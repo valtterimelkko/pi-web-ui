@@ -27,13 +27,36 @@ export interface SessionInfo {
   lastActivity: Date;
 }
 
+export interface SessionWatcherOptions {
+  /** Test seam for the expensive complete-file metadata read. */
+  readSessionInfo?: (filePath: string) => Promise<SessionInfo>;
+  /** Optional debounce override for deterministic callers; production remains 500 ms. */
+  debounceDelay?: number;
+}
+
+interface SessionReadState {
+  cached: SessionInfo | null;
+  revalidateQueued: boolean;
+  inFlight: Promise<SessionInfo | null> | null;
+}
+
 export class SessionWatcher extends EventEmitter {
   private watcher: FSWatcher | null = null;
   private sessionsDir: string;
   private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private sessionIdsByPath = new Map<string, string>();
+  private readStateByPath = new Map<string, SessionReadState>();
+  /** Compatibility projection for existing lifecycle tests; readStateByPath owns the state. */
   private pendingInfoByPath = new Map<string, Promise<SessionInfo | null>>();
   private debounceDelay = 500; // ms
+  /** Number of complete-file metadata reads started by watcher activity. */
+  public debugFullReadCount = 0;
+  /** Number of bounded 16 KiB header capture attempts. */
+  public debugBoundedHeaderReadCount = 0;
+  /** Short alias retained for test/debug callers. */
+  public get debugHeaderReadCount(): number {
+    return this.debugBoundedHeaderReadCount;
+  }
   /** True once stop() has run; handleChange becomes a no-op so a stopped watcher never broadcasts. */
   private stopped = false;
 
@@ -44,9 +67,12 @@ export class SessionWatcher extends EventEmitter {
       // present it gates origin tagging to genuinely-new sessions.
       getByPath?: SessionRegistryManager['getByPath'];
     },
+    options?: SessionWatcherOptions,
   ) {
     super();
     this.sessionsDir = sessionsDir || path.join(process.env.HOME || '/root', '.pi/agent/sessions');
+    if (options?.debounceDelay !== undefined) this.debounceDelay = options.debounceDelay;
+    if (options?.readSessionInfo) this.readSessionInfo = options.readSessionInfo;
   }
 
   /**
@@ -101,6 +127,7 @@ export class SessionWatcher extends EventEmitter {
     }
     this.debounceTimers.clear();
     this.sessionIdsByPath.clear();
+    this.readStateByPath.clear();
     this.pendingInfoByPath.clear();
 
     // Symmetric cleanup: remove all EventEmitter listeners registered via
@@ -111,26 +138,37 @@ export class SessionWatcher extends EventEmitter {
   }
 
   /**
-   * Handle file change with debouncing
+   * Handle file change with debouncing.
+   *
+   * The header capture remains synchronous and bounded so an add followed by
+   * unlink can retain the canonical identity. Complete-file parsing is owned by
+   * the per-path read state below and is never started once per notification.
    */
   private handleChange(type: 'add' | 'change' | 'unlink', filePath: string): void {
     // No-op once stopped so a dying watcher cannot broadcast post-shutdown.
     if (this.stopped) return;
 
     // Clear existing timer for this file
+    const hadDebounceTimer = this.debounceTimers.has(filePath);
     const existingTimer = this.debounceTimers.get(filePath);
-    if (existingTimer) {
+    if (hadDebounceTimer && existingTimer !== undefined) {
       clearTimeout(existingTimer);
     }
 
-    // For 'unlink', emit immediately
+    // For 'unlink', emit immediately. Retire the state before awaiting an
+    // in-flight read so a replacement file at the same path gets fresh state.
     if (type === 'unlink') {
-      this.emitChange(type, filePath);
+      const state = this.readStateByPath.get(filePath);
+      const fallbackSessionId = state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? this.extractSessionId(filePath);
+      this.readStateByPath.delete(filePath);
+      this.sessionIdsByPath.delete(filePath);
+      void this.emitChange(type, filePath, state, fallbackSessionId);
       return;
     }
 
     // Capture the header ID synchronously while chokidar still guarantees the
     // path exists; this closes the add→unlink debounce race.
+    this.debugBoundedHeaderReadCount += 1;
     try {
       const fd = openSync(filePath, 'r');
       try {
@@ -146,35 +184,120 @@ export class SessionWatcher extends EventEmitter {
       }
     } catch { /* the async read below will report malformed/missing files */ }
 
-    // Begin reading canonical header metadata immediately. If an unlink follows
-    // before the debounce fires, the unlink handler can still await this read.
-    const pendingInfo = this.readSessionInfo(filePath)
-      .then((info) => {
-        // stop() may have completed while the asynchronous read was in flight;
-        // do not repopulate cleared lifecycle maps after shutdown.
-        if (!this.stopped) this.sessionIdsByPath.set(filePath, info.id);
-        return info;
-      })
-      .catch(() => null);
-    this.pendingInfoByPath.set(filePath, pendingInfo);
+    const state = this.readStateByPath.get(filePath) ?? {
+      cached: null,
+      revalidateQueued: false,
+      inFlight: null,
+    };
+    this.readStateByPath.set(filePath, state);
+    state.revalidateQueued = true;
+    // A completed read can cover all notifications in the current debounce
+    // window; defer that invalidation to the debounced emit. If a read is
+    // already active, ensureRead() simply returns the covering promise.
+    if (!hadDebounceTimer || state.inFlight) void this.ensureRead(filePath, state);
 
     // Debounce add/change events
     const timer = setTimeout(() => {
+      if (this.debounceTimers.get(filePath) !== timer || this.stopped) return;
       this.debounceTimers.delete(filePath);
-      this.emitChange(type, filePath);
+      void this.emitChange(type, filePath, state);
     }, this.debounceDelay);
 
     this.debounceTimers.set(filePath, timer);
   }
 
+  /** Get or create the sole per-path owner of cached/read metadata. */
+  private getOrCreateReadState(filePath: string): SessionReadState {
+    const existing = this.readStateByPath.get(filePath);
+    if (existing) return existing;
+    const state: SessionReadState = { cached: null, revalidateQueued: false, inFlight: null };
+    this.readStateByPath.set(filePath, state);
+    return state;
+  }
+
+  /** Start at most one complete-file read for a path, or return its covering read/cache. */
+  private ensureRead(filePath: string, state = this.getOrCreateReadState(filePath)): Promise<SessionInfo | null> {
+    if (state.inFlight) return state.inFlight;
+    if (!state.revalidateQueued) return Promise.resolve(state.cached);
+
+    state.revalidateQueued = false;
+    this.debugFullReadCount += 1;
+    let readResult: Promise<SessionInfo>;
+    try {
+      // Invoke the injectable reader now (rather than in a deferred microtask)
+      // so the in-flight state covers the notification that started the read.
+      readResult = this.readSessionInfo(filePath);
+    } catch (error) {
+      readResult = Promise.reject(error);
+    }
+    const read = readResult
+      .then((info) => {
+        this.finishRead(filePath, state, info);
+        return info;
+      })
+      .catch(() => {
+        this.finishRead(filePath, state, null);
+        return null;
+      });
+    state.inFlight = read;
+    // Keep this compatibility map as a projection only; all decisions use the
+    // state object, so a trailing read cannot overwrite a newer path state.
+    this.pendingInfoByPath.set(filePath, read);
+    void read.then(() => {
+      if (this.pendingInfoByPath.get(filePath) === read) this.pendingInfoByPath.delete(filePath);
+    });
+    return read;
+  }
+
+  private finishRead(filePath: string, state: SessionReadState, info: SessionInfo | null): void {
+    state.inFlight = null;
+    if (this.stopped || this.readStateByPath.get(filePath) !== state) return;
+
+    state.cached = info;
+    if (info) this.sessionIdsByPath.set(filePath, info.id);
+    // A notification that arrived while this read was active invalidated the
+    // result. One boolean gives exactly one trailing read without a promise
+    // backlog; further changes can set it again while that read is active.
+    if (state.revalidateQueued) void this.ensureRead(filePath, state);
+  }
+
+  /** Wait for the cached result after any one trailing invalidation read settles. */
+  private async waitForSettledRead(filePath: string, state: SessionReadState): Promise<SessionInfo | null> {
+    let info = await this.ensureRead(filePath, state);
+    while (!this.stopped && this.readStateByPath.get(filePath) === state && (state.inFlight || state.revalidateQueued)) {
+      info = await this.ensureRead(filePath, state);
+    }
+    return info;
+  }
+
   /**
    * Emit the change event with parsed session info
    */
-  private async emitChange(type: 'add' | 'change' | 'unlink', filePath: string): Promise<void> {
-    const pendingInfo = await this.pendingInfoByPath.get(filePath);
-    this.pendingInfoByPath.delete(filePath);
-    const sessionId = pendingInfo?.id ?? this.sessionIdsByPath.get(filePath) ?? this.extractSessionId(filePath);
+  private async emitChange(
+    type: 'add' | 'change' | 'unlink',
+    filePath: string,
+    stateArg?: SessionReadState,
+    fallbackSessionId?: string,
+  ): Promise<void> {
+    const state = stateArg ?? this.readStateByPath.get(filePath);
+    const sessionId = fallbackSessionId ?? state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? this.extractSessionId(filePath);
     const cwd = this.extractCwd(filePath);
+
+    if (type === 'unlink') {
+      const info = state?.inFlight ? await state.inFlight : state?.cached;
+      if (this.stopped) return;
+      this.emit('session_update', {
+        type,
+        path: filePath,
+        sessionId: info?.id ?? sessionId,
+        cwd,
+      } satisfies SessionChangeEvent);
+      return;
+    }
+
+    // A retired state belongs to an unlinked/replaced file and must not emit
+    // stale metadata after a new state has taken over the same path.
+    if (state && (this.stopped || this.readStateByPath.get(filePath) !== state)) return;
 
     const event: SessionChangeEvent = {
       type,
@@ -183,50 +306,53 @@ export class SessionWatcher extends EventEmitter {
       cwd,
     };
 
-    // For add/change, try to read session info
-    if (type !== 'unlink') {
-      try {
-        const info = pendingInfo ?? await this.readSessionInfo(filePath);
-        event.sessionId = info.id;
-        event.cwd = info.cwd;
-        this.sessionIdsByPath.set(filePath, info.id);
-        if (this.registry) {
-          try {
-            // Contract 1.30.0 origin provenance: a file the registry has never
-            // seen is a pi CLI session started outside pi-web-ui; mark it
-            // 'native-discovered'. Already-registered sessions (browser or
-            // Internal API created) keep their existing origin — the upsert
-            // merge never sees an origin key for them.
-            let origin: 'native-discovered' | undefined;
-            if (type === 'add' && this.registry.getByPath) {
-              const existing = await this.registry.getByPath(filePath).catch(() => undefined);
-              if (!existing) origin = 'native-discovered';
-            }
-            await this.registry.upsert({
-              id: info.id,
-              sdkType: 'pi',
-              path: info.path,
-              cwd: info.cwd,
-              firstMessage: info.firstMessage,
-              messageCount: info.messageCount,
-              createdAt: info.createdAt.toISOString(),
-              lastActivity: info.lastActivity.toISOString(),
-              status: 'idle',
-              ...(origin ? { origin } : {}),
-            });
-          } catch (error) {
-            logger.warn(`Failed to index observed Pi session ${filePath}:`, error);
-          }
-        }
-
-        // Emit full session info
-        this.emit('session_update', { ...event, info });
-      } catch (error) {
-        logger.warn(`Failed to read session info for ${filePath}:`, error);
+    try {
+      const info = state
+        ? await this.waitForSettledRead(filePath, state)
+        : await this.readSessionInfo(filePath);
+      if (state && (this.stopped || this.readStateByPath.get(filePath) !== state)) return;
+      if (!info) {
+        logger.warn(`Failed to read session info for ${filePath}`);
         this.emit('session_update', event);
+        return;
       }
-    } else {
-      this.sessionIdsByPath.delete(filePath);
+
+      event.sessionId = info.id;
+      event.cwd = info.cwd;
+      this.sessionIdsByPath.set(filePath, info.id);
+      if (this.registry) {
+        try {
+          // Contract 1.30.0 origin provenance: a file the registry has never
+          // seen is a pi CLI session started outside pi-web-ui; mark it
+          // 'native-discovered'. Already-registered sessions (browser or
+          // Internal API created) keep their existing origin — the upsert
+          // merge never sees an origin key for them.
+          let origin: 'native-discovered' | undefined;
+          if (type === 'add' && this.registry.getByPath) {
+            const existing = await this.registry.getByPath(filePath).catch(() => undefined);
+            if (!existing) origin = 'native-discovered';
+          }
+          await this.registry.upsert({
+            id: info.id,
+            sdkType: 'pi',
+            path: info.path,
+            cwd: info.cwd,
+            firstMessage: info.firstMessage,
+            messageCount: info.messageCount,
+            createdAt: info.createdAt.toISOString(),
+            lastActivity: info.lastActivity.toISOString(),
+            status: 'idle',
+            ...(origin ? { origin } : {}),
+          });
+        } catch (error) {
+          logger.warn(`Failed to index observed Pi session ${filePath}:`, error);
+        }
+      }
+
+      // Emit full session info
+      this.emit('session_update', { ...event, info });
+    } catch (error) {
+      logger.warn(`Failed to read session info for ${filePath}:`, error);
       this.emit('session_update', event);
     }
   }

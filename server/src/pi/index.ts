@@ -9,7 +9,7 @@ export {
 export { SessionPool, type ClientSession } from './session-pool.js';
 export { EventForwarder, type WebSocketSender, type ForwardedEvent, type SessionEvent } from './event-forwarder.js';
 export { SessionWatcher, getSessionWatcher, startSessionWatcher, stopSessionWatcher } from './session-watcher.js';
-export type { SessionChangeEvent, SessionInfo } from './session-watcher.js';
+export type { SessionChangeEvent, SessionInfo, SessionWatcherOptions } from './session-watcher.js';
 export {
   MultiSessionManager,
   type SessionStatus,
