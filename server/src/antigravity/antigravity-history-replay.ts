@@ -41,6 +41,25 @@ export function turnsToReplayEvents(turns: AntigravityTurn[], sessionId: string)
       continue;
     }
 
+    // Stream-mode turns store compact tool calls (plan T7.1): render the same
+    // tool_execution shapes the live stream produced, so replay shows the
+    // agent's tool work between the user prompt and the final reply.
+    for (const tool of turn.tools ?? []) {
+      const toolCallId = randomUUID();
+      events.push({
+        type: 'tool_execution_start', sessionId,
+        toolCallId,
+        toolName: tool.toolName,
+        ...(tool.args !== undefined ? { args: tool.args } : {}),
+      });
+      events.push({
+        type: 'tool_execution_end', sessionId,
+        toolCallId,
+        result: tool.errorMessage ? `error: ${tool.errorMessage}` : (tool.output ?? ''),
+        isError: tool.isError,
+      });
+    }
+
     const assistantId = randomUUID();
     // error turns without a captured response surface the error text (or a
     // generic fallback) so the failure is visible instead of a blank screen.
@@ -56,7 +75,8 @@ export function turnsToReplayEvents(turns: AntigravityTurn[], sessionId: string)
     });
     events.push({ type: 'message_end', message: { id: assistantId, role: 'assistant' } });
 
-    events.push({ type: 'agent_end', result: null, usage: {} });
+    // Stream-mode turns carry real token usage; legacy turns keep {}.
+    events.push({ type: 'agent_end', result: null, usage: turn.usage ?? {} });
   }
 
   return events;

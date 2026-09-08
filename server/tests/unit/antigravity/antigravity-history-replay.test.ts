@@ -157,6 +157,46 @@ describe('turnsToReplayEvents', () => {
       expect(userUpdate).toBeDefined();
     });
 
+    it('T7.1: stream turns with stored tools render tool_execution_start/end between messages', () => {
+      const turn = makeTurn({
+        turnId: 't-tools', status: 'done', prompt: 'run it', response: 'did it',
+        tools: [
+          { toolName: 'run_command', args: { CommandLine: 'ls' }, output: 'a.txt\n', isError: false },
+          { toolName: 'write_to_file', output: 'written', isError: true, errorMessage: 'denied' },
+        ],
+        usage: { input: 100, output: 5, thinking: 0, cacheRead: 0, total: 105 },
+        numTurns: 1,
+        agyStatus: 'SUCCESS',
+      });
+      const events = turnsToReplayEvents([turn], 'sess');
+      const types = events.map((e) => e.type);
+      // user triple, tool pair x2, assistant triple, agent_end
+      expect(types.filter((t) => t === 'tool_execution_start')).toHaveLength(2);
+      expect(types.filter((t) => t === 'tool_execution_end')).toHaveLength(2);
+      const firstStart = events.find((e) => e.type === 'tool_execution_start') as Record<string, unknown>;
+      expect(firstStart.toolName).toBe('run_command');
+      expect((firstStart.args as Record<string, unknown>).CommandLine).toBe('ls');
+      const firstEnd = events.filter((e) => e.type === 'tool_execution_end')[0] as Record<string, unknown>;
+      expect(firstEnd.isError).toBe(false);
+      expect(String(firstEnd.result)).toContain('a.txt');
+      const secondEnd = events.filter((e) => e.type === 'tool_execution_end')[1] as Record<string, unknown>;
+      expect(secondEnd.isError).toBe(true);
+      const agentEnd = events.find((e) => e.type === 'agent_end') as Record<string, unknown>;
+      expect(agentEnd.usage).toEqual({ input: 100, output: 5, thinking: 0, cacheRead: 0, total: 105 });
+    });
+
+    it('T7.2: legacy turns without tools/usage replay exactly as before (shape unchanged)', () => {
+      const turn = makeTurn({ turnId: 't-legacy', status: 'done', prompt: 'p', response: 'r' });
+      const events = turnsToReplayEvents([turn], 'sess');
+      const types = events.map((e) => e.type);
+      expect(types).toEqual([
+        'agent_start', 'message_start', 'message_update', 'message_end',
+        'message_start', 'message_update', 'message_end', 'agent_end',
+      ]);
+      const agentEnd = events.find((e) => e.type === 'agent_end') as Record<string, unknown>;
+      expect(agentEnd.usage).toEqual({});
+    });
+
     it('a running turn followed by a done turn renders both correctly', () => {
       // Unusual but possible after a crash: an orphaned running turn then a later done turn.
       const turns = [
