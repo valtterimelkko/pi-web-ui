@@ -35,6 +35,7 @@ Current contract:
   - unreadable/invalid registry state or unavailable visibility checks return 503 `DIAGNOSTIC_SOURCE_UNAVAILABLE` with `sources` status, not fabricated healthy empty counts. Corrupt registry bytes are preserved and reads may recover after external repair;
   - API receipt metrics include all five runtimes, including Command Code. Existing visibility restrictions still apply;
   - `operational.pipeline.eventLoopLagWindow` adds a bounded60-second/120-sample history from the existing monitor, with count/max/nearest-rank p95 and reset/limit metadata; it does not change shed thresholds or add a sampler;
+  - aggregate broker replay retention is bounded and observable: `operational.pipeline.brokerReplayRetainedBytes/Keys/EvictedEventsTotal` gauges, a 32 MiB default global replay-byte budget (per-session limits preserved; cold subscriber-less sessions evicted whole first), a 1,000 cold-key bookkeeping bound, and event-snapshot responses carry `replayStatus:{incomplete:true,evictedEvents}` when retained history was evicted — an evicted history is never presented as complete; live terminal/control delivery is never suppressed;
   - Agent OS mirror migration remains an explicit final integration task, separately coordinated before production deployment. A source version bump does not imply consumer synchronisation or a running-server upgrade.
 
 - **1.35.0** (minor, additive watch-generation preconditions and Pi pause reasons):
