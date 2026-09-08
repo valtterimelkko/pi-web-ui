@@ -265,7 +265,7 @@ function foldHistoryEvents(
     if (!storageIdIndex.has(message.id)) storageIdIndex.set(message.id, message);
     if (message.role === 'assistant') latestAssistantMessage = message;
   }
-  let storageLookupLinearScans = 0;
+  const lookupDiagnostics = { linearScans: 0 };
   let storageIdAllocationCollisions = 0;
   // Command Code restarts its synthetic message numbering every agent turn, so
   // the same wire id (commandcode-message-1..N) legitimately appears once per
@@ -389,7 +389,7 @@ function foldHistoryEvents(
     messages,
     leftovers,
     diagnostics: {
-      storageLookupLinearScans,
+      storageLookupLinearScans: lookupDiagnostics.linearScans,
       storageIdAllocationCollisions,
     },
   };
