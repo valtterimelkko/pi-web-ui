@@ -16,6 +16,7 @@ import {
   shouldPauseGoalOnStop,
   canSteerWhileStreaming,
   canSendStreamingText,
+  streamingComposeIsQueueOnly,
 } from '../../lib/piExtensionControls';
 
 interface QueuedStreamingMessage {
@@ -138,18 +139,20 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const [isFocused, setIsFocused] = useState(false);
   const [showCompactModal, setShowCompactModal] = useState(false);
   const [showSlashPalette, setShowSlashPalette] = useState(false);
-  // Delivery mode for messages sent while the agent is streaming (steer-
-  // capable runtimes: pi, claude, commandcode): 'steer' delivers into/alongside
-  // the current run (semantics per runtime); 'followUp' is delivered when the
-  // run finishes. Alt+Enter always forces a follow-up.
+  // Delivery mode for messages sent while the agent is streaming (streaming-
+  // compose runtimes: pi, claude, commandcode, antigravity): 'steer' delivers
+  // into/alongside the current run (semantics per runtime); 'followUp' is
+  // delivered when the run finishes. Queue-only runtimes (antigravity) force
+  // followUp. Alt+Enter always forces a follow-up.
   const [deliveryMode, setDeliveryMode] = useState<'steer' | 'followUp'>('steer');
   const [queuedStreaming, setQueuedStreaming] = useState<QueuedStreamingMessage[]>([]);
 
-  // Reset the delivery mode and local queue when switching sessions.
+  // Reset the delivery mode and local queue when switching sessions. Queue-only
+  // runtimes start (and stay) on followUp — they have no steer transport.
   useEffect(() => {
-    setDeliveryMode('steer');
+    setDeliveryMode(streamingComposeIsQueueOnly(currentSessionSdkType) ? 'followUp' : 'steer');
     setQueuedStreaming([]);
-  }, [currentSessionId]);
+  }, [currentSessionId, currentSessionSdkType]);
 
   // A queued message is delivered once the matching user message reaches the
   // transcript (the server replays it into the session when the runtime
@@ -236,7 +239,9 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     }
 
     if (streamingTextSend) {
-      const mode = forcedMode ?? deliveryMode;
+      // Queue-only runtimes (antigravity): every streaming send is a follow-up,
+      // regardless of the (hidden) toggle state.
+      const mode = forcedMode ?? (streamingComposeIsQueueOnly(currentSessionSdkType) ? 'followUp' : deliveryMode);
       const sent = mode === 'followUp' ? sendFollowUp(message) : sendSteer(message);
       if (!sent) {
         useUIStore.getState().addToast({
@@ -601,7 +606,17 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
             Send/Stop. Semantics differ per runtime; labels stay honest about
             what 'Steer' does. Mobile-friendly: two labelled segmented
             buttons, no keyboard needed. */}
-        {streamCompose && (
+        {streamCompose && streamingComposeIsQueueOnly(currentSessionSdkType) && (
+          <div className="flex items-center justify-between gap-2 px-3 pt-2">
+            <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-gray-900 text-white">
+              Queue
+            </span>
+            <span className="text-[10px] text-gray-400 truncate">
+              Runs after the current turn
+            </span>
+          </div>
+        )}
+        {streamCompose && !streamingComposeIsQueueOnly(currentSessionSdkType) && (
           <div className="flex items-center justify-between gap-2 px-3 pt-2">
             <div
               className="flex items-center overflow-hidden rounded-full border border-gray-300"

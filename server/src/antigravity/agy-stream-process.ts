@@ -281,6 +281,14 @@ export class AgyStreamProcess {
     if (typeof this.idleTimer.unref === 'function') this.idleTimer.unref();
   }
 
+  /** Graceful stop (model switch / dispose): close stdin, let the current
+   *  state drain, process exits 0. Idempotent. */
+  stop(): void {
+    if (this.exited) return;
+    const stdin = this.child?.stdin;
+    if (stdin && !stdin.destroyed) stdin.end();
+  }
+
   private clearTimers(): void {
     if (this.stallTimer) clearTimeout(this.stallTimer);
     if (this.idleTimer) clearTimeout(this.idleTimer);

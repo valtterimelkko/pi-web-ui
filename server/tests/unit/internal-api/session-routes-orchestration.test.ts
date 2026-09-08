@@ -1322,6 +1322,30 @@ describe('createSessionRoutes orchestration endpoints', () => {
       });
     });
 
+    it('routes antigravity set_thinking_level through the sibling-slug swap (stream-json)', async () => {
+      registry.get.mockResolvedValue(antigravityEntry('agy-think'));
+      antigravityService.isRunning.mockReturnValue(false);
+      antigravityService.setThinkingLevel = vi.fn(async (_sid: string, level: string) => level === 'high' ? 'gemini-3.6-flash-high' : 'gemini-3.6-flash-low');
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleSessionControl(
+        createJsonReq('POST', '/api/v1/sessions/agy-think/control', {
+          action: 'set_thinking_level',
+          level: 'high',
+        }),
+        res,
+        'agy-think',
+      );
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({
+        success: true,
+        action: 'set_thinking_level',
+        level: 'high',
+        model: 'gemini-3.6-flash-high',
+      });
+      expect(antigravityService.setThinkingLevel).toHaveBeenCalledWith('agy-think', 'high');
+    });
+
     it('applies max to a Pi session after selecting the requested model', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions', {

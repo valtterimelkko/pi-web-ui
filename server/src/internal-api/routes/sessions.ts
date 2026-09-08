@@ -2916,7 +2916,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return busy ? { dispatchMode: 'steer' } : { error: ErrorCode.SESSION_NOT_STREAMING };
     }
     if (mode === 'follow_up') {
-      if (busy) return runtime === 'pi' ? { dispatchMode: 'follow_up' } : { error: ErrorCode.SESSION_BUSY };
+      // Antigravity (stream-json): a mid-turn write queues inside the live agy
+      // process and runs as the next turn (live-validated) — same queue
+      // semantics as Pi.
+      if (busy) return runtime === 'pi' || runtime === 'antigravity' ? { dispatchMode: 'follow_up' } : { error: ErrorCode.SESSION_BUSY };
       if (requireActiveTurn) return { error: ErrorCode.SESSION_NOT_STREAMING };
       return { dispatchMode: 'prompt' };
     }
@@ -3258,8 +3261,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       // Native Pi follow-up is queue acceptance, not a separately correlated
       // turn. Persist queued before calling the SDK and never attach this run to
-      // the predecessor's agent_end.
-      if (dispatchMode === 'follow_up') {
+      // the predecessor's agent_end. Antigravity follow-ups are NOT server-side
+      // queued: the write-through into the live agy stdin stream happens in the
+      // runtime execution switch below, and the run completes with its turn.
+      if (dispatchMode === 'follow_up' && runtime === 'pi') {
         try {
           await runReceipts.markQueued(runId);
           await queuePiFollowUp(sessionId, body.message, runId);
@@ -3810,6 +3815,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             const normalizedModel = await opencodeService.setModel(sessionId, body.modelId);
             response = { success: true, action: 'set_model', modelId: normalizedModel };
           } else if (entry.sdkType === 'antigravity') {
+            // O3: model changes apply between turns — refuse on a busy session.
+            if (isSessionBusy(entry)) {
+              res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+              sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy; model changes apply between turns'));
+              return;
+            }
             const normalizedModel = await antigravityService.setModel(sessionId, body.modelId);
             response = { success: true, action: 'set_model', modelId: normalizedModel };
           } else {
@@ -3850,6 +3861,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             claudeService.setThinkingLevel(sessionId, body.level);
           } else if (entry.sdkType === 'opencode') {
             await opencodeService.setThinkingLevel(sessionId, body.level);
+          } else if (entry.sdkType === 'antigravity') {
+            // Stream-json mode: thinking level = sibling slug swap (no --effort
+            // flag — live-validated conflict semantics). The resolved slug is
+            // the honest read-back: it is what init.model will echo.
+            if (typeof antigravityService.setThinkingLevel !== 'function') {
+              sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Thinking level not supported for this runtime'));
+              return;
+            }
+            try {
+              const resolvedSlug = await antigravityService.setThinkingLevel(sessionId, body.level);
+              sendJson(res, 200, { success: true, action: 'set_thinking_level', level: body.level, model: resolvedSlug });
+            } catch (error) {
+              sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, error instanceof Error ? error.message : 'Thinking level not resolvable for this model'));
+            }
+            return;
           } else if (entry.sdkType === 'pi') {
             const agentSession = multiSessionManager.getAgentSession(entry.path);
             if (!agentSession) {
@@ -4959,6 +4985,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             onComplete(error);
             resolve();
           };
+          if (mode === 'follow_up') {
+            // Queue write-through: agy buffers the mid-turn stdin write and
+            // runs it as the next turn. A false return is a lost race with
+            // turn completion — surface it as a failed run, not a hang.
+            antigravityService.followUp(sessionId, message, broadcast, wrappedComplete)
+              .then((queued: boolean) => {
+                if (!queued) wrappedComplete(new Error('session is no longer running a turn; resend as a plain prompt'));
+              })
+              .catch((err: unknown) => {
+                wrappedComplete(err instanceof Error ? err : new Error(String(err)));
+              });
+            return;
+          }
           antigravityService.sendPrompt(sessionId, message, broadcast, wrappedComplete).catch((err) => {
             onComplete(err instanceof Error ? err : new Error(String(err)));
             resolve();

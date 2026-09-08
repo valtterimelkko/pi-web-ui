@@ -1564,6 +1564,19 @@ export class WebSocketConnectionManager {
     }
   }
 
+  /** Shared antigravity event fan-out (prompt + follow-up use identical routing). */
+  private antigravityEventSink(clientId: string, sessionId: string): (normalizedEvent: NormalizedEvent) => void {
+    return (normalizedEvent) => {
+      const piEvent = normEventToPiFormat(normalizedEvent);
+      const msg = { type: 'session_event' as const, sessionId, event: piEvent };
+      const subscribers = this.antigravitySubs.getSubscribers(sessionId);
+      const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+      for (const subId of targets) {
+        this.sendMessage(subId, msg);
+      }
+    };
+  }
+
   private async handleAntigravityPrompt(
     clientId: string,
     sessionId: string,
@@ -1577,15 +1590,7 @@ export class WebSocketConnectionManager {
       await this.antigravityService.sendPrompt(
         sessionId,
         prompt,
-        (normalizedEvent) => {
-          const piEvent = normEventToPiFormat(normalizedEvent);
-          const msg = { type: 'session_event' as const, sessionId, event: piEvent };
-          const subscribers = this.antigravitySubs.getSubscribers(sessionId);
-          const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
-          for (const subId of targets) {
-            this.sendMessage(subId, msg);
-          }
-        },
+        this.antigravityEventSink(clientId, sessionId),
         (error) => {
           const subscribers = this.antigravitySubs.getSubscribers(sessionId);
           const targets = [...subscribers].length > 0 ? [...subscribers] : [clientId];
@@ -1658,6 +1663,18 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Antigravity (stream-json): the agy stdin protocol has no mid-run join —
+    // signals kill the whole session process (live-validated), so steer is
+    // refused honestly; follow_up queues natively instead.
+    if (this.antigravitySessionIds.has(sessionPath)) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Antigravity has no mid-run steering. Your message would arrive only after the current turn; send it as a follow-up (queue) instead.',
+        code: 'STEER_NOT_RUNNING',
+      });
+      return;
+    }
+
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
       this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
@@ -1694,6 +1711,34 @@ export class WebSocketConnectionManager {
     // Command Code: server-side queue drained when the current run ends.
     if (this.commandCodeSessionIds.has(sessionPath)) {
       await this.handleCommandCodeFollowUp(clientId, sessionPath, message.message);
+      return;
+    }
+
+    // Antigravity (stream-json): write-through into the live agy stdin stream;
+    // agy buffers mid-turn writes and runs them as the next turn
+    // (live-validated queue semantics).
+    if (this.antigravitySessionIds.has(sessionPath)) {
+      const queued = await this.antigravityService.followUp(
+        sessionPath,
+        message.message,
+        this.antigravityEventSink(clientId, sessionPath),
+        (error) => {
+          const subscribers = this.antigravitySubs.getSubscribers(sessionPath);
+          const targets = [...subscribers].length > 0 ? [...subscribers] : [clientId];
+          if (error) {
+            for (const subId of targets) {
+              this.sendMessage(subId, { type: 'error', message: error.message, code: 'ANTIGRAVITY_ERROR' });
+            }
+          }
+        },
+      );
+      if (!queued) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'Session is not running a turn to follow. Send the message as a normal prompt instead.',
+          code: 'STEER_NOT_RUNNING',
+        });
+      }
       return;
     }
 

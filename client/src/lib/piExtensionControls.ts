@@ -11,7 +11,7 @@ export function isPiSlashCommandAllowedWhileStreaming(
 /**
  * Whether the composer accepts free text while the agent is streaming.
  *
- * Three runtimes have a steer path on this transport:
+ * Four runtimes have a streaming-compose path on this transport:
  * - Pi: native mid-run steering (Enter = steer, delivered after the current
  *   tool batch and before the next model call).
  * - Claude (SDK backend): streaming-input mode delivers the steer at the next
@@ -19,10 +19,13 @@ export function isPiSlashCommandAllowedWhileStreaming(
  *   priority 'later'.
  * - Command Code: no mid-run input channel — steer interrupts the run and
  *   delivers the text as the next prompt; follow-up queues server-side.
- * Other runtimes have no steer path yet, so their composers stay read-only
- * while streaming.
+ * - Antigravity (stream-json): no mid-run join exists in the agy stdin
+ *   protocol (signals kill the session process), but a mid-turn write queues
+ *   natively inside agy and runs as the next turn — streaming text is
+ *   ALWAYS follow-up ('queue'), never steer (see streamingComposeIsQueueOnly).
+ * Other runtimes have no streaming-compose path yet.
  */
-const STEERABLE_SDK_TYPES = new Set<RuntimeSdkType>(['pi', 'claude', 'commandcode']);
+const STEERABLE_SDK_TYPES = new Set<RuntimeSdkType>(['pi', 'claude', 'commandcode', 'antigravity']);
 
 export function canSteerWhileStreaming(
   isStreaming: boolean,
@@ -42,6 +45,14 @@ export function canSendStreamingText(
   hasUploads: boolean,
 ): boolean {
   return canSteerWhileStreaming(isStreaming, sdkType) && !hasUploads;
+}
+
+/**
+ * Runtimes whose streaming compose can ONLY queue (no steer transport).
+ * The composer forces follow-up delivery and shows a single Queue affordance.
+ */
+export function streamingComposeIsQueueOnly(sdkType: RuntimeSdkType): boolean {
+  return sdkType === 'antigravity';
 }
 
 export function shouldPauseGoalOnStop(

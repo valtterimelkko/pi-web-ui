@@ -12,7 +12,7 @@ import { getSessionRegistry } from '../session-registry.js';
 import type { RegistryEntry } from '../session-registry.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
-import { parseAgyModelsOutput, toCatalogEntries, canonicalizeAgyModelId, type AgyModelEntry } from './agy-models.js';
+import { parseAgyModelsOutput, toCatalogEntries, canonicalizeAgyModelId, resolveModelSlug, type AgyModelEntry, type ParsedAgyModel } from './agy-models.js';
 import { AgyStreamProcess, type AgyTurnOutcome } from './agy-stream-process.js';
 import { AgyEventNormalizer } from './agy-event-normalizer.js';
 import type { AgyStoredToolCall, AgyStoredUsage } from './antigravity-session-store.js';
@@ -1337,8 +1337,51 @@ export class AntigravityService {
   async setModel(sessionId: string, modelId: string): Promise<string> {
     const entry = await this.registry.get(sessionId);
     if (!entry) throw new Error(`Session not found: ${sessionId}`);
-    await this.registry.upsert({ ...entry, id: entry.id, sdkType: 'antigravity', model: modelId });
-    return modelId;
+    // O3: a model change while a turn runs cannot take effect (the running
+    // process pinned its --model at spawn) — refuse instead of drifting.
+    const proc = this.streamProcesses.get(sessionId);
+    if (config.antigravityStreamMode && proc && !proc.hasExited && proc.hasPendingTurns) {
+      throw new Error('session is busy: model changes apply between turns');
+    }
+    // Canonicalise to the slug agy echoes in init.model (label / tab-string /
+    // provider-prefixed forms all normalise here; unknown ids pass through and
+    // loud-fail at the agy boundary on the next turn).
+    let catalog: ParsedAgyModel[] = [];
+    try {
+      const result = await runAgy(['models'], process.cwd(), 10000);
+      if (result.ok) catalog = parseAgyModelsOutput(result.stdout);
+    } catch { /* catalogue unavailable — canonicalise without it */ }
+    const slug = canonicalizeAgyModelId(modelId, catalog);
+    await this.registry.upsert({ ...entry, id: entry.id, sdkType: 'antigravity', model: slug });
+    // Drop the warm process so the next turn respawns with the new --model and
+    // resumes the same conversation (resume-into-stdin live-validated).
+    if (config.antigravityStreamMode && proc && !proc.hasExited) {
+      this.streamProcesses.delete(sessionId);
+      this.streamNormalizers.delete(sessionId);
+      proc.stop();
+    }
+    return slug;
+  }
+
+  /**
+   * Thinking-level selection (stream mode): swap to the level's sibling slug.
+   * No --effort flag is ever passed (live-validated: effort conflicts with
+   * baked-level slugs and is unsupported for claude/gpt-oss models).
+   * Throws for unsupported axes so callers fail loudly instead of drifting.
+   */
+  async setThinkingLevel(sessionId: string, level: string): Promise<string> {
+    const entry = await this.registry.get(sessionId);
+    if (!entry) throw new Error(`Session not found: ${sessionId}`);
+    const current = canonicalizeAgyModelId(entry.model || config.antigravityDefaultModel);
+    let catalog: ParsedAgyModel[] = [];
+    try {
+      const result = await runAgy(['models'], process.cwd(), 10000);
+      if (result.ok) catalog = parseAgyModelsOutput(result.stdout);
+    } catch { /* catalogue unavailable — resolution without siblings fails below */ }
+    const resolution = resolveModelSlug(current, level, catalog);
+    if (!resolution.ok) throw new Error(resolution.reason);
+    if (resolution.slug === current) return current; // level already baked in
+    return this.setModel(sessionId, resolution.slug);
   }
 
   async pinSession(sessionId: string, claimId = 'web-ui'): Promise<boolean> {

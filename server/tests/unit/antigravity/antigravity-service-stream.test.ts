@@ -61,6 +61,22 @@ vi.mock('node:child_process', async (importOriginal) => {
   return {
     ...actual,
     spawn: vi.fn((_bin: unknown, args: string[]) => {
+      // `agy models` probes (setModel/setThinkingLevel canonicalisation):
+      // answer synchronously with a small catalogue, like the real CLI.
+      if (args && args[0] === 'models') {
+        const probe = new FakeStreamChild();
+        setTimeout(() => {
+          // defer: runAgy attaches stdout listeners synchronously after spawn
+          probe.writeStdout([
+            'gemini-3.6-flash-low\tGemini 3.6 Flash (Low)',
+            'gemini-3.6-flash-medium\tGemini 3.6 Flash (Medium)',
+            'gemini-3.6-flash-high\tGemini 3.6 Flash (High)',
+            'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+          ].join('\n'));
+          probe.close(0);
+        }, 0);
+        return probe;
+      }
       const child = new FakeStreamChild();
       ctrl.lastArgs = args;
       ctrl.children.push(child);
@@ -116,17 +132,19 @@ async function startTurn(svcIn: AntigravityServiceType, sessionId: string): Prom
   let doneResolve: (e?: Error) => void = () => {};
   const done = new Promise<Error | undefined>((r) => { doneResolve = r; });
   void svcIn.sendPrompt(sessionId, 'hello agent', (e) => events.push({ type: e.type, data: e.data as Record<string, unknown> }), doneResolve);
-  // Wait until THIS turn's prompt is written through to the child's stdin
-  // (baseline = current write count; the service writes after persistence).
-  const baseline = ctrl.children[ctrl.children.length - 1]?.stdinWrites.length ?? 0;
+  // Wait until THIS turn's prompt is written through to a child's stdin —
+  // either the warm child's next write or a freshly respawned child's first.
+  const prevChild = ctrl.children[ctrl.children.length - 1];
+  const prevCount = prevChild?.stdinWrites.length ?? 0;
   let child: FakeStreamChild | undefined;
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 400; i++) {
     child = ctrl.children[ctrl.children.length - 1];
-    if (child && child.stdinWrites.length > baseline) break;
+    if (child && child !== prevChild && child.stdinWrites.length > 0) break; // respawn
+    if (child === prevChild && (prevChild?.stdinWrites.length ?? 0) > prevCount) break; // warm reuse
     await new Promise((r) => setTimeout(r, 5));
   }
   expect(child).toBeDefined();
-  expect(child!.stdinWrites.length).toBe(baseline + 1);
+  expect(child!.stdinWrites.length).toBeGreaterThan(0);
   child!.writeStdout(initLine());
   return { svc: svcIn as AntigravityServiceType & { testSessionId: string }, sessionId, events, done, child: child! };
 }
@@ -347,6 +365,44 @@ describe('AntigravityService — stream-json mode (plan phase 4)', () => {
     expect(turns[0].conversationId).toBe(newConv);
     const entry = await svc.getSession(sessionId);
     expect(entry?.antigravityConversationId).toBe(newConv);
+  });
+
+  it('T6.1: setModel canonicalises to a slug, drops the warm process, and the next turn respawns with the new model', async () => {
+    const h = await startTurn(svc, sessionId);
+    h.child.writeStdout(resultLine('one', 1));
+    await h.done;
+    expect(ctrl.children).toHaveLength(1);
+    const normalized = await svc.setModel(sessionId, 'Gemini 3.6 Flash (Medium)');
+    expect(normalized).toBe('gemini-3.6-flash-medium');
+    // warm process was dropped: next turn spawns fresh with the new slug
+    const h2 = await startTurn(svc, sessionId);
+    expect(ctrl.children).toHaveLength(2);
+    const modelIdx = ctrl.lastArgs!.indexOf('--model');
+    expect(ctrl.lastArgs![modelIdx + 1]).toBe('gemini-3.6-flash-medium');
+    h2.child.writeStdout(resultLine('two', 2));
+    await h2.done;
+  });
+
+  it('T6.1/O3: setModel while a turn runs is refused', async () => {
+    await startTurn(svc, sessionId);
+    await waitFor(() => svc.isRunning(sessionId));
+    await expect(svc.setModel(sessionId, 'gemini-3.6-flash-high')).rejects.toThrow(/busy/i);
+    await svc.abort(sessionId);
+  });
+
+  it('T6.2: setThinkingLevel swaps to the sibling slug', async () => {
+    const h = await startTurn(svc, sessionId);
+    h.child.writeStdout(resultLine('one', 1));
+    await h.done;
+    const applied = await svc.setThinkingLevel(sessionId, 'high');
+    expect(applied).toBe('gemini-3.6-flash-high');
+    const entry = await svc.getSession(sessionId);
+    expect(entry?.model).toBe('gemini-3.6-flash-high');
+  });
+
+  it('T6.2: setThinkingLevel rejects unsupported axes loudly', async () => {
+    await svc.setModel(sessionId, 'claude-sonnet-4-6');
+    await expect(svc.setThinkingLevel(sessionId, 'low')).rejects.toThrow(/not supported|unsupported/i);
   });
 
   it('getContextUsage uses real usage when present (no char/4 estimate in stream mode)', async () => {
