@@ -302,14 +302,15 @@ describe('coalesced reads across malformed lines and file replacement', () => {
     watcher.on('session_update', (event: SessionChangeEvent) => events.push(event));
 
     invoke.handleChange('add', filePath);
-    await drainUntil(() => events.length >= 1);
-    const partialInfo = events.at(-1)?.info;
-    expect(partialInfo?.id).toBe('malformed-session');
+    // Drain on the OBSERVABLE FACT (an emit with the parsed session id), not
+    // on an event count that can race the debounce timer on slow runners.
+    await drainUntil(() => events.some((event) => event.info?.id === 'malformed-session'));
+    expect(events.some((event) => event.info?.id === 'malformed-session')).toBe(true);
 
     await writeFile(filePath, sessionContent('malformed-session', 'replaced content'));
     invoke.handleChange('change', filePath);
-    await drainUntil(() => events.length >= 2);
-    const replacedInfo = events.at(-1)?.info;
+    await drainUntil(() => events.some((event) => event.info?.firstMessage?.includes('replaced content')));
+    const replacedInfo = events.filter((event) => event.info?.firstMessage?.includes('replaced content')).at(-1)?.info;
     expect(replacedInfo?.id).toBe('malformed-session');
     expect(replacedInfo?.firstMessage).toContain('replaced content');
     // Two notification windows: one initial read plus at most one trailing

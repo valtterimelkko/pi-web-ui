@@ -538,15 +538,25 @@ describe('Internal API prompt mode dispatch semantics', () => {
     expect(res.statusCode).toBe(202);
     const runId = JSON.parse(res.body).runId;
 
-    // Advance past the idle timeout.
+    // Advance past the idle timeout, then poll for the reaper's sweep rather
+    // than assuming a fixed wall-clock delay (slow runners need longer).
     now += 200;
-    await new Promise((r) => setTimeout(r, 150));
+    await waitFor(() => (manager.get(runId)?.status === 'failed' ? true : undefined));
 
     const receipt = manager.get(runId);
     expect(receipt?.status).toBe('failed');
     expect(receipt?.errorCode).toBe('TURN_STALLED');
     expect(receipt?.terminalAt).toBeDefined();
   });
+
+  const waitFor = async <T>(probe: () => T | undefined | Promise<T | undefined>, rounds = 200): Promise<T> => {
+    for (let spin = 0; spin < rounds; spin++) {
+      const value = await probe();
+      if (value !== undefined) return value;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error('waitFor: condition not reached within bounded rounds');
+  };
 
   it('17. admission activeTurns returns to zero after a stalled run is reaped', async () => {
     await makeRoutes({ idleTimeoutMs: 50 });
@@ -566,11 +576,12 @@ describe('Internal API prompt mode dispatch semantics', () => {
     );
 
     now += 200;
-    await new Promise((r) => setTimeout(r, 150));
-
-    const capacityRes = mockRes();
-    await routes.handleCapacity(jsonReq('GET', '/api/v1/capacity'), capacityRes);
-    const capacity = JSON.parse(capacityRes.body);
+    const capacity = await waitFor(async () => {
+      const capacityRes = mockRes();
+      await routes.handleCapacity(jsonReq('GET', '/api/v1/capacity'), capacityRes);
+      const parsed = JSON.parse(capacityRes.body) as { activeTurns: number };
+      return parsed.activeTurns === 0 ? parsed : undefined;
+    });
     expect(capacity.activeTurns).toBe(0);
     expect(capacity.runtimes.pi.activeTurns).toBe(0);
   });

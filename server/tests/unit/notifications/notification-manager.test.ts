@@ -330,7 +330,11 @@ describe('NotificationManager', () => {
       for (const e of assistantText('s1', 'a')) h.pi.emit('/sessions/s1', e);
       h.pi.emit('/sessions/s1', agentEnd('s1'));
       h.pi.emit('/sessions/s1', agentEnd('s1')); // second within window
-      await wait(150);
+      // Poll for the coalesced delivery instead of assuming a fixed delay:
+      // slow runners may need several debounce windows before the send lands.
+      for (let spin = 0; spin < 200 && h.channel.received.length < 1; spin++) {
+        await wait(10);
+      }
       expect(h.channel.received).toHaveLength(1);
     });
   });
