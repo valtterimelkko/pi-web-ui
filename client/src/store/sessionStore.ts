@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { deriveLegacySessionArrays } from '@pi-web-ui/shared';
 import { persist, type PersistStorage } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
 import {
@@ -240,7 +239,14 @@ function foldHistoryEvents(
   sessionId: string,
   buffer: Array<{ type: string; [key: string]: unknown }>,
   base: Message[],
-): { messages: Message[]; leftovers: Array<{ type: string; [key: string]: unknown }> } {
+): {
+  messages: Message[];
+  leftovers: Array<{ type: string; [key: string]: unknown }>;
+  diagnostics: {
+    storageLookupLinearScans: number;
+    storageIdAllocationCollisions: number;
+  };
+} {
   // Copy base messages (and their content entries) so a chunked continuation
   // never mutates store-owned objects in place — downstream memoization
   // compares by reference, so mutated-in-place entries would skip re-renders.
@@ -250,6 +256,17 @@ function foldHistoryEvents(
   }));
   const leftovers: Array<{ type: string; [key: string]: unknown }> = [];
   let activeMessageId: string | undefined;
+  // The copied messages are the fold's working set. Index every existing
+  // storage ID once, retaining the first entry for the same reason Array.find
+  // did: tool/message IDs can be malformed or collide in old history.
+  const storageIdIndex = new Map<string, Message>();
+  let latestAssistantMessage: Message | undefined;
+  for (const message of messages) {
+    if (!storageIdIndex.has(message.id)) storageIdIndex.set(message.id, message);
+    if (message.role === 'assistant') latestAssistantMessage = message;
+  }
+  let storageLookupLinearScans = 0;
+  let storageIdAllocationCollisions = 0;
   // Command Code restarts its synthetic message numbering every agent turn, so
   // the same wire id (commandcode-message-1..N) legitimately appears once per
   // turn. Deltas must route to the LATEST copy of a reused id (the turn being
@@ -262,6 +279,9 @@ function foldHistoryEvents(
    * (suffixed on collision with any earlier copy in this session). */
   const storageIdForStart = (wireId: string): string => {
     if (!usedIds.has(wireId)) return wireId;
+    // Collision accounting is intentionally separate from target lookup work:
+    // a duplicate wire ID is valid Command Code history and gets a suffix.
+    storageIdAllocationCollisions++;
     let n = 2;
     while (usedIds.has(`${wireId}#${n}`)) n++;
     return `${wireId}#${n}`;
@@ -271,14 +291,15 @@ function foldHistoryEvents(
   const findTarget = (id: string | undefined): Message | undefined => {
     if (id) {
       const mapped = lookupId(id);
-      return messages.find((m) => m.id === mapped) ?? messages.find((m) => m.id === id);
+      // Both the wire-ID projection and the storage-ID index are per-fold.
+      // There is deliberately no linear fallback: an absent Map entry is the
+      // same miss as the old array searches, without repeating O(N) work.
+      return storageIdIndex.get(mapped) ?? storageIdIndex.get(id);
     }
     // Delta without an id targets the most recent assistant message (same
-    // fallback semantics as the live handler's tracked current id).
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') return messages[i];
-    }
-    return undefined;
+    // fallback semantics as the live handler's tracked current id). Tracking
+    // it while building/appending the index preserves that fallback in O(1).
+    return latestAssistantMessage;
   };
   for (const buffered of buffer) {
     const event = (buffered as { event?: { type?: string; [key: string]: unknown } }).event;
@@ -291,7 +312,7 @@ function foldHistoryEvents(
         usedIds.add(id);
         latestByWireId.set(wireId, id);
         activeMessageId = wireId;
-        messages.push({
+        const foldedMessage: Message = {
           id,
           role: (message.role as Message['role']) ?? 'assistant',
           // User bubbles can arrive with a plain string content from the wire;
@@ -299,7 +320,12 @@ function foldHistoryEvents(
           // expects a string).
           content: message.content ?? (message.role === 'user' ? '' : []),
           timestamp: Date.now(),
-        });
+        };
+        messages.push(foldedMessage);
+        // Message starts normally have unique storage IDs. Keep first-match
+        // behaviour for malformed collisions, matching the old array lookup.
+        if (!storageIdIndex.has(id)) storageIdIndex.set(id, foldedMessage);
+        if (foldedMessage.role === 'assistant') latestAssistantMessage = foldedMessage;
         break;
       }
       case 'message_update': {
@@ -331,13 +357,18 @@ function foldHistoryEvents(
       case 'tool_execution_start': {
         const { toolCallId, toolName, args } = event as { toolCallId?: string; toolName?: string; args?: unknown };
         const id = toolCallId || `tool_${Date.now()}_${messages.length}`;
-        messages.push({
+        const toolMessage: Message = {
           id,
           role: 'tool',
           content: '',
           timestamp: Date.now(),
           toolCall: { id, name: toolName || 'unknown', args },
-        });
+        };
+        messages.push(toolMessage);
+        // Tool IDs are not passed through message storage-ID allocation. Keep
+        // the first map entry so duplicate/cross-role IDs retain Array.find's
+        // historical first-match semantics.
+        if (!storageIdIndex.has(id)) storageIdIndex.set(id, toolMessage);
         break;
       }
       case 'tool_execution_end': {
@@ -354,7 +385,14 @@ function foldHistoryEvents(
     }
   }
   void sessionId;
-  return { messages, leftovers };
+  return {
+    messages,
+    leftovers,
+    diagnostics: {
+      storageLookupLinearScans,
+      storageIdAllocationCollisions,
+    },
+  };
 }
 
 /** Apply buffered history events as ONE state write (single render). */
@@ -368,7 +406,11 @@ function applyHistoryBuffer(sessionId: string, chunkLimit = Number.POSITIVE_INFI
   const startedAt = performance.now();
   const store = useSessionStore.getState();
   const base = store.sessionData[sessionId]?.messages ?? [];
-  const { messages: folded, leftovers } = foldHistoryEvents(sessionId, chunk, base);
+  const {
+    messages: folded,
+    leftovers,
+    diagnostics,
+  } = foldHistoryEvents(sessionId, chunk, base);
   for (const leftover of leftovers) {
     useSessionStore.getState().handleServerMessage(leftover);
   }
@@ -391,6 +433,8 @@ function applyHistoryBuffer(sessionId: string, chunkLimit = Number.POSITIVE_INFI
       },
       sessionMessages: { ...state.sessionMessages, [sessionId]: folded },
       sessionCache: newCache,
+      debugStorageLookupLinearScans: state.debugStorageLookupLinearScans + diagnostics.storageLookupLinearScans,
+      debugStorageIdAllocationCollisions: state.debugStorageIdAllocationCollisions + diagnostics.storageIdAllocationCollisions,
       ...(isCurrent ? { messages: folded } : {}),
     };
   });
@@ -551,9 +595,16 @@ function deriveLegacyFromMeta(meta: Record<string, SessionMeta>): {
   pinnedSessionPaths: string[];
   sessionDisplayNames: Record<string, string>;
 } {
-  // Delegates to the shared pure helper so the client's optimistic projection
-  // and the server's compatibility window cannot drift apart.
-  return deriveLegacySessionArrays(meta);
+  const archivedSessionPaths: string[] = [];
+  const pinnedSessionPaths: string[] = [];
+  const sessionDisplayNames: Record<string, string> = {};
+  for (const [key, rec] of Object.entries(meta)) {
+    const legacy = rec.legacyKey ?? key.slice(key.indexOf(':') + 1);
+    if (rec.archived) archivedSessionPaths.push(legacy);
+    if (rec.pinned) pinnedSessionPaths.push(legacy);
+    if (rec.displayName !== undefined) sessionDisplayNames[legacy] = rec.displayName;
+  }
+  return { archivedSessionPaths, pinnedSessionPaths, sessionDisplayNames };
 }
 
 /** Resolve a session path/id to its stable v2 key (falls back to unknown:<path>). */
@@ -736,6 +787,10 @@ interface SessionState {
   sessionCacheMeta: Record<string, SessionCacheMeta>;
   /** Debug witness: number of complete-transcript size scans in this store instance. */
   debugSizeScanCount: number;
+  /** Debug witness: replay target resolutions that used a linear array scan. */
+  debugStorageLookupLinearScans: number;
+  /** Number of replay message starts that required a suffixed storage id. */
+  debugStorageIdAllocationCollisions: number;
   // Track which sessions are streaming (for background processing)
   streamingSessions: Record<string, boolean>;
   // Loading state to prevent duplicate adds during initial session load
@@ -892,6 +947,8 @@ export const useSessionStore = create<SessionState>()(
       sessionMessages: {},
       sessionCacheMeta: {},
       debugSizeScanCount: 0,
+      debugStorageLookupLinearScans: 0,
+      debugStorageIdAllocationCollisions: 0,
       streamingSessions: {},
       isLoadingSessions: false,
       // Auto-compaction state
