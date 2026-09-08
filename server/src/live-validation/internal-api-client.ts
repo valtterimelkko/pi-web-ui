@@ -351,6 +351,11 @@ export class InternalApiClient implements InternalApiClientLike {
     return this.request<CapabilitiesResponse>('GET', '/api/v1/capabilities');
   }
 
+  /** Live backend health incl. build/boot identity (unauthenticated route on the same socket). */
+  async getHealth(): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>('GET', '/api/v1/health');
+  }
+
   /** Fetch the live model list across all (or one) runtime. */
   async getModels(runtime?: string): Promise<ModelsResponse> {
     const query = runtime ? `?runtime=${runtime}` : '';

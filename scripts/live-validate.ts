@@ -5,11 +5,26 @@ import { InternalApiClient } from '../server/src/live-validation/internal-api-cl
 import { listScenarioIds, runScenario, scenarioRegistry } from '../server/src/live-validation/scenarios.js';
 import { resolveValidationTarget } from '../server/src/live-validation/validation-safety.js';
 import type { ValidationRuntime } from '../server/src/live-validation/types.js';
+import {
+  buildProofRecord,
+  evaluateAcceptance,
+  writeProofRecord,
+  type AcceptanceCheckExit,
+  type BackendIdentitySnapshot,
+} from '../server/src/live-validation/acceptance.js';
 
 function parseArgs(argv: string[]) {
   const get = (flag: string): string | undefined => {
     const index = argv.indexOf(flag);
     return index >= 0 ? argv[index + 1] : undefined;
+  };
+  const getAll = (flag: string): string[] => {
+    const values: string[] = [];
+    for (let index = argv.indexOf(flag); index >= 0; index = argv.indexOf(flag, index + 1)) {
+      const value = argv[index + 1];
+      if (value) values.push(value);
+    }
+    return values;
   };
 
   return {
@@ -22,7 +37,18 @@ function parseArgs(argv: string[]) {
     socketPath: get('--socket'),
     tokenPath: get('--token-path'),
     allowProduction: argv.includes('--allow-production'),
+    strict: argv.includes('--strict'),
+    require: getAll('--require'),
+    recordDir: get('--record-dir'),
+    expectMode: get('--expect-mode'),
+    entrypointMode: get('--entrypoint-mode'),
+    scope: get('--scope'),
   };
+}
+
+interface HealthIdentity {
+  buildIdentity?: { buildId?: string; identityStatus?: string; buildMode?: string };
+  bootIdentity?: { bootId?: string; startedAt?: string };
 }
 
 async function main() {
@@ -52,6 +78,30 @@ async function main() {
     tokenPath: target.tokenPath,
   });
   const capabilities = await client.getCapabilities();
+
+  // Strict mode: capture backend build/boot identity BEFORE any scenario runs,
+  // and reject the wrong build (e.g. source server for a compiled acceptance)
+  // before login or mutation.
+  const checks: AcceptanceCheckExit[] = [];
+  let identity: BackendIdentitySnapshot | undefined;
+  if (args.strict) {
+    const health = await client.getHealth() as HealthIdentity;
+    identity = {
+      source: 'health',
+      buildId: health.buildIdentity?.buildId ?? 'unknown',
+      identityStatus: health.buildIdentity?.identityStatus ?? 'unknown',
+      buildMode: health.buildIdentity?.buildMode ?? 'unknown',
+      bootId: health.bootIdentity?.bootId ?? 'unknown',
+      startedAt: health.bootIdentity?.startedAt ?? 'unknown',
+    };
+    const modeOk = !args.expectMode || identity.buildMode === args.expectMode;
+    checks.push({ name: 'identity-precheck', exitCode: modeOk ? 0 : 1 });
+    if (!modeOk) {
+      console.error(`[live-validate] STRICT: backend build mode is '${identity.buildMode}', expected '${args.expectMode}'; refusing to run scenarios against the wrong build.`);
+      process.exit(1);
+    }
+  }
+
   const runtimes: ValidationRuntime[] = args.runtime === 'all'
     ? (['pi', 'claude', 'opencode'] as ValidationRuntime[]).filter((runtime) => capabilities.runtimes[runtime].available)
     : [args.runtime];
@@ -99,6 +149,36 @@ async function main() {
 
   if (args.json) {
     console.log(JSON.stringify({ results }, null, 2));
+  }
+
+  if (args.strict) {
+    const required = args.require.length > 0 ? args.require : scenarioIds;
+    const acceptanceInput = {
+      createdAt: new Date().toISOString(),
+      identity: identity ?? {
+        source: 'provided' as const, buildId: 'unknown', identityStatus: 'unknown',
+        buildMode: 'unknown', bootId: 'unknown', startedAt: 'unknown',
+      },
+      ...(args.expectMode ? { expectedBuildMode: args.expectMode } : {}),
+      entrypointMode: (args.entrypointMode ?? 'source') as 'source' | 'compiled',
+      scope: (args.scope ?? 'real-runtime') as 'fixture' | 'real-runtime',
+      required,
+      results,
+      checks,
+      evidence: [],
+      cleanup: { mode: 'external' as const, detail: 'server lifecycle owned by validate:server flow' },
+      remainingLimits: [],
+    };
+    if (args.recordDir) {
+      mkdirSync(args.recordDir, { recursive: true });
+      const written = await writeProofRecord(acceptanceInput, args.recordDir);
+      console.log(`[live-validate] STRICT: proof record ${written.record.verdict} at ${written.path}`);
+    } else {
+      const record = await buildProofRecord(acceptanceInput);
+      console.log(`[live-validate] STRICT: verdict ${record.verdict} (${record.reasons.join('; ') || 'all required checks passed'})`);
+    }
+    const outcome = evaluateAcceptance(acceptanceInput);
+    process.exit(outcome.exitCode);
   }
 
   const failed = results.filter((result) => !result.passed && !result.skipped);

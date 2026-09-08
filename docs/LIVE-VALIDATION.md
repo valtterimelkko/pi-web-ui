@@ -86,6 +86,26 @@ entrypoint-mode environment label. Both modes retain the existing dedicated
 process group and stopper. An entrypoint banner is not functional proof: verify
 the served identity and run the required authenticated HTTP/WS/runtime scenarios.
 
+### Strict acceptance mode
+
+`scripts/live-validate.ts --strict` turns a validation run into an acceptance
+verdict. Before any scenario runs it fetches `/api/v1/health` and captures the
+backend build/boot identity; `--expect-mode compiled|source` refuses the wrong
+build before login or mutation. Required scenarios are named explicitly with
+repeatable `--require <id>` flags. Verdicts distinguish `passed` (exit 0),
+`failed` (exit 1 — a required scenario/assertion/check failed, or the wrong
+build was detected) and `indeterminate` (exit 2 — required proof is missing:
+scenario never ran, evidence artifact absent, or cleanup uncertainty).
+`--record-dir <dir>` writes a schema-versioned proof record (never overwriting
+prior evidence) containing identity, entrypoint mode, fixture-vs-real scope,
+expected/executed/skipped matrix with attempt history, named check exits,
+bounded artifact references with sha256 hashes, and cleanup disposition;
+records are bounded to 256 KiB with explicit truncation markers.
+`--entrypoint-mode` and `--scope` record how the run was actually driven.
+Server lifecycle (start/stop) remains owned by the `validate:server` flow, so
+records default to `cleanup: external`; a stop log can be attached as evidence
+afterwards via `verifyRecordIntegrity` re-verification.
+
 Start an isolated validation server in one terminal/background task:
 
 ```bash
