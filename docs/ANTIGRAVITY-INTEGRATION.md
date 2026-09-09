@@ -133,6 +133,51 @@ Failed turns emit a visible assistant error body + `agent_end` (no blank
 screen). `agyStatus` carries the raw agy terminal status
 (SUCCESS/ERROR/WAITING/…).
 
+### Tool surfacing parity (contract 1.39.0)
+
+- The shared `VISIBLE_TOOL_NAMES` allowlist includes the full live-captured
+  agy 1.1.27 inventory (`AGY_VISIBLE_TOOL_NAMES`, 57 names), so tool cards
+  render in BOTH the browser message list and the Internal API
+  `transcript?view=screen` / evidence screen expansion.
+- The agy wire sends tool parameters only on the DONE step; the server
+  re-surfaces them as additive `args` on `tool_execution_end`, and the client
+  patches the card, so live cards match replay. `write_to_file` ends with
+  empty output on the wire — the server synthesizes `Wrote <TargetFile>`.
+- Card presentation maps onto the pi families (`run_command`→Shell,
+  `write_to_file`→Write, `view_file`→Read, replace-family→Edit,
+  `command_status`→**Background process**, `invoke_subagent`→Subagent).
+  agy's background-command lifecycle (`run_command` + `command_status` +
+  `send_command_input`) is therefore visible as it happens.
+- No streaming partial tool output exists on the agy wire (verified: an 8 s
+  `run_command` emits nothing between ACTIVE and DONE) — a running card shows
+  name/args/spinner until completion.
+- The final assistant message is emitted exactly once: the streamed message is
+  closed by the service after durable persist, never re-emitted.
+
+### Context usage semantics
+
+`getContextUsage` reports the **real request size**: `input + cacheRead` of
+the last finalised turn, against the model's static window
+(`ANTIGRAVITY_MODEL_CONTEXT_WINDOWS`). agy's `usage.total` is `input + output`
+ONLY and understates the context ~2.6× (live-measured 2026-09-09: turn 1 real
+148,489 = 14.2% vs 44,704 = 4.3% displayed previously). Session stats carry
+cumulative token sums over finalised turns; the session-info modal shows both
+plus the durable transcript path and the native conversation id.
+
+### Session identity
+
+The displayed session id is the pi-web-ui registry UUID (stable across
+transfer/watch — the same convention as every runtime). The native agy
+conversation UUID is stored per turn and surfaced as `nativeSessionId`
+(session-info modal, "Native Session ID").
+
+### Working-directory caveat (upstream agy)
+
+The agy child is spawned with the session cwd (echoed in `init.cwd`), but the
+model-facing workspace root agy advertises is `/root` regardless (`--add-dir`
+does not change it). Prompts should use absolute paths; files may otherwise
+land under `/root` even when the session cwd differs.
+
 ## Session Registry
 
 Sessions are stored in `~/.pi-web-ui/session-registry.json` with:

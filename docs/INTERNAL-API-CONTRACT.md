@@ -29,6 +29,12 @@ Current contract:
 
 ### Changelog
 
+- **1.39.0** (minor, additive antigravity surfacing parity) — makes the antigravity stream-json runtime visible on the shared surfaces at the same fidelity as pi (see [`plans/ANTIGRAVITY-FRONTEND-PARITY-AND-CONTEXT-HONESTY-PLAN.md`](./plans/ANTIGRAVITY-FRONTEND-PARITY-AND-CONTEXT-HONESTY-PLAN.md) for the live evidence base). Everything is additive:
+  - the shared tool allowlist gains the full live-captured agy 1.1.27 inventory (`AGY_VISIBLE_TOOL_NAMES`, 57 names), so `transcript?view=screen`, the `/sessions/:id/evidence` screen expansion and the browser message list all render antigravity tool cards (previously every agy tool was dropped);
+  - `tool_execution_end` events on the broker may carry additive `data.args` (the agy wire sends tool parameters only on the DONE step; the server re-surfaces them so live cards match replay). Clients that ignore the field are unaffected;
+  - `GET /sessions/:id` session detail is unchanged in shape, but antigravity stats now carry real values: cumulative token `tokens` (summed over finalised turns), `sessionFile` (durable transcript path) and `nativeSessionId` (the agy conversation id); context usage is computed as `input + cacheRead` (the real Gemini request size — agy's `total` is input+output and understates the context ~2.6×);
+  - websocket `session_switched` for antigravity now includes `contextWindow`/`contextUsed`/`contextPercent` (matching opencode), so the composer context bar populates on session open.
+
 - **1.38.0** (minor, additive antigravity goal function) — the cross-runtime goal function (introduced 1.27.0 for pi/claude/commandcode) extends to the Antigravity runtime, which has no native CLI goal and is therefore served by a fully server-side goal manager (control store + turn-driven auto-continue sweeper with command or self-report verification). Everything is additive:
   - `capabilities.runtimes.antigravity`: gains `supportsGoal: true` and `goalControls: ["start","pause","resume","clear"]`.
   - `GET /sessions/:id/goal` on an antigravity session returns the canonical goal projection (previously `supported:false`); `POST` accepts `start|pause|resume|clear` (`start` takes `objective`, optional `verifyCommand`, `maxRuns` ≤ 100).
