@@ -135,7 +135,7 @@ const batchCreateEntrySchema = z.object({
 });
 
 export const sessionControlBodySchema = z.object({
-  action: z.enum(['set_model', 'set_thinking_level', 'set_effort', 'pin', 'unpin', 'acquire_retention', 'renew_retention', 'release_retention']),
+  action: z.enum(['set_model', 'set_thinking_level', 'set_effort', 'pin', 'unpin', 'acquire_retention', 'renew_retention', 'release_retention', 'adopt']),
   modelId: z.string().min(1).optional(),
   level: z.string().min(1).optional(),
   effort: commandCodeEffortSchema.optional(),
@@ -143,6 +143,39 @@ export const sessionControlBodySchema = z.object({
   retentionLeaseId: z.string().uuid().optional(),
   ownerId: z.string().min(1).max(200).optional(),
   retention: retentionSchema.optional(),
+  // Contract 1.40.0 `adopt`: link this session under a parent (display-only).
+  parentSessionId: sessionIdSchema.optional(),
+  alias: z.string().min(1).max(120).optional(),
+  role: z.string().min(1).max(120).optional(),
+  // Contract 1.40.0 `adopt-native` shares the control schema surface via types.
+  runtime: z.enum(['claude', 'commandcode', 'opencode', 'antigravity']).optional(),
+  nativeId: z.string().min(1).max(128).optional(),
+  cwd: cwdSchema.optional(),
+}).strict();
+
+/** Contract 1.40.0: POST /api/v1/sessions/:id/adopt body. Parent may also arrive
+ *  via the X-Parent-Session header (header wins, same precedence as create). */
+export const adoptSessionBodySchema = z.object({
+  parentSessionId: sessionIdSchema.optional(),
+  alias: z.string().min(1).max(120).optional(),
+  role: z.string().min(1).max(120).optional(),
+}).strict();
+
+/** Native session artefact base names: UUIDs (claude/commandcode/antigravity),
+ *  ses_* ids (opencode). No separators, no `..` — the value is joined into a
+ *  filesystem path and additionally containment-checked before any read. */
+const nativeIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/, 'nativeId must be a bare session file base name');
+
+/** Contract 1.40.0: POST /api/v1/sessions/adopt-native body. Pi is deliberately
+ *  absent — native pi sessions are auto-discovered into the registry by the
+ *  SessionWatcher (same rule as GET /sessions/native). */
+export const adoptNativeBodySchema = z.object({
+  runtime: z.enum(['claude', 'commandcode', 'opencode', 'antigravity']),
+  nativeId: nativeIdSchema,
+  cwd: cwdSchema.optional(),
+  parentSessionId: sessionIdSchema.optional(),
+  alias: z.string().min(1).max(120).optional(),
+  role: z.string().min(1).max(120).optional(),
 }).strict();
 
 export const batchCreateBodySchema = z.object({
@@ -161,6 +194,8 @@ export const batchPromptBodySchema = z.object({
 }).strict();
 
 export type CreateSessionBody = z.infer<typeof createSessionBodySchema>;
+export type AdoptSessionBody = z.infer<typeof adoptSessionBodySchema>;
+export type AdoptNativeBody = z.infer<typeof adoptNativeBodySchema>;
 export type BatchCreateBody = z.infer<typeof batchCreateBodySchema>;
 export type BatchPromptBody = z.infer<typeof batchPromptBodySchema>;
 

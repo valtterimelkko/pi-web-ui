@@ -63,13 +63,15 @@ import type {
   DeleteWatchRequest,
   Phase7PiShadowProfile,
   Phase7PiShadowReasonCode,
+  AdoptSessionResponse,
+  AdoptNativeSessionResponse,
 } from '../types.js';
 import { isThinkingLevel } from '../types.js';
 import { composePiGoalCommand, type SessionGoalControlRequest } from '../goal/goal-actions.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
-import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildChildDispatchedCard, type ParentLink, type LinkageRegistry } from '../child-linkage.js';
+import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildChildDispatchedCard, brokerKeyFor, type ParentLink, type LinkageRegistry } from '../child-linkage.js';
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
@@ -94,7 +96,7 @@ import {
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
-import { readBoundedJsonBody as readJsonBody } from '../request-body.js';
+import { readBoundedJsonBody as readJsonBody, RequestBodyTooLargeError } from '../request-body.js';
 import {
   createSessionBodySchema,
   batchCreateBodySchema,
@@ -102,6 +104,8 @@ import {
   mapWithConcurrency,
   BATCH_CONCURRENCY_LIMIT,
   sessionControlBodySchema,
+  adoptSessionBodySchema,
+  adoptNativeBodySchema,
 } from '../session-validation.js';
 import { withCorrelation, newRequestId, getCorrelationContext } from '../../logging/correlation.js';
 import { TransferService } from '../../session-transfer/transfer-service.js';
@@ -125,6 +129,7 @@ import { toV2Key } from '../../routes/session-meta.js';
 import {
   NATIVE_RUNTIMES,
   scanNativeSessions,
+  resolveNativeSessionArtifact,
   type NativeRuntime,
 } from '../native-sessions.js';
 import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
@@ -3634,6 +3639,234 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  // ── Contract 1.40.0: session adoption ────────────────────────────────────
+
+  interface AdoptionLinkResult {
+    childSessionId: string;
+    parentSessionId: string;
+    runtime: string;
+  }
+
+  /** Resolve a session by id or, failing that, by session path (parents may be
+   *  addressed either way, matching create-time linkage resolution). */
+  async function resolveRegistrySession(idOrPath: string) {
+    return (await sessionRegistry.get(idOrPath)) ?? (await sessionRegistry.getByPath(idOrPath));
+  }
+
+  /** Shared adoption core: validate child+parent, guard cycles, patch the
+   *  registry linkage, fan out `child_dispatched` to the parent's broker key
+   *  and browser surface. Returns either the link result or the error to send. */
+  async function adoptRegisteredSession(
+    childId: string,
+    parentIdOrPath: string,
+    opts: { alias?: string; role?: string } = {},
+  ): Promise<{ ok: true; result: AdoptionLinkResult } | { ok: false; status: 400 | 404; body: Record<string, unknown> }> {
+    const child = await resolveRegistrySession(childId);
+    if (!child) {
+      return { ok: false, status: 404, body: enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Child session not found: ${childId}`) };
+    }
+    const parent = await resolveRegistrySession(parentIdOrPath);
+    if (!parent) {
+      return { ok: false, status: 404, body: enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Parent session not found: ${parentIdOrPath}`) };
+    }
+    if (child.id === parent.id) {
+      return { ok: false, status: 400, body: enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'A session cannot adopt itself as a child') };
+    }
+    // Cycle guard: refuse when the child already sits on the parent's ancestor
+    // chain (bounded walk; linkage is display-only so chains are short).
+    let ancestor = parent;
+    for (let depth = 0; depth < 32 && ancestor.parentSessionId; depth += 1) {
+      if (ancestor.parentSessionId === child.id) {
+        return { ok: false, status: 400, body: enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'Adoption refused: it would create a parent cycle') };
+      }
+      const next = await resolveRegistrySession(ancestor.parentSessionId);
+      if (!next) break;
+      ancestor = next;
+    }
+
+    await sessionRegistry.patchSessionMeta(child.id, { parentSessionId: parent.id });
+
+    const card = buildChildDispatchedCard({
+      childSessionId: child.id,
+      runtime: child.sdkType,
+      model: child.model,
+      cwd: child.cwd,
+      parentSessionId: parent.id,
+      ...(opts.alias ? { label: opts.alias } : {}),
+    });
+    const timestamp = Date.now();
+    try {
+      broker.publish(brokerKeyFor(parent.sdkType, parent.path, parent.id), { type: 'child_dispatched', timestamp, data: { sessionId: parent.id, child: card } } as NormalizedEvent);
+    } catch { /* non-fatal: browser surface still notified below */ }
+    try {
+      onBrowserMessage?.({ type: 'child_dispatched', sessionId: parent.id, child: card });
+    } catch { /* non-fatal */ }
+    try {
+      await childLinks.linkChild(
+        { sessionId: child.id, sessionPath: child.path, runtime: child.sdkType, model: card.model },
+        { parentSessionId: parent.id, parentBrokerKey: brokerKeyFor(parent.sdkType, parent.path, parent.id), parentSdkType: parent.sdkType },
+      );
+    } catch { /* non-fatal: terminal-turn fan-out is best-effort */ }
+
+    logger.info(`[SessionAdoption] ${child.id} (${child.sdkType}) adopted under parent ${parent.id}${opts.alias ? ` as '${opts.alias}'` : ''}`);
+    return {
+      ok: true,
+      result: {
+        childSessionId: child.id,
+        parentSessionId: parent.id,
+        runtime: child.sdkType,
+      },
+    };
+  }
+
+  /** POST /api/v1/sessions/:id/adopt — link an existing registered session under
+   *  a parent. Parent from the X-Parent-Session header or body parentSessionId. */
+  async function handleAdoptSession(
+    req: IncomingMessage,
+    res: ServerResponse,
+    childId: string,
+  ): Promise<void> {
+    let raw: unknown = {};
+    try {
+      raw = (await readJsonBody<unknown>(req)) ?? {};
+    } catch {
+      raw = {};
+    }
+    const parsed = adoptSessionBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: parsed.error.issues[0]?.message ?? 'Invalid request body',
+        code: ErrorCode.INVALID_REQUEST,
+        details: parsed.error.issues,
+      });
+      return;
+    }
+    const body = parsed.data;
+    const parentId = pickExplicitParentId(req.headers['x-parent-session'] as string | undefined, body.parentSessionId);
+    if (!parentId) {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required'));
+      return;
+    }
+    const outcome = await adoptRegisteredSession(childId, parentId, { alias: body.alias, role: body.role });
+    if (!outcome.ok) {
+      sendJson(res, outcome.status, outcome.body);
+      return;
+    }
+    const response: AdoptSessionResponse = {
+      success: true,
+      ...outcome.result,
+      ...(body.alias ? { alias: body.alias } : {}),
+      ...(body.role ? { role: body.role } : {}),
+    };
+    sendJson(res, 200, response);
+  }
+
+  /** POST /api/v1/sessions/adopt-native — resolve an unmanaged native CLI
+   *  session artefact on disk and register it as a linked child. */
+  async function handleAdoptNativeSession(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    let raw: unknown = {};
+    try {
+      raw = (await readJsonBody<unknown>(req)) ?? {};
+    } catch (err) {
+      if (err instanceof RequestBodyTooLargeError) throw err;
+      raw = {};
+    }
+    const parsed = adoptNativeBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: parsed.error.issues[0]?.message ?? 'Invalid request body',
+        code: ErrorCode.INVALID_REQUEST,
+        details: parsed.error.issues,
+      });
+      return;
+    }
+    const body = parsed.data;
+
+    const parentId = pickExplicitParentId(req.headers['x-parent-session'] as string | undefined, body.parentSessionId);
+    if (parentId) {
+      const parent = await resolveRegistrySession(parentId);
+      if (!parent) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Parent session not found: ${parentId}`));
+        return;
+      }
+    }
+
+    const nativeIdField = body.runtime === 'claude' ? 'claudeSessionId'
+      : body.runtime === 'commandcode' ? 'commandCodeNativeSessionId'
+      : body.runtime === 'opencode' ? 'opencodeSessionId'
+      : 'antigravityConversationId';
+
+    // Already known in the registry → adopt the existing entry (no duplicate).
+    const known = (await sessionRegistry.listAll()).find((entry) => entry[nativeIdField] === body.nativeId);
+    if (known) {
+      if (parentId) {
+        const outcome = await adoptRegisteredSession(known.id, parentId, { alias: body.alias, role: body.role });
+        if (!outcome.ok) {
+          sendJson(res, outcome.status, outcome.body);
+          return;
+        }
+      }
+      const response: AdoptNativeSessionResponse = {
+        success: true,
+        sessionId: known.id,
+        runtime: body.runtime,
+        ...(parentId ? { parentSessionId: parentId } : {}),
+        adopted: 'existing',
+        nativePath: known.path,
+        ...(body.alias ? { alias: body.alias } : {}),
+        ...(body.role ? { role: body.role } : {}),
+      };
+      sendJson(res, 200, response);
+      return;
+    }
+
+    const resolved = await resolveNativeSessionArtifact({
+      runtime: body.runtime,
+      nativeId: body.nativeId,
+      cwd: body.cwd,
+      roots: nativeRoots,
+    });
+    if (!resolved) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.NATIVE_SESSION_NOT_FOUND, `No native ${body.runtime} session '${body.nativeId}' found on disk`));
+      return;
+    }
+
+    const mtimeIso = new Date(resolved.mtimeMs).toISOString();
+    const created = await sessionRegistry.upsert({
+      sdkType: body.runtime,
+      path: resolved.nativePath,
+      [nativeIdField]: body.nativeId,
+      cwd: body.cwd ?? resolved.fileCwd ?? '',
+      firstMessage: resolved.preview ?? '',
+      messageCount: resolved.messageCount ?? 0,
+      createdAt: mtimeIso,
+      lastActivity: mtimeIso,
+      status: 'idle',
+      origin: 'native-discovered',
+      ...(parentId ? { parentSessionId: parentId } : {}),
+    } as Parameters<typeof sessionRegistry.upsert>[0]);
+
+    if (parentId) {
+      await adoptRegisteredSession(created.id, parentId, { alias: body.alias, role: body.role });
+    }
+
+    const response: AdoptNativeSessionResponse = {
+      success: true,
+      sessionId: created.id,
+      runtime: body.runtime,
+      ...(parentId ? { parentSessionId: parentId } : {}),
+      adopted: 'created',
+      nativePath: resolved.nativePath,
+      ...(created.cwd ? { cwd: created.cwd } : {}),
+      ...(body.alias ? { alias: body.alias } : {}),
+      ...(body.role ? { role: body.role } : {}),
+    };
+    sendJson(res, 200, response);
+  }
+
   async function handleSessionControl(
     req: IncomingMessage,
     res: ServerResponse,
@@ -3650,6 +3883,32 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     const body = parsed.data as SessionControlRequest;
+
+    // Contract 1.40.0: adoption is runtime-agnostic registry linkage — handle it
+    // before the per-runtime control branches (works for Command Code too).
+    if (body.action === 'adopt') {
+      const parentId = pickExplicitParentId(req.headers['x-parent-session'] as string | undefined, body.parentSessionId);
+      if (!parentId) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required for adopt'));
+        return;
+      }
+      const outcome = await adoptRegisteredSession(sessionId, parentId, { alias: body.alias, role: body.role });
+      if (!outcome.ok) {
+        sendJson(res, outcome.status, outcome.body);
+        return;
+      }
+      const response: SessionControlResponse = {
+        success: true,
+        action: 'adopt',
+        childSessionId: outcome.result.childSessionId,
+        parentSessionId: outcome.result.parentSessionId,
+        runtime: outcome.result.runtime,
+        ...(body.alias ? { alias: body.alias } : {}),
+        ...(body.role ? { role: body.role } : {}),
+      };
+      sendJson(res, 200, response);
+      return;
+    }
 
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
@@ -6920,6 +7179,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleAbort: wrapControl(handleAbort),
     handleSessionControl: wrapControl(handleSessionControl),
     handleRespondApproval: wrapControl(handleRespondApproval),
+    // Contract 1.40.0: session adoption (P1 control-lane bounded).
+    handleAdoptSession: wrapControl(handleAdoptSession),
+    handleAdoptNativeSession: wrapControl(handleAdoptNativeSession),
     // Orchestration endpoints
     handleSessionEvents,
     handleSessionWait,

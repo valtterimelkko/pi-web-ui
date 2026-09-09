@@ -109,8 +109,9 @@ export class InFlightBashCorrelator {
   }
 }
 
-function brokerKeyFor(sdkType: string, path: string, id: string): string {
-  // Pi publishes events under the session *path*; other runtimes under the id.
+/** Broker publish key for a session (exported for adopt-time fan-out).
+ *  Pi publishes events under the session *path*; other runtimes under the id. */
+export function brokerKeyFor(sdkType: string, path: string, id: string): string {
   return sdkType === 'pi' ? path : id;
 }
 

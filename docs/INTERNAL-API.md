@@ -688,6 +688,57 @@ sources for that session.
 
 ---
 
+### Session adoption (contract 1.40.0)
+
+Adoption links a session under a parent **after the fact** — the same
+registry `parentSessionId` linkage and `child_dispatched` fan-out that
+create-time linkage produces, but applied to an existing session. Linkage is
+display-only metadata: it never moves transcripts, restarts runtimes, or
+changes session ownership.
+
+**Adopt a registered session** (the child already exists in the registry —
+e.g. it was created without `parentSessionId`/`X-Parent-Session`):
+
+```
+POST /api/v1/sessions/:id/adopt
+{"parentSessionId": "<parent>", "alias": "worker-1", "role": "db-migration"}
+```
+
+- The parent may also arrive via the `X-Parent-Session` header (header wins,
+  same precedence as create; a registry id or session path is accepted).
+- `alias` becomes the child-card label; `role` is an advisory echo.
+- Response: `{success, childSessionId, parentSessionId, runtime}`.
+- The same operation is available as `POST /sessions/:id/control` with
+  `{action: "adopt", parentSessionId}` (P1 control lane).
+- Errors: `404 SESSION_NOT_FOUND` (child or parent unknown), `400
+  INVALID_REQUEST` (missing parent identity, self-adoption, or an adoption
+  that would close a parent cycle).
+
+**Adopt a native CLI session** (discovered on disk, never registered — pulls
+it into the registry as a linked child using the same bounded,
+containment-checked resolution as the native scan):
+
+```
+POST /api/v1/sessions/adopt-native
+{"runtime": "claude", "nativeId": "<uuid>", "cwd": "/root/proj", "parentSessionId": "<parent>"}
+```
+
+- `runtime` — one of `claude,commandcode,opencode,antigravity` (`pi` is
+  rejected: native pi sessions are auto-discovered by the SessionWatcher).
+- `nativeId` — bare artefact base name (claude/commandcode/antigravity UUID,
+  opencode `ses_*`); path separators and `..` are refused.
+- `cwd` — optional; narrows the artefact search to that project directory
+  (cross-project fallback stays bounded) and seeds the registry `cwd`.
+- Already-registered native ids are adopted in place (no duplicate entry);
+  the response reports `adopted: "existing"` vs `"created"`.
+- Errors: `404 NATIVE_SESSION_NOT_FOUND` (artefact not on disk), `404
+  SESSION_NOT_FOUND` (parent unknown), `400 INVALID_REQUEST` (bad body).
+- The browser UI exposes the same capability via `GET /api/sessions/native`
+  and `POST /api/sessions/import-native` (Resume CLI Session modal); the
+  Internal API remains the canonical contract surface.
+
+---
+
 ### Session identifiers and read-path resolution
 
 The registry carries several identifiers for one session. `sessionId` normally

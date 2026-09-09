@@ -29,6 +29,7 @@ export const ErrorCode = {
   INVALID_REQUEST: 'INVALID_REQUEST',
   PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
+  NATIVE_SESSION_NOT_FOUND: 'NATIVE_SESSION_NOT_FOUND',
   SESSION_BUSY: 'SESSION_BUSY',
   SESSION_CREATE_FAILED: 'SESSION_CREATE_FAILED',
   RUNTIME_UNAVAILABLE: 'RUNTIME_UNAVAILABLE',
@@ -150,6 +151,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'Wrong/expired id, or the session was deleted.',
     hint: 'List current sessions with GET /api/v1/sessions and use a valid sessionId.',
     docs: 'docs/INTERNAL-API.md#list-sessions',
+  },
+  [ErrorCode.NATIVE_SESSION_NOT_FOUND]: {
+    httpStatus: 404,
+    description: 'No native session artefact exists on disk for the given runtime + nativeId.',
+    cause: 'adopt-native could not resolve the session file the runtime CLI writes (wrong id, wrong cwd, or already removed).',
+    hint: 'Discover candidate ids with GET /api/v1/sessions/native?runtime=<rt> and pass a listed nativeId.',
+    docs: 'docs/INTERNAL-API.md#adopt-native',
   },
   [ErrorCode.SESSION_BUSY]: {
     httpStatus: 409,

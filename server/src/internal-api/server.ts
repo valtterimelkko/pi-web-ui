@@ -685,6 +685,16 @@ export class InternalApiServer {
           return;
         }
 
+        // Reserved word: contract 1.40.0 native session adoption.
+        if (id === 'adopt-native' && !action) {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleAdoptNativeSession(req, res);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+
         const sessionId = decodeURIComponent(id);
 
         if (action === 'prompt') {
@@ -815,6 +825,16 @@ export class InternalApiServer {
         if (action === 'control') {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleSessionControl(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+
+        // Contract 1.40.0: link an existing registered session under a parent.
+        if (action === 'adopt') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleAdoptSession(req, res, sessionId);
           } else {
             sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }

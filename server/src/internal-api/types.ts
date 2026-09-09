@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.39.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.40.0' as const;
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -561,10 +561,22 @@ export interface SessionEvidenceResponse {
 }
 
 export interface SessionControlRequest {
-  action: 'set_model' | 'set_thinking_level' | 'set_effort' | 'pin' | 'unpin' | 'acquire_retention' | 'renew_retention' | 'release_retention';
+  action: 'set_model' | 'set_thinking_level' | 'set_effort' | 'pin' | 'unpin' | 'acquire_retention' | 'renew_retention' | 'release_retention' | 'adopt';
   modelId?: string;
   level?: ThinkingLevel;
   effort?: CommandCodeEffort;
+  /** Contract 1.40.0 `adopt`: parent session id (or path) to link the session under. */
+  parentSessionId?: string;
+  /** Contract 1.40.0 `adopt`/`adopt-native`: optional display label for the child card. */
+  alias?: string;
+  /** Contract 1.40.0 `adopt`/`adopt-native`: advisory caller-assigned role echoed in the response. */
+  role?: string;
+  /** Contract 1.40.0 `adopt-native`: runtime owning the native session artefact. */
+  runtime?: SessionRuntime;
+  /** Contract 1.40.0 `adopt-native`: native session id (file base name / conversation id). */
+  nativeId?: string;
+  /** Contract 1.40.0 `adopt-native`: working directory scoping the native artefact search. */
+  cwd?: string;
   /**
    * Pin lifetime in seconds for the `pin` action. Defaults to 24h; clamped to a
    * hard max (7d). Re-pinning extends the deadline. The granted expiry is
@@ -730,6 +742,30 @@ export interface SessionHistoryResponse {
   events: Array<Record<string, unknown>>;
 }
 
+/** Contract 1.40.0: link an existing registered session under a parent (display-only). */
+export interface AdoptSessionResponse {
+  success: boolean;
+  childSessionId: string;
+  parentSessionId: string;
+  runtime: string;
+  alias?: string;
+  role?: string;
+}
+
+/** Contract 1.40.0: register an unmanaged native CLI session artefact as a linked child. */
+export interface AdoptNativeSessionResponse {
+  success: boolean;
+  sessionId: string;
+  runtime: string;
+  parentSessionId?: string;
+  /** Whether the registry entry was created fresh or an existing entry was adopted. */
+  adopted: 'created' | 'existing';
+  nativePath?: string;
+  cwd?: string;
+  alias?: string;
+  role?: string;
+}
+
 export interface SessionControlResponse {
   success: boolean;
   action: SessionControlRequest['action'];
@@ -737,6 +773,16 @@ export interface SessionControlResponse {
   level?: string;
   effort?: CommandCodeEffort;
   defaultEffort?: CommandCodeEffort;
+  /** Contract 1.40.0 `adopt`: the linked child session id. */
+  childSessionId?: string;
+  /** Contract 1.40.0 `adopt`: the parent session id the child was linked under. */
+  parentSessionId?: string;
+  /** Contract 1.40.0 `adopt`: the child's runtime. */
+  runtime?: string;
+  /** Contract 1.40.0 `adopt`: echo of the caller-provided display label. */
+  alias?: string;
+  /** Contract 1.40.0 `adopt`: echo of the caller-provided advisory role. */
+  role?: string;
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
   pinnedUntil?: string;

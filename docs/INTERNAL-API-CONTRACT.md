@@ -21,13 +21,20 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.37.0",
+  "contractVersion": "1.40.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.40.0** (minor, additive session adoption + native adoption) — an orchestrating agent can now link an existing session under a parent after the fact, and pull an unmanaged native CLI session into the registry as a linked child. Everything is additive; linkage stays display-only (registry `parentSessionId` + `child_dispatched` fan-out, exactly the create-time linkage semantics from 1.34.0 — transcripts, runtime ownership and lifecycle are untouched):
+  - `POST /sessions/:id/adopt` — link a registered session (`:id` = child) under a parent from the body `parentSessionId` or the `X-Parent-Session` header (header wins; registry id or session path). Optional `alias` becomes the child-card label; optional `role` is an advisory echo. Errors: `404 SESSION_NOT_FOUND` (child/parent unknown), `400 INVALID_REQUEST` (missing parent identity, self-adoption, would-be parent cycle).
+  - `POST /sessions/adopt-native` — resolve an unmanaged native CLI session artefact (same bounded, containment-checked layouts as `GET /sessions/native`) and register it as a linked child with `origin: 'native-discovered'` and the runtime's native id field set. Already-known native ids adopt the existing entry in place (`adopted: "existing" | "created"` in the response). New error code `404 NATIVE_SESSION_NOT_FOUND` when the artefact is absent. `pi` is not adoptable (SessionWatcher already covers it).
+  - `POST /sessions/:id/control` gains `action: "adopt"` (same semantics; `{success, action: "adopt", childSessionId, parentSessionId, runtime}` response) so adoption runs through the existing P1 control surface.
+  - Registry fix (required by adoption): `upsert` now carries `antigravityConversationId` and `parentSessionId` on first-time entry creation (previously only merge-path updates kept them).
+  - Rollback: ignore the new endpoints; the only persisted state is the display-only `parentSessionId` on registry entries, which older consumers already ignore.
 
 - **1.39.0** (minor, additive antigravity surfacing parity) — makes the antigravity stream-json runtime visible on the shared surfaces at the same fidelity as pi (see [`plans/ANTIGRAVITY-FRONTEND-PARITY-AND-CONTEXT-HONESTY-PLAN.md`](./plans/ANTIGRAVITY-FRONTEND-PARITY-AND-CONTEXT-HONESTY-PLAN.md) for the live evidence base). Everything is additive:
   - the shared tool allowlist gains the full live-captured agy 1.1.27 inventory (`AGY_VISIBLE_TOOL_NAMES`, 57 names), so `transcript?view=screen`, the `/sessions/:id/evidence` screen expansion and the browser message list all render antigravity tool cards (previously every agy tool was dropped);

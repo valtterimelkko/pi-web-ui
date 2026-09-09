@@ -156,7 +156,7 @@ function parseJsonlHead(head: string): Array<Record<string, unknown>> {
   return parsed;
 }
 
-async function previewFromClaudeStyleJsonl(filePath: string): Promise<{ preview?: string; cwd?: string }> {
+export async function previewFromClaudeStyleJsonl(filePath: string): Promise<{ preview?: string; cwd?: string }> {
   const head = await readHead(filePath);
   if (!head) return {};
   const lines = parseJsonlHead(head);
@@ -177,7 +177,7 @@ async function previewFromClaudeStyleJsonl(filePath: string): Promise<{ preview?
   return { preview: title ?? userText, cwd };
 }
 
-async function previewFromCommandCodeJsonl(filePath: string): Promise<{ preview?: string }> {
+export async function previewFromCommandCodeJsonl(filePath: string): Promise<{ preview?: string }> {
   const head = await readHead(filePath);
   if (!head) return {};
   const lines = parseJsonlHead(head);
@@ -319,6 +319,195 @@ async function scanAntigravity(root: string | undefined): Promise<RawItem[]> {
     items.push(item);
   }
   return items;
+}
+
+// ── Contract 1.40.0: native artefact resolution for adopt-native ────────────
+
+export interface NativeArtifactResolution {
+  runtime: NativeRuntime;
+  nativePath: string;
+  mtimeMs: number;
+  size: number;
+  /** Best-effort first user message (claude/commandcode/opencode). */
+  preview?: string;
+  /** Working directory when the artefact self-describes one (claude/opencode). */
+  fileCwd?: string;
+  /** Bounded JSONL line count (claude/commandcode); undefined when skipped. */
+  messageCount?: number;
+}
+
+/** Encode a cwd into the project-directory name convention shared by the
+ *  claude and commandcode CLI stores (path separators → dashes; lossy, so
+ *  resolution also tries the leading-dash variant claude writes). */
+export function encodeProjectDirName(cwd: string): string {
+  return cwd.split(path.sep).filter(Boolean).join('-');
+}
+
+/** stat a candidate path only if it is strictly contained in root. */
+async function containedStat(root: string, ...parts: string[]): Promise<{ nativePath: string; mtimeMs: number; size: number } | null> {
+  const rootAbs = path.resolve(root);
+  const candidate = path.resolve(rootAbs, ...parts);
+  if (candidate !== rootAbs && !candidate.startsWith(rootAbs + path.sep)) return null;
+  try {
+    const st = await fs.stat(candidate);
+    if (!st.isFile()) return null;
+    return { nativePath: candidate, mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
+/** Bounded JSONL line count (≤5 MiB read); undefined when skipped or unreadable. */
+async function boundedLineCount(filePath: string, size: number): Promise<number | undefined> {
+  if (size > 5 * 1024 * 1024) return undefined;
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    return content.split('\n').filter((line) => line.trim().length > 0).length;
+  } catch {
+    return undefined;
+  }
+}
+
+interface OpencodeMeta { preview?: string; fileCwd?: string; mtimeMs?: number }
+
+/** Read the small self-describing opencode session JSON (shared by scan + adopt). */
+async function readOpencodeMeta(filePath: string): Promise<OpencodeMeta> {
+  try {
+    const handle = await fs.open(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(PREVIEW_MAX_BYTES);
+      const { bytesRead } = await handle.read(buffer, 0, PREVIEW_MAX_BYTES, 0);
+      const parsed = JSON.parse(buffer.subarray(0, bytesRead).toString('utf-8')) as OpencodeSessionJson;
+      const meta: OpencodeMeta = {};
+      if (typeof parsed.title === 'string' && parsed.title.trim()) meta.preview = parsed.title.trim();
+      else if (typeof parsed.slug === 'string' && parsed.slug.trim()) meta.preview = parsed.slug.trim();
+      if (typeof parsed.directory === 'string' && parsed.directory.startsWith('/')) meta.fileCwd = parsed.directory;
+      const updated = typeof parsed.time?.updated === 'number' ? parsed.time.updated : undefined;
+      const created = typeof parsed.time?.created === 'number' ? parsed.time.created : undefined;
+      if (updated || created) meta.mtimeMs = Math.max(updated ?? 0, created ?? 0);
+      return meta;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return {};
+  }
+}
+
+/** Resolve one native session artefact on disk for adopt-native. Mirrors the
+ *  discovery layouts above; every candidate is containment-checked against its
+ *  runtime root before any read. Returns null when the artefact does not exist.
+ *  `cwd` (when given) narrows claude/commandcode to that project directory,
+ *  with a bounded cross-project fallback scan so a mismatched encoding still
+ *  resolves exactly one artefact. */
+export async function resolveNativeSessionArtifact(input: {
+  runtime: NativeRuntime;
+  nativeId: string;
+  cwd?: string;
+  roots: NativeScanRoots;
+}): Promise<NativeArtifactResolution | null> {
+  const { runtime, nativeId, cwd, roots } = input;
+
+  const claudeStyle = async (
+    projectsRoot: string | undefined,
+    extraProjectsRoots: Array<() => Promise<string[]>> = [],
+  ): Promise<NativeArtifactResolution | null> => {
+    if (!projectsRoot) return null;
+    const direct: Array<{ nativePath: string; mtimeMs: number; size: number }> = [];
+    if (cwd) {
+      const encoded = encodeProjectDirName(cwd);
+      for (const dir of [encoded, `-${encoded}`]) {
+        const hit = await containedStat(projectsRoot, dir, `${nativeId}.jsonl`);
+        if (hit) { direct.push(hit); break; }
+      }
+    }
+    let hit = direct[0] ?? null;
+    if (!hit) {
+      // Bounded fallback: scan project dirs for the exact file name.
+      const projectDirs = await safeReaddir(projectsRoot);
+      for (const dir of projectDirs) {
+        const found = await containedStat(projectsRoot, dir, `${nativeId}.jsonl`);
+        if (found) { hit = found; break; }
+      }
+    }
+    if (!hit) {
+      for (const more of extraProjectsRoots) {
+        for (const projectsDir of await more()) {
+          const projectDirs = await safeReaddir(projectsDir);
+          for (const dir of projectDirs) {
+            const found = await containedStat(projectsDir, dir, `${nativeId}.jsonl`);
+            if (found) { hit = found; break; }
+          }
+          if (hit) break;
+        }
+        if (hit) break;
+      }
+    }
+    if (!hit) return null;
+    const { preview, cwd: fileCwd } = await previewFromClaudeStyleJsonl(hit.nativePath);
+    return {
+      runtime,
+      nativePath: hit.nativePath,
+      mtimeMs: hit.mtimeMs,
+      size: hit.size,
+      ...(preview ? { preview } : {}),
+      ...(fileCwd ? { fileCwd } : {}),
+      ...(runtime === 'claude' ? { messageCount: (await boundedLineCount(hit.nativePath, hit.size)) ?? undefined } : {}),
+    };
+  };
+
+  switch (runtime) {
+    case 'claude':
+      return claudeStyle(roots.claudeProjectsDir);
+    case 'commandcode': {
+      if (!UUID_RE.test(nativeId)) return null;
+      const nativeHomeProjects = async (): Promise<string[]> => {
+        if (!roots.commandCodeNativeHomeDir) return [];
+        const internalIds = await safeReaddir(roots.commandCodeNativeHomeDir);
+        return internalIds.map((id) => path.join(roots.commandCodeNativeHomeDir!, id, '.commandcode', 'projects'));
+      };
+      const cliProjects = roots.commandCodeCliHomeDir ? path.join(roots.commandCodeCliHomeDir, 'projects') : undefined;
+      const resolved = await claudeStyle(cliProjects, [nativeHomeProjects]);
+      if (!resolved) return null;
+      const { preview } = await previewFromCommandCodeJsonl(resolved.nativePath);
+      const count = await boundedLineCount(resolved.nativePath, resolved.size);
+      return { ...resolved, ...(preview ? { preview } : {}), messageCount: count };
+    }
+    case 'opencode': {
+      if (!roots.opencodeStorageDir || !nativeId.startsWith('ses_')) return null;
+      const sessionRoot = path.join(roots.opencodeStorageDir, 'session');
+      let hit: { nativePath: string; mtimeMs: number; size: number } | null = null;
+      if (cwd) {
+        const encoded = encodeProjectDirName(cwd);
+        for (const dir of [encoded, `-${encoded}`]) {
+          const found = await containedStat(sessionRoot, dir, `${nativeId}.json`);
+          if (found) { hit = found; break; }
+        }
+      }
+      if (!hit) {
+        for (const dir of await safeReaddir(sessionRoot)) {
+          const found = await containedStat(sessionRoot, dir, `${nativeId}.json`);
+          if (found) { hit = found; break; }
+        }
+      }
+      if (!hit) return null;
+      const meta = await readOpencodeMeta(hit.nativePath);
+      return {
+        runtime,
+        nativePath: hit.nativePath,
+        mtimeMs: meta.mtimeMs ?? hit.mtimeMs,
+        size: hit.size,
+        ...(meta.preview ? { preview: meta.preview } : {}),
+        ...(meta.fileCwd ? { fileCwd: meta.fileCwd } : {}),
+      };
+    }
+    case 'antigravity': {
+      if (!UUID_RE.test(nativeId) || !roots.antigravityConversationsDir) return null;
+      const hit = await containedStat(roots.antigravityConversationsDir, `${nativeId}.db`);
+      if (!hit) return null;
+      return { runtime, nativePath: hit.nativePath, mtimeMs: hit.mtimeMs, size: hit.size };
+    }
+  }
 }
 
 export async function scanNativeSessions(input: NativeScanInput): Promise<NativeScanResult> {

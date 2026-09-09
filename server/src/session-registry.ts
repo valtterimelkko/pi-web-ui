@@ -352,6 +352,11 @@ export class SessionRegistryManager {
         claudeSessionId: entry.claudeSessionId,
         opencodeSessionId: entry.opencodeSessionId,
         commandCodeNativeSessionId: entry.commandCodeNativeSessionId,
+        // Previously dropped on create (only carried on merge) — required by
+        // contract 1.40.0 adopt-native so an adopted agy child keeps its
+        // conversation id and parent linkage from the first write.
+        antigravityConversationId: entry.antigravityConversationId,
+        parentSessionId: entry.parentSessionId,
         cwd: entry.cwd,
         model: entry.model,
         thinkingLevel: entry.thinkingLevel,
