@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { MessageSquare, Terminal, FolderOpen, GitBranch, ListTodo, Info, ChevronsUpDown, ChevronUp, Car, type LucideIcon } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { MessageSquare, Terminal, FolderOpen, GitBranch, ListTodo, Info, ChevronsUpDown, ChevronUp, Car, Copy, Check, type LucideIcon } from 'lucide-react';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useUIStore } from '../../store/uiStore';
@@ -23,6 +23,15 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
   const openSessionInfo = useUIStore((state) => state.openSessionInfo);
   const openTreeView = useUIStore((state) => state.openTreeView);
   const openDriveMode = useUIStore((state) => state.openDriveMode);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopySessionId = useCallback(() => {
+    if (!currentSessionId) return;
+    navigator.clipboard.writeText(currentSessionId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  }, [currentSessionId]);
 
   // Suppress unused warning - onOpenSettings may be used in future
   void onOpenSettings;
@@ -82,6 +91,18 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
               >
                 <ChevronsUpDown className="w-4 h-4 text-gray-500 dark:text-gray-400" />
               </button>
+              <button
+                onClick={handleCopySessionId}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                title={copied ? 'Copied Session ID!' : 'Copy Session ID'}
+                aria-label="Copy Session ID"
+              >
+                {copied ? (
+                  <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+                ) : (
+                  <Copy className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                )}
+              </button>
             </div>
           )}
 
@@ -115,6 +136,15 @@ function MobileHeader() {
   const openTreeView = useUIStore((state) => state.openTreeView);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopySessionId = useCallback(() => {
+    if (!currentSessionId) return;
+    navigator.clipboard.writeText(currentSessionId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  }, [currentSessionId]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -173,6 +203,18 @@ function MobileHeader() {
                 aria-label="View conversation tree"
               >
                 <ChevronsUpDown className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              </button>
+              <button
+                onClick={handleCopySessionId}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                title={copied ? 'Copied Session ID!' : 'Copy Session ID'}
+                aria-label="Copy Session ID"
+              >
+                {copied ? (
+                  <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+                ) : (
+                  <Copy className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                )}
               </button>
             </>
           )}
