@@ -512,7 +512,67 @@ describe('projectDefaultViewFromEvents — aggregates', () => {
   });
 });
 
-// ─── renderScreenViewMarkdown ───────────────────────────────────────────────────
+// ─── Antigravity (agy) tool visibility ─────────────────────────────────────
+
+// The 57-tool inventory captured live from a real agy 1.1.27 init event
+// (2026-09-09). Hardcoded here INDEPENDENTLY of the implementation constant
+// so neither list can silently shrink or drift.
+const AGY_INVENTORY_CAPTURED = [
+  'ask_custom_permission', 'ask_permission', 'ask_question', 'browser_click_element',
+  'browser_drag_pixel_to_pixel', 'browser_get_dom', 'browser_get_network_request',
+  'browser_input', 'browser_list_network_requests', 'browser_mouse_down',
+  'browser_mouse_up', 'browser_move_mouse', 'browser_press_key', 'browser_refresh_page',
+  'browser_resize_window', 'browser_scroll', 'browser_scroll_dom', 'browser_select_option',
+  'browser_subagent', 'call_mcp_tool', 'capture_browser_console_logs',
+  'capture_browser_screenshot', 'click_browser_pixel', 'command_status', 'define_subagent',
+  'delete_knowledge', 'execute_browser_javascript', 'find_by_name', 'finish',
+  'generate_image', 'grep_search', 'invoke_subagent', 'list_browser_pages', 'list_dir',
+  'list_permissions', 'list_resources', 'manage_inbox', 'manage_subagents', 'manage_task',
+  'multi_replace_file_content', 'notebook_edit', 'notebook_execution', 'open_browser_url',
+  'read_browser_page', 'read_resource', 'read_url_content', 'replace_file_content',
+  'run_command', 'schedule', 'search_web', 'sed_file', 'send_command_input',
+  'send_message', 'view_file', 'wait', 'wait_5_seconds', 'write_to_file',
+];
+
+describe('isVisibleTool — antigravity (agy) names', () => {
+  it('shows the core agentic agy families', () => {
+    for (const name of [
+      'run_command', 'write_to_file', 'view_file', 'replace_file_content',
+      'multi_replace_file_content', 'sed_file', 'list_dir', 'find_by_name', 'grep_search',
+      'search_web', 'read_url_content', 'read_resource', 'invoke_subagent',
+      'command_status', 'send_command_input', 'generate_image',
+    ]) {
+      expect(isVisibleTool(name)).toBe(true);
+    }
+  });
+
+  it('shows every tool from the live-captured agy inventory (drift detector)', () => {
+    const missing = AGY_INVENTORY_CAPTURED.filter((name) => !isVisibleTool(name));
+    expect(missing).toEqual([]);
+  });
+
+  it('still hides unknown non-member tools (no fuzzy matching)', () => {
+    expect(isVisibleTool('mcp_unknown_thing')).toBe(false);
+    expect(isVisibleTool('run_command_extra')).toBe(false);
+  });
+});
+
+describe('toolPrimaryArg — agy PascalCase keys', () => {
+  it('reads CommandLine for run_command', () => {
+    expect(toolPrimaryArg('run_command', { CommandLine: 'python3 -m unittest -v' })).toBe('python3 -m unittest -v');
+  });
+  it('reads TargetFile (not Content) for write_to_file', () => {
+    expect(toolPrimaryArg('write_to_file', { TargetFile: '/x/y.py', Content: 'def add...' })).toBe('/x/y.py');
+  });
+  it('reads AbsolutePath for view_file', () => {
+    expect(toolPrimaryArg('view_file', { AbsolutePath: '/a/b.txt' })).toBe('/a/b.txt');
+  });
+  it('reads Path for list_dir', () => {
+    expect(toolPrimaryArg('list_dir', { Path: '/w' })).toBe('/w');
+  });
+});
+
+// ─── renderScreenViewMarkdown ───────────────────────────────────────────────
 
 describe('renderScreenViewMarkdown', () => {
   it('is stable (deterministic) for a fixed input', () => {

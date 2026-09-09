@@ -83,6 +83,36 @@ const ESTIMATE_WRAP_COLS = 80;
 
 // ─── Rule primitive: visible-tool allowlist (unified superset) ─────────────────
 
+/** Antigravity (agy) tool names — captured live from a real agy 1.1.27 init
+ *  event (2026-09-09). Frozen as an explicit constant so catalogue changes
+ *  surface as test drift (shared/src/screen-view.test.ts pins all 57). */
+export const AGY_VISIBLE_TOOL_NAMES: ReadonlyArray<string> = [
+  // Files & shell (incl. the background-command lifecycle)
+  'run_command', 'command_status', 'send_command_input',
+  'write_to_file', 'view_file', 'replace_file_content', 'multi_replace_file_content',
+  'sed_file', 'list_dir', 'find_by_name', 'grep_search',
+  // Web & knowledge
+  'search_web', 'read_url_content', 'read_resource', 'delete_knowledge',
+  // Subagents
+  'invoke_subagent', 'define_subagent', 'manage_subagents', 'browser_subagent',
+  // Media, notebooks, interaction
+  'generate_image', 'notebook_edit', 'notebook_execution',
+  'ask_question', 'ask_permission', 'ask_custom_permission', 'send_message',
+  // Tasks, scheduling, waiting (background-process surface)
+  'manage_task', 'schedule', 'wait', 'wait_5_seconds', 'finish',
+  'manage_inbox', 'list_permissions', 'list_resources', 'call_mcp_tool',
+  // Browser automation
+  'open_browser_url', 'read_browser_page', 'list_browser_pages',
+  'browser_click_element', 'browser_input', 'browser_scroll', 'browser_scroll_dom',
+  'browser_get_dom', 'browser_refresh_page', 'browser_resize_window',
+  'browser_select_option', 'browser_press_key', 'browser_move_mouse',
+  'browser_mouse_down', 'browser_mouse_up', 'browser_drag_pixel_to_pixel',
+  'click_browser_pixel', 'execute_browser_javascript',
+  'capture_browser_screenshot', 'capture_browser_console_logs',
+  'browser_get_network_request', 'browser_list_network_requests',
+];
+
+
 /**
  * Tool names that render as cards in the default view. This is the unified
  * superset — Pi SDK lowercase names, Claude/OpenCode PascalCase equivalents,
@@ -109,7 +139,13 @@ export const VISIBLE_TOOL_NAMES = new Set<string>([
   'Read_tool', 'Bash_tool', 'Write_tool', 'Edit_tool',
   'Grep_tool', 'Glob_tool', 'WebSearch_tool', 'WebFetch_tool',
   'TodoRead_tool', 'TodoWrite_tool',
+  // Antigravity (agy CLI, stream-json) — full live-captured 1.1.27 inventory.
+  // Exact membership like every other family; the client message list and the
+  // Internal API screen view share this allowlist, so a missing name makes the
+  // tool invisible in BOTH the browser and the agent's screen view.
+  ...AGY_VISIBLE_TOOL_NAMES,
 ]);
+
 
 /** Whether a tool name renders as a visible card. Exact, case-sensitive match. */
 export function isVisibleTool(name: string): boolean {
@@ -182,9 +218,17 @@ export function toolPrimaryArg(_name: string, args: unknown): string | undefined
   const entries = Object.entries(obj);
   if (entries.length === 0) return undefined;
 
-  const priorityKeys = ['path', 'command', 'pattern', 'url', 'query', 'file_path', 'target_path'];
+  const priorityKeys = [
+    'path', 'command', 'pattern', 'url', 'query', 'file_path', 'target_path',
+    // Antigravity PascalCase arg keys (agy wire: CommandLine / TargetFile /
+    // AbsolutePath). Matched case-insensitively below.
+    'commandline', 'targetfile', 'absolutepath',
+  ];
+  const lowerKeyToValue = new Map<string, unknown>(
+    entries.map(([k, v]) => [k.toLowerCase(), v]),
+  );
   for (const key of priorityKeys) {
-    const value = obj[key];
+    const value = lowerKeyToValue.get(key);
     if (typeof value === 'string' && value.length > 0) {
       return value.length > 50 ? `${value.slice(0, 50)}…` : value;
     }
