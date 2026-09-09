@@ -316,6 +316,10 @@ async function scanAntigravity(root: string | undefined): Promise<RawItem[]> {
     const item = await statItem('antigravity', fullPath);
     if (!item) continue;
     item.knownId = base;
+    const transcriptPath = path.join(root, '..', 'brain', base, '.system_generated', 'logs', 'transcript.jsonl');
+    const meta = await readAntigravityMeta(transcriptPath);
+    if (meta.preview) item.preview = meta.preview;
+    if (meta.fileCwd) item.cwd = meta.fileCwd;
     items.push(item);
   }
   return items;
@@ -394,6 +398,34 @@ async function readOpencodeMeta(filePath: string): Promise<OpencodeMeta> {
   }
 }
 
+interface AntigravityMeta { preview?: string; messageCount?: number; fileCwd?: string }
+
+async function readAntigravityMeta(brainTranscriptPath: string): Promise<AntigravityMeta> {
+  try {
+    const raw = await fs.readFile(brainTranscriptPath, 'utf-8');
+    const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+    let preview: string | undefined;
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line) as { type?: unknown; content?: unknown };
+        if (parsed.type === 'USER_INPUT' && typeof parsed.content === 'string') {
+          const m = parsed.content.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
+          const text = (m && m[1] ? m[1] : parsed.content).trim();
+          if (text) {
+            preview = text.slice(0, 200);
+            break;
+          }
+        }
+      } catch {
+        // ignore malformed lines
+      }
+    }
+    return { preview, messageCount: lines.length, fileCwd: '/root' };
+  } catch {
+    return {};
+  }
+}
+
 /** Resolve one native session artefact on disk for adopt-native. Mirrors the
  *  discovery layouts above; every candidate is containment-checked against its
  *  runtime root before any read. Returns null when the artefact does not exist.
@@ -462,9 +494,10 @@ export async function resolveNativeSessionArtifact(input: {
     case 'commandcode': {
       if (!UUID_RE.test(nativeId)) return null;
       const nativeHomeProjects = async (): Promise<string[]> => {
-        if (!roots.commandCodeNativeHomeDir) return [];
-        const internalIds = await safeReaddir(roots.commandCodeNativeHomeDir);
-        return internalIds.map((id) => path.join(roots.commandCodeNativeHomeDir!, id, '.commandcode', 'projects'));
+        const homeDir = roots.commandCodeNativeHomeDir;
+        if (!homeDir) return [];
+        const internalIds = await safeReaddir(homeDir);
+        return internalIds.map((id) => path.join(homeDir, id, '.commandcode', 'projects'));
       };
       const cliProjects = roots.commandCodeCliHomeDir ? path.join(roots.commandCodeCliHomeDir, 'projects') : undefined;
       const resolved = await claudeStyle(cliProjects, [nativeHomeProjects]);
@@ -505,7 +538,17 @@ export async function resolveNativeSessionArtifact(input: {
       if (!UUID_RE.test(nativeId) || !roots.antigravityConversationsDir) return null;
       const hit = await containedStat(roots.antigravityConversationsDir, `${nativeId}.db`);
       if (!hit) return null;
-      return { runtime, nativePath: hit.nativePath, mtimeMs: hit.mtimeMs, size: hit.size };
+      const transcriptPath = path.join(roots.antigravityConversationsDir, '..', 'brain', nativeId, '.system_generated', 'logs', 'transcript.jsonl');
+      const meta = await readAntigravityMeta(transcriptPath);
+      return {
+        runtime,
+        nativePath: hit.nativePath,
+        mtimeMs: hit.mtimeMs,
+        size: hit.size,
+        ...(meta.preview ? { preview: meta.preview } : {}),
+        fileCwd: cwd ?? meta.fileCwd ?? '/root',
+        ...(meta.messageCount ? { messageCount: meta.messageCount } : {}),
+      };
     }
   }
 }

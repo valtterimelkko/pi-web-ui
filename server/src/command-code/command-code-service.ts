@@ -31,7 +31,6 @@ import {
 import {
   coalesceCommandCodeReplayEvents,
   describeCommandCodeReplayCoalesce,
-  type CommandCodeReplayCoalesceStats,
 } from './command-code-replay-projection.js';
 import { CommandCodeEventJournal, type CommandCodeJournalStats, type CommandCodeReplayProjectionSnapshot } from './command-code-event-journal.js';
 import {
@@ -39,7 +38,8 @@ import {
   type CommandCodeProcessRunInput,
   type CommandCodeProcessRunResult,
 } from './command-code-process-runner.js';
-import type { SessionRegistryManager } from '../session-registry.js';
+import { randomUUID } from 'node:crypto';
+import { getSessionRegistry, type SessionRegistryManager } from '../session-registry.js';
 import {
   CommandCodeSessionStore,
   canonicalCwd,
@@ -332,7 +332,11 @@ export class CommandCodeService {
 
   async getSession(sessionId: string): Promise<CommandCodeInternalSessionRecord | undefined> {
     await this.init();
-    const record = await this.store.get(sessionId);
+    let record = await this.store.get(sessionId);
+    if (!record) {
+      await this.hasSession(sessionId);
+      record = await this.store.get(sessionId);
+    }
     return this.isSessionRecordAccessible(record) ? record : undefined;
   }
 
@@ -553,7 +557,10 @@ export class CommandCodeService {
     // record; only reads are projected. Without this, one real session's
     // journal (7,423 per-token events) was pushed to the browser one delta at
     // a time, which dominated session-open time and starved the UI.
-    const raw = await this.journal.read(sessionId);
+    let raw = await this.journal.read(sessionId);
+    if (raw.length === 0) {
+      raw = await this.loadNativeCommandCodeEvents(sessionId);
+    }
     const projected = coalesceCommandCodeReplayEvents(raw);
     this.lastReplayProjection = {
       sessionId,
@@ -709,7 +716,81 @@ export class CommandCodeService {
   isRunning(sessionId: string): boolean { return this.runner.isRunning(sessionId); }
   async hasSession(sessionId: string): Promise<boolean> {
     await this.init();
-    return this.isSessionRecordAccessible(await this.store.get(sessionId));
+    const existing = await this.store.get(sessionId);
+    if (this.isSessionRecordAccessible(existing)) return true;
+
+    try {
+      const registry = getSessionRegistry();
+      const entry = await registry.get(sessionId);
+      if (entry && entry.sdkType === 'commandcode') {
+        const models = this.getModels();
+        const modelSelector = (entry.model as CommandCodeRuntimeModel) || models[0]?.id || 'claude-sonnet';
+        const record = await this.store.create({
+          sessionId,
+          cwd: (entry.cwd && entry.cwd.trim()) ? entry.cwd : process.cwd(),
+          modelSelector,
+          eventJournalRef: path.join(this.config.stateDir, 'journals', `${sessionId}.jsonl`),
+        });
+        if (entry.commandCodeNativeSessionId) {
+          await this.store.bindNativeSession(sessionId, entry.commandCodeNativeSessionId);
+        }
+        return this.isSessionRecordAccessible(record);
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
+  private async loadNativeCommandCodeEvents(sessionId: string): Promise<NormalizedEvent[]> {
+    try {
+      const registry = getSessionRegistry();
+      const entry = await registry.get(sessionId);
+      const nativePath = entry?.path;
+      if (!nativePath) return [];
+      const content = await readFile(nativePath, 'utf-8');
+      const lines = content.split('\n').filter((l: string) => l.trim().length > 0);
+      const events: NormalizedEvent[] = [];
+      const ts = Date.now();
+      events.push({ type: 'agent_start', sessionId, timestamp: ts, data: { sessionId } });
+      for (const line of lines) {
+        try {
+          const p = JSON.parse(line) as {
+            type?: unknown;
+            timestamp?: unknown;
+            id?: unknown;
+            message?: { role?: unknown; content?: unknown };
+          };
+          const lineTs = typeof p.timestamp === 'string' ? new Date(p.timestamp).getTime() : ts;
+          if (p.type === 'message' && p.message) {
+            const role = typeof p.message.role === 'string' ? p.message.role : '';
+            const text = Array.isArray(p.message.content)
+              ? (p.message.content as Array<{ type?: string; text?: string }>)
+                  .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+                  .map((c) => c.text)
+                  .join('')
+              : (typeof p.message.content === 'string' ? p.message.content : '');
+            if (role === 'user' && text) {
+              const msgId = typeof p.id === 'string' ? p.id : randomUUID();
+              events.push({ type: 'message_start', sessionId, timestamp: lineTs, data: { id: msgId, role: 'user' } });
+              events.push({ type: 'message_update', sessionId, timestamp: lineTs, data: { id: msgId, assistantMessageEvent: { type: 'text_delta', delta: text } } });
+              events.push({ type: 'message_end', sessionId, timestamp: lineTs, data: { id: msgId, role: 'user' } });
+            } else if (role === 'assistant' && text) {
+              const msgId = typeof p.id === 'string' ? p.id : randomUUID();
+              events.push({ type: 'message_start', sessionId, timestamp: lineTs, data: { id: msgId, role: 'assistant' } });
+              events.push({ type: 'message_update', sessionId, timestamp: lineTs, data: { id: msgId, assistantMessageEvent: { type: 'text_delta', delta: text } } });
+              events.push({ type: 'message_end', sessionId, timestamp: lineTs, data: { id: msgId, role: 'assistant' } });
+            }
+          }
+        } catch {
+          // ignore malformed lines
+        }
+      }
+      events.push({ type: 'agent_end', sessionId, timestamp: ts, data: { sessionId } });
+      return events;
+    } catch {
+      return [];
+    }
   }
   isEnabled(): boolean { return this.config.enabled; }
 

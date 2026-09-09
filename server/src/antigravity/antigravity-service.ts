@@ -5,6 +5,7 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { AntigravitySessionStore } from './antigravity-session-store.js';
 import { isTurnDone } from './antigravity-session-store.js';
 import { turnsToReplayEvents } from './antigravity-history-replay.js';
+import { loadNativeAntigravityTurns } from './antigravity-native-reader.js';
 import { AntigravitySessionSubscribers } from './antigravity-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
 import type { RegistryEntry } from '../session-registry.js';
@@ -433,7 +434,7 @@ export class AntigravityService {
         norm = new AgyEventNormalizer({ sessionId, suppressTerminalEvents: true });
         const fresh = new AgyStreamProcess({
           sessionId,
-          cwd: entry.cwd,
+          cwd: (entry.cwd && entry.cwd.trim()) ? entry.cwd : process.cwd(),
           model: modelSlug,
           conversationId,
           timeoutMs: this.promptTimeoutMs,
@@ -878,7 +879,35 @@ export class AntigravityService {
   }
 
   async getReplayEvents(sessionId: string): Promise<Array<Record<string, unknown>>> {
-    const history = await this.store.loadHistory(sessionId);
+    let history = await this.store.loadHistory(sessionId);
+    if (history.length === 0) {
+      const entry = await this.registry.get(sessionId);
+      if (entry?.antigravityConversationId) {
+        history = await loadNativeAntigravityTurns(
+          entry.antigravityConversationId,
+          entry.model,
+          config.antigravityNativeConversationsDir,
+        );
+        if (history.length > 0) {
+          await this.store.ensureDir();
+          for (const turn of history) {
+            await this.store.startTurn(sessionId, {
+              turnId: turn.turnId,
+              prompt: turn.prompt,
+              model: turn.model,
+              conversationId: turn.conversationId,
+              timestamp: turn.timestamp,
+            });
+            await this.store.finalizeTurn(sessionId, turn.turnId, {
+              response: turn.response,
+              usage: turn.usage,
+              tools: turn.tools,
+              status: turn.status === 'error' ? 'error' : 'done',
+            });
+          }
+        }
+      }
+    }
     return turnsToReplayEvents(history, sessionId);
   }
 

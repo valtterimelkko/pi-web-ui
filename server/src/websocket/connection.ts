@@ -2510,7 +2510,17 @@ export class WebSocketConnectionManager {
       const { config: cfg } = await import('../config.js');
 
       const store = new ClaudeSessionStore(cfg.claudeSessionDir);
-      const history = await store.loadHistory(sessionId);
+      let history = await store.loadHistory(sessionId);
+
+      if (history.length === 0 && (entry?.path || entry?.claudeSessionId)) {
+        const { resolveClaudeSessionPath } = await import('../claude/claude-process-pool.js');
+        const candidatePath = entry.path && entry.path.endsWith('.jsonl')
+          ? entry.path
+          : (entry.cwd && entry.claudeSessionId ? resolveClaudeSessionPath(entry.cwd, entry.claudeSessionId) : null);
+        if (candidatePath) {
+          history = await this.loadClaudeNativeHistory(candidatePath, sessionId);
+        }
+      }
 
       if (history.length === 0) {
         // Empty session, nothing to replay
@@ -2548,6 +2558,79 @@ export class WebSocketConnectionManager {
       this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
     } catch (error) {
       logger.error(`[replayClaudeHistory] Error replaying history for ${sessionId}:`, error);
+    }
+  }
+
+  private async loadClaudeNativeHistory(
+    filePath: string,
+    sessionId: string,
+  ): Promise<import('../claude/claude-session-store.js').ClaudeMessageEntry[]> {
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      const lines = content.split('\n').filter((l: string) => l.trim().length > 0);
+      const entries: import('../claude/claude-session-store.js').ClaudeMessageEntry[] = [];
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line) as {
+            type?: unknown;
+            timestamp?: unknown;
+            message?: { role?: unknown; content?: unknown };
+          };
+          const ts = typeof parsed.timestamp === 'string' ? new Date(parsed.timestamp).getTime() : Date.now();
+          if (parsed.type === 'user' && parsed.message && parsed.message.content) {
+            const text = typeof parsed.message.content === 'string'
+              ? parsed.message.content
+              : (Array.isArray(parsed.message.content)
+                ? (parsed.message.content as Array<{ type?: string; text?: string }>)
+                    .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+                    .map((c) => c.text)
+                    .join('')
+                : '');
+            if (text) {
+              entries.push({
+                type: 'user',
+                sessionId,
+                content: text,
+                timestamp: ts,
+              });
+            }
+          } else if (parsed.type === 'assistant' && parsed.message && parsed.message.content) {
+            if (Array.isArray(parsed.message.content)) {
+              for (const block of parsed.message.content as Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>) {
+                if (block && block.type === 'text' && typeof block.text === 'string') {
+                  entries.push({
+                    type: 'assistant',
+                    sessionId,
+                    content: block.text,
+                    timestamp: ts,
+                  });
+                } else if (block && block.type === 'tool_use' && typeof block.name === 'string') {
+                  entries.push({
+                    type: 'tool',
+                    sessionId,
+                    toolName: block.name,
+                    toolCallId: typeof block.id === 'string' ? block.id : undefined,
+                    toolInput: block.input,
+                    timestamp: ts,
+                  });
+                }
+              }
+            } else if (typeof parsed.message.content === 'string') {
+              entries.push({
+                type: 'assistant',
+                sessionId,
+                content: parsed.message.content,
+                timestamp: ts,
+              });
+            }
+          }
+        } catch {
+          // ignore malformed lines
+        }
+      }
+      return entries;
+    } catch {
+      return [];
     }
   }
 

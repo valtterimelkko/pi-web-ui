@@ -86,7 +86,8 @@ export function ResumeNativeSessionModal({ isOpen, onClose }: ResumeNativeSessio
   const [manualNativeId, setManualNativeId] = useState('');
   const [manualCwd, setManualCwd] = useState('/root/pi-web-ui');
 
-  const { switchSession } = useWebSocket();
+  const { switchSession, getSessions } = useWebSocket();
+  const setSwitchingSession = useSessionStore((state) => state.setSwitchingSession);
   const localSwitchSession = useSessionStore((state) => state.switchSession);
 
   const loadSessions = useCallback(async () => {
@@ -120,25 +121,24 @@ export function ResumeNativeSessionModal({ isOpen, onClose }: ResumeNativeSessio
     setImportingId(nativeId);
     setError(null);
     try {
-      if (item.knownInRegistry && item.registrySessionId) {
-        // Already registered — just select it
-        localSwitchSession(item.registrySessionId);
-        switchSession(item.registrySessionId);
-        onClose();
-        return;
+      let targetSessionId = item.knownInRegistry && item.registrySessionId ? item.registrySessionId : undefined;
+      if (!targetSessionId) {
+        const res = await importNativeSession({
+          runtime: item.runtime,
+          nativeId,
+          cwd: item.cwd,
+        });
+        if (!res.success || !res.sessionId) {
+          throw new Error('Failed to import session');
+        }
+        targetSessionId = res.sessionId;
       }
 
-      const res = await importNativeSession({
-        runtime: item.runtime,
-        nativeId,
-        cwd: item.cwd,
-      });
-
-      if (res.success && res.sessionId) {
-        localSwitchSession(res.sessionId);
-        switchSession(res.sessionId);
-        onClose();
-      }
+      setSwitchingSession(true, targetSessionId);
+      localSwitchSession(targetSessionId);
+      switchSession(targetSessionId);
+      getSessions?.();
+      onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to resume session');
     } finally {
@@ -158,8 +158,10 @@ export function ResumeNativeSessionModal({ isOpen, onClose }: ResumeNativeSessio
         cwd: manualCwd.trim() || undefined,
       });
       if (res.success && res.sessionId) {
+        setSwitchingSession(true, res.sessionId);
         localSwitchSession(res.sessionId);
         switchSession(res.sessionId);
+        getSessions?.();
         onClose();
       }
     } catch (err) {
@@ -387,7 +389,7 @@ export function ResumeNativeSessionModal({ isOpen, onClose }: ResumeNativeSessio
                   <label className="block text-[11px] text-gray-500 mb-1">Runtime</label>
                   <select
                     value={manualRuntime}
-                    onChange={(e) => setManualRuntime(e.target.value as any)}
+                    onChange={(e) => setManualRuntime(e.target.value as Exclude<RuntimeFilter, 'all'>)}
                     className="w-full text-xs rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2.5 py-1.5 text-gray-800 dark:text-gray-200"
                   >
                     <option value="claude">Claude Code</option>

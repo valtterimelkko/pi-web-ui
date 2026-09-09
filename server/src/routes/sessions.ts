@@ -4,8 +4,6 @@ import { getPiService } from '../pi/index.js';
 import { WorkerPool } from '../workers/worker-pool.js';
 import type { WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
 import fs from 'fs/promises';
-import path from 'path';
-import { randomUUID } from 'crypto';
 import type { SdkType } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
 import { getSessionRegistry, type RegistryEntry } from '../session-registry.js';
