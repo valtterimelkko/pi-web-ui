@@ -121,8 +121,12 @@ function makeHarness(
     isSessionAllowed: opts.isSessionAllowed,
     ingressPollMs: 60_000,
   });
-  return { mgr, store, pi, claude, channel };
+  const harness = { mgr, store, pi, claude, channel };
+  activeHarnesses.push(harness);
+  return harness;
 }
+
+let activeHarnesses: Harness[] = [];
 
 const piOptIn = (overrides: Partial<OptInRecord> = {}): OptInRecord => ({
   sessionId: 's1',
@@ -161,10 +165,25 @@ describe('NotificationManager', () => {
   let dir: string;
 
   beforeEach(async () => {
+    activeHarnesses = [];
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-notif-mgr-'));
   });
 
   afterEach(async () => {
+    for (const h of activeHarnesses) {
+      try {
+        h.mgr.shutdown();
+      } catch {
+        /* ignore teardown error */
+      }
+      try {
+        await h.store.drain();
+      } catch {
+        /* ignore teardown error */
+      }
+    }
+    activeHarnesses = [];
+    await wait(20);
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 

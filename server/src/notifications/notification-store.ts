@@ -334,26 +334,37 @@ export class NotificationStore {
         /* don't let a prior failure break the chain */
       })
       .then(async () => {
-        await mkdir(this.dir, { recursive: true, mode: 0o700 });
-        await chmod(this.dir, 0o700);
-        const tmp = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
-        const handle = await open(tmp, 'wx', 0o600);
         try {
+          await mkdir(this.dir, { recursive: true, mode: 0o700 });
+          await chmod(this.dir, 0o700);
+          const tmp = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+          const handle = await open(tmp, 'wx', 0o600);
           try {
-            await handle.writeFile(JSON.stringify(data, null, 2), 'utf8');
-            await handle.sync();
-          } finally {
-            await handle.close();
+            try {
+              await handle.writeFile(JSON.stringify(data, null, 2), 'utf8');
+              await handle.sync();
+            } finally {
+              await handle.close();
+            }
+            await rename(tmp, file);
+            await syncDirectory(this.dir);
+          } catch (error) {
+            await unlink(tmp).catch(() => { /* already renamed or removed */ });
+            throw error;
           }
-          await rename(tmp, file);
-          await syncDirectory(this.dir);
         } catch (error) {
-          await unlink(tmp).catch(() => { /* already renamed or removed */ });
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            return;
+          }
           throw error;
         }
       });
     this.writeChains.set(name, next);
     return next;
+  }
+
+  async drain(): Promise<void> {
+    await Promise.allSettled([...this.writeChains.values()]);
   }
 }
 
