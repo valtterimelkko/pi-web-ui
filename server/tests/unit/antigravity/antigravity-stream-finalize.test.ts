@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,19 +23,18 @@ import { join } from 'node:path';
  */
 
 const ctrl = vi.hoisted(() => {
+  // Must be set BEFORE the config module is imported (module-level singleton
+  // reads this env at import time). vi.hoisted runs before the imports below,
+  // so no fs/os imports here — the store creates the directory on demand.
+  const sessionDir = `/tmp/agy-finalize-store-${process.pid}-${Math.random().toString(36).slice(2)}`;
   const state = {
-    sessionDir: '',
-    registryPath: '',
+    sessionDir,
+    registryPath: `${sessionDir}/registry.json`,
     scripted: '',
     writes: [] as string[],
   };
+  process.env.ANTIGRAVITY_SESSION_DIR = sessionDir;
   return state;
-});
-
-beforeAll(() => {
-  ctrl.sessionDir = mkdtempSync(join(tmpdir(), 'agy-finalize-store-'));
-  ctrl.registryPath = join(ctrl.sessionDir, 'registry.json');
-  process.env.ANTIGRAVITY_SESSION_DIR = ctrl.sessionDir;
 });
 
 import { AntigravityService } from '../../../src/antigravity/antigravity-service.js';
@@ -217,6 +216,22 @@ describe('antigravity stream finalize honesty (F2/F3)', () => {
     expect((agentEnd.data as { usage: { input: number; cacheRead: number } }).usage).toEqual({
       input: 42445, output: 2259, thinking: 1531, cacheRead: 106044, total: 44704,
     });
+  });
+
+  it('F5: context usage uses the real request size (input + cacheRead), not input+output', async () => {
+    const { service, sessionId } = await runTurn();
+    const ctx = await service.getContextUsage(sessionId);
+    expect(ctx).toEqual({ contextWindow: 1_048_576, tokens: 148_489, percent: 14 });
+  });
+
+  it('F4/F7: session stats carry real cumulative usage, the store path, and the native conversation id', async () => {
+    const { service, sessionId } = await runTurn();
+    const stats = await service.getSessionStats(sessionId);
+    expect(stats).not.toBeNull();
+    const s = must(stats);
+    expect(s.tokens).toEqual({ input: 42445, output: 2259, thinking: 1531, cacheRead: 106044, cacheWrite: 0, total: 44704 });
+    expect(s.sessionFile).toBe(join(ctrl.sessionDir, `${sessionId}.jsonl`));
+    expect(s.nativeSessionId).toBe('c-final-1');
   });
 });
 

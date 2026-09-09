@@ -981,6 +981,13 @@ export class AntigravityService {
     toolResults: number;
     totalMessages: number;
     pinned: boolean;
+    /** Cumulative token consumption summed over finalized turns (real agy
+     *  usage; zeros when no turn reported usage). */
+    tokens: { input: number; output: number; thinking: number; cacheRead: number; cacheWrite: number; total: number };
+    /** Durable on-disk transcript path (session-info surfacing). */
+    sessionFile: string;
+    /** Native agy conversation id (undefined until the first finalised turn). */
+    nativeSessionId?: string;
   } | null> {
     const entry = await this.registry.get(sessionId);
     if (!entry || entry.sdkType !== 'antigravity') return null;
@@ -991,6 +998,21 @@ export class AntigravityService {
     const finalized = history.filter((t) => t.status !== 'running');
     // Stream mode: real stored tool-call counts (legacy text turns store none).
     const toolCalls = finalized.reduce((acc, t) => acc + (t.tools?.length ?? 0), 0);
+    // Cumulative consumption: each turn's usage block reports that turn's real
+    // spend, so the session total is the sum (NOT the last turn's request size
+    // — see getContextUsage for the context-window metric).
+    const tokens = finalized.reduce(
+      (acc, t) => ({
+        input: acc.input + (t.usage?.input ?? 0),
+        output: acc.output + (t.usage?.output ?? 0),
+        thinking: acc.thinking + (t.usage?.thinking ?? 0),
+        cacheRead: acc.cacheRead + (t.usage?.cacheRead ?? 0),
+        // agy never reports cache writes; keep the wire shape uniform.
+        cacheWrite: 0,
+        total: acc.total + (t.usage?.total ?? 0),
+      }),
+      { input: 0, output: 0, thinking: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    );
     return {
       sessionId,
       cwd: entry.cwd,
@@ -1001,6 +1023,9 @@ export class AntigravityService {
       toolResults: toolCalls,
       totalMessages: finalizedCount * 2,
       pinned: this.sessionMeta.get(sessionId)?.pinned ?? false,
+      tokens,
+      sessionFile: this.store.sessionFilePath(sessionId),
+      ...(entry.antigravityConversationId ? { nativeSessionId: entry.antigravityConversationId } : {}),
     };
   }
 
@@ -1013,12 +1038,17 @@ export class AntigravityService {
       if (finalized.length === 0) return null;
 
       // Stream mode: the latest real cumulative usage from agy's result
-      // envelope is the honest signal (char/4 estimates are legacy-only).
+      // envelope is the honest signal. Gemini request size = input + cacheRead
+      // (live-validated 2026-09-09: turn1 input 42,445 + cacheRead 106,044 =
+      // 148,489 = 14.2% of 1,048,576; agy's `total` is input+output ONLY and
+      // understates the context ~2.6x). Turns predating stream-mode usage
+      // (legacy text mode): no honest signal.
       for (let i = finalized.length - 1; i >= 0; i--) {
         const usage = finalized[i].usage;
         if (usage) {
           const contextWindow = getModelContextWindow(entry.model ?? config.antigravityDefaultModel);
-          return { contextWindow, tokens: usage.total, percent: Math.min(Math.round((usage.total / contextWindow) * 100), 100) };
+          const tokens = usage.input + usage.cacheRead;
+          return { contextWindow, tokens, percent: Math.min(Math.round((tokens / contextWindow) * 100), 100) };
         }
       }
       // Turns predating stream-mode usage (legacy text mode): no honest signal.

@@ -2674,6 +2674,9 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Context fields mirror the opencode replay: the composer context bar must
+    // be populated on session switch, not only after the next turn completes.
+    const switchedContext = await this.antigravityService.getContextUsage(sessionId).catch(() => null);
     this.sendMessage(clientId, {
       type: 'session_switched',
       sessionId,
@@ -2683,6 +2686,9 @@ export class WebSocketConnectionManager {
       messages: [],
       fileTimestamp: 0,
       isStreaming: this.antigravityService.isRunning(sessionId),
+      contextWindow: switchedContext?.contextWindow ?? undefined,
+      contextUsed: switchedContext?.tokens ?? undefined,
+      contextPercent: switchedContext?.percent ?? undefined,
     } as unknown as ServerMessage);
 
     try {
@@ -2971,16 +2977,17 @@ export class WebSocketConnectionManager {
         this.sendMessage(clientId, {
           type: 'session_info',
           stats: {
-            sessionFile: undefined,
+            sessionFile: agStats.sessionFile,
             sessionId: agStats.sessionId,
+            nativeSessionId: agStats.nativeSessionId,
             cwd: agStats.cwd,
             userMessages: agStats.userMessages,
             assistantMessages: agStats.assistantMessages,
             toolCalls: agStats.toolCalls,
             toolResults: agStats.toolResults,
             totalMessages: agStats.totalMessages,
-            tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            cost: 0,
+            // Real cumulative usage from stored turns (agy reports no cost).
+            tokens: agStats.tokens,
             model: agStats.model,
             contextWindow: agContextUsage?.contextWindow ?? undefined,
             contextUsed: agContextUsage?.tokens ?? undefined,

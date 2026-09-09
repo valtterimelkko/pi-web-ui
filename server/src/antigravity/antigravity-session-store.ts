@@ -85,6 +85,11 @@ export class AntigravitySessionStore {
     return path.join(this.sessionDir, `${sessionId}.jsonl`);
   }
 
+  /** Durable on-disk transcript path for a session (session-info surfacing). */
+  sessionFilePath(sessionId: string): string {
+    return this.sessionPath(sessionId);
+  }
+
   /** Instance-bound alias for isTurnDone for callers that already hold a store. */
   isDone(turn: AntigravityTurn): boolean {
     return isTurnDone(turn);

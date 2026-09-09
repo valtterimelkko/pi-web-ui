@@ -182,6 +182,9 @@ export interface SessionStats {
   contextUsed?: number;
   contextPercent?: number;
   lastActivityAt?: number;
+  /** Native runtime session id (Command Code CLI id; Antigravity agy
+   *  conversation id). Distinct from the pi-web-ui registry id. */
+  nativeSessionId?: string;
 }
 
 // Tree node for session history navigation

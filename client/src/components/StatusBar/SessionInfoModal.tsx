@@ -16,6 +16,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
   const isClaudeSession = currentSessionSdkType === 'claude';
   const isOpencodeSession = currentSessionSdkType === 'opencode';
   const isCommandCodeSession = currentSessionSdkType === 'commandcode';
+  const isAntigravitySession = currentSessionSdkType === 'antigravity';
   const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { getSessionInfo } = useWebSocket();
   const [isLoading, setIsLoading] = useState(false);
@@ -204,6 +205,14 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                       </span>
                       <span className="text-sm text-gray-900">Command Code</span>
                       <span className="text-xs text-gray-400">(cmdc CLI)</span>
+                    </div>
+                  ) : isAntigravitySession ? (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-100 text-sky-700 border border-sky-200">
+                        AG
+                      </span>
+                      <span className="text-sm text-gray-900">Antigravity</span>
+                      <span className="text-xs text-gray-400">(agy CLI · stream-json)</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
