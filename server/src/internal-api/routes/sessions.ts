@@ -73,7 +73,7 @@ import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildC
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
-import { type AntigravityGoalRecord, AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
+import { AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';

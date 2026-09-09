@@ -22,7 +22,7 @@
 import { exec } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { GoalVerificationInfo, GoalVerificationStatus, SessionGoalProjection } from './types.js';
+import type { GoalVerificationInfo, SessionGoalProjection } from './types.js';
 
 /** Exact self-report marker the goal prompts ask the model to emit. */
 export const AGY_GOAL_SENTINEL = 'GOAL_STATUS: ACHIEVED';
