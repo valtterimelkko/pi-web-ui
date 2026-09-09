@@ -55,6 +55,27 @@ export function normalizeToolName(name: string): string {
     'FileRead': 'read',
     'FileWrite': 'write',
     'FileEdit': 'edit',
+    // Antigravity (agy) → pi card families: same Shell/Write/Read/Edit card
+    // experience across runtimes (plan F8). The header keeps the real name;
+    // this mapping only routes icon, display name and arg presentation.
+    'run_command': 'bash',
+    'write_to_file': 'write',
+    'view_file': 'read',
+    'replace_file_content': 'edit',
+    'multi_replace_file_content': 'edit',
+    'sed_file': 'edit',
+    'list_dir': 'find',
+    'find_by_name': 'glob',
+    'grep_search': 'grep',
+    'search_web': 'web_search',
+    'read_url_content': 'web_fetch',
+    'read_resource': 'web_fetch',
+    'invoke_subagent': 'subagent',
+    // Background-command lifecycle stays distinct (plan F9): rendered as a
+    // dedicated "Background process" card, not as a generic shell call.
+    'command_status': 'command_status',
+    'send_command_input': 'send_command_input',
+    'wait': 'wait',
   };
   return map[name] ?? name;
 }

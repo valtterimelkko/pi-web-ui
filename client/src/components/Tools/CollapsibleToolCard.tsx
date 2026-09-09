@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, memo } from 'react';
+import { normalizeToolName } from '../../lib/messageAdapter';
 // Shared rules — same values the server-side screen-view projection uses:
 // collapsed-by-default for tool cards, and the truncation length for output.
 import { MAX_TOOL_OUTPUT_LENGTH, TOOL_COLLAPSED_BY_DEFAULT } from '@pi-web-ui/shared';
@@ -62,6 +63,9 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   think: <Brain className="w-3.5 h-3.5" />,
   todo: <ListTodo className="w-3.5 h-3.5" />,
   mail: <Mail className="w-3.5 h-3.5" />,
+  command_status: <Terminal className="w-3.5 h-3.5" />,
+  send_command_input: <Terminal className="w-3.5 h-3.5" />,
+  wait: <Clock className="w-3.5 h-3.5" />,
 };
 
 // Map tool names to display names
@@ -80,6 +84,10 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   think: 'Think',
   todo: 'Todo',
   mail: 'Mail',
+  // Antigravity background-command lifecycle (agy run_command --background)
+  command_status: 'Background process',
+  send_command_input: 'Background input',
+  wait: 'Wait',
 };
 
 // Get status icon based on tool state
@@ -102,10 +110,15 @@ function getPrimaryParam(args: unknown): string | null {
   const entries = Object.entries(args as Record<string, unknown>);
   if (entries.length === 0) return null;
 
-  // Priority order: path, command, pattern, url, query, then first param
-  const priorityKeys = ['path', 'command', 'pattern', 'url', 'query', 'file_path', 'target_path'];
+  // Priority order: path, command, pattern, url, query, then first param.
+  // Antigravity PascalCase keys (CommandLine / TargetFile / AbsolutePath) are
+  // matched case-insensitively so agy cards get the same primary arg display.
+  const priorityKeys = ['path', 'command', 'commandline', 'pattern', 'url', 'query', 'file_path', 'target_path', 'targetfile', 'absolutepath'];
+  const lowerKeyToValue = new Map<string, unknown>(
+    entries.map(([k, v]) => [k.toLowerCase(), v]),
+  );
   for (const key of priorityKeys) {
-    const value = (args as Record<string, unknown>)[key];
+    const value = lowerKeyToValue.get(key);
     if (typeof value === 'string' && value.length > 0) {
       // Truncate to 50 chars like Kimi
       return value.length > 50 ? `${value.slice(0, 50)}…` : value;
@@ -580,8 +593,8 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
     return () => clearInterval(interval);
   }, [isPending, startTime]);
 
-  const displayName = TOOL_DISPLAY_NAMES[name] || name;
-  const icon = TOOL_ICONS[name] || <Terminal className="w-3.5 h-3.5" />;
+  const displayName = TOOL_DISPLAY_NAMES[normalizeToolName(name)] ?? TOOL_DISPLAY_NAMES[name] ?? name;
+  const icon = TOOL_ICONS[normalizeToolName(name)] ?? TOOL_ICONS[name] ?? <Terminal className="w-3.5 h-3.5" />;
   const primaryParam = getPrimaryParam(args);
   const statusIcon = getStatusIcon(hasResult, isError, isPending);
 
