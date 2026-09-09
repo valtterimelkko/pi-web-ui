@@ -729,7 +729,7 @@ export class CommandCodeService {
           sessionId,
           cwd: (entry.cwd && entry.cwd.trim()) ? entry.cwd : process.cwd(),
           modelSelector,
-          eventJournalRef: path.join(this.config.stateDir, 'journals', `${sessionId}.jsonl`),
+          eventJournalRef: `events/${sessionId}.jsonl`,
         });
         if (entry.commandCodeNativeSessionId) {
           await this.store.bindNativeSession(sessionId, entry.commandCodeNativeSessionId);

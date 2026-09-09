@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { CommandCodeRuntimeError, CommandCodeService } from '../../../src/command-code/command-code-service.js';
+import { getSessionRegistry } from '../../../src/session-registry.js';
 import type { CommandCodeProcessRunInput, CommandCodeProcessRunResult } from '../../../src/command-code/command-code-process-runner.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
@@ -368,5 +369,26 @@ describe('Command Code service', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it('restores a session record from registry when hasSession is called for an adopted native session', async () => {
+    const { root, cwd, service } = await harness();
+    await service.init();
+    const nativeUuid = '11111111-2222-3333-4444-555555555555';
+    const registry = getSessionRegistry(path.join(root, 'session-registry.json'));
+    await registry.upsert({
+      id: nativeUuid,
+      sdkType: 'commandcode',
+      path: path.join(cwd, `${nativeUuid}.jsonl`),
+      commandCodeNativeSessionId: nativeUuid,
+      cwd,
+      status: 'idle',
+    });
+    expect(await service.hasSession(nativeUuid)).toBe(true);
+    const restored = await service.getSession(nativeUuid);
+    expect(restored).toBeDefined();
+    expect(restored?.sessionId).toBe(nativeUuid);
+    expect(restored?.nativeSessionId).toBe(nativeUuid);
+    expect(restored?.cwd).toBe(cwd);
   });
 });
