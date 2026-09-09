@@ -372,11 +372,15 @@ function foldHistoryEvents(
         break;
       }
       case 'tool_execution_end': {
-        const { toolCallId, result, isError } = event as { toolCallId?: string; result?: unknown; isError?: boolean };
+        const { toolCallId, args, result, isError } = event as { toolCallId?: string; args?: unknown; result?: unknown; isError?: boolean };
         const target = findTarget(toolCallId);
         if (!target || target.role !== 'tool') break;
         const content = extractToolResultText(result);
         target.content = content;
+        // Replay parity: history events may carry args on the end event too.
+        if (args !== undefined && target.toolCall) {
+          target.toolCall = { ...target.toolCall, args };
+        }
         target.toolResult = { output: content, isError: isError === true };
         break;
       }
@@ -1254,7 +1258,16 @@ export const useSessionStore = create<SessionState>()(
             : existingData.messages;
           const previousMessage = baseMessages.find((msg) => msg.id === messageId);
           if (!previousMessage) return state;
-          const nextMessage = { ...previousMessage, ...updates };
+          // Antigravity live parity: tool_execution_end may carry the args the
+          // start event lacked (agy sends parameters only on DONE).
+          const { toolCallArgs, ...rest } = updates as Partial<Message> & { toolCallArgs?: unknown };
+          const nextMessage = {
+            ...previousMessage,
+            ...rest,
+            ...(toolCallArgs !== undefined && previousMessage.toolCall
+              ? { toolCall: { ...previousMessage.toolCall, args: toolCallArgs } }
+              : {}),
+          };
           const newMessages = baseMessages.map((msg) => msg.id === messageId ? nextMessage : msg);
           const now = Date.now();
           const accounting = accountMessageSize(
@@ -1720,7 +1733,16 @@ export const useSessionStore = create<SessionState>()(
             return state.currentSessionId ? { lastStreamEventAt: now } : state;
           }
 
-          const nextMessage = { ...previousMessage, ...updates };
+          // Antigravity live parity: merge toolCallArgs into the existing
+          // toolCall instead of adding an unknown top-level field.
+          const { toolCallArgs, ...rest } = updates as Partial<Message> & { toolCallArgs?: unknown };
+          const nextMessage = {
+            ...previousMessage,
+            ...rest,
+            ...(toolCallArgs !== undefined && previousMessage.toolCall
+              ? { toolCall: { ...previousMessage.toolCall, args: toolCallArgs } }
+              : {}),
+          };
           const newMessages = state.messages.map((msg) => msg.id === id ? nextMessage : msg);
           const sessionId = state.currentSessionId;
           const newCache = new Map(state.sessionCache);
@@ -2263,8 +2285,11 @@ export const useSessionStore = create<SessionState>()(
 
           case 'tool_execution_end': {
             set({ lastStreamEventAt: Date.now() });
-            const { toolCallId, result, isError, resultSummary } = msg as unknown as {
+            const { toolCallId, args, result, isError, resultSummary } = msg as unknown as {
               toolCallId: string;
+              // Antigravity live parity: agy carries parameters only on the
+              // DONE step, so the server re-sends them here (additive).
+              args?: unknown;
               result?: unknown;
               isError: boolean;
               resultSummary?: SubagentToolSummary;
@@ -2274,6 +2299,7 @@ export const useSessionStore = create<SessionState>()(
             // identity so the card can name/link the dispatched child.
             const background = extractBackgroundIdentity(result);
             get().updateMessage(toolCallId, {
+              ...(args !== undefined ? { toolCallArgs: args } : {}),
               content,
               toolResult: { output: content, isError, summary: resultSummary, ...(background ? { background } : {}) },
             });
@@ -2961,14 +2987,16 @@ export const useSessionStore = create<SessionState>()(
               }
               
               case 'tool_execution_end': {
-                const { toolCallId, result, isError, resultSummary } = event as unknown as {
+                const { toolCallId, args, result, isError, resultSummary } = event as unknown as {
                   toolCallId: string;
+                  args?: unknown;
                   result?: unknown;
                   isError: boolean;
                   resultSummary?: SubagentToolSummary;
                 };
                 const content = extractToolResultText(result);
                 get().updateMessageInSession(sessionId, toolCallId, {
+                  ...(args !== undefined ? { toolCallArgs: args } : {}),
                   content,
                   toolResult: { output: content, isError, summary: resultSummary },
                 });

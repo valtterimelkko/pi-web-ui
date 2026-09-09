@@ -66,6 +66,33 @@ export function mapAgyUsage(usage: AgyUsage | undefined): Record<string, number>
   };
 }
 
+/** Write-family tools whose agy DONE step reports EMPTY output: synthesize a
+ *  friendly result from the args so the card (and the stored record) says what
+ *  happened instead of nothing. Maps tool name → the arg key holding the path. */
+const WRITE_FAMILY_RESULT_ARG: Record<string, string> = {
+  write_to_file: 'TargetFile',
+};
+
+/** Resolve the user-facing result text for a completed tool call. Real output
+ *  wins; empty write-family output becomes "Wrote <path>"; errors surface the
+ *  message. Stored in the turn record too, so replay matches live exactly. */
+export function resolveToolResultText(
+  toolName: string,
+  args: unknown,
+  output: string | undefined,
+  isError: boolean,
+  errorMessage: string | undefined,
+): string {
+  if (isError) return output ?? (errorMessage ? `error: ${errorMessage}` : '');
+  if (output !== undefined && output.length > 0) return output;
+  const pathKey = WRITE_FAMILY_RESULT_ARG[toolName];
+  if (pathKey && args && typeof args === 'object') {
+    const value = (args as Record<string, unknown>)[pathKey];
+    if (typeof value === 'string' && value.length > 0) return `Wrote ${value}`;
+  }
+  return '';
+}
+
 export class AgyEventNormalizer {
   private readonly sessionId: string;
   private readonly expectedConversationId: string | null;
@@ -196,12 +223,16 @@ export class AgyEventNormalizer {
         .reverse()
         .find((t) => t.toolName === (step.tool_name ?? 'unknown') && t.output === undefined);
       const info = step.tool_info;
-      const output = typeof info?.output === 'string' ? info.output : undefined;
       const isError = info?.error !== undefined;
       const errorMessage = info?.error?.message;
+      // Live/replay parity (F3): the ACTIVE step carries no parameters, so the
+      // start event goes out without args — re-surface them on the end event so
+      // the live card shows what replay shows.
+      const args = info?.parameters;
+      const resultText = resolveToolResultText(step.tool_name ?? 'unknown', args, info?.output, isError, errorMessage);
       if (record) {
-        record.args = info?.parameters;
-        record.output = output;
+        record.args = args;
+        record.output = resultText;
         record.isError = isError;
         record.errorMessage = errorMessage;
       } else {
@@ -210,8 +241,8 @@ export class AgyEventNormalizer {
         this.state.turnTools.push({
           toolCallId,
           toolName: step.tool_name ?? 'unknown',
-          args: info?.parameters,
-          output,
+          args,
+          output: resultText,
           isError,
           errorMessage,
         });
@@ -219,7 +250,7 @@ export class AgyEventNormalizer {
           this.ev('tool_execution_start', timestamp, {
             toolCallId,
             toolName: step.tool_name ?? 'unknown',
-            args: info?.parameters,
+            args,
           }),
         );
       }
@@ -227,7 +258,8 @@ export class AgyEventNormalizer {
       events.push(
         this.ev('tool_execution_end', timestamp, {
           toolCallId: emitId,
-          result: output ?? (errorMessage ? `error: ${errorMessage}` : ''),
+          ...(args !== undefined ? { args } : {}),
+          result: resultText,
           isError,
         }),
       );
@@ -254,8 +286,12 @@ export class AgyEventNormalizer {
 
     const events: NormalizedEvent[] = [];
     if (this.suppressTerminalEvents) {
-      // Caller owns terminal emission ordering; just close the bookkeeping.
-      this.state.assistantMessageOpen = false;
+      // Caller owns terminal emission ordering AND the streamed-message close:
+      // clearing assistantMessageOpen here made finalizeStreamSuccess/Error
+      // believe nothing had streamed, so it re-emitted the full response under
+      // a fresh id (live: final text delivered twice) and the streamed message
+      // never closed. Leave the open-message bookkeeping untouched — the
+      // service emits message_end for the streamed id and resets the flag.
       this._lastResult = result;
       this.noteConversationId(parsed.conversationId, 'result');
       this._lastTurn = { text: this.state.turnText, tools: [...this.state.turnTools], result };
