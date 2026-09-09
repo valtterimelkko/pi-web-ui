@@ -47,7 +47,7 @@ vi.mock('../../../../src/components/Sidebar/SessionList', () => ({
 }));
 vi.mock('../../../../src/components/Sidebar/SessionFilters', () => ({ SessionFilters: () => null }));
 vi.mock('../../../../src/components/Sidebar/SessionItem', () => ({ SessionItem: () => null }));
-vi.mock('../../../../src/components/Session', () => ({ NewSessionModal: () => null }));
+vi.mock('../../../../src/components/Session', () => ({ NewSessionModal: () => null, ResumeNativeSessionModal: () => null }));
 vi.mock('../../../../src/components/Sidebar/TransferConfirmationModal', () => ({ TransferConfirmationModal: () => null }));
 vi.mock('../../../../src/components/Usage', () => ({ TokenUsageDashboard: () => null }));
 

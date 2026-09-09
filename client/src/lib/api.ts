@@ -327,3 +327,48 @@ export async function recordUsage(data: {
     // Silently ignore usage recording errors
   }
 }
+
+export interface NativeSessionItem {
+  runtime: 'claude' | 'commandcode' | 'opencode' | 'antigravity';
+  nativePath: string;
+  mtime: string;
+  size: number;
+  cwd?: string;
+  knownInRegistry: boolean;
+  registrySessionId?: string;
+  preview?: string;
+}
+
+export interface NativeSessionsResponse {
+  sessions: NativeSessionItem[];
+  truncated: boolean;
+  scannedRoots: Array<{ runtime: string; root: string; considered: number }>;
+}
+
+export async function fetchNativeSessions(runtime?: string, limit?: number): Promise<NativeSessionsResponse> {
+  const params = new URLSearchParams();
+  if (runtime) params.set('runtime', runtime);
+  if (limit) params.set('limit', String(limit));
+  const qs = params.toString();
+  return apiGet(`/api/sessions/native${qs ? `?${qs}` : ''}`) as Promise<NativeSessionsResponse>;
+}
+
+export async function importNativeSession(body: {
+  runtime: string;
+  nativeId: string;
+  cwd?: string;
+  parentSessionId?: string;
+}): Promise<{ success: boolean; sessionId: string; alreadyRegistered?: boolean; runtime: string }> {
+  const response = await fetch(`${API_URL}/api/sessions/import-native`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: 'Import failed' }));
+    throw new ApiError(response.status, err.error || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+

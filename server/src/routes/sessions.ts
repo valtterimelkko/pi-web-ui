@@ -4,7 +4,21 @@ import { getPiService } from '../pi/index.js';
 import { WorkerPool } from '../workers/worker-pool.js';
 import type { WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
 import fs from 'fs/promises';
+import path from 'path';
+import { randomUUID } from 'crypto';
+import type { SdkType } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
+import { getSessionRegistry, type RegistryEntry } from '../session-registry.js';
+import { config } from '../config.js';
+import {
+  scanNativeSessions,
+  resolveNativeSessionArtifact,
+  NATIVE_RUNTIMES,
+  type NativeRuntime,
+  type NativeScanRoots,
+  type NativeKnownSets,
+} from '../internal-api/native-sessions.js';
+import { resolveClaudeProjectsRoot } from '../internal-api/goal/claude-goal.js';
 
 const logger = createLogger('Sessions');
 
@@ -45,6 +59,203 @@ router.get('/', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Error listing sessions:', error);
     res.status(500).json({ error: 'Failed to list sessions' });
+  }
+});
+
+// GET /api/sessions/native - List unmanaged and managed native CLI sessions on disk
+router.get('/native', async (req: Request, res: Response) => {
+  try {
+    const runtimeParam = req.query.runtime as string | undefined;
+    let runtimes: NativeRuntime[];
+    if (runtimeParam === undefined || runtimeParam.trim() === '') {
+      runtimes = [...NATIVE_RUNTIMES];
+    } else {
+      const parts = runtimeParam.split(',').map((s) => s.trim()).filter(Boolean);
+      for (const part of parts) {
+        if (part === 'pi') {
+          res.status(400).json({
+            error: 'Native pi sessions are auto-discovered into the session registry by the SessionWatcher and are already returned by GET /sessions; the native scan covers claude, commandcode, opencode, antigravity',
+          });
+          return;
+        }
+        if (!(NATIVE_RUNTIMES as readonly string[]).includes(part)) {
+          res.status(400).json({
+            error: `Unsupported native runtime: ${part}. Valid runtimes: ${NATIVE_RUNTIMES.join(', ')}`,
+          });
+          return;
+        }
+      }
+      runtimes = parts as NativeRuntime[];
+    }
+
+    let limit = 20;
+    const limitParam = req.query.limit as string | undefined;
+    if (limitParam !== undefined) {
+      const num = parseInt(limitParam, 10);
+      if (isNaN(num) || num < 1 || num > 200) {
+        res.status(400).json({ error: 'limit must be an integer between 1 and 200' });
+        return;
+      }
+      limit = num;
+    }
+
+    let since: Date | undefined;
+    if (req.query.since) {
+      const parsed = Date.parse(req.query.since as string);
+      if (!isNaN(parsed)) since = new Date(parsed);
+    }
+
+    let before: Date | undefined;
+    if (req.query.before) {
+      const parsed = Date.parse(req.query.before as string);
+      if (!isNaN(parsed)) before = new Date(parsed);
+    }
+
+    const nativeRoots: NativeScanRoots = {
+      claudeProjectsDir: resolveClaudeProjectsRoot(),
+      commandCodeCliHomeDir: config.commandCodeCliHomeDir,
+      commandCodeNativeHomeDir: config.commandCodeNativeHomeDir,
+      opencodeStorageDir: config.opencodeStorageDir,
+      antigravityConversationsDir: config.antigravityNativeConversationsDir,
+    };
+
+    const registry = getSessionRegistry(config.sessionRegistryPath);
+    const known: NativeKnownSets = {
+      claudeSessionIds: new Map<string, string>(),
+      commandCodeNativeSessionIds: new Map<string, string>(),
+      opencodeSessionIds: new Map<string, string>(),
+      antigravityConversationIds: new Map<string, string>(),
+    };
+    for (const entry of await registry.listAll()) {
+      if (entry.claudeSessionId) known.claudeSessionIds.set(entry.claudeSessionId, entry.id);
+      if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, entry.id);
+      if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, entry.id);
+      if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, entry.id);
+    }
+
+    const result = await scanNativeSessions({ runtimes, limit, since, before, roots: nativeRoots, known });
+    res.json({
+      sessions: result.items,
+      truncated: result.truncated,
+      scannedRoots: result.scannedRoots,
+    });
+  } catch (error) {
+    logger.error('Error scanning native sessions:', error);
+    res.status(500).json({ error: 'Failed to scan native sessions' });
+  }
+});
+
+// POST /api/sessions/import-native - Import unmanaged CLI session into registry
+router.post('/import-native', async (req: Request, res: Response) => {
+  try {
+    const { runtime, nativeId, cwd, parentSessionId } = req.body ?? {};
+    if (!runtime || !nativeId) {
+      res.status(400).json({ error: 'runtime and nativeId are required' });
+      return;
+    }
+
+    if (!(NATIVE_RUNTIMES as readonly string[]).includes(runtime)) {
+      res.status(400).json({ error: `Unsupported runtime: ${runtime}. Valid runtimes: ${NATIVE_RUNTIMES.join(', ')}` });
+      return;
+    }
+
+    // nativeId is joined into filesystem paths: accept only bare artefact base
+    // names (no separators, no '..'); resolution additionally containment-checks
+    // every candidate against the runtime root before any read.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nativeId)) {
+      res.status(400).json({ error: 'nativeId must be a bare session file base name' });
+      return;
+    }
+
+    const registry = getSessionRegistry(config.sessionRegistryPath);
+
+    // If parentSessionId provided, verify parent exists
+    if (parentSessionId) {
+      const parent = await registry.get(parentSessionId);
+      if (!parent) {
+        res.status(404).json({ error: 'Parent session not found', code: 'SESSION_NOT_FOUND' });
+        return;
+      }
+    }
+
+    // Check if already registered
+    let existingEntry: RegistryEntry | undefined;
+    if (runtime === 'claude') {
+      existingEntry = await registry.getByClaudeSessionId(nativeId);
+    } else if (runtime === 'commandcode') {
+      existingEntry = await registry.getByCommandCodeNativeSessionId(nativeId);
+    } else if (runtime === 'opencode') {
+      existingEntry = await registry.getByOpencodeSessionId(nativeId);
+    } else if (runtime === 'antigravity') {
+      const all = await registry.listAll();
+      existingEntry = all.find((e) => e.antigravityConversationId === nativeId);
+    }
+
+    if (existingEntry) {
+      if (parentSessionId && existingEntry.parentSessionId !== parentSessionId) {
+        existingEntry = await registry.upsert({
+          ...existingEntry,
+          parentSessionId,
+        });
+      }
+      res.json({
+        success: true,
+        sessionId: existingEntry.id,
+        alreadyRegistered: true,
+        runtime,
+        session: existingEntry,
+      });
+      return;
+    }
+
+    // Not registered yet — resolve the artefact through the same bounded,
+    // containment-checked resolver the Internal API adopt-native uses.
+    const nativeRoots: NativeScanRoots = {
+      claudeProjectsDir: resolveClaudeProjectsRoot(),
+      commandCodeCliHomeDir: config.commandCodeCliHomeDir,
+      commandCodeNativeHomeDir: config.commandCodeNativeHomeDir,
+      opencodeStorageDir: config.opencodeStorageDir,
+      antigravityConversationsDir: config.antigravityNativeConversationsDir,
+    };
+
+    const resolved = await resolveNativeSessionArtifact({
+      runtime,
+      nativeId,
+      cwd: typeof cwd === 'string' && cwd.trim() ? cwd.trim() : undefined,
+      roots: nativeRoots,
+    });
+    if (!resolved) {
+      res.status(404).json({ error: 'Native session artefact not found on disk', code: 'NATIVE_SESSION_NOT_FOUND' });
+      return;
+    }
+
+    const mtimeIso = new Date(resolved.mtimeMs).toISOString();
+    const entry = await registry.upsert({
+      sdkType: runtime as SdkType,
+      path: resolved.nativePath,
+      claudeSessionId: runtime === 'claude' ? nativeId : undefined,
+      commandCodeNativeSessionId: runtime === 'commandcode' ? nativeId : undefined,
+      opencodeSessionId: runtime === 'opencode' ? nativeId : undefined,
+      antigravityConversationId: runtime === 'antigravity' ? nativeId : undefined,
+      cwd: (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : resolved.fileCwd) ?? '',
+      firstMessage: resolved.preview || 'Native CLI session',
+      messageCount: resolved.messageCount ?? 0,
+      createdAt: mtimeIso,
+      lastActivity: mtimeIso,
+      status: 'idle',
+      origin: 'native-discovered',
+      parentSessionId,
+    });
+
+    res.json({
+      success: true,
+      sessionId: entry.id,
+      runtime,
+      session: entry,
+    });
+  } catch (error) {
+    logger.error('Error importing native session:', error);
+    res.status(500).json({ error: 'Failed to import native session', detail: error instanceof Error ? error.message : String(error) });
   }
 });
 

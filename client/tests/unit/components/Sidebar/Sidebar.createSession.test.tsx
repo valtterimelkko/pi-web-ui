@@ -49,6 +49,7 @@ vi.mock('../../../../src/components/Session', () => ({
     lastModalProps = props;
     return null;
   },
+  ResumeNativeSessionModal: () => null,
 }));
 vi.mock('../../../../src/components/Sidebar/SessionList', () => ({ SessionList: () => null }));
 vi.mock('../../../../src/components/Sidebar/SessionFilters', () => ({ SessionFilters: () => null }));

@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import type { CommandCodeEffort, SdkType } from '@pi-web-ui/shared';
-import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight, Coins, Archive } from 'lucide-react';
+import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight, Coins, Archive, Terminal } from 'lucide-react';
 import { useSessionStore, useUIStore } from '../../store';
 import { useChatStore } from '../../store/chatStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { useTransferStore } from '../../store/transferStore';
 import { SessionList } from './SessionList';
 import { SessionFilters } from './SessionFilters';
-import { NewSessionModal } from '../Session';
+import { NewSessionModal, ResumeNativeSessionModal } from '../Session';
 import { TransferConfirmationModal } from './TransferConfirmationModal';
 import { SessionItem } from './SessionItem';
 import { TokenUsageDashboard } from '../Usage';
@@ -26,6 +26,7 @@ export function Sidebar() {
   const [filter, setFilter] = useState('');
   const [cwdFilter, setCwdFilter] = useState<string | null>(null);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
+  const [showResumeNativeModal, setShowResumeNativeModal] = useState(false);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
   const [showUsageDashboard, setShowUsageDashboard] = useState(false);
   const [archivingAll, setArchivingAll] = useState(false);
@@ -183,6 +184,13 @@ export function Sidebar() {
                 <RefreshCw className="w-3.5 h-3.5 text-gray-400" />
               </button>
               <button
+                onClick={() => setShowResumeNativeModal(true)}
+                className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-md transition-colors"
+                title="Resume CLI session (Claude, Antigravity, Command Code, OpenCode)"
+              >
+                <Terminal className="w-3.5 h-3.5 text-gray-400" />
+              </button>
+              <button
                 onClick={() => setShowNewSessionModal(true)}
                 className="p-1.5 hover:bg-gray-200 rounded-md transition-colors"
                 title="New session"
@@ -320,6 +328,12 @@ export function Sidebar() {
           setShowNewSessionModal(false);
           openDriveMode();
         }}
+      />
+
+      {/* Resume Native CLI Session Modal */}
+      <ResumeNativeSessionModal
+        isOpen={showResumeNativeModal}
+        onClose={() => setShowResumeNativeModal(false)}
       />
 
       {/* Token Usage Dashboard */}
