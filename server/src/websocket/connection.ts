@@ -36,6 +36,7 @@ import { ClaudeSessionSubscribers } from '../claude/claude-session-subscribers.j
 import { getOpenCodeService, type OpenCodeService } from '../opencode/index.js';
 import { GOAL_RESUME_CONTINUATION } from '../opencode/opencode-service.js';
 import { parseGoalCommand, type GoalCommand } from '../opencode/goal-command.js';
+import { parseAgyGoalCommand, type AgyGoalCommand } from '../internal-api/goal/antigravity-goal.js';
 import { OpenCodeSessionSubscribers } from '../opencode/opencode-session-subscribers.js';
 import { getAntigravityService, type AntigravityService } from '../antigravity/index.js';
 import { AntigravitySessionSubscribers } from '../antigravity/antigravity-session-subscribers.js';
@@ -320,7 +321,7 @@ export class WebSocketConnectionManager {
    * native client-side path (Claude, Command Code). Wired from index.ts to the
    * Internal API goal-control handler; null = those controls answer honestly.
    */
-  goalControlApi?: (sessionId: string, body: { action: string; objective?: string }) => Promise<{ statusCode: number; body: Record<string, unknown> }>;
+  goalControlApi?: (sessionId: string, body: { action: string; objective?: string; verifyCommand?: string }) => Promise<{ statusCode: number; body: Record<string, unknown> }>;
   private wss: WebSocketServer;
   private clients: Map<string, WebSocketClient> = new Map();
   private piService: PiService;
@@ -1577,11 +1578,52 @@ export class WebSocketConnectionManager {
     };
   }
 
+  /** Contract 1.38.0: drive the antigravity server-side goal manager from
+   *  `/goal …` text typed in the web UI (antigravity has no slash layer).
+   *  Success is silent: the Internal API handler emits the browser goal-widget
+   *  bridge messages, which is what the client's GoalPanel parses. */
+  private async handleAgyGoalControl(clientId: string, sessionId: string, goalCmd: AgyGoalCommand): Promise<void> {
+    if (!this.goalControlApi) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Goal control is not available on this host',
+        code: 'UNSUPPORTED_OPERATION',
+      });
+      return;
+    }
+    const body = goalCmd.kind === 'start'
+      ? { action: 'start' as const, objective: goalCmd.objective, verifyCommand: goalCmd.verifyCommand }
+      : { action: goalCmd.kind };
+    try {
+      const result = await this.goalControlApi(sessionId, body);
+      if (result.statusCode >= 400) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: typeof result.body.error === 'string' ? result.body.error : 'Goal control failed',
+          code: typeof result.body.code === 'string' ? result.body.code : 'GOAL_CONTROL_FAILED',
+        });
+      }
+    } catch (error) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: `Goal control failed: ${error instanceof Error ? error.message : String(error)}`,
+        code: 'GOAL_CONTROL_FAILED',
+      });
+    }
+  }
+
   private async handleAntigravityPrompt(
     clientId: string,
     sessionId: string,
     prompt: string,
   ): Promise<void> {
+    // Contract 1.38.0: intercept `/goal …` — antigravity has no slash layer, so
+    // the web UI interprets goal commands itself (same pattern as OpenCode).
+    const agyGoalCmd = parseAgyGoalCommand(prompt);
+    if (agyGoalCmd) {
+      await this.handleAgyGoalControl(clientId, sessionId, agyGoalCmd);
+      return;
+    }
     // Durability now also comes from the store: sendPrompt persists the prompt
     // as a `running` turn before returning, so a reconnecting subscriber (not
     // just this client) sees it via replay even if it missed the live fan-out.
@@ -1870,8 +1912,9 @@ export class WebSocketConnectionManager {
 
     // Contract 1.27.0: Claude and Command Code route to the Internal API
     // goal-control handler (same code path the Unix-socket API exposes).
+    // Contract 1.38.0: antigravity joins them (server-side goal manager).
     const entry = await getSessionRegistry().get(sessionPath);
-    if (entry?.sdkType === 'claude' || entry?.sdkType === 'commandcode') {
+    if (entry?.sdkType === 'claude' || entry?.sdkType === 'commandcode' || entry?.sdkType === 'antigravity') {
       if (!this.goalControlApi) {
         this.sendMessage(clientId, {
           type: 'error',

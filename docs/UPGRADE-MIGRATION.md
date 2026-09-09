@@ -2,6 +2,11 @@
 
 Short, adopter-facing migration notes for the additive minor bumps that still need operator awareness. Everything here is **compatible** — no breaking `/api/v1` route change — but the behaviours below affect pin capacity, model selection, and goal handling.
 
+## Antigravity goal function (1.38.0, 2026-09-08)
+
+- **What changed:** `capabilities.runtimes.antigravity` gains `supportsGoal`/`goalControls`; `GET/POST /sessions/:id/goal` now work on antigravity sessions; a `/goal …`-prefixed antigravity prompt is intercepted as goal control (never reaches the model; resolves while busy). The goal loop is server-side: sweeper verifies each completed turn (`verifyCommand` exit 0, or the `GOAL_STATUS: ACHIEVED` sentinel self-report) and dispatches continuations while unmet up to `maxTurns` (default/cap 100, `AGY_GOAL_MAX_RUNS`). Sweep/verify knobs: `AGY_GOAL_AUTO_CONTINUE`, `AGY_GOAL_SWEEP_MS`, `AGY_GOAL_VERIFY_TIMEOUT_MS`.
+- **Compatibility:** additive. Existing consumers that treated antigravity goals as unsupported should now gate on `supportsGoal`. Goal-control records live under `~/.pi-web-ui/antigravity-sessions/goal-control/`; deleting a record disarms that session's goal.
+
 ## Antigravity slug selectors + queueing (1.37.0, 2026-09-08)
 
 - **What changed:** Antigravity `/models` selectors are now canonical agy **slugs** (`gemini-3.6-flash-low`) and each entry carries sibling-derived `thinkingLevels`; `follow_up` on a busy antigravity session **queues** in the live agy process (previously `409`); `steer` on busy antigravity returns `409 SESSION_BUSY` (no mid-run join exists); `set_model` on a busy session is `409`. Turns stream real deltas/tool events and `agent_end` carries real token `usage`.

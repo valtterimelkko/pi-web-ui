@@ -190,6 +190,30 @@ Fetched live via `agy models` (60 s cache). Each `/models` entry carries
 catalogue siblings. When `agy models` cannot run, a small static fallback list
 is served.
 
+## Goal Function (contract 1.38.0)
+
+`agy` has no native goal, so antigravity goals are **fully server-owned** — no
+mod, no CLI cooperation:
+
+- `POST /api/v1/sessions/:id/goal {action:"start", objective, verifyCommand?, maxTurns?}`
+  arms a control record under `~/.pi-web-ui/antigravity-sessions/goal-control/<sessionId>.json`
+  and dispatches a goal start prompt through the normal prompt pipeline
+  (queued transparently when a turn is already running).
+- A turn-driven sweeper (`AGY_GOAL_SWEEP_MS`, default 15 s) verifies each
+  **completed** turn: with `verifyCommand`, exit 0 means achieved
+  (`verification.status:"passed"`); without one, the goal prompts ask the model
+  to end its reply with exactly `GOAL_STATUS: ACHIEVED`
+  (`verification.status:"self_reported"`). Unmet turns get a continuation
+  prompt until `maxTurns` (default/cap 100) is exhausted → `failed`/`budget`.
+- `pause` disarms the sweeper (the in-flight turn still settles); `resume`
+  re-arms and dispatches one continuation; `clear` retires the record.
+- `/goal <objective>` / `/goal pause|resume|clear|status` typed at the prompt
+  boundary (HTTP `POST /prompt` or the web-UI message box) is intercepted as
+  goal control and never reaches the model — it resolves even while the
+  session is busy. `/goal --verify "npm test" <objective>` arms with a verifier.
+- Projections, `goal_state`/`goal_end` broker events and the browser GoalPanel
+  (pause/resume/clear buttons) behave exactly as on the other runtimes.
+
 ## Frontend
 
 - `NewSessionModal` shows an Antigravity button (violet theme) when

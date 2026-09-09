@@ -145,6 +145,18 @@ describe('GoalPanel', () => {
       expect(screen.getByTestId('goal-tag')).toBeTruthy();
       expect(screen.queryByTestId('goal-controls')).toBeNull();
     });
+
+    it('renders controls for antigravity (contract 1.38.0: server-side goal manager)', () => {
+      const onControl = vi.fn();
+      renderPanel({ sdkType: 'antigravity', onControl, isStreaming: true });
+
+      fireEvent.click(screen.getByTestId('goal-pause'));
+      expect(onControl).toHaveBeenCalledWith('pause');
+
+      fireEvent.click(screen.getByTestId('goal-clear'));
+      fireEvent.click(screen.getByTestId('goal-clear-confirm'));
+      expect(onControl).toHaveBeenCalledWith('clear');
+    });
   });
 
   describe('after the goal finishes', () => {

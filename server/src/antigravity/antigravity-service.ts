@@ -834,6 +834,31 @@ export class AntigravityService {
     return this.sessionMeta.has(sessionId);
   }
 
+  /** Contract 1.38.0 goal sweeper: latest finalized turn (null when none).
+   *  Stream mode stores turn completion in `turnDurationMs` finalization order;
+   *  `timestamp` is the turn start, which preserves ordering well enough for
+   *  the sweeper's process-once bookkeeping. */
+  async getLastCompletedTurn(sessionId: string): Promise<{ completedAt: number; response: string } | null> {
+    const history = await this.store.loadHistory(sessionId);
+    const finalized = history.filter((t) => t.status !== 'running');
+    const last = finalized[finalized.length - 1];
+    if (!last) return null;
+    // Derived completion instant, guarded monotonically across finalized turns
+    // so identical timestamps can never make the sweeper skip a newer turn.
+    let prevDerived = -Infinity;
+    for (const t of finalized) {
+      const derived = t.turnDurationMs !== undefined ? t.timestamp + t.turnDurationMs : t.timestamp;
+      prevDerived = derived > prevDerived ? derived : prevDerived + 1;
+    }
+    return { completedAt: prevDerived, response: last.response ?? '' };
+  }
+
+  /** Contract 1.38.0 goal sweeper: registry cwd for verifyCommand execution. */
+  async getSessionCwd(sessionId: string): Promise<string | undefined> {
+    const entry = await this.registry.get(sessionId).catch(() => null);
+    return entry && entry.sdkType === 'antigravity' ? entry.cwd : undefined;
+  }
+
   async ensureSession(sessionId: string): Promise<boolean> {
     if (this.sessionMeta.has(sessionId)) return true;
     const entry = await this.registry.get(sessionId);

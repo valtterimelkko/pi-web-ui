@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.37.0',
+        contractVersion: '1.38.0',
       },
       features: {
         // Contract 1.34.0: child-orchestration surfacing (background subagents,
@@ -140,7 +140,11 @@ describe('createCapabilitiesRoutes', () => {
       supportsSteer: false,
       supportsThinkingLevel: true,
       supportsHeartbeat: false,
+      // Contract 1.38.0: server-side goal manager (queueing is the transport).
+      supportsGoal: true,
+      goalControls: ['start', 'pause', 'resume', 'clear'],
     });
+    expect(runtimes.pi.supportsGoal).toBe(true);
   });
 
   it('27. reports structured interactive-question support only for the Claude SDK backend', async () => {

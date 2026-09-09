@@ -164,6 +164,10 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
             supportsPinning: true,
             supportsReplayHistory: true,
             supportsApprovals: false,
+            // Contract 1.38.0: server-side goal manager; queueing (stream mode)
+            // is the transport for its continuation turns.
+            supportsGoal: stream,
+            goalControls: stream ? ['start', 'pause', 'resume', 'clear'] : [],
             // Real step events stream during turns; the synthetic heartbeat
             // only exists for the legacy batch subprocess path.
             supportsHeartbeat: !stream,

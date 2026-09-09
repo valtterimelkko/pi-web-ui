@@ -4,6 +4,9 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Antigravity /goal integration (`1.38.0`, `2026-09-08`)**
+  - The cross-runtime goal function now covers Antigravity. `agy` has no native goal, so the runtime is served by a fully server-side goal manager: `POST /sessions/:id/goal` arms a per-session control record and dispatches a goal prompt; a turn-driven sweeper verifies every completed turn (`verifyCommand` exit code, or the `GOAL_STATUS: ACHIEVED` self-report sentinel) and dispatches continuation prompts while unmet, bounded by `maxTurns` (default/cap 100). `/goal …` typed at the prompt boundary (HTTP or WebSocket) is intercepted as goal control — even on busy sessions. `goal_state`/`goal_end` broker events and the browser GoalPanel work unchanged; the frontend gains pause/resume/clear buttons for antigravity sessions.
+
 - **Antigravity stream-json integration (`1.37.0`, `2026-09-08`)**
   - The Antigravity runtime moved from batch text print-mode (`agy -p`) to a persistent `agy --input-format stream-json --output-format stream-json` process per session: real `text_delta` streaming (~200 ms cadence), per-turn results, tool-call visibility (`tool_execution_start/end`), real token usage (context % now comes from agy, not char/4 estimates), and native follow-up queueing (a mid-turn write runs as the next turn — frontend composer shows a queue-only affordance; Internal API `mode:'follow_up'` queues on busy antigravity sessions).
   - Model + thinking-level selection is now reliable and live-validated against agy 1.1.27: canonical slug selectors with sibling-derived `thinkingLevels` per model, loud failures for unknown models (the historic silent downgrade is gone), sibling-slug level swaps (never an `--effort` flag), 409 for busy model changes, and crash recovery via `--conversation` resume.

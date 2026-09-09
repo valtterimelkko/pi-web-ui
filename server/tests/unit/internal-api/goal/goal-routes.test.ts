@@ -114,7 +114,18 @@ describe('goal function (contract 1.27.0)', () => {
       getBackendMode: vi.fn().mockResolvedValue('sdk'),
     };
     opencodeService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false), isEnabled: vi.fn(() => false) };
-    antigravityService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false) };
+    antigravityService = {
+      isAvailable: vi.fn().mockResolvedValue(true),
+      isRunning: vi.fn(() => false),
+      sendPrompt: vi.fn((_id: string, _message: string, _broadcast: unknown, complete: (error?: Error) => void) => {
+        complete();
+        return Promise.resolve();
+      }),
+      followUp: vi.fn(() => Promise.resolve(true)),
+      getLastCompletedTurn: vi.fn(async () => null),
+      getSessionCwd: vi.fn(async () => '/root/pi-web-ui'),
+      abort: vi.fn(),
+    };
     piService = {
       getAvailableModels: vi.fn().mockResolvedValue([
         { id: 'glm-5.3', name: 'GLM-5.3', provider: 'zai', contextWindow: 200000 },
@@ -156,6 +167,7 @@ describe('goal function (contract 1.27.0)', () => {
       watchDir: path.join(dir, 'watches'),
       pinDir: path.join(dir, 'pins'),
       claudeSessionDir: path.join(dir, 'claude-sessions'),
+      antigravitySessionDir: path.join(dir, 'antigravity-sessions'),
       claudeProjectsDir: path.join(dir, '.claude', 'projects'),
       pinExpiryIntervalMs: 60_000,
       runReceiptManager: manager,
@@ -210,10 +222,17 @@ describe('goal function (contract 1.27.0)', () => {
     });
 
     it('reports unsupported honestly for out-of-scope runtimes', async () => {
+      registry.get.mockResolvedValue(entry({ sdkType: 'opencode' }));
+      const res = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/session-1/goal'), res, 'session-1');
+      expect(JSON.parse(res.body)).toMatchObject({ runtime: 'opencode', supported: false, status: 'unknown' });
+    });
+
+    it('contract 1.38.0: projects an idle antigravity goal as supported', async () => {
       registry.get.mockResolvedValue(entry({ sdkType: 'antigravity' }));
       const res = mockRes();
       await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/session-1/goal'), res, 'session-1');
-      expect(JSON.parse(res.body)).toMatchObject({ runtime: 'antigravity', supported: false, status: 'unknown' });
+      expect(JSON.parse(res.body)).toMatchObject({ runtime: 'antigravity', supported: true, status: 'idle' });
     });
   });
 
@@ -598,6 +617,121 @@ describe('goal function (contract 1.27.0)', () => {
       const res = mockRes();
       await routes.handleSendPrompt(req, res, 'session-1');
       expect(res.statusCode).toBe(409);
+    });
+  });
+
+  describe('contract 1.38.0 — antigravity server-side goal manager', () => {
+    function agyEntry(): void {
+      registry.get.mockResolvedValue(entry({ sdkType: 'antigravity' }));
+    }
+
+    it('start arms the store, dispatches the goal prompt (sentinel without verify) and answers running', async () => {
+      agyEntry();
+      const req = jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship the release' });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(req, res, 'session-1');
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ accepted: true, action: 'start', runtime: 'antigravity' });
+      expect(body.goal).toMatchObject({ supported: true, status: 'running', objective: 'Ship the release', maxRuns: 100 });
+      expect(antigravityService.sendPrompt).toHaveBeenCalledTimes(1);
+      const prompt = antigravityService.sendPrompt.mock.calls[0][1] as string;
+      expect(prompt).toContain('Ship the release');
+      expect(prompt).toContain('GOAL_STATUS: ACHIEVED');
+    });
+
+    it('start with verifyCommand omits the sentinel and stores the verifier', async () => {
+      agyEntry();
+      const req = jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Lint clean', verifyCommand: 'npm run lint' });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(req, res, 'session-1');
+
+      expect(res.statusCode).toBe(200);
+      const prompt = antigravityService.sendPrompt.mock.calls[0][1] as string;
+      expect(prompt).not.toContain('GOAL_STATUS: ACHIEVED');
+      const record = JSON.parse(await fs.readFile(path.join(dir, 'antigravity-sessions', 'goal-control', 'session-1.json'), 'utf8'));
+      expect(record).toMatchObject({ objective: 'Lint clean', verifyCommand: 'npm run lint', status: 'running', autoContinue: true });
+    });
+
+    it('start on a busy session arms without dispatching and says so', async () => {
+      agyEntry();
+      antigravityService.isRunning.mockReturnValue(true);
+      const req = jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(req, res, 'session-1');
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).note).toContain('busy');
+      expect(antigravityService.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('pause/clear require an armed goal; pause disarms; resume re-arms and dispatches a continuation', async () => {
+      agyEntry();
+      const pauseNone = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' }), pauseNone, 'session-1');
+      expect(pauseNone.statusCode).toBe(409);
+
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' }), mockRes(), 'session-1');
+      antigravityService.sendPrompt.mockClear();
+
+      const pause = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' }), pause, 'session-1');
+      expect(pause.statusCode).toBe(200);
+      expect(JSON.parse(pause.body).goal).toMatchObject({ status: 'paused', pausedReason: 'user', autoContinue: false });
+
+      const resume = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'resume' }), resume, 'session-1');
+      expect(resume.statusCode).toBe(200);
+      expect(JSON.parse(resume.body).goal).toMatchObject({ status: 'running', autoContinue: true });
+      expect(antigravityService.sendPrompt).toHaveBeenCalledTimes(1);
+      expect(antigravityService.sendPrompt.mock.calls[0][1] as string).toContain('Ship it');
+
+      const clear = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'clear' }), clear, 'session-1');
+      expect(clear.statusCode).toBe(200);
+      expect(JSON.parse(clear.body).goal).toMatchObject({ status: 'cleared' });
+    });
+
+    it('POST action status answers read-only with the projection', async () => {
+      agyEntry();
+      const res = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'status' }), res, 'session-1');
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({ accepted: true, action: 'status', goal: { supported: true, status: 'idle' } });
+      expect(antigravityService.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('/goal text at the prompt boundary is intercepted as goal control, even while busy', async () => {
+      agyEntry();
+      antigravityService.isRunning.mockReturnValue(true);
+      const res = mockRes();
+      await routes.handleSendPrompt(jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: '/goal pause' }), res, 'session-1');
+
+      expect(res.statusCode).toBe(409); // pause with no armed goal -> conflict
+      expect(JSON.parse(res.body).code).toBe('INVALID_REQUEST');
+      expect(antigravityService.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('/goal start text arms a goal from the prompt boundary', async () => {
+      agyEntry();
+      const res = mockRes();
+      await routes.handleSendPrompt(jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: '/goal "Ship the beta"' }), res, 'session-1');
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.accepted).toBe(true);
+      expect(body.goal).toMatchObject({ status: 'running', objective: 'Ship the beta' });
+      expect(antigravityService.sendPrompt).toHaveBeenCalledTimes(1);
+      expect(antigravityService.sendPrompt.mock.calls[0][1] as string).toContain('Ship the beta');
+    });
+
+    it('non-goal prompts still reach the runtime unchanged', async () => {
+      agyEntry();
+      const res = mockRes();
+      await routes.handleSendPrompt(jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: '/goals are great but this is prose' }), res, 'session-1');
+      // '/goals …' is not a goal command; it flows into the normal pipeline.
+      expect(JSON.parse(res.body).goal).toBeUndefined();
     });
   });
 });

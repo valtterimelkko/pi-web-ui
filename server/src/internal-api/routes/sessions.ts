@@ -73,6 +73,7 @@ import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildC
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
+import { type AntigravityGoalRecord, AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
@@ -979,6 +980,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     await ready.catch(() => { /* startup surfaces the original initialization error */ });
     pinExpiry?.stop();
     claudeGoalNudger?.stop();
+    agyGoalSweeper?.stop();
     await runReceipts.shutdown();
     disposal.disposeAll();
   }
@@ -3103,6 +3105,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
+    // Contract 1.38.0: antigravity has no slash layer — `/goal …` typed at the
+    // prompt boundary is goal control, not a model prompt. It resolves even on
+    // a busy session because control never needs the runtime process.
+    if (entry.sdkType === 'antigravity') {
+      const agyGoalCmd = parseAgyGoalCommand(body.message);
+      if (agyGoalCmd) {
+        await handleAgyGoalPromptControl(res, sessionId, entry, agyGoalCmd);
+        return;
+      }
+    }
+
     const runtime = entry.sdkType;
 
     // Fail-closed BEFORE any receipt/admission/runtime call: a disabled OpenCode
@@ -4137,8 +4150,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   async function readGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
     if (entry.sdkType === 'pi') return readProjectPiGoalState(entry.path);
     if (entry.sdkType === 'claude') return readClaudeGoalProjection(entry);
-    // Command Code gains its mod-state channel in Phase 3. OpenCode/Antigravity
-    // are out of scope (plan D1).
+    if (entry.sdkType === 'antigravity') return projectAgyGoal(await agyGoalStore.get(entry.id));
+    // Command Code gains its mod-state channel in Phase 3. OpenCode
+    // is out of scope (plan D1).
     return unsupportedGoalProjection();
   }
 
@@ -4178,6 +4192,30 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   });
   claudeGoalNudger.start();
 
+  /** Contract 1.38.0 — Antigravity goal ledger (server-owned; agy has no native goal). */
+  const agyGoalStore = new AntigravityGoalControlStore(path.join(antigravitySessionDir, 'goal-control'));
+  const agyGoalSweeper = createAgyGoalSweeper({
+    config: loadAgyGoalAutoContinueConfig(),
+    listGoalSessions: () => agyGoalStore.listSessionIds(),
+    isRunning: (id) => antigravityService.isRunning(id),
+    getStore: () => agyGoalStore,
+    readLastCompletedTurn: (id) => antigravityService.getLastCompletedTurn(id),
+    sessionCwd: (id) => antigravityService.getSessionCwd(id),
+    dispatch: async (id, message) => {
+      const dispatched = await dispatchDetachedInternal(id, message);
+      if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+        throw new Error(`goal continuation dispatch failed (${dispatched.statusCode})`);
+      }
+    },
+    publish: (sessionId, event) => {
+      try {
+        broker.publish(sessionId, event as NormalizedEvent);
+        emitGoalBrowserBridge(sessionId, event.data as SessionGoalProjection);
+      } catch { /* non-fatal */ }
+    },
+  });
+  agyGoalSweeper.start();
+
   /**
    * Bridge a canonical goal projection to the browser: synthesizes the
    * extension-UI-grammar messages the client goal surface already parses.
@@ -4189,6 +4227,136 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         onBrowserMessage(message);
       } catch { /* non-fatal */ }
     }
+  }
+
+  /** Contract 1.38.0 — antigravity goal control (server-side manager; agy has no native /goal). */
+  async function handleSessionGoalControlAntigravity(
+    res: ServerResponse,
+    sessionId: string,
+    entry: RegistryEntry,
+    raw: SessionGoalControlRequest,
+  ): Promise<void> {
+    const action = raw.action;
+    if (action !== 'start' && action !== 'pause' && action !== 'resume' && action !== 'clear' && action !== 'status') {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'action must be one of start|pause|resume|clear|status'));
+      return;
+    }
+    const respond = async (extra: Record<string, unknown> = {}): Promise<void> => {
+      const projection = await readGoalProjection(entry);
+      emitGoalBrowserBridge(sessionId, projection);
+      sendJson(res, 200, { sessionId, runtime: 'antigravity', action, accepted: true, ...extra, goal: projection });
+    };
+
+    if (action === 'status') {
+      await respond({ note: 'read-only status' });
+      return;
+    }
+
+    if (action === 'start') {
+      const objective = typeof raw.objective === 'string' ? raw.objective.trim() : '';
+      if (!objective) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, "action 'start' requires a non-empty objective"));
+        return;
+      }
+      if (objective.length > 4000 || /[\n\r]/.test(objective)) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'objective must be a single line of at most 4000 characters'));
+        return;
+      }
+      const verifyCommand = typeof raw.verifyCommand === 'string' && raw.verifyCommand.trim() !== ''
+        ? raw.verifyCommand.trim()
+        : undefined;
+      if (verifyCommand !== undefined && /[\n\r]/.test(verifyCommand)) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'verifyCommand must be a single line'));
+        return;
+      }
+      const maxRuns = typeof raw.maxTurns === 'number' && Number.isSafeInteger(raw.maxTurns) && raw.maxTurns > 0
+        ? Math.min(Math.floor(raw.maxTurns), 100)
+        : 100;
+      const previous = await agyGoalStore.get(sessionId);
+      await agyGoalStore.patch(sessionId, {
+        objective,
+        verifyCommand,
+        maxRuns,
+        status: 'running',
+        runs: 0,
+        pausedReason: undefined,
+        lastReason: undefined,
+        verification: undefined,
+        completedAt: null,
+        clearedAt: undefined,
+        lastVerifiedTurnAt: undefined,
+        autoContinue: raw.autoContinue !== false,
+        createdAt: previous?.createdAt ?? Date.now(),
+      });
+      const busy = antigravityService.isRunning(sessionId);
+      if (!busy) {
+        const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalStartPrompt(objective, verifyCommand !== undefined));
+        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+          sendJson(res, dispatched.statusCode || 500, dispatched.body);
+          return;
+        }
+      }
+      await respond({
+        note: busy
+          ? 'goal armed; the session is busy \u2014 the sweeper verifies the turn in flight and continues from there'
+          : 'goal armed and start prompt dispatched; the sweeper verifies each completed turn and continues while unmet',
+      });
+      return;
+    }
+
+    if (action === 'pause') {
+      const existing = await agyGoalStore.get(sessionId);
+      if (!existing) {
+        sendJson(res, 409, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'no goal is armed for this session'));
+        return;
+      }
+      await agyGoalStore.patch(sessionId, { status: 'paused', pausedReason: 'user', autoContinue: false });
+      await respond({ note: 'auto-continue disarmed (server-side pause; the in-flight turn still settles)' });
+      return;
+    }
+
+    if (action === 'resume') {
+      const existing = await agyGoalStore.get(sessionId);
+      if (!existing || existing.status === 'cleared') {
+        sendJson(res, 409, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'no goal is armed for this session'));
+        return;
+      }
+      await agyGoalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true });
+      if (!antigravityService.isRunning(sessionId)) {
+        const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalContinuationPrompt(existing.objective, existing.verifyCommand !== undefined));
+        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+          sendJson(res, dispatched.statusCode || 500, dispatched.body);
+          return;
+        }
+      }
+      await respond({ note: 'auto-continue re-armed; continuation prompt dispatched' });
+      return;
+    }
+
+    // clear
+    await agyGoalStore.patch(sessionId, { status: 'cleared', clearedAt: Date.now(), autoContinue: false, completedAt: null });
+    await respond({ note: 'goal cleared' });
+  }
+
+  /** Contract 1.38.0: `/goal \u2026` typed at the antigravity prompt boundary is
+   *  goal control, not a model prompt \u2014 it resolves even while the session is
+   *  busy because control never needs the runtime process. */
+  async function handleAgyGoalPromptControl(
+    res: ServerResponse,
+    sessionId: string,
+    entry: RegistryEntry,
+    goalCmd: AgyGoalCommand,
+  ): Promise<void> {
+    if (goalCmd.kind === 'status') {
+      const projection = await readGoalProjection(entry);
+      emitGoalBrowserBridge(sessionId, projection);
+      sendJson(res, 200, { sessionId, runtime: 'antigravity', action: 'status', accepted: true, goal: projection });
+      return;
+    }
+    const raw: SessionGoalControlRequest = goalCmd.kind === 'start'
+      ? { action: 'start', objective: goalCmd.objective, verifyCommand: goalCmd.verifyCommand }
+      : { action: goalCmd.kind };
+    await handleSessionGoalControlAntigravity(res, sessionId, entry, raw);
   }
 
   /** Create-with-goal arming (contract 1.27.0). Never throws; reports honestly. */
@@ -4210,6 +4378,29 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const dispatched = await dispatchDetachedInternal(sessionId, `/goal ${goal.objective}`);
         if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
         return { armed: true, note: 'goal dispatched detached; poll GET /goal or watch goal_end' };
+      }
+      if (runtime === 'antigravity') {
+        const verifyCommand = typeof goal.verifyCommand === 'string' && goal.verifyCommand.trim() !== '' ? goal.verifyCommand.trim() : undefined;
+        const maxRuns = typeof goal.maxTurns === 'number' && goal.maxTurns > 0 ? Math.min(Math.floor(goal.maxTurns), 100) : 100;
+        const previous = await agyGoalStore.get(sessionId);
+        await agyGoalStore.patch(sessionId, {
+          objective: goal.objective,
+          verifyCommand,
+          maxRuns,
+          status: 'running',
+          runs: 0,
+          pausedReason: undefined,
+          lastReason: undefined,
+          verification: undefined,
+          completedAt: null,
+          clearedAt: undefined,
+          lastVerifiedTurnAt: undefined,
+          autoContinue: true,
+          createdAt: previous?.createdAt ?? Date.now(),
+        });
+        const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalStartPrompt(goal.objective, verifyCommand !== undefined));
+        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
+        return { armed: true, note: 'goal armed and start prompt dispatched; the sweeper continues while unmet' };
       }
       if (runtime === 'commandcode') {
         const record = await commandCodeService?.findSession(sessionId);
@@ -4502,6 +4693,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     if (entry.sdkType === 'claude') {
       await handleSessionGoalControlClaude(res, sessionId, entry, raw ?? {});
+      return;
+    }
+
+    if (entry.sdkType === 'antigravity') {
+      await handleSessionGoalControlAntigravity(res, sessionId, entry, raw ?? {});
       return;
     }
 

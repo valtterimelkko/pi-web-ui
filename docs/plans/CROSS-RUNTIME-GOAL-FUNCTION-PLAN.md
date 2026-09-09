@@ -8,6 +8,7 @@ binaries on 2026-08-27._
 
 > **Status:** completed (phases 0–6 executed) — Phase 7 owner-gated
 > **Canonical:** `docs/INTERNAL-API.md` § Goal Function, `docs/INTERNAL-API-CONTRACT.md` changelog 1.27.0, `docs/GOAL-EXTENSION-UI.md`
+> **Update 2026-09-08 (contract 1.38.0):** Antigravity joined the goal function via a fully server-side manager (control store + turn-driven sweeper; command or sentinel verification). Executed in `docs/plans/ANTIGRAVITY-GOAL-AND-SESSION-LOGS-PLAN.md`.
 > **ImplementedBy:** `2924596`→`cee19f7` (pi-web-ui), `dda585b` (cmd-enhancement), `3e3e031` (skills-global)
 > **LastVerified:** 2026-08-27 (disposable live validation) — contract `1.27.0` in service; `suggested` 1.28.0 follow-up in `docs/RECENT-CHANGES.md`
 

@@ -24,6 +24,8 @@ export interface GoalStartOptions {
 
 export interface SessionGoalControlRequest extends Partial<GoalStartOptions> {
   action?: string;
+  /** Server-side pause semantics for runtimes without a native pause (claude/antigravity). */
+  autoContinue?: boolean;
 }
 
 /** Upper bound for objective text (single-line commands only). */

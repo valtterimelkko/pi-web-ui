@@ -100,8 +100,10 @@ export function GoalPanel({ sessionId, sdkType, isStreaming, statusText, onContr
 
   // The headline already carries the run counter.
   const summary = current && phase ? summarizeGoal(current.model, phase, { includeRun: false }) : null;
+  // Contract 1.38.0: antigravity goals are server-owned state — the same
+  // goal_control WebSocket action the other server-side runtimes expose.
   const controlsEnabled = isLive && Boolean(current || fallbackTag.active)
-    && (sdkType === 'pi' || sdkType === 'opencode');
+    && (sdkType === 'pi' || sdkType === 'opencode' || sdkType === 'antigravity');
   const canExpand = Boolean(detailRecord);
 
   const toneClass = finished

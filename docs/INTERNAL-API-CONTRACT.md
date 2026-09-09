@@ -29,6 +29,13 @@ Current contract:
 
 ### Changelog
 
+- **1.38.0** (minor, additive antigravity goal function) — the cross-runtime goal function (introduced 1.27.0 for pi/claude/commandcode) extends to the Antigravity runtime, which has no native CLI goal and is therefore served by a fully server-side goal manager (control store + turn-driven auto-continue sweeper with command or self-report verification). Everything is additive:
+  - `capabilities.runtimes.antigravity`: gains `supportsGoal: true` and `goalControls: ["start","pause","resume","clear"]`.
+  - `GET /sessions/:id/goal` on an antigravity session returns the canonical goal projection (previously `supported:false`); `POST` accepts `start|pause|resume|clear` (`start` takes `objective`, optional `verifyCommand`, `maxRuns` ≤ 100).
+  - `POST /sessions/:id/prompt` on an antigravity session with a body starting `/goal …` is intercepted as goal control (start/pause/resume/clear/status) and never reaches the model; it resolves even while the session is busy.
+  - Antigravity goal transitions publish `goal_state` / `goal_end` on the event broker (watchable) and drive the same browser goal-widget bridge as the other runtimes.
+  - Rollback: revert to 1.37.0 behaviour by ignoring the new capability fields; stored goal-control records under `~/.pi-web-ui/antigravity-sessions/goal-control/` are inert without the feature.
+
 - **1.37.0** (minor, additive antigravity stream-json integration) — the Antigravity runtime moves from batch text print-mode to a persistent `agy --input-format stream-json --output-format stream-json` process per session. Everything is additive; existing consumers keep working unchanged:
   - `capabilities.runtimes.antigravity`: `backendMode` gains the `"stream-json"` value (the `RuntimeBackendMode` union extends); `followUpSemantics` becomes `"queue_while_busy"` (a mid-turn write queues inside the live agy process and runs as the next turn — live-validated); `supportsThinkingLevel` becomes `true` (level = gemini slug sibling swap); `supportsHeartbeat` becomes `false` (real stream events replace the synthetic heartbeat).
   - `GET /api/v1/models?runtime=antigravity` entries gain additive `thinkingLevels` (derived from actual catalogue sibling slugs; `[]` for axis-less models). Selectors become canonical agy slugs (what `init.model` echoes); label forms still accepted at the `--model` boundary.
