@@ -19,6 +19,11 @@ export function buildValidationIsolationEnv(
   const piSessionsDir = join(input.validationDir, 'pi-sessions');
   const commandCodeFixture = input.commandCodeFixture === true;
   const commandCodeReal = input.commandCodeReal === true;
+  // Stub-only antigravity opt-in (see the isolation entry below): any explicit
+  // AGY_BINARY other than the real default path qualifies. Unset or real →
+  // antigravity stays disabled in disposable mode.
+  const ambientAgy = process.env.AGY_BINARY?.trim();
+  const agyStubBinary = ambientAgy && ambientAgy !== '/root/.local/bin/agy' ? ambientAgy : undefined;
 
   return {
     PI_WEB_UI_VALIDATION_MODE: 'true',
@@ -63,7 +68,13 @@ export function buildValidationIsolationEnv(
     // agy stores conversation DBs in the user's global ~/.gemini directory and
     // exposes no supported data-dir override. Disable it in disposable mode so
     // validation can never create or resume a production conversation.
-    ANTIGRAVITY_ENABLED: 'false',
+    // STUB OPT-IN: a caller-provided AGY_BINARY that is NOT the real default
+    // binary flips antigravity on — the stub has no production conversation
+    // state, so disposable browser validation stays side-effect free while
+    // exercising the full antigravity frontend path.
+    ...(agyStubBinary
+      ? { ANTIGRAVITY_ENABLED: 'true', AGY_BINARY: agyStubBinary }
+      : { ANTIGRAVITY_ENABLED: 'false' }),
     CLAUDE_CHANNEL_WS_PORT: input.claudeWsPort,
     CLAUDE_CHANNEL_HOOK_PORT: input.claudeHookPort,
     OPENCODE_SERVER_HOST: '127.0.0.1',

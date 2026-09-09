@@ -39,6 +39,64 @@ afterEach(() => {
 });
 
 describe('validation server env-file loading', () => {
+  it('keeps antigravity disabled when no stub AGY_BINARY is provided', () => {
+    const ambientAgy = process.env.AGY_BINARY;
+    delete process.env.AGY_BINARY;
+    try {
+      const isolation = buildValidationIsolationEnv({
+        validationDir: '/tmp/pi-validation',
+        port: '3091',
+        claudeWsPort: '43110',
+        claudeHookPort: '43111',
+        opencodePort: '44097',
+      });
+      expect(isolation.ANTIGRAVITY_ENABLED).toBe('false');
+      expect(isolation.AGY_BINARY).toBeUndefined();
+    } finally {
+      if (ambientAgy !== undefined) process.env.AGY_BINARY = ambientAgy;
+    }
+  });
+
+  it('enables antigravity against the stub when AGY_BINARY points at a non-default binary', () => {
+    const ambientAgy = process.env.AGY_BINARY;
+    process.env.AGY_BINARY = '/root/pi-web-ui/scripts/agy-stub.mjs';
+    try {
+      const isolation = buildValidationIsolationEnv({
+        validationDir: '/tmp/pi-validation',
+        port: '3091',
+        claudeWsPort: '43110',
+        claudeHookPort: '43111',
+        opencodePort: '44097',
+      });
+      // Stub-only opt-in: the real agy binary (or its default path) must never
+      // flip disposable mode — that is the production-conversation hazard the
+      // disable exists for.
+      expect(isolation.ANTIGRAVITY_ENABLED).toBe('true');
+      expect(isolation.AGY_BINARY).toBe('/root/pi-web-ui/scripts/agy-stub.mjs');
+    } finally {
+      if (ambientAgy === undefined) delete process.env.AGY_BINARY;
+      else process.env.AGY_BINARY = ambientAgy;
+    }
+  });
+
+  it('keeps antigravity disabled when AGY_BINARY is the default real binary path', () => {
+    const ambientAgy = process.env.AGY_BINARY;
+    process.env.AGY_BINARY = '/root/.local/bin/agy';
+    try {
+      const isolation = buildValidationIsolationEnv({
+        validationDir: '/tmp/pi-validation',
+        port: '3091',
+        claudeWsPort: '43110',
+        claudeHookPort: '43111',
+        opencodePort: '44097',
+      });
+      expect(isolation.ANTIGRAVITY_ENABLED).toBe('false');
+    } finally {
+      if (ambientAgy === undefined) delete process.env.AGY_BINARY;
+      else process.env.AGY_BINARY = ambientAgy;
+    }
+  });
+
   it('forces runtime state and working directories under the disposable directory', () => {
     const isolation = buildValidationIsolationEnv({
       validationDir: '/tmp/pi-validation',
