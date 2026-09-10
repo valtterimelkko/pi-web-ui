@@ -14,10 +14,10 @@ export const ChildrenStrip = memo(function ChildrenStrip({ sessionId }: { sessio
   if (!sessionId || !children || children.length === 0) return null;
   const running = children.filter((c) => c.status === 'running' || c.status === 'dispatched');
   if (running.length === 0) return null;
-  // Antigravity native background tasks read as "background task" (their own
-  // rail), not as orchestrated child agents.
-  const allAntigravity = running.every((c) => c.kind === 'antigravity_task');
-  const noun = allAntigravity ? (running.length === 1 ? 'background task' : 'background tasks') : running.length === 1 ? 'child' : 'children';
+  // Antigravity native background tasks and pi background shell tasks read as
+  // "background task" (their own rail), not as orchestrated child agents.
+  const allBackgroundTasks = running.every((c) => c.kind === 'antigravity_task' || c.kind === 'background_shell');
+  const noun = allBackgroundTasks ? (running.length === 1 ? 'background task' : 'background tasks') : running.length === 1 ? 'child' : 'children';
 
   return (
     <div
@@ -39,7 +39,9 @@ export const ChildrenStrip = memo(function ChildrenStrip({ sessionId }: { sessio
                 ? `dispatched via API${c.runtime ? ` · ${c.runtime}` : ''}`
                 : c.kind === 'antigravity_task'
                   ? 'background task'
-                  : 'background subagent'}
+                  : c.kind === 'background_shell'
+                    ? 'shell task'
+                    : 'background subagent'}
             </span>
           </div>
         ))}

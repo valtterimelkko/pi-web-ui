@@ -21,13 +21,18 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.40.0",
+  "contractVersion": "1.41.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.41.0** (minor, additive background-shell child surfacing) — pi `bg_run` background shell tasks (pi-enhancement `background-shell` extension) are surfaced through the same child-orchestration bridge as background subagents (contract 1.34.0). Everything is additive:
+  - `shared` `ChildCardKind` gains `'background_shell'` — `background_child_state` events and browser messages may now carry shell-task cards (`id` = `bg_*` task id, `label` = task label or command slice, `task` = command, `exitCode`, standard status mapping where `timed_out` → `failed` + `timedOut: true` and `aborted` → `cancelled`); consumers that switch on kind should treat unknown kinds gracefully as before;
+  - the bridge additionally triggers on extension-UI status/widget keys `background-shell` / `background-shell-widget` and reads the session file's latest `bg-shell-tasks` custom entry, merging it with the subagent snapshot (a session using both rails emits one merged `background_child_state` payload);
+  - rollback: ignore the new kind and trigger keys — older consumers already skip unknown kinds/keys.
 
 - **1.40.0** (minor, additive session adoption + native adoption) — an orchestrating agent can now link an existing session under a parent after the fact, and pull an unmanaged native CLI session into the registry as a linked child. Everything is additive; linkage stays display-only (registry `parentSessionId` + `child_dispatched` fan-out, exactly the create-time linkage semantics from 1.34.0 — transcripts, runtime ownership and lifecycle are untouched):
   - `POST /sessions/:id/adopt` — link a registered session (`:id` = child) under a parent from the body `parentSessionId` or the `X-Parent-Session` header (header wins; registry id or session path). Optional `alias` becomes the child-card label; optional `role` is an advisory echo. Errors: `404 SESSION_NOT_FOUND` (child/parent unknown), `400 INVALID_REQUEST` (missing parent identity, self-adoption, would-be parent cycle).

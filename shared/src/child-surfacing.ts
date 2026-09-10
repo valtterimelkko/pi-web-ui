@@ -21,8 +21,12 @@
  * `antigravity_task` (contract 1.39.0, additive): an Antigravity native
  * background task (agy demotes a long run_command to a background process
  * group and reports it as `task <id>`); surfaced by the agy event normalizer.
+ * `background_shell` (contract 1.41.0, additive): a pi `bg_run` background
+ * shell task (pi-enhancement `background-shell` extension) — long command-
+ * shaped work with a completion wake; surfaced through the same
+ * background_child_state bridge as background subagents.
  */
-export type ChildCardKind = 'background_subagent' | 'internal_api_child' | 'antigravity_task';
+export type ChildCardKind = 'background_subagent' | 'internal_api_child' | 'antigravity_task' | 'background_shell';
 
 export type ChildCardStatus = 'dispatched' | 'running' | 'completed' | 'failed' | 'cancelled';
 

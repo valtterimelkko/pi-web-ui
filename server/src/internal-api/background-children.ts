@@ -22,11 +22,21 @@
  */
 
 import fs from 'fs/promises';
-import type { ChildCardProjection } from '@pi-web-ui/shared';
+import type { ChildCardKind, ChildCardProjection } from '@pi-web-ui/shared';
 
 /** Extension UI keys owned by the subagent extension's surfacing. */
 export const BACKGROUND_STATUS_KEY = 'background-tasks';
 export const BACKGROUND_STATUS_WIDGET_KEY = 'background-tasks-widget';
+
+/** Extension UI keys owned by the background-shell extension's surfacing (contract 1.41.0). */
+export const BACKGROUND_SHELL_STATUS_KEY = 'background-shell';
+export const BACKGROUND_SHELL_STATUS_WIDGET_KEY = 'background-shell-widget';
+
+/** Session-file custom types bridged into child cards, with their card kind. */
+const BRIDGED_ENTRY_TYPES: ReadonlyArray<{ customType: string; kind: ChildCardKind }> = [
+  { customType: 'background-tasks', kind: 'background_subagent' },
+  { customType: 'bg-shell-tasks', kind: 'background_shell' },
+];
 
 /** Upper bound for the tail read — background entries carry short summaries only. */
 const DEFAULT_TAIL_BYTES = 512 * 1024;
@@ -44,6 +54,19 @@ interface RawBackgroundTask {
   startedAt?: unknown;
   endedAt?: unknown;
   summary?: unknown;
+  errorMessage?: unknown;
+}
+
+/** Raw per-task shape persisted by the background-shell extension (subset we consume). */
+interface RawShellTask {
+  taskId?: unknown;
+  command?: unknown;
+  label?: unknown;
+  cwd?: unknown;
+  status?: unknown;
+  startedAt?: unknown;
+  endedAt?: unknown;
+  exitCode?: unknown;
   errorMessage?: unknown;
 }
 
@@ -106,10 +129,40 @@ function projectTask(raw: RawBackgroundTask): ChildCardProjection | null {
   };
 }
 
+function projectShellTask(raw: RawShellTask): ChildCardProjection | null {
+  const id = asString(raw.taskId);
+  if (!id) return null;
+  const mapped = mapStatus(asString(raw.status));
+  const startedAtIso = asString(raw.startedAt);
+  const endedAtIso = asString(raw.endedAt);
+  const startedAt = startedAtIso ? Date.parse(startedAtIso) : undefined;
+  const endedAt = endedAtIso ? Date.parse(endedAtIso) : undefined;
+  const command = asString(raw.command);
+  const commandText = command !== undefined && command.length > MAX_TASK_CHARS ? `${command.slice(0, MAX_TASK_CHARS - 1)}…` : command;
+  const label = asString(raw.label) ?? commandText ?? id;
+  const exitCode = typeof raw.exitCode === 'number' ? raw.exitCode : undefined;
+  const error = asString(raw.errorMessage) ?? mapped.error;
+  return {
+    id,
+    kind: 'background_shell',
+    status: mapped.status,
+    label,
+    ...(asString(raw.cwd) !== undefined ? { cwd: asString(raw.cwd) } : {}),
+    ...(commandText !== undefined ? { task: commandText } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(mapped.timedOut ? { timedOut: true } : {}),
+    ...(Number.isFinite(startedAt) ? { startedAt } : {}),
+    ...(Number.isFinite(endedAt) ? { endedAt } : {}),
+    ...(error !== undefined ? { error } : {}),
+  };
+}
+
 /**
- * Read the authoritative background-task snapshot (the LATEST
- * 'background-tasks' custom entry) from a Pi session file via a bounded tail
- * read. Returns [] for missing/unreadable files or sessions without entries.
+ * Read the authoritative background-child snapshot from a Pi session file via
+ * a bounded tail read: the LATEST entry of each bridged custom type
+ * (`background-tasks` from the subagent extension, `bg-shell-tasks` from the
+ * background-shell extension — contract 1.41.0), projected and merged.
+ * Returns [] for missing/unreadable files or sessions without entries.
  */
 export async function readBackgroundTasksSnapshot(
   sessionPath: string,
@@ -127,7 +180,10 @@ export async function readBackgroundTasksSnapshot(
     // When tailing, the first line is likely truncated mid-JSON — skip it.
     const effectiveLines = start > 0 ? lines.slice(1) : lines;
 
+    // One backwards pass; remember the newest entry per bridged type.
+    const latest = new Map<string, { tasks: unknown[] }>();
     for (let i = effectiveLines.length - 1; i >= 0; i--) {
+      if (latest.size === BRIDGED_ENTRY_TYPES.length) break;
       const line = effectiveLines[i]?.trim();
       if (!line) continue;
       let parsed: unknown;
@@ -137,18 +193,28 @@ export async function readBackgroundTasksSnapshot(
         continue;
       }
       const rec = parsed as Record<string, unknown>;
-      if (rec?.type !== 'custom' || rec?.customType !== 'background-tasks') continue;
+      if (rec?.type !== 'custom') continue;
+      const bridged = BRIDGED_ENTRY_TYPES.find((b) => b.customType === rec.customType);
+      if (!bridged || latest.has(bridged.customType)) continue;
       const data = rec.data as { tasks?: unknown } | undefined;
-      if (!data || !Array.isArray(data.tasks)) return [];
-      const children: ChildCardProjection[] = [];
-      for (const raw of data.tasks) {
+      if (!data || !Array.isArray(data.tasks)) continue;
+      latest.set(bridged.customType, { tasks: data.tasks });
+    }
+
+    const children: ChildCardProjection[] = [];
+    for (const bridged of BRIDGED_ENTRY_TYPES) {
+      const found = latest.get(bridged.customType);
+      if (!found) continue;
+      for (const raw of found.tasks) {
         if (!raw || typeof raw !== 'object') continue;
-        const projected = projectTask(raw as RawBackgroundTask);
+        const projected =
+          bridged.kind === 'background_shell'
+            ? projectShellTask(raw as RawShellTask)
+            : projectTask(raw as RawBackgroundTask);
         if (projected) children.push(projected);
       }
-      return children;
     }
-    return [];
+    return children;
   } catch {
     return [];
   } finally {
@@ -176,10 +242,10 @@ function isBackgroundUiMessage(message: unknown): boolean {
   const m = message as Record<string, unknown>;
   if (m.type === 'extension_status') {
     const status = m.status as { key?: unknown } | undefined;
-    return status?.key === BACKGROUND_STATUS_KEY;
+    return status?.key === BACKGROUND_STATUS_KEY || status?.key === BACKGROUND_SHELL_STATUS_KEY;
   }
   if (m.type === 'widget_content' || m.type === 'widget_cleared') {
-    return m.key === BACKGROUND_STATUS_WIDGET_KEY;
+    return m.key === BACKGROUND_STATUS_WIDGET_KEY || m.key === BACKGROUND_SHELL_STATUS_WIDGET_KEY;
   }
   return false;
 }
