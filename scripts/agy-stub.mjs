@@ -16,6 +16,14 @@
  *   tools      (default) text + write_to_file (empty output) + delayed run_command + result
  *   plain      text deltas only + result
  *   background run_command + command_status (agy background-command lifecycle) + result
+ *   bg-task    REAL background-task wire (live capture, 2026-09-10): run_command demoted to a
+ *              background task group — a GENERIC/RUNNING step announces
+ *              "Tool is running as a background task with task id: <conv>/task-N" +
+ *              "Task Description: <command>" + "Task logs are available at: file://...". The turn
+ *              then ENDS while the task still runs (headless agy never re-prompts). After
+ *              AGY_STUB_BG_TASK_DELAY_MS (default 8000) the stub writes the completion receipt
+ *              JSON into <AGY_STUB_BRAIN_DIR>/<conv>/.system_generated/messages/ exactly like
+ *              real agy, so the server's background-task completion watcher can observe it.
  *   slow       like tools but run_command stalls AGY_STUB_DELAY_MS (default 5000)
  *
  * Usage in tests/scripts:
@@ -23,12 +31,15 @@
  *   chmod +x required (spawned directly).
  */
 
-const SCENARIOS = new Set(['tools', 'plain', 'background', 'slow']);
+const SCENARIOS = new Set(['tools', 'plain', 'background', 'bg-task', 'slow']);
 
 const scenario = process.env.AGY_STUB_SCENARIO && SCENARIOS.has(process.env.AGY_STUB_SCENARIO)
   ? process.env.AGY_STUB_SCENARIO
   : 'tools';
 const delayMs = Number.parseInt(process.env.AGY_STUB_DELAY_MS ?? '', 10);
+
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 function argValue(flag) {
   const i = process.argv.indexOf(flag);
@@ -94,7 +105,88 @@ function resultEnvelope(turnIndex, status = 'SUCCESS') {
 
 let turnCount = 0;
 
+/** Real background-task lifecycle (plan Phase 1 E2E). Faithful to the live
+ *  2026-09-10 capture: the turn ends while the task runs, and the receipt
+ *  lands in the conversation brain's messages dir (the server's watcher
+ *  polls there — see AntigravityService.pollBackgroundCompletions). */
+function runBgTaskTurn(prompt) {
+  const t = turnCount;
+  if (t > 0) {
+    // Follow-up turns: plain reply (the receipt was already delivered).
+    turnCount += 1;
+    step(90 + t, 'ACTIVE', { step_type: 'agent_response', text_delta: 'The background task already finished.' });
+    step(90 + t, 'DONE', { step_type: 'agent_response' });
+    resultEnvelope(t);
+    return;
+  }
+  turnCount += 1;
+
+  const taskId = `${conversationId}/task-${process.pid}`;
+  const command = 'python3 verify_bg_e2e.py';
+  const brainDir = process.env.AGY_STUB_BRAIN_DIR;
+  const logPath = `${brainDir}/${conversationId}/.system_generated/tasks/task-${process.pid}.log`;
+  const messagesDir = `${brainDir}/${conversationId}/.system_generated/messages`;
+
+  let idx = 1;
+  step(idx++, 'ACTIVE', { step_type: 'agent_response', text_delta: 'Running the verification script.' });
+  step(idx++, 'DONE', { step_type: 'agent_response' });
+  step(idx++, 'ACTIVE', { step_type: 'tool', tool_name: 'run_command' });
+  step(idx++, 'DONE', {
+    step_type: 'tool',
+    tool_name: 'run_command',
+    tool_info: { name: 'run_command', parameters: { CommandLine: command }, output: 'demoted to background' },
+  });
+  // The announcement step (real shape: GENERIC/RUNNING, content field).
+  emit({
+    event: 'step_update',
+    step_update: {
+      conversation_id: conversationId,
+      step_index: idx++,
+      state: 'RUNNING',
+      step_type: 'GENERIC',
+      content: [
+        'Created At: 2026-09-10T07:08:35Z',
+        `Tool is running as a background task with task id: ${taskId}`,
+        `Task Description: ${command}`,
+        `Task logs are available at: file://${logPath}`,
+        'YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work or, B) simply update the user and end the turn.',
+      ].join('\n'),
+    },
+  });
+  step(idx++, 'ACTIVE', { step_type: 'agent_response', text_delta: 'I launched the command in the background and will report when it finishes.' });
+  step(idx++, 'DONE', { step_type: 'agent_response' });
+  resultEnvelope(t);
+
+  // Simulate the task finishing: agy writes a MESSAGE_PRIORITY_HIGH receipt
+  // into the conversation's messages dir (no stream traffic — the server's
+  // completion watcher must notice the file).
+  const delayMs = Number.parseInt(process.env.AGY_STUB_BG_TASK_DELAY_MS ?? '', 10);
+  const wait = Number.isFinite(delayMs) ? Math.max(0, Math.min(delayMs, 120_000)) : 8_000;
+  setTimeout(() => {
+    try {
+      mkdirSync(messagesDir, { recursive: true });
+      writeFileSync(
+        join(messagesDir, `receipt-task-${process.pid}.json`),
+        JSON.stringify({
+          id: `receipt-${process.pid}`,
+          recipient: conversationId,
+          sender: taskId,
+          priority: 'MESSAGE_PRIORITY_HIGH',
+          timestamp: new Date().toISOString(),
+          renderDetails: { messageTitle: 'Background command finished' },
+          content: `Task id "${taskId}" finished with result:\n\nThe command exited with code 0.\nOutput:\nBG-TASK-PROOF`,
+        }),
+      );
+    } catch (err) {
+      process.stderr.write(`agy-stub: failed to write completion receipt: ${err}\n`);
+    }
+  }, wait);
+}
 function runScenarioTurn(prompt) {
+  if (scenario === 'bg-task') {
+    runBgTaskTurn(prompt);
+    return;
+  }
   const t = turnCount++;
   let idx = 1;
   if (scenario === 'plain') {
