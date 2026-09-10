@@ -284,7 +284,7 @@ describe('WatchManager generation CAS', () => {
     expect(manager.get('a')?.generation).toBe(replaced.generation);
   });
 
-  it('migrates a legacy disk ledger once and preserves generation, firings and detached status across restart', async () => {
+  it('migrates a legacy disk ledger once; an all-fired pure-observer watch completes at rehydration (watch-defect brief)', async () => {
     const dir = await tempDir('watch-generation-migrate-');
     const legacy = {
       watchId: 'watch-legacy', sessionId: 'legacy', sessionPath: 'legacy', runtime: 'pi', status: 'active', pinned: true, targetPinned: false,
@@ -299,7 +299,9 @@ describe('WatchManager generation CAS', () => {
     await first.init();
     const migrated = first.get('legacy')!;
     expect(migrated.generation).toMatch(/^[0-9a-f-]{36}$/i);
-    expect(migrated.status).toBe('detached');
+    // Rehydrated as live (resolvable conditions), then completed because all
+    // once-conditions had already fired and no wake work remains.
+    expect(migrated.status).toBe('done');
     expect(migrated.firings).toHaveLength(1);
     await settle();
 
@@ -307,7 +309,7 @@ describe('WatchManager generation CAS', () => {
     await second.init();
     const restarted = second.get('legacy')!;
     expect(restarted.generation).toBe(migrated.generation);
-    expect(restarted.status).toBe('detached');
+    expect(restarted.status).toBe('done');
     expect(restarted.firings).toEqual(migrated.firings);
   });
 });
@@ -458,7 +460,9 @@ describe('actual HTTP watch generation contract', () => {
     const restarted = await request(socket2, 'GET');
     expect(restarted.status).toBe(200);
     expect(restarted.body.generation).toBe(generation2);
-    expect(restarted.body.status).toBe('detached');
+    // Watch-defect brief: the once:false watch rehydrates as active with a
+    // live subscription — no longer demoted to detached by the restart.
+    expect(restarted.body.status).toBe('active');
     expect(restarted.body.firingCount).toBe(1);
 
     const deleted = await request(socket2, 'DELETE', { expectedGeneration: generation2 });

@@ -63,6 +63,13 @@ export interface WatchManagerDeps {
    * any prompt/SSE consumer exists (Pi needs its persistent observer attached).
    */
   ensureObserver?: (sessionPath: string) => void;
+  /**
+   * Resolve a session's last-activity instant (epoch ms) for restart downtime
+   * reconciliation: when a watched session advanced while the server was
+   * down, a completion-type watch records a reconciled firing at boot.
+   * Undefined = unknown (no reconciliation for that session).
+   */
+  getSessionLastActivity?: (sessionPath: string) => Promise<number | undefined>;
   /** Cap on firings recorded per condition (when `once: false`). */
   maxFiringsPerCondition?: number;
   /** Hard cap on total ledger size per watch. */
@@ -192,6 +199,7 @@ export class WatchManager {
   private readonly pinSession: WatchManagerDeps['pinSession'];
   private readonly unpinSession?: WatchManagerDeps['unpinSession'];
   private readonly ensureObserver?: WatchManagerDeps['ensureObserver'];
+  private readonly getSessionLastActivity?: WatchManagerDeps['getSessionLastActivity'];
   private readonly maxPerCondition: number;
   private readonly maxTotal: number;
   private readonly metrics: OperationalMetrics;
@@ -213,6 +221,7 @@ export class WatchManager {
     this.pinSession = deps.pinSession;
     this.unpinSession = deps.unpinSession;
     this.ensureObserver = deps.ensureObserver;
+    this.getSessionLastActivity = deps.getSessionLastActivity;
     this.maxPerCondition = deps.maxFiringsPerCondition ?? DEFAULT_MAX_PER_CONDITION;
     this.maxTotal = deps.maxTotalFirings ?? DEFAULT_MAX_TOTAL;
     this.metrics = deps.metrics ?? getOperationalMetrics();
@@ -222,16 +231,20 @@ export class WatchManager {
   }
 
   /**
-   * Load persisted watches from disk. Reloaded watches are marked `detached`:
-   * their past firings remain readable, but they have no live subscription
-   * until re-registered (the runtime/session may be entirely fresh after a
-   * restart). This is what the durability guarantee rests on.
+   * Load persisted watches from disk and rehydrate every `active` watch:
+   * conditions are re-resolved, broker subscriptions re-established, subject
+   * and target pins re-acquired, runtime observers re-attached, and downtime
+   * reconciliation records a firing when the watched session settled while
+   * the server was down (watch-defect brief, 2026-09-10). Watches whose
+   * persisted conditions can no longer be resolved (legacy/corrupt specs)
+   * demote to `detached` — their past firings remain readable.
    */
   async init(): Promise<void> {
     if (this.initialized) return;
     if (!this.initialization) {
       this.initialization = (async () => {
         await this.store.init();
+        const rehydrated: Array<{ record: PersistedWatch; resolved: ResolvedCondition[] }> = [];
         for (const record of this.store.list()) {
           let changed = false;
           const migrated: PersistedWatch = { ...record };
@@ -239,15 +252,68 @@ export class WatchManager {
             migrated.generation = randomUUID();
             changed = true;
           }
-          if (migrated.status === 'active') {
-            migrated.status = 'detached';
+          // Pre-1.22 ledgers lack wakeAttempts (and possibly firings):
+          // normalise before any rehydration code path can touch them.
+          if (!Array.isArray(migrated.wakeAttempts)) {
+            migrated.wakeAttempts = [];
             changed = true;
+          }
+          if (!Array.isArray(migrated.firings)) {
+            migrated.firings = [];
+            changed = true;
+          }
+          if (migrated.status === 'active') {
+            let resolved: ResolvedCondition[] | null = null;
+            if (migrated.conditions.length > 0) {
+              try {
+                resolved = resolveConditions(migrated.conditions.map((c) => c.spec));
+              } catch {
+                resolved = null; // legacy/corrupt spec — cannot re-subscribe
+              }
+            }
+            if (resolved && resolved.length > 0) {
+              rehydrated.push({ record: migrated, resolved });
+            } else {
+              migrated.status = 'detached';
+              changed = true;
+            }
           }
           // Never mutate the cache-owned legacy object before durability. A
           // failed save must leave the migration visible for the next init.
           if (changed) await this.store.save(migrated);
         }
+        // Activation happens only after every migration is durable: a failed
+        // save above rejects init and must not leave half-live subscriptions.
+        for (const { record, resolved } of rehydrated) {
+          try {
+            if (record.pinned) {
+              record.pinned = await Promise.resolve(
+                this.pinSession(record.sessionId, `watch:${record.watchId}`),
+              ).catch(() => false);
+            }
+            if (record.targetPinned && record.onFire) {
+              await Promise.resolve(
+                this.pinSession(record.onFire.targetSessionId, `watch-target:${record.watchId}`),
+              ).catch(() => false);
+            }
+          } catch {
+            /* pin re-acquisition is best-effort; the watch stays honest about
+             * the outcome in the persisted record */
+          }
+          if (this.ensureObserver) {
+            try { this.ensureObserver(record.sessionPath); } catch { /* non-fatal */ }
+          }
+          this.activateWatch(record, resolved);
+          // A watch whose once-conditions all fired before the crash never
+          // persisted its completion — finish that bookkeeping now.
+          if (!record.onFire && this.allOneShotConditionsFired(record)) {
+            const reactivated = this.active.get(record.sessionId);
+            if (reactivated) this.completeWatch(record.sessionId, reactivated);
+          }
+        }
         this.initialized = true;
+        // Best-effort: never block boot on reconciliation failures.
+        void this.reconcileDowntime(rehydrated).catch(() => undefined);
       })();
     }
     try {
@@ -255,6 +321,46 @@ export class WatchManager {
     } catch (error) {
       this.initialization = undefined;
       throw error;
+    }
+  }
+
+  /**
+   * Downtime reconciliation: for each rehydrated watch still waiting on a
+   * completion-type condition (`event_type: agent_end`), compare the
+   * session's last-activity instant against the watch's event watermark
+   * (last seen event, else the record's updatedAt). When the session advanced
+   * while the server was down, ingest a synthetic `agent_end` stamped with
+   * the actual completion instant so waiting conductors receive the firing on
+   * their next wait call — routed through the ordinary handleEvent path so
+   * once-semantics, wake dispatch, surfacing and ledger persistence behave
+   * exactly as they do for live events.
+   */
+  private async reconcileDowntime(
+    entries: Array<{ record: PersistedWatch; resolved: ResolvedCondition[] }>,
+  ): Promise<void> {
+    if (!this.getSessionLastActivity) return;
+    for (const { record } of entries) {
+      try {
+        const waitsOnCompletion = record.conditions.some(
+          (c) => !c.fired && (c.spec as { eventType?: string }).eventType === 'agent_end',
+        );
+        if (!waitsOnCompletion) continue;
+        const live = this.active.get(record.sessionId);
+        if (!live || live.record !== record || record.status !== 'active') continue;
+
+        const lastActivity = await this.getSessionLastActivity(record.sessionPath);
+        if (lastActivity === undefined || !Number.isFinite(lastActivity)) continue;
+        const watermark = record.snapshot?.lastEventAt ?? Date.parse(record.updatedAt);
+        if (!Number.isFinite(watermark) || lastActivity <= watermark) continue;
+
+        this.handleEvent(record.sessionId, {
+          type: 'agent_end',
+          timestamp: lastActivity,
+          data: { sessionId: record.sessionId, reconciledDowntime: true },
+        });
+      } catch {
+        /* reconciliation is best-effort per watch */
+      }
     }
   }
 
@@ -494,7 +600,18 @@ export class WatchManager {
       wakeChain: Promise.resolve(),
       wakeRetryTimers: new Set(),
     };
+    // The same event object may legitimately be published under BOTH broker
+    // keys (session-watcher bridge: id + path). A dual-subscribed watch must
+    // ingest it once — double ingestion would double-count snapshots and
+    // double-fire once:false conditions. Per-live-watch identity dedup keeps
+    // cross-session routing (child linkage) unaffected: each watch owns its
+    // own seen-set.
+    const seenEventObjects = new WeakSet<object>();
     const handler = (event: NormalizedEvent) => {
+      if (typeof event === 'object' && event !== null) {
+        if (seenEventObjects.has(event)) return;
+        seenEventObjects.add(event);
+      }
       if (this.active.get(record.sessionId) === live) this.handleEvent(record.sessionId, event);
     };
     // Match the historical publication order: replay delivered during subscribe

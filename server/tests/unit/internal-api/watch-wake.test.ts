@@ -336,7 +336,9 @@ describe('WatchManager — onFire wake dispatch (watch the child, wake the paren
     manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, dispatchWake });
     await manager.init();
     const reloaded = manager.get('legacy-1')!;
-    expect(reloaded.status).toBe('detached');           // active -> detached on reload (documented)
+    // Watch-defect brief: the all-fired pure-observer record rehydrates live
+    // and completes immediately — 'done' is the honest terminal state.
+    expect(reloaded.status).toBe('done');
     expect(reloaded.onFire).toBeUndefined();            // legacy record is a pure observer
     expect(reloaded.wakeAttempts).toEqual([]);           // defensive default, not undefined
     expect(reloaded.firingCount).toBe(1);                // ledger preserved

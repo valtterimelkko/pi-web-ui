@@ -153,6 +153,8 @@ export class InternalApiServer {
   private notificationManager: NotificationManager | null = null;
   private socketOwner: UnixSocketOwner | null = null;
   private sessionRoutesShutdown: (() => Promise<void>) | null = null;
+  /** The per-session event broker owned by the session routes; null before start. */
+  private eventBroker: import('../internal-api/event-broker.js').InternalApiEventBroker | null = null;
   private onBrowserMessage?: (message: Record<string, unknown>) => void;
   private goalControlHandler: ((sessionId: string, body: Record<string, unknown>) => Promise<{ statusCode: number; body: Record<string, unknown> }>) | null = null;
   private stopPromise: Promise<void> | null = null;
@@ -307,6 +309,7 @@ export class InternalApiServer {
       onBrowserMessage: this.onBrowserMessage,
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
+    this.eventBroker = sessionRoutes.broker;
     this.goalControlHandler = async (sessionId, body) => {
       // Re-enter the HTTP handler through a synthetic exchange so the browser
       // control path uses the exact same logic as the Internal API route.
@@ -563,6 +566,17 @@ export class InternalApiServer {
    */
   getGoalControlHandler(): ((sessionId: string, body: Record<string, unknown>) => Promise<{ statusCode: number; body: Record<string, unknown> }>) | null {
     return this.goalControlHandler;
+  }
+
+  /**
+   * The per-session Internal API event broker (watch-defect brief fix 3):
+   * lets the host process bridge externally observed session activity (e.g.
+   * the SessionWatcher's native CLI file changes) into the same broker the
+   * WatchManager subscribes to, without going through a prompt path. Null
+   * until the server has started.
+   */
+  getEventBroker(): import('../internal-api/event-broker.js').InternalApiEventBroker | null {
+    return this.eventBroker;
   }
 
   async stop(): Promise<void> {

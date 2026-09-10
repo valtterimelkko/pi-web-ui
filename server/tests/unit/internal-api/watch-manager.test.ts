@@ -519,3 +519,207 @@ describe('watch surfacing — pure-observer watches (contract 1.34.0)', () => {
     }
   });
 });
+
+// ── Watch-defect brief (docs/WATCH-DEFECT-RESTART-BRIEF.md) ──────────────────
+
+describe('WatchManager — restart rehydration & downtime reconciliation (watch-defect brief)', () => {
+  // Ratchet-clean accessor: asserts presence instead of a non-null assertion.
+  function mustGet(m: WatchManager, id: string) {
+    const w = m.get(id);
+    if (!w) throw new Error(`watch ${id} missing`);
+    return w;
+  }
+  let dir: string;
+  let broker: InternalApiEventBroker;
+  let pin: ReturnType<typeof vi.fn>;
+  let unpin: ReturnType<typeof vi.fn>;
+  let ensureObserver: ReturnType<typeof vi.fn>;
+  let manager: WatchManager;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-rehydrate-'));
+    broker = new InternalApiEventBroker({ replayBufferSize: 10 });
+    pin = vi.fn(() => true);
+    unpin = vi.fn(() => true);
+    ensureObserver = vi.fn();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, ensureObserver });
+  });
+
+  afterEach(async () => {
+    manager.close();
+    await flush();
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  it('calls ensureObserver when registering a watch', async () => {
+    await manager.register({
+      sessionId: 'obs-reg', sessionPath: '/sessions/obs-reg.jsonl', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    expect(ensureObserver).toHaveBeenCalledWith('/sessions/obs-reg.jsonl');
+  });
+
+  it('rehydrates an active watch after restart: stays active, re-subscribes to the broker, re-acquires pins and re-attaches the observer', async () => {
+    await manager.register({
+      sessionId: 'rehy-1', sessionPath: '/sessions/rehy-1.jsonl', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    await flush();
+
+    // Simulate a full server restart: fresh broker, fresh manager, same ledger dir.
+    const broker2 = new InternalApiEventBroker({ replayBufferSize: 10 });
+    const pin2 = vi.fn(() => true);
+    const unpin2 = vi.fn(() => true);
+    const ensureObserver2 = vi.fn();
+    const manager2 = new WatchManager({
+      broker: broker2, storeDir: dir, pinSession: pin2, unpinSession: unpin2, ensureObserver: ensureObserver2,
+    });
+    try {
+      await manager2.init();
+      const reloaded = mustGet(manager2, 'rehy-1');
+      expect(reloaded.status).toBe('active');
+      expect(reloaded.generation).toBeDefined();
+
+      // Subject pin re-acquired under the same claim id.
+      expect(pin2).toHaveBeenCalledWith('rehy-1', 'watch:watch-rehy-1');
+      // Observer re-attached for the session path.
+      expect(ensureObserver2).toHaveBeenCalledWith('/sessions/rehy-1.jsonl');
+
+      // Live again: an event on the FRESH broker fires the rehydrated watch.
+      broker2.publish('/sessions/rehy-1.jsonl', ev('agent_end'));
+      await flush();
+      const after = mustGet(manager2, 'rehy-1');
+      expect(after.allFired).toBe(true);
+      expect(after.firingCount).toBe(1);
+      expect(after.status).toBe('done');
+    } finally {
+      manager2.close();
+      await flush();
+    }
+  });
+
+  it('re-acquires the target pin for a rehydrated onFire watch', async () => {
+    const dispatchWake = vi.fn(async () => ({ status: 'dispatched' as const, deliveryKind: 'prompt' as const }));
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, ensureObserver, dispatchWake });
+    await manager.register({
+      sessionId: 'rehy-wake', sessionPath: '/sessions/rehy-wake.jsonl', runtime: 'pi',
+      request: {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent-9', message: 'wake' },
+      },
+    });
+    await flush();
+
+    const broker2 = new InternalApiEventBroker({ replayBufferSize: 10 });
+    const pin2 = vi.fn(() => true);
+    const manager2 = new WatchManager({
+      broker: broker2, storeDir: dir, pinSession: pin2, unpinSession: unpin, ensureObserver, dispatchWake,
+    });
+    try {
+      await manager2.init();
+      expect(mustGet(manager2, 'rehy-wake').status).toBe('active');
+      expect(pin2).toHaveBeenCalledWith('rehy-wake', 'watch:watch-rehy-wake');
+      expect(pin2).toHaveBeenCalledWith('parent-9', 'watch-target:watch-rehy-wake');
+    } finally {
+      manager2.close();
+      await flush();
+    }
+  });
+
+  it('demotes an active watch to detached when its persisted conditions cannot be resolved', async () => {
+    await manager.register({
+      sessionId: 'rehy-bad', sessionPath: '/sessions/rehy-bad.jsonl', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    await flush();
+    // Corrupt the persisted spec so resolveConditions throws on rehydrate.
+    const file = path.join(dir, 'rehy-bad.json');
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'));
+    raw.conditions[0].spec = { type: 'event_type', eventType: 'agent_end', id: 'c0', extraUnknown: true };
+    // Force resolution failure via an invalid regex condition instead.
+    raw.conditions[0].spec = { type: 'text', pattern: '([unclosed', id: 'c0' };
+    await fs.writeFile(file, JSON.stringify(raw));
+
+    const manager2 = new WatchManager({ broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin });
+    await manager2.init();
+    expect(mustGet(manager2, 'rehy-bad').status).toBe('detached');
+  });
+
+  it('records a reconciled firing when the session settled during restart downtime', async () => {
+    const registeredAt = Date.now();
+    await manager.register({
+      sessionId: 'rehy-down', sessionPath: '/sessions/rehy-down.jsonl', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    await flush();
+
+    // The session finished 60s AFTER the watch's last known event → downtime completion.
+    const completedAt = registeredAt + 60_000;
+    const getSessionLastActivity = vi.fn(async () => completedAt);
+
+    const broker2 = new InternalApiEventBroker({ replayBufferSize: 10 });
+    const manager2 = new WatchManager({
+      broker: broker2, storeDir: dir, pinSession: pin, unpinSession: unpin, ensureObserver, getSessionLastActivity,
+    });
+    try {
+      await manager2.init();
+      await flush();
+      const after = mustGet(manager2, 'rehy-down');
+      expect(after.firingCount).toBe(1);
+      expect(after.conditions[0].fired).toBe(true);
+      // Pure-observer watch auto-completes on the reconciled firing.
+      expect(after.status).toBe('done');
+      expect(after.snapshot.sawAgentEnd).toBe(true);
+      const firing = after.firings[0];
+      expect(firing.eventType).toBe('agent_end');
+      // firedAt reflects the actual completion instant, not boot time.
+      expect(firing.firedAt).toBe(completedAt);
+    } finally {
+      manager2.close();
+      await flush();
+    }
+  });
+
+  it('does not reconcile a firing when the session did not advance during downtime', async () => {
+    const registeredAt = Date.now();
+    await manager.register({
+      sessionId: 'rehy-quiet', sessionPath: '/sessions/rehy-quiet.jsonl', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    await flush();
+
+    // Session last activity PREDATES the watch → no completion during downtime.
+    const getSessionLastActivity = vi.fn(async () => registeredAt - 1000);
+    const broker2 = new InternalApiEventBroker({ replayBufferSize: 10 });
+    const manager2 = new WatchManager({
+      broker: broker2, storeDir: dir, pinSession: pin, unpinSession: unpin, ensureObserver, getSessionLastActivity,
+    });
+    try {
+      await manager2.init();
+      await flush();
+      const after = mustGet(manager2, 'rehy-quiet');
+      expect(after.firingCount).toBe(0);
+      expect(after.status).toBe('active');
+    } finally {
+      manager2.close();
+      await flush();
+    }
+  });
+
+  it('deduplicates the same event object delivered under both id and path broker keys', async () => {
+    await manager.register({
+      sessionId: 'rehy-dual', sessionPath: '/sessions/rehy-dual.jsonl', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end', once: false }] },
+    });
+    // The same object published under both keys (session-watcher bridge shape)
+    // must be ingested once, not double-counted.
+    const shared = ev('agent_end');
+    broker.publish('rehy-dual', shared);
+    broker.publish('/sessions/rehy-dual.jsonl', shared);
+    await flush();
+    const w = mustGet(manager, 'rehy-dual');
+    expect(w.firingCount).toBe(1);
+    expect(w.snapshot.eventCount).toBe(1);
+  });
+});

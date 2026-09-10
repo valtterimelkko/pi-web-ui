@@ -2195,13 +2195,18 @@ decouples observation from the observer's liveness: a headless validator can
 register a watch, sleep for an hour, then poll for what fired — without holding
 any connection open.
 
-The restart guarantee is about the **ledger**, not automatic observer recovery.
-On boot, an `active` watch is reloaded as `detached`: past firings remain
-readable, but new events are not recorded until the caller registers the watch
-again. A watch's default residency is a source-owned `watch:<watchId>` claim;
-deleting or replacing the watch releases exactly that claim without affecting
-human UI or API leases. Release any separately owned retention lease when the
-long task is finished. See
+The restart guarantee covers both the **ledger** and the **observer**.
+On boot, an `active` watch is rehydrated: conditions re-resolved, the broker
+subscription re-established, subject/target pins re-acquired, the runtime
+observer re-attached, and new events recorded without re-registration
+(watch-defect fix, 2026-09-10). A persisted watch whose conditions can no
+longer be resolved demotes to `detached` — past firings remain readable, but
+new events are not recorded until the caller registers the watch again.
+Downtime reconciliation fires completion-type watches whose subject settled
+during the restart. A watch's default residency is a source-owned
+`watch:<watchId>` claim; deleting or replacing the watch releases exactly that
+claim without affecting human UI or API leases. Release any separately owned
+retention lease when the long task is finished. See
 [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
 
 ```

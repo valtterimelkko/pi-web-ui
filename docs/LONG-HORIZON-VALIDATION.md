@@ -20,14 +20,20 @@ A **watch** is a standing subscription the server keeps on a session. It evaluat
 - the session going idle,
 - a full **server restart** (already-recorded firings are reloaded from disk).
 
-This is the load-bearing idea: it **decouples observation from the observer's liveness** while the server instance remains up. A validator can register a watch, walk away for an hour, then ask "what fired while I was gone?" in one cheap request. A server restart preserves the ledger but requires explicit watch re-registration for future events.
+This is the load-bearing idea: it **decouples observation from the observer's liveness** while the server instance remains up. A validator can register a watch, walk away for an hour, then ask "what fired while I was gone?" in one cheap request.
 
-The restart guarantee is deliberately narrower than automatic watch recovery:
-when the server boots, an `active` watch is reloaded as `detached`. Its past
-firings and snapshot remain readable, but it has no live broker subscription and
-records no new events until the caller re-registers the watch. Treat a restart
-as an evidence boundary: preserve the old ledger, then register a new watch
-before continuing. The current CLI does not re-register or merge the old
+**Restart recovery (watch-defect fix, 2026-09-10):** when the server boots, an
+`active` watch is *rehydrated* — its conditions are re-resolved, the broker
+subscription re-established, subject/target pins re-acquired, the runtime
+observer re-attached, and the watch continues recording without any client
+action. Watches whose persisted conditions can no longer be resolved (legacy or
+corrupt specs) demote to `detached` — past firings remain readable. Downtime
+reconciliation additionally records a firing (routed through the ordinary
+condition path) when a watched session settled while the server was down:
+for completion-type watches (`event_type: agent_end`) the session's
+last-activity instant is compared against the watch's event watermark, and a
+newer activity ingests a synthetic `agent_end` stamped with the actual
+completion time, so waiting conductors receive the firing on their next poll.
 firing-count/state automatically; use a new runner/state file (or a custom
 Internal-API client that explicitly reconciles the two ledgers) rather than
 claiming uninterrupted observation.
@@ -36,7 +42,7 @@ Because conditions match on the runtime-neutral `NormalizedEvent` shape, the wat
 
 ### 2. The Runner — a headless, restart-tolerant evidence collector
 
-The [`validate:long-horizon`](#cli) runner drives a real **subject** session through the Internal API and polls the watch on an interval. It never blocks on the subject: it dispatches work, then sleeps and polls. Because progress is split between the durable ledger and a private run-state file, the runner can be a long-lived daemon **or** exit and be re-launched by cron between polls without losing already-recorded evidence. If the **server** restarts, the next check will see `detached`; it does not re-register or reconcile ledgers automatically. Preserve the old run-state as evidence, register a new watch, and start a new runner/state (or implement explicit reconciliation in a custom client) before expecting new firings. Without that recovery, a long-horizon run preserves past evidence but does not observe new events after the restart.
+The [`validate:long-horizon`](#cli) runner drives a real **subject** session through the Internal API and polls the watch on an interval. It never blocks on the subject: it dispatches work, then sleeps and polls. Because progress is split between the durable ledger and a private run-state file, the runner can be a long-lived daemon **or** exit and be re-launched by cron between polls without losing already-recorded evidence. If the **server** restarts, the next check sees the watch rehydrated `active` (broker subscription re-established at boot; downtime reconciliation fires completion watches whose subject settled during the restart). Preserving the old run-state and ledger remains good hygiene for evidence continuity.
 
 The "hour" in a long-horizon test is just `pollInterval × N` — the loop logic is identical whether N polls span seconds or hours.
 
@@ -146,7 +152,7 @@ GET /api/v1/sessions/:sessionId/watch?sinceIndex=4
 
 Returns the watch with its `conditions` (each with `fired`/`fireCount`/timestamps), the append-only `firings` ledger, a `firingCount`, `pendingConditionIds`, `allFired`, a lightweight event-derived `snapshot` (status, `eventCount`, `toolCallCount`, `sawAgentEnd`, last event) — and, when `onFire` is registered, the echoed action plus the `wakeAttempts[]` audit trail (`dispatched` with `runId`, `failed` with `errorCode`, or `suppressed` with `reason`). `?sinceIndex=N` returns only firings after the caller's last poll; `firingCount` stays the absolute total so the caller can compute its next `sinceIndex`.
 
-`status` is `active` (live subscription attached), `detached` (reloaded from disk after a restart — past firings readable, new ones not recorded until re-registered), `done` (all one-shot conditions fired, no wake work remains, claims released, ledger readable), or `closed`.
+`status` is `active` (live subscription attached — including after a restart, via boot rehydration), `detached` (persisted watch whose conditions could not be re-resolved — past firings readable, no live recording until re-registered), `done` (all one-shot conditions fired, no wake work remains, claims released, ledger readable), or `closed`.
 
 `404 WATCH_NOT_FOUND` if no watch is registered for the session.
 
@@ -309,7 +315,8 @@ Use production only when the user clearly asks for it, for example "validate thi
 
 - One watch per session.
 - Conditions evaluate against normalized events only; a runtime that doesn't surface a behaviour as an event can't have it watched (observe it another way).
-- A `detached` watch (post-restart) does not auto-resubscribe — re-register to resume live recording. Past firings remain readable.
+- Native CLI session activity is bridged into the broker (`session_update` events under both path and id keys), so watches observe sessions driven from bare CLI/external tools too. The shared event object is deduplicated per watch.
+- A `detached` watch (unresolvable persisted conditions) does not auto-resubscribe — re-register to resume live recording. Past firings remain readable.
 - The ledger caps firings per condition and per watch to stay bounded under `once: false`.
 
 ## Related docs

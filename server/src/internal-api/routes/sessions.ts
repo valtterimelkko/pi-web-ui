@@ -771,6 +771,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     pinSession: pinSessionById,
     unpinSession: unpinSessionById,
     dispatchWake: dispatchWatchWake,
+    // Watch-defect brief fix 1: a watch registered on a Pi session that is not
+    // already streaming must still receive events — attach the long-lived
+    // broker-feeding observer at registration and at restart rehydration.
+    ensureObserver: attachPiObserverIfNeeded,
+    // Restart downtime reconciliation source: registry last-activity first
+    // (all runtimes indexed), file mtime fallback for on-disk JSONL sessions.
+    getSessionLastActivity: async (sessionPath) => {
+      try {
+        const entry = await sessionRegistry.get(sessionPath)
+          ?? await sessionRegistry.getByPath(sessionPath);
+        if (entry?.lastActivity) {
+          const t = Date.parse(entry.lastActivity);
+          if (Number.isFinite(t)) return t;
+        }
+      } catch { /* fall through to mtime */ }
+      try {
+        const st = await stat(sessionPath);
+        if (st.isFile()) return st.mtimeMs;
+      } catch { /* unknown */ }
+      return undefined;
+    },
     // Contract 1.34.0 watch surfacing: fan watch_registered / watch_fired out
     // to the arming session's broker key + browser bridge.
     surface: (record, event) => {
@@ -783,6 +804,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         onBrowserMessage?.({ type: event.type, ...(event.data as Record<string, unknown>) });
       } catch { /* non-fatal */ }
     },
+  });
+
+  // Watch-defect brief fix 2 (boot half): rehydrate persisted active watches
+  // eagerly at route construction — restart survival must not wait for the
+  // first watch-endpoint touch, or events emitted between boot and first poll
+  // would be missed. Non-fatal: a failed rehydration surfaces on the next
+  // explicit watch call, which retries init().
+  void watchManager.init().catch((error) => {
+    logger.warn('[WatchManager] boot rehydration failed (will retry on next watch call):', error instanceof Error ? error.message : String(error));
   });
 
   /**
