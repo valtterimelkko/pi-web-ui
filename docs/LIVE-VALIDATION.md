@@ -386,6 +386,25 @@ mid-run runs as its own turn strictly after the current run finishes. The
 Command Code fixture recognises the `COMMAND-CODE-SLOW-RUN` marker to produce a
 slow, interruptible turn.
 
+### Parent-child adoption E2E (`scripts/live-validate-parent-child-e2e.mjs`)
+
+Self-contained end-to-end driver for contract 1.40.0 parent adoption plus
+runtime continuation plus browser child surfacing. It boots its own disposable
+server (`--command-code-fixture`, the agy stub, hermetic native roots and
+workspace policy), writes real native session artifacts for Claude Code,
+Antigravity, and Command Code, adopts each under a pi parent via
+`POST /sessions/adopt-native`, prompts every adopted child to a completed turn
+(fixture CLI, agy stub, and a real `claude --resume` turn authenticated through
+the GLM endpoint via `--env-file`/`--env-key GLM_CODING_PLAN_TOKEN`), verifies
+`child_dispatched`/`child_turn_ended` on the parent's broker key and child
+status transitions, then drives Playwright to assert the parent's chat view
+renders `[data-testid="children-strip"]` with the child label and status:
+
+```bash
+node scripts/live-validate-parent-child-e2e.mjs --port 3588
+# useful flags: --keep (preserve dir + screenshot), --skip-browser, --model <pi-model>
+```
+
 ## Claude profile validation runner
 
 For validating Claude **provider profiles** (SDK backend, direct CLI backend, GLM/Z.ai provider routing, skills, concurrency), use the dedicated profile runner rather than `validate:live`:
