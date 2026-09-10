@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 
 /**
  * Screen-view / replay projection parity for Antigravity tool args (plan

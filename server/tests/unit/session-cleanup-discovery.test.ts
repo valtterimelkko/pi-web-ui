@@ -4,7 +4,16 @@ import path from 'path';
 import os from 'os';
 import { archiveStaleDiscoveredSession, DEFAULT_DISCOVERY_ARCHIVE_MS, SessionCleanupService } from '../../src/session-cleanup.js';
 
-const mockRegistryEntries: Map<string, any> = new Map();
+interface FakeRegistryEntry {
+  id: string;
+  sdkType: string;
+  path: string;
+  lastActivity?: string;
+  origin?: string;
+  [key: string]: unknown;
+}
+
+const mockRegistryEntries: Map<string, FakeRegistryEntry> = new Map();
 const mockRegistry = {
   get: vi.fn(async (id: string) => mockRegistryEntries.get(id)),
   getByPath: vi.fn(async (p: string) => {
@@ -16,7 +25,7 @@ const mockRegistry = {
   getByClaudeSessionId: vi.fn(async () => undefined),
   getByOpencodeSessionId: vi.fn(async () => undefined),
   delete: vi.fn(async (id: string) => { mockRegistryEntries.delete(id); }),
-  upsert: vi.fn(async (entry: any) => { mockRegistryEntries.set(entry.id ?? entry.path, entry); return entry; }),
+  upsert: vi.fn(async (entry: FakeRegistryEntry) => { mockRegistryEntries.set(entry.id ?? entry.path, entry); return entry; }),
   listAll: vi.fn(async () => [...mockRegistryEntries.values()]),
 };
 
@@ -64,7 +73,7 @@ describe('archiveStaleDiscoveredSession (discovery hygiene)', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function readPrefs(): Promise<{ sessions: Record<string, any> }> {
+  async function readPrefs(): Promise<{ sessions: Record<string, Record<string, unknown>> }> {
     const raw = await fs.readFile(prefsPath, 'utf8');
     return JSON.parse(raw);
   }

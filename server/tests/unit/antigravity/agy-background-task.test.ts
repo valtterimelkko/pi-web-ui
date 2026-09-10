@@ -222,7 +222,7 @@ describe('AgyEventNormalizer background task detection', () => {
       `/root/.gemini/antigravity-cli/brain/${CONV}/.system_generated/messages`,
     );
   });
-});;
+});
 
 // Local helper (mirrors the sibling test files' delta builder).
 function delta(text: string, state: 'ACTIVE' | 'DONE' = 'ACTIVE', index = 2): string {
