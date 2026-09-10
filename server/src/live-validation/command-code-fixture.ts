@@ -61,7 +61,10 @@ process.stdin.on('end', () => {
               : prompt.includes('SECOND-VALIDATION-TURN') ? 'SECOND-VALIDATION-TURN'
               : prompt.includes('LIVE-VALIDATION-TOOL') ? 'LIVE-VALIDATION-TOOL'
             : 'COMMAND-CODE-LIVE-OK';
-  const sessionId = 'command-code-fixture-native-session';
+  // A resumed native conversation keeps ONE native session id: when the caller
+  // resumes with --resume <id>, report that id (native-session drift guard).
+  const resumeIndex = args.indexOf('--resume');
+  const sessionId = resumeIndex >= 0 && args[resumeIndex + 1] ? args[resumeIndex + 1] : 'command-code-fixture-native-session';
   const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
   emit({ type: 'event', event: { type: 'run_start', sessionId } });
   emit({ type: 'event', event: { type: 'message_start', message: { id: 'fixture-assistant', role: 'assistant' } } });

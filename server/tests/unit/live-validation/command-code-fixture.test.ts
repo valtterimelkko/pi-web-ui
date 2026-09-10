@@ -108,4 +108,29 @@ describe('Command Code validation fixture', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('reports the resumed native session id in the result envelope, like a real resumed CLI conversation', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'command-code-fixture-resume-test-'));
+    try {
+      const executable = await createCommandCodeValidationFixture(dir);
+      const resumedId = '7e1c9d42-1111-4222-8333-abcdec444444';
+      const child = spawn(executable, ['-p', '--output-format', 'json', '--model', 'qwen/qwen3.8-max', '--resume', resumedId], {
+        cwd: dir,
+        env: { ...process.env, HOME: dir },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stdin.end('any prompt');
+      const exitCode = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+      expect(exitCode).toBe(0);
+      const result = stdout.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).find((entry) => entry.type === 'result');
+      expect(result).toBeDefined();
+      // Drift guard contract: a resumed conversation keeps ONE native session id.
+      expect(result.sessionId).toBe(resumedId);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
