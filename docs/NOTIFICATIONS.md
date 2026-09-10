@@ -290,6 +290,7 @@ drain. **No production restart or code change is performed by the helper.**
 
 ```
 scripts/notify.sh <kind> <title> [body]
+scripts/notify.sh status <notification-id-or-url>
 ```
 
 | Arg | Value |
@@ -308,6 +309,11 @@ regardless of which harness or model wrote them:
 | `question` | `❓ Question: <title>` |
 | `blocked` | `⚠️ Blocked: <title>` |
 | (custom) | `📢 <kind>: <title>` |
+
+For querying notification status without sending a message:
+```bash
+scripts/notify.sh status <notification-id-or-url>
+```
 
 Examples:
 

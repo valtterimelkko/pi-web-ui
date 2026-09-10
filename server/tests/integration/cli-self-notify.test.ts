@@ -41,6 +41,12 @@ function buildServer(
       res.end(JSON.stringify({ status: 'ok', contract: { name: 'pi-web-ui-internal-api' } }));
       return;
     }
+    if (req.method === 'GET' && req.url?.startsWith('/api/v1/notifications/')) {
+      captured.push({ method: req.method, url: req.url, headers: req.headers, body: '' });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', delivery: { notificationId: 'fake-id', status: 'sent' } }));
+      return;
+    }
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
@@ -263,5 +269,17 @@ describe('scripts/notify.sh — CLI self-notification helper', () => {
     expect(res.code).not.toBe(0);
     expect(res.stderr).toContain('HTTP 400');
     await expect(fs.readdir(path.join(dir, 'ingress'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('queries notification delivery status instead of sending a message when invoked with status', async () => {
+    const res = await runScript(['status', '/api/v1/notifications/fake-id'], env());
+    expect(res.code).toBe(0);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].method).toBe('GET');
+    expect(captured[0].url).toBe('/api/v1/notifications/fake-id');
+    expect(captured[0].headers['authorization']).toBe(`Bearer ${FAKE_TOKEN}`);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.status).toBe('ok');
+    expect(parsed.delivery.notificationId).toBe('fake-id');
   });
 });

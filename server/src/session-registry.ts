@@ -229,7 +229,7 @@ export class SessionRegistryManager {
     const dir = path.dirname(this.registryPath);
     await fs.mkdir(dir, { recursive: true });
 
-    const tmpPath = `${this.registryPath}.tmp`;
+    const tmpPath = `${this.registryPath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
     try {
       await this.writeFile(tmpPath, JSON.stringify(this.registry, null, 2), 'utf-8');
       await this.rename(tmpPath, this.registryPath);
@@ -242,6 +242,10 @@ export class SessionRegistryManager {
 
   async get(id: string): Promise<RegistryEntry | undefined> {
     await this.load();
+    return this.indexById.get(id);
+  }
+
+  getSync(id: string): RegistryEntry | undefined {
     return this.indexById.get(id);
   }
 

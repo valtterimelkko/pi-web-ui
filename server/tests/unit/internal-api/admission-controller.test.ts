@@ -87,6 +87,7 @@ describe('AdmissionController', () => {
       minimumHeadroomBytes: 1536 * MiB,
       reservedBytesPerTurn: 768 * MiB,
       memory: () => ({ currentBytes: 0, limitBytes: 12 * 1024 * MiB }),
+      readPids: () => ({ current: 10, max: 10_000, source: 'service' }),
     });
     const snap = controller.snapshot();
     expect(snap.maxActiveTurns).toBe(6);
@@ -265,6 +266,7 @@ describe('AdmissionController — Phase 4 priority classes', () => {
       maxActiveTurns: 6,
       interactiveReserve: 1,
       memory: () => ({ currentBytes: 0, limitBytes: 12 * GiB }),
+      readPids: () => ({ current: 10, max: 10_000, source: 'service' }),
       minimumHeadroomBytes: 100,
       reservedBytesPerTurn: 1,
     });
@@ -284,6 +286,7 @@ describe('AdmissionController — Phase 4 priority classes', () => {
       maxActiveTurns: 3,
       interactiveReserve: 1,
       memory: () => ({ currentBytes: 0, limitBytes: 10_000 }),
+      readPids: () => ({ current: 10, max: 10_000, source: 'service' }),
       minimumHeadroomBytes: 100,
       reservedBytesPerTurn: 1,
     });
@@ -340,6 +343,7 @@ describe('AdmissionController — Phase 4 priority classes', () => {
       interactiveReserve: 1,
       runtimeMaxActiveTurns: { pi: 6 },
       memory: () => ({ currentBytes: 0, limitBytes: 12 * GiB }),
+      readPids: () => ({ current: 10, max: 10_000, source: 'service' }),
       minimumHeadroomBytes: 100,
       reservedBytesPerTurn: 1,
     });

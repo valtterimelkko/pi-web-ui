@@ -942,11 +942,11 @@ export class WebSocketConnectionManager {
         break;
 
       case 'pin_session':
-        this.handlePinSession(clientId, message);
+        await this.handlePinSession(clientId, message);
         break;
 
       case 'unpin_session':
-        this.handleUnpinSession(clientId, message);
+        await this.handleUnpinSession(clientId, message);
         break;
 
       case 'auth': {
@@ -3664,11 +3664,42 @@ export class WebSocketConnectionManager {
     });
   }
 
+  private async resolveSessionRuntime(sessionPath: string): Promise<'commandcode' | 'antigravity' | 'opencode' | 'claude' | 'pi'> {
+    if (this.commandCodeSessionIds.has(sessionPath)) return 'commandcode';
+    if (this.antigravitySessionIds.has(sessionPath)) return 'antigravity';
+    if (this.opencodeSessionIds.has(sessionPath)) return 'opencode';
+    if (this.claudeSessionIds.has(sessionPath)) return 'claude';
+    try {
+      const entry = await getSessionRegistry().get(sessionPath);
+      if (entry?.sdkType === 'commandcode') {
+        this.commandCodeSessionIds.add(sessionPath);
+        return 'commandcode';
+      }
+      if (entry?.sdkType === 'antigravity') {
+        this.antigravitySessionIds.add(sessionPath);
+        return 'antigravity';
+      }
+      if (entry?.sdkType === 'opencode') {
+        this.opencodeSessionIds.add(sessionPath);
+        return 'opencode';
+      }
+      if (entry?.sdkType === 'claude') {
+        this.claudeSessionIds.add(sessionPath);
+        return 'claude';
+      }
+    } catch {
+      // Ignore registry read errors, fall back to pi
+    }
+    return 'pi';
+  }
+
   private async handlePinSession(
     clientId: string,
     message: { type: 'pin_session'; sessionPath: string }
   ): Promise<void> {
-    if (this.commandCodeSessionIds.has(message.sessionPath)) {
+    const runtime = await this.resolveSessionRuntime(message.sessionPath);
+
+    if (runtime === 'commandcode') {
       const success = this.commandCodeService.pinSession(message.sessionPath);
       this.sendMessage(clientId, success
         ? { type: 'session_pinned', sessionPath: message.sessionPath, pinned: true }
@@ -3676,7 +3707,7 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    if (this.antigravitySessionIds.has(message.sessionPath)) {
+    if (runtime === 'antigravity') {
       const success = await this.antigravityService.pinSession(message.sessionPath);
       if (success) {
         this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: true });
@@ -3691,7 +3722,7 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    if (this.opencodeSessionIds.has(message.sessionPath)) {
+    if (runtime === 'opencode') {
       const success = await this.opencodeService.pinSession(message.sessionPath);
       if (success) {
         this.sendMessage(clientId, {
@@ -3710,7 +3741,7 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    if (this.claudeSessionIds.has(message.sessionPath)) {
+    if (runtime === 'claude') {
       const success = this.claudeService.pinSession(message.sessionPath);
       if (success) {
         this.sendMessage(clientId, {
@@ -3746,23 +3777,25 @@ export class WebSocketConnectionManager {
     }
   }
 
-  private handleUnpinSession(
+  private async handleUnpinSession(
     clientId: string,
     message: { type: 'unpin_session'; sessionPath: string }
-  ): void {
-    if (this.commandCodeSessionIds.has(message.sessionPath)) {
+  ): Promise<void> {
+    const runtime = await this.resolveSessionRuntime(message.sessionPath);
+
+    if (runtime === 'commandcode') {
       this.commandCodeService.unpinSession(message.sessionPath);
       this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: false });
       return;
     }
 
-    if (this.antigravitySessionIds.has(message.sessionPath)) {
+    if (runtime === 'antigravity') {
       this.antigravityService.unpinSession(message.sessionPath);
       this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: false });
       return;
     }
 
-    if (this.opencodeSessionIds.has(message.sessionPath)) {
+    if (runtime === 'opencode') {
       this.opencodeService.unpinSession(message.sessionPath);
       this.sendMessage(clientId, {
         type: 'session_pinned',
@@ -3772,7 +3805,7 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    if (this.claudeSessionIds.has(message.sessionPath)) {
+    if (runtime === 'claude') {
       this.claudeService.unpinSession(message.sessionPath);
       this.sendMessage(clientId, {
         type: 'session_pinned',

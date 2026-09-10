@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { ClaudeService } from '../../../src/claude/claude-service.js';
+import { getSessionRegistry } from '../../../src/session-registry.js';
 
 async function makeService(useChannel = false): Promise<{ service: ClaudeService; dir: string }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-claude-service-pin-'));
@@ -28,8 +29,26 @@ describe('ClaudeService direct pinning', () => {
 
     const { sessionId } = await service.createSession('/tmp/project', 'sonnet');
 
-    expect(service.pinSession(sessionId)).toBe(true);
+    expect(await service.pinSession(sessionId)).toBe(true);
     expect(service.isSessionPinned(sessionId)).toBe(true);
+  });
+
+  it('can pin an imported native Claude session before its first prompt', async () => {
+    const { service, dir } = await makeService();
+    dirs.push(dir);
+
+    const registry = getSessionRegistry(path.join(dir, 'session-registry.json'));
+    const entry = await registry.upsert({
+      sdkType: 'claude',
+      path: '/tmp/claude.jsonl',
+      claudeSessionId: 'native-test-123',
+      cwd: '/tmp/project',
+      status: 'idle',
+      origin: 'native-discovered',
+    });
+
+    expect(await service.pinSession(entry.id)).toBe(true);
+    expect(service.isSessionPinned(entry.id)).toBe(true);
   });
 
   it('enforces the Claude facade pin limit at five existing sessions', async () => {

@@ -433,7 +433,7 @@ export const config: ServerConfig = {
   commandCodeCliHomeDir: process.env.COMMAND_CODE_CLI_HOME_DIR || path.join(os.homedir(), '.commandcode'),
   opencodeStorageDir: process.env.OPENCODE_STORAGE_DIR || path.join(os.homedir(), '.local', 'share', 'opencode', 'storage'),
   antigravityNativeConversationsDir: process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR || path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations'),
-  antigravityDefaultModel: process.env.ANTIGRAVITY_DEFAULT_MODEL || 'Gemini 3.5 Flash (Medium)',
+  antigravityDefaultModel: process.env.ANTIGRAVITY_DEFAULT_MODEL || 'Gemini 3.8 Flash (Medium)',
   antigravityPromptTimeoutMs: parseInt(process.env.ANTIGRAVITY_PROMPT_TIMEOUT_MS || '600000', 10),
   antigravityIdleTimeoutMs: parseInt(process.env.ANTIGRAVITY_IDLE_TIMEOUT_MS || '1800000', 10),
   antigravityMaxSessions: parseInt(process.env.ANTIGRAVITY_MAX_SESSIONS || '4', 10),

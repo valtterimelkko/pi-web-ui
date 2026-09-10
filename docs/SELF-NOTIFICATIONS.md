@@ -22,6 +22,7 @@ Both use the same durable notification outbox and Telegram channel.
 
 ```bash
 scripts/notify.sh <milestone|done|question|blocked> <title> [body]
+scripts/notify.sh status <notification-id-or-url>
 ```
 
 Any value other than the four standard kinds becomes a custom label. The kind only standardizes the title prefix for operator scanning; it does not create a separate queue or workflow state machine.
@@ -34,6 +35,8 @@ scripts/notify.sh done "Docs review complete" "A pull request is ready for revie
 scripts/notify.sh question "Decision needed" "Should the migration preserve the old table?"
 
 scripts/notify.sh blocked "CI blocked" "The required runtime credential is unavailable."
+
+scripts/notify.sh status /api/v1/notifications/4c874492-a6de-4ef4-b619-8bc24a244096
 ```
 
 For a multiline body, omit the body argument (or pass `-`) and pipe stdin:

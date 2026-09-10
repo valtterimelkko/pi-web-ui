@@ -42,8 +42,15 @@ log() { printf '%s\n' "$*" >&2; }   # stderr only — keep stdout clean for pipi
 # ── Parse args ───────────────────────────────────────────────────────────────
 if [[ $# -lt 2 ]]; then
   log "usage: scripts/notify.sh <milestone|done|question|blocked> <title> [body]"
+  log "       scripts/notify.sh status <notification-id-or-url>"
   log "       body omitted or '-' is read from stdin"
   exit 64
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "$1" == "status" ]]; then
+  exec node "$SCRIPT_DIR/notify-client.mjs" status "$2"
 fi
 
 KIND="$1"

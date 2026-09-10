@@ -185,7 +185,8 @@ export class ClaudeService {
     return this.pinClaims.has(sessionId)
       || this.processPool.isActive(sessionId)
       || this.sessionsWithHistory.has(sessionId)
-      || existsSync(this.sessionStore.getFilePath(sessionId));
+      || existsSync(this.sessionStore.getFilePath(sessionId))
+      || (this.registry.getSync(sessionId)?.sdkType === 'claude');
   }
 
   // ── Auth & availability ───────────────────────────────────────────────────
@@ -732,6 +733,16 @@ export class ClaudeService {
   }
 
   // ── Pinning ─────────────────────────────────────────────────────────────
+
+  async ensureSession(sessionId: string): Promise<boolean> {
+    if (this.hasChannelSession(sessionId) || this.hasDirectSession(sessionId)) return true;
+    const entry = await this.registry.get(sessionId).catch(() => null);
+    if (entry && entry.sdkType === 'claude') {
+      this.sessionsWithHistory.add(sessionId);
+      return true;
+    }
+    return false;
+  }
 
   pinSession(sessionId: string, claimId = 'web-ui'): boolean {
     if (this.hasChannelSession(sessionId)) {

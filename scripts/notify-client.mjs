@@ -23,6 +23,32 @@ const spoolTtlMs = 7 * 24 * 60 * 60 * 1000;
 
 class PermanentError extends Error {}
 
+if (process.argv[2] === 'status') {
+  const targetId = process.argv[3]?.split('/').filter(Boolean).pop();
+  if (!targetId || !/^[A-Za-z0-9._:-]{1,128}$/.test(targetId)) {
+    fail('notify: status requires a valid notification id or url');
+  }
+  try {
+    const token = (await readFile(tokenPath, 'utf8')).trim();
+    if (!token) fail(`notification token is empty: ${tokenPath}`);
+    const response = await request({
+      method: 'GET',
+      requestPath: `/api/v1/notifications/${targetId}`,
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (response.status >= 200 && response.status < 300) {
+      process.stdout.write(response.body + '\n');
+      process.exit(0);
+    } else {
+      fail(`notify: server returned HTTP ${response.status}${response.body ? ` — ${response.body}` : ''}`);
+    }
+  } catch (err) {
+    fail(`notify: failed to query status — ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 if (!/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) {
   fail('notify: PI_WEB_UI_NOTIFY_IDEMPOTENCY_KEY must be 1-128 safe ASCII characters');
 }

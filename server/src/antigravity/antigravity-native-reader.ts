@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { config } from "../config.js";
 import type { AntigravityTurn, AgyStoredToolCall } from "./antigravity-session-store.js";
 import { AGY_STORED_TOOL_LIMIT, AGY_STORED_TOOL_OUTPUT_LIMIT } from "./antigravity-session-store.js";
 
@@ -17,7 +18,7 @@ export function cleanUserPrompt(raw: string): string {
 export function parseNativeAntigravityTranscript(
   jsonlContent: string,
   conversationId: string,
-  model = "Gemini 3.5 Flash (Medium)",
+  model = config.antigravityDefaultModel,
 ): AntigravityTurn[] {
   const turns: AntigravityTurn[] = [];
   const lines = jsonlContent.split("\n").filter((l) => l.trim().length > 0);
