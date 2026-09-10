@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { NormalizedEvent } from '@pi-web-ui/shared';
+import type { NormalizedEvent, ChildCardProjection } from '@pi-web-ui/shared';
 import type { AgyEnvelope, AgyInit, AgyStepUpdate, ParsedAgyLine, AgyUsage } from './agy-event-types.js';
 
 /**
@@ -38,6 +38,10 @@ export interface AgyNormalizerOptions {
    *  caller (AntigravityService) emits terminal events itself after durable
    *  persistence, preserving the legacy ordering invariant. */
   suppressTerminalEvents?: boolean;
+  /** Background-task children to seed tracking with (respawn parity: the
+   *  service re-seeds a fresh normalizer from its durable per-session meta so
+   *  a process respawn does not forget still-running tasks). */
+  initialBackgroundChildren?: ChildCardProjection[];
 }
 
 export interface AgyNormalizerState {
@@ -53,6 +57,52 @@ export interface AgyNormalizerState {
   /** Tool calls recorded during the current turn. */
   turnTools: AgyToolCallRecord[];
 }
+
+/** Internal per-task record: the wire-safe projection plus the server-only
+ *  completion-watch hint (never serialized onto the wire). */
+export interface AgyBackgroundTaskRecord {
+  projection: ChildCardProjection;
+  /** Directory whose message JSONs carry the task's completion receipt
+ *  (derived from the "Task logs are available at:" line). */
+  watchDir?: string;
+}
+
+// ── Background task content patterns (live wire, 2026-09-10) ─────────────────
+
+/** agy demotes a long run_command: "Tool is running as a background task with task id: <conv>/task-N". */
+const BG_START_PATTERN = /Tool is running as a background task with task id:\s*(\S+)/;
+/** Human-readable command line: "Task Description: <command>". */
+const BG_DESCRIPTION_PATTERN = /Task Description:\s*([^\n]+)/;
+/** Where the task's own stdout lands; sibling `messages/` dir gets the receipt. */
+const BG_LOGS_PATTERN = /Task logs are available at:\s*(\S+)/;
+/** agy's high-priority wake message when the task exits. */
+const BG_COMPLETE_PATTERN = /Task id "([^"]+)" finished with result/;
+/** Exit code line inside the completion receipt. */
+const BG_EXIT_CODE_PATTERN = /The command exited with code (\d+)/;
+
+/** Convert the file:// task-log URL into the sibling messages directory that
+ *  receives the completion receipt JSON. Returns undefined when absent/foreign. */
+export function taskLogUrlToMessagesDir(logUrl: string): string | undefined {
+  if (!logUrl.startsWith('file://')) return undefined;
+  const logPath = logUrl.slice('file://'.length);
+  const idx = logPath.lastIndexOf('/.system_generated/tasks/');
+  if (idx < 0) return undefined;
+  return `${logPath.slice(0, idx)}/.system_generated/messages`;
+}
+
+/** Extract the background-task-relevant text of a step from every carrier the
+ *  wire has shown (passthrough `content`, `text_delta`, `tool_info.output`). */
+function stepContentProbe(step: AgyStepUpdate): string {
+  const parts: string[] = [];
+  if (typeof step.text_delta === 'string') parts.push(step.text_delta);
+  const content = (step as unknown as Record<string, unknown>).content;
+  if (typeof content === 'string') parts.push(content);
+  if (typeof step.tool_info?.output === 'string') parts.push(step.tool_info.output);
+  return parts.join('\n');
+}
+
+/** Max label length for a background child (matches MAX_TASK_CHARS spirit). */
+const BG_LABEL_MAX = 200;
 
 /** Map agy usage tokens to the neutral keys used across runtimes (additive). */
 export function mapAgyUsage(usage: AgyUsage | undefined): Record<string, number> {
@@ -102,6 +152,10 @@ export class AgyEventNormalizer {
   private _lastResult: AgyEnvelope | null = null;
   private _lastTurn: { text: string; tools: AgyToolCallRecord[]; result: AgyEnvelope } | null = null;
 
+  /** Background-task children tracked across turns (NOT reset on result).
+   *  Insertion-ordered: oldest task first. */
+  private readonly backgroundTasks = new Map<string, AgyBackgroundTaskRecord>();
+
   readonly state: AgyNormalizerState = {
     conversationId: null,
     initModel: null,
@@ -118,6 +172,11 @@ export class AgyEventNormalizer {
     this.expectedConversationId = options.expectedConversationId ?? null;
     this.onConversationIdMismatch = options.onConversationIdMismatch;
     this.suppressTerminalEvents = options.suppressTerminalEvents ?? false;
+    for (const child of options.initialBackgroundChildren ?? []) {
+      if (child && typeof child.id === 'string') {
+        this.backgroundTasks.set(child.id, { projection: { ...child } });
+      }
+    }
   }
 
   /** Terminal envelope of the most recent completed turn (null before one). */
@@ -128,6 +187,22 @@ export class AgyEventNormalizer {
   /** Snapshot of the most recent completed turn (captured before reset). */
   get lastTurn(): { text: string; tools: AgyToolCallRecord[]; result: AgyEnvelope } | null {
     return this._lastTurn;
+  }
+
+  /** Wire-safe projections of every tracked background task (running AND
+   *  completed — the strip filters, the store keeps the latest list). */
+  getBackgroundChildren(): ChildCardProjection[] {
+    return [...this.backgroundTasks.values()].map((r) => ({ ...r.projection }));
+  }
+
+  /** Server-only completion-watch hints (taskId → messages directory). */
+  getBackgroundTaskWatchDirs(): Map<string, string | undefined> {
+    return new Map([...this.backgroundTasks.entries()].map(([id, r]) => [id, r.watchDir]));
+  }
+
+  /** Watch-dir for one task (undefined when unknown). */
+  getBackgroundTaskWatchDir(taskId: string): string | undefined {
+    return this.backgroundTasks.get(taskId)?.watchDir;
   }
 
   /** True while a turn has produced output but not yet seen its result. */
@@ -179,6 +254,11 @@ export class AgyEventNormalizer {
 
   private onStep(step: AgyStepUpdate, timestamp: number): NormalizedEvent[] {
     const events: NormalizedEvent[] = [];
+
+    // Background-task surfacing (plan Phase 1): probe every step's content
+    // carriers before type-specific handling. Emits background_child_state on
+    // transitions only; never user-facing message content.
+    events.push(...this.detectBackgroundTaskTransitions(step, timestamp));
 
     if (step.step_type === 'agent_response') {
       if (typeof step.text_delta === 'string' && step.text_delta.length > 0) {
@@ -277,6 +357,76 @@ export class AgyEventNormalizer {
       }),
     );
     return events;
+  }
+
+  /** Detect background-task start/completion in a step's content and return
+   *  the resulting `background_child_state` events (one per transition). */
+  private detectBackgroundTaskTransitions(step: AgyStepUpdate, timestamp: number): NormalizedEvent[] {
+    const content = stepContentProbe(step);
+    if (!content) return [];
+
+    const started = this.noteBackgroundTaskStart(content, timestamp);
+    if (started) return [started];
+
+    const completed = this.noteBackgroundTaskCompletion(content, timestamp);
+    if (completed) return [completed];
+
+    return [];
+  }
+
+  /** Record a newly announced background task; returns the event when NEW. */
+  private noteBackgroundTaskStart(content: string, timestamp: number): NormalizedEvent | null {
+    const match = BG_START_PATTERN.exec(content);
+    if (!match) return null;
+    const taskId = match[1];
+    if (this.backgroundTasks.has(taskId)) return null; // re-delivery dedupe
+
+    const description = BG_DESCRIPTION_PATTERN.exec(content)?.[1]?.trim();
+    const label = (description && description.length > 0 ? description : taskId).slice(0, BG_LABEL_MAX);
+    const watchDir = taskLogUrlToMessagesDir(BG_LOGS_PATTERN.exec(content)?.[1] ?? '');
+
+    const projection: ChildCardProjection = {
+      id: taskId,
+      kind: 'antigravity_task',
+      status: 'running',
+      label,
+      model: 'antigravity-task',
+      task: description ?? taskId,
+      startedAt: timestamp,
+      parentSessionId: this.sessionId,
+    };
+    this.backgroundTasks.set(taskId, { projection, ...(watchDir ? { watchDir } : {}) });
+    return this.ev('background_child_state', timestamp, {
+      sessionId: this.sessionId,
+      children: this.getBackgroundChildren(),
+    });
+  }
+
+  /** Mark a task completed from its in-stream receipt; returns the event on
+   *  transition. Unknown task ids are ignored (stale receipts). */
+  private noteBackgroundTaskCompletion(content: string, timestamp: number): NormalizedEvent | null {
+    const match = BG_COMPLETE_PATTERN.exec(content);
+    if (!match) return null;
+    if (!this.completeBackgroundTask(match[1], BG_EXIT_CODE_PATTERN.exec(content)?.[1], timestamp)) return null;
+    return this.ev('background_child_state', timestamp, {
+      sessionId: this.sessionId,
+      children: this.getBackgroundChildren(),
+    });
+  }
+
+  /** Transition one task to completed (idempotent). True when it changed.
+   *  Used by the in-stream receipt path AND the service's file watcher. */
+  completeBackgroundTask(taskId: string, exitCode: string | number | undefined, endedAt: number): boolean {
+    const record = this.backgroundTasks.get(taskId);
+    if (!record || record.projection.status !== 'running') return false;
+    const code = exitCode === undefined ? undefined : Number(exitCode);
+    record.projection = {
+      ...record.projection,
+      status: 'completed',
+      ...(code !== undefined && Number.isFinite(code) ? { exitCode: code } : {}),
+      endedAt,
+    };
+    return true;
   }
 
   private onResult(parsed: Extract<ParsedAgyLine, { kind: 'result' }>, timestamp: number): NormalizedEvent[] {

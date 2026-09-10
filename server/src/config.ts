@@ -284,6 +284,11 @@ export interface ServerConfig {
   antigravityHeartbeatIntervalMs: number;
   antigravityStallTimeoutMs: number;
   antigravityMaxAttempts: number;
+  /** Background-task completion poll cadence (0 disables the watcher). */
+  antigravityBackgroundWatchIntervalMs: number;
+  /** Watch ceiling per task: after this long without a receipt the task is
+   *  marked completed (timedOut flag) so the banner cannot hang forever. */
+  antigravityBackgroundWatchMaxMs: number;
   notificationsEnabled: boolean;
   notificationsDir: string;
   notificationsDebounceMs: number;
@@ -439,6 +444,12 @@ export const config: ServerConfig = {
   antigravityMaxSessions: parseInt(process.env.ANTIGRAVITY_MAX_SESSIONS || '4', 10),
   antigravityMaxPinnedSessions: parseInt(process.env.ANTIGRAVITY_MAX_PINNED_SESSIONS || String(MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME), 10),
   antigravityCleanupIntervalMs: parseInt(process.env.ANTIGRAVITY_CLEANUP_INTERVAL_MS || '60000', 10),
+  // Background-task completion watcher (plan: antigravity background task
+  // surfacing). agy's headless stream never re-prompts when a backgrounded
+  // run_command finishes, so the service polls the conversation's
+  // .system_generated/messages dir while tasks are running.
+  antigravityBackgroundWatchIntervalMs: parseInt(process.env.ANTIGRAVITY_BACKGROUND_WATCH_INTERVAL_MS || '5000', 10),
+  antigravityBackgroundWatchMaxMs: parseInt(process.env.ANTIGRAVITY_BACKGROUND_WATCH_MAX_MS || String(2 * 60 * 60 * 1000), 10),
   // Liveness heartbeat cadence during an in-flight Antigravity turn. agy is a
   // batch subprocess (no native streaming), so the server emits a synthetic
   // stream_activity ping on this interval to keep the UI heartbeat fresh.

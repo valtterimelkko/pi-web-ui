@@ -2776,15 +2776,27 @@ export class WebSocketConnectionManager {
 
     try {
       const events = await this.antigravityService.getReplayEvents(sessionId);
-      if (events.length === 0) return;
-
-      this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
-      for (const evt of events) {
-        this.sendMessage(clientId, { type: 'session_event', sessionId, event: evt } as unknown as ServerMessage);
+      if (events.length > 0) {
+        this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+        for (const evt of events) {
+          this.sendMessage(clientId, { type: 'session_event', sessionId, event: evt } as unknown as ServerMessage);
+        }
+        this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
       }
-      this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
     } catch (error) {
       logger.error('[replayAntigravityHistory] Error:', error);
+    }
+
+    // Contract 1.34.0 parity (antigravity background tasks): rehydrate the
+    // switching client's still-running background-task banner from the
+    // service's live tracking, like the pi snapshot path does.
+    try {
+      const children = this.antigravityService.getBackgroundChildren(sessionId);
+      if (children.length > 0) {
+        this.sendMessage(clientId, { type: 'background_child_state', sessionId, children } as unknown as ServerMessage);
+      }
+    } catch {
+      /* surfacing is best-effort */
     }
   }
 

@@ -14,6 +14,10 @@ export const ChildrenStrip = memo(function ChildrenStrip({ sessionId }: { sessio
   if (!sessionId || !children || children.length === 0) return null;
   const running = children.filter((c) => c.status === 'running' || c.status === 'dispatched');
   if (running.length === 0) return null;
+  // Antigravity native background tasks read as "background task" (their own
+  // rail), not as orchestrated child agents.
+  const allAntigravity = running.every((c) => c.kind === 'antigravity_task');
+  const noun = allAntigravity ? (running.length === 1 ? 'background task' : 'background tasks') : running.length === 1 ? 'child' : 'children';
 
   return (
     <div
@@ -22,7 +26,7 @@ export const ChildrenStrip = memo(function ChildrenStrip({ sessionId }: { sessio
     >
       <div className="flex items-center gap-1.5 font-medium">
         <Bot className="w-3.5 h-3.5" />
-        {running.length} {running.length === 1 ? 'child' : 'children'} running
+        {running.length} {noun} running
       </div>
       <div className="mt-1 space-y-0.5">
         {running.map((c: ChildCardProjection) => (
@@ -31,7 +35,11 @@ export const ChildrenStrip = memo(function ChildrenStrip({ sessionId }: { sessio
             <span className="font-medium truncate">{c.label}</span>
             {c.model && <span className="font-mono text-[10px] text-amber-700/70 truncate">{c.model}</span>}
             <span className="text-[10px] text-amber-700/60 shrink-0">
-              {c.kind === 'internal_api_child' ? `dispatched via API${c.runtime ? ` · ${c.runtime}` : ''}` : 'background subagent'}
+              {c.kind === 'internal_api_child'
+                ? `dispatched via API${c.runtime ? ` · ${c.runtime}` : ''}`
+                : c.kind === 'antigravity_task'
+                  ? 'background task'
+                  : 'background subagent'}
             </span>
           </div>
         ))}

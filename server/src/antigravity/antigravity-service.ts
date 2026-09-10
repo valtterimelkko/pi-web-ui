@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import type { NormalizedEvent } from '@pi-web-ui/shared';
+import type { NormalizedEvent, ChildCardProjection } from '@pi-web-ui/shared';
 import { AntigravitySessionStore } from './antigravity-session-store.js';
 import { isTurnDone } from './antigravity-session-store.js';
 import { turnsToReplayEvents } from './antigravity-history-replay.js';
@@ -146,6 +146,14 @@ interface ActiveSessionMeta {
   pinned: boolean;
   pinClaims: Set<string>;
   status: 'idle' | 'running' | 'error';
+  /** Live background-task children (plan Phase 1). Mirrored from the stream
+   *  normalizer on every `background_child_state` and updated by the file
+   *  watcher — authoritative between turns / across process respawns. */
+  backgroundTasks: Map<string, ChildCardProjection>;
+}
+
+function blankMeta(now = Date.now()): ActiveSessionMeta {
+  return { lastActivity: now, pinned: false, pinClaims: new Set(), status: 'idle', backgroundTasks: new Map() };
 }
 
 export class AntigravityService {
@@ -168,6 +176,12 @@ export class AntigravityService {
   }> = new Map();
   /** API observers — receive every normalized event for a session, regardless of which client prompted. */
   private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
+  /** Last per-session websocket event sink (kept after the turn ends so the
+   *  background-task watcher can still push state to connected clients). */
+  private sessionEventSinks: Map<string, (event: NormalizedEvent) => void> = new Map();
+  private backgroundWatchTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly backgroundWatchIntervalMs: number;
+  private readonly backgroundWatchMaxMs: number;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private readonly idleTimeoutMs: number;
   private readonly maxSessions: number;
@@ -192,8 +206,19 @@ export class AntigravityService {
     this.promptTimeoutMs = config.antigravityPromptTimeoutMs;
     this.stallTimeoutMs = config.antigravityStallTimeoutMs;
     this.maxAttempts = config.antigravityMaxAttempts;
+    this.backgroundWatchIntervalMs = config.antigravityBackgroundWatchIntervalMs;
+    this.backgroundWatchMaxMs = config.antigravityBackgroundWatchMaxMs;
 
     this.startCleanupInterval();
+    this.startBackgroundWatch();
+  }
+
+  private startBackgroundWatch(): void {
+    if (this.backgroundWatchTimer || this.backgroundWatchIntervalMs <= 0) return;
+    this.backgroundWatchTimer = setInterval(() => {
+      void this.pollBackgroundCompletions().catch(() => { /* watcher is best-effort */ });
+    }, this.backgroundWatchIntervalMs);
+    if (this.backgroundWatchTimer.unref) this.backgroundWatchTimer.unref();
   }
 
   private startCleanupInterval(): void {
@@ -208,6 +233,9 @@ export class AntigravityService {
       if (meta.pinned) continue;
       if (this.runningSessions.has(sessionId)) continue;
       if (this.subscribers.getSubscriberCount(sessionId) > 0) continue;
+      // A running background task IS activity: dropping the meta map would
+      // orphan the ChildrenStrip banner and the completion watcher.
+      if ([...meta.backgroundTasks.values()].some((c) => c.status === 'running')) continue;
       if (now - meta.lastActivity > this.idleTimeoutMs) {
         this.sessionMeta.delete(sessionId);
       }
@@ -244,7 +272,7 @@ export class AntigravityService {
     }
 
     const sessionId = randomUUID();
-    this.sessionMeta.set(sessionId, { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'idle' });
+    this.sessionMeta.set(sessionId, blankMeta());
 
     const chosenModel = model || config.antigravityDefaultModel;
     await this.registry.upsert({
@@ -289,13 +317,14 @@ export class AntigravityService {
 
       let meta = this.sessionMeta.get(sessionId);
       if (!meta) {
-        meta = { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'idle' };
+        meta = blankMeta();
         this.sessionMeta.set(sessionId, meta);
       }
 
       meta.status = 'running';
       meta.lastActivity = Date.now();
       this.runningSessions.add(sessionId);
+      this.sessionEventSinks.set(sessionId, onEvent);
       const abortController = new AbortController();
       this.promptAbortControllers.set(sessionId, abortController);
       this.promptCallbacks.set(sessionId, { onEvent, onComplete });
@@ -342,10 +371,12 @@ export class AntigravityService {
 
     let meta = this.sessionMeta.get(sessionId);
     if (!meta) {
-      meta = { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'running' };
+      meta = blankMeta();
+      meta.status = 'running';
       this.sessionMeta.set(sessionId, meta);
     }
     meta.lastActivity = Date.now();
+    this.sessionEventSinks.set(sessionId, onEvent);
     void this.runStreamTurn(sessionId, entry, prompt, meta, onEvent, onComplete, null);
     return true;
   }
@@ -373,6 +404,11 @@ export class AntigravityService {
     const tlog = logger.child({ sessionId, turnId, runtime: 'antigravity' });
 
     const emit = (event: NormalizedEvent) => {
+      // Background-task state transitions mirror into ActiveSessionMeta so the
+      // banner survives turn boundaries and process respawns (plan Phase 1).
+      if (event.type === 'background_child_state') {
+        this.rememberBackgroundChildren(sessionId, (event.data as { children?: ChildCardProjection[] }).children ?? []);
+      }
       try { onEvent(event); } catch { /* non-fatal */ }
       this.emitApiObserverEvent(sessionId, event);
     };
@@ -431,7 +467,13 @@ export class AntigravityService {
       let norm = normalizer ?? new AgyEventNormalizer({ sessionId, suppressTerminalEvents: true });
 
       const spawnProcess = async (conversationId: string | null): Promise<AgyStreamProcess> => {
-        norm = new AgyEventNormalizer({ sessionId, suppressTerminalEvents: true });
+        norm = new AgyEventNormalizer({
+          sessionId,
+          suppressTerminalEvents: true,
+          // Respawn parity: seed the fresh normalizer with the tasks the
+          // service still tracks, so a mid-task respawn cannot forget them.
+          initialBackgroundChildren: this.getBackgroundChildren(sessionId),
+        });
         const fresh = new AgyStreamProcess({
           sessionId,
           cwd: (entry.cwd && entry.cwd.trim()) ? entry.cwd : process.cwd(),
@@ -811,6 +853,119 @@ export class AntigravityService {
     this.streamProcesses.get(sessionId)?.abort();
   }
 
+  // ── Background-task tracking (plan Phase 1) ─────────────────────────────
+
+  /** Mirror a background_child_state payload into session meta. */
+  private rememberBackgroundChildren(sessionId: string, children: ChildCardProjection[]): void {
+    const meta = this.sessionMeta.get(sessionId);
+    if (!meta) return;
+    meta.backgroundTasks = new Map(children.map((c) => [c.id, { ...c }]));
+    meta.lastActivity = Date.now();
+  }
+
+  /** Wire-safe projections of the session's tracked background tasks
+   *  (running AND completed — the frontend strip filters). Empty when the
+   *  session has none or is unknown. */
+  getBackgroundChildren(sessionId: string): ChildCardProjection[] {
+    const meta = this.sessionMeta.get(sessionId);
+    if (!meta) return [];
+    return [...meta.backgroundTasks.values()].map((c) => ({ ...c }));
+  }
+
+  /** Poll the on-disk agy message receipts for every running background task
+   *  and transition the ones that finished. Bounded: only sessions with
+   *  running tasks are touched, each dir read is a single readdir. */
+  private async pollBackgroundCompletions(): Promise<void> {
+    const now = Date.now();
+    for (const [sessionId, meta] of this.sessionMeta) {
+      const running = [...meta.backgroundTasks.values()].filter((c) => c.status === 'running');
+      if (running.length === 0) continue;
+      const normalizer = this.streamNormalizers.get(sessionId);
+      for (const child of running) {
+        const startedAt = child.startedAt ?? now;
+        if (now - startedAt > this.backgroundWatchMaxMs) {
+          // Watch ceiling: stop tracking rather than hanging the banner
+          // forever. Honest via the timedOut flag; exit code unknown.
+          this.completeBackgroundChild(sessionId, child.id, undefined, now, true);
+          continue;
+        }
+        const watchDir = normalizer?.getBackgroundTaskWatchDir(child.id);
+        if (!watchDir) continue;
+        const receipt = await this.findBackgroundReceipt(watchDir, child.id, startedAt);
+        if (receipt) {
+          this.completeBackgroundChild(sessionId, child.id, receipt.exitCode, now, false);
+        }
+      }
+    }
+  }
+
+  /** Scan the conversation's messages dir for the task's completion receipt.
+   *  Only files with mtime at/after the task start (minus clock slack) are
+   *  read — old receipts for earlier tasks are never re-read. */
+  private async findBackgroundReceipt(watchDir: string, taskId: string, startedAt: number): Promise<{ exitCode?: number } | null> {
+    let names: string[];
+    try {
+      names = await readdir(watchDir);
+    } catch {
+      return null; // dir not created yet (or conversation gone) — keep polling
+    }
+    const floor = startedAt - 5000;
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const filePath = `${watchDir}/${name}`;
+      try {
+        const info = await stat(filePath);
+        if (info.mtimeMs < floor) continue;
+        const raw = await readFile(filePath, 'utf8');
+        if (!raw.includes(taskId)) continue;
+        const parsed = JSON.parse(raw) as { sender?: string; content?: string };
+        if (parsed.sender !== taskId) continue;
+        if (!/finished with result/.test(parsed.content ?? '')) continue;
+        const code = /The command exited with code (\d+)/.exec(parsed.content ?? '')?.[1];
+        return { ...(code !== undefined ? { exitCode: Number(code) } : {}) };
+      } catch {
+        continue; // unreadable/partial file — try the next
+      }
+    }
+    return null;
+  }
+
+  /** Transition one task to completed (normalizer + meta + fan-out). */
+  private completeBackgroundChild(sessionId: string, taskId: string, exitCode: number | undefined, endedAt: number, timedOut: boolean): void {
+    const normalizer = this.streamNormalizers.get(sessionId);
+    normalizer?.completeBackgroundTask(taskId, exitCode, endedAt);
+    const meta = this.sessionMeta.get(sessionId);
+    const existing = meta?.backgroundTasks.get(taskId);
+    if (!meta || !existing || existing.status !== 'running') return;
+    const updated: ChildCardProjection = {
+      ...existing,
+      status: 'completed',
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(timedOut ? { timedOut: true } : {}),
+      endedAt,
+    };
+    meta.backgroundTasks.set(taskId, updated);
+    this.emitBackgroundState(sessionId);
+  }
+
+  /** Push the current background-task state to the session's websocket sink
+   *  (the connection's antigravity fan-out — resolves current subscribers at
+   *  call time) and API observers. */
+  private emitBackgroundState(sessionId: string): void {
+    const children = this.getBackgroundChildren(sessionId);
+    const event: NormalizedEvent = {
+      type: 'background_child_state',
+      sessionId,
+      timestamp: Date.now(),
+      data: { sessionId, children },
+    };
+    const sink = this.sessionEventSinks.get(sessionId);
+    if (sink) {
+      try { sink(event); } catch { /* non-fatal */ }
+    }
+    this.emitApiObserverEvent(sessionId, event);
+  }
+
   disposeSession(sessionId: string): void {
     this.abort(sessionId);
     const proc = this.streamProcesses.get(sessionId);
@@ -824,6 +979,7 @@ export class AntigravityService {
     this.startingSessions.delete(sessionId);
     this.promptAbortControllers.delete(sessionId);
     this.promptCallbacks.delete(sessionId);
+    this.sessionEventSinks.delete(sessionId);
     this.apiObservers.delete(sessionId);
   }
 
@@ -868,7 +1024,7 @@ export class AntigravityService {
     // mid-flight is intentionally NOT reconciled here. replayAntigravityHistory
     // renders it as user-prompt-only (no agent_end) with isStreaming driving the
     // spinner, which is the cheapest correct behavior — no heavy reconciliation.
-    this.sessionMeta.set(sessionId, { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'idle' });
+    this.sessionMeta.set(sessionId, blankMeta());
     return true;
   }
 
@@ -1123,6 +1279,10 @@ export class AntigravityService {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
+    }
+    if (this.backgroundWatchTimer) {
+      clearInterval(this.backgroundWatchTimer);
+      this.backgroundWatchTimer = null;
     }
   }
 }

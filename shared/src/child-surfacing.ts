@@ -16,8 +16,13 @@
  * stream, and the browser websocket.
  */
 
-/** Which orchestration rail produced this child. */
-export type ChildCardKind = 'background_subagent' | 'internal_api_child';
+/**
+ * Which orchestration rail produced this child.
+ * `antigravity_task` (contract 1.39.0, additive): an Antigravity native
+ * background task (agy demotes a long run_command to a background process
+ * group and reports it as `task <id>`); surfaced by the agy event normalizer.
+ */
+export type ChildCardKind = 'background_subagent' | 'internal_api_child' | 'antigravity_task';
 
 export type ChildCardStatus = 'dispatched' | 'running' | 'completed' | 'failed' | 'cancelled';
 
