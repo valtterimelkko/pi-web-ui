@@ -177,6 +177,9 @@ export interface ServerConfig {
   sessionAutoArchiveDays: number;
   sessionCleanupDryRun: boolean;
   sessionRetentionMinDwellDays: number;
+  /** Discovery hygiene (plan Phase 3): auto-archive a natively-discovered
+   *  session older than this many days at discovery time; 0 disables. */
+  sessionDiscoveryArchiveDays: number;
   piAgentDir: string;
   webUiPrefsPath: string;
   sessionDir: string | undefined;
@@ -332,6 +335,7 @@ export const config: ServerConfig = {
   sessionAutoArchiveDays: resolveAutoArchiveDays(process.env),
   sessionCleanupDryRun: resolveCleanupDryRun(process.env),
   sessionRetentionMinDwellDays: resolveRetentionMinDwellDays(process.env),
+  sessionDiscoveryArchiveDays: parseInt(process.env.SESSION_DISCOVERY_ARCHIVE_DAYS || '14', 10),
   piAgentDir: process.env.PI_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent'),
   /** Browser preference metadata file. Overridable so disposable validation
    *  servers never touch the production prefs (see validation-server-env). */

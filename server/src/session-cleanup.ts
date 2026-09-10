@@ -13,6 +13,48 @@ import { createLogger } from './logging/logger.js';
 
 const logger = createLogger('SessionCleanup');
 
+/**
+ * Stage 0 of the hygiene funnel (plan Phase 3): a pi CLI session the
+ * SessionWatcher just discovered on disk (origin 'native-discovered') that is
+ * ALREADY older than the discovery threshold is flagged archived immediately
+ * upon discovery, so hundreds of historical CLI sessions never flood the
+ * sidebar's active list. Reversible and idempotent: explicit pins win, and an
+ * existing archived stamp (with its retention-dwell archivedAt) is preserved.
+ * Returns true when this call stamped a NEW archive record.
+ */
+export async function archiveStaleDiscoveredSession(opts: {
+  sessionPath: string;
+  lastActivityMs: number;
+  /** Recency threshold in ms; <= 0 disables. Defaults to
+   *  config.sessionDiscoveryArchiveDays (14 days). */
+  thresholdMs?: number;
+  prefsPath?: string;
+}): Promise<boolean> {
+  const thresholdMs = opts.thresholdMs ?? config.sessionDiscoveryArchiveDays * 24 * 60 * 60 * 1000;
+  if (thresholdMs <= 0) return false;
+  if (Date.now() - opts.lastActivityMs <= thresholdMs) return false;
+
+  const filePath = opts.prefsPath ?? PREFS_FILE;
+  const resolver = await buildRegistryResolver();
+  const { key } = toV2Key(opts.sessionPath, resolver);
+  const now = Date.now();
+
+  return withPrefsLock(async (read, write) => {
+    const prefs = await read();
+    const rec = prefs.sessions[key];
+    if (rec?.archived || rec?.pinned) return false;
+    prefs.sessions[key] = {
+      ...(rec ?? {}),
+      archived: true,
+      archivedAt: rec?.archivedAt ?? now,
+      updatedAt: now,
+      legacyKey: rec?.legacyKey ?? opts.sessionPath,
+    };
+    await write(prefs);
+    return true;
+  }, filePath);
+}
+
 
 export const DEFAULT_PIN_INACTIVITY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_ARCHIVE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -20,6 +62,8 @@ export const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 export const DEFAULT_AUTO_ARCHIVE_MS = 30 * 24 * 60 * 60 * 1000;
 /** Grace period between archiving and retention-delete eligibility. */
 export const DEFAULT_RETENTION_MIN_DWELL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Default recency threshold for auto-archiving a session upon discovery. */
+export const DEFAULT_DISCOVERY_ARCHIVE_MS = 14 * 24 * 60 * 60 * 1000;
 
 export interface SessionCleanupConfig {
   pinInactivityMs: number;

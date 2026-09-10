@@ -5,6 +5,8 @@ import { closeSync, openSync, readSync } from 'node:fs';
 import { EventEmitter } from 'events';
 import { createLogger } from '../logging/logger.js';
 import type { SessionRegistryManager } from '../session-registry.js';
+import { archiveStaleDiscoveredSession } from '../session-cleanup.js';
+import { config } from '../config.js';
 
 const logger = createLogger('SessionWatcher');
 
@@ -344,6 +346,17 @@ export class SessionWatcher extends EventEmitter {
             status: 'idle',
             ...(origin ? { origin } : {}),
           });
+          // Discovery hygiene (plan Phase 3): a session discovered on disk
+          // that is ALREADY older than the discovery threshold is archived
+          // upon discovery so historical CLI sessions never flood the active
+          // list. Cheap freshness pre-check avoids the prefs lock for normal
+          // fresh adds; the helper re-checks authoritatively (pins win).
+          if (origin && Date.now() - info.lastActivity.getTime() > config.sessionDiscoveryArchiveDays * 24 * 60 * 60 * 1000) {
+            void archiveStaleDiscoveredSession({
+              sessionPath: info.path,
+              lastActivityMs: info.lastActivity.getTime(),
+            }).catch(() => { /* best-effort hygiene */ });
+          }
         } catch (error) {
           logger.warn(`Failed to index observed Pi session ${filePath}:`, error);
         }

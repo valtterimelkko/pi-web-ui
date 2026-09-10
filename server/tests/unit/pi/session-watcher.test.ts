@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { SessionWatcher } from '../../../src/pi/session-watcher.js';
 
+const discoveryArchive = vi.hoisted(() => ({ archiveStaleDiscoveredSession: vi.fn(async () => true) }));
+vi.mock('../../../src/session-cleanup.js', () => discoveryArchive);
+
 describe('SessionWatcher canonical metadata', () => {
   let tempDir: string | undefined;
 
@@ -79,6 +82,32 @@ describe('SessionWatcher canonical metadata', () => {
     expect(changeCall).toBeTruthy();
     expect(changeCall.origin).toBeUndefined();
 
+    await watcher.stop();
+  });
+
+  it('auto-archives stale native-discovered adds via the discovery helper (plan Phase 3)', async () => {
+    discoveryArchive.archiveStaleDiscoveredSession.mockClear();
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-discovery-'));
+    const stalePath = path.join(tempDir, '2026-01-01T00-00-00_11111111-2222-4333-8444-555566667777.jsonl');
+    const freshPath = path.join(tempDir, '2026-01-01T00-00-00_99999999-8888-4777-8666-555544443333.jsonl');
+    const now = Date.now();
+    await writeFile(stalePath, JSON.stringify({ type: 'session', id: 'stale-discovered', cwd: '/tmp/stale', timestamp: now - 60 * 24 * 60 * 60 * 1000 }));
+    await writeFile(freshPath, JSON.stringify({ type: 'session', id: 'fresh-discovered', cwd: '/tmp/fresh', timestamp: now }));
+    const registry = {
+      upsert: vi.fn().mockResolvedValue(undefined),
+      getByPath: vi.fn(async () => undefined), // both genuinely new → native-discovered
+    };
+    const watcher = new SessionWatcher(tempDir, registry);
+    const invoke = watcher as unknown as { emitChange(type: 'add', filePath: string): Promise<void> };
+
+    await invoke.emitChange('add', stalePath);
+    expect(discoveryArchive.archiveStaleDiscoveredSession).toHaveBeenCalledTimes(1);
+    const call = discoveryArchive.archiveStaleDiscoveredSession.mock.calls[0][0];
+    expect(call.sessionPath).toBe(stalePath);
+    expect(now - call.lastActivityMs).toBeGreaterThan(14 * 24 * 60 * 60 * 1000);
+
+    await invoke.emitChange('add', freshPath);
+    expect(discoveryArchive.archiveStaleDiscoveredSession).toHaveBeenCalledTimes(1); // fresh → not called
     await watcher.stop();
   });
 

@@ -565,6 +565,9 @@ export interface Session {
   cwd: string;
   name?: string;
   sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';  // optional for backward compatibility
+  /** Registry provenance (plan Phase 3): 'native-discovered' = indexed from
+   *  disk by the SessionWatcher / Resume-CLI scan, never created in the UI. */
+  origin?: 'browser' | 'internal-api' | 'native-discovered';
   model?: string;              // current model
   effort?: CommandCodeEffort;
   effortLevels?: CommandCodeEffort[];

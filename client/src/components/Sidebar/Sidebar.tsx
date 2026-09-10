@@ -11,6 +11,7 @@ import { NewSessionModal, ResumeNativeSessionModal } from '../Session';
 import { TransferConfirmationModal } from './TransferConfirmationModal';
 import { SessionItem } from './SessionItem';
 import { TokenUsageDashboard } from '../Usage';
+import { filterRecentActiveSessions } from '../../lib/sidebarSessions';
 
 export function Sidebar() {
   const sessions = useSessionStore(s => s.sessions);
@@ -32,6 +33,8 @@ export function Sidebar() {
   const [archivingAll, setArchivingAll] = useState(false);
   // Default the active list to recent sessions (2026-08-21 hygiene fix): an
   // unbounded list of hundreds of rows made manual archiving feel necessary.
+  // Native-discovered CLI sessions obey a tighter 14-day cutoff (plan Phase 3:
+  // archive robustness) unless "Show all" is checked.
   const [showAllActive, setShowAllActive] = useState(false);
   const archiveAllSessions = useSessionStore(s => s.archiveAllSessions);
 
@@ -44,11 +47,7 @@ export function Sidebar() {
   const activeSessions = sessions.filter(s => !archivedSessionPaths.includes(s.path));
   const archivedSessions = sessions.filter(s => archivedSessionPaths.includes(s.path));
 
-  const RECENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-  const recentActiveSessions = activeSessions.filter((s) => {
-    if (!s.lastActivity) return true; // unknown age stays visible
-    return Date.now() - new Date(s.lastActivity).getTime() <= RECENT_WINDOW_MS;
-  });
+  const recentActiveSessions = filterRecentActiveSessions(activeSessions, { currentSessionId });
   const hiddenRecentCount = activeSessions.length - recentActiveSessions.length;
 
   const filteredSessions = (filter || showAllActive ? activeSessions : recentActiveSessions).filter((session) => {

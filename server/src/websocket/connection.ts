@@ -2847,10 +2847,25 @@ export class WebSocketConnectionManager {
   ): Promise<void> {
     const piSessions = await getPiSessionListCache().list();
 
+    // Registry provenance (plan Phase 3): the sidebar applies a tighter
+    // recency cutoff to 'native-discovered' sessions, so the wire must carry
+    // origin. The pi cache is file-backed; cross-reference the registry by
+    // path (single JSON read, same pattern as the other runtimes).
+    const originByPath = new Map<string, string>();
+    const originById = new Map<string, string>();
+    try {
+      for (const entry of await getSessionRegistry().listAll()) {
+        if (entry.origin) {
+          if (entry.path) originByPath.set(entry.path, entry.origin);
+          originById.set(entry.id, entry.origin);
+        }
+      }
+    } catch { /* provenance is best-effort */ }
+
     const formattedPiSessions: Array<{
       id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
       firstMessage: string; messageCount: number; cwd: string;
-      name?: string; createdAt: string; lastActivity: string;
+      name?: string; createdAt: string; lastActivity: string; origin?: string;
     }> = piSessions.map(s => ({
       id: s.id,
       path: s.path,
@@ -2861,6 +2876,7 @@ export class WebSocketConnectionManager {
       name: s.name,
       createdAt: s.createdAt?.toISOString?.() ?? String(s.createdAt),
       lastActivity: s.lastActivity?.toISOString?.() ?? String(s.lastActivity),
+      origin: originByPath.get(s.path) ?? originById.get(s.id),
     }));
 
     // Also load Claude sessions from the registry
@@ -2877,6 +2893,7 @@ export class WebSocketConnectionManager {
         name: undefined,
         createdAt: entry.createdAt || new Date().toISOString(),
         lastActivity: entry.lastActivity || new Date().toISOString(),
+        origin: entry.origin,
       }));
       allSessions = [...formattedPiSessions, ...formattedClaudeSessions];
     } catch (e) {
@@ -2895,6 +2912,7 @@ export class WebSocketConnectionManager {
         name: undefined,
         createdAt: entry.createdAt || new Date().toISOString(),
         lastActivity: entry.lastActivity || new Date().toISOString(),
+        origin: entry.origin,
       }));
       allSessions = [...allSessions, ...formattedOpencodeSessions];
     } catch (e) {
@@ -2913,6 +2931,7 @@ export class WebSocketConnectionManager {
         name: undefined,
         createdAt: entry.createdAt || new Date().toISOString(),
         lastActivity: entry.lastActivity || new Date().toISOString(),
+        origin: entry.origin,
       }));
       allSessions = [...allSessions, ...formattedAntigravitySessions];
     } catch (e) {
@@ -2938,6 +2957,7 @@ export class WebSocketConnectionManager {
           name: undefined,
           createdAt: entry.createdAt,
           lastActivity: entry.updatedAt,
+          origin: (entry as unknown as { origin?: string }).origin,
         };
       });
       allSessions = [...allSessions, ...formattedCommandCodeSessions];
