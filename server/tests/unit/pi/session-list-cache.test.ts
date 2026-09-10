@@ -215,6 +215,18 @@ describe('PiSessionListCache', () => {
     });
   });
 
+  it('a flat session file directly under <dir> is listed (validation-server layout)', async () => {
+    // Disposable validation servers write Internal-API-created pi sessions FLAT
+    // into PI_SESSIONS_DIR (<dir>/<timestamp>_<id>.jsonl, no per-cwd
+    // subdirectory). Those sessions must still appear in the sidebar list.
+    await withTempTree(async (root) => {
+      const file = join(root, '2026-09-10T02-10-46-377Z_flat-session.jsonl');
+      await writeFile(file, hdr('flat', '/w') + msg('user', 'hi', '2026-01-01T00:00:01.000Z'));
+      const cache = new PiSessionListCache(root);
+      expect((await cache.list()).map((s) => s.id)).toEqual(['flat']);
+    });
+  });
+
   it('concurrent list() calls share a single reconcile (single-flight)', async () => {
     await withTempTree(async (root) => {
       await writeSession(root, '--a--', 's', hdr('s', '/a') + msg('user', 'hi', '2026-01-01T00:00:01.000Z'), new Date());

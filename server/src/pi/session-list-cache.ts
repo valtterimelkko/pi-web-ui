@@ -147,16 +147,29 @@ function toSessionInfo(p: ParsedPiSession): SessionInfo {
   };
 }
 
-/** Discover all `<sessionsDir>/<encoded-cwd>/*.jsonl` files with their mtimes. */
+/** Discover all `<sessionsDir>/<encoded-cwd>/*.jsonl` files with their mtimes.
+ *  Top-level `<sessionsDir>/*.jsonl` files (the flat layout disposable
+ *  validation servers use for Internal-API-created sessions) are included too. */
 async function discoverFiles(sessionsDir: string): Promise<{ path: string; mtimeMs: number }[]> {
   let dirs: string[];
+  let flat: string[] = [];
   try {
     const entries = await readdir(sessionsDir, { withFileTypes: true });
     dirs = entries.filter((e) => e.isDirectory()).map((e) => join(sessionsDir, e.name));
+    flat = entries.filter((e) => e.isFile() && e.name.endsWith('.jsonl')).map((e) => e.name);
   } catch {
     return [];
   }
   const out: { path: string; mtimeMs: number }[] = [];
+  for (const name of flat) {
+    const p = join(sessionsDir, name);
+    try {
+      const st = await stat(p);
+      out.push({ path: p, mtimeMs: st.mtimeMs });
+    } catch {
+      /* skip unreadable */
+    }
+  }
   for (const dir of dirs) {
     let names: string[];
     try {
