@@ -10,6 +10,7 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 class Runner {
   inputs: CommandCodeProcessRunInput[] = [];
   hang = false;
+  terminalSessionId?: string;
   async run(input: CommandCodeProcessRunInput): Promise<CommandCodeProcessRunResult> {
     this.inputs.push(input);
     if (this.hang) return new Promise(() => undefined);
@@ -17,7 +18,7 @@ class Runner {
       exitCode: 0, signal: null, stderrTail: '',
       parsed: {
         events: [{ event: { type: 'message_update', text: 'ok' }, lineNumber: 1 }],
-        terminal: { type: 'result', subtype: 'success', sessionId: `native-${this.inputs.length}`, finalText: 'ok', usage: { input: 2, output: 3, total: 5 } },
+        terminal: { type: 'result', subtype: 'success', sessionId: this.terminalSessionId ?? `native-${this.inputs.length}`, finalText: 'ok', usage: { input: 2, output: 3, total: 5 } },
         unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 1, lineCount: 2,
       },
     };
@@ -48,6 +49,31 @@ async function harness(options: { models?: string[]; enabled?: boolean; runner?:
 // Native-home preparation only runs when the service owns its process runner
 // (ownsProcessRunner = !options.runner), so tests covering it must not inject
 // a fake runner. The real runner never spawns a process until sendPrompt.
+/** harness() with an injected (module-isolated) service class. `nativeSessionId`
+ *  pins the runner's terminal session id — a resumed native conversation keeps
+ *  ONE native session id, matching the registry binding. */
+async function harnessWith(
+  ServiceClass: typeof CommandCodeService,
+  options: { models?: string[]; enabled?: boolean; nativeSessionId?: string } = {},
+) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-cwd-'));
+  const runner = new Runner();
+  if (options.nativeSessionId) runner.terminalSessionId = options.nativeSessionId;
+  const service = new ServiceClass({
+    config: {
+      enabled: options.enabled ?? true,
+      executablePath: '/opt/bin/cmd',
+      stateDir: root,
+      allowedCwdRoots: [cwd],
+    },
+    runner,
+    discover: async () => ({ version: '1.23.2', models: options.models ?? ['qwen/qwen3.8-max', 'deepseek/deepseek-v4-flash'], ambiguous: [] }),
+    checkExecutable: false,
+  });
+  return { root, cwd, runner, service };
+}
+
 async function harnessOwningRunner() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-cwd-'));
@@ -390,5 +416,48 @@ describe('Command Code service', () => {
     expect(restored?.sessionId).toBe(nativeUuid);
     expect(restored?.nativeSessionId).toBe(nativeUuid);
     expect(restored?.cwd).toBe(cwd);
+  });
+
+  it('restores a session record from registry when sendPrompt is called for an adopted native session', async () => {
+    // The service resolves the registry through the process-wide singleton
+    // (getSessionRegistry with no path). Isolate the module graph so this test
+    // owns the only registry instance, mirroring production.
+    vi.resetModules();
+    const [{ CommandCodeService: IsolatedService }, { getSessionRegistry: isolatedGetRegistry }] = await Promise.all([
+      import('../../../src/command-code/command-code-service.js'),
+      import('../../../src/session-registry.js'),
+    ]);
+    const nativeUuid = '22222222-3333-4444-5555-666666666666';
+    const { root, cwd, service } = await harnessWith(IsolatedService, { nativeSessionId: nativeUuid });
+    await service.init();
+    const registry = isolatedGetRegistry(path.join(root, 'session-registry.json'));
+    await registry.upsert({
+      id: nativeUuid,
+      sdkType: 'commandcode',
+      path: path.join(cwd, `${nativeUuid}.jsonl`),
+      commandCodeNativeSessionId: nativeUuid,
+      cwd,
+      status: 'idle',
+    });
+    // A resumed native conversation keeps ONE native session id: the runner
+    // reports the resumed id, matching the registry binding (drift guard).
+
+    // An adopted-native child has registry linkage but NO Command Code store
+    // record until a runtime binds it. Prompting it (Internal API or browser
+    // path both call sendPrompt directly) must lazily restore the record from
+    // the registry — the same contract hasSession/getSession already honour —
+    // instead of throwing 'Command Code session not found'.
+    const events: NormalizedEvent[] = [];
+    await new Promise<void>((resolve, reject) => {
+      void service
+        .sendPrompt(nativeUuid, 'ADOPTED-NATIVE-CONTINUATION', (event) => events.push(event), (error) => (error ? reject(error) : resolve()))
+        .catch(reject);
+    });
+
+    const restored = await service.getSession(nativeUuid);
+    expect(restored).toBeDefined();
+    expect(restored?.nativeSessionId).toBe(nativeUuid);
+    expect(restored?.state).not.toBe('running');
+    expect(restored?.messageCount).toBe(1);
   });
 });

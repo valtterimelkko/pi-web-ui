@@ -368,7 +368,15 @@ export class CommandCodeService {
       await this.init();
       if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
       this.assertRunnable();
-      const record = await this.store.get(sessionId);
+      // Adopted-native children have registry linkage but no store record until
+      // a runtime binds one. Restore lazily (same contract as getSession)
+      // so a direct prompt — Internal API or browser — continues the native
+      // session instead of failing with 'session not found'.
+      let record = await this.store.get(sessionId);
+      if (!record) {
+        await this.hasSession(sessionId);
+        record = await this.store.get(sessionId);
+      }
       if (!record) throw new CommandCodeRuntimeError('Command Code session not found', 'runtime_error');
       if (!this.isSessionRecordAccessible(record)) throw new CommandCodeRuntimeError('Command Code session is no longer enabled by the active runtime policy', 'permission_denied');
       if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
