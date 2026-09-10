@@ -212,6 +212,15 @@ export function skillPlaceholder(name?: string): string {
  * order and 50-char truncation exactly. `name` is accepted for a unified
  * signature; the selection is arg-key based (as on screen).
  */
+/** Strip wrapping quotes some agy surfaces add around arg values
+ *  ("python3 x.py" → python3 x.py) so tool cards render the bare value. */
+function stripWrappingQuotes(value: string): string {
+  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
 export function toolPrimaryArg(_name: string, args: unknown): string | undefined {
   if (!args || typeof args !== 'object') return undefined;
   const obj = args as Record<string, unknown>;
@@ -230,17 +239,21 @@ export function toolPrimaryArg(_name: string, args: unknown): string | undefined
   for (const key of priorityKeys) {
     const value = lowerKeyToValue.get(key);
     if (typeof value === 'string' && value.length > 0) {
-      return value.length > 50 ? `${value.slice(0, 50)}…` : value;
+      return truncatePrimary(stripWrappingQuotes(value));
     }
   }
 
   const firstString = entries.find(([, v]) => typeof v === 'string');
   if (firstString) {
     const value = firstString[1] as string;
-    return value.length > 50 ? `${value.slice(0, 50)}…` : value;
+    return truncatePrimary(stripWrappingQuotes(value));
   }
 
   return undefined;
+}
+
+function truncatePrimary(value: string): string {
+  return value.length > 50 ? `${value.slice(0, 50)}…` : value;
 }
 
 // ─── Rule primitive: line estimate ─────────────────────────────────────────────

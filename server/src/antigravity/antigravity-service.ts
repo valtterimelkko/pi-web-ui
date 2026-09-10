@@ -674,8 +674,11 @@ export class AntigravityService {
       conversationId,
       turnDurationMs: durationMs,
       agyStatus: normalizer?.lastTurn?.result.status,
+      // Args must survive the error path too, or a failed turn's replay shows
+      // an EMPTY tool card (plan Phase 2: no blind cards).
       tools: (normalizer?.lastTurn?.tools ?? []).slice(0, AGY_STORED_TOOL_LIMIT).map((t) => ({
         toolName: t.toolName,
+        ...(t.args !== undefined ? { args: t.args } : {}),
         isError: t.isError,
         ...(t.output !== undefined ? { output: t.output.slice(0, AGY_STORED_TOOL_OUTPUT_LIMIT) } : {}),
         ...(t.errorMessage ? { errorMessage: t.errorMessage } : {}),

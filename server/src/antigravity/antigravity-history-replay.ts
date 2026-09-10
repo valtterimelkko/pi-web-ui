@@ -43,7 +43,8 @@ export function turnsToReplayEvents(turns: AntigravityTurn[], sessionId: string)
 
     // Stream-mode turns store compact tool calls (plan T7.1): render the same
     // tool_execution shapes the live stream produced, so replay shows the
-    // agent's tool work between the user prompt and the final reply.
+    // agent's tool work between the user prompt and the final reply. Args ride
+    // BOTH events (the live normalizer re-surfaces them on end — replay parity).
     for (const tool of turn.tools ?? []) {
       const toolCallId = randomUUID();
       events.push({
@@ -55,6 +56,7 @@ export function turnsToReplayEvents(turns: AntigravityTurn[], sessionId: string)
       events.push({
         type: 'tool_execution_end', sessionId,
         toolCallId,
+        ...(tool.args !== undefined ? { args: tool.args } : {}),
         result: tool.errorMessage ? `error: ${tool.errorMessage}` : (tool.output ?? ''),
         isError: tool.isError,
       });
