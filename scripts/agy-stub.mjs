@@ -109,7 +109,7 @@ let turnCount = 0;
  *  2026-09-10 capture: the turn ends while the task runs, and the receipt
  *  lands in the conversation brain's messages dir (the server's watcher
  *  polls there — see AntigravityService.pollBackgroundCompletions). */
-function runBgTaskTurn(prompt) {
+function runBgTaskTurn(_prompt) {
   const t = turnCount;
   if (t > 0) {
     // Follow-up turns: plain reply (the receipt was already delivered).
@@ -123,7 +123,7 @@ function runBgTaskTurn(prompt) {
 
   const taskId = `${conversationId}/task-${process.pid}`;
   const command = 'python3 verify_bg_e2e.py';
-  const brainDir = process.env.AGY_STUB_BRAIN_DIR;
+  const brainDir = process.env.AGY_STUB_BRAIN_DIR; // eslint-disable-line no-unused-vars -- documents the brain root; logPath embeds it
   const logPath = `${brainDir}/${conversationId}/.system_generated/tasks/task-${process.pid}.log`;
   const messagesDir = `${brainDir}/${conversationId}/.system_generated/messages`;
 
@@ -162,6 +162,7 @@ function runBgTaskTurn(prompt) {
   // completion watcher must notice the file).
   const delayMs = Number.parseInt(process.env.AGY_STUB_BG_TASK_DELAY_MS ?? '', 10);
   const wait = Number.isFinite(delayMs) ? Math.max(0, Math.min(delayMs, 120_000)) : 8_000;
+  inFlight += 1;
   setTimeout(() => {
     try {
       mkdirSync(messagesDir, { recursive: true });
@@ -177,14 +178,16 @@ function runBgTaskTurn(prompt) {
           content: `Task id "${taskId}" finished with result:\n\nThe command exited with code 0.\nOutput:\nBG-TASK-PROOF`,
         }),
       );
-    } catch (err) {
-      process.stderr.write(`agy-stub: failed to write completion receipt: ${err}\n`);
+    } catch {
+      process.stderr.write('agy-stub: failed to write completion receipt');
     }
+    inFlight -= 1;
+    if (stdinEnded && inFlight === 0) process.exit(0);
   }, wait);
 }
-function runScenarioTurn(prompt) {
+function runScenarioTurn(_prompt) {
   if (scenario === 'bg-task') {
-    runBgTaskTurn(prompt);
+    runBgTaskTurn(_prompt);
     return;
   }
   const t = turnCount++;
