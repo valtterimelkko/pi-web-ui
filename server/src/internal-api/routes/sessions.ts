@@ -386,6 +386,9 @@ export interface SessionRoutesDeps {
   opencodeStorageDir?: string;
   /** Antigravity native conversation databases directory. Defaults to config. */
   antigravityConversationsDir?: string;
+  /** Antigravity desktop-app conversation databases directory (parallel root,
+   *  see config.antigravityNativeDesktopConversationsDir). Defaults to config. */
+  antigravityDesktopConversationsDir?: string;
   /** Shared process-local execution admission authority. */
   admissionController?: AdmissionController;
   /** Optional bounded control lane for P0/P1 handlers (defaults to a bounded instance). */
@@ -432,6 +435,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     commandCodeNativeHomeDir: deps.commandCodeNativeHomeDir ?? config.commandCodeNativeHomeDir,
     opencodeStorageDir: deps.opencodeStorageDir ?? config.opencodeStorageDir,
     antigravityConversationsDir: deps.antigravityConversationsDir ?? config.antigravityNativeConversationsDir,
+    antigravityDesktopConversationsDir: deps.antigravityDesktopConversationsDir ?? config.antigravityNativeDesktopConversationsDir,
   };
   const blockedPiProviders = deps.blockedPiProviders ?? config.internalApiBlockedPiProviders;
   const runReceipts = deps.runReceiptManager ?? new RunReceiptManager({

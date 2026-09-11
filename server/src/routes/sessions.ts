@@ -115,6 +115,7 @@ router.get('/native', async (req: Request, res: Response) => {
       commandCodeNativeHomeDir: config.commandCodeNativeHomeDir,
       opencodeStorageDir: config.opencodeStorageDir,
       antigravityConversationsDir: config.antigravityNativeConversationsDir,
+      antigravityDesktopConversationsDir: config.antigravityNativeDesktopConversationsDir,
     };
 
     const registry = getSessionRegistry(config.sessionRegistryPath);
@@ -214,6 +215,7 @@ router.post('/import-native', async (req: Request, res: Response) => {
       commandCodeNativeHomeDir: config.commandCodeNativeHomeDir,
       opencodeStorageDir: config.opencodeStorageDir,
       antigravityConversationsDir: config.antigravityNativeConversationsDir,
+      antigravityDesktopConversationsDir: config.antigravityNativeDesktopConversationsDir,
     };
 
     const resolved = await resolveNativeSessionArtifact({

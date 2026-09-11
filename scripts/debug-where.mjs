@@ -153,7 +153,9 @@ export function buildSessionDebugReport(entry, opts = {}) {
       'Session files and state:',
       `  - Antigravity session JSONL: ${path.join(homeDir, '.pi-web-ui', 'antigravity-sessions', `${entry.id}.jsonl`)}`,
       `  - Conversation ID:           ${conversationId}`,
-      `  - Conversation DB:           ${entry.antigravityConversationId ? path.join(homeDir, '.gemini', 'antigravity-cli', 'conversations', `${entry.antigravityConversationId}.db`) : 'Unavailable (missing antigravityConversationId)'}`,
+      `  - Conversation DB (agy CLI):     ${entry.antigravityConversationId ? path.join(homeDir, '.gemini', 'antigravity-cli', 'conversations', `${entry.antigravityConversationId}.db`) : 'Unavailable (missing antigravityConversationId)'}`,
+      `  - Conversation DB (desktop app): ${entry.antigravityConversationId ? path.join(homeDir, '.gemini', 'antigravity', 'conversations', `${entry.antigravityConversationId}.db`) : 'Unavailable (missing antigravityConversationId)'}`,
+      '    (the agy CLI and the desktop app keep disjoint stores; probe both)',
       `  - agy CLI logs:              ${path.join(homeDir, '.gemini', 'antigravity-cli', 'log', 'cli-*.log')}`,
       '',
       'Useful checks:',
@@ -232,6 +234,9 @@ export function buildSessionEvidenceJson(entry, opts = {}) {
       conversationId: entry.antigravityConversationId ?? '',
       conversationDb: entry.antigravityConversationId
         ? path.join(homeDir, '.gemini', 'antigravity-cli', 'conversations', `${entry.antigravityConversationId}.db`)
+        : '',
+      conversationDbDesktop: entry.antigravityConversationId
+        ? path.join(homeDir, '.gemini', 'antigravity', 'conversations', `${entry.antigravityConversationId}.db`)
         : '',
       agyLogs: path.join(homeDir, '.gemini', 'antigravity-cli', 'log', 'cli-*.log'),
     };
@@ -328,6 +333,86 @@ export async function loadRegistry(registryPath = DEFAULT_REGISTRY_PATH) {
   return parsed;
 }
 
+/** Resolve the two native Antigravity conversation roots (agy CLI and desktop
+ *  app). Mirrors the server defaults in server/src/config.ts; both honour the
+ *  same env overrides so tests and disposable servers can redirect them. */
+export function antigravityConversationRoots(opts = {}) {
+  const homeDir = opts.homeDir ?? os.homedir();
+  return {
+    cli: opts.cliConversationsDir
+      ?? process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR
+      ?? path.join(homeDir, '.gemini', 'antigravity-cli', 'conversations'),
+    desktop: opts.desktopConversationsDir
+      ?? process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR
+      ?? path.join(homeDir, '.gemini', 'antigravity', 'conversations'),
+  };
+}
+
+/** Probe both native Antigravity conversation stores for an exact UUID match.
+ *  The agy CLI and the desktop app keep disjoint stores with identical layout
+ *  (conversations/<uuid>.db + brain/<uuid>/...); a conversation that never
+ *  entered the pi-web-ui registry is still findable here. Returns null for
+ *  non-UUID queries and misses; otherwise reports the owning surface and the
+ *  durable artefact paths. Read-only: stat only, no content reads. */
+export async function findNativeAntigravityConversation(query, opts = {}) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query)) return null;
+  const roots = antigravityConversationRoots(opts);
+  const candidates = [
+    { surface: 'cli', label: 'Antigravity CLI', dir: roots.cli },
+    { surface: 'desktop', label: 'Antigravity desktop app', dir: roots.desktop },
+  ];
+  for (const candidate of candidates) {
+    const dbPath = path.join(candidate.dir, `${query}.db`);
+    try {
+      const st = await fs.stat(dbPath);
+      if (!st.isFile()) continue;
+      return {
+        surface: candidate.surface,
+        surfaceLabel: candidate.label,
+        nativeId: query,
+        dbPath,
+        brainTranscript: path.join(candidate.dir, '..', 'brain', query, '.system_generated', 'logs', 'transcript.jsonl'),
+        brainTranscriptFull: path.join(candidate.dir, '..', 'brain', query, '.system_generated', 'logs', 'transcript_full.jsonl'),
+      };
+    } catch {
+      // Probe the next root.
+    }
+  }
+  return null;
+}
+
+function buildNativeAntigravityReport(hit) {
+  return [
+    `Query target:         ${hit.nativeId}`,
+    `Match:                Native Antigravity conversation (${hit.surfaceLabel})`,
+    'Registry:             Not a pi-web-ui session — this conversation never entered the session registry.',
+    '',
+    'Session files and state:',
+    `  - Conversation DB:           ${hit.dbPath}`,
+    `  - Brain transcript:          ${hit.brainTranscript}`,
+    `    (plus transcript_full.jsonl when the CLI/desktop wrote the chunked form)`,
+    '',
+    'Useful checks:',
+    `  - Read first prompt:         head -c 600 ${shellQuote(hit.brainTranscript)}`,
+    `  - List conversation steps:   sqlite3 'file:${hit.dbPath}?mode=ro' 'SELECT count(*) FROM steps;'`,
+    `  - Adopt into the registry:   POST /api/v1/sessions/adopt-native {"runtime":"antigravity","nativeId":"${hit.nativeId}"}`,
+  ].join('\n');
+}
+
+function buildNativeAntigravityEvidenceJson(hit) {
+  return {
+    mode: 'native-antigravity',
+    runtime: 'antigravity',
+    surface: hit.surface,
+    surfaceLabel: hit.surfaceLabel,
+    nativeId: hit.nativeId,
+    conversationDb: hit.dbPath,
+    brainTranscript: hit.brainTranscript,
+    brainTranscriptFull: hit.brainTranscriptFull,
+    note: `Native Antigravity conversation owned by the ${hit.surfaceLabel}; never a pi-web-ui registry session.`,
+  };
+}
+
 function parseArgs(argv) {
   const args = [...argv];
   let registryPath = DEFAULT_REGISTRY_PATH;
@@ -361,7 +446,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage:\n  npm run debug:where -- [--json] <session-id|runtime-session-id|path|antigravity-conversation-id> [--registry /path/to/session-registry.json]\n\nExamples:\n  npm run debug:where -- 123e4567-e89b-12d3-a456-426614174000\n  npm run debug:where -- --json abc123-claude-session-id\n  npm run debug:where -- /root/.pi-web-ui/claude-sessions/123.jsonl\n  npm run debug:where -- 4f1d3d93-7f2d-4a58-a7b0-123456789abc`);
+  console.log(`Usage:\n  npm run debug:where -- [--json] <session-id|runtime-session-id|path|antigravity-conversation-id> [--registry /path/to/session-registry.json]\n\nExamples:\n  npm run debug:where -- 123e4567-e89b-12d3-a456-426614174000\n  npm run debug:where -- --json abc123-claude-session-id\n  npm run debug:where -- /root/.pi-web-ui/claude-sessions/123.jsonl\n  npm run debug:where -- 4f1d3d93-7f2d-4a58-a7b0-123456789abc\n\nUnmatched Antigravity conversation UUIDs are also probed on disk across both native stores (agy CLI and desktop app roots).`);
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
@@ -374,6 +459,18 @@ export async function runCli(argv = process.argv.slice(2)) {
   const registry = await loadRegistry(registryPath);
   const entry = findSessionEntry(registry.entries, query) ?? await findPiSessionOnDisk(query);
   if (!entry) {
+    // Bounded filesystem fallback: an Antigravity conversation UUID that never
+    // entered the registry may still exist in one of the two native stores
+    // (agy CLI or desktop app). Probe both before giving up.
+    const nativeHit = await findNativeAntigravityConversation(query);
+    if (nativeHit) {
+      if (json) {
+        console.log(JSON.stringify(buildNativeAntigravityEvidenceJson(nativeHit), null, 2));
+      } else {
+        console.log(buildNativeAntigravityReport(nativeHit));
+      }
+      return 0;
+    }
     console.error(`No session entry matched '${query}' in ${registryPath}`);
     console.error('Tip: try the internal session id, runtime-native session id, Antigravity conversation id, or the registry path field.');
     return 1;

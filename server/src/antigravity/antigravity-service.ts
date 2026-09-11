@@ -1042,10 +1042,12 @@ export class AntigravityService {
     if (history.length === 0) {
       const entry = await this.registry.get(sessionId);
       if (entry?.antigravityConversationId) {
+        // No explicit conversations dir: the reader probes the configured CLI
+        // root and the desktop-app root, so an adopted desktop-app conversation
+        // replays from its own store.
         history = await loadNativeAntigravityTurns(
           entry.antigravityConversationId,
           entry.model,
-          config.antigravityNativeConversationsDir,
         );
         if (history.length > 0) {
           await this.store.ensureDir();

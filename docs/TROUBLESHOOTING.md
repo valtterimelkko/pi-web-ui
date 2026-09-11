@@ -43,7 +43,7 @@ without prompt text or credentials. `debug:where` reads `~/.pi-web-ui/session-re
 | Antigravity conversation id | `entry.antigravityConversationId` |
 | Command Code native session id | `entry.commandCodeNativeSessionId` |
 
-Keep the resolved **internal id**, runtime, and any native id from the report. The internal id is the safest correlation key for diagnostics and run receipts. If the session belongs to a disposable validation server, point the locator at that server's registry with `--registry <validation-dir>/session-registry.json`; use the validation server's printed socket/token and file roots for subsequent evidence calls. `--registry` changes the lookup file, not the helper's home-directory path hints, so for disposable runs treat the validation directory and the registry entry's actual `path` as authoritative.
+Keep the resolved **internal id**, runtime, and any native id from the report. The internal id is the safest correlation key for diagnostics and run receipts. When no registry entry matches and the query is an Antigravity conversation UUID, the locator also probes both native Antigravity conversation stores on disk (agy CLI and desktop-app roots, contract 1.42.0) and reports which surface owns it together with the durable artefact paths — a desktop-app session id is findable this way even though it never entered the registry. If the session belongs to a disposable validation server, point the locator at that server's registry with `--registry <validation-dir>/session-registry.json`; use the validation server's printed socket/token and file roots for subsequent evidence calls. `--registry` changes the lookup file, not the helper's home-directory path hints, so for disposable runs treat the validation directory and the registry entry's actual `path` as authoritative.
 
 ### 2. Use the one-call live evidence bundle
 
@@ -217,7 +217,7 @@ If the Internal API is unavailable:
 | **Claude channel hook config** | `~/.claude/settings.json` | `journalctl -u pi-web-ui -f \| grep ClaudeChannel` | Relevant only when channel-backed Claude mode is enabled. |
 | **OpenCode** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
 | **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/`; goal-control ledger at `~/.pi-web-ui/antigravity-sessions/goal-control/<session-id>.json` (contract 1.38.0) | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId (from the stream), and — stream turns since contract 1.37.0 — usage/numTurns/agyStatus/tools. Legacy rows may carry `rawStdoutLength`; `agy-logs/` holds historical text-mode run logs only. |
-| **Antigravity conversation state** | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite, agy-owned) | `agy --version`, `agy models` | The conversation UUID in the JSONL must match a `.db` file here for continuity to work. |
+| **Antigravity conversation state** | agy CLI: `~/.gemini/antigravity-cli/conversations/<uuid>.db`; desktop app: `~/.gemini/antigravity/conversations/<uuid>.db` (SQLite, runtime-owned; disjoint stores with identical layout) | `agy --version`, `agy models`, `npm run debug:where -- <conversation-uuid>` | The conversation UUID in the JSONL must match a `.db` file in one of the two roots for continuity to work. CLI-spawned sessions land in the `-cli` root; desktop-app conversations never enter the CLI store. Native discovery and adopt-native (contract 1.42.0) scan both roots, and `debug:where` probes both for unmatched conversation UUIDs. |
 | **Command Code (Pi Web UI-owned)** | `~/.pi-web-ui/command-code/sessions/<internal-id>.json` (session record) and `~/.pi-web-ui/command-code/events/<internal-id>.jsonl` (normalized event journal, the replay source) | `journalctl -u pi-web-ui -f \| grep -i commandcode` | Journal survives API session deletion (`nativeTranscriptRetained`); the record and native home do not. |
 | **Command Code native transcripts** | `~/.pi-web-ui/command-code-native-home/<internal-id>/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for server-spawned sessions; `~/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for plain `cmdc` CLI runs (plus `.meta.json`/`.checkpoints.jsonl` siblings) | — | cwd encoding joins path segments with dashes and strips dots (`/root/pi-web-ui` → `root-pi-web-ui`). Server default from `commandCodeNativeHomeDir` in `server/src/config.ts`; `COMMAND_CODE_NATIVE_HOME_DIR` overrides. |
 | **Notification layer** | `~/.pi-web-ui/notifications/` | `journalctl -u pi-web-ui -f`, `GET /api/v1/notifications` | Contains opt-ins, durable outbox/status ledger, and `ingress/` terminal-client spool. |
@@ -529,13 +529,24 @@ ls -la ~/.pi-web-ui/antigravity-sessions/
 sed -n '1,5p' ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl
 jq -c '.' ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl
 
-# agy-owned conversation SQLite DBs (one per agy conversation UUID)
-ls -la ~/.gemini/antigravity-cli/conversations/
+# Runtime-owned conversation SQLite DBs (one per conversation UUID).
+# Two disjoint stores with identical layout: the agy CLI root and the
+# desktop-app root (no "-cli" suffix).
+ls -la ~/.gemini/antigravity-cli/conversations/ ~/.gemini/antigravity/conversations/
+ls -la ~/.gemini/antigravity{,-cli}/conversations/<conversation-uuid>.db
 
 # agy CLI logs (native diagnostics)
 ls -lt ~/.gemini/antigravity-cli/log/cli-*.log | head
 tail -n 50 $(ls -t ~/.gemini/antigravity-cli/log/cli-*.log | head -1)
 ```
+
+Desktop-app conversations live only under `~/.gemini/antigravity/` (plus the
+brain transcript at `~/.gemini/antigravity/brain/<uuid>/.system_generated/logs/
+transcript.jsonl` and `transcript_full.jsonl`, and annotations at
+`~/.gemini/antigravity/annotations/<uuid>.pbtxt`). They never enter the pi-web-ui
+registry on their own; adopt them with `POST /api/v1/sessions/adopt-native
+{"runtime":"antigravity","nativeId":"<uuid>"}` or let `npm run debug:where --
+<uuid>` locate them (it probes both stores when the registry misses).
 
 Legacy text-mode sessions may also have `~/.pi-web-ui/antigravity-sessions/agy-logs/`
 per-run logs (historical evidence only; the stream-json path does not create them).

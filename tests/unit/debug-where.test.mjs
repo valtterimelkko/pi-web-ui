@@ -257,3 +257,210 @@ test('runCli --json emits machine-readable offline evidence and preserves alias 
   assert.equal(evidence.aliases.claudeSessionId, 'native-claude-99');
   assert.equal(JSON.stringify(evidence).includes('private prompt must not be emitted'), false);
 });
+
+// ── Antigravity desktop-root fallback (contract 1.42.0) ─────────────────────
+
+const AGY_DESKTOP_UUID = 'd0d0d0d0-1111-4111-8111-00000000d001';
+
+function makeAgyFixture(baseDir, surfaceName, uuid) {
+  const conversationsDir = path.join(baseDir, surfaceName, 'conversations');
+  const brainLogsDir = path.join(baseDir, surfaceName, 'brain', uuid, '.system_generated', 'logs');
+  fs.mkdirSync(conversationsDir, { recursive: true });
+  fs.mkdirSync(brainLogsDir, { recursive: true });
+  fs.writeFileSync(path.join(conversationsDir, `${uuid}.db`), 'sqlite', 'utf-8');
+  fs.writeFileSync(
+    path.join(brainLogsDir, 'transcript.jsonl'),
+    JSON.stringify({ type: 'USER_INPUT', content: '<USER_REQUEST>\nMUSE-SPARK-PROBE\n</USER_REQUEST>' }) + '\n',
+    'utf-8',
+  );
+  return { conversationsDir, brainTranscriptPath: path.join(brainLogsDir, 'transcript.jsonl') };
+}
+
+function withCapturedConsole(fn) {
+  const output = [];
+  const errors = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args) => output.push(args.join(' '));
+  console.error = (...args) => errors.push(args.join(' '));
+  return Promise.resolve(fn())
+    .then((result) => {
+      console.log = originalLog;
+      console.error = originalError;
+      return { result, output: output.join('\n'), errors: errors.join('\n') };
+    })
+    .catch((error) => {
+      console.log = originalLog;
+      console.error = originalError;
+      throw error;
+    });
+}
+
+test('findNativeAntigravityConversation probes the desktop root when the CLI root lacks the id', async () => {
+  const { findNativeAntigravityConversation } = await import('../../scripts/debug-where.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'debug-where-agy-'));
+  try {
+    const cli = makeAgyFixture(path.join(dir, 'cli-root'), 'conversations', 'e1111111-1111-4111-8111-000000000001');
+    const desktop = makeAgyFixture(path.join(dir, 'desktop-root'), 'conversations', AGY_DESKTOP_UUID);
+
+    const hit = await findNativeAntigravityConversation(AGY_DESKTOP_UUID, {
+      homeDir: dir,
+      cliConversationsDir: cli.conversationsDir,
+      desktopConversationsDir: desktop.conversationsDir,
+    });
+    assert.ok(hit, 'expected a desktop-root hit');
+    assert.equal(hit.surface, 'desktop');
+    assert.equal(hit.dbPath, path.join(desktop.conversationsDir, `${AGY_DESKTOP_UUID}.db`));
+
+    const cliHit = await findNativeAntigravityConversation('e1111111-1111-4111-8111-000000000001', {
+      homeDir: dir,
+      cliConversationsDir: cli.conversationsDir,
+      desktopConversationsDir: desktop.conversationsDir,
+    });
+    assert.equal(cliHit.surface, 'cli');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('findNativeAntigravityConversation returns null for non-UUID queries and misses', async () => {
+  const { findNativeAntigravityConversation } = await import('../../scripts/debug-where.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'debug-where-agy-'));
+  try {
+    const empty = path.join(dir, 'empty', 'conversations');
+    fs.mkdirSync(empty, { recursive: true });
+    assert.equal(await findNativeAntigravityConversation('../../etc/passwd', {
+      homeDir: dir,
+      cliConversationsDir: empty,
+      desktopConversationsDir: empty,
+    }), null);
+    assert.equal(await findNativeAntigravityConversation(AGY_DESKTOP_UUID, {
+      homeDir: dir,
+      cliConversationsDir: empty,
+      desktopConversationsDir: empty,
+    }), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runCli falls back to a native antigravity desktop conversation absent from the registry', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'debug-where-agy-cli-'));
+  try {
+    const desktop = makeAgyFixture(path.join(dir, 'agy-home'), 'antigravity', AGY_DESKTOP_UUID);
+    const registryPath = path.join(dir, 'session-registry.json');
+    fs.writeFileSync(registryPath, JSON.stringify({ entries: [] }));
+
+    const previousDesktop = process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR;
+    const previousCli = process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR;
+    process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR = desktop.conversationsDir;
+    if (previousCli === undefined) delete process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR;
+    try {
+      const { result, output, errors } = await withCapturedConsole(() =>
+        runCli(['--registry', registryPath, AGY_DESKTOP_UUID]));
+      assert.equal(result, 0);
+      assert.match(output, /Antigravity desktop app/i);
+      assert.match(output, new RegExp(AGY_DESKTOP_UUID));
+      assert.match(output, /brain/);
+      assert.equal(errors.includes('No session entry matched'), false);
+    } finally {
+      if (previousDesktop === undefined) delete process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR;
+      else process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR = previousDesktop;
+      if (previousCli === undefined) delete process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR;
+      else process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR = previousCli;
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runCli --json emits a native-antigravity evidence object for desktop conversations', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'debug-where-agy-json-'));
+  try {
+    const desktop = makeAgyFixture(path.join(dir, 'agy-home'), 'antigravity', AGY_DESKTOP_UUID);
+    const registryPath = path.join(dir, 'session-registry.json');
+    fs.writeFileSync(registryPath, JSON.stringify({ entries: [] }));
+
+    const previousDesktop = process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR;
+    process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR = desktop.conversationsDir;
+    try {
+      const { output } = await withCapturedConsole(() =>
+        runCli(['--json', '--registry', registryPath, AGY_DESKTOP_UUID]));
+      const evidence = JSON.parse(output);
+      assert.equal(evidence.mode, 'native-antigravity');
+      assert.equal(evidence.surface, 'desktop');
+      assert.equal(evidence.runtime, 'antigravity');
+      assert.equal(evidence.nativeId, AGY_DESKTOP_UUID);
+      assert.equal(evidence.conversationDb, path.join(desktop.conversationsDir, `${AGY_DESKTOP_UUID}.db`));
+      assert.match(evidence.brainTranscript, /brain/);
+    } finally {
+      if (previousDesktop === undefined) delete process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR;
+      else process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR = previousDesktop;
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runCli still exits 1 with the miss tip when no native antigravity match exists', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'debug-where-agy-miss-'));
+  try {
+    const empty = path.join(dir, 'empty', 'conversations');
+    fs.mkdirSync(empty, { recursive: true });
+    const registryPath = path.join(dir, 'session-registry.json');
+    fs.writeFileSync(registryPath, JSON.stringify({ entries: [] }));
+
+    const previousDesktop = process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR;
+    const previousCli = process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR;
+    process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR = empty;
+    process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR = empty;
+    try {
+      const { result, errors } = await withCapturedConsole(() =>
+        runCli(['--registry', registryPath, AGY_DESKTOP_UUID]));
+      assert.equal(result, 1);
+      assert.match(errors, /No session entry matched/);
+    } finally {
+      if (previousDesktop === undefined) delete process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR;
+      else process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR = previousDesktop;
+      if (previousCli === undefined) delete process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR;
+      else process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR = previousCli;
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('antigravity report and evidence list both the CLI and desktop conversation roots', () => {
+  const report = buildSessionDebugReport({
+    id: 'agy-1',
+    sdkType: 'antigravity',
+    path: '/home/test/.pi-web-ui/antigravity-sessions/agy-1.jsonl',
+    antigravityConversationId: AGY_DESKTOP_UUID,
+    cwd: '/root',
+    firstMessage: '',
+    messageCount: 2,
+    createdAt: '2026-09-11T10:00:00.000Z',
+    lastActivity: '2026-09-11T11:00:00.000Z',
+    status: 'idle',
+  }, { homeDir: '/home/test' });
+
+  assert.match(report, /\.gemini\/antigravity-cli\/conversations/);
+  assert.match(report, /\.gemini\/antigravity\/conversations/);
+
+  const evidence = buildSessionEvidenceJson({
+    id: 'agy-1',
+    sdkType: 'antigravity',
+    path: '/home/test/.pi-web-ui/antigravity-sessions/agy-1.jsonl',
+    antigravityConversationId: AGY_DESKTOP_UUID,
+    cwd: '/root',
+    firstMessage: '',
+    messageCount: 2,
+    createdAt: '2026-09-11T10:00:00.000Z',
+    lastActivity: '2026-09-11T11:00:00.000Z',
+    status: 'idle',
+  }, { homeDir: '/home/test' });
+
+  assert.equal(evidence.sources.runtime.conversationId, AGY_DESKTOP_UUID);
+  assert.match(evidence.sources.runtime.conversationDb, /\.gemini\/antigravity-cli\/conversations/);
+  assert.match(evidence.sources.runtime.conversationDbDesktop, /\.gemini\/antigravity\/conversations/);
+});

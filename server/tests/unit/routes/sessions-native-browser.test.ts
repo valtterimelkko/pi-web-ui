@@ -190,5 +190,42 @@ describe('Browser Sessions Routes — Native Discovery & Import', () => {
       expect(res.body.alreadyRegistered).toBe(true);
       expect(res.body.sessionId).toBe(existingId);
     });
+
+    it('imports an antigravity conversation that only exists under the desktop root (contract 1.42.0)', async () => {
+      const { config } = await import('../../../src/config.js');
+      const cliDir = path.join(testDir, 'agy-cli', 'conversations');
+      const desktopDir = path.join(testDir, 'agy-desktop', 'conversations');
+      await fs.mkdir(cliDir, { recursive: true });
+      await fs.mkdir(desktopDir, { recursive: true });
+      const sid = '8f0c2d1a-0000-4000-8000-00000000d001';
+      await fs.writeFile(path.join(desktopDir, `${sid}.db`), 'sqlite', 'utf-8');
+      const logsDir = path.join(testDir, 'agy-desktop', 'brain', sid, '.system_generated', 'logs');
+      await fs.mkdir(logsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(logsDir, 'transcript.jsonl'),
+        JSON.stringify({ type: 'USER_INPUT', content: '<USER_REQUEST>\nDesktop import probe\n</USER_REQUEST>' }) + '\n',
+      );
+
+      const prevCli = config.antigravityNativeConversationsDir;
+      const prevDesktop = config.antigravityNativeDesktopConversationsDir;
+      config.antigravityNativeConversationsDir = cliDir;
+      config.antigravityNativeDesktopConversationsDir = desktopDir;
+      try {
+        const res = await request(app)
+          .post('/api/sessions/import-native')
+          .send({ runtime: 'antigravity', nativeId: sid })
+          .expect(200);
+
+        expect(res.body.success).toBe(true);
+        const { getSessionRegistry } = await import('../../../src/session-registry.js');
+        const entry = await getSessionRegistry(registryPath).get(res.body.sessionId);
+        expect(entry?.antigravityConversationId).toBe(sid);
+        expect(entry?.path).toContain(path.join('agy-desktop', 'conversations'));
+        expect(entry?.firstMessage).toBe('Desktop import probe');
+      } finally {
+        config.antigravityNativeConversationsDir = prevCli;
+        config.antigravityNativeDesktopConversationsDir = prevDesktop;
+      }
+    });
   });
 });

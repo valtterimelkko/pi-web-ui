@@ -21,13 +21,20 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.41.0",
+  "contractVersion": "1.42.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.42.0** (minor, additive antigravity desktop-root discovery) — the antigravity runtime now covers BOTH of its native conversation stores in session discovery: the agy CLI root (`~/.gemini/antigravity-cli/conversations`) and the desktop-app root (`~/.gemini/antigravity/conversations`, no "-cli" suffix). The two stores are disjoint and share the identical layout (`conversations/<uuid>.db` + `brain/<uuid>/.system_generated/logs/transcript*.jsonl`), so a pasted desktop-app conversation id is now findable by the same bounded, read-only paths that already covered the CLI. Response shapes are unchanged — everything is additive coverage:
+  - `GET /sessions/native` additionally scans the configured desktop conversations root; the `scannedRoots` array may now carry two `antigravity` entries (one per distinct root actually scanned), and desktop conversations appear as regular items with previews from their brain transcripts;
+  - `POST /sessions/adopt-native` (and the browser `POST /api/sessions/import-native`) resolve antigravity artefacts across both roots, CLI root first, so desktop conversations can be adopted into the registry;
+  - replay fallback for an adopted antigravity session reads brain transcripts from whichever root holds the conversation;
+  - config gains `ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR` (default `~/.gemini/antigravity/conversations`); `npm run debug:where` gains a bounded read-only filesystem fallback that probes both roots for unmatched conversation UUIDs and reports the owning surface (CLI or desktop app) with durable artefact paths;
+  - rollback: point `ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR` at an empty directory (or ignore the second scannedRoots entry / the debug:where fallback) — no stored state is involved.
 
 - **1.41.0** (minor, additive background-shell child surfacing) — pi `bg_run` background shell tasks (pi-enhancement `background-shell` extension) are surfaced through the same child-orchestration bridge as background subagents (contract 1.34.0). Everything is additive:
   - `shared` `ChildCardKind` gains `'background_shell'` — `background_child_state` events and browser messages may now carry shell-task cards (`id` = `bg_*` task id, `label` = task label or command slice, `task` = command, `exitCode`, standard status mapping where `timed_out` → `failed` + `timedOut: true` and `aborted` → `cancelled`); consumers that switch on kind should treat unknown kinds gracefully as before;

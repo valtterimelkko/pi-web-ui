@@ -305,6 +305,28 @@ Stream-mode specific checks (L1–L11 in
 `--conversation` resume, parallel sessions, Internal-API follow-up receipts,
 and legacy-session resume.
 
+## Native conversation stores: CLI vs desktop app
+
+Antigravity keeps **two disjoint, identically-shaped conversation stores**:
+
+- **agy CLI**: `~/.gemini/antigravity-cli/conversations/<uuid>.db` plus
+  `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/
+  transcript.jsonl` / `transcript_full.jsonl` — this is where sessions spawned
+  by this server (and direct `agy` CLI use) persist conversations.
+- **Antigravity desktop app**: `~/.gemini/antigravity/conversations/<uuid>.db`
+  plus `~/.gemini/antigravity/brain/<uuid>/...` and
+  `~/.gemini/antigravity/annotations/<uuid>.pbtxt` — the desktop app never
+  writes into the `-cli` root.
+
+The databases share the same schema and the transcripts share the same event
+format, so the native reader parses both unchanged. Native discovery and
+adopt-native (contract 1.42.0) scan both roots (`ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR`
+and `ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR` override them, e.g. for
+disposable validation servers), and `npm run debug:where -- <conversation-uuid>`
+probes both stores when the registry misses and reports which surface owns the
+conversation. A conversation started in one surface never continues in the
+other.
+
 ## Authentication
 
 `agy` uses the local user's Antigravity Google OAuth credentials from

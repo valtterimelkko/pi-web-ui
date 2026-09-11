@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createSessionRoutes, type SessionRoutesDeps } from '../../../src/internal-api/routes/sessions.js';
+import { resolveNativeSessionArtifact } from '../../../src/internal-api/native-sessions.js';
 import { SessionRegistryManager } from '../../../src/session-registry.js';
 
 function jsonReq(method: string, url: string, body?: unknown): IncomingMessage {
@@ -76,6 +77,7 @@ describe('GET /api/v1/sessions/native (contract 1.30.0)', () => {
   let commandCodeNativeHomeDir: string;
   let opencodeStorageDir: string;
   let antigravityConversationsDir: string;
+  let antigravityDesktopConversationsDir: string;
   let registry: SessionRegistryManager;
   let registryPath: string;
   let routes: ReturnType<typeof createSessionRoutes>;
@@ -93,6 +95,7 @@ describe('GET /api/v1/sessions/native (contract 1.30.0)', () => {
     commandCodeNativeHomeDir = path.join(dir, 'commandcode-native-home');
     opencodeStorageDir = path.join(dir, 'opencode-storage');
     antigravityConversationsDir = path.join(dir, 'agy-conversations');
+    antigravityDesktopConversationsDir = path.join(dir, 'agy-desktop-conversations');
     registryPath = path.join(dir, 'session-registry.json');
     registry = new SessionRegistryManager(registryPath);
 
@@ -109,6 +112,7 @@ describe('GET /api/v1/sessions/native (contract 1.30.0)', () => {
       commandCodeNativeHomeDir,
       opencodeStorageDir,
       antigravityConversationsDir,
+      antigravityDesktopConversationsDir,
     });
   });
 
@@ -256,6 +260,61 @@ describe('GET /api/v1/sessions/native (contract 1.30.0)', () => {
     expect(body.sessions[0].preview).toBeUndefined();
   });
 
+  it('scans the antigravity desktop conversations dir alongside the CLI dir (contract 1.42.0)', async () => {
+    const t = Date.parse('2026-09-11T10:00:00.000Z');
+    const uuidCli = 'bbbbbbbb-2222-4222-8222-000000000001';
+    const uuidDesktop = 'cccccccc-3333-4333-8333-000000000003';
+    await fs.mkdir(antigravityConversationsDir, { recursive: true });
+    await fs.mkdir(antigravityDesktopConversationsDir, { recursive: true });
+    await fs.writeFile(path.join(antigravityConversationsDir, `${uuidCli}.db`), 'sqlite', 'utf-8');
+    await fs.writeFile(path.join(antigravityDesktopConversationsDir, `${uuidDesktop}.db`), 'sqlite', 'utf-8');
+    // Desktop brain transcript feeds the preview, exactly like the CLI root.
+    const logsDir = path.join(antigravityDesktopConversationsDir, '..', 'brain', uuidDesktop, '.system_generated', 'logs');
+    await fs.mkdir(logsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(logsDir, 'transcript.jsonl'),
+      JSON.stringify({ type: 'USER_INPUT', content: '<USER_REQUEST>\nDESKTOP-PROBE\n</USER_REQUEST>' }) + '\n',
+      'utf-8',
+    );
+    await fs.utimes(path.join(antigravityDesktopConversationsDir, `${uuidDesktop}.db`), new Date(t), new Date(t));
+
+    const { body } = await getNative('/api/v1/sessions/native?runtime=antigravity');
+    expect(body.sessions).toHaveLength(2);
+    const desktopItem = body.sessions.find((s: any) => s.nativePath.includes('agy-desktop-conversations'));
+    expect(desktopItem).toBeDefined();
+    expect(desktopItem.runtime).toBe('antigravity');
+    expect(desktopItem.preview).toBe('DESKTOP-PROBE');
+    // One scannedRoots entry per distinct root actually scanned.
+    const agyRoots = body.scannedRoots.filter((r: any) => r.runtime === 'antigravity');
+    expect(agyRoots).toHaveLength(2);
+    expect(new Set(agyRoots.map((r: any) => r.root)).size).toBe(2);
+  });
+
+  it('does not duplicate antigravity items when both roots point at the same directory', async () => {
+    const t = Date.parse('2026-09-11T10:00:00.000Z');
+    const uuid = 'dddddddd-4444-4444-8444-000000000004';
+    await fs.mkdir(antigravityConversationsDir, { recursive: true });
+    await fs.writeFile(path.join(antigravityConversationsDir, `${uuid}.db`), 'sqlite', 'utf-8');
+    await fs.utimes(path.join(antigravityConversationsDir, `${uuid}.db`), new Date(t), new Date(t));
+
+    const dedupeRoutes = createSessionRoutes({
+      claudeService: { isRunning: vi.fn(() => false) } as any,
+      opencodeService: { isRunning: vi.fn(() => false) } as any,
+      antigravityService: { isRunning: vi.fn(() => false) } as any,
+      multiSessionManager: {} as unknown as SessionRoutesDeps['multiSessionManager'],
+      sessionRegistry: registry,
+      piService: {} as any,
+      internalClientId: 'test-client',
+      antigravityConversationsDir,
+      antigravityDesktopConversationsDir: antigravityConversationsDir,
+    });
+    const res = mockRes();
+    await dedupeRoutes.handleListNativeSessions(jsonReq('GET', '/api/v1/sessions/native?runtime=antigravity'), res);
+    const body = res.body ? JSON.parse(res.body) : undefined;
+    expect(body.sessions).toHaveLength(1);
+    expect(body.scannedRoots.filter((r: any) => r.runtime === 'antigravity')).toHaveLength(1);
+  });
+
   it('refuses runtime=pi with an explanatory 400 (pi is auto-discovered into the registry)', async () => {
     const { status, body } = await getNative('/api/v1/sessions/native?runtime=pi');
     expect(status).toBe(400);
@@ -339,5 +398,61 @@ describe('GET /api/v1/sessions/native (contract 1.30.0)', () => {
     expect(status).toBe(200);
     expect(body.sessions).toEqual([]);
     expect(body.truncated).toBe(false);
+  });
+});
+
+describe('resolveNativeSessionArtifact — antigravity desktop root (contract 1.42.0)', () => {
+  const UUID_CLI = 'eeeeeeee-1111-4111-8111-000000000001';
+  const UUID_DESKTOP = 'eeeeeeee-2222-4222-8222-000000000002';
+  let dir: string;
+  let cliDir: string;
+  let desktopDir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-resolve-'));
+    cliDir = path.join(dir, 'agy-cli', 'conversations');
+    desktopDir = path.join(dir, 'agy-desktop', 'conversations');
+    await fs.mkdir(cliDir, { recursive: true });
+    await fs.mkdir(desktopDir, { recursive: true });
+    await fs.writeFile(path.join(cliDir, `${UUID_CLI}.db`), 'sqlite', 'utf-8');
+    await fs.writeFile(path.join(desktopDir, `${UUID_DESKTOP}.db`), 'sqlite', 'utf-8');
+    const logsDir = path.join(desktopDir, '..', 'brain', UUID_DESKTOP, '.system_generated', 'logs');
+    await fs.mkdir(logsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(logsDir, 'transcript.jsonl'),
+      JSON.stringify({ type: 'USER_INPUT', content: '<USER_REQUEST>\nDESKTOP-RESOLVE-PROBE\n</USER_REQUEST>' }) + '\n',
+      'utf-8',
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const roots = () => ({
+    antigravityConversationsDir: cliDir,
+    antigravityDesktopConversationsDir: desktopDir,
+  });
+
+  it('resolves a conversation that only exists under the desktop root', async () => {
+    const resolved = await resolveNativeSessionArtifact({ runtime: 'antigravity', nativeId: UUID_DESKTOP, roots: roots() });
+    expect(resolved).not.toBeNull();
+    expect(resolved!.nativePath).toBe(path.join(desktopDir, `${UUID_DESKTOP}.db`));
+    expect(resolved!.preview).toBe('DESKTOP-RESOLVE-PROBE');
+  });
+
+  it('still resolves CLI-root conversations first', async () => {
+    const resolved = await resolveNativeSessionArtifact({ runtime: 'antigravity', nativeId: UUID_CLI, roots: roots() });
+    expect(resolved).not.toBeNull();
+    expect(resolved!.nativePath).toBe(path.join(cliDir, `${UUID_CLI}.db`));
+  });
+
+  it('returns null when neither root holds the artefact', async () => {
+    const resolved = await resolveNativeSessionArtifact({
+      runtime: 'antigravity',
+      nativeId: 'eeeeeeee-3333-4333-8333-000000000003',
+      roots: roots(),
+    });
+    expect(resolved).toBeNull();
   });
 });

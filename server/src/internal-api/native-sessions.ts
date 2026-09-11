@@ -37,6 +37,10 @@ export interface NativeScanRoots {
   commandCodeNativeHomeDir?: string;
   opencodeStorageDir?: string;
   antigravityConversationsDir?: string;
+  /** Parallel Antigravity desktop-app conversations root (see config
+   *  antigravityNativeDesktopConversationsDir). Scanned in addition to the CLI
+   *  root; equal roots are deduplicated. */
+  antigravityDesktopConversationsDir?: string;
 }
 
 export interface NativeKnownSets {
@@ -535,20 +539,29 @@ export async function resolveNativeSessionArtifact(input: {
       };
     }
     case 'antigravity': {
-      if (!UUID_RE.test(nativeId) || !roots.antigravityConversationsDir) return null;
-      const hit = await containedStat(roots.antigravityConversationsDir, `${nativeId}.db`);
-      if (!hit) return null;
-      const transcriptPath = path.join(roots.antigravityConversationsDir, '..', 'brain', nativeId, '.system_generated', 'logs', 'transcript.jsonl');
-      const meta = await readAntigravityMeta(transcriptPath);
-      return {
-        runtime,
-        nativePath: hit.nativePath,
-        mtimeMs: hit.mtimeMs,
-        size: hit.size,
-        ...(meta.preview ? { preview: meta.preview } : {}),
-        fileCwd: cwd ?? meta.fileCwd ?? '/root',
-        ...(meta.messageCount ? { messageCount: meta.messageCount } : {}),
-      };
+      if (!UUID_RE.test(nativeId)) return null;
+      // The agy CLI and the desktop app keep disjoint conversation stores; probe
+      // both roots (deduplicated) in CLI-first order.
+      const antigravityCandidates = [...new Set(
+        [roots.antigravityConversationsDir, roots.antigravityDesktopConversationsDir]
+          .filter((root): root is string => Boolean(root)),
+      )];
+      for (const root of antigravityCandidates) {
+        const hit = await containedStat(root, `${nativeId}.db`);
+        if (!hit) continue;
+        const transcriptPath = path.join(root, '..', 'brain', nativeId, '.system_generated', 'logs', 'transcript.jsonl');
+        const meta = await readAntigravityMeta(transcriptPath);
+        return {
+          runtime,
+          nativePath: hit.nativePath,
+          mtimeMs: hit.mtimeMs,
+          size: hit.size,
+          ...(meta.preview ? { preview: meta.preview } : {}),
+          fileCwd: cwd ?? meta.fileCwd ?? '/root',
+          ...(meta.messageCount ? { messageCount: meta.messageCount } : {}),
+        };
+      }
+      return null;
     }
   }
 }
@@ -570,7 +583,16 @@ export async function scanNativeSessions(input: NativeScanInput): Promise<Native
   await collect('commandcode', roots.commandCodeCliHomeDir ?? roots.commandCodeNativeHomeDir, () =>
     scanCommandCode({ cliHome: roots.commandCodeCliHomeDir, nativeHome: roots.commandCodeNativeHomeDir }));
   await collect('opencode', roots.opencodeStorageDir, scanOpencode);
-  await collect('antigravity', roots.antigravityConversationsDir, scanAntigravity);
+  // Antigravity keeps two disjoint conversation stores: the agy CLI root and
+  // the desktop-app root. Scan both (deduplicated); each contributes its own
+  // scannedRoots entry so operators can see which roots were considered.
+  const antigravityRoots = [...new Set(
+    [roots.antigravityConversationsDir, roots.antigravityDesktopConversationsDir]
+      .filter((root): root is string => Boolean(root)),
+  )];
+  for (const root of antigravityRoots) {
+    await collect('antigravity', root, scanAntigravity);
+  }
 
   raw.sort((a, b) => b.mtimeMs - a.mtimeMs);
   if (since) raw = raw.filter((item) => item.mtimeMs >= since.getTime());

@@ -123,8 +123,8 @@ describe('Contract 1.40.0: Session Adoption & Adopt-Native', () => {
   });
 
   describe('Contract version check', () => {
-    it('bumps contract version to 1.41.0 (background-shell child surfacing)', () => {
-      expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.41.0');
+    it('bumps contract version to 1.42.0 (antigravity desktop-root discovery)', () => {
+      expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.42.0');
     });
   });
 
