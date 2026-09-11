@@ -566,7 +566,7 @@ curl --silent --unix-socket "$SOCKET" \
   | jq '{status, contract: .contract.contractVersion, runtimes}'
 ```
 
-The expected Internal API contract version is published by `GET /api/v1/health` and recorded with its full changelog in [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) — that file is the version authority; do not maintain a second version summary here. In production, keep `INTERNAL_API_BLOCKED_PI_PROVIDERS=openai,openrouter` unless Internal API automation is intentionally authorised to use those providers; this does not affect browser model use, dictation/Drive Mode dictation, or TTS.
+The expected Internal API contract version is published by `GET /api/v1/health` and recorded with its full changelog in [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) — that file is the version authority; do not maintain a second version summary here. In production, keep `INTERNAL_API_BLOCKED_PI_PROVIDERS=openai` unless Internal API automation is intentionally authorised to use additional metered providers (set e.g. `openai,openrouter` to re-block the OpenRouter gateway); this does not affect browser model use, dictation/Drive Mode dictation, or TTS.
 A public readiness check can be run in addition after the Internal API is ready:
 
 ```bash

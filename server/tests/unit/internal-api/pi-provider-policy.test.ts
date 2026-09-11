@@ -7,12 +7,17 @@ import {
   PiProviderNotAllowedError,
   providerFromPiModelReference,
 } from '../../../src/internal-api/pi-provider-policy.js';
+import { config } from '../../../src/config.js';
 
 describe('Internal API Pi provider policy', () => {
-  it('defaults to the two metered Pi providers and supports an explicit empty override', () => {
-    expect(parseBlockedPiProviders(undefined)).toEqual(['openai', 'openrouter']);
+  it('defaults to the direct-billing openai provider only and supports an explicit empty override', () => {
+    expect(parseBlockedPiProviders(undefined)).toEqual(['openai']);
     expect(parseBlockedPiProviders('')).toEqual([]);
     expect(parseBlockedPiProviders(' OpenAI,openrouter,openai ')).toEqual(['openai', 'openrouter']);
+  });
+
+  it('ships the config default with openrouter unblocked (operator decision 2026-09-07)', () => {
+    expect(config.internalApiBlockedPiProviders).toEqual(['openai']);
   });
 
   it('parses only the exact provider segment before the first slash', () => {

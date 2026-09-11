@@ -83,6 +83,36 @@ describe('createModelsRoutes — handleListModels', () => {
     ]);
   });
 
+  it('serves the full OpenRouter catalogue by default while still hiding direct openai', async () => {
+    // No explicit blockedPiProviders: exercises the shipped config default
+    // (openrouter unblocked 2026-09-07; openai stays blocked).
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          { id: 'gpt-5.5', name: 'GPT-5.5', provider: 'openai' },
+          { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', provider: 'openrouter' },
+          { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', provider: 'openrouter' },
+          { id: 'gpt-5.5', name: 'GPT-5.5 Codex', provider: 'openai-codex' },
+        ]),
+      } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=pi'),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const providers = JSON.parse(res.body).models.pi.map((model: { provider: string }) => model.provider);
+    expect(providers).toContain('openrouter');
+    expect(providers).not.toContain('openai');
+    expect(providers).toContain('openai-codex');
+  });
+
   it('publishes Pi SDK thinking levels including max for GPT-5.6 models', async () => {
     const routes = createModelsRoutes({
       piService: {

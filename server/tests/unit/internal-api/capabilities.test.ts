@@ -408,4 +408,24 @@ describe('createCapabilitiesRoutes', () => {
     expect(body.runtimes.pi.enabled).toBe(true);
     expect(body.runtimes.antigravity.enabled).toBe(true);
   });
+
+  it('advertises the shipped default provider policy with openrouter unblocked', async () => {
+    // No explicit blockedPiProviders: exercises the config default
+    // (openrouter unblocked 2026-09-07; openai stays blocked).
+    const routes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(false),
+        getBackendMode: vi.fn().mockResolvedValue('direct'),
+        getProfiles: vi.fn().mockReturnValue([]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).features.piProviderPolicy).toEqual({ blockedProviders: ['openai'] });
+  });
 });

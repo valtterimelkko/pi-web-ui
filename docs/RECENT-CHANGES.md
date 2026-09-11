@@ -4,6 +4,11 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **OpenRouter unblocked on the Internal API (`2026-09-07`, no contract version change)**
+  - The `INTERNAL_API_BLOCKED_PI_PROVIDERS` default narrowed from `openai,openrouter` to `openai` by operator decision: the full OpenRouter gateway catalogue (426 models at time of change, surfaced in the Pi runtime by `PI_OPENROUTER_MODELS_ENABLED`) is now served through the Internal API — listed by `GET /api/v1/models` and selectable at session creation, model switching, and every prompt mode. The historical 1.16.0 block was Internal-API-only; the browser model picker always served the catalogue and is unchanged.
+  - The direct metered `openai` provider stays blocked by default; the subscription-backed `openai-codex` provider remains available. `/capabilities.features.piProviderPolicy.blockedProviders` exposes the effective list; operators can re-block via env. Wire schema, routes, and error codes are unchanged.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`SECURITY.md`](../SECURITY.md)
+
 - **Antigravity /goal integration (`1.38.0`, `2026-09-08`)**
   - The cross-runtime goal function now covers Antigravity. `agy` has no native goal, so the runtime is served by a fully server-side goal manager: `POST /sessions/:id/goal` arms a per-session control record and dispatches a goal prompt; a turn-driven sweeper verifies every completed turn (`verifyCommand` exit code, or the `GOAL_STATUS: ACHIEVED` self-report sentinel) and dispatches continuation prompts while unmet, bounded by `maxTurns` (default/cap 100). `/goal …` typed at the prompt boundary (HTTP or WebSocket) is intercepted as goal control — even on busy sessions. `goal_state`/`goal_end` broker events and the browser GoalPanel work unchanged; the frontend gains pause/resume/clear buttons for antigravity sessions.
 

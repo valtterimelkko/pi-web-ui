@@ -88,8 +88,9 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 
 ### 8. Internal API metered-provider policy
 
-- Pi providers in `INTERNAL_API_BLOCKED_PI_PROVIDERS` (default exact ids
-  `openai,openrouter`) are hidden from Internal API discovery and rejected again
+- Pi providers in `INTERNAL_API_BLOCKED_PI_PROVIDERS` (default exact id
+  `openai`; since 2026-09-07 the OpenRouter gateway catalogue is intentionally
+  served through the Internal API) are hidden from Internal API discovery and rejected again
   at every Internal API execution boundary.
 - The dispatch-time check is authoritative because browser-created sessions can
   later be addressed through the shared Internal API registry.
