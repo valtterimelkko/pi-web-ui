@@ -2859,8 +2859,16 @@ INTERNAL_API_ADMISSION_INTERACTIVE_RESERVE=1
 # Minimum projected aggregate memory headroom in MiB (default 512)
 INTERNAL_API_ADMISSION_MIN_HEADROOM_MB=512
 
-# Conservative projected memory reservation per admitted turn in MiB (default 256)
-INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN=256
+# Conservative projected memory reservation per admitted turn in MiB (default 512)
+INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN=512
+
+# Conservative projected PID/task reservation per admitted turn (default 96).
+# When pids.current + (active+1)*this >= pids.max, execution is refused
+# (pid_pressure, 503). Empirical Pi turns measure 5-25 tasks.
+INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN=96
+
+# Maximum Pi sessions kept resident in the MultiSessionManager (default 20)
+PI_MAX_SESSIONS=20
 ```
 
 The API key is auto-generated on first start and written to

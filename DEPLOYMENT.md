@@ -122,7 +122,9 @@ owner/mode. Keep the socket, token, receipts, watches, and retention-lease ledge
 | `INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS` | CPU-derived | optional total active-turn budget |
 | `INTERNAL_API_ADMISSION_INTERACTIVE_RESERVE` | `1` | capacity held back from API conductors for Web UI turns |
 | `INTERNAL_API_ADMISSION_MIN_HEADROOM_MB` | `512` | measured memory headroom retained after projected reservations |
-| `INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN` | `256` | conservative projected memory reservation per admitted turn |
+| `INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN` | `512` | conservative projected memory reservation per admitted turn |
+| `INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN` | `96` | conservative projected PID/task reservation per admitted turn (refuses with `pid_pressure` at the cgroup `pids.max` ceiling) |
+| `PI_MAX_SESSIONS` | `20` | maximum Pi sessions kept resident in the MultiSessionManager (LRU-unloaded when idle) |
 
 Use `GET /api/v1/capabilities`, `GET /api/v1/capacity`, `GET /api/v1/health`, and
 `npm run internal-api:wait` to verify the local control plane. For a prompt that

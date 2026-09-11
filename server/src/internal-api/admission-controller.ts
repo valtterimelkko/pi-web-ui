@@ -117,8 +117,8 @@ export interface AdmissionControllerOptions {
 
 const RUNTIMES: SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
 const DEFAULT_MINIMUM_HEADROOM_BYTES = 512 * 1024 * 1024;
-const DEFAULT_RESERVED_BYTES_PER_TURN = 256 * 1024 * 1024;
-const DEFAULT_RESERVED_PIDS_PER_TURN = 256;
+const DEFAULT_RESERVED_BYTES_PER_TURN = 512 * 1024 * 1024;
+const DEFAULT_RESERVED_PIDS_PER_TURN = 96;
 const DEFAULT_HOST_MINIMUM_HEADROOM_BYTES = 512 * 1024 * 1024;
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -185,8 +185,8 @@ export const PRODUCTION_ADMISSION_DEFAULTS: Required<Pick<AdmissionControllerOpt
   maxActiveTurns: 6,
   interactiveReserve: 1,
   minimumHeadroomBytes: 1536 * 1024 * 1024,
-  reservedBytesPerTurn: 768 * 1024 * 1024,
-  reservedPidsPerTurn: 256,
+  reservedBytesPerTurn: 512 * 1024 * 1024,
+  reservedPidsPerTurn: 96,
   hostMinimumHeadroomBytes: 512 * 1024 * 1024,
 };
 

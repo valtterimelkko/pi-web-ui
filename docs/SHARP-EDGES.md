@@ -165,7 +165,9 @@ The same per-session HOME means the harness's user-scope mod directory (`$HOME/.
 when `existingSession.messages.length > 0`. A message-less session (freshly
 created, never prompted) rehydrates on the runtime default — the create-time
 `setModel` lives only in the in-memory `AgentSession`, and idle-session
-eviction (`maxSessions: 4`, hardcoded in `websocket/connection.ts`) routinely
+eviction (headless creates sit at the end of the LRU; residency is bounded by
+`PI_MAX_SESSIONS`, default 20 since the 2026-09 capacity scaling, before that
+a hardcoded 4 in `websocket/connection.ts`) routinely
 unloads headless creates before their first dispatch. This caused the
 2026-09-03 benchmark drift incident (6 of 8 dispatches ran the wrong model).
 Contract 1.33.0 fixes it server-side: the binding is persisted in the session

@@ -185,6 +185,10 @@ export interface ServerConfig {
   sessionDir: string | undefined;
   claudeSessionDir: string;
   sessionRegistryPath: string;
+  /** Maximum Pi sessions kept resident in the MultiSessionManager (capacity
+   *  scaling 2026-09: replaces the hardcoded cap of 4 that throttled
+   *  multi-agent orchestration). */
+  piMaxSessions: number;
   maxClaudeProcesses: number;
   opencodeServerPort: number;
   opencodeServerHost: string;
@@ -348,6 +352,7 @@ export const config: ServerConfig = {
   sessionDir: process.env.SESSION_DIR || undefined,
   claudeSessionDir: process.env.CLAUDE_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'claude-sessions'),
   sessionRegistryPath: process.env.SESSION_REGISTRY_PATH || path.join(os.homedir(), '.pi-web-ui', 'session-registry.json'),
+  piMaxSessions: parsePositiveInteger(process.env.PI_MAX_SESSIONS, 20, 'PI_MAX_SESSIONS'),
   maxClaudeProcesses: parseInt(process.env.MAX_CLAUDE_PROCESSES || '10', 10),
   opencodeServerPort: parseInt(process.env.OPENCODE_SERVER_PORT || '4096', 10),
   opencodeServerHost: process.env.OPENCODE_SERVER_HOST || '127.0.0.1',

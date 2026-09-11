@@ -373,6 +373,14 @@ describe('AdmissionController — Phase 4 priority classes', () => {
 });
 
 describe('admissionStartupStatus', () => {
+  it('uses the scaled execution defaults outside production (96 PIDs / 512 MiB per turn)', () => {
+    // Capacity-scaling defaults: real Pi turns measured 5-25 tasks; the old
+    // 256-PID / 768 MiB reservations collided with TasksMax=1024 at 3 turns.
+    const resolved = resolveAdmissionConfig({});
+    expect(resolved.reservedPidsPerTurn).toBe(96);
+    expect(resolved.reservedBytesPerTurn).toBe(512 * 1024 * 1024);
+  });
+
   it('applies conservative production defaults for unset knobs (env-lost-in-prod is SAFE)', () => {
     const { resolved, warning, usingDefaults, explicitKnobs, prodFallbackKnobs, options } = admissionStartupStatus({ isProduction: true });
     // Conservative prod defaults applied — not CPU-derived.
@@ -380,7 +388,8 @@ describe('admissionStartupStatus', () => {
     expect(resolved.maxActiveTurns).toBe(6);
     expect(resolved.apiTurnLimit).toBe(5);
     expect(resolved.minimumHeadroomBytes).toBe(1536 * 1024 * 1024);
-    expect(resolved.reservedBytesPerTurn).toBe(768 * 1024 * 1024);
+    expect(resolved.reservedBytesPerTurn).toBe(512 * 1024 * 1024);
+    expect(resolved.reservedPidsPerTurn).toBe(96);
     expect(explicitKnobs).toEqual([]);
     expect(prodFallbackKnobs).toContain('maxActiveTurns');
     expect(prodFallbackKnobs).toContain('hostMinimumHeadroomBytes');

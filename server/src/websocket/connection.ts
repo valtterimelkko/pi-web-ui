@@ -430,8 +430,10 @@ export class WebSocketConnectionManager {
         idleSessionTimeoutMs: 30 * 60 * 1000,
         // Check for cleanup every 1 minute
         cleanupIntervalMs: 60 * 1000,
-        // Maximum sessions to keep in memory (4 keeps ~2 GB heap under --max-old-space-size=2048)
-        maxSessions: 4,
+        // Maximum sessions to keep in memory. Configurable for multi-agent
+        // orchestration: the old hardcoded 4 collided with parallel Internal
+        // API children (heap sizing is validated in the capacity plan ladder).
+        maxSessions: config.piMaxSessions,
         // Maximum human Web UI pins allowed per runtime (protected from cleanup)
         maxPinnedSessions: MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME,
         // Enable memory monitoring
