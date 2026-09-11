@@ -658,11 +658,17 @@ describe('Internal API prompt mode dispatch semantics', () => {
     );
 
     now += 200;
-    await new Promise((r) => setTimeout(r, 150));
-
-    const capacityRes = mockRes();
-    await routes.handleCapacity(jsonReq('GET', '/api/v1/capacity'), capacityRes);
-    const capacity = JSON.parse(capacityRes.body);
+    // Deflake (CI run 34601783299): the watchdog fires at mocked-idle 50ms but
+    // terminalisation races the old single fixed 150 ms real-time wait under
+    // load. Poll /capacity for a bounded window instead of one fixed sleep.
+    let capacity = { stalledRuns: 0 };
+    for (let waited = 0; waited < 5000; waited += 100) {
+      const capacityRes = mockRes();
+      await routes.handleCapacity(jsonReq('GET', '/api/v1/capacity'), capacityRes);
+      capacity = JSON.parse(capacityRes.body);
+      if (capacity.stalledRuns >= 1) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     expect(capacity.stalledRuns).toBeGreaterThanOrEqual(1);
   });
 });
