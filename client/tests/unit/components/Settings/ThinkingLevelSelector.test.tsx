@@ -46,6 +46,26 @@ describe('ThinkingLevelSelector', () => {
     expect(screen.queryByText('Max')).not.toBeInTheDocument();
   });
 
+  it('renders no Off option for Gemini 3.x flash models whose thinking cannot be disabled', () => {
+    // google/gemini-3.5-flash-lite & 3.8-flash advertise [minimal,low,medium,high]:
+    // their thinkingLevelMap is {off:null} — thinking is always on.
+    render(
+      <ThinkingLevelSelector
+        value="medium"
+        availableLevels={['minimal', 'low', 'medium', 'high']}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText('Off')).not.toBeInTheDocument();
+    expect(screen.getByText('Minimal')).toBeInTheDocument();
+    expect(screen.getByText('Low')).toBeInTheDocument();
+    expect(screen.getByText('Medium')).toBeInTheDocument();
+    expect(screen.getByText('High')).toBeInTheDocument();
+    expect(screen.queryByText('Extra High')).not.toBeInTheDocument();
+    expect(screen.queryByText('Max')).not.toBeInTheDocument();
+  });
+
   it('does not highlight non-selected levels', () => {
     render(<ThinkingLevelSelector value="off" onChange={() => {}} />);
     const mediumButton = screen.getByText('Medium').closest('button');

@@ -169,6 +169,101 @@ describe('createModelsRoutes — handleListModels', () => {
     });
   });
 
+  it('publishes google provider models with their catalogued thinking levels across all four families', async () => {
+    // Metadata shapes mirror the SDK dynamic model store's google entries
+    // exactly (API-key Gemini via auth.json, never credentials in-repo).
+    // `null` in a thinkingLevelMap means "explicitly unsupported": Gemini 3.x
+    // flash thinking cannot be disabled (off: null), xhigh/max are absent.
+    // Models with no map at all (gemini-2.5-*, deep-research-*, computer-use)
+    // get the full generic range off..high; gemma-4 maps minimal/high only.
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          {
+            id: 'gemini-3.5-flash-lite',
+            name: 'Gemini 3.5 Flash Lite',
+            provider: 'google',
+            api: 'google-generative-ai',
+            baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+            reasoning: true,
+            input: ['text', 'image'],
+            contextWindow: 1048576,
+            maxTokens: 65536,
+            thinkingLevelMap: { off: null },
+          },
+          {
+            id: 'gemini-3.8-flash',
+            name: 'Gemini 3.8 Flash',
+            provider: 'google',
+            api: 'google-generative-ai',
+            reasoning: true,
+            thinkingLevelMap: { off: null },
+          },
+          {
+            id: 'gemini-3.1-pro-preview',
+            name: 'Gemini 3.1 Pro Preview',
+            provider: 'google',
+            api: 'google-generative-ai',
+            reasoning: true,
+            thinkingLevelMap: { off: null, minimal: null, low: 'LOW', medium: null, high: 'HIGH' },
+          },
+          {
+            id: 'gemini-2.5-flash',
+            name: 'Gemini 2.5 Flash',
+            provider: 'google',
+            api: 'google-generative-ai',
+            reasoning: true,
+          },
+          {
+            id: 'deep-research-preview-04-2026',
+            name: 'Deep Research',
+            provider: 'google',
+            api: 'google-generative-ai',
+            reasoning: true,
+          },
+          {
+            id: 'gemma-4-31b-it',
+            name: 'Gemma 4 31B IT',
+            provider: 'google',
+            api: 'google-generative-ai',
+            reasoning: true,
+            thinkingLevelMap: { off: null, minimal: 'MINIMAL', low: null, medium: null, high: 'HIGH' },
+          },
+        ]),
+      } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=pi'),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const pi = JSON.parse(res.body).models.pi;
+    const byId = (id: string) => pi.find((model: { id: string }) => model.id === id);
+    expect(byId('gemini-3.5-flash-lite')).toMatchObject({
+      selector: 'google/gemini-3.5-flash-lite',
+      provider: 'google',
+      thinkingLevels: ['minimal', 'low', 'medium', 'high'],
+    });
+    expect(byId('gemini-3.8-flash')).toMatchObject({
+      selector: 'google/gemini-3.8-flash',
+      thinkingLevels: ['minimal', 'low', 'medium', 'high'],
+    });
+    expect(byId('gemini-3.1-pro-preview')).toMatchObject({ thinkingLevels: ['low', 'high'] });
+    expect(byId('gemini-2.5-flash')).toMatchObject({
+      thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high'],
+    });
+    expect(byId('deep-research-preview-04-2026')).toMatchObject({
+      thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high'],
+    });
+    expect(byId('gemma-4-31b-it')).toMatchObject({ thinkingLevels: ['minimal', 'high'] });
+  });
+
   it('advertises the full discovered Command Code catalogue with runnable status', async () => {
     const routes = createModelsRoutes({
       piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
