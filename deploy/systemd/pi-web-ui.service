@@ -12,7 +12,7 @@ WatchdogSec=45
 User=root
 WorkingDirectory=/root/pi-web-ui
 Environment=NODE_ENV=production
-Environment=NODE_OPTIONS=--max-old-space-size=2048
+Environment=NODE_OPTIONS=--max-old-space-size=4096
 Environment=PATH=/root/.opencode/bin:/root/.local/bin:/root/.npm-global/bin:/usr/bin:/bin
 EnvironmentFile=/root/pi-web-ui/.env.production
 ExecStart=/usr/bin/node server/dist/index.js
