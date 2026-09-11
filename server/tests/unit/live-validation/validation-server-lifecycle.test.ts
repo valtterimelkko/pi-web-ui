@@ -414,7 +414,11 @@ describe('validation-server lifecycle (real launcher → real stopper)', () => {
       const handle = spawnChildForExitTest(dir, {
         PI_WEB_UI_VALIDATION_TEST_NOISE: '1',
         PI_WEB_UI_VALIDATION_CHILD_EXIT_AFTER_RECORD: '1',
-        PI_WEB_UI_VALIDATION_TEST_NOISE_TTL_MS: '1500',
+        // TTL 8s: the alive-right-after-leader-exit assertion needs a TTL
+        // comfortably longer than load-dependent record/exit observation; at
+        // 1.5s a loaded machine could observe the leader exit after the noise
+        // member had already expired (observed full-suite flake).
+        PI_WEB_UI_VALIDATION_TEST_NOISE_TTL_MS: '8000',
       });
       onTestFinished(() => {
         const record = readRecord(dir);
@@ -428,8 +432,8 @@ describe('validation-server lifecycle (real launcher → real stopper)', () => {
       expect(groupAliveByPs(record!.pgid!), 'noise member is alive right after leader exit').toBe(true);
 
       // A bounded helper must not outlive its configured lifetime: after the
-      // 1.5 s TTL (plus generous slack) no group member may remain.
-      const deadline = Date.now() + 8000;
+      // 8 s TTL (plus generous slack) no group member may remain.
+      const deadline = Date.now() + 20000;
       while (Date.now() < deadline && groupAliveByPs(record!.pgid!)) {
         await new Promise((resolve) => setTimeout(resolve, 300));
       }

@@ -74,7 +74,18 @@ describe('Channel Permission Flow', () => {
   afterEach(async () => {
     await service.stop();
     await mockServer.stop();
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    // Bounded rm retry: a lingering async writer can add a file between the
+    // recursive walk and the rmdir (ENOTEMPTY) under full-suite load. Retry
+    // while the teardown settles; persistent leaks still fail loudly.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOTEMPTY' || attempt >= 10) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
   });
 
   it('should receive permission_request from channel', async () => {

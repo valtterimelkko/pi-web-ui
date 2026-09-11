@@ -321,11 +321,15 @@ describe('AntigravityService background task tracking', () => {
     });
   }
 
-  /** Point the scripted task-log line at the temp watch dir. */
-  function scriptedStartStep(command: string, index: number): string {
+  /** Point the scripted task-log line at the temp watch dir. Each test that
+   *  tracks a running task should pass its OWN baseDir: the watcher scans the
+   *  messages dir with a 5s mtime slack, so a receipt written for one test's
+   *  task id (they share SVC_TASK) can otherwise complete a later test's task
+   *  with the stale exit code — a real full-suite-load flake. */
+  function scriptedStartStep(command: string, index: number, baseDir: string = watchDir): string {
     return svcStartStep(SVC_TASK, command, index).replace(
       /file:\/\/[^\n]+\.system_generated\/tasks\/task-77\.log/,
-      `file://${watchDir}/.system_generated/tasks/task-77.log`,
+      `file://${baseDir}/.system_generated/tasks/task-77.log`,
     );
   }
 
@@ -399,12 +403,21 @@ describe('AntigravityService background task tracking', () => {
       const bg = postTurn.filter((e) => e.type === 'background_child_state');
       expect(bg.length).toBeGreaterThan(0);
     } finally {
+      // Remove this test's receipt so its code-0 completion cannot bleed into
+      // later tests in this file (shared task id, 5s mtime slack in the
+      // watcher) — see the respawn-parity test below.
+      rmSync(join(watchDir, '.system_generated', 'messages'), { recursive: true, force: true });
       await service.shutdown();
     }
   });
 
   it('respawn parity: a fresh process turn still reports the running task and can complete it in-stream', async () => {
-    const turn1 = [SVC_INIT, scriptedStartStep('sleep 30 && echo DONE', 10), delta('Launched.', 'DONE', 11), svcResultLine()].join('\n') + '\n';
+    // Isolated watch dir: the shared dir may hold an older test's code-0
+    // receipt for the same task id; with the watcher's 5s mtime slack it can
+    // otherwise win the completion race against this test's in-stream
+    // code-1 receipt under full-suite load (observed flake).
+    const isolatedWatchDir = mkdtempSync(join(tmpdir(), 'agy-bg-watch-respawn-'));
+    const turn1 = [SVC_INIT, scriptedStartStep('sleep 30 && echo DONE', 10, isolatedWatchDir), delta('Launched.', 'DONE', 11), svcResultLine()].join('\n') + '\n';
     const completion = JSON.stringify({
       event: 'step_update',
       step_update: {
@@ -434,6 +447,7 @@ describe('AntigravityService background task tracking', () => {
       expect(children[0].exitCode).toBe(1);
       expect(service.getBackgroundChildren(sessionId)[0].status).toBe('completed');
     } finally {
+      rmSync(isolatedWatchDir, { recursive: true, force: true });
       await service.shutdown();
     }
   });

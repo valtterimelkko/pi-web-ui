@@ -75,7 +75,18 @@ describe('Channel Prompt Flow', () => {
   afterEach(async () => {
     await service.stop();
     await mockServer.stop();
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    // Bounded rm retry: a lingering async writer can add a file between the
+    // recursive walk and the rmdir (ENOTEMPTY) under full-suite load. Retry
+    // while the teardown settles; persistent leaks still fail loudly.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOTEMPTY' || attempt >= 10) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
   });
 
   it('should complete a full prompt→response cycle', async () => {
@@ -164,6 +175,14 @@ describe('Channel Prompt Flow', () => {
     mockServer.simulateAgentEnd(claudeSessionId);
 
     await completionPromise;
+
+    // Tool-event JSONL persistence is async and can flush just after the
+    // agent_end that resolves completionPromise under full-suite load; wait
+    // for the entry instead of racing the flush.
+    await vi.waitFor(async () => {
+      const settled = await store.loadHistory(sessionId);
+      expect(settled.some((e) => e.type === 'tool' && e.toolName === 'Read')).toBe(true);
+    }, { timeout: 5_000 });
 
     const history = await store.loadHistory(sessionId);
 

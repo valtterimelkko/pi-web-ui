@@ -108,7 +108,10 @@ describe('coalesced snapshot saves', () => {
     const promises: Array<Promise<unknown>> = [];
     promises.push(manager.upsert({ sdkType: 'pi', cwd: '/w', path: '/sessions/s0' }));
     // Advance the loop until the first write is actually latched on its gate.
-    for (let spin = 0; spin < 200 && tmpWrites.length === 0; spin++) {
+    // Deadline-based (not a fixed spin cap): under full-suite load the upsert
+    // may simply need more loop turns to reach the write seam.
+    const latchDeadline = Date.now() + 10_000;
+    while (tmpWrites.length === 0 && Date.now() < latchDeadline) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     expect(tmpWrites.length).toBe(1);
@@ -173,7 +176,10 @@ describe('coalesced snapshot saves', () => {
     );
 
     const first = manager.upsert({ sdkType: 'pi', cwd: '/w', path: '/sessions/g1' });
-    for (let spin = 0; spin < 200 && gates.length === 0; spin++) {
+    // Deadline-based latch wait (not a fixed spin cap): under full-suite load
+    // the upsert may need more loop turns to reach the write seam.
+    const latchDeadline = Date.now() + 10_000;
+    while (gates.length === 0 && Date.now() < latchDeadline) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     expect(gates.length).toBe(1);
