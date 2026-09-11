@@ -286,11 +286,30 @@ describe('WatchManager — onFire wake dispatch (watch the child, wake the paren
       },
     });
     broker.publish('child-11', ev('agent_end'));
-    await flush();
+
+    // Deflake (CI coverage run 34606965716): completeWatch flips the in-memory
+    // status to done and persists ASYNCHRONOUSLY after the immediate wake-attempt
+    // persist, so a reload after one fixed flush can observe the store mid-
+    // transition with status still active. Poll a fresh reload until the
+    // persisted status settles on done (bounded by vi.waitFor's default 1s... use explicit timeout below).
+    let reloaded: ReturnType<WatchManager['get']>;
+    await vi.waitFor(
+      async () => {
+        const poll = new WatchManager({ broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin });
+        try {
+          await poll.init();
+          reloaded = poll.get('child-11');
+          expect(reloaded?.status).toBe('done');
+        } finally {
+          poll.close();
+        }
+      },
+      { timeout: 10_000, interval: 50 },
+    );
 
     const manager2 = new WatchManager({ broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin });
     await manager2.init();
-    const reloaded = manager2.get('child-11')!;
+    reloaded = manager2.get('child-11')!;
     expect(reloaded.status).toBe('done');
     expect(reloaded.onFire?.targetSessionId).toBe('parent-1');
     expect(reloaded.wakeAttempts).toHaveLength(1);
