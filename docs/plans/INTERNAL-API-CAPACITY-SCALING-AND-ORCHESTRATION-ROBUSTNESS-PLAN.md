@@ -1,7 +1,7 @@
 # Plan: Internal API Capacity Scaling & Multi-Agent Orchestration Robustness
 
 > **File:** `docs/plans/INTERNAL-API-CAPACITY-SCALING-AND-ORCHESTRATION-ROBUSTNESS-PLAN.md`  
-> **Status:** READY FOR EXECUTION (Awaiting Operator Authorization)  
+> **Status:** READY FOR EXECUTION — full end-to-end owner authority granted 2026-09-11; awaiting goal-engine start  
 > **Target Service:** `pi-web-ui.service` (Port 3456)  
 > **Target Workload:** High-concurrency multi-agent orchestration, Benchmark 1 (`execute_children.py`), Benchmark 2 (`supervisor.py`), and parallel specialist subagent dispatch.  
 > **Related Incidents & Observations:** `docs/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md`, `docs/plans/execution-reports/INTERNAL-API-CAPACITY-REPAIR-2026-09-07.md`, commit `87e0b7b`.
@@ -53,6 +53,9 @@ This plan scales the Internal API to **Tier 2 (14 concurrent execution turns / 1
 | **D4** | **Strict TDD & Failure Assertions**: Every code change requires RED $\rightarrow$ GREEN evidence before live validation. |
 | **D5** | **Zero False-Victory Policy**: An execution agent must NOT claim victory based on mocks or disposable tests alone. Production victory requires verifying live drop-ins, truthful `/api/v1/capacity` readbacks, and empirical execution of Benchmark 1 in `/root/agent-benchmarks`. |
 | **D6** | **Production Restart Gate**: Production service restart requires explicit maintenance pre-flight: zero active turns, zero nonterminal run receipts, and production lock (`scripts/with-production-lock.sh`). Caddy and `/root/tmux` must remain completely untouched. |
+| **D7** | **End-to-end authority (owner, 2026-09-11)**: full authority granted for this delivery **including the production restart**. The Phase 4 restart ships ALL of master — including contracts 1.40.0–1.42.0 features from other workstreams (session/native adoption, background-shell surfacing, antigravity desktop-root discovery) — and this co-shipping is explicitly accepted. |
+| **D8** | **PI_MAX_SESSIONS strategy (owner, 2026-09-11)**: 20 is the configured *target*; Phase 2's ladder **measures** peak heap and empirically settles the safe value before Phase 3 writes it into production. If measured peak heap exceeds ~70% of the 4096 MB V8 limit (~2.8 GiB), drop to 16 and re-run the affected rung. |
+| **D9** | **No contract bump (owner, 2026-09-11)**: these are capacity VALUE changes, not wire-schema changes; `/api/v1/capacity` gains no fields and `PI_MAX_SESSIONS` is server-internal. Precedent: the glm-5.3-flash exposure shipped without a contract bump. |
 
 ---
 
@@ -96,10 +99,18 @@ Scaling concurrency cannot just patch `TasksMax`; it must resolve all 7 cascadin
 - `server/tests/unit/internal-api/admission-controller.test.ts` (Update conservative assertions)
 - `server/tests/unit/internal-api/admission-explanation.test.ts` (Update explanation test fixture)
 - `server/tests/unit/config/pi-max-sessions.test.ts` (New test verifying `PI_MAX_SESSIONS` configuration)
+- `.env.example` (Document `PI_MAX_SESSIONS`; refresh the admission knob examples to the new defaults)
+
+### Documentation (same-ship factual sync)
+- `docs/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md` (Phase 4: verified resolution notes)
+- `DEPLOYMENT.md` and `docs/INTERNAL-API.md` (capacity/admission sections stating 6-turn conservative posture — update to Tier 2 truth)
+
+### Disposable validation tooling (not committed)
+- A small **ladder driver script** (temp file, e.g. under `/tmp`) that creates N sessions on the disposable socket and prompts them concurrently. The Internal API has no built-in burst generator, so the executor writes this; it must target the disposable socket only — never production.
 
 ### Environment & Host Configuration
 - `/root/pi-web-ui/.env.production` (Set admission, memory, and session knobs)
-- `/etc/systemd/system/pi-web-ui.service` (Update `NODE_OPTIONS=--max-old-space-size=4096`)
+- `/etc/systemd/system/pi-web-ui.service` AND in-repo `deploy/systemd/pi-web-ui.service` (BOTH updated to `NODE_OPTIONS=--max-old-space-size=4096` in the same commit — the `/etc` copy is installed from the repo copy and they must not drift)
 - `/etc/systemd/system.control/pi-web-ui.service.d/50-TasksMax.conf` (`TasksMax=8192`)
 - `/etc/systemd/system.control/pi-web-ui.service.d/50-MemoryMax.conf` (`MemoryMax=18G` / `19327352832`)
 - `/etc/systemd/system.control/pi-web-ui.service.d/50-MemoryHigh.conf` (`MemoryHigh=14G` / `15032385536`)
@@ -109,6 +120,14 @@ Scaling concurrency cannot just patch `TasksMax`; it must resolve all 7 cascadin
 ## 4. Phased Implementation Sequence
 
 ```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Phase 0: Pre-Flight & Coordination (no code changes)                         │
+│ - Clean tree on owned paths / coordinate; declare on the Agent OS board      │
+│ - Record baseline: contractVersion, /capacity JSON, systemctl values, HEAD   │
+│ - Provider headroom (agent-os provider-usage); avoid GLM peak window         │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ Phase 1: Code Hardening & De-Hardcoding (TDD)                                │
 │ - Make MultiSessionManager.maxSessions configurable via PI_MAX_SESSIONS      │
@@ -148,6 +167,26 @@ Scaling concurrency cannot just patch `TasksMax`; it must resolve all 7 cascadin
 
 ## 5. Phase-by-Phase Plan, TDD, and Definitions of Victory
 
+### Phase 0: Pre-Flight & Coordination (no code changes)
+
+#### Intent
+Guarantee the executor is not colliding with parallel agent work, and that before/after evidence baselines exist.
+
+#### Steps
+1. `git status --short` — must be clean for the owned paths (`server/src/config.ts`, `server/src/websocket/connection.ts`, `server/src/internal-api/admission-controller.ts`, `.env.example`, `deploy/systemd/pi-web-ui.service`). If dirty on any of these, coordinate with the owning agent before starting (AGENTS.md rule: never edit a repo actively worked on by another agent without coordinating).
+2. Declare presence on the Agent OS board (`agent-os board quick-declare "..."`) for the duration of the work.
+3. Record the baseline evidence block in the execution report: production `contractVersion` from `GET /api/v1/capabilities` (informational — per D7 the Phase 4 restart ships all of master), full `GET /api/v1/capacity` JSON, `systemctl show pi-web-ui.service -p TasksMax -p MemoryMax -p MemoryHigh`, and current git HEAD sha.
+4. Provider quota check for Phase 2's real-model ladder: `agent-os provider-usage`. If inside the GLM peak window (Mon–Fri 07:00–11:00 London), schedule the ladder outside it.
+
+#### Definition of Victory for Phase 0 (DoV-0)
+- [ ] Owned paths clean, or an explicit recorded coordination decision covers the dirt.
+- [ ] Board entry live.
+- [ ] Baseline evidence block recorded (capacity JSON + systemctl values + HEAD sha + contractVersion).
+- [ ] Provider headroom confirmed adequate for ~40 short real turns, or the ladder rescheduled outside the peak window.
+- [ ] **ANTI-VICTORY CHECK:** Do NOT start Phase 1 with a dirty tree on owned paths without a recorded coordination decision.
+
+---
+
 ### Phase 1: Code Hardening & De-Hardcoding (TDD)
 
 #### Intent
@@ -184,13 +223,16 @@ Empirically prove on an isolated, disposable test server that 4, 8, 12, and 14 c
    - `INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN=96`
    - `INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN=512`
    - `PI_MAX_SESSIONS=20`
-2. **Concurrency Ladder Test:**
+2. **Ladder driver script:** write a small disposable dispatch script (temp file) that creates N sessions on the disposable socket and prompts them concurrently. Disposable socket only — never production.
+3. **Concurrency Ladder Test:**
    - **Rung 1 (4 turns):** Dispatch 4 concurrent Pi turns (`zai/glm-5.3-flash`) executing `bash` commands. Sample `/api/v1/capacity`. Verify `activeTurns: 4`, zero 503s.
    - **Rung 2 (8 turns):** Dispatch 8 concurrent Pi turns. Verify `activeTurns: 8`, zero 503s.
    - **Rung 3 (12 turns):** Dispatch 12 concurrent Pi turns. Verify `activeTurns: 12`, zero 503s.
    - **Rung 4 (14 turns):** Dispatch 14 concurrent Pi turns (maximum P2 capacity). Verify `activeTurns: 14`, `executionCapacity: 14`.
    - **Saturation Verification:** Attempt turn 15 $\rightarrow$ Verify clean `HTTP 429 global_limit` (capacity exhaustion, not a crash or 503 pressure).
-3. **Benchmark 1 Probe Simulation:**
+4. **Failure classification (every failed turn, every rung):** a failure is either an `ADMISSION_CAPACITY_EXHAUSTED` refusal (an admission failure — counts against this plan) or a provider-side error/429 from z.ai (a provider concurrency ceiling — recorded as an observed external limit, NOT an admission failure). DoV-2 fails only on admission failures; provider ceilings are documented findings.
+5. **Heap sampling (per D8):** sample the server's V8 heap (`process.memoryUsage` via diagnostics/logs or service RSS from the cgroup) during each rung. Settle `PI_MAX_SESSIONS`: 20 stands if measured peak stays under ~70% of the 4096 MB heap limit (~2.8 GiB); otherwise drop to 16 and re-run the affected rung. Record the settled value in the report — Phase 3 writes that value into production, not an assumed one.
+6. **Benchmark 1 Probe Simulation:**
    - Run a test dispatch of all 4 Benchmark 1 probes (`fxa`, `fxb`, `fxc`, `fxd`) simultaneously against the disposable socket.
    - Verify all 4 receive `200/202` on initial prompt; **zero probes are queued for retry**.
 
@@ -199,8 +241,10 @@ Empirically prove on an isolated, disposable test server that 4, 8, 12, and 14 c
 - [ ] Peak tasks sampled during 14 concurrent turns remain $< 1500$, comfortably inside `TasksMax=8192`.
 - [ ] Peak memory sampled remains $< 4\text{ GiB}$, comfortably inside `MemoryMax=18G`.
 - [ ] No `memory.events` (high, max, oom, oom_kill) recorded.
+- [ ] Every failure classified: zero `ADMISSION_CAPACITY_EXHAUSTED` refusals anywhere in the ladder; provider-side errors (if any) separately recorded as external ceilings.
+- [ ] Peak V8 heap / service RSS sampled per rung and the settled `PI_MAX_SESSIONS` value (20 or 16, per D8) recorded in the report.
 - [ ] All 4 Benchmark 1 synthetic probes start concurrently without any 503 refusal.
-- [ ] **ANTI-VICTORY CHECK:** Do NOT claim victory if testing was done only with mocked fetch calls or if concurrency was tested serially instead of overlapping in time.
+- [ ] **ANTI-VICTORY CHECK:** Do NOT claim victory if testing was done only with mocked fetch calls or if concurrency was tested serially instead of overlapping in time. Provider 429s do not equal success — the rung must still be re-run once the provider accepts, or the report must show the admission layer was demonstrably not the limiter.
 
 ---
 
@@ -216,11 +260,12 @@ Safely update the host drop-ins, service unit, and production environment file t
    systemctl set-property pi-web-ui.service MemoryMax=19327352832
    systemctl set-property pi-web-ui.service MemoryHigh=15032385536
    ```
-2. **Update Service Unit Node Options:**
-   In `/etc/systemd/system/pi-web-ui.service`, ensure:
+2. **Update Service Unit Node Options (both copies, one commit):**
+   In BOTH `/etc/systemd/system/pi-web-ui.service` AND the in-repo source-of-truth `deploy/systemd/pi-web-ui.service`, set:
    ```ini
    Environment=NODE_OPTIONS=--max-old-space-size=4096
    ```
+   Commit the repo-side file (together with `.env.example` and the doc updates) directly on `master` and push — the `/etc` copy is installed from it and must not drift.
 3. **Update `/root/pi-web-ui/.env.production`:**
    Add/update the following keys:
    ```ini
@@ -244,9 +289,11 @@ Safely update the host drop-ins, service unit, and production environment file t
   - `TasksMax=8192`
   - `MemoryMax=19327352832` (~18 GiB)
   - `MemoryHigh=15032385536` (~14 GiB)
-- [ ] `/root/pi-web-ui/.env.production` contains all 8 required environment variables.
+- [ ] `/root/pi-web-ui/.env.production` contains all 8 required environment variables, with `PI_MAX_SESSIONS` set to the Phase-2-**settled** value (per D8), not an assumed one.
+- [ ] `deploy/systemd/pi-web-ui.service` and `/etc/systemd/system/pi-web-ui.service` both carry `--max-old-space-size=4096` (diff-verified equal).
+- [ ] Repo-side changes (unit file, `.env.example`, docs) committed and pushed on `master`.
 - [ ] `npm run build` succeeds cleanly.
-- [ ] **ANTI-VICTORY CHECK:** Do NOT claim victory if `systemctl set-property` failed or if `daemon-reload` was omitted.
+- [ ] **ANTI-VICTORY CHECK:** Do NOT claim victory if `systemctl set-property` failed, if `daemon-reload` was omitted, or if only one of the two unit copies was updated.
 
 ---
 
@@ -259,6 +306,7 @@ Execute an operator-authorized restart of `pi-web-ui.service` under the maintena
 1. Check `GET /api/v1/capacity`: verify `activeTurns == 0`.
 2. Check `GET /api/v1/runs`: verify zero nonterminal/active run receipts.
 3. Check host: verify no other agent is actively streaming in `pi-web-ui`.
+4. Per D7: record the current production `contractVersion` and note the master delta being co-shipped (contracts 1.40.0–1.42.0 features) — owner-accepted; verify the built dist matches master HEAD (`git rev-parse HEAD` vs build timestamp).
 
 #### Production Execution
 1. Execute restart under production lock:
@@ -313,18 +361,19 @@ Execute an operator-authorized restart of `pi-web-ui.service` under the maintena
 
 If any regression occurs during Phase 4:
 
-1. **Restore Systemd Properties:**
+1. **Code rollback:** `git revert` the Phase 1 commit(s), `npm run build`, then restart. This is required because the new defaults (96 PIDs / 512 MB / `piMaxSessions`) live in code, not only in env.
+2. **Restore Systemd Properties:**
    ```bash
    systemctl set-property pi-web-ui.service TasksMax=1024
    systemctl set-property pi-web-ui.service MemoryMax=12884901888
    systemctl set-property pi-web-ui.service MemoryHigh=9663676416
    ```
-2. **Restore Unit File:**
-   In `/etc/systemd/system/pi-web-ui.service`, restore:
+3. **Restore Unit File (both copies):**
+   In `/etc/systemd/system/pi-web-ui.service` AND `deploy/systemd/pi-web-ui.service`, restore:
    ```ini
    Environment=NODE_OPTIONS=--max-old-space-size=2048
    ```
-3. **Restore `.env.production`:**
+4. **Restore `.env.production`:**
    Restore original values:
    ```ini
    INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS=6
@@ -333,12 +382,12 @@ If any regression occurs during Phase 4:
    INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN=768
    ```
    Remove `INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN` and `PI_MAX_SESSIONS`.
-4. **Reload & Restart:**
+5. **Reload & Restart:**
    ```bash
    systemctl daemon-reload
    systemctl restart pi-web-ui.service
    ```
-5. **Verify Rollback:**
+6. **Verify Rollback:**
    Confirm `/api/v1/capacity` returns to `maxActiveTurns: 6`, `pids.max: 1024`.
 
 ---
@@ -346,6 +395,10 @@ If any regression occurs during Phase 4:
 ## 7. Execution Checklist for the Implementing Agent
 
 ```markdown
+- [ ] 0. Phase 0 (Pre-Flight & Coordination)
+  - [ ] Owned paths clean or coordination recorded; Agent OS board declared
+  - [ ] Baseline evidence recorded (capacity JSON, systemctl values, HEAD sha, contractVersion)
+  - [ ] Provider headroom confirmed / GLM peak window avoided for the ladder
 - [ ] 1. Phase 1 (Code & TDD)
   - [ ] Write failing test for config.piMaxSessions in server/tests
   - [ ] Wire PI_MAX_SESSIONS in server/src/config.ts and connection.ts
@@ -357,14 +410,17 @@ If any regression occurs during Phase 4:
   - [ ] Start disposable server with Tier 2 configuration
   - [ ] Execute concurrent ladder (4 -> 8 -> 12 -> 14 turns) with real zai/glm-5.3-flash
   - [ ] Sample and log PID and memory peaks
+  - [ ] Classify failures: admission refusals vs provider 429s (zero admission refusals expected)
+  - [ ] Settle PI_MAX_SESSIONS from measured peak heap (20, or 16 per D8) and record it
   - [ ] Verify 4-probe parallel dispatch with zero 503s
   - [ ] Tear down disposable server cleanly
 - [ ] 3. Phase 3 (Production Systemd & Configuration)
   - [ ] Apply systemctl set-property TasksMax=8192
   - [ ] Apply systemctl set-property MemoryMax=18G
   - [ ] Apply systemctl set-property MemoryHigh=14G
-  - [ ] Update /etc/systemd/system/pi-web-ui.service (NODE_OPTIONS=--max-old-space-size=4096)
-  - [ ] Update /root/pi-web-ui/.env.production
+  - [ ] Update BOTH /etc/systemd/system/pi-web-ui.service AND deploy/systemd/pi-web-ui.service (NODE_OPTIONS=--max-old-space-size=4096)
+  - [ ] Update /root/pi-web-ui/.env.production (PI_MAX_SESSIONS = Phase-2-settled value)
+  - [ ] Update .env.example and capacity docs; commit repo-side changes on master and push
   - [ ] Run systemctl daemon-reload
   - [ ] Run npm run build
 - [ ] 4. Phase 4 (Gated Production Restart & Benchmark Unblock)
