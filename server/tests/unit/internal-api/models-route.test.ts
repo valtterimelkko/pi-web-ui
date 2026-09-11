@@ -230,11 +230,11 @@ describe('createModelsRoutes — handleListModels', () => {
             thinkingLevelMap: { off: null, minimal: 'MINIMAL', low: null, medium: null, high: 'HIGH' },
           },
         ]),
-      } as any,
-      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
-      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
-      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
-    });
+      },
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) },
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) },
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) },
+    } as unknown as Parameters<typeof createModelsRoutes>[0]);
     const res = createMockRes();
 
     await routes.handleListModels(
