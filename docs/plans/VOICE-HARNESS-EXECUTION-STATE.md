@@ -599,6 +599,69 @@ and logged the app out mid-outage during its validation; and a singleton
 replacement bug that discarded queued messages on any remount during
 `reconnecting`.
 
+### 2026-09-12 ~23:48 — R2 verified and committed; H8's restart deployed; production healthy
+
+#### H8's restart happened, safely
+
+PID `1653997` → `2893943` at 23:45:47, then → `2895528` after the rebuild-restart.
+H8 **held the restart until capacity cleared** (it found `activeTurns=2` earlier
+and refused to kill four in-flight children) — the sequencing steer worked.
+
+**The restart cleared the leak:** `EvictedEventsTotal` **659,400 → 0**.
+
+#### R2 verified by the parent, not just accepted
+
+**The revert test was run by the parent.** Stashing only the implementation fix
+(keeping the test) and re-running produced **3 failed / 3** with the right
+assertion — *"tracked must stay under the global budget"*. Restoring the fix gave
+**3/3 green**. The property test genuinely catches the bug.
+
+**Defect A was three leaks, not one.** R2 fixed the brief's count-trim omission
+**and** found two more the brief did not identify:
+- an oversized event popped by its own byte-trim was subtracted before being
+  added, and the `Math.max(0, ...)` clamp swallowed the difference — fixed by
+  restructuring to **add-before-trim**;
+- `clearAll()` dropped every buffer but kept the counter.
+It also found a **blind spot in its own property test**: the first caps let
+byte-trims preempt count-trims entirely, so the property *passed with the fix
+reverted*. Raising the per-session cap to 500 made both trim paths interleave.
+
+**Defect B — verified patched in both physical copies.** Confirmed by reading the
+code, not the report:
+
+```js
+const PARTIAL_ARGS_PARSE_INTERVAL_MS = 250;
+const MAX_STREAMING_TOOL_ARGS_CHARS = 64 * 1024;
+if (nextPartialArgs.length > MAX_STREAMING_TOOL_ARGS_CHARS) throw new Error('...stalled-stream guard');
+if (nowMs - (lastStreamingArgsParseAt.get(block) ?? 0) >= PARTIAL_ARGS_PARSE_INTERVAL_MS) {
+  lastStreamingArgsParseAt.set(block, nowMs);
+  block.arguments = parseStreamingJson(nextPartialArgs);   // throttled
+}
+```
+
+**The critical catch:** there are **two physical pi-ai copies** (root, and nested
+under `pi-coding-agent/node_modules`). The in-process hosted sessions resolve the
+**nested** one — so patching only the obvious root copy would have left the
+production defect live. Both are patched. The fix ships via a `postinstall`
+script that survives `npm ci`, fails loudly (exit 1) on version drift, and a
+guard test fails independently if the patch is missing.
+
+#### Deployed to production
+
+`dist` was **24 hours stale** (built 00:36; R2's source landed 23:45), so the
+first restart deployed the OLD broker. Rebuilt (`npm run build --workspace=server`,
+exit 0) and restarted again. Post-deploy: nine probes at ~0.2 s, contract 1.42.0,
+**0 startup errors**, and the eviction counter **stayed 0 under real traffic**
+(1847 sessions visible, events endpoints exercised) where it previously ratcheted
+to 659,400.
+
+#### Watch hygiene
+
+The restart invalidated all 13 registrations. **11 were cancelled** — they
+belonged to completed children and were pure polling load (reduced polling is one
+of the lessons from the stall investigation). Only H8 and R2 remain watched, both
+idle.
+
 ## Cleanup owed at the end
 
 - ~~Merge or discard H2's branch `talker/pi-input-routing`~~ — **done** (merged 5c17304).
