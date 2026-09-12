@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { Writable } from 'stream';
-import { createCapabilitiesRoutes } from '../../../src/internal-api/routes/capabilities.js';
+import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from '../../../src/internal-api/routes/capabilities.js';
 
 function createMockReq(url = '/api/v1/capabilities'): IncomingMessage {
   return {
@@ -43,14 +43,14 @@ describe('createCapabilitiesRoutes', () => {
         isAvailable: vi.fn().mockResolvedValue(true),
         getBackendMode: vi.fn().mockResolvedValue('channel'),
         getProfiles: vi.fn().mockReturnValue([]),
-      } as any,
+      } as unknown as CapabilitiesRoutesDeps['claudeService'],
       opencodeService: {
         isAvailable: vi.fn().mockResolvedValue(false),
         isEnabled: vi.fn().mockReturnValue(true),
-      } as any,
+      } as unknown as CapabilitiesRoutesDeps['opencodeService'],
       antigravityService: {
         isAvailable: vi.fn().mockResolvedValue(false),
-      } as any,
+      } as unknown as CapabilitiesRoutesDeps['antigravityService'],
       blockedPiProviders: ['openai', 'openrouter'],
     });
 
@@ -417,9 +417,9 @@ describe('createCapabilitiesRoutes', () => {
         isAvailable: vi.fn().mockResolvedValue(false),
         getBackendMode: vi.fn().mockResolvedValue('direct'),
         getProfiles: vi.fn().mockReturnValue([]),
-      } as any,
-      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
-      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      } as unknown as CapabilitiesRoutesDeps['claudeService'],
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as unknown as CapabilitiesRoutesDeps['opencodeService'],
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as unknown as CapabilitiesRoutesDeps['antigravityService'],
     });
 
     const res = createMockRes();

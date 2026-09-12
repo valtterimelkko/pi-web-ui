@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { Readable, Writable } from 'stream';
-import { createModelsRoutes } from '../../../src/internal-api/routes/models.js';
+import { createModelsRoutes, type ModelsRoutesDeps } from '../../../src/internal-api/routes/models.js';
 
 function createMockReq(
   body?: unknown,
@@ -94,10 +94,10 @@ describe('createModelsRoutes — handleListModels', () => {
           { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', provider: 'openrouter' },
           { id: 'gpt-5.5', name: 'GPT-5.5 Codex', provider: 'openai-codex' },
         ]),
-      } as any,
-      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
-      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
-      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      } as unknown as ModelsRoutesDeps['piService'],
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as unknown as ModelsRoutesDeps['claudeService'],
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as unknown as ModelsRoutesDeps['opencodeService'],
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as unknown as ModelsRoutesDeps['antigravityService'],
     });
     const res = createMockRes();
 
