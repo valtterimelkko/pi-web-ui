@@ -1733,7 +1733,17 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    await agentSession.steer(message.message);
+    // Route mid-run operator input through prompt({ streamingBehavior: 'steer' })
+    // when the session is streaming: that path emits the extension `input` event
+    // before queueing the message via the same _queueSteer primitive steer()
+    // uses, so extensions can observe (transform/handle) Web UI mid-run input.
+    // Direct steer() bypasses emitInput entirely. While idle, steer() keeps its
+    // queue-for-next-run semantics (prompt() would start a new turn instead).
+    if (agentSession.isStreaming) {
+      await agentSession.prompt(message.message, { streamingBehavior: 'steer' });
+    } else {
+      await agentSession.steer(message.message);
+    }
   }
 
   private async handleFollowUp(clientId: string, message: { type: 'follow_up'; message: string }): Promise<void> {
