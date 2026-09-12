@@ -517,6 +517,41 @@ Unchanged and still not implemented (all touch production):
    `partialArgs`. The root trigger.
 3. **Generation watchdog** and **out-of-band notifications** as previously noted.
 
+### 2026-09-12 ~23:22 — E1 mid-work verification (parent)
+
+E1 is **still running** (475 msgs); the wake was a mid-work turn end. Verified what
+is already in its worktree, since the work is substantial:
+
+**Scope discipline: clean.** Zero changes under `server/`; zero touches to H7's
+files (`talkerBus.ts`, `useTalkerTurn.ts`). Its edits are confined to the client
+paths its brief owned.
+
+**Tests: 18/18 pass** in `client/tests/unit/lib/websocket.test.ts` — including the
+three resume-listener cases that were failing mid-work.
+
+**The two claims I most wanted to check, verified in the code:**
+
+1. **Budgets reset on resume.** `handleResume()` (line 378) sets
+   `reconnectAttempts = 0` (line 386) and is wired to all three resume events —
+   `visibilitychange`, `online`, `focus` (lines 597–601). This is the fix for the
+   frozen-tab case, where a suspended tab could otherwise burn the 5-attempt
+   budget while unable to retry.
+
+2. **Ordered delivery is genuinely enforced** — and the reason is subtler than the
+   brief anticipated. A queued prompt flushed immediately after reconnect would be
+   **refused with `SESSION_NOT_FOUND`**, because the server rehydrates the session
+   asynchronously before acknowledging with `session_switched`. E1 gates the flush
+   on that ack (`switchAckPending`) with a **15 s bounded fallback** so a lost ack
+   cannot stall the queue permanently. It also keeps messages on a synchronous
+   `send` throw rather than dropping them, and falls back to `queueOutbound`.
+
+That ordering detail is exactly the trap the brief flagged, and E1 solved it
+rather than racing it.
+
+**Merge sequence (unchanged):** H7 first (verified, idle), then E1 once it stops
+writing, resolving the shared `client/src/hooks/useWebSocket.ts` by hand and
+re-running both suites afterwards.
+
 ## Cleanup owed at the end
 
 - Merge or discard H2's branch `talker/pi-input-routing` and remove
