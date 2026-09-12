@@ -126,7 +126,9 @@ export type ClientMessage =
   | PinSession
   | UnpinSession
   // Session context transfer
-  | TransferSessionContext;
+  | TransferSessionContext
+  // Voice talker (Drive Mode Two-Lane plan, brief H7)
+  | TalkerTurnMessage;
 
 // Session information for listing
 export interface SessionInfo {
@@ -249,7 +251,9 @@ export type ServerMessage =
   | { type: 'antigravity_available'; available: boolean; error: string | null }
   // Session context transfer responses
   | SessionTransferCompleted
-  | SessionTransferFailed;
+  | SessionTransferFailed
+  // Voice talker (Drive Mode Two-Lane plan, brief H7)
+  | TalkerTurnResultMessage;
 
 // Message type guards
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -377,6 +381,82 @@ export function isUnpinSession(data: unknown): data is UnpinSession {
   if (typeof data !== 'object' || data === null) return false;
   const msg = data as Record<string, unknown>;
   return msg.type === 'unpin_session' && typeof msg.sessionPath === 'string';
+}
+
+// ============================================================================
+// Voice Talker Protocol Types (Drive Mode Two-Lane plan, brief H7)
+//
+// Wire types live here (the client mirrors the result shape locally in
+// lib/talkerBus.ts, matching the existing convention in client/src/lib/
+// websocket.ts — the worktree's node_modules resolves @pi-web-ui/shared to
+// the main checkout, so a worktree-local additive type there is invisible to
+// this workspace's typecheck).
+// ============================================================================
+
+/** Which runtime adapter relays for a worker session (mirrors the talker registry). */
+export type TalkerRuntime = 'pi' | 'claude' | 'antigravity';
+
+/** Coarse, mechanically derived turn outcome so the client can act (speak)
+ *  without re-deriving harness state:
+ *   - 'refused'   the utterance never reached the talker (see `refused`);
+ *   - 'released'  the operator's confirmation released a pending proposal;
+ *   - 'proposed'  the harness holds an instruction a confirm would release;
+ *   - 'answered'  plain conversational turn (including a cancel).
+ */
+export type TalkerTurnPhase = 'answered' | 'proposed' | 'released' | 'refused';
+
+/** Wire shape of the talker library's DeliveryOutcome (JSON-safe passthrough). */
+export type TalkerDeliveryOutcome =
+  | { outcome: 'delivered'; mechanism: 'steer' | 'prompt'; disclosure?: string }
+  | { outcome: 'queued'; mechanism: 'follow_up'; disclosure: string }
+  | { outcome: 'refused'; reason: string };
+
+/**
+ * Client → Server: one operator utterance for the worker session's talker.
+ * The registry applies the prompt-injection gate BEFORE any model call and
+ * holds the only confirm-gated release path; this message adds no capability
+ * of its own.
+ */
+export interface TalkerTurnMessage {
+  type: 'talker_turn';
+  /** The worker session this talker relays to (Pi: the session path). */
+  workerSessionId: string;
+  /** The operator's verbatim utterance. */
+  utterance: string;
+  /** Defaults to 'pi'. */
+  runtime?: TalkerRuntime;
+  requestId?: string;
+}
+
+/** Server → Client: what happened on one operator talker turn. */
+export interface TalkerTurnResultMessage {
+  type: 'talker_turn_result';
+  requestId?: string;
+  workerSessionId: string;
+  runtime: TalkerRuntime;
+  /** What the operator hears (spoken by the client). */
+  reply: string;
+  phase: TalkerTurnPhase;
+  /** Set only when phase === 'refused'. */
+  refused?: 'prompt_injection' | 'model_unconfigured' | 'deliveries_unavailable';
+  /** Non-null only on a released turn: verbatim relay text + delivery outcome. */
+  released: { utteranceId: number; text: string; delivery: TalkerDeliveryOutcome } | null;
+  /** True when this turn cancelled a pending proposal. */
+  cancelled: boolean;
+  /** Present when the talker's model call failed (honest, surfaced). */
+  error?: string;
+}
+
+export function isTalkerTurnMessage(data: unknown): data is TalkerTurnMessage {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'talker_turn' &&
+    typeof msg.workerSessionId === 'string' &&
+    typeof msg.utterance === 'string' &&
+    (msg.runtime === undefined || msg.runtime === 'pi' || msg.runtime === 'claude' || msg.runtime === 'antigravity') &&
+    (msg.requestId === undefined || typeof msg.requestId === 'string')
+  );
 }
 
 // ============================================================================

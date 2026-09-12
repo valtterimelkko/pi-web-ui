@@ -27,8 +27,8 @@ import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
 import { getOperationalMetrics } from '../observability/operational-metrics.js';
-import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
-import { isTransferSessionContext } from './protocol.js';
+import type { ClientMessage, ServerMessage, ImageContent, SessionMessage, TalkerTurnMessage, TalkerTurnPhase } from './protocol.js';
+import { isTransferSessionContext, isTalkerTurnMessage } from './protocol.js';
 import { handleSessionWebSocket } from './session-websocket.js';
 import { config } from '../config.js';
 import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
@@ -1010,6 +1010,10 @@ export class WebSocketConnectionManager {
 
       case 'transfer_session_context':
         await this.handleTransferSessionContext(clientId, message);
+        break;
+
+      case 'talker_turn':
+        await this.handleTalkerTurn(clientId, message);
         break;
 
       // Browser heartbeat (websocket.ts startHeartbeat). Answer it instead of
@@ -4092,6 +4096,78 @@ export class WebSocketConnectionManager {
    */
   getTalkerSessionRegistry(): TalkerSessionRegistry {
     return this.talkerSessionRegistry;
+  }
+
+  /**
+   * H7 transport binding: the browser's voice-talker path. The utterance goes
+   * to the talker registry's single entry point — which applies the
+   * prompt-injection gate BEFORE any model call and whose release path is
+   * reachable only from a confirmed proposal — and the result is relayed back
+   * verbatim. This handler adds no worker-send capability of its own; it must
+   * never widen the gate (if that appears necessary, the design is wrong, not
+   * the transport).
+   */
+  private async handleTalkerTurn(clientId: string, message: TalkerTurnMessage): Promise<void> {
+    if (!isTalkerTurnMessage(message)) {
+      // The route case already pins `type`, so a failed guard narrows the
+      // value to never; read the optional correlation id structurally.
+      const envelope = message as { requestId?: unknown };
+      const requestId = typeof envelope.requestId === 'string' ? envelope.requestId : undefined;
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Invalid talker_turn message format',
+        code: 'INVALID_MESSAGE',
+        ...(requestId !== undefined ? { requestId } : {}),
+      });
+      return;
+    }
+
+    const runtime = message.runtime ?? 'pi';
+    try {
+      const result = await this.talkerSessionRegistry.handleOperatorTurn({
+        workerSessionId: message.workerSessionId,
+        utterance: message.utterance,
+        runtime,
+      });
+
+      // Mechanically derived phase. 'proposed' means the harness holds an
+      // instruction that a confirm-classified utterance would release — read
+      // from the pending-proposal store after the turn, never from the model.
+      const pendingAfterTurn =
+        this.talkerSessionRegistry.get(message.workerSessionId, runtime)?.proposals.pending ?? null;
+      let phase: TalkerTurnPhase;
+      if (result.refused) {
+        phase = 'refused';
+      } else if (result.turn?.released) {
+        phase = 'released';
+      } else if (pendingAfterTurn) {
+        phase = 'proposed';
+      } else {
+        phase = 'answered';
+      }
+
+      this.sendMessage(clientId, {
+        type: 'talker_turn_result',
+        ...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
+        workerSessionId: message.workerSessionId,
+        runtime,
+        reply: result.reply,
+        phase,
+        ...(result.refused ? { refused: result.refused } : {}),
+        released: result.turn?.released ?? null,
+        cancelled: result.turn?.cancelled ?? false,
+        ...(result.turn?.error ? { error: result.turn.error } : {}),
+      });
+    } catch (error) {
+      // The registry throws only on contract violations (e.g. empty utterance,
+      // pre-validated above); surface it honestly rather than swallowing it.
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Talker turn failed',
+        code: 'INTERNAL_ERROR',
+        ...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
+      });
+    }
   }
 
   getClaudeService(): ClaudeService {
