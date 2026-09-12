@@ -250,6 +250,39 @@ the missing caller for `handleOperatorTurn` — today an operator utterance cann
 reach the talker from the browser at all, so the harness is wired but not yet
 reachable.
 
+### 2026-09-12 ~21:40 — operator confirmed the lifecycle model (answering session 3)
+
+**The operator's model, stated and confirmed:** a plain session is worker-only;
+the talker appears only when Drive Mode is started. The old sequential Drive Mode
+is replaced rather than kept alongside.
+
+**Verified against the code:** the operator's model matches what was built. The
+registry creates a talker **lazily, on the first operator utterance** for a
+session (`session-registry.ts` — `getOrCreate`, LRU-bounded), so an ordinary
+session carries **zero** talker overhead. The talker is also deliberately *not* a
+second worker: it converses and relays; the "worker" is the existing session, so
+Drive Mode spawns nothing new.
+
+**Not built yet, by design:** the Drive Mode UI. The harness, the server wiring
+and (in flight) the transport exist; H7's brief explicitly puts UI work out of
+scope. So the talker currently has **no UI surface at all** — it is not being
+tested "somewhere else", it simply has no front door yet.
+
+**Two questions sent for confirmation before the UI phase**, because they are
+cheap now and expensive later:
+
+1. Is the talker **Drive-Mode-only**, or also invocable in an ordinary session?
+   Earlier operator commentary suggested the capability is general ("useful for
+   any kind of session"), while the current model makes Drive Mode the trigger.
+2. **What does closing Drive Mode do?** Assumption: the talker conversation ends
+   but the worker keeps running untouched, and reopening rebinds to the same
+   worker. The alternative (closing stops the worker) seems wrong but is
+   unstated.
+
+**Answer given:** the build matches the operator's model; the two questions above
+are protocol rather than blockers. Phase 4 (Drive Mode UI, anti-duet, talking
+while working) remains the next functional phase after E1/H7.
+
 ## Cleanup owed at the end
 
 - Merge or discard H2's branch `talker/pi-input-routing` and remove
