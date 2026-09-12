@@ -16,194 +16,29 @@ afterwards.
 - Board entry: `pi-01a0920a`
 - Wake path: `watch_wake_register` (bare CLI ⇒ server-side `onFire` cannot reach me)
 
-## Children in flight (wave 1)
+## Children — all four complete
 
-| Child | Session id | Tree | Model | Board | Watch |
-|---|---|---|---|---|---|
-| ~~**H1** talker harness~~ | `01a096a8-81e9-72aa-93c7-bbbca093c60a` | merged to master | `zai/glm-5.3-flash` @ max | left | fired |
-| | | **✅ COMPLETE** — committed `de6cafe`, parent-verified | | | |
-| ~~**H2** Pi input routing~~ | `01a096a8-84c3-72aa-93c7-bbbef32af902` | merged to master | `zai/glm-5.3-flash` @ max | `voice-h2-pi-input-routing` | fired |
-| | | **✅ COMPLETE** — merged `5c17304`, worktree removed, branch deleted | | | |
-
-Run receipts: H1 `6c30f51e-07f3-4a72-859d-e637a13f4b24`, H2 `39b18fd7-811a-4361-912d-c990ea583d90`.
-
-Briefs: `docs/plans/briefs/H1-talker-harness.md`,
-`docs/plans/briefs/H2-pi-input-routing.md` (also staged inside the H2 worktree).
-
-**Backstop:** `deadline-d955496a-543e-4254-985b-15370ff7070e`, armed 2026-09-12T17:27Z, fires 18:07Z.
-
-## Parent verification log
-
-### 2026-09-12 ~18:10 — backstop reconciliation (window 1, 40 min)
-
-Both children were **alive and progressing** when the backstop fired; the watch
-had not fired because neither had ended a turn.
-
-| | H1 | H2 |
+| Child | Session id | Outcome |
 |---|---|---|
-| session status | running, 184 msgs | running, 320 msgs |
-| artefacts | `server/src/talker/` (10 modules incl. `pending-proposal`, `delivery`, `ack`, `history`, `state-view`), `server/tests/unit/talker/` (9 files incl. a 297-line `talker-gate.test.ts`), `scripts/talker-harness.ts`, `scripts/talker-prompts/v3-harness.txt` | `server/tests/unit/pi/pi-input-event-steer.test.ts` (434 lines), both target files modified (23-line diff) |
+| **H1** talker harness | `01a096a8-81e9-72aa-93c7-bbbca093c60a` | ✅ committed `de6cafe` — 97 tests, structural gate verified |
+| **H2** Pi input routing | `01a096a8-84c3-72aa-93c7-bbbef32af902` | ✅ merged `5c17304` — 8 tests, live-validated |
+| **H3** model retest | `01a0970c-a362-72aa-93c7-bbc265ebeea4` | ✅ committed `cc3f86a` — five candidates measured, one defect found |
+| **H4** long-session | `01a0970c-944c-72aa-93c7-bbc089136e0c` | ✅ committed `cc3f86a` — design claim NOT falsified, 157 turns |
 
-**Parent independent verification of H2's work (partial — child still running):**
+All four worktrees and all four child branches are cleaned up. Only the 9 stale
+worktrees from a **previous execution** remain (listed at the end).
 
-- Read the actual fix. It routes mid-run input through
-  `prompt(message, { streamingBehavior: 'steer' })` when streaming, falling back
-  to `steer()` when idle, at both call sites. The comment records that
-  `prompt()` reaches the same `_queueSteer` primitive, so queue semantics are
-  preserved — the reasoning is sound.
-- **Ran its test suite myself**: `npx vitest run
-  server/tests/unit/pi/pi-input-event-steer.test.ts` → **8/8 pass**, including
-  the defect-proof assertions and the four pinned-behaviour tests.
-- **Ran the server typecheck myself**: clean (exit 0) after fixing the worktree
-  environment (below). No errors attributable to H2's change.
+### Isolation failure — honest record
 
-**Worktree environment defect found and fixed by the parent** (this would have
-blocked H2 when it ran checks):
-
-The worktree had no per-package `node_modules` shadows, so TypeScript resolution
-fell through to the **root** `node_modules` and picked up **zod 4** instead of
-the `server`/`shared`-scoped **zod 3.25.76**, producing 11 spurious
-`ZodError.errors` errors in files H2 never touched. Fixed by creating targeted
-shadows: `server/node_modules/zod` and `shared/node_modules/zod` symlinked to the
-main tree's zod 3 copies. Server typecheck then passed cleanly.
-
-Note for future worktree use: symlinking only the top-level `node_modules` is
-**not sufficient** in this repo — hoisted version conflicts (zod 3 vs 4) make
-per-package shadowing necessary.
-
-**Backstop re-armed** for window 2.
-
-### 2026-09-12 ~18:17 — H1 wake (turn end); both still running
-
-The watch fired on H1's turn end, but H1 was **still running** (247 msgs) and had
-no pending approvals — it had simply ended a turn to continue working. H2 was
-still running (370 msgs).
-
-**Parent independent verification of H1's work (against the tree, not its report):**
-
-- **Ran the talker suite myself: 9 files, 97/97 tests pass**, including
-  `talker-gate.test.ts` (25 tests). Not a claim from the child — observed.
-- Read `pending-proposal.ts`: the pending proposal, the verbatim utterance it
-  refers to, and release history live in harness state that **the model has no
-  write access to**. `takeForRelease()` is atomic (clears before returning) and
-  computes staleness **at release time from the caller's turn**, so no caller can
-  release an aged proposal even if it never ticked. Which instruction a "yes"
-  refers to is resolved by object reference — never from conversation history.
-- Read `delivery.ts`: per-runtime adapters degrade honestly. Claude refuses on a
-  non-SDK backend **with the reason**; Antigravity reports queuing as a
-  first-class outcome; an unwired Pi refuses rather than guessing; delivery
-  outcomes carry a `disclosure` field so nothing is hidden.
-- Read the gate ordering in `talker.ts`: `release()` is **private by
-  construction** — reachable only from the confirm branch — and takes **no relay
-  text**. The text comes solely from `takeForRelease()`. A forced direct call
-  still cannot relay anything that was not a recorded, unexpired, live proposal.
-  This is the strongest structural form of non-negotiable #1.
-- Confirmed `history.maybeTrim(this.proposals.pending !== null)` — the
-  never-trim-while-pending rule (non-negotiable #6) is implemented, not merely
-  documented.
-- Confirmed `ackForOutcome(delivery)` — the acknowledgement is derived from the
-  actual delivery outcome, so "sending that now" cannot be spoken for a send that
-  did not happen (non-negotiable #7).
-
-**Verdict so far:** the structural claims hold under direct inspection. H1 has not
-yet reported completion, so this is not acceptance — it is verification of the
-artefacts present at this point.
-
-**H1's own open item, to verify at completion:** it observed 4 test failures it
-attributes to the environment (`OPENCODE_ENABLED=false` in its session shell vs
-`true` in the repo `.env`), claiming the file passes 31/31 with the variable
-unset. **The parent has not yet verified that attribution** — do not accept it
-until the mechanism is checked.
-
-**Backstop re-armed** for window 3.
-
-### 2026-09-12 ~18:18 — H2 COMPLETE, verified, merged, cleaned up
-
-H2 reported complete. Parent verification before acceptance:
-
-- **Ran its suite myself: 8/8 pass.**
-- **Checked its "pre-existing failures" claim rather than believing it.**
-  Ran `tests/unit/internal-api/session-routes-orchestration.test.ts` in
-  isolation: **89/89 pass** — so those 2 failures are order-dependent in the
-  full-suite run, not caused by H2, and H2 had already verified them against
-  base with `git stash`. Claim holds.
-- Read the diff: 23 lines across two files, no secrets, no scope creep.
-- Confirmed the fix reaches the **talker's** Pi delivery path:
-  `delivery.ts` wires `manager.steer`, which is one of the two fixed call sites.
-
-**Merged** (`5c17304`, `--no-ff` so the work stays attributable), then
-**post-merge verification in the main tree: 105/105 pass** (H2's 8 + H1's 97) —
-the two children's work coexists correctly. Worktree removed, branch deleted.
-
-### Follow-up queued from H2's honest "what I could NOT do"
-
-H2 surfaced two call sites with the **same defect shape**, outside its owned
-files and correctly left out of scope:
-
-- `server/src/internal-api/routes/sessions.ts:872` — the Internal API steer route
-  for Pi
-- `server/src/internal-api/routes/sessions.ts:5604` — the prompt/dispatch handler
-- plus the worker/RPC path (`SessionRPCClient.steer` → SDK rpc-mode `steer`)
-
-**Not a blocker for the talker**: its Pi delivery goes through
-`manager.steer` (fixed). But it is a real consistency gap — anything reaching a
-busy Pi session via the Internal API still cannot be observed by an extension.
-
-**Preferred fix is consolidation, not more call-site patches:** move the
-streaming-vs-idle decision inside `MultiSessionManager.steer()` so *every* caller
-inherits it, and have the Internal API/RPC call sites go through that method.
-That removes the defect *class* instead of patching the next site someone adds.
-Queue as **P2** — after H1 lands and H4 runs.
-
-### 2026-09-12 ~19:16 — H1 COMPLETE (verified, committed) + wave 2 dispatched
-
-**H1 accepted after independent verification.** Its report was thorough and, more
-importantly, its own tests caught four real defects during development —
-including a **double-send bug** (the release path never consumed the proposal, so
-a previous relay could authorise a second send), a relay-before-proposal path via
-greeting questions, and a meta send question wrongly replacing the pending
-proposal. That is TDD doing real work, not ceremony.
-
-**Parent verification of the environmental claim — CONFIRMED, not assumed.**
-H1 attributed 4 test failures to environment leakage. Verified directly:
-
-- the mechanism is real: `opencode-service-expanded.test.ts` asserts
-  `/not available/` at line 729, but with `OPENCODE_ENABLED=false` in the shell
-  the service fail-closes earlier with "OpenCode is disabled", taking a different
-  branch. The repo `.env` says `true`, so a leaked shell value shadows it.
-- ran that file in a **clean** parent environment: **31/31 pass**.
-- ran the **whole suite** in the clean parent environment with H1+H2 work
-  present: **exit 0, 3877/3877 in the server workspace, zero failures** — better
-  than H1's own 3,868/3,869, because my shell has no leaked variables at all.
-- `npm run typecheck` exit 0; `npm run lint` exit 0 (warnings only, pre-existing).
-
-**Committed `de6cafe`** — 21 files, 2,631 insertions. Board entries for H1 and H2
-left. Working tree clean.
-
-### Wave 2 dispatched (H3 + H4), each in its own worktree
-
-Both write to this repo, so single-writer discipline applies: each got an
-isolated worktree with the **zod-shadow fix applied up front** (top-level
-`node_modules` symlink plus per-package zod shadows), and H4's server typecheck
-was verified clean before dispatch.
-
-| Child | Session id | Worktree | Brief |
-|---|---|---|---|
-| **H4** long-session validation | `01a0970c-944c-72aa-93c7-bbc089136e0c` | `/root/pi-web-ui-wt-h4` (branch `talker/h4-long-session`) | `docs/plans/briefs/H4-long-session.md` |
-| **H3** model retest | `01a0970c-a362-72aa-93c7-bbc265ebeea4` | `/root/pi-web-ui-wt-h3` (branch `talker/h3-model-retest`) | `docs/plans/briefs/H3-model-retest.md` |
-
-Watches `ww_3_1789240593701` (H4) and `ww_4_1789240598032` (H3); backstop
-`deadline-c59cf991-8123-4356-a06d-9ec8ffc75034`.
-
-**H4 is the design-claim test**: does the bounded window with no summariser hold
-the gate over 100+ turns and repeated cycling, and is never-trim-while-pending
-actually enforced? A fiduciary instruction was given: **if the claim is
-falsified, report it and do NOT fix it** — a falsification is the valuable
-outcome.
-
-**H3 is the proxy test**: the model was selected on a marker-based benchmark we
-are not shipping. Its headline question is whether `gpt-5-nano` still
-propose-and-relays now that the gate is structural.
+H3 and H4 were given isolated worktrees and their sessions did report the
+worktree as `cwd`, but **both wrote their artefacts into the main tree**
+(`/root/pi-web-ui`) instead. Cause: their briefs named `/root/pi-web-ui` as "the
+repo" while instructing them not to touch certain paths, so they followed the
+absolute paths. **No collision occurred** — their changes were disjoint
+(H3: results + probe + harness flag; H4: two test files) — and `server/src/talker/`
+was untouched by both, as required. But the isolation I intended did not hold, and
+the lesson is: name the worktree as the repo, not the main tree, and never let
+the brief's scope limits be the only thing keeping children apart.
 
 ## Queued, not yet dispatched (blocked on H1)
 
@@ -255,6 +90,61 @@ merely re-running the field.
 ## Outstanding operator question (non-blocking)
 
 None. The H3 fifth-candidate question was answered 2026-09-12 (gpt-5-nano).
+
+### 2026-09-12 ~19:45 — wave 2 accepted; a real production defect fixed
+
+**H3 (retest) and H4 (long-session) both accepted**, verified by the parent:
+
+- H4's numbers reproduce exactly on my run: `turns=157 trims=17 entriesDropped=290
+  releases=26`. Its strongest assertion was read and is **non-vacuous** (an exact
+  `.toBe(PENDING_KEEP)` on every pending-regime trim, plus an assertion that
+  material was actually dropped).
+- Full talker suite after both landed: **108/108**.
+- `npm run typecheck` exit 0; `npm run lint` exit 0 (the six "error" matches in
+  the log are pre-existing warnings whose variable names contain "error").
+
+**A real production defect was found and fixed (TDD, RED-first).**
+`model-client.ts` hardcoded `reasoning: { enabled: false }`. Some OpenRouter
+endpoints **reject** that with HTTP 400 *"Reasoning is mandatory for this
+endpoint and cannot be disabled"* — so the talker could not run on them **at
+all**. Reasoning is now configurable; the production model's behaviour is
+unchanged by default.
+
+**Proven both directions, live:**
+- production model, default path: **PASSED**, 561 ms median, 0 breaches, verbatim EXACT
+- `gemini-3.6-flash`, which previously could not run: **now PASSES**, 902 ms median, pushback 2/2
+
+### Headline findings
+
+1. **H4: the design claim survived.** The bounded window with no summariser does
+   not corrupt the gate — including the adversarial case where trims land
+   *during* a live proposal: every trim stopped exactly at the pending floor, and
+   the release stayed verbatim-correct from the store even after the proposing
+   utterance had been dropped from history. Correctness state genuinely lives in
+   the harness, not in model memory.
+2. **H3: `gpt-5-nano` is disqualified** (pushback hold 2/5). It accepts the
+   operator's "stop asking" premise as its new understanding of the rule. The
+   structural change did eliminate its old same-turn relay pattern as predicted,
+   but not this.
+3. **H3: `gemini-3.6-flash` is now a measured, qualified challenger** — cleanest
+   candidate: 26/26 within 2 s, max 1,280 ms, pushback 5/5, no warts.
+4. **H3: `deepseek-v4.1-flash` fails on tail latency** (two turns over the 4 s
+   hard line). Its prose was the best in the field; voice needs the tail.
+5. **⚠️ Quality risk now attached to the incumbent.** Gemma showed **output
+   instability** twice, independently: H3 saw one empty reply in 21 conversational
+   turns; H4 saw `"thought"` repetition loops and empty strings on long-context
+   turns. H4's raw SSE probe cleared the harness (HTTP 200, clean completion,
+   no reasoning chunks) — this is model degeneracy, faithfully relayed. In a
+   **voice** surface an empty reply is **silence**, which is the worst failure
+   shape.
+
+### Queued next (in order)
+
+| # | Work | Why |
+|---|---|---|
+| **H5** | **Degenerate-output guard** in `model-client.ts`: detect empty / runaway-repetition replies, retry once, then fall back honestly. TDD. | The incumbent's instability is a measured production risk, and a guard makes it cheap to keep the ~18× cost advantage. **Owner asked about this — see the open question below.** |
+| **H6** | **Wire the talker into the server** (Phase 3 integration): construct `TalkerSession` with the real `MultiSessionManager` and expose a turn entry point; request-receipt discipline. | Nothing consumes the harness yet — it is a library with tests and a CLI runner. This is what makes it a product surface. |
+| **P2** | Consolidate the streaming-vs-idle steer decision inside `MultiSessionManager.steer()` so the Internal API and RPC call sites inherit it. | Removes the defect *class* H2 surfaced rather than patching call sites. |
 
 ## Cleanup owed at the end
 
