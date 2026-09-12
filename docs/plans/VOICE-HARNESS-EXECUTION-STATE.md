@@ -40,6 +40,64 @@ was untouched by both, as required. But the isolation I intended did not hold, a
 the lesson is: name the worktree as the repo, not the main tree, and never let
 the brief's scope limits be the only thing keeping children apart.
 
+### 2026-09-12 ~20:53 — H5 mid-work verification + the mobile-socket finding
+
+**H5 is still running** (98 msgs); the wake was a mid-work turn end, not a stall.
+Its changes are already in the tree, so the parent verified them now rather than
+waiting:
+
+- **Ran its tests: 25/25 pass** (up from 9).
+- **Full talker suite: 138/138 pass**, `npm run typecheck` exit 0 — no regression.
+- **Read the retry control flow directly.** `completeTurn` makes two *sequential*
+  calls, not a loop: a good first reply returns immediately with `retries: 0`; a
+  degenerate first reply triggers exactly one more call; a still-degenerate second
+  reply **throws an honest error** (surfaced as `MODEL_FAILURE_REPLY`) rather than
+  fabricating text. Boundedness is structural, not a counter that could be
+  misconfigured.
+- **Confirmed the assertions that matter exist**: exactly-2-calls on persistent
+  degeneracy, 1-call-no-retry for good replies (explicitly labelled a regression
+  guard against retry storms), the provider preference carried on both attempts,
+  and HTTP errors NOT triggering a content retry.
+- The provider order is overridable (`TALKER_PROVIDER_ORDER`) so it can be
+  re-targeted when the provider set changes — which it will.
+
+Still outstanding for H5: its own live numbers. Not committed yet.
+
+### NEW FINDING — the mobile-browser socket defect (operator-reported)
+
+The operator reports that on mobile, dictated prompts frequently never leave the
+device, and that copying the text and refreshing the browser is the only fix.
+Investigated and confirmed — it is a real client defect, and it directly threatens
+Drive Mode, where a lost utterance cannot easily be retyped.
+
+Three verified links in the chain:
+
+1. **Reconnection is scheduled with `setTimeout`** (`client/src/lib/websocket.ts`
+   `attemptReconnect`). Mobile browsers **freeze timers** when the tab is
+   backgrounded or the screen locks, so the backoff never fires while suspended
+   and is stale on return.
+2. **Nothing reconnects on resume.** The whole client contains exactly **one**
+   `visibilitychange` handler, and it exists only to flush throttled localStorage
+   writes (`sessionStore.ts:67`). There is **no** `online`, `focus`, or resume
+   check in `useWebSocket`. So a returned tab sits on a `CLOSED` socket with no
+   recovery.
+3. **The send failure is silent.** `WebSocketClient.send()` returns `false` when
+   not open, and callers discard it — `useDriveModeDictation` does
+   `if (sessionId) { sendPrompt(text); }` with the boolean ignored. The dictated
+   text is dropped with only a `console.error`.
+
+Also: a suspended tab can consume the bounded reconnect budget
+(`maxReconnectAttempts = 5`) while frozen, before it ever retries. It is **not**
+an auth/token-expiry problem.
+
+**Why refresh fixes it:** a refresh is currently the only thing that reconnects.
+
+**Planned fix (E1, queued — deliberately not started while H5 writes this tree):**
+reconnect immediately on `visibilitychange→visible` / `online` / focus and reset
+the attempt budget; queue outbound sends while the socket is not open and flush
+after reconnect; surface send failure to the operator instead of a console log;
+preserve the dictation transcript on failure so a spoken instruction is never lost.
+
 ## Queued, not yet dispatched (blocked on H1)
 
 - **H3** — retest the top five Benchmark 3 finalists against the *real* harness,
