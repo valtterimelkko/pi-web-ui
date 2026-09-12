@@ -445,6 +445,78 @@ typecheck both exit 0.
 conflict on the file that both need. Sequence: let E1 finish, then merge H7, then
 E1, resolving that one file by hand and re-running both suites.
 
+### 2026-09-12 ~23:25 — THIRD investigation CONVERGES on trigger, and finds a REAL CODE DEFECT
+
+R1c (gemini-3.8, high) was run as an independent third angle. Result: **it agrees
+on the trigger and the timeline, and it found a genuine defect that R1/R1b missed.**
+
+#### Where all three agree (the trigger)
+
+The 21:59:57 runaway generation: ~29 m 34 s of continuous streaming to the
+**131,072-token ceiling** at 22:29:31.086 (`stopReason: length`), pumping
+**157,814 deltas**, all on the main thread. Instant recovery the moment the
+provider cut the stream. R1c's session-file quote confirms the same
+`usage.output = 131072` line with `input: 221` — a benign 221-token prompt.
+
+#### The defect R1/R1b missed — CONFIRMED BY THE PARENT
+
+**`server/src/internal-api/event-broker.ts` has an accounting leak.** Two
+eviction loops exist and they are not equivalent:
+
+```js
+// line 226 — count-based trim: decrements ONLY the local `bytes`
+while (buffer.length > this.replayBufferSize) { const old = buffer.shift(); if (old) bytes -= old.bytes; }
+
+// line 229 — byte-based trim: decrements the global counter correctly
+while (bytes > this.replayBufferMaxBytes && buffer.length > 0) {
+  const old = buffer.shift();
+  if (old) { bytes -= old.bytes; this.retainedBytesTotal = Math.max(0, this.retainedBytesTotal - old.bytes); ... }
+}
+// line 236 — then, unconditionally:
+this.retainedBytesTotal += measured.bytes;
+```
+
+Because the count-based path never decrements `retainedBytesTotal`, the counter
+**ratchets monotonically upward**. Once it exceeds
+`DEFAULT_REPLAY_BUDGET_MAX_BYTES` (32 MB), `enforceGlobalBounds()`
+(line 302-306) runs its eviction `while` loop **on every published event** —
+scanning every session's buffers, up to a 10,000-iteration guard.
+
+**And it does not self-repair.** `dropSessionState` (line 286) subtracts only that
+session's `replayBufferBytes` (bounded by the 1 MB per-session cap), never the
+leaked total — and it is skipped entirely when a session is *hot* (subscribed),
+which is exactly the streaming case. There is no full reset; `retainedBytesTotal`
+is only ever decremented by the two bounded paths above. **The only thing that
+clears it is a process restart.**
+
+**Live confirmation (parent-run):** `/api/v1/diagnostics` currently reports
+`EvictedEventsTotal: 632022`, with the process at ~3.0% CPU. The counter is
+inflated **now**, so production is running the per-event eviction scan today.
+
+#### Disagreement worth recording — the tmux cause
+
+- **R1/R1b** attributed the operator's tmux freeze to an **expired Authelia
+  session** (401s on reconnect).
+- **R1c** attributed it to the operator's own health-check `curl` for H7 hanging
+  **180 s in the kernel listen queue**, freezing the tmux pane.
+
+Both are evidenced and they are **not mutually exclusive**: the stuck request and
+the later 401 re-login can both be true. What is settled either way is that the
+tmux web UI was answering normally at the HTTP layer (10–17 ms) and shares no
+dependency with the Internal API. **The freeze was a consequence of our stall,
+not a second unrelated outage** — R1c's framing is the more useful one for the
+operator, because it means "tmux stopped responding" was *our* fault.
+
+#### Status of the three recommended fixes
+
+Unchanged and still not implemented (all touch production):
+1. **Broker leak fix (NEW, and the highest-value one):** decrement
+   `retainedBytesTotal` in the count-based trim too. Small, contained, testable —
+   and it removes an escalating per-event cost that persists until restart.
+2. **pi-ai adapter:** parse tool args at `finishBlock`/throttled; cap
+   `partialArgs`. The root trigger.
+3. **Generation watchdog** and **out-of-band notifications** as previously noted.
+
 ## Cleanup owed at the end
 
 - Merge or discard H2's branch `talker/pi-input-routing` and remove
