@@ -3,13 +3,13 @@ import { ErrorCode } from './error-codes.js';
 /**
  * Pi providers blocked from Internal API agent execution by default.
  *
- * `openai` is the direct metered OpenAI provider. `openrouter` was removed from
- * this default on 2026-09-07 by operator decision: the full OpenRouter gateway
- * catalogue is intentionally served through the Internal API. Operators can
- * still re-block it via INTERNAL_API_BLOCKED_PI_PROVIDERS. The distinct
- * subscription-backed `openai-codex` provider was never blocked.
+ * Empty since 2026-09-11 by operator decision: the previously blocked metered
+ * providers `openai` (direct) and `openrouter` (gateway) are both served
+ * through the Internal API. Operators can re-block any exact provider id via
+ * INTERNAL_API_BLOCKED_PI_PROVIDERS. The subscription-backed `openai-codex`
+ * provider was never covered by this policy.
  */
-export const DEFAULT_INTERNAL_API_BLOCKED_PI_PROVIDERS = ['openai'] as const;
+export const DEFAULT_INTERNAL_API_BLOCKED_PI_PROVIDERS = [] as const;
 
 export function parseBlockedPiProviders(raw: string | undefined): string[] {
   const source = raw === undefined

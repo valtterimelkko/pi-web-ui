@@ -409,9 +409,9 @@ describe('createCapabilitiesRoutes', () => {
     expect(body.runtimes.antigravity.enabled).toBe(true);
   });
 
-  it('advertises the shipped default provider policy with openrouter unblocked', async () => {
+  it('advertises the shipped default provider policy with no blocked providers', async () => {
     // No explicit blockedPiProviders: exercises the config default
-    // (openrouter unblocked 2026-09-07; openai stays blocked).
+    // (openai and openrouter liberated 2026-09-11; the env override still re-blocks).
     const routes = createCapabilitiesRoutes({
       claudeService: {
         isAvailable: vi.fn().mockResolvedValue(false),
@@ -426,6 +426,6 @@ describe('createCapabilitiesRoutes', () => {
     await routes.handleGetCapabilities(createMockReq(), res);
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).features.piProviderPolicy).toEqual({ blockedProviders: ['openai'] });
+    expect(JSON.parse(res.body).features.piProviderPolicy).toEqual({ blockedProviders: [] });
   });
 });

@@ -106,8 +106,9 @@ per-orchestration ownership in your caller state rather than assuming server-sid
 RBAC.
 
 The Internal API refuses Pi agent execution through providers blocked by the
-operator policy (default exact id: `openai`; the OpenRouter gateway catalogue is
-intentionally served since 2026-09-07) even when the target
+operator policy (default: none — the direct `openai` provider and the
+OpenRouter gateway catalogue are both intentionally served since 2026-09-11;
+re-block any exact provider id via `INTERNAL_API_BLOCKED_PI_PROVIDERS`) even when the target
 session was originally created in the browser. `openai-codex` is a distinct
 subscription provider and remains eligible. Do not work around a
 `PROVIDER_NOT_ALLOWED` response by guessing an omitted model; choose from the

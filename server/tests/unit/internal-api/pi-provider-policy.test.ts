@@ -10,14 +10,14 @@ import {
 import { config } from '../../../src/config.js';
 
 describe('Internal API Pi provider policy', () => {
-  it('defaults to the direct-billing openai provider only and supports an explicit empty override', () => {
-    expect(parseBlockedPiProviders(undefined)).toEqual(['openai']);
+  it('defaults to no blocked providers and supports explicit overrides', () => {
+    expect(parseBlockedPiProviders(undefined)).toEqual([]);
     expect(parseBlockedPiProviders('')).toEqual([]);
     expect(parseBlockedPiProviders(' OpenAI,openrouter,openai ')).toEqual(['openai', 'openrouter']);
   });
 
-  it('ships the config default with openrouter unblocked (operator decision 2026-09-07)', () => {
-    expect(config.internalApiBlockedPiProviders).toEqual(['openai']);
+  it('ships the config default with both metered providers unblocked (operator decision 2026-09-11)', () => {
+    expect(config.internalApiBlockedPiProviders).toEqual([]);
   });
 
   it('parses only the exact provider segment before the first slash', () => {

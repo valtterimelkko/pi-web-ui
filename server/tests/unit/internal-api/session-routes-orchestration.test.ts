@@ -264,7 +264,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
   function makeRoutes(
     runReceiptManager?: RunReceiptManager,
     admissionController?: any,
-    blockedPiProviders = ['openai'],
+    blockedPiProviders = [],
     commandCodeService?: any,
   ) {
     return createSessionRoutes({
@@ -822,10 +822,8 @@ describe('createSessionRoutes orchestration endpoints', () => {
       lastActivity: '2026-05-01T00:10:00.000Z',
     });
 
-    it.each(['openai/gpt-5.5'])(
-      'rejects Pi session creation with blocked model %s before creating a runtime session',
-      async (model) => {
-        const routes = makeRoutes();
+    it.each(['openai/gpt-5.5', 'openrouter/google/gemini-3.5-flash'])('rejects Pi session creation with an explicitly re-blocked model %s before creating a runtime session', async (model) => {
+        const routes = makeRoutes(undefined, undefined, ['openai', 'openrouter']);
         const res = createMockRes();
 
         await routes.handleCreateSession(
@@ -842,7 +840,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
 
     it('rejects Pi session creation when the effective default model is blocked', async () => {
       multiSessionManager.getAgentSession().model = { provider: 'openai', id: 'gpt-5.5' };
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleCreateSession(
@@ -871,7 +869,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(piService.setModel).toHaveBeenCalledWith('new-pi', 'openai-codex/gpt-5.5');
     });
 
-    it('allows Pi session creation with an OpenRouter model by default (unblocked 2026-09-07)', async () => {
+    it('allows Pi session creation with an OpenRouter model by default (unblocked 2026-09-07, both gateways liberated 2026-09-11)', async () => {
       const routes = makeRoutes();
       const res = createMockRes();
 
@@ -884,6 +882,21 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(res.statusCode).toBe(201);
       expect(JSON.parse(res.body)).not.toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
       expect(piService.setModel).toHaveBeenCalledWith('new-pi', 'openrouter/google/gemini-3.5-flash');
+    });
+
+    it('allows Pi session creation with a direct openai model by default (unblocked 2026-09-11)', async () => {
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi', model: 'openai/gpt-5.5' }),
+        res,
+        'internal-test',
+      );
+
+      expect(res.statusCode).toBe(201);
+      expect(JSON.parse(res.body)).not.toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(piService.setModel).toHaveBeenCalledWith('new-pi', 'openai/gpt-5.5');
     });
 
     it('still rejects an OpenRouter model when the operator explicitly re-blocks the provider', async () => {
@@ -903,7 +916,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
 
     it('rejects an Internal API model switch to a blocked Pi provider', async () => {
       registry.get.mockResolvedValue(piEntry('pi-control', 'openai-codex/gpt-5.5'));
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleSessionControl(
@@ -931,7 +944,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         ...multiSessionManager.getAgentSession(),
         model: { provider: 'openai', id: 'gpt-5.5' },
       });
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleSendPrompt(
@@ -960,7 +973,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         hydrated = true;
         agentSession.model = { provider: 'openai', id: 'gpt-5.5' };
       });
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleSendPrompt(
@@ -982,7 +995,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       multiSessionManager.subscribeClient.mockImplementation(async () => {
         agentSession.model = { provider: 'openai', id: 'gpt-5.5' };
       });
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleSendPrompt(
@@ -1046,7 +1059,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
 
     it('rejects batch Pi creation when the effective default model is blocked', async () => {
       multiSessionManager.getAgentSession().model = { provider: 'openai', id: 'gpt-5.5' };
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleBatchCreate(
@@ -1121,7 +1134,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         hydrated = true;
         agentSession.model = { provider: 'openai', id: 'gpt-5.5' };
       });
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleBatchPrompt(
@@ -1147,7 +1160,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         ...multiSessionManager.getAgentSession(),
         model: { provider: 'openai', id: 'gpt-5.5' },
       });
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleSessionTransfer(
@@ -1172,7 +1185,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         ...multiSessionManager.getAgentSession(),
         model: { provider: 'openai', id: 'gpt-5.5' },
       });
-      const routes = makeRoutes();
+      const routes = makeRoutes(undefined, undefined, ['openai']);
       const res = createMockRes();
 
       await routes.handleSessionTransfer(

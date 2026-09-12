@@ -4,6 +4,11 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **OpenAI + OpenRouter fully unblocked on the Internal API (`2026-09-11`, no contract version change)**
+  - The `INTERNAL_API_BLOCKED_PI_PROVIDERS` default became empty by operator decision: the direct metered `openai` provider (previously the sole default-blocked id) is now served through the Internal API alongside the already-liberated OpenRouter gateway catalogue — listed by `GET /api/v1/models` and selectable at session creation, model switching, and every prompt mode. The historical 1.16.0 block was Internal-API-only; the browser model picker always served these catalogues and is unchanged.
+  - The subscription-backed `openai-codex` provider remains available (it was never covered by this policy). `/capabilities.features.piProviderPolicy.blockedProviders` exposes the effective list (now `[]` by default); operators can re-block any exact provider id via env. Wire schema, routes, and error codes are unchanged.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`SECURITY.md`](../SECURITY.md)
+
 - **OpenRouter unblocked on the Internal API (`2026-09-07`, no contract version change)**
   - The `INTERNAL_API_BLOCKED_PI_PROVIDERS` default narrowed from `openai,openrouter` to `openai` by operator decision: the full OpenRouter gateway catalogue (426 models at time of change, surfaced in the Pi runtime by `PI_OPENROUTER_MODELS_ENABLED`) is now served through the Internal API — listed by `GET /api/v1/models` and selectable at session creation, model switching, and every prompt mode. The historical 1.16.0 block was Internal-API-only; the browser model picker always served the catalogue and is unchanged.
   - The direct metered `openai` provider stays blocked by default; the subscription-backed `openai-codex` provider remains available. `/capabilities.features.piProviderPolicy.blockedProviders` exposes the effective list; operators can re-block via env. Wire schema, routes, and error codes are unchanged.

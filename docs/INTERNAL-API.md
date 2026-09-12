@@ -413,11 +413,12 @@ Profile-backed Claude entries may include `backend` and `claudeModel` metadata s
 ### Pi provider execution policy
 
 The Internal API has an automation-only Pi-provider policy to prevent accidental
-metered agent spend. `INTERNAL_API_BLOCKED_PI_PROVIDERS` defaults to the exact
-provider id `openai` (the direct metered OpenAI provider). Since 2026-09-07 the
-OpenRouter gateway provider is intentionally NOT blocked: the full OpenRouter
-catalogue surfaced in the Pi runtime is served through this endpoint and
-Internal API sessions may select `openrouter/…` models. Blocked providers are
+metered agent spend. `INTERNAL_API_BLOCKED_PI_PROVIDERS` defaults to empty —
+since 2026-09-11 both previously blocked metered providers are intentionally
+served: the direct `openai` provider and the OpenRouter gateway catalogue
+surfaced in the Pi runtime are listed by this endpoint and Internal API sessions
+may select `openai/…` and `openrouter/…` models. Operators can re-block any
+exact provider id via the env override. Blocked providers are
 omitted from this endpoint
 and rejected with HTTP `403` / `PROVIDER_NOT_ALLOWED` before any Internal API
 agent execution or model switch can reach the runtime. Enforcement covers
@@ -1161,7 +1162,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "sessionRecoveryEvidence": true,
     "capacityEndpoint": "/api/v1/capacity",
     "piProviderPolicy": {
-      "blockedProviders": ["openai"]
+      "blockedProviders": []
     }
   },
   "runtimes": {
@@ -2852,10 +2853,8 @@ INTERNAL_API_PIN_EXPIRY_INTERVAL_MS=300000
 
 # Pi providers blocked for Internal API agent execution only (exact ids).
 # Browser models, dictation/Drive Mode dictation, and TTS are unaffected.
-# Default blocks only the direct `openai` provider; the OpenRouter gateway
-# catalogue is served through the Internal API. Re-block with e.g.
-# `openai,openrouter` if intentional.
-INTERNAL_API_BLOCKED_PI_PROVIDERS=openai
+# Default (unset/empty) blocks nothing; re-block with e.g. `openai,openrouter`.
+INTERNAL_API_BLOCKED_PI_PROVIDERS=
 
 # Total active-turn budget; default derives from available CPU parallelism
 INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS=

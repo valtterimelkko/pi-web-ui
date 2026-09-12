@@ -83,9 +83,9 @@ describe('createModelsRoutes — handleListModels', () => {
     ]);
   });
 
-  it('serves the full OpenRouter catalogue by default while still hiding direct openai', async () => {
+  it('serves the OpenRouter and direct openai catalogues by default (liberated 2026-09-11)', async () => {
     // No explicit blockedPiProviders: exercises the shipped config default
-    // (openrouter unblocked 2026-09-07; openai stays blocked).
+    // (both metered gateway/direct providers served; env override re-blocks).
     const routes = createModelsRoutes({
       piService: {
         getAvailableModels: vi.fn().mockResolvedValue([
@@ -109,7 +109,7 @@ describe('createModelsRoutes — handleListModels', () => {
     expect(res.statusCode).toBe(200);
     const providers = JSON.parse(res.body).models.pi.map((model: { provider: string }) => model.provider);
     expect(providers).toContain('openrouter');
-    expect(providers).not.toContain('openai');
+    expect(providers).toContain('openai');
     expect(providers).toContain('openai-codex');
   });
 
