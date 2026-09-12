@@ -49,11 +49,37 @@ Briefs: `docs/plans/briefs/H1-talker-harness.md`,
 - No LLM summariser in v1; bounded rolling window, turn-boundary trimming, never
   trimmed mid-exchange.
 
+## H3 — approved candidate list
+
+Operator approved 2026-09-12. Retest against the **real harness** in this repo:
+1. `openrouter/google/gemma-4-26b-a4b-it` (thinking off) — the incumbent
+2. `google/gemini-3.6-flash` (minimal)
+3. `deepseek/deepseek-flash` (off)
+4. `openai/gpt-4o-mini` (off)
+5. **`openai/gpt-5-nano`** (minimal — provider floor; no thinking-off exists)
+
+**Why #5 is `gpt-5-nano`:** it is marker-penalised (1 hard fail in the earlier
+sweep), and its documented failure was specifically a *propose-and-relay-in-the-
+same-turn* pattern — which is exactly what the structural gate should make
+impossible once the model no longer owns the send. It is also the fastest
+candidate after gpt-4o-mini. It therefore tests the harness change rather than
+merely re-running the field.
+
+## Supervision standard set by the operator (2026-09-12)
+
+- **Independently verify each child's work** after it stops — not to the deepest
+  depth, but genuinely: check claims against the tree, run the key evidence
+  yourself rather than trusting the report.
+- **Rework is allowed**: the same model may be asked to redo a section that is
+  not up to standard, rather than the parent silently fixing it.
+- **Operator does not need code review.** They are needed when **usage testing**
+  starts, not before. Keep them informed by Telegram; questions go to Telegram or
+  they will not be seen.
+- Milestones go to Telegram as well as this file.
+
 ## Outstanding operator question (non-blocking)
 
-H3's fifth candidate — whether to include a marker-penalised model (e.g.
-`google/gemini-3.5-flash-lite` or `openai/gpt-5-nano`, both of which may re-rank
-now the marker disadvantage no longer applies) or a different model.
+None. The H3 fifth-candidate question was answered 2026-09-12 (gpt-5-nano).
 
 ## Cleanup owed at the end
 
