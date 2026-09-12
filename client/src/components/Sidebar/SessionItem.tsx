@@ -194,7 +194,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
       // Set switching state for UI feedback
       setSwitchingSession(true, session.id);
       const sent = switchSession(session.path);
-      if (!sent) {
+      if (sent === 'failed') {
         // The WebSocket could not accept the switch (dropped/connecting).
         // Clear the loading state immediately so the row stays clickable and
         // the user sees a retryable error instead of a stuck spinner.

@@ -59,7 +59,7 @@ export function useDeepLinkSession(): void {
     if (!client || client.getStatus() !== 'connected') return;
     // Mirror SessionItem.handleClick: switch flag + WS switch by path.
     const sent = client.send({ type: 'switch_session', sessionPath: target.path });
-    if (sent) {
+    if (sent !== 'failed') {
       setSwitchingSession(true, target.id);
       firedRef.current = true;
     }

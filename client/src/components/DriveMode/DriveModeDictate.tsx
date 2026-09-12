@@ -181,6 +181,37 @@ export function DriveModeDictate({
         </div>
       )}
 
+      {/* Failed-send banner — a spoken instruction is never silently dropped */}
+      {dictation.pendingText != null && (
+        <div
+          className="mt-4 w-full max-w-md rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-3"
+          role="alert"
+        >
+          <div className="text-sm font-medium text-amber-800 dark:text-amber-200">
+            Message not sent — the connection was unavailable. Your words are kept:
+          </div>
+          <div className="mt-1 text-sm text-gray-700 dark:text-gray-200 break-words">
+            {dictation.pendingText}
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={dictation.retryLastSend}
+              className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 active:scale-[0.98] transition-colors select-none touch-manipulation"
+              type="button"
+            >
+              Try again
+            </button>
+            <button
+              onClick={dictation.discardPending}
+              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors select-none touch-manipulation"
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Read Aloud controls */}
       {showReadAloudControls && (
         <div className="mt-6 flex items-center gap-3">

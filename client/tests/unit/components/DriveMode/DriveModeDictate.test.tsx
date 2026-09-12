@@ -196,4 +196,36 @@ describe('DriveModeDictate', () => {
     fireEvent.click(screen.getByText('✕ Exit'));
     expect(mockOnExit).toHaveBeenCalled();
   });
+
+  // RED 3 (UI): a send failure must surface the preserved transcript with a
+  // retry affordance — the spoken words must never silently vanish.
+  it('shows the preserved transcript with retry and dismiss when a send failed', () => {
+    const mockRetryLastSend = vi.fn();
+    const mockDiscardPending = vi.fn();
+    (useDriveModeDictation as ReturnType<typeof vi.fn>).mockReturnValue({
+      state: 'idle',
+      errorMessage: '',
+      toggle: mockToggle,
+      startRecording: vi.fn(),
+      stopRecording: vi.fn(),
+      pendingText: 'Please summarise the report',
+      retryLastSend: mockRetryLastSend,
+      discardPending: mockDiscardPending,
+    });
+    render(<DriveModeDictate sessionId="s1" modelName="test-model" sessionDisplayName="Test" onExit={vi.fn()} />);
+
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Please summarise the report')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(mockRetryLastSend).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    expect(mockDiscardPending).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the retry banner when no send is pending', () => {
+    render(<DriveModeDictate sessionId="s1" modelName="test-model" sessionDisplayName="Test" onExit={vi.fn()} />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

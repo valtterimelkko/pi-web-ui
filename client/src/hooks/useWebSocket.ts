@@ -11,8 +11,8 @@
  * consider using the WebSocket client directly or refactoring to use the new protocol.
  */
 import { useEffect, useRef, useCallback } from 'react';
-import { useSessionStore } from '../store';
-import { WebSocketClient, createWebSocketClient, type WebSocketStatus } from '../lib/websocket';
+import { useSessionStore, useUIStore } from '../store';
+import { WebSocketClient, createWebSocketClient, type WebSocketSendResult, type WebSocketStatus } from '../lib/websocket';
 
 export function useWebSocket() {
   const clientRef = useRef<WebSocketClient | null>(null);
@@ -64,6 +64,23 @@ export function useWebSocket() {
       onError: (error) => {
         console.error('WebSocket error:', error);
       },
+      // A send made while the socket was down is held and flushed after
+      // reconnect. Tell the operator once per outage so a dictated prompt on a
+      // phone does not look like it vanished into thin air.
+      onMessageQueued: (queueDepth) => {
+        if (queueDepth !== 1) return; // one notice per outage, not per message
+        useUIStore.getState().addToast({
+          type: 'info',
+          message: 'Message queued — it will be sent once the connection is restored.',
+        });
+      },
+      // A send that could not even be queued is genuinely lost — this must be
+      // visible, not a silent console.error.
+      onSendFailed: (reason) => {
+        console.error('[WebSocket] Send failed:', reason);
+        useUIStore.getState().addToast({ type: 'error', message: reason });
+        useUIStore.getState().logNotification({ type: 'error', message: reason, sessionId: null });
+      },
     });
 
     clientRef.current = client;
@@ -80,14 +97,14 @@ export function useWebSocket() {
     };
   }, []); // Empty dependency array - only run once on mount
 
-  const sendMessage = useCallback((message: unknown) => {
-    return clientRef.current?.send(message) ?? false;
+  const sendMessage = useCallback((message: unknown): WebSocketSendResult => {
+    return clientRef.current?.send(message) ?? 'failed';
   }, []);
 
-  const sendPrompt = useCallback((message: string, images?: unknown[], agent?: string) => {
+  const sendPrompt = useCallback((message: string, images?: unknown[], agent?: string): WebSocketSendResult => {
     if (!currentSessionId) {
       console.error('No active session');
-      return false;
+      return 'failed';
     }
     const sent = sendMessage({
       type: 'prompt',
@@ -96,19 +113,22 @@ export function useWebSocket() {
       images,
       agent,
     });
-    if (sent) useSessionStore.getState().clearTransferReady(currentSessionId);
+    // A queued prompt will still reach the agent after reconnect, so the
+    // transfer-ready state may be cleared either way; only a real failure is
+    // reported to the caller as 'failed'.
+    if (sent !== 'failed') useSessionStore.getState().clearTransferReady(currentSessionId);
     return sent;
   }, [sendMessage, currentSessionId]);
 
-  const sendSteer = useCallback((message: string) => {
+  const sendSteer = useCallback((message: string): WebSocketSendResult => {
     const sent = sendMessage({ type: 'steer', message });
-    if (sent && currentSessionId) useSessionStore.getState().clearTransferReady(currentSessionId);
+    if (sent !== 'failed' && currentSessionId) useSessionStore.getState().clearTransferReady(currentSessionId);
     return sent;
   }, [sendMessage, currentSessionId]);
 
-  const sendFollowUp = useCallback((message: string) => {
+  const sendFollowUp = useCallback((message: string): WebSocketSendResult => {
     const sent = sendMessage({ type: 'follow_up', message });
-    if (sent && currentSessionId) useSessionStore.getState().clearTransferReady(currentSessionId);
+    if (sent !== 'failed' && currentSessionId) useSessionStore.getState().clearTransferReady(currentSessionId);
     return sent;
   }, [sendMessage, currentSessionId]);
 
