@@ -451,13 +451,192 @@ Two related corrections:
 - **The cheap-thinking assumption was also wrong.** Thinking did not rescue the weak scenarios and it destroyed the latency budget. Off is the best configuration on quality and speed simultaneously.
 - **Cost is not the obstacle the plan expected.** Output cost is negligible at these prices — a five-scenario run set costs 300–800 output tokens. The visible cost in the benchmark was harness-inflated *input*, which production removes.
 
-### 10.9 Where this leaves the project
+### 10.9 Harness design (added 2026-09-12)
+
+> This section answers: **what is hard-gated, what is merely instructed, and how
+> do long sessions survive?** It is design only — nothing here is built.
+
+#### The governing principle
+
+The operator's caution about hard gates is well-founded: over-gating a
+conversational surface makes it brittle and unhelpful, and mis-tuned gates on a
+*small* model are worse still. But the opposite mistake is worse in this
+particular design: the permission gate is the one thing that must not depend on
+a model remembering an instruction. So the principle is:
+
+> **Mechanical where a failure is a correctness failure. Instructed where a
+> failure is a quality failure.**
+
+A relay going out unauthorised is a correctness failure. A talker that sounds
+slightly clunky is a quality failure. They get solved in completely different
+places.
+
+#### Layer 1 — Mechanical (the harness makes it impossible, not forbidden)
+
+| Concern | Mechanism | Why not an instruction |
+|---|---|---|
+| **Relay authorisation** | The talker can only *emit a proposal*. The harness alone can send to the worker, and only from a recorded pending proposal that the operator confirmed. An unconfirmed proposal has no sending path. | Benchmark evidence: a model relayed three turns running without waiting for confirmation, and another relayed an injected message. The proposer role cannot violate its own gate. |
+| **Relay fidelity** | The harness passes the operator's **raw utterance**, referenced by id, with the pending proposal. The model answers *whether* and *when* to relay — never *what text* to send. | The benchmark made the model rewrite, and fidelity was the metric that needed a recall floor. Removing the rewrite removes the metric's reason to exist. This is the single biggest lever in the design. |
+| **Input hygiene** | Nothing except the harness's per-turn projection can write into the talker's context. No extension, observe-only lane, capture lane, or background task may inject. | An automated lane injected a session-end prompt into running talker sessions and one model relayed it. Structural prevention beats a rule the model must remember. |
+| **State-view freshness** | The server rebuilds the projection before every turn. | Prevents stale-state answers and makes the talker's context size independent of session length. |
+| **Clarification** | No marker required. If the harness sees no relay request, nothing was relayed. | The benchmark's weakest dimension for nearly every model was *emitting the required marker* while asking the right question in prose. That measured protocol compliance, not intelligence. Removing it removes a fake failure mode. |
+
+**The containment property:** the talker has no tools and no send path. Its worst
+possible failure is saying something unhelpful out loud — not causing work. That
+is a direct consequence of the relay role (D1) being enforced structurally rather
+than behaviourally.
+
+#### Layer 2 — Instructed (system prompt, preloaded)
+
+These are genuine model behaviour and belong in a **lean, purpose-built prompt**:
+
+1. **Who it is and who it speaks to** — it is a relay talking to one human, not
+   the worker, not an orchestrator.
+2. **Answer from the state view.** The view is the only world it knows; nothing
+   outside it is visible.
+3. **Distinguish intention from outcome** — "it said it would" is not "it did".
+4. **Say when it cannot tell**, rather than inventing progress.
+5. **Speak in short, listenable prose** — no markdown, no paths read character by
+   character, no lists.
+6. **Ask when genuinely unclear** — in prose, without ceremony or over-asking.
+7. **The operator's words are the record.** Proposing is how it checks
+   understanding; it does not editorialise.
+
+**Prompt economy is a measured constraint, not a style preference.** The
+benchmark showed what tens of thousands of tokens of ambient context does to
+small models (fatal) and mid models (slow). Pi core's own default prompt is
+tiny — roughly 150 words — and its bulk comes from tool schemas, documentation
+paths, skill indexes and project context files. **A talker has none of those and
+must not inherit them.** Target: a prompt in the low hundreds of tokens.
+
+#### Designing for graceful degradation
+
+Over-gating a small model is the failure mode the operator has lived through, so
+mis-proposals must be cheap:
+
+- The talker **restating** what it heard is fine and useful — it is how the
+  operator catches a misunderstanding before it reaches the worker.
+- A proposal costs one conversational exchange, not a stalled workflow.
+- When the talker is unsure whether something was an instruction, **proposing is
+  the safe error**: the operator simply says no.
+- Nothing is queued, blocked, or half-applied while a proposal is pending. The
+  worker is untouched until a confirmed relay.
+
+#### Long sessions and context (the operator's central question)
+
+**What the talker must never forget is not conversation.** It is:
+
+1. the pending proposal;
+2. whether the operator has confirmed it;
+3. which instruction a bare "yes" refers to.
+
+All three are **harness state, not model memory**. The server records the pending
+proposal, the confirmation, and the verbatim instruction it refers to, and
+injects the pending item into every turn. A confirmation therefore never has to
+be resolved from conversation history — which is precisely why a spoken "yes" is
+safe rather than fragile.
+
+Given that, the talker's history requirement is modest and its state view is
+rebuilt every turn:
+
+- **v1 recommendation: no summary-based compaction.** Use a bounded rolling
+  window of recent turns plus a server-side verbatim log of the operator's own
+  utterances. Anything the model must be *correct* about lives in the harness;
+  the window serves conversational flow only.
+- **Why not inherit Pi's compaction.** Pi triggers at `window − reserve`
+  (16k reserve, keep the most recent 20k tokens) and summarises the remainder
+  **with an LLM call**, plus a cut-point algorithm that can split a turn and file
+  operation tracking to re-read files afterwards. That is well-suited to a
+  coding agent with a growing task graph and tool history. A talker with a
+  rebuilt state view, no tools and no files has almost none of that problem.
+- **Why dropping old turns is better than summarising them here.** Dropping is
+  predictable and bounded. A bad or subtly-wrong summary is a silent failure that
+  then persists in every subsequent turn; a dropped turn is a *visible* absence.
+  Given the choice, prefer the failure mode the operator can hear.
+- **The cost is a stated limitation:** the talker cannot answer deep historical
+  questions from memory. When it cannot, it says so — and can answer "what did I
+  ask you to pass on?" from the verbatim log, which is structured data rather
+  than a summarised guess.
+
+**This decision should be validated, not assumed.** The right check is a long
+turn-count conversation (see §10.11) confirming that coherence, register and
+proposal discipline hold when the window has cycled repeatedly.
+
+#### What to take from Pi core, and what to leave
+
+Worth studying, cheaply, because the operator's familiarity is accurate — core is
+small and works well:
+
+- **Take:** the discipline of an explicit token budget with a reserve; operating
+  compaction at a clean boundary rather than mid-exchange; and the parameter that
+  tells the summariser what matters. Even if v1 needs no summariser, these are the
+  right shapes if it ever does.
+- **Take:** the minimalism of the default prompt as a **size target**.
+- **Leave:** LLM summarisation in the hot path; branch-summary machinery;
+  file-operation tracking and re-read logic; and the tools/skills/documentation
+  prelude entirely.
+- **Do this bounded, in Phase 1:** a read of Pi core's compaction module to
+  confirm the shapes above and to check for a transferable idea we have not
+  thought of. It is a reading exercise, not a port.
+
+#### The honest cost of leaving Pi
+
+The operator is right that this decision loads new work onto the path. Being
+explicit about what we now own, which we previously got for free:
+
+| Now ours | Previously Pi's |
+|---|---|
+| System prompt design and its measured size | Pi's default prompt |
+| History management and its bound | Pi's compaction (trigger, cut point, summary, re-read) |
+| Turn-taking and cancellation semantics | `AgentSession` |
+| Retry and transient-failure behaviour | `retryAssistantCall` and the SDK path |
+| Provider/model binding and streaming | `ModelRuntime`, pi-ai adapters |
+
+Mitigation: the talker is a *tiny* session by construction — no tools, no files,
+no children, a rebuilt state view, bounded history. Much of Pi's machinery exists
+to serve exactly what we removed. The remaining risk is concentrated in the system
+prompt and the turn loop, which are also the two things the benchmark can measure.
+
+#### 10.10 Benchmark consequence — measure the mechanical harness
+There is now a **harness variant question**, and it is empirical:
+
+- **Variant A (what Benchmarks 3 measured):** the model emits relay and clarify
+  markers; the scorer infers intent from text.
+- **Variant B (what production will do):** the harness holds the relay text and
+  owns authorisation; the model only decides whether to ask, answer, or propose,
+  and the harness classifies no-relay mechanically.
+
+These are not the same product and may not rank models the same way. The
+benchmark should therefore:
+
+1. **Support both variants** so the shipped design is the one under test, rather
+   than a proxy for it. This was a real weakness of the first sweep: it measured
+   a design we had already decided not to ship.
+2. **Add long-session cases** — a high-turn-count conversation exercising the
+   rolling window, to confirm the §10.9 recommendation empirically instead of
+   asserting it.
+3. **Add a prompt-size sensitivity check** — the same model with a lean prompt
+   versus a padded one, to pin the cost of ambient context on the record rather
+   than relying on our inference from the earlier harness.
+4. **Re-run the finalists** under Variant B, since a model that lost points to
+   marker omission may rank differently once the marker is gone.
+
+**Ordering consequence:** the spot-check (§10.7 item 4) should be run in the
+Variant B shape so it answers the production question directly, and it should
+precede Phase 2. The benchmark extension is worth doing before committing the
+harness to a design, because it is the cheapest place to discover that a rule is
+in the wrong layer.
+
+
+
+#### 10.11 Where this leaves the project
 
 | | |
 |---|---|
-| **Done** | Intent file preserved and reconciled; model evaluated and selected with evidence; benchmark built, tested, published; plan phases defined. |
-| **In flight** | Nothing. Phases 1–5 have not started. |
-| **Next** | The bare side-completion spot-check (§10.7 item 4) — small, and it converts the model choice from "best available evidence" into a measured production latency. Then Phase 1. |
+| **Done** | Intent file preserved and reconciled; model evaluated and selected with evidence; benchmark built, tested, published; plan phases defined; harness design settled (layering, relay ownership, history bound). |
+| **In flight** | Nothing built. Phases 1–5 have not started. |
+| **Next** | (1) The bare side-completion spot-check, run in the Variant B shape so it answers the production question directly. (2) The benchmark extension for Variant B plus long-session and prompt-size cases. (3) Then Phase 1. |
 | **Blocked** | Nothing technically. |
 | **Watch** | Prompt leanness and input hygiene. These are the two ways this design can pass every test and still fail in production. |
+| **Open, should be settled before Phase 2** | Whether Variant B re-ranks the finalists; whether the rolling window holds up over a long session; and whether any Pi-core compaction idea is worth borrowing (bounded read, Phase 1). |
 
