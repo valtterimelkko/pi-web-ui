@@ -370,6 +370,81 @@ disagreement is itself the finding.
 
 All four probe sessions were deleted after use.
 
+### 2026-09-12 ~23:10–23:20 — R1 root cause CONVERGED; H7 verified; merge serialised
+
+#### R1 root cause — confirmed by convergence
+
+Two independent investigators (R1 on `zai/glm-5.3` @ max, and its own continuation
+on the same session; plus R1b) reached the **identical mechanism**, verified by the
+parent reproducing the benchmark.
+
+**Mechanism.** A hosted child generation **ran away**: at 21:59:57 the H7 child
+session (inside the production server process, `zai/glm-5.3-flash`,
+`zaiToolStream: true`) began streaming and emitted its **entire 131,072-token
+output budget over 29.5 minutes**, ending 22:29:31.086 with `stopReason: "length"`
+and only a 549-byte final tool call.
+
+Every streamed tool-args delta runs this at `pi-ai/dist/api/openai-completions.js:455-456`:
+
+```js
+block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+block.arguments = parseStreamingJson(block.partialArgs);
+```
+
+and `parseStreamingJson` on an **incomplete** JSON string performs **four O(n)
+passes per delta** (two throwing `JSON.parse` attempts, a full char-by-char
+`repairJson` walk, then `partialParse`) over an ever-growing string. Linear per
+call, **quadratic in total**, all synchronous on the server's single event loop.
+
+**Parent reproduced the cost independently** (`/tmp/r1-bench/parse-bench.mjs`):
+0.399 ms/call at 5 KB → **14.566 ms at 460 KB**, integrating to **124.1 s of pure
+parse CPU** for one such generation. Matches the child's 13.9 ms / 121 s.
+
+**Everything else follows**, to the second: growing heartbeat gaps (31 s → 232 s),
+the `[EventLoopShed] lagMs=1728` at 22:17:51, health-probe failures from 22:15:29,
+the 67–72 queued unix-socket connections (pollers piling on a loop that cannot
+accept), 200–300 MB heap swings from per-delta allocations and exceptions, and
+recovery **within seconds** of the provider cutting the stream at 22:29:31.
+
+**Rejected with evidence:** watch-wake polling (memory-served route; the queue was
+a symptom), EventLoopShed (passive flag-setter; it *detected* the stall), timer
+fan-out, the sibling Vite/validation servers and host starvation (sar clean), and
+a GC-only spiral (an amplifier, not the source).
+
+**This exonerates my earlier hypotheses** — watch polling and the validation
+servers were both wrong. It also explains H7's apparent 23-minute "stall": it was
+between tool calls during that runaway generation.
+
+#### Tmux freeze — separate cause, NOT the API
+
+The tmux web UI answered in **10–17 ms throughout** (Caddy) and has no Internal API
+dependency. The operator's WebSocket closed at 22:17:50 and reconnects returned
+**401 — an expired Authelia session** — until re-login. What closed the socket is
+unknown. The two events were coincident, not related.
+
+#### Recommended fixes (documented, NOT implemented — production changes)
+
+1. **pi-ai adapter (root fix):** parse tool args at `finishBlock` (or throttled),
+   not per delta; cap `partialArgs` length and fail early with a clear error.
+2. **Server-side generation watchdog:** abort an in-process stream that saturates
+   the broker cap for minutes — shedding broker deliveries cannot relieve a burn
+   inside the provider adapter.
+3. **Out-of-band notification path** for `notify.sh` (the confirmed spool-during-
+   outage defect).
+
+#### H7 verified and ready — but merge is deliberately serialised
+
+Parent verification of H7: **10/10** its server transport tests, **8/8** client
+tests (I initially mis-ran these with the default vitest config; jsdom lives in
+`client/vitest.config.ts` — H7 was right), `release()` still private and reachable
+only from the confirm branch, **`server/src/talker/` untouched**, server and client
+typecheck both exit 0.
+
+**Merge held back on purpose:** E1 modifies the same shared file (`useWebSocket.ts`
++31/−11 vs H7's +9/−1), and E1 is still writing. Merging now would risk a messy
+conflict on the file that both need. Sequence: let E1 finish, then merge H7, then
+E1, resolving that one file by hand and re-running both suites.
+
 ## Cleanup owed at the end
 
 - Merge or discard H2's branch `talker/pi-input-routing` and remove
