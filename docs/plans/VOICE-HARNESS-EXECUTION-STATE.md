@@ -283,6 +283,48 @@ cheap now and expensive later:
 are protocol rather than blockers. Phase 4 (Drive Mode UI, anti-duet, talking
 while working) remains the next functional phase after E1/H7.
 
+### 2026-09-12 ~22:20–22:32 — SERVER EVENT-LOOP STALL (transient, self-recovered)
+
+**What happened.** The production `pi-web-ui` Internal API stopped responding for
+roughly ten minutes. Every request timed out (13–28 s, `http=000`), the unix-socket
+accept queue backed up to **67–72 pending** connections against a 511 backlog, the
+main thread sat in state **R (spinning)** with all 11 worker threads parked on
+futex, and the 30-second memory heartbeat stopped printing from 22:21:45.
+
+**Ruled out, with evidence:**
+
+- **Not memory.** Heap 535 MB of a 4288 MB limit, RSS ~1.5 GB. Plenty of headroom.
+- **Not CPU load.** Main process at 2.4% CPU; load average ~2.2 on the host.
+- **Not the validation servers.** E1's four validation processes were at 0.0% CPU
+  and idle throughout.
+- **Not disk.** 80 GB free.
+
+**What it broke:** H7's session stopped advancing (no writes from 21:59 while the
+API was down); E1 kept working because it is client-side. **All six parent watch
+registrations failed to poll**, so wake delivery was degraded — the parent fell
+back to reconciling from session files on disk, and the local `wake_deadline`
+timer kept working because it does not use the API.
+
+**It recovered on its own** at ~22:30–22:31, before a restart was performed. The
+operator had approved a restart; the parent re-probed first and found the API
+answering in 32–53 ms with the backlog drained, so **no restart was performed** —
+restarting would have killed two healthy sessions for nothing.
+
+**Open (do not lose this):** the stall was never root-caused. A repeat would hit a
+batch mid-flight again. Suspects to examine when there is evidence: the watch-wake
+polling path (six watches polling continuously), the client reconnect storm the
+backlog implies, or an event-loop-blocking synchronous section. The
+`[EventLoopShed] lagMs=1728` line at 22:17:51 is the only direct clue.
+
+**Second finding from the same window — the notification path has no independent
+delivery route.** `scripts/notify.sh` talks to the Internal API; with the API down
+it **spooled the blocker message locally instead of sending it**, so the operator
+would have received nothing during the outage. The parent worked around it by
+posting directly to the Telegram bot API (reading the bot credentials from the
+production env without printing them) and then deleted the spooled copy to avoid a
+duplicate on recovery. Worth fixing: during an outage is exactly when the operator
+needs to be told.
+
 ## Cleanup owed at the end
 
 - Merge or discard H2's branch `talker/pi-input-routing` and remove
