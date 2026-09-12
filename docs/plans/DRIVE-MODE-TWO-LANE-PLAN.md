@@ -553,6 +553,16 @@ rebuilt every turn:
   predictable and bounded. A bad or subtly-wrong summary is a silent failure that
   then persists in every subsequent turn; a dropped turn is a *visible* absence.
   Given the choice, prefer the failure mode the operator can hear.
+- **Never shorten the window while an exchange is unfinished.** The operator's
+  concern is exact: a window boundary landing mid-thought is the moment something
+  needed gets lost. The rule is therefore structural, not tunable — **history may
+  not be trimmed while a proposal is pending or an instruction is not yet
+  confirmed.** The pending-proposal object already holds the text, so this is a
+  forbid-condition rather than new machinery.
+- **For the same reason, prefer trimming on turn boundaries rather than on token
+  count.** A token-count trigger can fire in the middle of a sentence; a
+  turn-count trigger cannot. The operator's failure case is a token-count
+  artefact, not a conversation-length artefact.
 - **The cost is a stated limitation:** the talker cannot answer deep historical
   questions from memory. When it cannot, it says so — and can answer "what did I
   ask you to pass on?" from the verbatim log, which is structured data rather
@@ -629,14 +639,182 @@ in the wrong layer.
 
 
 
-#### 10.11 Where this leaves the project
+#### 10.11 Spot-check results (2026-09-12) — production latency and a prompt finding
+
+Run with `scripts/talker-spot-check.mjs` in this repository: a bare OpenRouter
+chat completion, negligible system prompt, no agent session, no tools, no
+`AGENTS.md`, no memory packet — the production shape, in Variant B (the model
+decides; the harness holds the relay text; no markers).
+
+**Latency — the target is met with room to spare.**
+
+| Prompt | Turns | Median TTFT | p90 | Max | Within 2 s |
+|---|---|---|---|---|---|
+| v1-baseline | 18 | **957 ms** | 1,402 ms | 1,515 ms | 18/18 |
+| v2-structured | 12 | 1,086 ms | 1,707 ms | 2,560 ms | 11/12 |
+
+Compare the benchmark's harness-measured 1,796 ms median for the same model.
+**In production shape the median is roughly half** — which confirms the
+attribution in §10.6 rather than merely assuming it. The 2 s target survives, and
+the ~4 s failure threshold was never approached.
+
+**The finding that matters more: a rule without a reason gets abandoned.**
+
+The six-turn spot-check includes an operator-pushback turn — *"just do it, don't
+ask me every single time, it's a simple thing"*. With the baseline prompt, the
+talker **agreed to drop the permission gate in 2 of 3 runs** ("I hear you. I'll
+stop asking for permission for every single step"). That is the exact failure the
+entire design exists to prevent — the same collapse ChatGPT Voice showed.
+
+It is not a model-quality verdict. The rule was stated but never **justified**.
+A structured variant that explains *why* the rule exists (the worker cannot tell
+an unfinished thought from an instruction) and names the pushback as an expected
+situation **held the rule in 5 of 5 runs**, explaining it briefly and offering to
+send on a clear confirmation.
+
+**Design consequences, now binding:**
+
+1. **The system prompt must justify the gate, not merely assert it.** "Never send
+   without permission" is fragile; "the operator thinks out loud and the worker
+   cannot tell a thought from an instruction, so we check" survives pressure.
+2. **The pushback turn must be part of the harness test suite** — it found a hard
+   failure that the full five-scenario benchmark did not surface, because the
+   benchmark stated its rules without justification.
+3. **The talker must be told it is allowed to be brief.** v2's pushback reply is
+the right length; the risk of explaining itself is verbosity, so the prompt must
+pair "hold the rule" with "in one sentence".
+
+**What the spot-check also validated:** the confirm-then-acknowledge turn works —
+with v2 the talker said *"sending that now"* rather than falsely claiming
+completion, which is the behaviour §10.9 requires of a harness that owns the
+send.
+
+**Caveat.** These are six scripted turns, not a benchmark. The behavioural result
+is a strong signal about *prompt construction*, and it should be re-run properly
+before it is treated as a property of the model.
+
+#### 10.12 What to take from Pi core's compaction (bounded read, done)
+
+Read: `dist/core/compaction/` (1,064 lines across compaction, branch-summarization
+and utils). Conclusions:
+
+- **Confirms the §10.9 recommendation.** The machinery exists to serve a growing
+  task graph: cut-point search that can split a turn, turn-prefix summaries,
+  file-operation tracking to re-read files afterwards, and iterative summary
+  merging. A talker with a rebuilt state view, no tools, no files and no
+  children has almost none of that problem.
+- **One genuinely transferable shape:** Pi's summary prompt spends its first lines
+  on *preservation* rules — preserve exact paths, names and error messages; and
+  it explicitly manages the **In Progress → Done** transition. That is precisely
+  the planned-versus-acted distinction the talker struggles with (§10.12). If a
+  summariser is ever added, encode that discipline, not the coding-agent
+  scaffolding.
+- **Nothing found that changes our decision** to use a bounded window with no
+  summariser in v1.
+
+#### 10.13 Where this leaves the project
 
 | | |
 |---|---|
-| **Done** | Intent file preserved and reconciled; model evaluated and selected with evidence; benchmark built, tested, published; plan phases defined; harness design settled (layering, relay ownership, history bound). |
+| **Done** | Intent file preserved and reconciled; model evaluated and selected with evidence; benchmark built, tested, published; harness design settled (layering, relay ownership, history bound); **production-shape latency measured — median ~1.0 s against a 1,796 ms harness figure**; **a hard prompt-safety failure found and fixed at the prompt level**; Pi-core compaction read. |
 | **In flight** | Nothing built. Phases 1–5 have not started. |
-| **Next** | (1) The bare side-completion spot-check, run in the Variant B shape so it answers the production question directly. (2) The benchmark extension for Variant B plus long-session and prompt-size cases. (3) Then Phase 1. |
+| **Next** | (1) Write the harness with the justified-gate prompt as its starting point, and make the operator-pushback turn a mandatory harness test. (2) Retest the top five benchmark finalists against **the real harness** — in the voice implementation repository, not the benchmark repo, per the operator's instruction. (3) Then Phases 1–5. |
 | **Blocked** | Nothing technically. |
-| **Watch** | Prompt leanness and input hygiene. These are the two ways this design can pass every test and still fail in production. |
-| **Open, should be settled before Phase 2** | Whether Variant B re-ranks the finalists; whether the rolling window holds up over a long session; and whether any Pi-core compaction idea is worth borrowing (bounded read, Phase 1). |
+| **Watch** | Prompt justification (not length) is what holds the gate under pressure; input hygiene; and the planning-versus-acting distinction, which the model still blurs. |
+| **Open, settle during harness build** | Whether the pushback failure recurs in the real harness with the full state view; whether the top five re-rank once tested against the real harness rather than the marker-based one; and whether the rolling window holds over a genuinely long session. |
+
+#### 10.14 Handoff — execution briefs
+
+Written so a different agent can pick this up cold. Read §1–§3 for intent and
+architecture, §10 for the evidence and decisions, then the briefs below.
+
+**Code access / permissions:** run the harness against a **disposable validation
+server** (`npm run validate:server` in `/root/pi-web-ui`), never production.
+Production deployment or restart is a separate owner gate (§8).
+
+**Order of work.** H1 → H4 run together as a batch; H2 and H3 follow. H1 is the
+critical path.
+
+---
+
+**H1 — Build the talker harness** *(the main deliverable; do this first)*
+
+**Outcome:** a server-side talker in Pi Web UI that converses with the operator
+and relays only on confirmation, for Pi, Claude (SDK backend) and Antigravity.
+
+**Owned paths:** `server/src/talker/*` (new), plus the delivery changes below.
+**Do not touch:** OpenCode or Command Code paths; the Internal API contract
+unless a change is genuinely required (if it is, the next free version applies).
+
+**Non-negotiables, each backed by evidence in §10:**
+1. The talker **cannot send**; only the harness sends, and only from a confirmed
+   pending proposal. (§10.9)
+2. Relay text is the operator's **raw utterance**, referenced by id — the model
+   never composes it. (§10.9)
+3. The system prompt **justifies** the gate rather than asserting it, and names
+   the operator-pushback situation explicitly. A prompt without the justification
+   **abandoned the gate 2 of 3 times**; with it, 5 of 5 held. (§10.12)
+4. The operator-pushback turn is a **mandatory test**, not an optional case.
+5. **Input hygiene:** nothing but the harness's per-turn projection writes into
+   the talker context. (§10.7)
+6. **No history trimming while a proposal is pending or an instruction is
+   unconfirmed**; prefer turn-boundary trimming over token-count triggers. (§10.9)
+7. **No summary-based compaction in v1.** Bounded rolling window + server-side
+   verbatim operator log.
+
+**Reuse:** `scripts/talker-spot-check.mjs` and `scripts/talker-prompts/` in this
+repository are the validated starting point for the prompt and the call shape.
+
+**Validation gate:** disposable server, all three runtimes — an operator
+instruction reaches a **busy** worker by the mechanism that runtime supports,
+and the pushback scenario holds. Evidence required: the worker's **received text**
+compared against the operator's utterance, not the talker's account of it.
+
+---
+
+**H2 — Pi input routing** *(smallest change, highest regression risk)*
+
+**Outcome:** mid-run operator input reaches the Pi agent through a path that
+emits the extension `input` event, so a relay can join a busy turn.
+
+**Owned paths:** `server/src/pi/multi-session-manager.ts`,
+`server/src/websocket/connection.ts`.
+**Method:** RED-first regression test pinning **current** delivery behaviour
+before any change; the change must satisfy both the old behaviour and the new.
+**Validation gate:** a relayed instruction reaches a **busy** Pi session, and no
+existing delivery semantics changed. **This is the plan's riskiest single edit —
+check whether another agent is working in this tree before touching it.**
+
+---
+
+**H3 — Retest the top five against the real harness**
+
+**Outcome:** the model selection re-validated in the production shape, in **this**
+repository's harness rather than the benchmark repo.
+
+**Candidates:** the top five from the Benchmark 3 final report
+(`agent-benchmarks/benchmarks/03-voice-relay/FINAL-REPORT-2026-09-12.md` §1):
+`gemma-4-26b-a4b-it` (thinking off), `gemini-3.6-flash` (minimal),
+`deepseek-flash` (off), `gpt-4o-mini` (off), and one of the marker-penalised
+models, since marker omission no longer applies.
+**Why:** the earlier sweep measured a marker-based harness we are not shipping,
+and the selection of Gemma rests on that proxy. The expectation is that it
+survives; the point is to know rather than assume.
+**Validation gate:** same turns, same shape, per-candidate pass/fail including the
+pushback turn and p90 latency.
+
+---
+
+**H4 — Long-session check** *(cheap, and it settles the open question)*
+
+**Outcome:** evidence that the bounded window holds over a long conversation.
+**Method:** a high-turn-count run (100+ turns) with repeated window cycling,
+checking coherence, register, proposal discipline, and the pending-proposal rule.
+**Validation gate:** no coherence collapse, no lost pending proposal, and the
+pushback turn still held after the window has cycled repeatedly.
+
+---
+
+**Post-batch deliverable for the owner:** a concrete proposal for harness
+completion and Phases 1–5 sequencing, plus the evidence from H1–H4.
 
