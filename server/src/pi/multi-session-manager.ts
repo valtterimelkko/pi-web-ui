@@ -1504,6 +1504,10 @@ export class MultiSessionManager {
   /**
    * Steer/abort the current operation in a session.
    * Requires the underlying AgentSession to have a steer method.
+   *
+   * Mid-run input is routed through prompt({ streamingBehavior: 'steer' }) so
+   * the extension `input` event fires (direct steer() bypasses emitInput);
+   * while idle, steer() keeps its queue-for-next-run semantics.
    */
   async steer(sessionPath: string, message: string): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
@@ -1514,8 +1518,11 @@ export class MultiSessionManager {
     activeSession.lastActivity = new Date();
 
     try {
-      // The AgentSession should have a steer method
-      await activeSession.agentSession.steer(message);
+      if (activeSession.agentSession.isStreaming) {
+        await activeSession.agentSession.prompt(message, { streamingBehavior: 'steer' });
+      } else {
+        await activeSession.agentSession.steer(message);
+      }
     } catch (error) {
       logger.error(`[MultiSessionManager] Error steering session ${sessionPath}:`, error);
       throw error;
