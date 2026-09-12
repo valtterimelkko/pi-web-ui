@@ -20,7 +20,8 @@ afterwards.
 
 | Child | Session id | Tree | Model | Board | Watch |
 |---|---|---|---|---|---|
-| **H1** talker harness | `01a096a8-81e9-72aa-93c7-bbbca093c60a` | `/root/pi-web-ui` (main) | `zai/glm-5.3-flash` @ max | `voice-h1-talker-harness` | `ww_1_1789234031763` |
+| ~~**H1** talker harness~~ | `01a096a8-81e9-72aa-93c7-bbbca093c60a` | merged to master | `zai/glm-5.3-flash` @ max | left | fired |
+| | | **✅ COMPLETE** — committed `de6cafe`, parent-verified | | | |
 | ~~**H2** Pi input routing~~ | `01a096a8-84c3-72aa-93c7-bbbef32af902` | merged to master | `zai/glm-5.3-flash` @ max | `voice-h2-pi-input-routing` | fired |
 | | | **✅ COMPLETE** — merged `5c17304`, worktree removed, branch deleted | | | |
 
@@ -153,6 +154,56 @@ streaming-vs-idle decision inside `MultiSessionManager.steer()` so *every* calle
 inherits it, and have the Internal API/RPC call sites go through that method.
 That removes the defect *class* instead of patching the next site someone adds.
 Queue as **P2** — after H1 lands and H4 runs.
+
+### 2026-09-12 ~19:16 — H1 COMPLETE (verified, committed) + wave 2 dispatched
+
+**H1 accepted after independent verification.** Its report was thorough and, more
+importantly, its own tests caught four real defects during development —
+including a **double-send bug** (the release path never consumed the proposal, so
+a previous relay could authorise a second send), a relay-before-proposal path via
+greeting questions, and a meta send question wrongly replacing the pending
+proposal. That is TDD doing real work, not ceremony.
+
+**Parent verification of the environmental claim — CONFIRMED, not assumed.**
+H1 attributed 4 test failures to environment leakage. Verified directly:
+
+- the mechanism is real: `opencode-service-expanded.test.ts` asserts
+  `/not available/` at line 729, but with `OPENCODE_ENABLED=false` in the shell
+  the service fail-closes earlier with "OpenCode is disabled", taking a different
+  branch. The repo `.env` says `true`, so a leaked shell value shadows it.
+- ran that file in a **clean** parent environment: **31/31 pass**.
+- ran the **whole suite** in the clean parent environment with H1+H2 work
+  present: **exit 0, 3877/3877 in the server workspace, zero failures** — better
+  than H1's own 3,868/3,869, because my shell has no leaked variables at all.
+- `npm run typecheck` exit 0; `npm run lint` exit 0 (warnings only, pre-existing).
+
+**Committed `de6cafe`** — 21 files, 2,631 insertions. Board entries for H1 and H2
+left. Working tree clean.
+
+### Wave 2 dispatched (H3 + H4), each in its own worktree
+
+Both write to this repo, so single-writer discipline applies: each got an
+isolated worktree with the **zod-shadow fix applied up front** (top-level
+`node_modules` symlink plus per-package zod shadows), and H4's server typecheck
+was verified clean before dispatch.
+
+| Child | Session id | Worktree | Brief |
+|---|---|---|---|
+| **H4** long-session validation | `01a0970c-944c-72aa-93c7-bbc089136e0c` | `/root/pi-web-ui-wt-h4` (branch `talker/h4-long-session`) | `docs/plans/briefs/H4-long-session.md` |
+| **H3** model retest | `01a0970c-a362-72aa-93c7-bbc265ebeea4` | `/root/pi-web-ui-wt-h3` (branch `talker/h3-model-retest`) | `docs/plans/briefs/H3-model-retest.md` |
+
+Watches `ww_3_1789240593701` (H4) and `ww_4_1789240598032` (H3); backstop
+`deadline-c59cf991-8123-4356-a06d-9ec8ffc75034`.
+
+**H4 is the design-claim test**: does the bounded window with no summariser hold
+the gate over 100+ turns and repeated cycling, and is never-trim-while-pending
+actually enforced? A fiduciary instruction was given: **if the claim is
+falsified, report it and do NOT fix it** — a falsification is the valuable
+outcome.
+
+**H3 is the proxy test**: the model was selected on a marker-based benchmark we
+are not shipping. Its headline question is whether `gpt-5-nano` still
+propose-and-relays now that the gate is structural.
 
 ## Queued, not yet dispatched (blocked on H1)
 
