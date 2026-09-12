@@ -71,6 +71,50 @@ per-package shadowing necessary.
 
 **Backstop re-armed** for window 2.
 
+### 2026-09-12 ~18:17 — H1 wake (turn end); both still running
+
+The watch fired on H1's turn end, but H1 was **still running** (247 msgs) and had
+no pending approvals — it had simply ended a turn to continue working. H2 was
+still running (370 msgs).
+
+**Parent independent verification of H1's work (against the tree, not its report):**
+
+- **Ran the talker suite myself: 9 files, 97/97 tests pass**, including
+  `talker-gate.test.ts` (25 tests). Not a claim from the child — observed.
+- Read `pending-proposal.ts`: the pending proposal, the verbatim utterance it
+  refers to, and release history live in harness state that **the model has no
+  write access to**. `takeForRelease()` is atomic (clears before returning) and
+  computes staleness **at release time from the caller's turn**, so no caller can
+  release an aged proposal even if it never ticked. Which instruction a "yes"
+  refers to is resolved by object reference — never from conversation history.
+- Read `delivery.ts`: per-runtime adapters degrade honestly. Claude refuses on a
+  non-SDK backend **with the reason**; Antigravity reports queuing as a
+  first-class outcome; an unwired Pi refuses rather than guessing; delivery
+  outcomes carry a `disclosure` field so nothing is hidden.
+- Read the gate ordering in `talker.ts`: `release()` is **private by
+  construction** — reachable only from the confirm branch — and takes **no relay
+  text**. The text comes solely from `takeForRelease()`. A forced direct call
+  still cannot relay anything that was not a recorded, unexpired, live proposal.
+  This is the strongest structural form of non-negotiable #1.
+- Confirmed `history.maybeTrim(this.proposals.pending !== null)` — the
+  never-trim-while-pending rule (non-negotiable #6) is implemented, not merely
+  documented.
+- Confirmed `ackForOutcome(delivery)` — the acknowledgement is derived from the
+  actual delivery outcome, so "sending that now" cannot be spoken for a send that
+  did not happen (non-negotiable #7).
+
+**Verdict so far:** the structural claims hold under direct inspection. H1 has not
+yet reported completion, so this is not acceptance — it is verification of the
+artefacts present at this point.
+
+**H1's own open item, to verify at completion:** it observed 4 test failures it
+attributes to the environment (`OPENCODE_ENABLED=false` in its session shell vs
+`true` in the repo `.env`), claiming the file passes 31/31 with the variable
+unset. **The parent has not yet verified that attribution** — do not accept it
+until the mechanism is checked.
+
+**Backstop re-armed** for window 3.
+
 ## Queued, not yet dispatched (blocked on H1)
 
 - **H3** — retest the top five Benchmark 3 finalists against the *real* harness,
