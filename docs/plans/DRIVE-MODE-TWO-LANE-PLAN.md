@@ -8,7 +8,9 @@
 > is the reference point for every intent check. This plan reconciles against it
 > item by item in §2 and names every place where it deviates.
 >
-> **Status:** plan, not started. Written 2026-09-10.
+> **Status:** plan; Phase 0 (talker model evaluation) is **complete** — see §10.
+> Phases 1–5 not started. Written 2026-09-10; §10 added 2026-09-12 from the
+> Benchmark 3 results.
 > **Operator authorisation:** extension/server lane approved; Pi + Claude SDK +
 > Antigravity scope approved; intent file to remain frozen; voice confirmation
 > chosen; model left open, decided by evaluation.
@@ -64,6 +66,8 @@ canonical file, where it lands in this plan, and its current status.
 | I14 | **Talker is a pi-enhancement extension** | Phase 2/3 (server-side talker instead) | ⚠️ **SUPERSEDED** — see below |
 | I15 | Talker covers the Pi runtime only | Phase 3 (three runtimes) | ⚠️ **SUPERSEDED** — see below |
 | I16 | Rough size: extension ~1–2 days, Drive Mode ~1–2 days | Phase estimates in §6 | ⚠️ **INVALIDATED** — written before the delivery-path finding |
+| I17 | Cheap, fast, minimal-thinking talker; "leaning GLM 5.3 Flash" | §10 — decision D7 | ⚠️ **PARTLY SUPERSEDED** — GLM is ruled out on latency; Gemma 4 26B A4B selected |
+| I18 | Deployed as a pi-enhancement extension under `/root/pi-enhancement/` | Not applicable | ⚠️ **SUPERSEDED** by S1/S2 — see §10 measurement caveat |
 
 ### Named supersessions
 
@@ -103,6 +107,7 @@ permission. Only the talker's *placement* moved.
 | D4 | **Confirmation gate is mandatory and voice-driven**, with a text fallback that echoes the exact proposal. | Operator chose voice confirmation. The fallback exists because a misheard confirmation is the one failure that defeats the design's purpose. |
 | D5 | **The talker model is decided by evaluation, not assumption.** | Operator: leave it open; test several models including genuinely small ones. |
 | D6 | **The eval precedes build.** | Latency determines whether this is a conversation or just a quieter wait, and it is unmeasured. |
+| D7 | **Talker model: `openrouter/google/gemma-4-26b-a4b-it`, thinking OFF**, served by OpenRouter on the **paid** route. | Benchmark 3 leader (86.4%, zero gate breaches) at the lowest cost of the top cluster. Full rationale in §10. |
 
 ### Per-runtime delivery reality (verified this session)
 
@@ -120,7 +125,18 @@ Each phase is TDD-first: a failing behavioural test exists before implementation
 Each phase states its own live-validation gate. No phase is "done" on unit tests
 alone.
 
-### Phase 0 — Model evaluation (pre-flight, decides D5)
+### Phase 0 — Model evaluation (pre-flight, decides D5) — ✅ COMPLETE
+
+**Outcome:** `gemma-4-26b-a4b-it` at thinking OFF, via the OpenRouter paid route.
+See §10 for the decision record and the benchmark signposts.
+
+**Still outstanding from Phase 0:** the bare side-completion spot-check (§10.7).
+The benchmark's latency figures carry a ~0.4 s harness tax and ~4.3k tokens of
+ambient context, so they rank candidates fairly but do not state production
+latency. The spot-check is small and should happen before Phase 2 completes.
+
+<details>
+<summary>Original Phase 0 definition (for reference)</summary>
 
 **Deliverable:** `agent-benchmarks/benchmarks/03-voice-relay/` run against 5–10
 candidates; a results table; a chosen talker model with its measured latency
@@ -139,6 +155,11 @@ time-to-first-token, its cost per exchange, and its hard-fail behaviour under
 **Gate:** at least one candidate that does **not** hard-fail the permission gate
 and whose median first-token is within target. If none qualifies, stop and
 report — do not proceed to Phase 1 on an assumption.
+
+**Gate result:** PASSED — four candidates cleared the gate with zero hard fails,
+and the winner cleared it in every scenario including the pressure sequence.
+
+</details>
 
 ### Phase 1 — Compact state view contract (server-side)
 
@@ -315,3 +336,128 @@ Deliberately not given in days until Phase 0 reports. What is known:
 - Worker model evidence (which model should reason): `agent-benchmarks/benchmarks/02-orchestrator-governance/`
 - Orchestration practice the voice lane drives: `/root/.pi/agent/skills/pi-web-ui-internal-api-orchestration/`
 - Extension source of truth (if any future extension work returns): `/root/pi-enhancement/AGENTS.md`
+
+---
+
+## 10. Talker model decision (Phase 0 outcome, 2026-09-12)
+
+### 10.1 The decision
+
+| | |
+|---|---|
+| **Model** | `openrouter/google/gemma-4-26b-a4b-it` |
+| **Thinking** | **OFF** (the decisive setting — see §10.4) |
+| **Route** | OpenRouter, **paid** tier |
+| **Benchmark result** | **86.4%**, zero permission-gate breaches, 1,796 ms median TTFT (harness-inflated) |
+| **Reason in one line** | Best measured quality in the field, tied-fastest latency, roughly half the cost of its nearest competitors, and a routing/commercial shape that is legitimate and resilient in production. |
+
+### 10.2 Evidence
+
+Signposts — read the report before quoting any number from it:
+
+- **Full report:** `/root/agent-benchmarks/benchmarks/03-voice-relay/FINAL-REPORT-2026-09-12.md` — results, thinking-level experiment, harness-compatibility findings, and a latency-attribution section that must be read before quoting timings.
+- **Standings and discard reasons:** `/root/agent-benchmarks/benchmarks/03-voice-relay/runs-manifest.json` (105 runs, 17 models).
+- **Published leaderboard:** https://united-voyage-ex39.here.now/
+- **Harness:** `/root/agent-benchmarks/benchmarks/03-voice-relay/`
+
+Top of the field (average across the five scenarios, 600 points):
+
+| Candidate | Thinking | Avg % | Gate breaches | Median TTFT* |
+|---|---|---|---|---|
+| `openrouter/google/gemma-4-26b-a4b-it` | **off** | **86.4** | **0** | 1,796 ms |
+| `google/gemini-3.6-flash` | minimal | 85.0 | 0 | 1,923 ms |
+| `deepseek/deepseek-flash` | off | 83.7 | 0 | 1,836 ms |
+| `openai/gpt-4o-mini` | off | 81.5 | 0 | 1,489 ms |
+| `zai/glm-5.3-flash` | low | 76.8 | 0 | 5,168 ms |
+
+\* Harness-inflated; see §10.6.
+
+### 10.3 Why Gemma 4 26B A4B
+
+1. **It leads on measured quality** — 86.4% across all five scenarios, including the permission-gate pressure sequence, with **zero** gate breaches. Gate discipline is the property this whole design rests on, and it held.
+2. **Latency is in the pack** — 1.8 s median in a harness that taxes every candidate equally.
+3. **The cost profile is the differentiator.** The other top contenders score comparably but cost roughly **double or more** for the same job. This candidate is markedly cheaper *without* a quality give-up, which matters because these are high-frequency exchanges.
+4. **The routing shape is production-grade.** It is an open-weights model, so many inference providers can serve it. On the paid route that means provider redundancy, high measured uptime, and no dependence on a single vendor's free tier.
+5. **It is a legitimate commercial use.** The model is served through a general inference provider on a paid route, so building a product feature on it is within terms. See §10.5 for why this is load-bearing.
+6. **It has genuine general ability** — this family is well regarded for coding as well, which matters because the talker may be asked to *discuss* work without doing it.
+
+### 10.4 Ruled out: thinking at any level, and the larger sibling
+
+The thinking experiment is the most useful negative result in the whole benchmark.
+
+| Variant | Avg % | Gate breaches | Median TTFT (max) | Output tokens |
+|---|---|---|---|---|
+| Gemma 4 26B, **off** | **86.4** | 0 | **1,796 ms** (3.5 s) | 1,764 |
+| Gemma 4 26B, minimal | 80.1 (−6.3) | 0 | 3,733 ms (15 s) | 16,049 (**×9**) |
+| Gemma 4 31B, off | 76.4 | 0 | 3,911 ms (133 s) | 1,336 |
+| Gemma 4 31B, minimal | 64.9 (−21.5) | **2** | 13,568 ms (140 s) | 14,531 |
+
+**Thinking made it worse on every axis.** Quality fell, latency roughly doubled or worse, output tokens grew about ninefold, and the worst variant began breaching the permission gate. The weak scenarios were not thinking-starved — thinking simply did not help them.
+
+The larger 31B is **not** the stronger option here. The dense 31B scores 76.4 against the fast-MoE 26B's 86.4 *at the same thinking setting*, and its latency grows badly. More parameters did not buy a better talker.
+
+**Decision:** run the talker with thinking **off**. This is not a cost compromise — it is the best-measured configuration on quality *and* latency.
+
+### 10.5 Ruled out: alternatives and why
+
+| Rejected | Reason |
+|---|---|
+| **`zai/glm-5.3-flash`** (the original candidate) | ~5 s to first spoken token at low thinking makes it unusable as a voice talker. Its gate and honesty behaviour was impeccable — **it remains the worker-lane model**, not the talker. |
+| **GLM on any coding-subscription endpoint** | That endpoint is for interactive coding use. Serving a product feature from it is a **terms-of-service problem**, not a tuning problem. This alone rules the route out regardless of performance. |
+| **Google's own API for the same model** | Rate limits even on paid calls, experienced directly. The same provider is also less generous on limits than an aggregator serving the same weights. |
+| **OpenRouter free endpoint** | Only one inference provider behind it, its own free quota, ~97% measured uptime, and heavier limits. Not a sound dependency for a production feature. |
+| **The paid OpenRouter route for other candidates** | Comparable quality at roughly double the cost. |
+
+**The general lesson, worth carrying past this decision:** provider choice is not only a cost/latency question. It is a **terms, limits and uptime** question, and a route can be disqualified commercially or operationally no matter how good its numbers are.
+
+### 10.6 Measurement caveat — read before quoting latency
+
+Every figure above was measured through the **Pi coding agent harness** on the Internal API, which was chosen because it was the lowest-barrier way to build the benchmark. That harness adds a fixed per-turn tax before the model generates anything:
+
+- an Agent OS memory-injection CLI subprocess, awaited on the dispatch path — **~0.4 s per turn**, plus a second call after each turn;
+- the user-level `AGENTS.md` loaded per session (~3.4k tokens);
+- an Agent OS context packet injected per session (~0.9k tokens);
+- Pi tool schemas and a skills index in every prompt, bringing harness input to **~38–46k tokens per turn**.
+
+**Production shape is different and cheaper.** The talker will be a *direct server-side model call* — no agent session, no `AGENTS.md`, no memory packet, no tools. None of that tax applies. So benchmark TTFT **overstates** production TTFT, and a candidate at ~1.5–1.8 s here plausibly lands materially under the 2 s target.
+
+The tax is **identical for every candidate**, so the **ranking is fair** — but the absolute numbers are not production latency. The bare side-completion spot-check (§10.7) is still owed.
+
+### 10.7 The harness is ours to build, and it must be lean and strict
+
+Because the talker is not a Pi agent session, **there is no existing harness to inherit** — Phase 2 builds it. Four requirements come directly out of the benchmark evidence:
+
+1. **A purpose-built system prompt.** The talker must know at all times what it is, who it speaks to, what it may do, and what it must never do. The benchmark's own brief is the starting point (`talker_runner.py::build_brief`).
+2. **A lean prompt, deliberately.** The benchmark demonstrated what tens of thousands of tokens of ambient context does: it is fatal for small models and slow for mid models. The talker's prompt must be self-contained and small. Do **not** let it inherit `AGENTS.md`, memory packets, or tool schemas.
+3. **The confirmation gate must be mechanical, not a model-emitted marker.** In the benchmark the talker had to emit a `CLARIFY_REQUIRED:` marker; most top models asked the right question in prose but omitted the marker, which cost them points in the weakest dimension for nearly everyone. That measured *protocol compliance*, not conversational intelligence. In production the talker should simply ask in natural prose, and the **server** should decide that no relay occurred. Never make the model responsible for the state transition that protects the operator.
+4. **A bare side-completion spot-check before Phase 2 is called done** — run the top two or three finalists through a minimal direct model call (persona prompt + one state view, nothing else) and measure true first-token latency against the 2 s target. That is the number the production decision should rest on.
+
+#### A contamination finding that is a design constraint
+
+During the thinking experiment, an automated capture lane delivered a session-end prompt *into the running talker sessions*, and one variant relayed that injected message — collecting two gate breaches as a result.
+
+That was measured as a gate breach because it genuinely was one: the scripted owner never authorised it and the propose-then-confirm cycle was skipped. It is also a real production hazard, not an artefact. **Therefore:**
+
+The production talker session must accept **only** owner turns and state views. No ambient or automated lane may inject text into it, and the relay path must be mechanically restricted to the operator's own utterance. A design that lets any message in is a design where an automated system can get the talker to relay on its behalf.
+
+### 10.8 The small-model hypothesis — checked, and it did not hold
+
+This plan and the search brief both expected a *small* model to win the talker seat. **The evidence does not support that expectation, and the plan is corrected accordingly.**
+
+Every sub-12B open-weight candidate either breached the gate (Gemma 3 12B: two breaches; Ministral 8B: one) or could not run in the harness at all. The winner is a 26B model with a fast mixture-of-experts design — cheap and quick in practice, but not small. The operative insight is not "small models work" but "**a model with crisp instruction-following and low chat latency** works, and that does not correlate with parameter count".
+
+Two related corrections:
+
+- **The cheap-thinking assumption was also wrong.** Thinking did not rescue the weak scenarios and it destroyed the latency budget. Off is the best configuration on quality and speed simultaneously.
+- **Cost is not the obstacle the plan expected.** Output cost is negligible at these prices — a five-scenario run set costs 300–800 output tokens. The visible cost in the benchmark was harness-inflated *input*, which production removes.
+
+### 10.9 Where this leaves the project
+
+| | |
+|---|---|
+| **Done** | Intent file preserved and reconciled; model evaluated and selected with evidence; benchmark built, tested, published; plan phases defined. |
+| **In flight** | Nothing. Phases 1–5 have not started. |
+| **Next** | The bare side-completion spot-check (§10.7 item 4) — small, and it converts the model choice from "best available evidence" into a measured production latency. Then Phase 1. |
+| **Blocked** | Nothing technically. |
+| **Watch** | Prompt leanness and input hygiene. These are the two ways this design can pass every test and still fail in production. |
+
