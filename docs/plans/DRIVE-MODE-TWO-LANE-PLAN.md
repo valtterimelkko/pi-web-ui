@@ -97,6 +97,58 @@ permission. Only the talker's *placement* moved.
 
 ---
 
+## 2b. Terminology — two independent axes (clarified 2026-09-12)
+
+Early drafts (including the originating intent file's framing and this plan's
+title) used **"orchestration"** to mean two different things at once. That
+conflation caused real confusion, so it is fixed here.
+
+**Axis 1 — the RELAY (voice layer).** Is there a talker relaying your words to a
+session?
+
+- **Voice Mode** (formerly "Drive Mode"): a talker is active. It converses, and
+  relays your instruction to the worker only after you confirm.
+- **No talker**: you type directly into the session.
+
+The talker **relays only**. It has no children, no dispatch authority and never
+orchestrates. Relay and orchestration are different things.
+
+**Axis 2 — the WORKER ROLE.** What is the session on the other end of the relay
+doing?
+
+- **Orchestrating**: it is running the Internal API orchestration practice —
+  creating children, delegating work, supervising them. This is the case the
+  operator's Antigravity run demonstrated.
+- **Working directly**: no children; it does the coding/work itself.
+
+**"Worker" as a name is therefore imprecise** — the session on the other end may
+be an orchestrator. The precise split is *Who relays?* (Axis 1) and *What is the
+worker doing?* (Axis 2).
+
+**The four independent combinations**, all legitimate:
+
+| | Worker is orchestrating | Worker works directly |
+|---|---|---|
+| **Voice Mode active** | Talker relays to a session that delegates to children | Talker relays to a session doing the work itself |
+| **No talker** | You orchestrate directly, typed | Ordinary coding session |
+
+Neither axis implies the other. Earlier phrasing implied "Drive Mode =
+orchestration"; that was wrong.
+
+**Naming decision (proposed):** rename **Drive Mode → Voice Mode** (or Talker
+Mode). Its capabilities are unchanged — an overlay with dictation, read-aloud and
+now a talker — but the name should describe *talking*, not *orchestrating*. The
+plan keeps "Drive Mode" for existing artefact references until the rename is
+confirmed by the operator.
+
+**Why the confusion existed:** the originating intent file is titled
+`VOICE-ORCHESTRATOR-FEASIBILITY.md` and opens "The operator wants to orchestrate
+agent work by voice" — the motivating example was orchestration, so orchestration
+vocabulary was applied to the whole design even though the relay layer is
+role-agnostic. §1 of this plan had already recorded the correction ("the
+non-orchestration case is not a degraded mode, it is a primary use"); this section
+removes the remaining ambiguity in the vocabulary itself.
+
 ## 3. Architecture decisions
 
 | # | Decision | Rationale |
