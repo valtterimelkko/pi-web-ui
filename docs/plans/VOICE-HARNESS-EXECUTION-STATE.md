@@ -21,7 +21,8 @@ afterwards.
 | Child | Session id | Tree | Model | Board | Watch |
 |---|---|---|---|---|---|
 | **H1** talker harness | `01a096a8-81e9-72aa-93c7-bbbca093c60a` | `/root/pi-web-ui` (main) | `zai/glm-5.3-flash` @ max | `voice-h1-talker-harness` | `ww_1_1789234031763` |
-| **H2** Pi input routing | `01a096a8-84c3-72aa-93c7-bbbef32af902` | `/root/pi-web-ui-wt-h2` (branch `talker/pi-input-routing`) | `zai/glm-5.3-flash` @ max | `voice-h2-pi-input-routing` | `ww_2_1789234035294` |
+| ~~**H2** Pi input routing~~ | `01a096a8-84c3-72aa-93c7-bbbef32af902` | merged to master | `zai/glm-5.3-flash` @ max | `voice-h2-pi-input-routing` | fired |
+| | | **✅ COMPLETE** — merged `5c17304`, worktree removed, branch deleted | | | |
 
 Run receipts: H1 `6c30f51e-07f3-4a72-859d-e637a13f4b24`, H2 `39b18fd7-811a-4361-912d-c990ea583d90`.
 
@@ -114,6 +115,44 @@ unset. **The parent has not yet verified that attribution** — do not accept it
 until the mechanism is checked.
 
 **Backstop re-armed** for window 3.
+
+### 2026-09-12 ~18:18 — H2 COMPLETE, verified, merged, cleaned up
+
+H2 reported complete. Parent verification before acceptance:
+
+- **Ran its suite myself: 8/8 pass.**
+- **Checked its "pre-existing failures" claim rather than believing it.**
+  Ran `tests/unit/internal-api/session-routes-orchestration.test.ts` in
+  isolation: **89/89 pass** — so those 2 failures are order-dependent in the
+  full-suite run, not caused by H2, and H2 had already verified them against
+  base with `git stash`. Claim holds.
+- Read the diff: 23 lines across two files, no secrets, no scope creep.
+- Confirmed the fix reaches the **talker's** Pi delivery path:
+  `delivery.ts` wires `manager.steer`, which is one of the two fixed call sites.
+
+**Merged** (`5c17304`, `--no-ff` so the work stays attributable), then
+**post-merge verification in the main tree: 105/105 pass** (H2's 8 + H1's 97) —
+the two children's work coexists correctly. Worktree removed, branch deleted.
+
+### Follow-up queued from H2's honest "what I could NOT do"
+
+H2 surfaced two call sites with the **same defect shape**, outside its owned
+files and correctly left out of scope:
+
+- `server/src/internal-api/routes/sessions.ts:872` — the Internal API steer route
+  for Pi
+- `server/src/internal-api/routes/sessions.ts:5604` — the prompt/dispatch handler
+- plus the worker/RPC path (`SessionRPCClient.steer` → SDK rpc-mode `steer`)
+
+**Not a blocker for the talker**: its Pi delivery goes through
+`manager.steer` (fixed). But it is a real consistency gap — anything reaching a
+busy Pi session via the Internal API still cannot be observed by an extension.
+
+**Preferred fix is consolidation, not more call-site patches:** move the
+streaming-vs-idle decision inside `MultiSessionManager.steer()` so *every* caller
+inherits it, and have the Internal API/RPC call sites go through that method.
+That removes the defect *class* instead of patching the next site someone adds.
+Queue as **P2** — after H1 lands and H4 runs.
 
 ## Queued, not yet dispatched (blocked on H1)
 
