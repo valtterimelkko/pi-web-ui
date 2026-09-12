@@ -552,10 +552,58 @@ rather than racing it.
 writing, resolving the shared `client/src/hooks/useWebSocket.ts` by hand and
 re-running both suites afterwards.
 
+### 2026-09-12 ~23:38 — E1 and H7 MERGED (the shared-file conflict, resolved)
+
+Both client children landed. The predicted single-file conflict happened exactly
+as foreseen, and resolving it surfaced a **real cross-child regression**.
+
+**Merge order:** H7 first (`c22bb6a`), then E1 (`17d2f1c`).
+
+**The conflict** was `client/src/hooks/useWebSocket.ts` — the one file both edit,
+and precisely why the parent refused to merge H7 early. It was confined to the
+**import block**: H7 adds `emitTalkerTurnResult`, E1 adds `useUIStore` and the
+`WebSocketSendResult` type. Both additive, so the fix was to combine them. Git
+auto-merged the `onMessage` region, and the parent verified both sides survived
+rather than assuming: H7's tap is intact and E1's send-result handling is intact.
+
+**The regression the merge exposed — and neither child could have seen it.**
+E1 changed `sendMessage`'s contract from `boolean` to `'sent' | 'queued' |
+'failed'`. H7's `useTalkerTurn` was written against the boolean and failed
+typecheck (`TS2322: Type 'string' is not assignable to type 'boolean'`). Each
+child's branch was internally consistent; only the combination breaks. Fixed at
+the call site following E1's own established pattern (`sent === 'failed'`),
+treating `'queued'` as **accepted** because a queued message still flushes on
+reconnect. This is the classic argument for merging and re-verifying rather than
+accepting two green branches.
+
+**Post-merge verification (parent-run, on the combined tree):**
+
+| Check | Result |
+|---|---|
+| client typecheck | **exit 0** |
+| server typecheck | **exit 0** |
+| E1 client suites (websocket, dictation hook, dictate component) | **40/40** |
+| H7 client suites (useTalkerTurn, talkerBus) | **8/8** |
+| H7 server transport test | **10/10** |
+| talker suite | **138/138** |
+
+**Cleanup done:** `/root/pi-web-ui-wt-e1` and `/root/pi-web-ui-wt-h7` removed;
+branches `fix/mobile-socket-durability` (7cdb147) and `feat/talker-transport`
+(39752dc) deleted. Only master remains among active worktrees.
+
+**E1's own live validation: 9/9.** It also found two traps the brief did not
+anticipate: CSRF staleness after a backend restart (flushed prompts were refused
+with `CSRF_TOKEN_REFRESH_REQUIRED`), fixed by refreshing CSRF via `/api/auth/me`
+and deliberately **not** `checkAuthStatus()` — which flips `isAuthenticated:false`
+and logged the app out mid-outage during its validation; and a singleton
+replacement bug that discarded queued messages on any remount during
+`reconnecting`.
+
 ## Cleanup owed at the end
 
-- Merge or discard H2's branch `talker/pi-input-routing` and remove
-  `/root/pi-web-ui-wt-h2` once its regression evidence is accepted.
+- ~~Merge or discard H2's branch `talker/pi-input-routing`~~ — **done** (merged 5c17304).
+- ~~Remove `/root/pi-web-ui-wt-e1` and `/root/pi-web-ui-wt-h7`~~ — **done**,
+  with their branches deleted after merge.
 - **9 stale worktrees from a previous execution** under
   `/root/.pi-web-ui/operations/four-angle-20260908/children/*` plus
   `/root/pi-capacity-release-20260907` — confirm they are unreferenced, then
