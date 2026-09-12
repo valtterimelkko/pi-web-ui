@@ -325,6 +325,51 @@ production env without printing them) and then deleted the spooled copy to avoid
 duplicate on recovery. Worth fixing: during an outage is exactly when the operator
 needs to be told.
 
+### 2026-09-12 ~22:38–22:45 — R1 dispatch failure and the codex-route outage
+
+**R1 never ran.** The first investigation child was dispatched on
+`openai-codex/gpt-5.6-sol` (medium) as the operator requested. The session was
+created, the model binding was applied and *verification passed* — and then the
+assistant reply came back **empty**: `stopReason: error`, `content: ""`,
+`toolCalls: 0`, `assistantTextChars: 0`, run disposition `no-text`. The brief had
+arrived intact (7,479 chars). It failed silently.
+
+**Isolated to the provider route, not the model and not the brief:**
+
+| Probe | Result |
+|---|---|
+| `openai-codex/gpt-5.6-sol` (medium) | **empty content** |
+| `openai-codex/gpt-5.6-luna` (medium, same pool) | **empty content** |
+| `openai-codex/gpt-5.6-sol` (medium), retried ~4 min later | **still empty** |
+| `zai/glm-5.3-flash` (control) | `"GLM-ALIVE"` |
+| `openrouter/google/gemini-3.8-flash` (high) | `"ALIVE-PROBE"` |
+
+Also checked: the `openai-codex` **OAuth credential is valid** (expires
+2026-09-14), the model is present in the registry, and the binding is verified by
+the server. So the route is accepted and then fails **server-side at the
+provider** — a codex-route outage, not a local misconfiguration.
+
+**Defect worth flagging:** a provider failure on this path surfaces as **HTTP 200
+with empty content and `stopReason: error`** — a silent no-op. A caller that does
+not inspect `stopReason` sees success. That is how R1 "completed" while doing
+nothing.
+
+**Resolution:** two fresh investigators were dispatched on routes verified live
+by probe, deliberately on **different model families** so their answers can be
+cross-checked:
+
+| | Session | Route |
+|---|---|---|
+| **R1b** | `01a097c9-e0c5-72aa-93c7-bbd679be83fe` | `zai/glm-5.3` @ max |
+| **R1c** | `01a097ca-d680-72aa-93c7-bbdd5165e7ed` | `openrouter/google/gemini-3.8-flash` @ high |
+
+Watches `ww_10` (R1c) and `ww_11` (R1b). **The point of two is convergence:** if
+independent investigators on different families agree on the mechanism, that is
+far stronger evidence than one confident answer. If they disagree, the
+disagreement is itself the finding.
+
+All four probe sessions were deleted after use.
+
 ## Cleanup owed at the end
 
 - Merge or discard H2's branch `talker/pi-input-routing` and remove
