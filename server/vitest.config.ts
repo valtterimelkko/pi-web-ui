@@ -22,6 +22,15 @@ export default defineConfig({
     setupFiles: ['./tests/setup-env.ts'],
     globals: true,
     environment: 'node',
+    server: {
+      deps: {
+        // Inline the pi-ai adapter so tests can vi.mock its internal modules
+        // (e.g. counting parseStreamingJson calls in the toolstream stall
+        // regression). Externalised node_modules imports bypass the mock
+        // registry and mocks silently no-op.
+        inline: [/node_modules[\\/]@earendil-works[\\/]pi-ai[\\/]dist/],
+      },
+    },
     onConsoleLog: showAppConsoleLogs ? undefined : () => false,
     // Also emit a machine-parseable JSON report (per-test pass/fail + messages)
     // for agents/tools. Artifact is git-ignored. See docs/TROUBLESHOOTING.md.

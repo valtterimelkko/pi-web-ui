@@ -221,9 +221,20 @@ export class InternalApiEventBroker {
         this.replayBuffers.set(sessionId, buffer);
       }
       buffer.push({ event, bytes: measured.bytes });
+      // Add before trimming so every trim subtraction corresponds to an entry
+      // that is genuinely in a buffer — the counter can then never ratchet up
+      // monotonically (2026-09-12 stall: the count-based trim used to skip the
+      // decrement entirely, inflating retainedBytesTotal forever).
+      this.retainedBytesTotal += measured.bytes;
       // Bound by count AND bytes: trim oldest events using cached sizes.
       let bytes = (this.replayBufferBytes.get(sessionId) ?? 0) + measured.bytes;
-      while (buffer.length > this.replayBufferSize) { const old = buffer.shift(); if (old) bytes -= old.bytes; }
+      while (buffer.length > this.replayBufferSize) {
+        const old = buffer.shift();
+        if (old) {
+          bytes -= old.bytes;
+          this.retainedBytesTotal = Math.max(0, this.retainedBytesTotal - old.bytes);
+        }
+      }
       while (bytes > this.replayBufferMaxBytes && buffer.length > 0) {
         const old = buffer.shift();
         if (old) {
@@ -233,7 +244,6 @@ export class InternalApiEventBroker {
         }
       }
       this.replayBufferBytes.set(sessionId, Math.max(0, bytes));
-      this.retainedBytesTotal += measured.bytes;
       this.enforceGlobalBounds();
     }
 
@@ -359,6 +369,23 @@ export class InternalApiEventBroker {
     this.warnedOversizedSessions.clear();
     this.rateStates.clear();
     this.pendingUpdates.clear();
+    // All retained bytes were dropped above; the global counter must follow
+    // or it leaks upward forever (invariant: tracked == actual).
+    this.retainedBytesTotal = 0;
+  }
+
+  /** Global retained-bytes counter (diagnostics / invariant test seam). */
+  get debugRetainedBytesTracked(): number {
+    return this.retainedBytesTotal;
+  }
+
+  /** Ground-truth sum of every retained replay-buffer entry's bytes (invariant test seam). */
+  get debugRetainedBytesActual(): number {
+    let total = 0;
+    for (const buffer of this.replayBuffers.values()) {
+      for (const entry of buffer) total += entry.bytes;
+    }
+    return total;
   }
 
   /** Number of active subscribers for a session. */
