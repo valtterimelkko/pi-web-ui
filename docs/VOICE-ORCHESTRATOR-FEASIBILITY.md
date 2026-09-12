@@ -1,9 +1,74 @@
 # Voice Orchestrator Feasibility: Two Lanes
 
-> Status: **findings record, not a plan.** Written 2026-09-10 from a research
-> session between the operator and Claude (Fable 5.1). A later agent owns the
-> plan, TDD, and implementation. Nothing here has been built or validated.
+> Status: **findings record, not a plan** — and now **amended with a
+> terminology clarification** (2026-09-12, appended at the top; the original
+> 2026-09-10 text is preserved unchanged below).
+> Written 2026-09-10 from a research session between the operator and Claude
+> (Fable 5.1). A later agent owns the plan, TDD, and implementation. Nothing here
+> has been built or validated.
 > Sibling report: [`REVERSE-TRANSFER-FEASIBILITY.md`](./REVERSE-TRANSFER-FEASIBILITY.md).
+> Implementation plan: [`plans/DRIVE-MODE-TWO-LANE-PLAN.md`](./plans/DRIVE-MODE-TWO-LANE-PLAN.md).
+
+---
+
+## 0. Clarification added 2026-09-12: two independent axes
+
+> **Read this before the rest of the document.** The original text below uses
+> **"orchestration"** to mean two different things at once. That was a defect in
+> this document's framing — it spread orchestration vocabulary onto a relay layer
+> that is entirely role-agnostic — and it caused real confusion during planning.
+> The operator corrected it on 2026-09-12. The original words are preserved
+> below, unedited, but **the vocabulary below this section is superseded by this
+> section wherever the two disagree.**
+
+### Axis 1 — the RELAY
+
+Is a talker relaying the operator's words to a session?
+
+- **Voice Mode** (this document's "Drive Mode"; renamed 2026-09-12): a talker is
+  active. It converses, and relays the operator's instruction to the worker only
+  after the operator confirms.
+- **No talker**: the operator types directly into the session.
+
+**The talker relays only.** It has no tools, no children, no dispatch authority,
+and it never orchestrates. *Relaying and orchestrating are different things.*
+
+### Axis 2 — the WORKER ROLE
+
+What is the session receiving the relay doing?
+
+- **Orchestrating**: running the Internal API orchestration practice
+  (`pi-web-ui-internal-api-orchestration`) — creating children, delegating work,
+  supervising them. This is what the operator's Antigravity run in §6 did.
+- **Working directly**: no children; it does the coding or other work itself.
+
+**"Worker" is an imprecise name for this role**, because the session may be an
+orchestrator. The precise questions are *who relays?* (Axis 1) and *what is the
+worker doing?* (Axis 2).
+
+### The four independent combinations — all legitimate
+
+|  | Worker is orchestrating | Worker works directly |
+|---|---|---|
+| **Voice Mode active** | Talker relays to a session that delegates to children | Talker relays to a session doing the work itself |
+| **No talker** | Operator orchestrates directly, typed | Ordinary coding session |
+
+**Neither axis implies the other.** This document's framing implies
+"voice = orchestration"; that implication is wrong and is withdrawn.
+
+### Consequence for this document's language
+
+- Where this document says the goal is "to orchestrate agent work by voice", read
+  it as: **the relay layer is voice; whether the session orchestrates is a
+  separate matter.**
+- §5's statement that "Both lanes target orchestration, not the conductor" should
+  be read as: **the voice layer targets relaying; the worker may or may not
+  orchestrate.**
+- The title `VOICE-ORCHESTRATOR-FEASIBILITY` is retained for continuity, but the
+  surface is **Voice Mode**, not an "orchestrator".
+
+---
+
 
 ## 1. The problem being solved
 
