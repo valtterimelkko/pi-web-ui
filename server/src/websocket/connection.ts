@@ -22,6 +22,7 @@ import { parsePiSessionHistory } from '../pi/session-history.js';
 import { readBackgroundTasksSnapshot } from '../internal-api/background-children.js';
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
+import { TalkerSessionRegistry } from '../talker/session-registry.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
@@ -335,6 +336,8 @@ export class WebSocketConnectionManager {
   private piService: PiService;
   private sessionPool: SessionPool;
   private multiSessionManager: MultiSessionManager;
+  /** Phase 3 (H6): the server's voice talker, wired to the manager this class owns. */
+  private talkerSessionRegistry: TalkerSessionRegistry;
   private eventForwarder: EventForwarder;
   /** Track CWD per client for session info */
   private clientCwd: Map<string, string> = new Map();
@@ -454,6 +457,13 @@ export class WebSocketConnectionManager {
 
     // Set up Web UI context provider for MultiSessionManager (extension binding)
     this.multiSessionManager.setWebUIContextProvider(this.getWebUIContextForMultiSession.bind(this));
+
+    // Phase 3 (H6): construct the voice-talker registry with the MultiSessionManager
+    // this class owns — the talker's pi delivery and state snapshots target exactly
+    // the sessions this server manages (never a second manager instance). Transport
+    // binding (which message/route calls handleOperatorTurn) is a later phase; the
+    // narrow accessor below is its seam.
+    this.talkerSessionRegistry = new TalkerSessionRegistry({ multiSessionManager: this.multiSessionManager });
 
     // Set up session status change broadcasting
     this.setupSessionStatusBroadcasting();
@@ -4072,6 +4082,16 @@ export class WebSocketConnectionManager {
    */
   getMultiSessionManager(): MultiSessionManager {
     return this.multiSessionManager;
+  }
+
+  /**
+   * The server's voice-talker registry (Phase 3, H6): created once with the
+   * MultiSessionManager this class owns. Narrow accessor — the future transport
+   * binding (WebSocket message or Internal API route) resolves through this;
+   * no other construction site may exist.
+   */
+  getTalkerSessionRegistry(): TalkerSessionRegistry {
+    return this.talkerSessionRegistry;
   }
 
   getClaudeService(): ClaudeService {
