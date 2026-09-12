@@ -30,6 +30,47 @@ Briefs: `docs/plans/briefs/H1-talker-harness.md`,
 
 **Backstop:** `deadline-d955496a-543e-4254-985b-15370ff7070e`, armed 2026-09-12T17:27Z, fires 18:07Z.
 
+## Parent verification log
+
+### 2026-09-12 ~18:10 — backstop reconciliation (window 1, 40 min)
+
+Both children were **alive and progressing** when the backstop fired; the watch
+had not fired because neither had ended a turn.
+
+| | H1 | H2 |
+|---|---|---|
+| session status | running, 184 msgs | running, 320 msgs |
+| artefacts | `server/src/talker/` (10 modules incl. `pending-proposal`, `delivery`, `ack`, `history`, `state-view`), `server/tests/unit/talker/` (9 files incl. a 297-line `talker-gate.test.ts`), `scripts/talker-harness.ts`, `scripts/talker-prompts/v3-harness.txt` | `server/tests/unit/pi/pi-input-event-steer.test.ts` (434 lines), both target files modified (23-line diff) |
+
+**Parent independent verification of H2's work (partial — child still running):**
+
+- Read the actual fix. It routes mid-run input through
+  `prompt(message, { streamingBehavior: 'steer' })` when streaming, falling back
+  to `steer()` when idle, at both call sites. The comment records that
+  `prompt()` reaches the same `_queueSteer` primitive, so queue semantics are
+  preserved — the reasoning is sound.
+- **Ran its test suite myself**: `npx vitest run
+  server/tests/unit/pi/pi-input-event-steer.test.ts` → **8/8 pass**, including
+  the defect-proof assertions and the four pinned-behaviour tests.
+- **Ran the server typecheck myself**: clean (exit 0) after fixing the worktree
+  environment (below). No errors attributable to H2's change.
+
+**Worktree environment defect found and fixed by the parent** (this would have
+blocked H2 when it ran checks):
+
+The worktree had no per-package `node_modules` shadows, so TypeScript resolution
+fell through to the **root** `node_modules` and picked up **zod 4** instead of
+the `server`/`shared`-scoped **zod 3.25.76**, producing 11 spurious
+`ZodError.errors` errors in files H2 never touched. Fixed by creating targeted
+shadows: `server/node_modules/zod` and `shared/node_modules/zod` symlinked to the
+main tree's zod 3 copies. Server typecheck then passed cleanly.
+
+Note for future worktree use: symlinking only the top-level `node_modules` is
+**not sufficient** in this repo — hoisted version conflicts (zod 3 vs 4) make
+per-package shadowing necessary.
+
+**Backstop re-armed** for window 2.
+
 ## Queued, not yet dispatched (blocked on H1)
 
 - **H3** — retest the top five Benchmark 3 finalists against the *real* harness,
