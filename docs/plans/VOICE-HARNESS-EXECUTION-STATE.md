@@ -24,6 +24,8 @@ afterwards.
 | **H2** Pi input routing | `01a096a8-84c3-72aa-93c7-bbbef32af902` | ✅ merged `5c17304` — 8 tests, live-validated |
 | **H3** model retest | `01a0970c-a362-72aa-93c7-bbc265ebeea4` | ✅ committed `cc3f86a` — five candidates measured, one defect found |
 | **H4** long-session | `01a0970c-944c-72aa-93c7-bbc089136e0c` | ✅ committed `cc3f86a` — design claim NOT falsified, 157 turns |
+| **H5** Gemma provider guard | `01a09754-7e0e-72aa-93c7-bbc6edcebe39` | ✅ committed `f84fa86` — 3-part fix, live 330ms median, 0/12 degenerate |
+| **H6** server integration | `01a09727-7df1-72aa-93c7-bbc47c5951df` | ✅ committed `13e30da` — registry wired, gate unchanged |
 
 All four worktrees and all four child branches are cleaned up. Only the 9 stale
 worktrees from a **previous execution** remain (listed at the end).
@@ -203,6 +205,50 @@ unchanged by default.
 | **H5** | **Degenerate-output guard** in `model-client.ts`: detect empty / runaway-repetition replies, retry once, then fall back honestly. TDD. | The incumbent's instability is a measured production risk, and a guard makes it cheap to keep the ~18× cost advantage. **Owner asked about this — see the open question below.** |
 | **H6** | **Wire the talker into the server** (Phase 3 integration): construct `TalkerSession` with the real `MultiSessionManager` and expose a turn entry point; request-receipt discipline. | Nothing consumes the harness yet — it is a library with tests and a CLI runner. This is what makes it a product surface. |
 | **P2** | Consolidate the streaming-vs-idle steer decision inside `MultiSessionManager.steer()` so the Internal API and RPC call sites inherit it. | Removes the defect *class* H2 surfaced rather than patching call sites. |
+
+### 2026-09-12 ~21:35 — H5 committed; wave 3 (E1 + H7) dispatched
+
+**H5 accepted and committed (`f84fa86`).** Parent verified before committing:
+25/25 its tests, **138/138** full talker suite, typecheck clean, and the retry
+control flow read directly — two sequential calls with an early return, never a
+loop, honest throw after the second degenerate reply, plus an explicit regression
+guard that good replies are not retried.
+
+**Its live numbers were better than the pre-fix baseline:**
+
+| | before H5 | after H5 |
+|---|---|---|
+| harness median TTFT | 561 ms | **330 ms** (p90 433, max 1224) |
+| gate breaches | 0 | 0 |
+| verbatim fidelity | EXACT | EXACT |
+| pushback | 2/2 | 3/3 |
+| direct client calls | — | **0/12 degenerate, 0 retries** |
+
+The median improved because routing now avoids the slow providers — the
+preference list is doing measurable work, not just guarding.
+
+### Wave 3 dispatched — E1 + H7, isolated worktrees
+
+Both write to this repo, so each got its own worktree with the zod-shadow fix
+applied up front (E1's server typecheck verified clean before dispatch).
+
+| Child | Session id | Worktree | Brief |
+|---|---|---|---|
+| **E1** mobile socket durability | `01a0978b-c7ff-72aa-93c7-bbc87374c2b2` | `/root/pi-web-ui-wt-e1` | `docs/plans/briefs/E1-mobile-socket-durability.md` |
+| **H7** transport binding | `01a0978b-db7b-72aa-93c7-bbcbaac56`→`01a0978b-db7b-72aa-93c7-bbcb32baac56` | `/root/pi-web-ui-wt-h7` | `docs/plans/briefs/H7-transport-binding.md` |
+
+Watches `ww_7_1789248930606` (E1) and `ww_8_1789248934131` (H7); backstop
+`deadline-8ef4288c-1bf1-404e-bbfc-6039bad4851a`.
+
+**File ownership is deliberately disjoint** so the wave cannot self-collide:
+E1 owns `client/src/lib/websocket.ts`, `client/src/hooks/useWebSocket.ts` and
+`useDriveModeDictation.ts`; H7 owns `shared/src/protocol-types.ts`, the server
+router and its own client hook. Each brief names the other's files as off-limits.
+
+**E1** is the operator-reported mobile defect (see the prior entry). **H7** adds
+the missing caller for `handleOperatorTurn` — today an operator utterance cannot
+reach the talker from the browser at all, so the harness is wired but not yet
+reachable.
 
 ## Cleanup owed at the end
 
