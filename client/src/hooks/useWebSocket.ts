@@ -13,6 +13,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useSessionStore } from '../store';
 import { WebSocketClient, createWebSocketClient, type WebSocketStatus } from '../lib/websocket';
+import { emitTalkerTurnResult } from '../lib/talkerBus';
 
 export function useWebSocket() {
   const clientRef = useRef<WebSocketClient | null>(null);
@@ -37,7 +38,13 @@ export function useWebSocket() {
     const handleServerMessage = useSessionStore.getState().handleServerMessage;
 
     const client = createWebSocketClient({
-      onMessage: handleServerMessage,
+      onMessage: (message: unknown) => {
+        // H7 voice-talker tap: consume `talker_turn_result` here, BEFORE the
+        // session store — the store does not know this message type and would
+        // record it as protocol drift. See lib/talkerBus.ts.
+        if (emitTalkerTurnResult(message)) return;
+        handleServerMessage(message);
+      },
       onStatusChange: (status: WebSocketStatus) => {
         console.log('WebSocket status:', status);
         // A dropped connection can never deliver the session_switched the
