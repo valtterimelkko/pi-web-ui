@@ -110,7 +110,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
         ? useSessionStore.getState().opencodeAgentModes[currentSessionId ?? ''] ?? 'build'
         : undefined;
       const sent = sendPrompt(promptMessage, images, agent);
-      if (!sent) {
+      if (sent === 'failed') {
         // Surface send failure - don't clear draft, show error toast
         useUIStore.getState().addToast({
           type: 'error',
@@ -243,7 +243,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
       // regardless of the (hidden) toggle state.
       const mode = forcedMode ?? (streamingComposeIsQueueOnly(currentSessionSdkType) ? 'followUp' : deliveryMode);
       const sent = mode === 'followUp' ? sendFollowUp(message) : sendSteer(message);
-      if (!sent) {
+      if (sent === 'failed') {
         useUIStore.getState().addToast({
           type: 'error',
           message: 'Failed to send message. Check your connection and try again.',

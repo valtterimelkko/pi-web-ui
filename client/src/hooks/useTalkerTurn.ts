@@ -46,17 +46,21 @@ export function useTalkerTurn() {
   const sendTalkerTurn = useCallback(
     (input: SendTalkerTurnInput): boolean => {
       if (!input.utterance || !input.utterance.trim()) return false;
-      const sent = sendMessage({
+      // E1 changed sendMessage's contract from boolean to
+      // 'sent' | 'queued' | 'failed'. A queued message is still an accepted
+      // send (it flushes on reconnect), so only 'failed' is a refusal here.
+      const result = sendMessage({
         type: 'talker_turn',
         workerSessionId: input.workerSessionId,
         utterance: input.utterance,
         ...(input.runtime ? { runtime: input.runtime } : {}),
       });
-      if (sent) {
+      const accepted = result !== 'failed';
+      if (accepted) {
         pendingCount.current += 1;
         setAwaitingReply(true);
       }
-      return sent;
+      return accepted;
     },
     [sendMessage]
   );

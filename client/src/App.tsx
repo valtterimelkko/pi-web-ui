@@ -79,8 +79,8 @@ function AuthenticatedApp() {
   // Handle extension UI response
   const handleExtensionResponse = useCallback((response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean }) => {
     const client = getWebSocketClient();
-    const sent = client?.send({ type: 'extension_ui_response', response }) ?? false;
-    if (!sent) {
+    const sent = client?.send({ type: 'extension_ui_response', response }) ?? 'failed';
+    if (sent === 'failed') {
       console.error('Failed to send extension UI response: WebSocket is not connected');
       return;
     }
