@@ -19,6 +19,15 @@
  * Usage:
  *   source ~/.bashrc  # provides OPENROUTER_API_KEY
  *   npx tsx scripts/talker-harness.ts [--model <id>] [--runs N] [--pushback-runs N] [--json <path>]
+ *                                     [--reasoning-effort <minimal|low|medium|high>]
+ *
+ * H3 retest addition (2026-09): --reasoning-effort rewrites the request body's
+ * `reasoning` field via the client's fetchImpl seam. This is required because
+ * model-client.ts hardcodes `reasoning: { enabled: false }`, which some
+ * candidates reject outright (HTTP 400 "Reasoning is mandatory for this
+ * endpoint and cannot be disabled" — google/gemini-3.6-flash, openai/gpt-5-nano).
+ * server/src/talker/* is out of bounds for H3, so the rewrite lives here and
+ * touches nothing else: same prompt, same gate, same measurement path.
  */
 
 import fs from 'node:fs';
@@ -26,7 +35,8 @@ import path from 'node:path';
 import { TalkerSession } from '../server/src/talker/talker.js';
 import { createNullDelivery } from '../server/src/talker/delivery.js';
 import { OpenRouterTalkerClient, resolveTalkerModelConfig } from '../server/src/talker/model-client.js';
-import type { TalkerModelConfig, WorkerStateSnapshot } from '../server/src/talker/types.js';
+import type { TalkerModelConfig } from '../server/src/talker/model-client.js';
+import type { TalkerModelClient, WorkerStateSnapshot } from '../server/src/talker/types.js';
 
 const TTFT_TARGET_MS = 2000;
 const TTFT_HARD_MS = 4000;
@@ -121,8 +131,10 @@ interface TurnRecord {
   gateVerdict: 'ok' | 'BREACH';
 }
 
-async function runScenario(cfg: TalkerModelConfig, runIndex: number): Promise<{ turns: TurnRecord[]; ttfts: number[] }> {
-  const model = new OpenRouterTalkerClient(cfg);
+async function runScenario(cfg: TalkerModelConfig, runIndex: number, providedClient?: TalkerModelClient): Promise<{ turns: TurnRecord[]; ttfts: number[] }> {
+  // H3: accept the (possibly reasoning-rewriting) client built in main();
+  // constructing a bare client here would drop the --reasoning-effort rewrite.
+  const model = providedClient ?? new OpenRouterTalkerClient(cfg);
   const delivery = createNullDelivery();
   const session = new TalkerSession({
     model,
@@ -181,12 +193,12 @@ async function runScenario(cfg: TalkerModelConfig, runIndex: number): Promise<{ 
  * model must hold the rule conversationally. Runs the prompt-safety check
  * that plan §10.11 made mandatory.
  */
-async function runPushbackHoldCheck(cfg: TalkerModelConfig, runs: number): Promise<{ held: number; replies: string[]; ttfts: number[] }> {
+async function runPushbackHoldCheck(cfg: TalkerModelConfig, runs: number, providedClient?: TalkerModelClient): Promise<{ held: number; replies: string[]; ttfts: number[] }> {
   const replies: string[] = [];
   const ttfts: number[] = [];
   let held = 0;
   for (let i = 1; i <= runs; i++) {
-    const model = new OpenRouterTalkerClient(cfg);
+    const model = providedClient ?? new OpenRouterTalkerClient(cfg);
     const delivery = createNullDelivery();
     const session = new TalkerSession({
       model,
@@ -237,9 +249,27 @@ async function main() {
   }
   const modelOverride = getArg('--model', null);
   if (modelOverride) cfg = { ...cfg, model: modelOverride };
+  const reasoningEffort = getArg('--reasoning-effort', null);
+  let client: TalkerModelClient = new OpenRouterTalkerClient(cfg);
+  if (reasoningEffort) {
+    const rewritingFetch: typeof fetch = (input, init) => {
+      if (init?.body) {
+        try {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          if (body.reasoning) body.reasoning = { effort: reasoningEffort };
+          init = { ...init, body: JSON.stringify(body) };
+        } catch {
+          // Malformed body: send untouched and let the API surface it.
+        }
+      }
+      return fetch(input, init);
+    };
+    client = new OpenRouterTalkerClient(cfg, rewritingFetch);
+  }
 
   console.log('=== TALKER HARNESS — end-to-end against a real model (H1) ===');
   console.log(`model: ${cfg.model}`);
+  console.log(`reasoning: ${reasoningEffort ? `effort ${reasoningEffort} (body rewritten via fetchImpl seam)` : 'enabled: false (client default)'}`);
   console.log(`runs: ${runs}, pushback-hold runs: ${pushbackRuns}`);
   console.log('');
 
@@ -248,7 +278,7 @@ async function main() {
   let breaches = 0;
 
   for (let run = 1; run <= runs; run++) {
-    const { turns, ttfts } = await runScenario(cfg, run);
+    const { turns, ttfts } = await runScenario(cfg, run, client);
     allTurns.push(...turns);
     allTtfts.push(...ttfts);
     breaches += turns.filter(t => t.gateVerdict === 'BREACH').length;
@@ -256,7 +286,7 @@ async function main() {
   }
 
   console.log('=== PUSHBACK WITH NOTHING PENDING (prompt-safety check) ===');
-  const pushback = await runPushbackHoldCheck(cfg, pushbackRuns);
+  const pushback = await runPushbackHoldCheck(cfg, pushbackRuns, client);
   allTtfts.push(...pushback.ttfts);
   console.log('');
 
@@ -280,6 +310,7 @@ async function main() {
       JSON.stringify(
         {
           model: cfg.model,
+          reasoningEffort: reasoningEffort ?? 'off (enabled: false)',
           runs,
           pushbackRuns,
           gateBreaches: breaches,

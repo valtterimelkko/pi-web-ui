@@ -90,4 +90,47 @@ describe('OpenRouterTalkerClient', () => {
     const client = new OpenRouterTalkerClient(resolveTalkerModelConfig({ OPENROUTER_API_KEY: 'k' }), fetchImpl as unknown as typeof fetch);
     await expect(client.completeTurn([{ role: 'user', content: 'hello' }])).rejects.toThrow(/502/);
   });
+
+  // H3's retest proved this is a real defect, not a hypothetical: some OpenRouter
+  // endpoints reject a disabled-reasoning request outright with HTTP 400
+  // "Reasoning is mandatory for this endpoint and cannot be disabled"
+  // (google/gemini-3.6-flash and openai/gpt-5-nano among the tested candidates).
+  // A hardcoded `reasoning: { enabled: false }` therefore makes the talker unable
+  // to run on those models at all.
+  describe('configurable reasoning (H3 defect)', () => {
+    it('defaults to disabled reasoning so the selected production model is unchanged', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
+        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]));
+      const client = new OpenRouterTalkerClient(resolveTalkerModelConfig({ OPENROUTER_API_KEY: 'k' }), fetchImpl as unknown as typeof fetch);
+      await client.completeTurn([{ role: 'user', content: 'hello' }]);
+      const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(body.reasoning).toEqual({ enabled: false });
+    });
+
+    it('sends a configured reasoning effort instead of disabling it', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
+        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]));
+      const cfg = { ...resolveTalkerModelConfig({ OPENROUTER_API_KEY: 'k' }), reasoningEffort: 'minimal' as const };
+      const client = new OpenRouterTalkerClient(cfg, fetchImpl as unknown as typeof fetch);
+      await client.completeTurn([{ role: 'user', content: 'hello' }]);
+      const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(body.reasoning).toEqual({ effort: 'minimal' });
+    });
+
+    it('omits the reasoning field entirely when configured to', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
+        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]));
+      const cfg = { ...resolveTalkerModelConfig({ OPENROUTER_API_KEY: 'k' }), reasoningEffort: 'omit' as const };
+      const client = new OpenRouterTalkerClient(cfg, fetchImpl as unknown as typeof fetch);
+      await client.completeTurn([{ role: 'user', content: 'hello' }]);
+      const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(body).not.toHaveProperty('reasoning');
+    });
+  });
 });

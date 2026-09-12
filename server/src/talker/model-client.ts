@@ -20,6 +20,17 @@ export interface TalkerModelConfig {
   temperature: number;
   maxTokens: number;
   timeoutMs: number;
+  /**
+   * How to express the reasoning preference to the provider.
+   *
+   * - `undefined` (default): disable reasoning — the selected production model
+   *   (thinking OFF, plan §10.4).
+   * - an effort level: request that effort instead, for endpoints that REJECT a
+   *   disabled-reasoning request with HTTP 400 (H3 retest found two such
+   *   candidates).
+   * - `'omit'`: send no `reasoning` field at all.
+   */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'omit';
 }
 
 export function resolveTalkerModelConfig(env: NodeJS.ProcessEnv = process.env): TalkerModelConfig {
@@ -71,8 +82,17 @@ export class OpenRouterTalkerClient implements TalkerModelClient {
           stream: true,
           temperature: this.cfg.temperature,
           max_tokens: this.cfg.maxTokens,
-          // The selected configuration is thinking OFF (plan §10.4).
-          reasoning: { enabled: false },
+          // Reasoning is configurable because it is NOT universally disableable:
+          // some OpenRouter endpoints reject a disabled-reasoning request with
+          // HTTP 400 "Reasoning is mandatory for this endpoint and cannot be
+          // disabled". The selected production model wants thinking OFF
+          // (plan §10.4), which stays the default; a candidate that mandates
+          // reasoning sets an effort level (or 'omit') instead. (H3 retest.)
+          ...(this.cfg.reasoningEffort === 'omit'
+            ? {}
+            : this.cfg.reasoningEffort
+              ? { reasoning: { effort: this.cfg.reasoningEffort } }
+              : { reasoning: { enabled: false } }),
         }),
       });
 
