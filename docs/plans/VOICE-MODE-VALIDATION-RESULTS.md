@@ -244,6 +244,13 @@ still `private` with a single caller, there is still exactly one
 are untouched. Suites: talker **17 files / 200 tests**, websocket **24 files /
 311 tests**, both green.
 
-**Still open (unchanged):** F3 (the talker's state view is Pi-manager-based, so
-status conversation about a Claude worker is blind) and the two carried-forward
-validation gaps (Antigravity; the operator listening check).
+**F3 is now IN SCOPE (operator reversal, 2026-09-13).** The talker's state view is
+Pi-manager-based, so status conversation about a Claude worker is blind. It was
+briefly set aside and the operator has since asked for it to ship; it is dispatched
+as **P11** (`docs/plans/briefs/P11-per-runtime-state-view.md`). The risk of that
+change is recorded there: the current Claude behaviour is *honest but blind* and must
+not become *confident and wrong* — a snapshot must never imply activity it has not
+observed, and a runtime without a provider keeps the plain fallback.
+
+**Still open besides F3:** the two carried-forward validation gaps (Antigravity; the
+operator listening check).
