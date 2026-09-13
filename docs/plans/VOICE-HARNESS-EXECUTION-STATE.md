@@ -78,6 +78,66 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 ~12:06 — P2 receipt ack COMPLETE (verified by the parent)
+
+P2's goal read back **achieved**. The parent reviewed the diff and ran the suite
+rather than trusting the report.
+
+**The three properties, verified in the code:**
+
+- **A receipt, never an agreement.** `RECEIPT_ACK = 'Noted — still holding that.'`
+  Nothing has been relayed when it is spoken and the confirmation step follows.
+  Tests pin the string exactly and assert it cannot be read as assent, a send, or
+  an action taken.
+- **Once per relay, never per utterance.** `takeReceipt()` marks the whole
+  outstanding set acknowledged and returns the count it covered, so three
+  utterances in a row yield **one** receipt. It consumes the condition by the
+  take rather than by observation — deliberately mirroring `takeForRelease()` —
+  so repeated answer-ready moments cannot repeat it, and a later utterance
+  re-arms exactly one more. That symmetry with the release path is the nicest
+  thing in this diff; it makes the receipt's lifetime behave like the gate's.
+- **Harness-produced, never model-produced.** The selector is a pure function
+  taking only a count, so no model behaviour can compose, substitute for,
+  suppress, or extend a receipt. Tests cover an imitating reply, a model failure,
+  and an attempt to re-arm an already-given receipt.
+
+**The gate is untouched.** The diff adds an `acknowledged` flag, a count method
+and `takeReceipt()`; `takeForRelease`, `recordCandidate`, `tickTurn`, `cancel`
+and `recordReleased` are all unmodified — checked by grepping the diff for
+release-path identifiers, which found only a comment.
+
+**Independent verification:** the parent ran the talker suite — **13 files, 150
+tests, all passing** — including the pre-existing talker suite, which is what
+demonstrates the gate did not regress. Committed `5e97bb4`, path-limited to P2's
+server files because P4 still owned the client tree.
+
+## 2026-09-13 ~12:07 — P3 (the operator's draft) dispatched
+
+P2 released `pending-proposal.ts`, so the §4.2 draft work could start without two
+writers in one file. P3 owns `pending-proposal.ts`, `talker.ts`, `prompt.ts` and
+their tests; **P4 still owns the client tree.** Dispatched at `max` with its own
+goal armed.
+
+The brief specifies the invariants rather than the method, and adds one design
+point the plan implies but did not state: **a release releases verbatim text
+selected by utterance id — never composed.** If the operator says "just the
+second one", the harness selects a subset of ids; the model must have no route to
+compose, edit, summarise or re-word what is sent. Without that, partial selection
+would quietly hand the model a text-composition path into the relay, which is
+exactly what the gate exists to prevent.
+
+The brief also warns P3 that **existing tests asserting the old semantics will
+legitimately need to change** (candidate replacement, expiry at
+`maxPendingAgeTurns`, a second "yes" after release finding nothing) — and that it
+must name each changed test and justify it, and must never weaken a test pinning a
+genuine safety property. That instruction exists because those old tests are the
+very semantics this package replaces, and a confused child might otherwise either
+refuse to touch them or silently delete them.
+
+---
+
 ## 2026-09-13 — §4.2 Interleaved composition: the operator's draft (DECIDED)
 
 **The operator's question, and it found a real gap.** Their scenario: the worker
