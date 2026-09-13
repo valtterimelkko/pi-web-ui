@@ -245,3 +245,31 @@ metadata entries exist from creation, which is expected.
 **Disposable infrastructure still running for immediate re-drive after any fix:**
 validation server port 3777 (`--dir /tmp/p9-e2e`), vite on 5173 (`VITE_API_TARGET` set).
 Stop with `pkill -f validation-server` and `pkill -f "vite --port 5173"`.
+
+---
+
+## 9. Isolation: accepted limitation (owner decision, 2026-09-13)
+
+§1.4 reports the REST listing defect. The owner has reviewed it and **accepted it**:
+the exposure is local to the owner's own machine, on the owner's own data, and
+agents create fresh sessions for validation anyway. No confidentiality risk is
+considered material.
+
+**One nuance worth recording, because it is not about exposure.** The defect is not
+merely that the listing *shows* production sessions — it is that it makes them
+**reachable**. `switch_session` accepts a `sessionPath` directly
+(`server/src/websocket/connection.ts:2286`) with **no guard scoping the value to the
+validation directory**, so a disposable server can load a production session, after
+which a prompt or a Voice Mode relay would target it.
+
+The realistic hazard is therefore an **unintended instruction into live work** — a
+driver that selects an existing session instead of creating one, or an operator
+clicking through 854 listed sessions — not data leakage. Low likelihood (agents
+create their own sessions; the UI requires an explicit pick), so it is accepted
+rather than fixed.
+
+**Read this before treating a disposable server as fully isolated.** Its *creation*
+path is isolated — sessions it creates stay in the validation directory, verified
+in §1.3 — but its *listing and switching* path is not. If a validation server is ever
+handed to an agent for open-ended testing, scope the listing (and `switch_session`)
+to the validation directory first; it is a small change.
