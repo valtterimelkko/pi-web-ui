@@ -76,6 +76,68 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 — §4.2 Interleaved composition: the operator's draft (DECIDED)
+
+**The operator's question, and it found a real gap.** Their scenario: the worker
+is mid-task and emits something important; the operator is simultaneously
+composing a new instruction with the talker and may go back and forth before
+permitting a relay; the worker's news arrives during that composition and is
+relayed; then they resume the half-finished thought. *Will the talker still know
+where they left off, without making them re-explain?*
+
+**Today's answer is no.** Verified in code, not inferred:
+
+- `recordCandidate()` **replaces** any existing candidate — a second utterance
+  silently supersedes the first, and the first is never offered for release.
+- `tickTurn()` **expires** the candidate after `maxPendingAgeTurns` (6). Since
+  that counter advances on *worker* turns, an interleaved worker conversation
+  ages the operator's unfinished instruction out of existence, and a later "yes"
+  releases nothing at all.
+
+Both behaviours were deliberate and defensible alone (a "yes" must resolve to one
+thing; stale text must never be released). The error is that they are applied to
+**the wrong object**.
+
+**The decision.** Separate the operator's thread from the confirmation:
+
+- **The draft** — the operator's accumulating verbatim composing thread — is
+  **harness state resolved by object reference**, never reconstructed from
+  conversation history and never written by the model. Same principle the release
+  gate already follows, which is what makes it survive interruption, worker news,
+  compaction and model variance.
+- **The confirmation** is a snapshot of the draft, released atomically once.
+
+**Ageing is re-anchored, not removed.** The confirmation window still exists and
+still refuses to release un-reconfirmed text. But it expires the *confirmation*,
+not the *draft*: the draft is marked needs-re-confirmation and the talker says so
+("You were composing something — 'tell the worker to X'. Still want that?").
+Nothing is silently dropped; nothing stale is released.
+
+**Supersession gets loud**, per the operator's accepted recommendation: a new
+utterance that would replace an unreleased one makes the talker hold both and ask
+which, rather than replacing silently.
+
+**Two independent lanes.** Relaying worker news never touches the draft, and
+resuming the draft never discards the worker's news (it stays in the transcript).
+The talker arbitrates playback order, never content ownership.
+
+A mid-thought **pause** needs no special mechanism: with tap-to-talk the utterance
+ends only on tap-stop, so a pause is silence inside one utterance, not an
+ambiguous boundary. This is a small argument in favour of keeping tap-to-talk.
+
+**Added criteria:** A12 (an unfinished instruction survives interleaving and is
+released verbatim), A13 (a lapsed draft is offered for re-confirmation, never
+dropped), A14 (taking the floor mid-relay loses neither lane).
+
+**Work queued:** the draft is server-side in `pending-proposal.ts` / `talker.ts`,
+which P2 currently holds for acknowledgement marking — so the draft goes to a
+later child to avoid two writers in one file. The client speech arbiter (P4) is
+dispatched now because it is independent of that file.
+
+---
+
 ## 2026-09-13 — Phase 4 opens: the anti-duet rule is DECIDED
 
 **Operator decision (verbatim intent):** choose option (b) — the talker finishes

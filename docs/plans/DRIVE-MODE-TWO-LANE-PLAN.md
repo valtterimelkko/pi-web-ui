@@ -362,6 +362,80 @@ not two.
 
 **New acceptance criteria** (added to §5): A9, A10, A11.
 
+#### 4.2 Interleaved composition: the operator's draft (DECIDED 2026-09-13)
+
+**The situation the operator raised.** The worker is mid-task and emits
+something important. The operator is *simultaneously* composing a new
+instruction with the talker — and may go back and forth several times before
+giving permission to relay. The worker's news arrives during that composition
+and is relayed. Then the operator resumes the half-finished thought. **Does the
+talker still know where they left off, without making them re-explain?**
+
+Today's answer is **no**, and this is a genuine gap, not a hypothetical:
+
+- `recordCandidate()` **replaces** any existing candidate, so a second utterance
+  silently supersedes the first — and the first is never offered for release.
+- `tickTurn()` **expires** the candidate after `maxPendingAgeTurns` (6) turns. An
+  interleaved worker conversation therefore ages the operator's unfinished
+  instruction out of existence, and a later "yes" releases nothing.
+
+Both behaviours were deliberate and are defensible in isolation: a spoken "yes"
+must resolve to exactly one thing, and stale text must never be released. The
+error is not the bounds — it is that they are applied to **the wrong object**.
+
+**The fix: separate the operator's thread from the confirmation.**
+
+- **The draft** is the operator's composing thread — the accumulating, verbatim
+  record of what they have said toward an instruction not yet released. It is
+  **harness state, resolved by object reference**: never reconstructed from
+  conversation history, never written by the model. That is the same principle
+  the release gate already follows, and it is what makes this robust —
+  interruptions, worker news, compaction and model variance cannot lose a draft
+  the harness holds.
+- **The confirmation** is a *snapshot* of the draft, quoted verbatim, released
+  atomically exactly once.
+
+**Ageing keeps its safety but moves to the right object.** The confirmation
+window still exists: the system still refuses to release text the operator has
+not re-confirmed after a gap. But when it lapses it expires the
+**confirmation, not the draft**. The draft is marked *needs re-confirmation* and
+the talker says so — *"You were composing something — 'tell the worker to X'.
+Still want that?"* Nothing is silently dropped, and nothing stale is released.
+This is the direct answer to the operator's *"so that I don't have to
+re-explain anything"*.
+
+**Supersession stays loud.** Per the operator's decision, when a new utterance
+would replace an unreleased one the talker **holds both and asks which** rather
+than replacing silently. With the draft, the operator hears *"I'm holding two"*
+instead of discovering later that half an instruction vanished.
+
+**Two independent lanes.** The operator's lane (their draft, with the talker)
+and the worker's lane (news, results, questions) are separate, and speaking one
+never destroys the other: relaying worker news does not touch the draft, and
+resuming the draft does not discard the worker's news — which stays in the
+transcript and remains askable. The talker arbitrates *playback order*, never
+content ownership.
+
+**The interleaving, traced** (the operator's exact scenario):
+
+1. Operator is recording; the worker's news arrives → it **waits**. Rule 1: the
+   operator holds the floor.
+2. Operator taps stop → the utterance is captured unconditionally → one receipt
+   ack → **then** the worker's news speaks.
+3. Operator taps again and continues: *"…and also make it use staging"* → the
+   draft **accumulates**. No re-explaining.
+4. Operator: *"yes, send that"* → the confirmation quotes the whole draft
+   verbatim and releases exactly that.
+
+A mid-thought **pause** needs no special handling: with tap-to-talk the utterance
+ends only when the operator taps stop, so a pause is silence inside one
+utterance rather than an ambiguous turn boundary.
+
+**Also required:** an explicit way to abandon a draft (*"forget that"*), and the
+existing rule that an **ambiguous** confirmation never acts.
+
+**New acceptance criteria** (added to §5): A12, A13, A14.
+
 ### Phase 5 — Live validation and documentation
 
 **Deliverable:** the full acceptance evidence, plus documentation corrections.
@@ -397,6 +471,9 @@ comparison, and any known gaps stated plainly.
 | A9 | The operator is never interrupted mid-utterance | A speaking operator stays uninterrupted while an answer is ready and while one is playing (§4.1 rule 1) |
 | A10 | No operator utterance is ever lost | Every utterance reaches the verbatim store regardless of playback state; assert capture is unconditional and survives a mid-playback utterance (§4.1 invariant) |
 | A11 | A receipt ack is never interpretable as a send | Ack text is drawn from the fixed harness vocabulary; at ack time nothing has been relayed, and the confirmation step still follows |
+| A12 | An unfinished instruction survives interleaving | Compose a draft, let worker turns interleave, resume, confirm — the released text is the whole draft, verbatim (§4.2) |
+| A13 | A lapsed draft is offered for re-confirmation, never dropped | Drive the draft past the confirmation window, then ask; the talker surfaces it and requires re-confirmation (§4.2) |
+| A14 | Taking the floor mid-relay loses neither lane | Interrupt a worker-news relay by speaking; the draft and the pending news both survive and remain reachable (§4.2) |
 
 ---
 
