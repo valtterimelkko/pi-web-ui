@@ -84,6 +84,58 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 ~13:10 — P5 the Voice Mode UI COMPLETE (verified by the parent)
+
+P5's goal read back **achieved**. The surface exists and the parent **looked at
+it** rather than accepting a description.
+
+**Real screenshots, not a claim.** The child produced eight PNGs in
+`/tmp/voice-mode-shots/` by driving the actual UI (`start recording` / `stop
+recording` buttons, a fake media device, stubbed network) — `1-idle`,
+`2-you-have-the-floor`, `3-talker-speaking`, `4-answer-ready-held`,
+`5-working-silently`, `6-barge-in-floor-with-badges`, `7-confirmation-card`,
+`7b-confirmation-card-scrolled`. The parent read them directly.
+
+**What the four states actually look like:** *You have the floor* is a red orb
+with a red badge; *Answer ready — held* is purple with an `answer held` chip and a
+**neutral, still-enabled** mic; *Talker speaking* is blue; `idle` is quiet. The
+barge-in state reads **"You have the floor · speech ducked · answer held"** — the
+exact information the operator asked for.
+
+**The confirmation card** says *"Ready to send — your words, exactly:"*, shows the
+operator's verbatim text behind a blue rule, and offers explicit Confirm / Cancel
+plus a typed fallback.
+
+**The operator's hard constraint, checked in the source.** The mic control carries
+`disabled={voice.state === 'processing'}`. That line is **pre-existing** (it was
+`dictation.state` in HEAD), and `processing` is the *transcription round-trip*
+state — not a speech state — so the mic is never disabled while the surface
+speaks, which is what the operator rejected. The call site documents the intent.
+The child **kept** it rather than removing it, which is correct: removing it would
+have introduced a double-submit.
+
+**The dev harness decision.** `client/voice-harness.html` + `src/dev/voiceHarness.tsx`
+were kept deliberately. It renders the REAL components with only the network
+stubbed, which is what made the screenshots honest, and it lets the operator look
+at the surface without a backend. Verified it cannot ship: a production build
+emits only `index.html` + assets, and grepping `dist/` for harness markers finds
+nothing. It opts out of `tsc` and `eslint` because it is dev-only scaffolding —
+recorded here as a conscious trade-off rather than silent drift.
+
+**Independent verification:** client typecheck clean; full client suite **97 files
+/ 1064 tests passing** (up from 1037); production build succeeded; screenshots
+inspected directly.
+
+Two cosmetic observations, not defects, for the operator's eye: the
+"answer ready — held" badge repeats the word *held* in its chip, and the typed
+fallback placeholder is truncated mid-word in the card.
+
+Committed `6d9618a`.
+
+---
+
 ## 2026-09-13 ~12:49 — P3 the operator's draft COMPLETE (verified by the parent)
 
 P3's goal read back **achieved**. The parent ran the suite: **15 files, 173 tests
