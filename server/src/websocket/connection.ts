@@ -4156,6 +4156,10 @@ export class WebSocketConnectionManager {
         ...(result.refused ? { refused: result.refused } : {}),
         released: result.turn?.released ?? null,
         cancelled: result.turn?.cancelled ?? false,
+        // The harness's mechanical receipt ack (§4.1 rule 2), when one was
+        // due this turn. Additive pass-through — the harness produced it;
+        // this handler only relays it.
+        ...(result.turn?.receiptAck !== undefined ? { receiptAck: result.turn.receiptAck } : {}),
         ...(result.turn?.error ? { error: result.turn.error } : {}),
       });
     } catch (error) {

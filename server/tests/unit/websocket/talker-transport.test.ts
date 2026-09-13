@@ -190,6 +190,32 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
     expect((result?.message.released as unknown) ?? null).toBeNull();
   });
 
+  it('a batch-opening instruction turn carries the mechanical receipt ack on the wire (§4.1 rule 2)', async () => {
+    buildHarness();
+    await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: INSTRUCTION, requestId: 'r9' });
+
+    const result = lastOfType('talker_turn_result');
+    expect(result?.message.receiptAck).toBe('Noted — still holding that.');
+    // The receipt never races the gate: proposed, nothing delivered.
+    expect(result?.message.phase).toBe('proposed');
+    expect(piDelivery.deliveredTexts()).toEqual([]);
+
+    // A continuing utterance in the same batch carries no further receipt.
+    await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'and also deploy staging' });
+    const second = lastOfType('talker_turn_result');
+    expect(second?.message.receiptAck ?? undefined).toBeUndefined();
+
+    // The confirming release carries its own ack — no receipt.
+    await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: CONFIRM });
+    const release = lastOfType('talker_turn_result');
+    expect(release?.message.phase).toBe('released');
+    expect(release?.message.receiptAck ?? undefined).toBeUndefined();
+    // Both batch parts release, joined verbatim (plan §4.2 multi-part draft):
+    expect(piDelivery.deliveredTexts()).toEqual([
+      'please tell the worker to add a smoke test to the login flow\nand also deploy staging',
+    ]);
+  });
+
   it('confirm → releases the verbatim utterance and acks exactly "sending that now"', async () => {
     buildHarness();
     await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: INSTRUCTION });
@@ -216,12 +242,14 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
 
     await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: CONFIRM, requestId: 'r4' });
     const result = lastOfType('talker_turn_result');
-    // The bare confirm falls through to conversation ("send what?") — nothing
-    // further is delivered and the reply is the model's, not an ack.
+    // UPDATED (P7, finding F2): the bare confirm with nothing pending is a
+    // mechanical dead end — the honest nothing-held answer, no model call.
+    // Nothing further is delivered.
     expect(result?.message.phase).toBe('answered');
     expect(result?.message.released ?? null).toBeNull();
+    expect(result?.message.reply).toMatch(/nothing is held/i);
     expect(piDelivery.deliveredTexts()).toEqual([INSTRUCTION]);
-    expect(model.calls.length).toBe(2);
+    expect(model.calls.length).toBe(1);
   });
 
   it('a refused delivery surfaces the refusal honestly', async () => {

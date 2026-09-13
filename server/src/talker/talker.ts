@@ -54,13 +54,13 @@
  *   draft (parts, age, needs-re-confirmation) and the last release.
  */
 
-import { classifyOperatorUtterance, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
+import { classifyOperatorUtterance, extractPostCancelInstruction, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
 import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
 import type { DraftSelection, DraftSnapshot } from './pending-proposal.js';
 import { renderStateView } from './state-view.js';
 import { TalkerHistory } from './history.js';
 import { loadTalkerSystemPrompt } from './prompt.js';
-import { ackForOutcome, describeOutcome, MODEL_FAILURE_REPLY } from './ack.js';
+import { ackForOutcome, describeOutcome, MODEL_FAILURE_REPLY, NOTHING_PENDING_ACK, NOTHING_TO_CANCEL_ACK, receiptAckFor } from './ack.js';
 import type {
   ChatMessage,
   TalkerModelClient,
@@ -199,14 +199,51 @@ export class TalkerSession {
         }
         return this.release(utterance, turn, selection ?? undefined);
       }
-      // A confirmation with nothing pending falls through to conversation —
-      // the model will ask "send what?". The "yes" itself is never recorded
-      // as a candidate.
-      return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false });
+      // A confirmation with nothing pending is a DEAD END, and the harness
+      // owns it (finding F2, P7): the model's conversational answer promised
+      // a send that could not happen — "OK. I'll send that instruction to
+      // the worker." Nothing could be sent: the gate held. The answer is now
+      // the fixed mechanical string — the truth, the way out, no promise —
+      // with no model call, exactly like the release acks and the lapsed
+      // refusal. The "yes" itself is never recorded as a candidate.
+      this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
+      this.history.append({ role: 'assistant', content: NOTHING_PENDING_ACK, kind: 'mechanical', turn });
+      this.history.maybeTrim(this.proposals.pending !== null);
+      return { reply: NOTHING_PENDING_ACK, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
     }
 
     if (utteranceClass === 'cancel') {
+      // Finding F1 (P7): the cancel boundary ends the OLD draft, but an
+      // instruction spoken AFTER the boundary in the same breath is captured
+      // — the residue composes fresh instead of vanishing from the harness.
+      // The residue is the operator's verbatim words; it joins the draft and
+      // still needs its own confirmation to release. The gate is untouched.
+      const residue = extractPostCancelInstruction(utterance);
       const cancelled = this.proposals.cancel('operator cancelled', turn);
+      if (residue) {
+        const residueClass = classifyOperatorUtterance(residue);
+        const residueIsDraftable =
+          residueClass === 'statement' ||
+          (residueClass === 'question' && !isMetaSendQuestion(residue) && isWorkerDirectedQuestion(residue));
+        if (residueIsDraftable) {
+          // The residue opens a fresh composition batch (the cancel cleared
+          // any held draft), so its answer-ready moment owes one receipt.
+          const residueRecord = this.utteranceLog.record(residue, turn);
+          this.proposals.appendToDraft(residueRecord.id, residue, turn);
+          return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled, opensBatch: true });
+        }
+      }
+      if (!cancelled && !residue) {
+        // The F2 neighbouring dead-end (checked and closed in the same
+        // package): a cancel with nothing held reached the model, which could
+        // claim a cancellation that never happened. Mechanical honesty —
+        // there was nothing to cancel. A cancel that DID clear a draft stays
+        // conversational: the model may truthfully acknowledge it.
+        this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
+        this.history.append({ role: 'assistant', content: NOTHING_TO_CANCEL_ACK, kind: 'mechanical', turn });
+        this.history.maybeTrim(this.proposals.pending !== null);
+        return { reply: NOTHING_TO_CANCEL_ACK, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
+      }
       return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled });
     }
 
@@ -217,12 +254,24 @@ export class TalkerSession {
     // supersession holds both, and the state view tells the talker.
     if (utteranceClass === 'question') {
       if (!isMetaSendQuestion(utterance) && isWorkerDirectedQuestion(utterance)) {
+        // A draft-opening question is a receipt moment like any append
+        // (§4.1 rule 2) — the ack travels on this turn's result.
+        const opensBatch = this.proposals.snapshotDraft() === null;
         this.proposals.appendToDraft(record.id, utterance, turn);
+        return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false, opensBatch });
       }
       return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false });
     }
+    // Receipt emission point (plan §4.1 rule 2): when this utterance OPENS a
+    // composition batch (no draft was held), the harness owes one receipt for
+    // the whole batch. It is consumed atomically here — takeReceipt(), the
+    // same once-per-relay consumption pinned in pending-proposal.ts — and
+    // travels on the turn result as a fixed-vocabulary string, spoken ahead
+    // of everything else. Continuing utterances in the same batch mint no
+    // further receipt: at most one per relay, never one per utterance.
+    const opensBatch = this.proposals.snapshotDraft() === null;
     this.proposals.appendToDraft(record.id, utterance, turn);
-    return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: true });
+    return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: true, opensBatch });
   }
 
   /**
@@ -265,7 +314,7 @@ export class TalkerSession {
     utterance: string,
     utteranceClass: TalkerTurnResult['utteranceClass'],
     turn: number,
-    flags: { recordedCandidate?: boolean; cancelled?: boolean }
+    flags: { recordedCandidate?: boolean; cancelled?: boolean; opensBatch?: boolean }
   ): Promise<TalkerTurnResult> {
     const snapshot = this.snapshotProvider();
     const draftSnap = this.proposals.snapshotDraft();
@@ -309,6 +358,16 @@ export class TalkerSession {
     this.history.append({ role: 'assistant', content: reply, kind: 'talker', turn });
     this.history.maybeTrim(this.proposals.pending !== null);
 
+    // The receipt (§4.1 rule 2) is emitted here — at the answer-ready moment
+    // for the utterance that opened the batch — from the fixed vocabulary,
+    // chosen purely by how many recorded utterances are outstanding. The
+    // model's reply is never an input; a model failure cannot suppress it.
+    let receiptAck: string | undefined;
+    if (flags.opensBatch) {
+      const ack = receiptAckFor(this.utteranceLog.takeReceipt() ?? 0);
+      if (ack) receiptAck = ack;
+    }
+
     return {
       reply,
       utteranceClass,
@@ -316,6 +375,7 @@ export class TalkerSession {
       cancelled: flags.cancelled ?? false,
       modelCalled: error === undefined,
       latency,
+      ...(receiptAck !== undefined ? { receiptAck } : {}),
       ...(error !== undefined ? { error } : {}),
     };
   }

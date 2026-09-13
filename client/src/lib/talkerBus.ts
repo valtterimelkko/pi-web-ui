@@ -37,6 +37,8 @@ export type TalkerTurnResult = {
       | { outcome: 'refused'; reason: string };
   } | null;
   cancelled: boolean;
+  /** Harness receipt ack (§4.1 rule 2) — mirror of the server wire shape. */
+  receiptAck?: string;
   error?: string;
 };
 

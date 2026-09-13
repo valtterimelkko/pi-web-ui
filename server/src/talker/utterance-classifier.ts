@@ -113,6 +113,44 @@ export function classifyOperatorUtterance(raw: string): UtteranceClass {
 }
 
 /**
+ * Locate the instruction residue AFTER the cancel boundary of a
+ * cancel-classified utterance (finding F1, P7). "Never mind, forget it. Tell
+ * the worker to rebase instead." is ONE breath carrying two decisions: the
+ * cancel ends whatever was held, and the instruction half must still be
+ * draft-captured — before this existed, the operator's words vanished from
+ * the harness while remaining in the talker's conversation.
+ *
+ * Purely mechanical: repeatedly cut at the EARLIEST cancel-pattern match end
+ * until the remainder no longer classifies as cancel (a cancel run — "no,
+ * wait — cancel that" — is skipped whole), then strip leftover leading
+ * punctuation. Returns the trimmed residue, or null when the utterance is a
+ * pure cancel or cancels itself down to nothing (an instruction that takes
+ * itself back mid-breath cancels wholly — the last cancel phrase wins, same
+ * as the pre-fix classifier). This function only LOCATES the boundary; the
+ * caller classifies the residue and decides what it means. It never touches
+ * the release path: a residue can only ever join the draft, which still
+ * requires its own confirmation to release.
+ */
+export function extractPostCancelInstruction(raw: string): string | null {
+  let text = raw.trim();
+  for (;;) {
+    if (!text) return null;
+    if (!CANCEL_PATTERNS.some(p => p.test(text))) break;
+    let earliestEnd: number | null = null;
+    for (const pattern of CANCEL_PATTERNS) {
+      const m = pattern.exec(text);
+      if (m && (earliestEnd === null || m.index + m[0].length < earliestEnd)) {
+        earliestEnd = m.index + m[0].length;
+      }
+    }
+    if (earliestEnd === null) return null; // unreachable while the .some() matched
+    text = text.slice(earliestEnd).trim();
+  }
+  if (!text) return null;
+  return text.replace(/^[,.;:!—-]+\s*/, '').trim() || null;
+}
+
+/**
  * True when a question-classified utterance is about the send in flight and
  * therefore must not replace the pending proposal ("did you send it?" keeps
  * the proposal alive; "could you ask the worker to rebase?" does not — it is

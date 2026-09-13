@@ -443,6 +443,15 @@ export interface TalkerTurnResultMessage {
   released: { utteranceId: number; text: string; delivery: TalkerDeliveryOutcome } | null;
   /** True when this turn cancelled a pending proposal. */
   cancelled: boolean;
+  /**
+   * Present when the harness emitted a receipt ack this turn (plan §4.1
+   * rule 2): a fixed-vocabulary string from the server's ack vocabulary —
+   * a receipt that operator speech is held, never an agreement, never a
+   * send. Produced mechanically server-side; the model cannot compose,
+   * suppress or extend it. The client speaks it at TIER_RECEIPT_ACK, ahead
+   * of everything else. Additive, optional.
+   */
+  receiptAck?: string;
   /** Present when the talker's model call failed (honest, surfaced). */
   error?: string;
 }

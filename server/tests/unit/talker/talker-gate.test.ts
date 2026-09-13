@@ -84,12 +84,18 @@ describe('NON-NEGOTIABLE 1: the talker cannot send — only the harness sends, o
     expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
   });
 
-  it('an ambiguous yes with no pending proposal triggers no delivery and reaches the model', async () => {
+  it('an ambiguous yes with no pending proposal triggers no delivery and answers MECHANICALLY (F2)', async () => {
+    // UPDATED (P7, finding F2): this dead end previously reached the model,
+    // which promised a send that could not happen ("OK. I'll send that
+    // instruction to the worker."). The harness now answers with the fixed
+    // nothing-held string — no model call, no promise, no delivery.
     const { session, delivery, model } = makeSession();
     const result = await session.handleOperatorTurn('yes');
     expect(delivery.deliveredTexts()).toEqual([]);
-    expect(model.calls.length).toBe(1);
+    expect(model.calls.length).toBe(0);
     expect(result.released).toBeNull();
+    expect(result.reply).toMatch(/nothing is held/i);
+    expect(result.modelCalled).toBe(false);
   });
 
   it('the public surface is minimal: one entry point plus TS-private internals, no injection or delivery API', async () => {
@@ -154,13 +160,18 @@ describe('NON-NEGOTIABLE 4: the operator-pushback turn', () => {
     expect(result.released).not.toBeNull();
   });
 
-  it('pushback with nothing pending delivers nothing (the model may explain the rule, but there is nothing to release)', async () => {
+  it('pushback with nothing pending delivers nothing and answers mechanically (F2 neighbour)', async () => {
+    // UPDATED (P7, finding F2): the dead-end transition is mechanical. The
+    // fixed string carries the honest state (nothing held) and the way out;
+    // the model can no longer answer this dead end at all, so it can never
+    // promise a send here either.
     const { session, delivery } = makeSession({
       model: stubModel("I hear you — but the worker can't tell a thought from an instruction, so I check. Say the word and it goes."),
     });
     const result = await session.handleOperatorTurn("just do it, don't ask me every single time");
     expect(delivery.deliveredTexts()).toEqual([]);
-    expect(result.reply).toMatch(/can't tell a thought from an instruction/);
+    expect(result.reply).toMatch(/nothing is held/i);
+    expect(result.modelCalled).toBe(false);
   });
 
   it('pushback does not disable the gate for later instructions', async () => {

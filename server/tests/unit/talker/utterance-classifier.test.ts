@@ -68,3 +68,54 @@ describe('classifyOperatorUtterance', () => {
     expect(classifyOperatorUtterance('   ')).toBe('statement');
   });
 });
+
+// ============================================================================
+// Finding F1 (P7): a cancel-shaped utterance can carry instruction material
+// AFTER the cancel boundary. The classifier reads the cancel first (safe
+// default — the gate must not move), so without a mechanical split the
+// instruction half never reaches the draft and the operator's words vanish
+// from the harness. extractPostCancelInstruction locates the boundary;
+// the caller decides what the residue means.
+// ============================================================================
+
+import { extractPostCancelInstruction } from '../../../src/talker/utterance-classifier.js';
+
+describe('extractPostCancelInstruction — the cancel/instruction boundary (F1)', () => {
+  it('the exact s5/t4 utterance: everything after the cancel run is the residue', () => {
+    const utterance =
+      "Never mind, forget it. Back to the caching thing — tell it to leave caching alone entirely, we're dropping that work.";
+    expect(extractPostCancelInstruction(utterance)).toBe(
+      "Back to the caching thing — tell it to leave caching alone entirely, we're dropping that work."
+    );
+  });
+
+  it('a pure cancel yields null — unchanged behaviour', () => {
+    expect(extractPostCancelInstruction('never mind')).toBeNull();
+    expect(extractPostCancelInstruction('cancel that')).toBeNull();
+    expect(extractPostCancelInstruction('no, wait')).toBeNull();
+    expect(extractPostCancelInstruction('forget it')).toBeNull();
+    expect(extractPostCancelInstruction('No.')).toBeNull();
+  });
+
+  it('a cancel run is skipped whole — several cancel phrases in a row do not strand a fragment', () => {
+    expect(extractPostCancelInstruction('No, wait — cancel that. Actually tell the worker to rebase.')).toBe(
+      'Actually tell the worker to rebase.'
+    );
+  });
+
+  it('an instruction that self-cancels in the same breath cancels wholly — nothing drafts', () => {
+    // The last cancel phrase swallows what came before it: the operator took
+    // it back themselves. Same outcome as the pre-fix classifier.
+    expect(extractPostCancelInstruction('tell it to rebase. actually no, cancel that')).toBeNull();
+  });
+
+  it('the residue is returned raw for the caller to classify — a question-shaped residue is not an instruction', () => {
+    expect(extractPostCancelInstruction("never mind. how's it going?")).toBe("how's it going?");
+  });
+
+  it('non-cancel utterances pass through whole (only the cancel branch consults this)', () => {
+    expect(extractPostCancelInstruction('tell the worker to rebase onto main')).toBe(
+      'tell the worker to rebase onto main'
+    );
+  });
+});

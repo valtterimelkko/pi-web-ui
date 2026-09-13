@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // RED: the receipt vocabulary does not exist yet.
-import { RECEIPT_ACK, receiptAckFor } from '../../../src/talker/ack.js';
+import { RECEIPT_ACK, RELEASE_ACK, NOTHING_PENDING_ACK, NOTHING_TO_CANCEL_ACK, receiptAckFor } from '../../../src/talker/ack.js';
 import { UtteranceLog } from '../../../src/talker/pending-proposal.js';
 import { TalkerSession } from '../../../src/talker/talker.js';
 import { createNullDelivery } from '../../../src/talker/delivery.js';
@@ -132,14 +132,21 @@ describe('PROPERTY 2: the receipt fires at most once per relay — never once pe
     expect(log.takeReceipt()).toBeNull();
   });
 
-  it('at the harness level: three spoken statements, then one answer-ready moment, produce exactly one receipt', async () => {
+  it('at the harness level: three spoken statements produce exactly one EMITTED receipt — on the turn that opened the batch', async () => {
+    // Updated for the live emission path (P7/A11): the receipt is no longer a
+    // condition a caller consumes by hand — the harness emits it on the turn
+    // result, once per batch. The property is unchanged: one receipt per
+    // relay, never one per utterance.
     const { session } = makeSession();
-    await session.handleOperatorTurn('tell the worker to rebase onto main');
-    await session.handleOperatorTurn('also tell it to rerun the flaky suite');
-    await session.handleOperatorTurn('and keep the docs phase for later');
-    expect(session.utteranceLog.unacknowledgedCount()).toBe(3);
-    expect(session.utteranceLog.takeReceipt()).toBe(3); // one receipt for the batch
-    expect(session.utteranceLog.takeReceipt()).toBeNull(); // not a second
+    const t1 = await session.handleOperatorTurn('tell the worker to rebase onto main');
+    const t2 = await session.handleOperatorTurn('also tell it to rerun the flaky suite');
+    const t3 = await session.handleOperatorTurn('and keep the docs phase for later');
+    expect(t1.receiptAck).toBe(RECEIPT_ACK);
+    expect(t2.receiptAck ?? null).toBeNull();
+    expect(t3.receiptAck ?? null).toBeNull();
+    // The verbatim records exist per utterance; the single receipt covers the
+    // batch. No parallel store of utterances exists.
+    expect(session.utteranceLog.size).toBe(3);
   });
 });
 
@@ -155,13 +162,13 @@ describe('PROPERTY 3: produced by the harness, never by the model', () => {
   it('a model reply that imitates or upgrades an acknowledgement cannot substitute for the receipt', async () => {
     const imposterReply = "Done — sending that to the worker for you right away.";
     const { session } = makeSession({ model: stubModel(imposterReply) });
-    await session.handleOperatorTurn(INSTRUCTION); // the model's reply is imposter text
-    const due = session.utteranceLog.takeReceipt();
-    expect(due).toBe(1);
-    // The spoken receipt is the fixed harness string — byte-identical every time,
-    // never the model's composition:
-    expect(receiptAckFor(due ?? -1)).toBe(RECEIPT_ACK);
-    expect(receiptAckFor(due ?? -1)).not.toBe(imposterReply);
+    const result = await session.handleOperatorTurn(INSTRUCTION); // the model's reply is imposter text
+    // The spoken receipt is the fixed harness string on the result —
+    // byte-identical every time, never the model's composition:
+    expect(result.receiptAck).toBe(RECEIPT_ACK);
+    expect(result.receiptAck).not.toBe(imposterReply);
+    // The imposter text remains what it is — conversational model output:
+    expect(result.reply).toBe(imposterReply);
   });
 
   it('a model failure cannot suppress the receipt', async () => {
@@ -173,35 +180,148 @@ describe('PROPERTY 3: produced by the harness, never by the model', () => {
     const { session } = makeSession({ model: failingModel });
     const result = await session.handleOperatorTurn(INSTRUCTION); // conversational turn fails
     expect(result.error).toBeDefined(); // the model really did fail
-    // The receipt state is untouched by the failure — the harness still owes one:
-    expect(session.utteranceLog.unacknowledgedCount()).toBe(1);
-    expect(receiptAckFor(session.utteranceLog.takeReceipt() ?? -1)).toBe(RECEIPT_ACK);
+    // The receipt is still emitted on the result — the failure suppresses nothing:
+    expect(result.receiptAck).toBe(RECEIPT_ACK);
   });
 
   it('a model reply cannot re-arm or extend a receipt that has already been given', async () => {
     const receiptShapedReply = 'Noted — still holding that. And three more receipts for you.';
     const { session } = makeSession({ model: stubModel(receiptShapedReply) });
-    await session.handleOperatorTurn(INSTRUCTION); // exactly one operator utterance; the model's reply is receipt-shaped text
-    expect(session.utteranceLog.takeReceipt()).toBe(1); // the one receipt covers the operator utterance only
+    const result = await session.handleOperatorTurn(INSTRUCTION); // exactly one operator utterance; the model's reply is receipt-shaped text
+    expect(result.receiptAck).toBe(RECEIPT_ACK); // exactly the fixed string — not the model's extended version
     // The model's receipt-shaped reply never entered the verbatim log as an
     // operator utterance, so it cannot re-arm or mint another receipt:
-    expect(session.utteranceLog.takeReceipt()).toBeNull();
-    expect(session.utteranceLog.takeReceipt()).toBeNull();
-    expect(session.utteranceLog.unacknowledgedCount()).toBe(0);
+    expect(session.utteranceLog.size).toBe(1);
   });
 
   it('producing the receipt never relays and never widens the gate', async () => {
     const delivery = createNullDelivery();
     const deliverSpy = vi.spyOn(delivery, 'deliver');
     const { session } = makeSession({ delivery });
-    await session.handleOperatorTurn(INSTRUCTION);
-    const due = session.utteranceLog.takeReceipt();
-    expect(due).toBe(1);
+    const result = await session.handleOperatorTurn(INSTRUCTION);
+    expect(result.receiptAck).toBe(RECEIPT_ACK); // emitted at the answer-ready moment
     expect(deliverSpy).not.toHaveBeenCalled(); // receipt ≠ relay
     expect(session.proposals.pending?.text).toBe(INSTRUCTION); // confirmation still required
     const yes = await session.handleOperatorTurn('yes, go ahead');
     expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
     expect(yes.released?.text).toBe(INSTRUCTION);
     expect(deliverSpy).toHaveBeenCalledTimes(1); // exactly one send, exactly from the confirm branch
+  });
+});
+
+// ============================================================================
+// LIVE EMISSION (A11 closure, P7): the receipt ack is emitted by the harness
+// on the turn result — not merely consumable by hand. Before this package,
+// takeReceipt() had zero callers outside tests: the receipt existed but never
+// happened. The emission point is the answer-ready moment (plan §4.1 rule 2:
+// "it fires once when the worker's answer is ready and at least one operator
+// utterance has not been acknowledged"): the turn whose reply answers the
+// utterance that OPENED the composition batch. One receipt per batch — never
+// one per utterance — and only batch-opening turns consume one.
+// ============================================================================
+
+describe('LIVE EMISSION: the harness emits the receipt on the turn result', () => {
+  it('the dead-end ack strings are pinned exactly — fixed vocabulary, no model wording', () => {
+    expect(NOTHING_PENDING_ACK).toBe(
+      "Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead."
+    );
+    expect(NOTHING_TO_CANCEL_ACK).toBe('Nothing is held right now — there was nothing to cancel.');
+    // Neither can be read as a promise or a send:
+    for (const s of [NOTHING_PENDING_ACK, NOTHING_TO_CANCEL_ACK]) {
+      expect(s).not.toMatch(/\bi'?ll send\b|\bi will send\b|\bsending that\b|\bshall i send\b|\bdone\b|\bcancelled that\b/i);
+    }
+  });
+
+  it('a batch-opening instruction turn carries the receipt ack on its result', async () => {
+    const delivery = createNullDelivery();
+    const deliverSpy = vi.spyOn(delivery, 'deliver');
+    const { session, model } = makeSession({ delivery });
+    const result = await session.handleOperatorTurn(INSTRUCTION);
+    expect(result.receiptAck).toBe(RECEIPT_ACK);
+    // The receipt never races the gate: no relay, no model substitution —
+    // the conversational reply still comes from the model, the receipt from
+    // the fixed vocabulary.
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(result.modelCalled).toBe(true);
+    expect(result.reply).not.toBe(RECEIPT_ACK);
+    expect(session.proposals.pending?.text).toBe(INSTRUCTION);
+    expect(model.calls.length).toBe(1);
+  });
+
+  it('a worker-directed question that opens a batch carries the receipt too', async () => {
+    const { session } = makeSession();
+    const result = await session.handleOperatorTurn('could you ask the worker to rebase onto main?');
+    expect(result.receiptAck).toBe(RECEIPT_ACK);
+    expect(session.proposals.pending?.text).toBe('could you ask the worker to rebase onto main?');
+  });
+
+  it('three statements in a row produce exactly ONE emitted receipt — on the first turn, not per utterance', async () => {
+    const { session } = makeSession();
+    const t1 = await session.handleOperatorTurn('tell the worker to rebase onto main');
+    const t2 = await session.handleOperatorTurn('also tell it to rerun the flaky suite');
+    const t3 = await session.handleOperatorTurn('and keep the docs phase for later');
+    expect(t1.receiptAck).toBe(RECEIPT_ACK);
+    expect(t2.receiptAck ?? null).toBeNull();
+    expect(t3.receiptAck ?? null).toBeNull();
+    // The verbatim records exist per utterance; the single emitted receipt
+    // covered the batch opener. No parallel store of utterances exists.
+    expect(session.utteranceLog.size).toBe(3);
+  });
+
+  it('after a release, a NEW composition batch earns exactly one more receipt (once per relay)', async () => {
+    const { session, delivery } = makeSession();
+    const t1 = await session.handleOperatorTurn(INSTRUCTION);
+    expect(t1.receiptAck).toBe(RECEIPT_ACK);
+    await session.handleOperatorTurn('yes, go ahead'); // release — its own ack, no receipt
+    const t3 = await session.handleOperatorTurn('also tell the worker to rerun the flaky suite');
+    expect(t3.receiptAck).toBe(RECEIPT_ACK);
+    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+  });
+
+  it('no receipt on turns that hold nothing new: status question, meta question, cancel, release, confirm dead-end', async () => {
+    const { session } = makeSession();
+    expect((await session.handleOperatorTurn("how's it going?")).receiptAck ?? null).toBeNull();
+    await session.handleOperatorTurn(INSTRUCTION); // receipt fires here (batch opens)
+    expect((await session.handleOperatorTurn('did you send it yet?')).receiptAck ?? null).toBeNull();
+    // Cancel the draft, then a fresh instruction opens a new batch on its own turn.
+    expect((await session.handleOperatorTurn('never mind')).receiptAck ?? null).toBeNull();
+    expect(session.proposals.pending).toBeNull();
+    const fresh = await session.handleOperatorTurn(INSTRUCTION);
+    expect(fresh.receiptAck).toBe(RECEIPT_ACK);
+    const release = await session.handleOperatorTurn('yes, go ahead');
+    expect(release.receiptAck ?? null).toBeNull();
+    expect(release.reply).toBe(RELEASE_ACK); // release keeps its own fixed ack
+    // Confirm-shaped dead end (nothing pending): mechanical reply, no receipt.
+    expect((await session.handleOperatorTurn('yes')).receiptAck ?? null).toBeNull();
+  });
+
+  it('a lapsed-draft reconfirmation turn does not emit a receipt', async () => {
+    const model = stubModel('noted.');
+    const session = new TalkerSession({
+      model,
+      delivery: createNullDelivery(),
+      workerSessionId: 'w',
+      snapshotProvider: () => SNAPSHOT,
+      config: { maxPendingAgeTurns: 2 },
+    });
+    await session.handleOperatorTurn(INSTRUCTION); // receipt emitted (batch opens)
+    await session.handleOperatorTurn('did you send it?');
+    await session.handleOperatorTurn('did you send it?'); // window lapses
+    const lapsedYes = await session.handleOperatorTurn('yes');
+    expect(lapsedYes.released).toBeNull();
+    expect(lapsedYes.receiptAck ?? null).toBeNull();
+    expect(lapsedYes.reply).toContain('still want that sent');
+  });
+
+  it('a model failure on the batch-opening turn cannot suppress the emitted receipt', async () => {
+    const failingModel: TalkerModelClient = {
+      async completeTurn() {
+        throw new Error('provider down');
+      },
+    };
+    const { session } = makeSession({ model: failingModel });
+    const result = await session.handleOperatorTurn(INSTRUCTION);
+    expect(result.error).toBeDefined();
+    expect(result.receiptAck).toBe(RECEIPT_ACK);
   });
 });

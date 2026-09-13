@@ -179,8 +179,19 @@ export function useVoiceTurn(
     }
 
     // Speak what the operator hears, at the ladder's tier (playback only —
-    // this never gates capture). Release acks are tier 2 so they speak before
-    // anything else; conversational replies are tier 4 chatter.
+    // this never gates capture). §4.1 rule 2: the harness's mechanical
+    // receipt ack speaks FIRST (tier 2, before anything else). The
+    // conversational reply stays tier 4: per the decided ladder, chatter is
+    // dropped, not queued, when it would delay tiers 1–3 — so on a receipt
+    // turn the receipt is what the operator hears, and the reply remains in
+    // the harness record. Release acks are tier 2; replies are tier 4.
+    if (lastResult.receiptAck) {
+      speechArbiter.submit({
+        id: `receipt-${workerSessionId}`,
+        tier: TIER_RECEIPT_ACK,
+        text: lastResult.receiptAck,
+      });
+    }
     if (lastResult.reply) {
       const tier =
         lastResult.phase === 'released' ? TIER_RECEIPT_ACK : TIER_CHATTER;

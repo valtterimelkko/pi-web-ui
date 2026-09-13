@@ -99,4 +99,14 @@ export interface TalkerTurnResult {
   modelCalled: boolean;
   latency: TurnLatency | null;
   error?: string;
+  /**
+   * Present when the harness emitted a receipt ack this turn (plan §4.1
+   * rule 2): the fixed-vocabulary acknowledgement that operator speech is
+   * held — a receipt, never an agreement, never a send. Produced
+   * mechanically from harness state (ack.ts), never by the model; at most
+   * once per composition batch, emitted on the turn whose reply answers the
+   * utterance that opened the batch. The client speaks it at
+   * TIER_RECEIPT_ACK, ahead of everything else.
+   */
+  receiptAck?: string;
 }

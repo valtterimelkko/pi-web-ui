@@ -193,3 +193,57 @@ Legend: ✅ live evidence · 🟡 partial (live + unit-pinned, with the un-lived
 - JSON evidence: `/tmp/voice-relay-p6-run2.json` (acceptance run), `/tmp/voice-relay-p6-run1.json` (superseded — script race), `/tmp/p6-ws-red.json`, `/tmp/p6-ws-clean.json`, `/tmp/voice-relay-claude-1789307968980.json`.
 
 Nothing outside the owned paths was modified. `server/src/**` and `client/src/**` are untouched; the canonical intent file was not edited.
+
+---
+
+## 11. Post-validation closure (P7, 2026-09-13)
+
+This section is appended by the parent after the closure package; nothing above is
+rewritten, so the reader can see exactly what the validation found and what
+changed afterwards.
+
+**A11 — the receipt ack now HAS a live emission path (was the gap in §8).**
+`receiptAckFor(utteranceLog.takeReceipt())` is now called in the turn path
+(`server/src/talker/talker.ts:367`), carried additively on the wire
+(`protocol.ts` `receiptAck?`), and played by the client at **tier 2** ahead of the
+worker's answer (`useVoiceTurn.ts:191`), so ladder rule 2 is wired end to end.
+
+Live evidence (`/tmp/p7-probe-out.json`, disposable server, real worker):
+- t1 instruction → `phase: proposed`, **`receiptAck: "Noted — still holding that."`** — emitted.
+- t2 second utterance in the same batch → **`receiptAck: None`** — once per relay, not per utterance.
+- t3 confirm → `released`, no receipt on the release turn.
+- `a11-verdict: { emittedReceipt, oncePerBatch: true, releaseTurnReceipt: null }`.
+
+**One tooling defect found while verifying this, recorded honestly.** The probe's
+own verdict reported `workerTranscriptByteEqual: false`. Checking the worker's
+transcript directly showed the relay **is** byte-equal — entry 10, role `user`,
+151 B → 151 B, `Buffer`-equal. The probe compared before the worker runtime
+flushed the entry (the 5–40 s persistence lag this document already describes in
+§2), so **the flag was a timing bug in the probe, not a relay defect**. A future
+probe should poll for the entry rather than reading once.
+
+**F1 — fixed.** A cancel-shaped breath no longer swallows the instruction beside
+it. `extractPostCancelInstruction()` locates the instruction residue after the
+cancel boundary *purely mechanically*; the residue **only ever joins the draft**,
+so it still needs its own confirmation — the split does not widen the gate. Live:
+the exact s5/t4 utterance now proposes with the instruction captured, and a
+following "Yes." releases `"Back to the caching thing — tell it to leave caching
+alone entirely, we're dropping that work."` verbatim, **with the cancel words
+excluded**.
+
+**F2 — fixed.** Confirm-with-nothing-pending now answers mechanically, with no
+model call, so it cannot promise an impossible send: *"Nothing is held right now,
+so there is nothing to send. Say the instruction and I'll hold it for your
+go-ahead."* The sibling dead ends (cancel-with-nothing-pending, pushback) are
+covered by the same rule, and a confirm **with** a live draft still releases.
+
+**Gate unregressed — verified at the source, not from the report:** `release()` is
+still `private` with a single caller, there is still exactly one
+`delivery.deliver()` call carrying `taken.text`, and `pending-proposal.ts` was
+**not modified by the closure at all**, so atomicity and release-time staleness
+are untouched. Suites: talker **17 files / 200 tests**, websocket **24 files /
+311 tests**, both green.
+
+**Still open (unchanged):** F3 (the talker's state view is Pi-manager-based, so
+status conversation about a Claude worker is blind) and the two carried-forward
+validation gaps (Antigravity; the operator listening check).

@@ -263,3 +263,72 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     expect(result.current.state).toBe('idle');
   });
 });
+
+describe('useVoiceTurn — the harness receipt ack speaks at tier 2 (§4.1 rule 2, P7/A11)', () => {
+  let fake: ReturnType<typeof makeBlockedPlayer>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetTalkerTurnBus();
+    sendMock.mockReturnValue('sent');
+    speechArbiter.stopAll();
+    fake = makeBlockedPlayer();
+    speechArbiter.attachPlayer(fake.player);
+  });
+
+  afterEach(() => {
+    speechArbiter.stopAll();
+    fake.drain();
+  });
+
+  it('a result carrying a receipt ack submits it at TIER_RECEIPT_ACK (tier 2), ahead of the reply', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('tell the worker to rebase');
+    });
+    act(() => {
+      emit({
+        reply: 'You want the worker to rebase — shall I send that?',
+        phase: 'proposed',
+        receiptAck: 'Noted — still holding that.',
+      });
+    });
+    // The receipt is what took the floor — tier 2, before anything else.
+    expect(speechArbiter.getState().current?.tier).toBe(2);
+    expect(fake.played[0]).toBe('Noted — still holding that.');
+  });
+
+  it('the same-turn conversational reply stays tier 4 and yields: dropped while the receipt speaks (decided ladder rule 4)', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('tell the worker to rebase');
+    });
+    act(() => {
+      emit({
+        reply: 'You want the worker to rebase — shall I send that?',
+        phase: 'proposed',
+        receiptAck: 'Noted — still holding that.',
+      });
+    });
+    // The receipt outranks the chatter; the arbiter drops chatter that would
+    // trail it. The proposal itself is unaffected (shown verbatim in state).
+    expect(fake.played).toEqual(['Noted — still holding that.']);
+    expect(result.current.pendingProposal?.text).toBe('tell the worker to rebase');
+  });
+
+  it('a receipt released: the release ack keeps its own tier-2 slot and no receipt is spoken for it', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('ship it');
+    });
+    act(() => {
+      emit({
+        reply: 'sending that now',
+        phase: 'released',
+        released: { utteranceId: 1, text: 'ship it', delivery: { outcome: 'delivered', mechanism: 'steer' } },
+      });
+    });
+    expect(fake.played).toEqual(['sending that now']);
+    expect(speechArbiter.getState().current?.tier).toBe(2);
+  });
+});
