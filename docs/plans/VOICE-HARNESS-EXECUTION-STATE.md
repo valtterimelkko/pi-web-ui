@@ -88,6 +88,41 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 ~15:48 — CI GREEN on 4e88f78 (programme complete)
+
+**Parent-verified directly, not taken from the background watch:**
+
+| Workflow | Latest run | Verdict |
+|---|---|---|
+| `application.yml` | `4e88f78` (15:38) | **success** |
+| `agent-guides-sync.yml` | unchanged since 08 Sep | success |
+
+The failing runs listed above it (`0ea0cbf`, `e8934a1`, `2dc5ff6`, `662f40f`,
+`6d9618a`) are the superseded commits from this session — real failures at the
+time, and their record stays. The head is green, and a new commit to master will
+build green.
+
+**Watch-ledger hygiene, applied to our own work.** Eight registrations were still
+polling every 30 s for children that had finished hours earlier (~16 requests/min
+of noise, plus a residency claim each). All cancelled with confirmed remote
+deletes; the full ledger of 22 is now released. One (`ww_9`) reports
+`remote_delete: not-authorised` from a generation mismatch — its local delivery is
+stopped and the generation was already superseded, so it is inert, but it is the
+one entry without a *confirmed* remote delete and is recorded as such rather than
+rounded up to "clean". The lesson from tonight (cancel watches for settled
+children as part of finishing) had been applied to the children but not to our own
+accumulated registrations.
+
+**Still open, carried forward deliberately:** `docx-fidelity-guard` (979 lines of
+unique unpushed work in a 6-week-old branch — owner decision: merge, push for
+safekeeping, or discard); F3 (the talker's state view is Pi-manager-based, so
+status conversation about a Claude worker is blind); and the two recorded
+validation gaps (Antigravity; the operator listening check).
+
+---
+
 ## 2026-09-13 ~15:35 — P8: CI green (ratchet cleared, coverage verified)
 
 **The CI failure was NOT a broken gate.** Correcting the parent's earlier claim: the
