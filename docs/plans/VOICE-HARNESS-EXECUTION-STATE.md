@@ -1,3 +1,74 @@
+# Voice Mode — execution state (PARENT)
+
+> **READ THIS FIRST after any compaction or handover.** This file is the durable
+> record of the 2026-09-12/13 voice-harness execution. Everything below the
+> summary is append-only history with raw evidence, in the order it happened.
+
+## Where things stand (2026-09-13)
+
+**All work packages are complete, verified and merged.** Production is healthy.
+
+| Package | Outcome |
+|---|---|
+| H1 talker harness | ✅ committed — 10 modules, structural send gate, 97 tests |
+| H2 Pi input routing | ✅ merged — the extension input event now fires for Web UI input |
+| H3 model retest | ✅ committed — 5 candidates retested against the real harness |
+| H4 long-session | ✅ committed — design claim NOT falsified, 157 turns, 17 trims |
+| H5 Gemma provider guard | ✅ committed — provider preference + bounded retry |
+| H6 server integration | ✅ committed — one talker per session, injection check applies |
+| H7 transport binding | ✅ merged — the browser can now reach the talker |
+| E1 mobile socket durability | ✅ merged — resume recovery, no lost sends |
+| H8 secrets migration | ✅ complete — every live secret now outside the repo |
+| R1 stall root cause | ✅ 3 investigations converged, parent-reproduced |
+| R2 stall defect fixes | ✅ committed + **deployed to production** |
+
+**Production:** contract 1.42.0, `capabilities` ~0.2 s, zero startup errors, and
+the broker eviction counter **0** where it previously ratcheted to 659,400.
+
+## The two things a resumed agent most needs to know
+
+1. **The talker's send gate is structural, not instructed.** The release path is
+   private, reachable only from the confirmed-proposal branch, and takes **no
+   relay text** — the text comes solely from a verbatim utterance store the model
+   cannot write to. **Never widen its reachability.** If work appears to require
+   that, the design is wrong, not the transport.
+2. **There are TWO physical copies of the pi-ai library**, and hosted sessions
+   load the **nested** one under `pi-coding-agent/node_modules`. A patch applied
+   only to the root copy appears to succeed and changes nothing. The fix now ships
+   via a `postinstall` regeneration script that patches every copy and fails loudly
+   on drift.
+
+## What remains
+
+- **Phase 4 — the Voice Mode user interface.** The only substantive work left.
+  Rename Drive Mode → **Voice Mode** (operator-decided). Needs the
+  talking-while-working phase machine, sentence-chunked TTS, voice confirmation
+  with a text fallback echoing the exact proposal, and the **anti-duet rule** (the
+  worker's final answer and the talker's chatter must not both be spoken).
+- **Not yet exercised:** the merged transport has not been driven from a real
+  browser against a real worker — only tests and server-side live validation.
+- **Optional:** reusing Pi's stored zai credential for the Claude GLM profiles
+  instead of the migrated token (a code change in `claude-profiles.ts`, separate
+  from the completed migration).
+
+## Operating lessons that cost time here
+
+- `git worktree` + this repo needs **per-package `node_modules` shadows**
+  (`server/node_modules/zod`, `shared/node_modules/zod`), not just a top-level
+  symlink — the top-level-only approach resolves zod 4 instead of 3 and produces
+  spurious typecheck errors in untouched files.
+- Vitest has **two configs**: jsdom lives in `client/vitest.config.ts`, rooted at
+  `client/`. Running a client hook test with the default config fails on
+  `document is not defined` and looks like a real bug.
+- `gh`-style owner questions and long waits: see the incident sections below. The
+  notification helper rides the Internal API, so during an API outage it **spools
+  silently** — reach the operator via the Telegram bot API directly (a workaround
+  is recorded in the incident section).
+- **Cancel watch registrations for settled children.** 11 stale polls per 30 s is
+  real load, and reduced polling was one of the lessons from the stall.
+
+---
+
 # Voice harness execution — live state (parent)
 
 > Parent keeps this current. If a different agent picks this up, read this file
