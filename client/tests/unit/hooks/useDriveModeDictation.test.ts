@@ -1,6 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useDriveModeDictation } from '../../../src/hooks/useDriveModeDictation';
+import {
+  speechArbiter,
+  TIER_ANSWER,
+  type ArbiterPlayer,
+} from '../../../src/lib/speechArbiter';
 
 // Mock useDictation
 vi.mock('../../../src/hooks/useDictation', () => ({
@@ -31,6 +36,27 @@ function getOnTranscript(): (text: string) => void {
   const lastCall = (useDictation as ReturnType<typeof vi.fn>).mock.lastCall;
   if (!lastCall) throw new Error('useDictation was not called');
   return lastCall[0] as (text: string) => void;
+}
+
+/** Point the useDictation mock at an arbitrary dictation state. */
+function mockDictationState(state: string): void {
+  (useDictation as ReturnType<typeof vi.fn>).mockImplementation((onTranscript) => ({
+    state,
+    errorMessage: '',
+    startRecording: vi.fn(),
+    stopRecording: vi.fn(),
+    toggle: vi.fn(),
+    __onTranscript: onTranscript,
+  }));
+}
+
+/** Player whose chunk never finishes — pins the arbiter mid-playback. */
+class NeverFinishingPlayer implements ArbiterPlayer {
+  playChunk(): Promise<void> {
+    return new Promise<void>(() => {});
+  }
+  setVolume(): void {}
+  stopCurrent(): void {}
 }
 
 describe('useDriveModeDictation', () => {
@@ -153,5 +179,78 @@ describe('useDriveModeDictation', () => {
     });
 
     expect(result.current.pendingText).toBeNull();
+  });
+});
+
+describe('useDriveModeDictation — operator floor signal (P4 speech arbiter)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    speechArbiter.setOperatorSpeaking(false);
+  });
+
+  afterEach(() => {
+    speechArbiter.stopAll();
+    speechArbiter.setOperatorSpeaking(false);
+  });
+
+  it('exposes operatorSpeaking while the dictation is recording', () => {
+    mockDictationState('recording');
+    const { result } = renderHook(() => useDriveModeDictation('session-123'));
+    expect(result.current.operatorSpeaking).toBe(true);
+  });
+
+  it('exposes operatorSpeaking false when idle, processing, or errored', () => {
+    for (const state of ['idle', 'processing', 'error']) {
+      mockDictationState(state);
+      const { result, unmount } = renderHook(() => useDriveModeDictation('session-123'));
+      expect(result.current.operatorSpeaking).toBe(false);
+      unmount();
+    }
+  });
+
+  it('reports the floor to the speech arbiter while recording and clears when it stops', () => {
+    expect(speechArbiter.isOperatorSpeaking()).toBe(false);
+
+    mockDictationState('recording');
+    const { rerender } = renderHook(() => useDriveModeDictation('session-123'));
+    rerender();
+    expect(speechArbiter.isOperatorSpeaking()).toBe(true);
+
+    mockDictationState('idle');
+    rerender();
+    expect(speechArbiter.isOperatorSpeaking()).toBe(false);
+  });
+
+  // PINNED PROPERTY 3 — capture is unconditional; only playback is scheduled
+  // (§4.1 invariant). With the arbiter mid-playback (a chunk that never
+  // finishes), an operator utterance must still be captured and sent, and
+  // the floor signal must reach the arbiter so playback ducks.
+  it('captures an utterance even while the arbiter is mid-playback', async () => {
+    const mockSendPrompt = vi.fn(() => 'sent');
+    (useWebSocket as ReturnType<typeof vi.fn>).mockReturnValue({ sendPrompt: mockSendPrompt });
+
+    speechArbiter.attachPlayer(new NeverFinishingPlayer());
+    expect(
+      speechArbiter.submit({ id: 'answer', tier: TIER_ANSWER, chunks: ['long answer.'] })
+    ).toBe('queued');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(speechArbiter.getState().playing).toBe(true);
+
+    mockDictationState('recording');
+    const { result } = renderHook(() => useDriveModeDictation('session-123'));
+    expect(result.current.operatorSpeaking).toBe(true);
+    expect(speechArbiter.isOperatorSpeaking()).toBe(true);
+
+    const onTranscript = getOnTranscript();
+    act(() => {
+      onTranscript('Spoken while speech is playing');
+    });
+
+    // The capture path was not gated by playback state.
+    expect(mockSendPrompt).toHaveBeenCalledWith('Spoken while speech is playing');
+    // Playback ducked instead of being hard-stopped by the barge-in.
+    expect(speechArbiter.getState().current).not.toBeNull();
   });
 });

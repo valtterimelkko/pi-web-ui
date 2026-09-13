@@ -1,6 +1,5 @@
 import { Volume2, Square, Loader2 } from 'lucide-react';
-
-type ReadAloudState = 'idle' | 'loading' | 'playing';
+import type { ReadAloudState } from '../../hooks/useReadAloud';
 
 interface ReadAloudButtonProps {
   state: ReadAloudState;
@@ -12,6 +11,7 @@ interface ReadAloudButtonProps {
 export function ReadAloudButton({ state, speedEnabled, onClick, onToggleSpeed }: ReadAloudButtonProps) {
   const isLoading = state === 'loading';
   const isPlaying = state === 'playing';
+  const isPaused = state === 'paused';
 
   return (
     <>
@@ -50,7 +50,7 @@ export function ReadAloudButton({ state, speedEnabled, onClick, onToggleSpeed }:
               : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700 cursor-pointer'
           }
         `}
-        title={isLoading ? 'Loading…' : isPlaying ? 'Stop' : 'Read aloud'}
+        title={isLoading ? 'Loading…' : isPlaying ? 'Stop' : isPaused ? 'Stopped at a sentence boundary — tap to clear' : 'Read aloud'}
         aria-label={isLoading ? 'Loading audio' : isPlaying ? 'Stop reading aloud' : 'Read message aloud'}
         type="button"
       >

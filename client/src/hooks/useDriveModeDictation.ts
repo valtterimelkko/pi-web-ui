@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useDictation } from './useDictation';
 import { useWebSocket } from './useWebSocket';
+import { speechArbiter } from '../lib/speechArbiter';
 
 /**
  * Drive Mode dictation: turns a finished transcript into a prompt.
@@ -43,12 +44,27 @@ export function useDriveModeDictation(sessionId: string | null) {
 
   const dictation = useDictation(handleTranscript);
 
+  /** The operator holds the floor while the mic is capturing their voice
+   *  (§4.1 rule 1). This signal only ever feeds playback scheduling — it is
+   *  read by the speech arbiter to duck speech, never the other way round:
+   *  capture is unconditional and must never be gated by playback state. */
+  const operatorSpeaking = dictation.state === 'recording';
+
+  useEffect(() => {
+    speechArbiter.setOperatorSpeaking(operatorSpeaking);
+    return () => {
+      speechArbiter.setOperatorSpeaking(false);
+    };
+  }, [operatorSpeaking]);
+
   return {
     state: dictation.state,
     errorMessage: dictation.errorMessage,
     startRecording: dictation.startRecording,
     stopRecording: dictation.stopRecording,
     toggle: dictation.toggle,
+    /** True while the operator holds the floor (dictation recording). */
+    operatorSpeaking,
     /** Transcript whose send failed; kept until a retry succeeds or it is discarded. */
     pendingText,
     retryLastSend,

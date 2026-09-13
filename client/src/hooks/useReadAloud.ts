@@ -1,24 +1,22 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useUIStore } from '../store/uiStore';
+import {
+  speechArbiter,
+  chunkIntoSentences,
+  TIER_ANSWER,
+  type ArbiterPlayer,
+} from '../lib/speechArbiter';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
-type ReadAloudState = 'idle' | 'loading' | 'playing';
+export type ReadAloudState = 'idle' | 'loading' | 'playing' | 'paused';
 
 // Module-level singleton: shared AudioContext so we can resume() it during a user gesture
 let audioCtx: AudioContext | null = null;
-// Track the currently playing source node so we can stop it
-let currentSource: AudioBufferSourceNode | null = null;
-let currentBuffer: AudioBuffer | null = null;
-// Speed toggle — persisted across messages until explicitly toggled off
+// Speed toggle — persisted across messages until explicitly switched off
 let playbackRate: number = 1.0;
 
-const listeners = new Set<() => void>();
 const speedListeners = new Set<() => void>();
-
-function notifyListeners() {
-  listeners.forEach((fn) => fn());
-}
 
 function getAudioContext(): AudioContext {
   if (!audioCtx) {
@@ -27,18 +25,140 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
-export function stopCurrentAudio() {
-  if (currentSource) {
-    try {
-      currentSource.stop();
-    } catch {
-      // Already stopped
-    }
-    currentSource.disconnect();
-    currentSource = null;
+/**
+ * The arbiter's player: synthesises and plays ONE sentence chunk at a time
+ * (§4.1 "Chunked TTS is what makes barge-in clean" — a chunk boundary is the
+ * only scheduling point, so pause/resume never resume mid-word). Volume is
+ * applied through a GainNode so barge-in can duck the live chunk.
+ */
+class TtsChunkPlayer implements ArbiterPlayer {
+  private voice: string | undefined;
+  private source: AudioBufferSourceNode | null = null;
+  private gain: GainNode | null = null;
+  private resolveCurrent: (() => void) | null = null;
+  private abort: AbortController | null = null;
+
+  setVoice(voice: string | undefined) {
+    this.voice = voice;
   }
-  currentBuffer = null;
-  notifyListeners();
+
+  async playChunk(chunk: string, volume: number, rate: number): Promise<void> {
+    const ctx = getAudioContext();
+    this.abort = new AbortController();
+    const res = await fetch(`${API_URL}/api/tts`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: chunk, voice: this.voice }),
+      signal: this.abort.signal,
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      throw new Error((body.error as string) ?? `HTTP ${res.status}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      throw new Error('Empty audio response');
+    }
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.playbackRate.value = rate;
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+    source.connect(gain);
+    gain.connect(ctx.destination);
+
+    this.source = source;
+    this.gain = gain;
+    return new Promise<void>((resolve) => {
+      this.resolveCurrent = resolve;
+      source.addEventListener(
+        'ended',
+        () => {
+          if (this.source === source) {
+            this.source = null;
+            this.gain = null;
+            this.resolveCurrent = null;
+          }
+          resolve();
+        },
+        { once: true }
+      );
+      source.start(0);
+    });
+  }
+
+  /** Live volume change on the in-flight chunk (barge-in ducking). */
+  setVolume(volume: number) {
+    if (this.gain) {
+      this.gain.gain.value = volume;
+    }
+  }
+
+  /** Live playback-rate change on the in-flight chunk (speed toggle). */
+  setRate(rate: number) {
+    if (this.source) {
+      this.source.playbackRate.value = rate;
+    }
+  }
+
+  /** Hard-cancel. Explicit stop only — never barge-in (that ducks). */
+  stopCurrent() {
+    this.abort?.abort();
+    // Capture locals first: stop() may fire 'ended' (async per spec, but not
+    // guaranteed synchronous-ordering-safe), and the ended handler nulls
+    // these fields.
+    const source = this.source;
+    const gain = this.gain;
+    this.source = null;
+    this.gain = null;
+    if (source) {
+      try {
+        source.stop();
+      } catch {
+        // Already stopped
+      }
+      source.disconnect();
+    }
+    gain?.disconnect();
+    this.resolveCurrent?.();
+    this.resolveCurrent = null;
+  }
+}
+
+const ttsPlayer = new TtsChunkPlayer();
+
+// The app-wide arbiter speaks through this player. Attaching at module load
+// is side-effect-free: no AudioContext exists until the first chunk plays.
+speechArbiter.attachPlayer(ttsPlayer, { getRate: () => playbackRate });
+
+speechArbiter.setErrorHandler((err: unknown) => {
+  // One failed chunk drops its intent but keeps the queue moving; surface
+  // the failure the way the pre-arbiter hook did.
+  const msg = (err as Error).message || '';
+  if (
+    msg.includes('NotAllowed') ||
+    msg.includes('AudioContext') ||
+    msg.includes('play()') ||
+    msg.includes('user gesture')
+  ) {
+    useUIStore.getState().addToast({
+      type: 'error',
+      message: 'Unable to play audio. Try tapping the button again.',
+    });
+  } else {
+    useUIStore.getState().addToast({
+      type: 'error',
+      message: err instanceof Error ? err.message : 'Failed to generate audio',
+    });
+  }
+});
+
+/** Explicit stop of everything the arbiter is doing (queue + current chunk). */
+export function stopCurrentAudio() {
+  speechArbiter.stopAll();
 }
 
 export function useReadAloud(messageId: string) {
@@ -47,51 +167,63 @@ export function useReadAloud(messageId: string) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // Sync local state with global audio state
+  // Mirror arbiter state into this instance's hook state. Only the instance
+  // whose message is the arbiter's current intent shows playing/paused; one
+  // with a pending intent shows loading; everything else is idle.
   useEffect(() => {
     const sync = () => {
-      if (!currentSource) {
-        if (stateRef.current === 'playing') {
-          setState('idle');
-        }
+      const st = speechArbiter.getState();
+      if (st.current && st.current.id === messageId) {
+        setState(st.paused ? 'paused' : 'playing');
+      } else if (st.queued.some((q) => q.id === messageId)) {
+        setState('loading');
+      } else if (stateRef.current !== 'idle') {
+        setState('idle');
       }
     };
-    listeners.add(sync);
+    sync();
+    const unsubscribe = speechArbiter.subscribe(sync);
 
-    // Also sync speed state across instances
     const syncSpeed = () => {
       setSpeedEnabled(playbackRate > 1.0);
     };
     speedListeners.add(syncSpeed);
 
     return () => {
-      listeners.delete(sync);
+      unsubscribe();
       speedListeners.delete(syncSpeed);
     };
-  }, []);
+  }, [messageId]);
 
   const toggleSpeed = useCallback(() => {
     playbackRate = playbackRate > 1.0 ? 1.0 : 1.25;
-    // Apply to currently playing source immediately
-    if (currentSource) {
-      currentSource.playbackRate.value = playbackRate;
-    }
+    ttsPlayer.setRate(playbackRate);
     setSpeedEnabled(playbackRate > 1.0);
     speedListeners.forEach((fn) => fn());
   }, []);
 
   const play = useCallback(
     (text: string, voice?: string) => {
-      if (stateRef.current === 'playing') {
-        stopCurrentAudio();
-        setState('idle');
+      const st = speechArbiter.getState();
+
+      // Tap again on the playing message = stop (existing toggle behaviour).
+      if (st.current && st.current.id === messageId) {
+        speechArbiter.stopAll();
+        return;
+      }
+      // Replacing peer answer playback preserves the pre-arbiter UX of
+      // tapping read-aloud on another message. A tier-2 receipt ack is never
+      // stopped — it outranks this playback and this intent queues behind it.
+      if (st.current && st.current.tier === TIER_ANSWER) {
+        speechArbiter.stopAll();
+      }
+
+      const chunks = chunkIntoSentences(text);
+      if (chunks.length === 0) {
         return;
       }
 
-      // Stop any currently playing audio
-      stopCurrentAudio();
-
-      setState('loading');
+      ttsPlayer.setVoice(voice);
 
       // CRITICAL: Resume the AudioContext synchronously during the user gesture.
       // iOS Safari puts AudioContext in "suspended" state until a user gesture
@@ -104,90 +236,23 @@ export function useReadAloud(messageId: string) {
         });
       }
 
-      fetch(`${API_URL}/api/tts`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.trim(), voice }),
-      })
-        .then((res) => {
-          if (!res.ok) {
-            return res.json().then((body) => {
-              throw new Error((body.error as string) ?? `HTTP ${res.status}`);
-            });
-          }
-          return res.arrayBuffer();
-        })
-        .then((arrayBuffer) => {
-          if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-            throw new Error('Empty audio response');
-          }
-
-          // Decode the MP3 data into an AudioBuffer
-          return ctx.decodeAudioData(arrayBuffer).then((audioBuffer) => {
-            currentBuffer = audioBuffer;
-
-            // Create a source node and connect it
-            const source = ctx.createBufferSource();
-            source.buffer = audioBuffer;
-            source.playbackRate.value = playbackRate;
-            source.connect(ctx.destination);
-
-            source.addEventListener(
-              'ended',
-              () => {
-                currentSource = null;
-                currentBuffer = null;
-                setState('idle');
-                notifyListeners();
-              },
-              { once: true }
-            );
-
-            currentSource = source;
-
-            // Start playback — this works because the AudioContext was resumed
-            // during the user gesture
-            source.start(0);
-            setState('playing');
-          });
-        })
-        .catch((err: unknown) => {
-          if ((err as Error).name === 'AbortError') {
-            setState('idle');
-            return;
-          }
-          stopCurrentAudio();
-          // Check if the error is from the AudioContext not being allowed
-          const msg = (err as Error).message || '';
-          if (
-            msg.includes('NotAllowed') ||
-            msg.includes('AudioContext') ||
-            msg.includes('play()') ||
-            msg.includes('user gesture')
-          ) {
-            useUIStore.getState().addToast({
-              type: 'error',
-              message: 'Unable to play audio. Try tapping the button again.',
-            });
-          } else {
-            useUIStore.getState().addToast({
-              type: 'error',
-              message: err instanceof Error ? err.message : 'Failed to generate audio',
-            });
-          }
-          setState('idle');
-        });
+      speechArbiter.submit({ id: messageId, tier: TIER_ANSWER, chunks });
     },
     [messageId]
   );
 
   const stop = useCallback(() => {
-    if (stateRef.current !== 'idle') {
-      stopCurrentAudio();
-      setState('idle');
-    }
+    speechArbiter.stopAll();
   }, []);
 
-  return { state, play, stop, speedEnabled, toggleSpeed };
+  /** Stop at the current chunk boundary; resume continues from the next. */
+  const pause = useCallback(() => {
+    speechArbiter.pause();
+  }, []);
+
+  const resume = useCallback(() => {
+    speechArbiter.resume();
+  }, []);
+
+  return { state, play, stop, pause, resume, speedEnabled, toggleSpeed };
 }
