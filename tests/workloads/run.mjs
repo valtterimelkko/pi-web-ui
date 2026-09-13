@@ -378,7 +378,7 @@ function cloneMessage(message) {
 // The pre-indexed-fold oracle copied from the Step-7B fixture.  It is kept in
 // the runner so equality is checked against an independent implementation.
 function foldOld(events, base = [], chunkSize = 1_000) {
-  let messages = base.map(cloneMessage);
+  const messages = base.map(cloneMessage);
   let linearScans = 0;
   let allocationCollisions = 0;
   for (let offset = 0; offset < events.length; offset += chunkSize) {

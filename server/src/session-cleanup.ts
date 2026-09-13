@@ -374,7 +374,7 @@ export class SessionCleanupService {
         }
 
         const sessionPath = rec.legacyKey ?? key;
-        let entry = await registry.get(sessionPath)
+        const entry = await registry.get(sessionPath)
           ?? await registry.getByPath(sessionPath)
           ?? await registry.getByClaudeSessionId(sessionPath)
           ?? await registry.getByOpencodeSessionId(sessionPath);

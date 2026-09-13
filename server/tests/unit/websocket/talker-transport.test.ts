@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { claudeMock, opencodeMock, antigravityMock, piMock, registryMock } = vi.hoisted(() => {
-  const noopRecursive: any = new Proxy(function noop() {}, {
+  const noopRecursive: (...args: never[]) => unknown = new Proxy(function noop() {}, {
     get: () => noopRecursive,
     apply: () => undefined,
   });

@@ -125,14 +125,16 @@ class LongRun {
     const result = await this.session.handleOperatorTurn(utterance);
     const where = `${this.label} turn ${turn}`;
     if (opts.releases !== undefined) {
-      expect(result.released, `${where}: expected a release, got none`).not.toBeNull();
-      expect(result.released!.text, `${where}: released text must be byte-identical to the proposed utterance`).toBe(
+      const released = result.released;
+      expect(released, `${where}: expected a release, got none`).not.toBeNull();
+      if (!released) throw new Error(`${where}: expected a release, got none`);
+      expect(released.text, `${where}: released text must be byte-identical to the proposed utterance`).toBe(
         opts.releases
       );
       expect(result.utteranceClass, `${where}: release must be confirm-classified`).toBe('confirm');
-      expect(result.released!.delivery.outcome, `${where}: null adapter must report delivery`).toBe('delivered');
+      expect(released.delivery.outcome, `${where}: null adapter must report delivery`).toBe('delivered');
       expect(result.modelCalled, `${where}: release turns make no model call`).toBe(false);
-      this.expectedReleases.push({ turn, text: result.released!.text });
+      this.expectedReleases.push({ turn, text: released.text });
     } else {
       expect(
         result.released,

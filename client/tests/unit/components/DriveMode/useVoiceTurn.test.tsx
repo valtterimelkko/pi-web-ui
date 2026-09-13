@@ -29,11 +29,11 @@ function makeBlockedPlayer() {
     stopCurrent: () => {
       // Reject nothing: unblock any pending chunk so the arbiter loop can
       // observe the generation change and stop cleanly.
-      while (resolvers.length) resolvers.shift()!();
+      while (resolvers.length) resolvers.shift()?.();
     },
   };
   const drain = () => {
-    while (resolvers.length) resolvers.shift()!();
+    while (resolvers.length) resolvers.shift()?.();
   };
   return { player, played, drain };
 }

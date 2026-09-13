@@ -72,29 +72,35 @@ const SLOW_PROMPT =
 
 interface UserMessageRecord { role: string; text: string; timestamp: string }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function textFromContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p: unknown) => (typeof p === 'string' ? p : isRecord(p) && typeof p.text === 'string' ? p.text : ''))
+      .filter(Boolean)
+      .join(' ');
+  }
+  return '';
+}
+
 function readUserMessages(sessionFile: string): UserMessageRecord[] {
   const out: UserMessageRecord[] = [];
   for (const line of fs.readFileSync(sessionFile, 'utf-8').split('\n')) {
     if (!line.trim()) continue;
-    let entry: any;
+    let entry: unknown;
     try {
       entry = JSON.parse(line);
     } catch {
       continue;
     }
-    if (entry?.type !== 'message' || !entry.message) continue;
+    if (!isRecord(entry) || entry.type !== 'message' || !isRecord(entry.message)) continue;
     const msg = entry.message;
     if (msg.role !== 'user') continue;
-    const content = msg.content;
-    let text = '';
-    if (typeof content === 'string') text = content;
-    else if (Array.isArray(content)) {
-      text = content
-        .map((p: any) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : ''))
-        .filter(Boolean)
-        .join(' ');
-    }
-    out.push({ role: 'user', text, timestamp: String(entry.timestamp ?? '') });
+    out.push({ role: 'user', text: textFromContent(msg.content), timestamp: String(entry.timestamp ?? '') });
   }
   return out;
 }
@@ -190,13 +196,9 @@ log(`worker session created: ${sessionPath}`);
   for (const line of fs.readFileSync(sessionPath, 'utf-8').split('\n')) {
     if (!line.trim()) continue;
     try {
-      const e = JSON.parse(line);
-      if (e?.type !== 'message' || !e.message) continue;
-      const c = e.message.content;
-      const t = typeof c === 'string' ? c : Array.isArray(c)
-        ? c.map((p: any) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : '')).filter(Boolean).join(' ')
-        : '';
-      entries.push({ role: e.message.role, text: t });
+      const e: unknown = JSON.parse(line);
+      if (!isRecord(e) || e.type !== 'message' || !isRecord(e.message)) continue;
+      entries.push({ role: String(e.message.role), text: textFromContent(e.message.content) });
     } catch { /* skip */ }
   }
   const steerEntryIdx = entries.findIndex(e => e.role === 'user' && e.text === OPERATOR_INSTRUCTION);

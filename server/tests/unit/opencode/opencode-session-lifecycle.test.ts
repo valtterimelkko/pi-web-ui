@@ -30,7 +30,7 @@ function makeSession(overrides: Partial<OpenCodeSession> = {}): OpenCodeSession 
 
 async function createTestSession(service: OpenCodeService, cwd = '/tmp'): Promise<string> {
   const session = makeSession({ directory: cwd });
-  let callIdx = 0;
+  const callIdx = 0;
   mockFetch.mockImplementation((url: string, opts: RequestInit) => {
     if (url.includes('/config/providers')) return Promise.resolve(jsonResponse({ providers: {} }));
     if (url.includes('/session?') && opts?.method === 'POST') return Promise.resolve(jsonResponse(session));

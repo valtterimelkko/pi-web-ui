@@ -639,7 +639,6 @@ export class MultiSessionManager {
       this.handleAgentEvent(sessionPath, event);
     });
 
-    let resolvedWebUIContext: WebUIContext | undefined;
     const pendingExtensionMessages: unknown[] = [];
     // Contract 1.27.0 (goal function): even headless sessions (Internal API
     // creates, no browser attached) get a sink so extension UI messages still
@@ -666,7 +665,7 @@ export class MultiSessionManager {
           },
         }
       : undefined;
-    resolvedWebUIContext = extensionWebUIContext;
+    const resolvedWebUIContext: WebUIContext | undefined = extensionWebUIContext;
 
     const agentSession = await this.piService.createSession({
       clientId: tempClientId,

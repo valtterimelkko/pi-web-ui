@@ -66,7 +66,7 @@ function extractTodoDetails(args: unknown, result?: { output: string; isError: b
   if (!action) return null;
   
   // Try to parse todos from result output if available
-  let todos: Todo[] = [];
+  const todos: Todo[] = [];
   let nextId = 1;
   
   if (result?.output) {

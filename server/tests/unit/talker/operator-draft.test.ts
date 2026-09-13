@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // RED: the operator draft (plan §4.2) does not exist yet.
 import { TalkerSession } from '../../../src/talker/talker.js';
@@ -259,7 +259,8 @@ describe('draft store mechanics (harness state, held by object reference)', () =
     const store = new PendingProposalStore();
     store.appendToDraft(101, INSTRUCTION_1, 1);
     const taken = store.takeForRelease(2);
-    store.recordReleased({ utteranceId: taken!.utteranceId, text: taken!.text, outcome: 'delivered (steer)', turn: 2 });
+    if (!taken) throw new Error('takeForRelease(2) returned null — the drafted proposal should be held');
+    store.recordReleased({ utteranceId: taken.utteranceId, text: taken.text, outcome: 'delivered (steer)', turn: 2 });
     expect(store.lastReleased?.text).toBe(INSTRUCTION_1);
     expect(store.lastReleased?.utteranceId).toBe(101);
   });

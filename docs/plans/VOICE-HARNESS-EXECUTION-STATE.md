@@ -86,6 +86,47 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 ~15:35 — P8: CI green (ratchet cleared, coverage verified)
+
+**The CI failure was NOT a broken gate.** Correcting the parent's earlier claim: the
+workflow alternates (20 pass / 20 fail in the last 40 runs); the last success was
+12 Sep at `warnings: 1735, ceiling: 1738`. This session's commits added ~41
+warnings and pushed it over. **The debt was ours, not the gate's.**
+
+**The ratchet also caught a real bug the normal lint cannot see.** `npm run lint`
+checks `.ts/.tsx` plus two named `.mjs` files; the ratchet lints every
+`js/mjs/cjs`. In `scripts/talker-spot-check.mjs` the summary object declared
+`turns` **twice** — `results.length` then the mapped array — so the count was
+silently discarded by the duplicate key. Fixed as `turnCount` (commit `2dc5ff6`).
+
+**P8 result, parent-verified:**
+- `warnings: 1776 → 1736`, ceiling **1738, unchanged** — `violations: []`, exit 0.
+- **No suppressions**: grep for added `eslint-disable`/`@ts-ignore`/`@ts-nocheck`
+  returns nothing.
+- **No test weakened or deleted**: 0 test files removed, 0 `it(` removed. Five
+  `expect(` lines changed — checked in context: they are `result.released!` →
+  `const released = …; if (!released) throw`, i.e. a non-null assertion replaced by
+  real narrowing **plus a guard**, so the assertions are stronger, not weaker.
+- **No threshold or default touched**: `maxWarnings: 1738` and every vitest
+  threshold unchanged.
+- Production-source edits are behaviour-neutral: `let`→`const` where never
+  reassigned, plus genuine `any`→`unknown` narrowing with type guards in the
+  talker scripts.
+- **5 warnings honestly reported as unfixable** without behaviour risk (a
+  deliberate closure-ordering `let`, and three cyclic-init `let`s with receipts) —
+  reported rather than silenced, which is the right call.
+- **Coverage, all four workspaces pass**: server 80.32/78.14/84.09/80.32,
+  client 70.69/78.05/60.25/70.69, shared 93.31/82.73/94.44/93.31,
+  internal-api-mcp 94.63/80.44/88.54/94.63.
+
+**Still open, stated not hidden:** F3 (the talker's state view is Pi-manager-based,
+so status conversation about a Claude worker is blind) and the two carried-forward
+validation gaps (Antigravity; the operator listening check).
+
+---
+
 ## 2026-09-13 ~13:10 — P5 the Voice Mode UI COMPLETE (verified by the parent)
 
 P5's goal read back **achieved**. The surface exists and the parent **looked at

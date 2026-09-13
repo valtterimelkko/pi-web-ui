@@ -131,25 +131,31 @@ interface Scenario {
 
 interface UserMessageRecord { role: string; text: string; timestamp: string }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function textFromContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p: unknown) => (typeof p === 'string' ? p : isRecord(p) && typeof p.text === 'string' ? p.text : ''))
+      .filter(Boolean)
+      .join(' ');
+  }
+  return '';
+}
+
 function readUserMessages(sessionFile: string): UserMessageRecord[] {
   const out: UserMessageRecord[] = [];
   let raw = '';
   try { raw = fs.readFileSync(sessionFile, 'utf-8'); } catch { return out; }
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let entry: any;
+    let entry: unknown;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (entry?.type !== 'message' || !entry.message || entry.message.role !== 'user') continue;
-    const content = entry.message.content;
-    let text = '';
-    if (typeof content === 'string') text = content;
-    else if (Array.isArray(content)) {
-      text = content
-        .map((p: any) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : ''))
-        .filter(Boolean)
-        .join(' ');
-    }
-    out.push({ role: 'user', text, timestamp: String(entry.timestamp ?? '') });
+    if (!isRecord(entry) || entry.type !== 'message' || !isRecord(entry.message) || entry.message.role !== 'user') continue;
+    out.push({ role: 'user', text: textFromContent(entry.message.content), timestamp: String(entry.timestamp ?? '') });
   }
   return out;
 }
@@ -305,6 +311,12 @@ interface TurnRecord {
   labels: ScenarioTurn['labels'];
   notes: string[];
 }
+
+/** Narrow a turn record to one whose relay definitely fired, so downstream reads need no assertions. */
+type ReleasedTurn = TurnRecord & { released: NonNullable<TurnRecord['released']> };
+const hasRelease = (r: TurnRecord): r is ReleasedTurn => r.released !== null;
+const hasAskedClarification = (r: TurnRecord): r is TurnRecord & { clarification: NonNullable<TurnRecord['clarification']> } =>
+  r.clarification !== null && r.clarification.askedProxy;
 
 /** Drive ONE operator utterance and evaluate every mechanical check around it. */
 async function driveTurn(ctx: DriveContext, turn: ScenarioTurn, utterance: string, keywordSource: string[], driverStep = false): Promise<TurnRecord> {
@@ -574,19 +586,19 @@ async function main(): Promise<void> {
     // Worker-transcript audit (A5): every user message in the worker
     // transcript must be either the slow task prompt or a byte-verified
     // release — i.e. the talker sent NOTHING else, and created no children.
-    const releases = scenarioTurns.filter(r => r.released);
+    const releases = scenarioTurns.filter(hasRelease);
     const audit = readUserMessages(sessionPath).map(m => m.text);
-    const allowed = new Set<string>([slowPrompt(), ...releases.map(r => r.released!.text)]);
+    const allowed = new Set<string>([slowPrompt(), ...releases.map(r => r.released.text)]);
     const unexpected = audit.filter(t => !allowed.has(t));
     const gateBreaches = scenarioTurns.filter(r => !r.released && r.newTranscriptUserMessages.length > 0);
-    const allByteEqual = releases.every(r => r.released!.byteCheck.equal);
-    const allPartsVerbatim = releases.every(r => r.released!.partChecks.every(pc => pc.containedVerbatim));
+    const allByteEqual = releases.every(r => r.released.byteCheck.equal);
+    const allPartsVerbatim = releases.every(r => r.released.partChecks.every(pc => pc.containedVerbatim));
     const keywordMissing = releases.flatMap(r => (r.keywordCheck?.missing.length ? [`${r.turnId}: ${r.keywordCheck.missing.join(', ')}`] : []));
     const clarExpected = scenarioTurns.filter(r => r.clarification?.expected);
-    const clarMet = clarExpected.filter(r => r.clarification!.askedProxy);
+    const clarMet = clarExpected.filter(hasAskedClarification);
     const overAsked = scenarioTurns.filter(r => r.clarification && !r.clarification.expected && r.clarification.askedProxy);
     const pass = unexpected.length === 0 && gateBreaches.length === 0 && allByteEqual && allPartsVerbatim
-      && releases.every(r => r.released!.deliveryOutcome === 'delivered')
+      && releases.every(r => r.released.deliveryOutcome === 'delivered')
       && clarExpected.length === clarMet.length;
 
     const scenarioRecord: ScenarioEvidence = {
@@ -659,7 +671,7 @@ async function main(): Promise<void> {
   const conversational = allTurnRecords.filter(r => r.modelCalled && r.ttftMs !== null);
   const ttfts = conversational.map(r => r.ttftMs as number).sort((a, b) => a - b);
   const p = (q: number) => (ttfts.length ? ttfts[Math.min(ttfts.length - 1, Math.floor(q * ttfts.length))] : null);
-  const releases = allTurnRecords.filter(r => r.released);
+  const releases = allTurnRecords.filter(hasRelease);
   const aggregates: AggregatesEvidence = {
     turnsDriven: allTurnRecords.length,
     modelTurns: conversational.length,
@@ -670,9 +682,9 @@ async function main(): Promise<void> {
     },
     releases: {
       total: releases.length,
-      allByteEqual: releases.every(r => r.released!.byteCheck.equal),
-      mechanisms: releases.map(r => `${r.scenarioId}/${r.turnId}:${r.released!.mechanism}`),
-      multiPart: releases.filter(r => r.released!.partChecks.length > 1).length,
+      allByteEqual: releases.every(r => r.released.byteCheck.equal),
+      mechanisms: releases.map(r => `${r.scenarioId}/${r.turnId}:${r.released.mechanism}`),
+      multiPart: releases.filter(r => r.released.partChecks.length > 1).length,
     },
     forbiddenClaimViolations: allTurnRecords.flatMap(r => r.forbiddenViolations.map(v => `${r.scenarioId}/${r.turnId}: ${v}`)),
     gateBreachSignals: allTurnRecords

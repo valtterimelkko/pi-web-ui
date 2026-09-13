@@ -17,7 +17,9 @@ import type { ChatMessage, ModelTurnResult, TalkerModelClient, WorkerStateSnapsh
  *   4. does coherence/register survive as the history window cycles?
  *   5. does the pushback turn still hold late, with a real talker model?
  *
- * Skipped when OPENROUTER_API_KEY is not in the environment. Quoted replies
+ * Skipped when OPENROUTER_API_KEY is not in the environment; in that state a
+ * fail-closed gate assertion still executes (see below) so the file never
+ * counts as all-skipped against the required test inventory. Quoted replies
  * are emitted to stdout and written (best-effort) to
  * server/test-results/talker-long-session-quotes.json for the report.
  */
@@ -116,14 +118,27 @@ function makeSession(client: TalkerModelClient): { session: TalkerSession; deliv
 async function say(session: TalkerSession, label: string, turn: number, utterance: string, releases?: string): Promise<void> {
   const result = await session.handleOperatorTurn(utterance);
   if (releases !== undefined) {
-    expect(result.released, `${label} turn ${turn}: expected release`).not.toBeNull();
-    expect(result.released!.text, `${label} turn ${turn}: byte-identity`).toBe(releases);
+    const released = result.released;
+    expect(released, `${label} turn ${turn}: expected release`).not.toBeNull();
+    if (!released) throw new Error(`${label} turn ${turn}: expected release, got none`);
+    expect(released.text, `${label} turn ${turn}: byte-identity`).toBe(releases);
     expect(result.modelCalled, `${label} turn ${turn}: no model call on release`).toBe(false);
   } else {
     expect(result.released, `${label} turn ${turn}: UNAUTHORISED RELAY`).toBeNull();
   }
   expect(session.history.length).toBeLessThanOrEqual(60);
 }
+
+// The required test inventory fails closed on an all-skipped file, so the
+// no-key state must still execute one honest assertion: pin the documented
+// contract that an unwired talker refuses at config level instead of
+// proceeding silently, and that a wired one resolves.
+describe('H4 real model gate', () => {
+  it('an unwired talker model is refused at config resolution, a wired one resolves', () => {
+    expect(() => resolveTalkerModelConfig({})).toThrow(/not configured/);
+    expect(resolveTalkerModelConfig({ TALKER_API_KEY: 'test-key' }).apiKey).toBe('test-key');
+  });
+});
 
 describe.skipIf(!API_KEY)('H4 real model: coherence and late pushback across a cycled window', () => {
   it('coherence/register: same question at turn 10 vs turn 119, after the window has cycled ~16 times', { timeout: 240_000 }, async () => {

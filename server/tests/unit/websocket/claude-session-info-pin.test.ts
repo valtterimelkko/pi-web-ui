@@ -481,7 +481,7 @@ describe('ClaudeService getSessionStats computation', () => {
     let assistantMessages = 0;
     let toolCalls = 0;
     let toolResults = 0;
-    let totalTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    const totalTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
     for (const entry of history) {
       switch (entry.type) {

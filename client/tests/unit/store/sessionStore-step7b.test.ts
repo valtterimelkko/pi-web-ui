@@ -66,7 +66,7 @@ function cloneMessage(message: Message): Message {
  * The 1,000-event chunk size mirrors HISTORY_BUFFER_FLUSH_EVENTS.
  */
 function foldOld(events: ReplayEnvelope[], base: Message[] = [], chunkSize = 1_000): BaselineResult {
-  let messages = base.map(cloneMessage);
+  const messages = base.map(cloneMessage);
   let linearScans = 0;
   let allocationCollisions = 0;
 
