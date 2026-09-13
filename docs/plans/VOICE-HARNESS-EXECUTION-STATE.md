@@ -662,6 +662,81 @@ belonged to completed children and were pure polling load (reduced polling is on
 of the lessons from the stall investigation). Only H8 and R2 remain watched, both
 idle.
 
+### 2026-09-13 ~00:05 — SECRETS MIGRATION COMPLETE (and it was incomplete until now)
+
+H8's migration plus the parent's follow-up has removed **every live secret from
+the repository tree**. `pi-web-ui` is a public repo, so this was the point.
+
+#### What H8 did (verified by the parent)
+
+Moved six secrets from `.env.production` (mode 644, inside the repo) to
+`/root/.pi-web-ui/secrets.env` (mode **600**, **outside** the repo), loaded via a
+systemd drop-in; added `TALKER_API_KEY`; tightened `.env.production` to 600.
+The name-diff confirmed **exactly** the six removed, nothing else touched.
+
+It correctly **held the restart** at `activeTurns=2` until capacity cleared rather
+than killing four in-flight children, and it **escalated instead of acting** on a
+finding outside its authorisation — which is what a good child does.
+
+#### H8's escalation, and why it mattered
+
+It reported that `/root/pi-web-ui/.env` (mode 644, inside the repo) contained the
+**same live values** of `AUTH_PASSWORD` and `TELEGRAM_BOT_TOKEN` — the very leak
+vector the migration exists to eliminate — and left it alone pending a decision.
+
+**Investigating it exposed a gap that made the migration incomplete:**
+`CSRF_SECRET` is **required in production** (`server/src/routes/config.ts` checks
+it when `nodeEnv === 'production'`), and it existed in **exactly one place — the
+repo's `.env`**. Because `dotenv.config()` loads `.env` without `override: true`,
+systemd's values won for the six migrated secrets while `CSRF_SECRET` still flowed
+in from the repository.
+
+So `.env` was **load-bearing**, and deleting it would have broken the config check.
+Completing the migration required moving the secret *before* removing the file.
+
+#### What the parent did
+
+1. Appended `CSRF_SECRET` to `/root/.pi-web-ui/secrets.env` (now eight secrets).
+2. Moved the file **out** of the repo: `/root/pi-web-ui/.env` →
+   `/root/.pi-web-ui/env.dev`, mode 600 (backup at `/tmp/h8-backup/env.dev.before`).
+3. Restarted, then **verified `CSRF_SECRET` still resolves** — config issues:
+   **none**.
+4. Ran a secrets audit of the repo's `.env*` files.
+
+#### The audit result — and a false alarm worth recording
+
+| File | Secret-like vars | Verdict |
+|---|---|---|
+| `.env.production` | **0** | non-secret config only ✓ |
+| `.env.example` (tracked, public) | 6 *names* | **placeholders — verified** ✓ |
+| `.env` | — | **gone from the repo** ✓ |
+
+`.env.example` initially looked alarming: tracked in a **public** repo with
+non-empty `JWT_SECRET` (28 chars), `CSRF_SECRET` (28) and `AUTH_PASSWORD` (23).
+Comparing against the live values showed **all three differ** and are markedly
+shorter than production's (`JWT_SECRET` 44, `AUTH_PASSWORD` 60) — placeholder
+documentation, which is correct for an example file. **No live value has been
+committed.** A full-history scan for key-shaped strings had already found only the
+literal placeholder `sk-proj-12345…`.
+
+#### Post-migration state
+
+`capabilities` 200 in 0.24 s, `health` 200, `sessions` 200 in 0.07 s, contract
+1.42.0, **0 startup errors**, eviction counter still **0**. Production is healthy
+and now runs with **zero secrets inside the repository directory**.
+
+#### Still owned by the operator
+
+- **Rotation decision:** the six values sat in a world-readable (644) file inside
+  a public repo's directory for an unknown period. Nothing was committed, but
+  `AUTH_PASSWORD`, `JWT_SECRET` and `CSRF_SECRET` are worth rotating as
+  defence-in-depth. **Not done — credentials are the operator's call.**
+- **Stale worktrees:** all nine have HEADs already in master, but several hold
+  **uncommitted source edits** (`client/src/lib/browserDiagnostics.ts`, `.gitignore`,
+  docs) owned by a *prior* execution. Deleting them destroys content that exists
+  nowhere else, so the parent deliberately did **not** delete them unilaterally.
+  The two worktrees created *by this execution* (wt-e1, wt-h7) were removed.
+
 ## Cleanup owed at the end
 
 - ~~Merge or discard H2's branch `talker/pi-input-routing`~~ — **done** (merged 5c17304).
