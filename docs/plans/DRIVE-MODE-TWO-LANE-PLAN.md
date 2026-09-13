@@ -287,8 +287,10 @@ Mode stops blocking.
 - **Reply channel** — extend the existing extension-UI observer/bridge pattern
   (the precedent is the background-task bridge) so the talker's conversational
   replies reach the browser rather than being swallowed.
-- **Anti-duet rule** — the worker's final answer and the talker's conversational
-  replies must not both be read aloud. Decide the rule explicitly and test it.
+- **Anti-duet rule** — DECIDED (operator, 2026-09-13): see
+  [§4.1 The speech priority ladder](#41-the-speech-priority-ladder-decided-2026-09-13).
+  Not merely "do not both speak" — the operator's own speech outranks everything,
+  and no operator utterance may ever be lost.
 - **Drive Mode phase machine** — a talking-while-working state replaces blocking
   in `agent-working`; TTS is sentence-chunked so speech starts early.
 - **Voice confirmation** — the talker catches the operator's confirmation while
@@ -303,6 +305,62 @@ the worker received the operator's own words.
 **Blocked on:** Phase 3.
 **Preserved:** `/api/dictation` and `/api/tts` are unchanged in this phase
 (intent I8).
+
+#### 4.1 The speech priority ladder (DECIDED 2026-09-13)
+
+The operator chose option (b) — the talker finishes, then the worker's answer
+speaks — with three refinements that change its shape. What is scheduled is
+*playback*, never capture.
+
+**The invariant — capture is unconditional, playback is scheduled.**
+An operator utterance enters the verbatim store the moment it is recognised,
+regardless of what is currently being spoken. The anti-duet rule gates *when
+the surface speaks* and must never gate whether an utterance is kept. If the
+scheduler ever delays or refuses capture, instructions are lost — which is the
+precise failure the operator named. This invariant is the highest-value test in
+the phase.
+
+**The ladder** (strict precedence, highest first):
+
+1. **The operator speaking is never interrupted.** No talker speech, no worker
+   answer, no ack starts over, or cuts off, an operator mid-utterance.
+2. **An unacknowledged operator utterance gets a short receipt ack** before
+   anything else speaks.
+3. **The worker's completed answer speaks** at the next natural gap.
+4. **The talker's own conversational chatter is lowest.** It is dropped, not
+   queued, if it would delay 1–3.
+
+**The receipt ack is at most one per relay, and is not a confirmation.**
+It fires once when the worker's answer is ready and at least one operator
+utterance has not been acknowledged — not once per utterance, which would flood
+the surface when the operator says several things in a row. Critically, it is a
+*receipt* ("Noted — still holding that"), never an *agreement*. It must not be
+interpretable as a send: nothing has been relayed at that point, and criterion
+A3 (nothing relays without confirmation) would be violated in spirit if the
+talker sounded like it was acting. The confirmation remains a separate,
+explicit step. The ack joins the existing harness-generated fixed-string set in
+`server/src/talker/ack.ts` — produced mechanically from a fixed vocabulary,
+never composed by the model, so the gate is not widened by this feature.
+
+**Chunked TTS is what makes barge-in clean.** Because TTS is already
+sentence-chunked in this phase, "pause" means *stop at the current sentence
+boundary* and "resume" means *continue from the next chunk* — never a resume
+mid-word. The chunking work and the barge-in rule are therefore one mechanism,
+not two.
+
+**Two edge cases and their handling:**
+
+- *The operator talks for a long stretch while the answer is ready.* Speech
+  defers (rule 1) and the answer waits. Nothing is hidden: the answer is already
+  in the transcript, which is the channel of record — speech is an enhancement
+  over it, not the only path to it. Surface a visual "answer ready" indicator so
+  deferral is visibly deliberate rather than silent.
+- *The operator starts speaking while an answer is playing.* Duck the playback
+  volume while they speak and restore it at the next chunk boundary. Do not
+  hard-pause and resume, which sounds broken; do not keep playing at full
+  volume, which is an interruption.
+
+**New acceptance criteria** (added to §5): A9, A10, A11.
 
 ### Phase 5 — Live validation and documentation
 
@@ -336,6 +394,9 @@ comparison, and any known gaps stated plainly.
 | A6 | Replies are speakable | Length/latency scoring plus operator listening check |
 | A7 | Worker's final answer and talker's chatter do not both speak | The anti-duet test |
 | A8 | Per-runtime delivery is honest | Three live runtime runs, including the Antigravity queue case |
+| A9 | The operator is never interrupted mid-utterance | A speaking operator stays uninterrupted while an answer is ready and while one is playing (§4.1 rule 1) |
+| A10 | No operator utterance is ever lost | Every utterance reaches the verbatim store regardless of playback state; assert capture is unconditional and survives a mid-playback utterance (§4.1 invariant) |
+| A11 | A receipt ack is never interpretable as a send | Ack text is drawn from the fixed harness vocabulary; at ack time nothing has been relayed, and the confirmation step still follows |
 
 ---
 

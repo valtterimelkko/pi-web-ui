@@ -43,10 +43,17 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 - **Phase 4 — the Voice Mode user interface.** The only substantive work left.
   Rename Drive Mode → **Voice Mode** (operator-decided). Needs the
   talking-while-working phase machine, sentence-chunked TTS, voice confirmation
-  with a text fallback echoing the exact proposal, and the **anti-duet rule** (the
-  worker's final answer and the talker's chatter must not both be spoken).
+  with a text fallback echoing the exact proposal, and the **anti-duet rule** —
+  now **DECIDED** (operator, 2026-09-13) and written up in the plan at
+  **§4.1 The speech priority ladder**: the operator's own speech outranks
+  everything (never interrupted), an unacknowledged utterance gets one short
+  **receipt** ack before the worker's answer is relayed, and **no operator
+  utterance may ever be lost** — capture is unconditional, only playback is
+  scheduled. Adds acceptance criteria **A9/A10/A11**, with A10 (unconditional
+  capture) the highest-value test in the phase.
 - **Not yet exercised:** the merged transport has not been driven from a real
   browser against a real worker — only tests and server-side live validation.
+  This is why the phase opens with a bounded E2E probe rather than UI work.
 - **Optional:** reusing Pi's stored zai credential for the Claude GLM profiles
   instead of the migrated token (a code change in `claude-profiles.ts`, separate
   from the completed migration).
@@ -66,6 +73,56 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
   is recorded in the incident section).
 - **Cancel watch registrations for settled children.** 11 stale polls per 30 s is
   real load, and reduced polling was one of the lessons from the stall.
+
+---
+
+## 2026-09-13 — Phase 4 opens: the anti-duet rule is DECIDED
+
+**Operator decision (verbatim intent):** choose option (b) — the talker finishes
+before the worker's answer speaks — **with three refinements**:
+
+1. *"if I was just speaking to it, it should not interrupt me"* — the operator's
+   own speech is the highest-precedence thing in the system, above both the
+   talker and the worker.
+2. *"important not to lose my instructions as well"* — no operator utterance may
+   be dropped because something was playing.
+3. *"it should acknowledge what I've said shortly if I just said something
+   before relaying what the worker said"* — a brief receipt ack precedes the
+   relay.
+
+**Why this is better than what the parent proposed:** the parent's option (a)
+(the talker yields immediately) optimised for hearing the worker's result, but
+treated the operator's speech as one input among several. The operator's
+refinement makes it the top of the ladder, which is how conversation actually
+works. The parent's options (a)/(b)/(c) are superseded.
+
+**Two consequences the parent worked out and wrote into the plan (§4.1):**
+
+- **Capture is unconditional; playback is scheduled.** The anti-duet rule gates
+  *when the surface speaks*, never *whether an utterance is kept*. This is the
+  direct answer to refinement 2, and it is the one place where a careless
+  implementation would silently lose work. Made the phase's highest-value test.
+- **The receipt ack is not a confirmation, and fires at most once per relay.**
+  Per-utterance acks would flood the surface when the operator says several
+  things in a row; and an ack that sounds like agreement would violate the spirit
+  of A3 (nothing relays without confirmation). The ack joins the existing
+  harness-generated fixed-string set in `server/src/talker/ack.ts`, so it is
+  produced mechanically from a fixed vocabulary and **the gate is not widened**.
+
+**Verified code facts backing the above** (parent, not delegated):
+`ack.ts` already holds harness-generated fixed strings, but they are all
+*delivery-outcome* acks (`sending that now` / `queued` / `couldn't deliver`) —
+there is **no receipt ack today**, so refinement 3 is genuinely new work that
+fits an established pattern. `client/src/hooks/useDriveModeDictation.ts` exposes
+no "operator is mid-utterance" state and a repository-wide grep for
+`isListening|isSpeaking|bargeIn|duckVol|vadActive` returns **nothing**, so
+refinement 1 needs new client-side signal. `useReadAloud.ts` has AudioContext
+scheduling but no queue, pause, or ducking — so barge-in is new work, and the
+phase's existing sentence-chunked TTS is what will make it clean rather than
+mid-word.
+
+**Supersession:** the parent's earlier (a)/(b)/(c) framing is **superseded** —
+(b) was chosen, then strengthened by the three refinements. Do not re-derive (a).
 
 ---
 
