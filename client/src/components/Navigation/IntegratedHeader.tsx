@@ -109,12 +109,12 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
           {/* Notification history — extension notifications are one-shot */}
           <NotificationBell />
 
-          {/* Drive Mode button - always visible */}
+          {/* Voice Mode button - always visible */}
           <button
             onClick={openDriveMode}
             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-            title="Drive Mode"
-            aria-label="Enter Drive Mode"
+            title="Voice Mode"
+            aria-label="Enter Voice Mode"
           >
             <Car className="w-4 h-4 text-gray-500 dark:text-gray-400" />
           </button>

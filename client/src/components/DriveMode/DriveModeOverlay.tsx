@@ -130,6 +130,7 @@ export function DriveModeOverlay() {
       {(phase === 'dictate' || phase === 'agent-working' || phase === 'read-aloud-ready' || phase === 'audio-playing') && (
         <DriveModeDictate
           sessionId={activeSessionId || currentSessionId || ''}
+          sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
           modelName={modelName}
           sessionDisplayName={sessionDisplayName}
           onExit={handleClose}

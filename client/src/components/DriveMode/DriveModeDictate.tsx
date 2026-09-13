@@ -1,72 +1,143 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { Mic, MicOff, Square } from 'lucide-react';
 import { useDriveModeStore } from '../../store/driveModeStore';
 import { useSessionStore } from '../../store/sessionStore';
-import { useDriveModeDictation } from '../../hooks/useDriveModeDictation';
-import { useReadAloud, stopCurrentAudio } from '../../hooks/useReadAloud';
+import { useReadAloud } from '../../hooks/useReadAloud';
+import { useVoiceTurn } from './useVoiceTurn';
+import { ConfirmationCard } from './ConfirmationCard';
+import { FloorBanner } from './FloorBanner';
+import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
+import { speechArbiter, TIER_ANSWER } from '../../lib/speechArbiter';
 import { getLastAssistantText } from '../../lib/driveModeUtils';
 
 export interface DriveModeDictateProps {
   sessionId: string;
+  /** The active session's runtime family — routes talker turns. */
+  sdkType?: string | null;
   modelName: string;
   sessionDisplayName: string;
   onExit: () => void;
   onAbort?: () => void;
 }
 
+/**
+ * The Voice Mode surface — talking while working (plan Phase 4).
+ *
+ * Two lanes, one floor:
+ *   - Capture never stops: the mic is always one tap away, including while
+ *     speech plays. Tapping while speech plays is the BARGE-IN gesture — the
+ *     floor changes hands and the arbiter ducks (restoring at the next chunk
+ *     boundary). There is deliberately no state in which the mic control is
+ *     disabled because the surface is speaking.
+ *   - Everything the operator hears goes through the speech arbiter (§4.1
+ *     ladder); everything the operator says goes to the talker verbatim.
+ *     NOTHING in this component sends to the worker except through the
+ *     talker's confirm-gated release path.
+ */
 export function DriveModeDictate({
   sessionId,
+  sdkType,
   modelName,
   sessionDisplayName,
   onExit,
   onAbort,
 }: DriveModeDictateProps) {
-  const dictation = useDriveModeDictation(sessionId);
+  const voice = useVoiceTurn(sessionId, sdkType);
   const readAloud = useReadAloud('drive-mode');
   const phase = useDriveModeStore((s) => s.phase);
   const setPhase = useDriveModeStore((s) => s.setPhase);
   const isStreaming = useSessionStore((s) => s.isStreaming);
   const messages = useSessionStore((s) => s.messages);
 
+  const lastAssistantText = getLastAssistantText(messages);
+  const isRecording = voice.state === 'recording';
+
   // Vibrate when recording starts
   useEffect(() => {
-    if (dictation.state === 'recording') {
+    if (isRecording) {
       navigator.vibrate?.(100);
     }
-  }, [dictation.state]);
+  }, [isRecording]);
 
-  // Keep phase in 'dictate' while dictating
+  // ---------------------------------------------------------------------------
+  // Store phase bookkeeping. Kept for store-contract coherence with the rest
+  // of the app — NOTHING in this surface is gated on `phase` any more: the
+  // old agent-working block is replaced by the floor banner below, and the
+  // mic stays usable in every state.
+  // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (dictation.state === 'recording' || dictation.state === 'processing') {
-      if (phase !== 'dictate') {
-        setPhase('dictate');
-      }
+    if (isRecording || voice.state === 'processing') {
+      if (phase !== 'dictate') setPhase('dictate');
     }
-  }, [dictation.state, phase, setPhase]);
+  }, [voice.state, isRecording, phase, setPhase]);
 
-  // Watch streaming state to transition between agent-working and read-aloud-ready
   useEffect(() => {
-    if (isStreaming && phase !== 'agent-working') {
-      setPhase('agent-working');
-    }
-    if (!isStreaming && phase === 'agent-working') {
-      setPhase('read-aloud-ready');
-    }
+    if (isStreaming && phase !== 'agent-working') setPhase('agent-working');
+    if (!isStreaming && phase === 'agent-working') setPhase('read-aloud-ready');
   }, [isStreaming, phase, setPhase]);
 
-  // When audio finishes, return to dictate phase
   useEffect(() => {
     if (phase === 'audio-playing' && readAloud.state === 'idle') {
       setPhase('dictate');
     }
   }, [readAloud.state, phase, setPhase]);
 
-  const handleMicClick = useCallback(() => {
-    if (phase === 'read-aloud-ready' || phase === 'audio-playing') {
-      stopCurrentAudio();
+  // ---------------------------------------------------------------------------
+  // The four states, derived from what the surface receives (§4.1).
+  // ---------------------------------------------------------------------------
+  const [floorView, setFloorView] = useState<FloorView>(() =>
+    deriveFloorState({
+      operatorSpeaking: voice.operatorSpeaking,
+      arbiter: arbiterFloorSignals(speechArbiter.getState()),
+      workerStreaming: isStreaming,
+    })
+  );
+  useEffect(() => {
+    const sync = () => {
+      setFloorView(
+        deriveFloorState({
+          operatorSpeaking: voice.operatorSpeaking,
+          arbiter: arbiterFloorSignals(speechArbiter.getState()),
+          workerStreaming: isStreaming,
+        })
+      );
+    };
+    sync();
+    return speechArbiter.subscribe(sync);
+  }, [voice.operatorSpeaking, isStreaming]);
+
+  // ---------------------------------------------------------------------------
+  // The worker's completed answer speaks at the next natural gap (§4.1 rule
+  // 3): submit once per completed answer at tier 3. While the operator holds
+  // the floor it waits queued — the held state makes that deliberate.
+  // ---------------------------------------------------------------------------
+  const prevStreamingRef = useRef(isStreaming);
+  const spokenAnswerRef = useRef<string | null>(null);
+  const autoSeqRef = useRef(0);
+  useEffect(() => {
+    const wasStreaming = prevStreamingRef.current;
+    prevStreamingRef.current = isStreaming;
+    if (
+      wasStreaming &&
+      !isStreaming &&
+      lastAssistantText &&
+      spokenAnswerRef.current !== lastAssistantText
+    ) {
+      spokenAnswerRef.current = lastAssistantText;
+      speechArbiter.submit({
+        id: `answer-auto-${autoSeqRef.current++}`,
+        tier: TIER_ANSWER,
+        text: lastAssistantText,
+      });
     }
-    dictation.toggle();
-  }, [phase, dictation]);
+  }, [isStreaming, lastAssistantText]);
+
+  const handleMicClick = useCallback(() => {
+    // Taking the floor is ALWAYS available — including while speech plays.
+    // Barge-in ducks via the arbiter and restores at the next chunk boundary;
+    // there is deliberately NO hard stop here (that was the old behaviour).
+    voice.toggle();
+  }, [voice]);
 
   const handleReadAloud = useCallback(() => {
     if (readAloud.state === 'playing') {
@@ -74,36 +145,20 @@ export function DriveModeDictate({
       setPhase('dictate');
       return;
     }
-    const text = getLastAssistantText(messages);
-    if (text) {
-      readAloud.play(text);
+    if (lastAssistantText) {
+      readAloud.play(lastAssistantText);
       setPhase('audio-playing');
     }
-  }, [readAloud, messages, setPhase]);
+  }, [readAloud, lastAssistantText, setPhase]);
 
   const handleToggleSpeed = useCallback(() => {
     readAloud.toggleSpeed();
   }, [readAloud]);
 
-  const getStatusText = () => {
-    if (phase === 'dictate') {
-      if (dictation.state === 'idle') return 'Tap to speak';
-      if (dictation.state === 'recording') return 'Listening...';
-      if (dictation.state === 'processing') return 'Processing...';
-      if (dictation.state === 'error') return 'Tap to retry';
-    }
-    if (phase === 'agent-working') return 'Agent working...';
-    if (phase === 'read-aloud-ready') return 'Done — listen or speak';
-    if (phase === 'audio-playing') return 'Reading aloud...';
-    return '';
-  };
-
-  const isRecording = dictation.state === 'recording';
-  const showReadAloudControls = phase === 'read-aloud-ready' || phase === 'audio-playing';
-  const lastAssistantText = getLastAssistantText(messages);
+  const showAnswerControls = lastAssistantText != null || readAloud.state !== 'idle';
 
   return (
-    <div className="flex flex-col items-center h-full w-full px-4 py-6 relative">
+    <div className="flex flex-col items-center h-full w-full px-4 py-6 relative overflow-y-auto">
       {/* Exit button */}
       <button
         onClick={onExit}
@@ -114,19 +169,24 @@ export function DriveModeDictate({
       </button>
 
       {/* Session info */}
-      <div className="flex flex-col items-center mt-8 mb-8">
+      <div className="flex flex-col items-center mt-8 mb-4">
         <div className="text-lg font-medium text-gray-900 dark:text-gray-100">
           {sessionDisplayName}
         </div>
         <div className="text-sm text-gray-500 dark:text-gray-400">{modelName}</div>
       </div>
 
-      {/* Mic button */}
+      {/* The four states — who has the floor, at a glance */}
+      <div className="mb-6">
+        <FloorBanner view={floorView} />
+      </div>
+
+      {/* Mic button — never disabled because the surface is speaking */}
       <button
         onClick={handleMicClick}
-        disabled={dictation.state === 'processing'}
+        disabled={voice.state === 'processing'}
         className={`w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation ${
-          dictation.state === 'processing' ? 'cursor-not-allowed' : 'active:scale-95'
+          voice.state === 'processing' ? 'cursor-not-allowed' : 'active:scale-95'
         } ${
           isRecording
             ? 'bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse'
@@ -135,7 +195,7 @@ export function DriveModeDictate({
         aria-label={isRecording ? 'Stop recording' : 'Start recording'}
         type="button"
       >
-        {dictation.state === 'error' ? (
+        {voice.state === 'error' ? (
           <MicOff
             className={`w-10 h-10 ${
               isRecording ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'
@@ -150,39 +210,59 @@ export function DriveModeDictate({
         )}
       </button>
 
-      {/* Status text */}
-      <div
-        className="mt-6 text-lg text-gray-600 dark:text-gray-300 text-center"
-        role="status"
-        aria-live="polite"
-      >
-        {getStatusText()}
-      </div>
+      {/* Refusal — surfaced honestly (never swallowed) */}
+      {voice.refusal && (
+        <div className="mt-4 w-full max-w-md rounded-xl border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-950 px-4 py-3" role="alert">
+          <div className="text-sm text-red-700 dark:text-red-300">{voice.refusal}</div>
+        </div>
+      )}
 
-      {/* Stop button — only when agent is working */}
-      {phase === 'agent-working' && onAbort && (
+      {/* Dictation error */}
+      {voice.state === 'error' && voice.errorMessage && (
+        <div className="mt-2 text-sm text-red-600 dark:text-red-400 text-center" role="alert">
+          {voice.errorMessage}
+        </div>
+      )}
+
+      {/* Stop worker — independent of speech */}
+      {isStreaming && onAbort && (
         <button
           onClick={onAbort}
           className="mt-4 px-6 py-3 rounded-xl bg-red-600 text-white text-base font-medium hover:bg-red-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation"
           type="button"
         >
           <Square className="w-4 h-4 fill-current" />
-          Stop
+          Stop worker
         </button>
       )}
 
-      {/* Error message */}
-      {dictation.state === 'error' && dictation.errorMessage && (
+      {/* The confirmation card — explicit, verbatim, ambiguous does nothing */}
+      {voice.pendingProposal && (
+        <div className="mt-4 w-full flex justify-center">
+          <ConfirmationCard
+            proposalText={voice.pendingProposal.text}
+            onConfirm={voice.confirmPending}
+            onCancel={voice.cancelPending}
+            onSubmitText={voice.sendText}
+          />
+        </div>
+      )}
+
+      {/* Last released relay — the operator can see what actually went */}
+      {voice.lastReleased && !voice.pendingProposal && (
         <div
-          className="mt-2 text-sm text-red-600 dark:text-red-400 text-center"
-          role="alert"
+          className="mt-4 w-full max-w-md rounded-xl border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-950 px-4 py-3"
+          data-testid="released-outcome"
         >
-          {dictation.errorMessage}
+          <div className="text-sm font-medium text-green-800 dark:text-green-200">Sent to the worker:</div>
+          <div className="mt-1 text-sm text-gray-700 dark:text-gray-200 break-words">
+            “{voice.lastReleased.text}” — {voice.lastReleased.outcome}
+          </div>
         </div>
       )}
 
       {/* Failed-send banner — a spoken instruction is never silently dropped */}
-      {dictation.pendingText != null && (
+      {voice.pendingText != null && (
         <div
           className="mt-4 w-full max-w-md rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-3"
           role="alert"
@@ -191,18 +271,18 @@ export function DriveModeDictate({
             Message not sent — the connection was unavailable. Your words are kept:
           </div>
           <div className="mt-1 text-sm text-gray-700 dark:text-gray-200 break-words">
-            {dictation.pendingText}
+            {voice.pendingText}
           </div>
           <div className="mt-3 flex items-center gap-3">
             <button
-              onClick={dictation.retryLastSend}
+              onClick={voice.retryLastSend}
               className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 active:scale-[0.98] transition-colors select-none touch-manipulation"
               type="button"
             >
               Try again
             </button>
             <button
-              onClick={dictation.discardPending}
+              onClick={voice.discardPending}
               className="px-3 py-2 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors select-none touch-manipulation"
               type="button"
             >
@@ -212,8 +292,9 @@ export function DriveModeDictate({
         </div>
       )}
 
-      {/* Read Aloud controls */}
-      {showReadAloudControls && (
+      {/* Answer controls — the answer is ready whenever it exists, not only
+          in a dedicated phase; listening is one tap while work continues. */}
+      {showAnswerControls && (
         <div className="mt-6 flex items-center gap-3">
           <button
             onClick={handleReadAloud}

@@ -39,14 +39,14 @@ describe('IntegratedHeader', () => {
     expect(useNavigationStore.getState().activeTab).toBe('shell');
   });
 
-  it('renders Drive Mode button', () => {
+  it('renders Voice Mode button', () => {
     render(<IntegratedHeader onOpenSettings={() => {}} />);
-    expect(screen.getByLabelText('Enter Drive Mode')).toBeDefined();
+    expect(screen.getByLabelText('Enter Voice Mode')).toBeDefined();
   });
 
-  it('clicking Drive Mode button calls openDriveMode', () => {
+  it('clicking Voice Mode button calls openDriveMode', () => {
     render(<IntegratedHeader onOpenSettings={() => {}} />);
-    fireEvent.click(screen.getByLabelText('Enter Drive Mode'));
+    fireEvent.click(screen.getByLabelText('Enter Voice Mode'));
     expect(useUIStore.getState().driveModeOpen).toBe(true);
   });
 });

@@ -880,7 +880,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                 className="px-3 sm:px-4 py-2 border border-blue-500 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-1.5 text-sm"
               >
                 <Mic className="w-3.5 h-3.5" />
-                Drive Mode
+                Voice Mode
               </button>
             )}
             <button

@@ -44,7 +44,7 @@ describe('DriveModeEntry', () => {
     expect(screen.getByText('Continue Session')).toBeInTheDocument();
   });
 
-  it('renders "Exit Drive Mode" button', () => {
+  it('renders "Exit Voice Mode" button', () => {
     render(
       <DriveModeEntry
         onNewSession={mockOnNewSession}
@@ -52,7 +52,7 @@ describe('DriveModeEntry', () => {
         onExit={mockOnExit}
       />
     );
-    expect(screen.getByText('Exit Drive Mode')).toBeInTheDocument();
+    expect(screen.getByText('Exit Voice Mode')).toBeInTheDocument();
   });
 
   it('clicking "New Session" calls onNewSession', () => {

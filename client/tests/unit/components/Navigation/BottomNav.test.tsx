@@ -48,18 +48,18 @@ describe('BottomNav', () => {
     expect(useNavigationStore.getState().bottomNavCollapsed).toBe(false);
   });
 
-  it('shows Drive Mode in "More" dropdown', () => {
+  it('shows Voice Mode in "More" dropdown', () => {
     render(<BottomNav />);
     fireEvent.click(screen.getByText('More'));
-    expect(screen.getByText('Drive Mode')).toBeDefined();
+    expect(screen.getByText('Voice Mode')).toBeDefined();
   });
 
-  it('clicking Drive Mode calls openDriveMode and closes dropdown', () => {
+  it('clicking Voice Mode calls openDriveMode and closes dropdown', () => {
     render(<BottomNav />);
     fireEvent.click(screen.getByText('More'));
-    fireEvent.click(screen.getByText('Drive Mode'));
+    fireEvent.click(screen.getByText('Voice Mode'));
     expect(useUIStore.getState().driveModeOpen).toBe(true);
-    // Dropdown should be closed — Drive Mode button no longer visible
-    expect(screen.queryByText('Drive Mode')).toBeNull();
+    // Dropdown should be closed — Voice Mode button no longer visible
+    expect(screen.queryByText('Voice Mode')).toBeNull();
   });
 });
