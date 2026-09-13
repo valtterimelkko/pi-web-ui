@@ -54,12 +54,18 @@ export default defineConfig(({ command }) => {
     server: {
       port: 3457,
       proxy: {
+        // Defaults to the local production server. VITE_API_TARGET exists so the
+        // dev client can be driven against a DISPOSABLE validation server, which
+        // is the only way to exercise the assembled UI end to end: the server
+        // serves client/dist only in production, so a validation server cannot
+        // serve the UI itself, and browser validation was previously impossible
+        // without pointing the proxy at production.
         '/api': {
-          target: 'http://localhost:3456',
+          target: process.env.VITE_API_TARGET ?? 'http://localhost:3456',
           changeOrigin: true,
         },
         '/ws': {
-          target: 'http://localhost:3456',
+          target: process.env.VITE_API_TARGET ?? 'http://localhost:3456',
           ws: true,
           changeOrigin: true,
           secure: false,
