@@ -82,6 +82,51 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 ~12:49 — P3 the operator's draft COMPLETE (verified by the parent)
+
+P3's goal read back **achieved**. The parent ran the suite: **15 files, 173 tests
+passing**, up from 150 — so 23 tests were added net and nothing was lost.
+
+**The three properties, verified in the code:**
+
+- **The draft survives interleaving** — compose, run many conversation turns,
+  resume, confirm; the released text is the whole draft, verbatim.
+- **A lapsed draft is surfaced, never dropped** — a refusal quotes the draft,
+  keeps it, and a re-confirmed yes then releases it. Release-time enforcement
+  holds even when no tick observed the lapse.
+- **Supersession holds both** — a second unreleased instruction accumulates, and a
+  confirm releases both in composition order, byte-verbatim.
+
+**The parent's explicit question — was any safety-property test weakened?** No.
+Six existing tests were **renamed, none dropped**. Checked by diffing for removed
+assertions and then locating each property under its new name: atomic consumption
+("authorisation used once"), cancel-clears-so-a-later-yes-releases-nothing,
+release-time staleness at the send boundary, exactly-once for a multi-part draft,
+and ambiguous-never-acts all survive. Several were **strengthened** — a refused
+release must now *not destroy* the draft, and "cancel clears the whole accumulated
+draft" is broader than the single-candidate original. The old replace-and-expire
+tests changed because they encoded exactly the semantics this package replaces.
+
+**The gate is still structural, not merely intended.** Checked directly rather
+than inferred: `release()` is still `private` with a **single caller**, and there
+is still exactly **one** delivery call, carrying `taken.text`. Subset selection
+("just the second one") resolves against a fixed mechanical ordinal vocabulary and
+takes parts **by id**, so text still comes from the store and selection cannot
+compose it. Without that, partial selection would have handed the model a
+text-composition path into the relay.
+
+One self-correction worth recording: the parent's first check for the term
+"over-aged" returned zero matches and looked like a missing safety test. The grep
+was wrong (`\|` inside `grep -E`, where alternation is `|`), not the code — the
+test exists and passes. Checked rather than reported as a defect.
+
+Committed `fa6550c`, path-limited to P3's server files (P5 still owned the client
+tree; the staged set was verified to contain zero client paths).
+
+---
+
 ## 2026-09-13 ~12:23 — P4 client speech arbiter COMPLETE (verified by the parent)
 
 P4's goal read back **achieved**. The parent ran the client suite rather than
