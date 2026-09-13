@@ -90,6 +90,48 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 ~19:55 — OBJECTIVE MET: the browser relays, byte-for-byte (P12)
+
+The browser E2E left one open defect: the assembled UI worked up to the confirm gate
+and then every confirmed relay was **refused**, because the UI sent the session **id**
+while the delivery machinery resolved **paths**. Fixed server-side, once, at the
+delivery boundary (`resolveSessionRef` + `canonicalWorkerRef`), path-first so every
+existing path-based caller behaves identically, and loud on an unresolvable
+reference — no try-id-then-path guessing, because a silent wrong answer is worse than
+a refusal. The manager's own semantics are deliberately unchanged: `prompt()` still
+refuses an id, pinned by a test, because resolution belongs at the boundary.
+
+**Parent-verified evidence, read from the raw JSON rather than the report:**
+
+| Check | Value |
+|---|---|
+| Worker transcript at the proposal | **0 entries** — the gate held |
+| `card_eq_worker` / `released_eq_worker` / `utterance_eq_worker` | **all true** |
+| Byte count in the worker's own transcript | **68** |
+| Release banner (screenshot `08-released.png`) | *"delivered (prompt)"* where it previously read **refused** |
+| Path regression (live) | `talker-live-validate.ts` → LIVE-VALIDATED, `TALKER-RELAY-OK` |
+| Suites / typecheck / ratchet | 126/126 · clean · **1736 ≤ 1738** |
+
+**Honest residual from that run:** the worker's own model was quota-exhausted
+(Kimi 403), so the worker could not produce an *answer*. What this run proves is the
+**relay** — the operator's words in the worker's own transcript, byte-for-byte, from
+the real UI. A completed conversational turn is proven separately (the live path
+regression and P9's three bisect runs).
+
+**Also corrected:** the `TalkerTurnMessage` doc comment in `protocol.ts` still claimed
+*"Pi: the session path"* — the contract that caused this defect. The child flagged it
+as outside its owned paths; the parent folded it in. A wrong contract comment on the
+exact field that broke is worth fixing, not tolerating.
+
+**Still open, carried forward deliberately:** the REST `/api/sessions` listing on a
+disposable server exposes the operator's **production** sessions (found by P9,
+file:line in its results doc, not fixed — product was frozen for that package); the
+Antigravity validation gap; and the operator listening check.
+
+---
+
 ## 2026-09-13 ~15:48 — CI GREEN on 4e88f78 (programme complete)
 
 **Parent-verified directly, not taken from the background watch:**
