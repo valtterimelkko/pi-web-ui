@@ -80,6 +80,69 @@ the broker eviction counter **0** where it previously ratcheted to 659,400.
 
 ---
 
+---
+
+## 2026-09-13 ~12:23 — P4 client speech arbiter COMPLETE (verified by the parent)
+
+P4's goal read back **achieved**. The parent ran the client suite rather than
+trusting the report: **94 files, 1037 tests, all passing**, client typecheck
+clean.
+
+**The three properties, verified in the source and by running the tests:**
+
+- **Chatter dropped, not queued.** Tier 4 plays only from a completely idle
+  arbiter and is dropped — not deferred — whenever a higher tier is playing,
+  waiting, paused, or the operator holds the floor.
+- **Ducking restores at a chunk boundary.** Barge-in lowers the in-flight gain
+  live and per chunk; restoration is a chunk-boundary event so nothing resumes
+  mid-word. `stopAll()` is the only hard cancel — barge-in never stops.
+- **Capture is not gated by playback.** The arbiter has **no capture-side API at
+  all**, which is the structural reason an utterance cannot be lost to playback
+  state. That is a better answer than a behavioural guard would have been.
+
+Also carried: the receipt ack's precedence over a playing answer (tier 2 preempts
+tier 3 at a boundary and the answer resumes), sentence chunking that avoids
+splitting decimals and abbreviations, and a new `operatorSpeaking` signal from the
+dictation hook — the client had no such state before.
+
+**The child found a real defect in its own first pass**, which is the most
+valuable thing in this package: the preemption branch was not gated on the
+operator's floor, so an ack arriving while an answer played *and* the operator was
+mid-utterance would have started speech over them — exactly the failure rule 1
+forbids. Its own RED test caught it (`expected [ 'a1.', 'ack.' ] to deeply equal
+[ 'a1.', 'a2.' ]`), and preemption is now gated on `!operatorSpeaking` at
+`speechArbiter.ts:207`, with the switch at the first boundary after release. The
+parent confirmed the gate in the source rather than accepting the claim.
+
+**Known limits, stated by the child rather than claimed:** audible ducking quality
+and real AudioContext/TTS behaviour are not testable headlessly.
+
+Committed `0041ecf`, path-limited to P4's client files.
+
+## 2026-09-13 ~12:23 — P5 (the Voice Mode UI) dispatched
+
+With the arbiter interface in place the surface is unblocked, so P5 is running
+**in parallel with P3** — disjoint trees, client versus server, no coordination
+hazard.
+
+The brief carries the operator's own constraint most prominently: **the mic is
+never disabled.** Tapping while speech plays is the barge-in gesture; adding a
+`disabled` to that control is the "locked out for minutes" failure the operator
+rejected, so the brief says explicitly to stop and report rather than do it.
+
+It also requires a **screenshot or a precise description of the four visual
+states**, and says plainly that describing an interface the child has not seen is
+not acceptable. This is a user-facing surface and the parent has to judge whether
+the clarity the operator asked for is actually present — a green test suite cannot
+answer that question.
+
+The rename is scoped deliberately: **user-facing labels and the store's public
+naming only**, not a file-name sweep. The brief states the reason (a large
+mechanical diff that makes review impossible for no user benefit) so a later agent
+does not "tidy" it.
+
+---
+
 ## 2026-09-13 ~12:06 — P2 receipt ack COMPLETE (verified by the parent)
 
 P2's goal read back **achieved**. The parent reviewed the diff and ran the suite
