@@ -173,7 +173,7 @@ async function callOnce({ apiKey, model, messages, onFirstToken }) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
 
-  while (true) {
+  for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -274,7 +274,10 @@ async function main() {
   const summary = {
     model,
     runs,
-    turns: results.length,
+    // NB: keep this distinct from the `turns` detail array below. Both were
+    // previously named `turns`, so this count was silently discarded by the
+    // duplicate key (caught by the lint ratchet's no-dupe-keys error).
+    turnCount: results.length,
     systemPromptChars: SYSTEM_PROMPT.length,
     ttft: {
       medianMs: median ? Math.round(median) : null,
