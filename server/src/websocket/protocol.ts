@@ -419,7 +419,11 @@ export type TalkerDeliveryOutcome =
  */
 export interface TalkerTurnMessage {
   type: 'talker_turn';
-  /** The worker session this talker relays to (Pi: the session path). */
+  /**
+   * The worker session this talker relays to. Either identifier works (P12):
+   * the session path, or the session id the server issued in `session_created` —
+   * resolved against the runtime adapter's own index at the delivery boundary.
+   */
   workerSessionId: string;
   /** The operator's verbatim utterance. */
   utterance: string;

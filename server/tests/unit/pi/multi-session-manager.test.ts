@@ -2295,6 +2295,59 @@ describe('MultiSessionManager', () => {
     });
   });
 
+  describe('resolveSessionRef (P12 id/path wiring)', () => {
+    it('resolves a session ID to the manager canonical key (the session path)', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'worker-uuid-1',
+        sessionFile: '/path/to/worker-1.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as never, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      expect(manager.resolveSessionRef('worker-uuid-1')).toBe('/path/to/worker-1.jsonl');
+    });
+
+    it('returns a session path unchanged (identity — existing path callers behave exactly as before)', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'worker-uuid-2',
+        sessionFile: '/path/to/worker-2.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as never, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      expect(manager.resolveSessionRef('/path/to/worker-2.jsonl')).toBe('/path/to/worker-2.jsonl');
+    });
+
+    it('returns undefined for an unknown reference (loud — callers must fail closed, never guess)', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'worker-uuid-3',
+        sessionFile: '/path/to/worker-3.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as never, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      expect(manager.resolveSessionRef('no-such-id')).toBeUndefined();
+      expect(manager.resolveSessionRef('/path/to/not-a-session.jsonl')).toBeUndefined();
+    });
+
+    it('prompt() still refuses a session ID (delivery semantics unchanged — the manager stays path-keyed)', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'worker-uuid-4',
+        sessionFile: '/path/to/worker-4.jsonl',
+        prompt: vi.fn().mockResolvedValue(undefined),
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as never, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      await expect(manager.prompt('worker-uuid-4', 'hello')).rejects.toThrow(/does not exist/);
+      await expect(manager.prompt('/path/to/worker-4.jsonl', 'hello')).resolves.toBeUndefined();
+    });
+  });
+
   describe('PiService release wiring (WS-path memory robustness F4)', () => {
     it('unload/dispose releases every PiService-owned reference, not just the event handler', async () => {
       const mockSession = createMockAgentSession({

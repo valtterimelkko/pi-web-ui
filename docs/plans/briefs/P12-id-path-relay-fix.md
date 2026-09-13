@@ -105,3 +105,38 @@ server-side fix cannot work, and tests.
 ## Do not commit
 
 Leave the work in the tree and report. The parent reviews, commits and pushes.
+
+---
+
+## Resolution (2026-09-13, this work package)
+
+**Fixed, unit-proven and live-proven. A confirmed relay reaches the pi worker whichever identifier the caller supplies.** Left uncommitted in the tree for parent review, per the brief.
+
+### The fix (one place, server-side)
+
+- `server/src/pi/multi-session-manager.ts` — new read-only `resolveSessionRef(ref)`: resolves a supplied reference against the manager's own active index to the canonical session key (path identity; id → path; no match → `undefined`). Explicit resolution against the manager's index, never try-one-then-the-other. `prompt`/`steer` semantics unchanged — the manager still refuses an id directly (pinned).
+- `server/src/talker/session-registry.ts` — one resolution chokepoint (`canonicalWorkerRef`, pi-only; claude/antigravity are id-keyed already) applied at the top of `handleOperatorTurn` and inside `get`/`has`/`dispose`, so the talker state key, the stored delivery target, the worker snapshot and the transport's phase read all land on one canonical value. Unresolvable references pass through unchanged and still fail closed loudly. The wire echo keeps the caller's raw id (client correlation). The client call site was not touched.
+
+### Evidence
+
+- TDD RED first: release with `workerSessionId = <session id>` refused with the exact production symptom (`Session <uuid> does not exist`); GREEN after. Path pin passed before and after.
+- `server/tests/unit/talker/session-registry-id-path.test.ts` (new): id-release, path release, one-session-per-worker regardless of identifier, unresolvable-ref fail-closed.
+- `server/tests/unit/pi/multi-session-manager.test.ts`: helper semantics (id→path, path identity, unknown→undefined) and `prompt(id)` still refuses.
+- Suites: talker + transport + pi 672 green; full server suite 4037 green (4 failures pre-existing environment artefacts, verified failing identically at HEAD); lint ratchet 1736 ≤ 1738; typecheck clean; zero gate-related lines in the source diff.
+- **Live browser proof** (disposable server + real UI): the UI sent the **id** from `session_created`; release banner "delivered (prompt)"; worker's own transcript received the instruction **68/68/68/68 bytes byte-for-byte** (utterance / card / server release frame / transcript user entry); 0 transcript entries at proposal time (gate held); screenshots in `/tmp/p12-evidence/` (`08-released.png` is the release).
+- **Path no-regression, live**: `scripts/talker-live-validate.ts` → `✅ LIVE-VALIDATED` on a real busy pi worker, mechanism steer, byte-for-byte true, worker replied `TALKER-RELAY-OK`.
+
+### Per-runtime finding (as required)
+
+| Runtime | Keying by the services | UI's id works? |
+|---|---|---|
+| pi | session **path** (MultiSessionManager) | NO → fixed by resolution |
+| claude | server-issued **id** (claude-sdk-service sessions map) | already worked |
+| antigravity | server-issued **id** (streamProcesses / sessionMeta / registry) | already worked |
+| opencode | no talker delivery adapter exists (`TalkerRuntime = pi\|claude\|antigravity`; protocol guard rejects others) | n/a — no relay surface |
+
+### Known residual (honest)
+
+- The worker's conversational answer can arrive long after the release (the pi release result resolves only when the worker's full turn completes — the behaviour already reported in the P9 evidence record §4). Delivery is proven by the transcript write; the answer wait timed out empty in the browser run.
+- `server/src/websocket/protocol.ts` still documents `workerSessionId` as "(Pi: the session path)" — outside this package's owned paths; one-line doc fix for the parent to fold in or assign.
+- The original defect finding in `docs/plans/VOICE-MODE-BROWSER-E2E-RESULTS.md` §4 is intentionally untouched: it remains the accurate record of pre-fix builds.

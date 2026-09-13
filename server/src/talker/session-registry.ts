@@ -76,7 +76,7 @@ function honestUnavailableActivity(runtime: TalkerRuntime): string {
 }
 
 export interface TalkerOperatorTurnInput {
-  /** The worker session this talker relays to (Pi: the session path). */
+  /** The worker session this talker relays to. Either identifier works (P12): the session path (the pi manager's key) or the session id the server issued in `session_created` — resolved against the manager's own index. */
   workerSessionId: string;
   /** The operator's verbatim utterance. */
   utterance: string;
@@ -162,11 +162,11 @@ export class TalkerSessionRegistry {
   }
 
   get(workerSessionId: string, runtime: TalkerRuntime = 'pi'): TalkerSession | undefined {
-    return this.sessions.get(this.key(workerSessionId, runtime));
+    return this.sessions.get(this.key(this.canonicalWorkerRef(workerSessionId, runtime), runtime));
   }
 
   has(workerSessionId: string, runtime: TalkerRuntime = 'pi'): boolean {
-    return this.sessions.has(this.key(workerSessionId, runtime));
+    return this.sessions.has(this.key(this.canonicalWorkerRef(workerSessionId, runtime), runtime));
   }
 
   get size(): number {
@@ -174,7 +174,7 @@ export class TalkerSessionRegistry {
   }
 
   dispose(workerSessionId: string, runtime: TalkerRuntime = 'pi'): void {
-    this.sessions.delete(this.key(workerSessionId, runtime));
+    this.sessions.delete(this.key(this.canonicalWorkerRef(workerSessionId, runtime), runtime));
   }
 
   disposeAll(): void {
@@ -188,6 +188,13 @@ export class TalkerSessionRegistry {
    */
   async handleOperatorTurn(input: TalkerOperatorTurnInput): Promise<TalkerOperatorTurnResult> {
     const runtime: TalkerRuntime = input.runtime ?? 'pi';
+    // P12: resolve the caller's reference ONCE, up front, so the talker state
+    // key, the stored delivery target and the snapshot read all use the same
+    // canonical value. Callers may supply the session id (the value the server
+    // itself issues in `session_created`) or the session path (the manager's
+    // key); an unresolvable reference passes through unchanged and fails
+    // closed downstream with the loud "Session <ref> does not exist" refusal.
+    const workerRef = this.canonicalWorkerRef(input.workerSessionId, runtime);
     if (!input.utterance || !input.utterance.trim()) {
       throw new Error('operator utterance must be non-empty');
     }
@@ -201,7 +208,7 @@ export class TalkerSessionRegistry {
       // refusal — no talker turn exists, hence no voiceTurnId).
       this.voiceRecorder.observeRegistryRefusal({
         runtime,
-        workerSessionId: input.workerSessionId,
+        workerSessionId: workerRef,
         utterance: input.utterance,
         refused: 'prompt_injection',
       });
@@ -214,7 +221,7 @@ export class TalkerSessionRegistry {
     } catch (error) {
       this.voiceRecorder.observeRegistryRefusal({
         runtime,
-        workerSessionId: input.workerSessionId,
+        workerSessionId: workerRef,
         utterance: input.utterance,
         refused: 'deliveries_unavailable',
       });
@@ -227,7 +234,7 @@ export class TalkerSessionRegistry {
     if (!delivery) {
       this.voiceRecorder.observeRegistryRefusal({
         runtime,
-        workerSessionId: input.workerSessionId,
+        workerSessionId: workerRef,
         utterance: input.utterance,
         refused: 'deliveries_unavailable',
       });
@@ -241,20 +248,41 @@ export class TalkerSessionRegistry {
     if (!model) {
       this.voiceRecorder.observeRegistryRefusal({
         runtime,
-        workerSessionId: input.workerSessionId,
+        workerSessionId: workerRef,
         utterance: input.utterance,
         refused: 'model_unconfigured',
       });
       return { reply: TALKER_MODEL_UNCONFIGURED_ACK, refused: 'model_unconfigured' };
     }
 
-    const talker = this.getOrCreate(input.workerSessionId, runtime, delivery, model);
+    const talker = this.getOrCreate(workerRef, runtime, delivery, model);
     const turn = await talker.handleOperatorTurn(input.utterance);
     return { reply: turn.reply, turn };
   }
 
   private key(workerSessionId: string, runtime: TalkerRuntime): string {
     return `${runtime}:${workerSessionId}`;
+  }
+
+  /**
+   * P12: resolve a caller-supplied worker reference to the manager's canonical
+   * session key before it may key talker state or reach a delivery adapter.
+   *
+   * Pi's MultiSessionManager keys sessions by session PATH while the server
+   * issues session IDS on the wire (session_created) — the UI correctly uses
+   * the id, the server-side relay validations correctly used the path, and
+   * both must land on the same talker session and the same delivery target.
+   * Resolution is explicit, against the manager's own index (resolveSessionRef)
+   * — never a guess. An unresolved reference is passed through unchanged so the
+   * delivery fails closed with the loud "Session <ref> does not exist"
+   * refusal (unchanged behaviour). Claude and Antigravity key their services by
+   * the server-issued id already, so their references are canonical as given.
+   * Managers without the resolver (older test doubles) keep today's
+   * passthrough semantics.
+   */
+  private canonicalWorkerRef(workerSessionId: string, runtime: TalkerRuntime): string {
+    if (runtime !== 'pi') return workerSessionId;
+    return this.manager.resolveSessionRef?.(workerSessionId) ?? workerSessionId;
   }
 
   private async resolveDeliveries(): Promise<DefaultDeliveries> {

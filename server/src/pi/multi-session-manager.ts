@@ -982,6 +982,27 @@ export class MultiSessionManager {
   }
 
   /**
+   * Resolve a caller-supplied session reference to this manager's canonical
+   * session key (the session path), using this manager's OWN index.
+   *
+   * Accepts EITHER the session path (identity) OR the agent session id — the
+   * server issues ids on the wire (`session_created`) while this manager keys
+   * sessions by path, and callers (P12: the talker delivery boundary) must
+   * not have to know which form they were handed. Returns undefined when the
+   * reference matches nothing: callers must fail closed on undefined and say
+   * so, never guess. Lookup order is path-first so every existing path-based
+   * caller behaves exactly as before. Read-only: this resolves nothing and
+   * mutates nothing.
+   */
+  resolveSessionRef(ref: string): string | undefined {
+    if (this.sessions.has(ref)) return ref;
+    for (const active of this.sessions.values()) {
+      if (active.sessionId === ref) return active.sessionPath;
+    }
+    return undefined;
+  }
+
+  /**
    * Get the status of a session.
    */
   getSessionStatus(sessionPath: string): SessionStatusInfo | undefined {
