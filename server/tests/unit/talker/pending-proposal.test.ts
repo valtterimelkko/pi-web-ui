@@ -31,18 +31,28 @@ describe('UtteranceLog', () => {
 });
 
 describe('PendingProposalStore', () => {
-  it('holds at most one pending proposal; a new candidate replaces the previous one', () => {
+  it('a second utterance accumulates into the draft — nothing is replaced silently (plan §4.2)', () => {
+    // CHANGED from replacement semantics (plan §4.2): the old test pinned
+    // recordCandidate() REPLACING the candidate so the most recent instruction
+    // was the one a yes referred to. That silently destroyed the first
+    // instruction. Supersession now holds both: the draft is the operator's
+    // accumulating composing thread, and the state view surfaces the count so
+    // the talker asks which. A release takes the whole draft, or one part by
+    // id — never a silent replacement.
     const store = new PendingProposalStore();
-    store.recordCandidate('instruction one', 1, 101);
+    store.appendToDraft(101, 'instruction one', 1);
     expect(store.pending?.text).toBe('instruction one');
-    store.recordCandidate('instruction two', 2, 102);
-    expect(store.pending?.text).toBe('instruction two');
+    store.appendToDraft(102, 'instruction two', 2);
+    expect(store.snapshotDraft()?.utterances.map(u => u.text)).toEqual(['instruction one', 'instruction two']);
+    // The compatibility view anchors the latest part id and carries the
+    // whole verbatim draft text.
     expect(store.pending?.utteranceId).toBe(102);
+    expect(store.pending?.text).toBe('instruction one\ninstruction two');
   });
 
-  it('takeForRelease atomically consumes the pending proposal (authorisation used once)', () => {
+  it('takeForRelease atomically consumes the draft (authorisation used once)', () => {
     const store = new PendingProposalStore();
-    store.recordCandidate('instruction one', 1, 101);
+    store.appendToDraft(101, 'instruction one', 1);
     const taken = store.takeForRelease(2);
     expect(taken?.text).toBe('instruction one');
     expect(store.pending).toBeNull();
@@ -50,9 +60,9 @@ describe('PendingProposalStore', () => {
     expect(store.takeForRelease(3)).toBeNull();
   });
 
-  it('cancel clears the pending proposal so a later yes releases nothing', () => {
+  it('cancel clears the whole draft so a later yes releases nothing', () => {
     const store = new PendingProposalStore();
-    store.recordCandidate('instruction one', 1, 101);
+    store.appendToDraft(101, 'instruction one', 1);
     expect(store.cancel('operator cancelled', 2)).toBe(true);
     expect(store.pending).toBeNull();
     expect(store.takeForRelease(3)).toBeNull();
@@ -63,30 +73,39 @@ describe('PendingProposalStore', () => {
     expect(store.cancel('operator cancelled', 1)).toBe(false);
   });
 
-  it('expires a stale pending proposal after maxPendingAgeTurns', () => {
+  it('a lapsed window never releases — and the refusal marks the draft instead of dropping it', () => {
+    // CHANGED (plan §4.2): the old test pinned tickTurn() EXPIRING (dropping)
+    // the candidate at maxPendingAgeTurns. The safety half — stale text is
+    // never released — is preserved unchanged below. What is removed is the
+    // silent drop: the window now lapses onto the confirmation, the draft is
+    // marked needs-re-confirmation, and the harness surfaces it.
     const store = new PendingProposalStore({ maxPendingAgeTurns: 3 });
-    store.recordCandidate('instruction one', 1, 101);
+    store.appendToDraft(101, 'instruction one', 1);
     store.tickTurn(2);
     store.tickTurn(3);
-    expect(store.pending).not.toBeNull();
-    store.tickTurn(4); // age reaches the limit
-    expect(store.pending).toBeNull();
-    expect(store.takeForRelease(5)).toBeNull();
+    expect(store.snapshotDraft()?.needsReConfirmation).toBe(false);
+    store.tickTurn(4); // the window lapses
+    expect(store.takeForRelease(5)).toBeNull(); // stale text is never released (unchanged safety)
+    expect(store.snapshotDraft()).not.toBeNull(); // and nothing is silently dropped
+    expect(store.snapshotDraft()?.needsReConfirmation).toBe(true);
   });
 
-  it('takeForRelease itself refuses an over-aged candidate (lifetime enforced at the send boundary)', () => {
+  it('takeForRelease itself refuses an over-aged draft at the send boundary — without destroying it', () => {
     // A caller that jumps straight to release at a far-future turn — without
-    // any intervening tickTurn — must not be able to release a stale proposal.
+    // any intervening tickTurn — must not be able to release a stale draft.
+    // CHANGED (plan §4.2): the refusal no longer CONSUMES the draft (the old
+    // code's consumption was the silent drop); it marks needs-re-confirmation
+    // so the harness can surface it and the operator can re-confirm.
     const store = new PendingProposalStore({ maxPendingAgeTurns: 3 });
-    store.recordCandidate('instruction one', 1, 101);
+    store.appendToDraft(101, 'instruction one', 1);
     expect(store.takeForRelease(50)).toBeNull();
-    // The stale candidate is consumed by the refusal: it can never release.
-    expect(store.pending).toBeNull();
+    expect(store.snapshotDraft()?.needsReConfirmation).toBe(true);
+    expect(store.snapshotDraft()?.utterances.map(u => u.text)).toEqual(['instruction one']);
   });
 
-  it('takeForRelease still releases a fresh candidate in the normal propose-then-confirm window', () => {
+  it('takeForRelease still releases a fresh draft in the normal propose-then-confirm window', () => {
     const store = new PendingProposalStore({ maxPendingAgeTurns: 3 });
-    store.recordCandidate('instruction one', 1, 101);
+    store.appendToDraft(101, 'instruction one', 1);
     store.tickTurn(2);
     const taken = store.takeForRelease(2) as { text: string } | null;
     expect(taken?.text).toBe('instruction one');
@@ -94,7 +113,7 @@ describe('PendingProposalStore', () => {
 
   it('records releases and exposes the last one for the state view', () => {
     const store = new PendingProposalStore();
-    store.recordCandidate('instruction one', 1, 101);
+    store.appendToDraft(101, 'instruction one', 1);
     const taken = store.takeForRelease(2) as { utteranceId: number; text: string };
     store.recordReleased({ utteranceId: taken.utteranceId, text: taken.text, outcome: 'delivered (steer)', turn: 2 });
     expect(store.lastReleased?.text).toBe('instruction one');

@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { renderStateView, STATE_VIEW_LIMITS } from '../../../src/talker/state-view.js';
 import type { WorkerStateSnapshot, HarnessView } from '../../../src/talker/types.js';
 
-const emptyHarness: HarnessView = { pendingUtterance: null, pendingAgeTurns: null, lastReleased: null };
+const emptyHarness: HarnessView = { draft: null, lastReleased: null };
 
 describe('renderStateView', () => {
   const snapshot: WorkerStateSnapshot = {
@@ -61,10 +61,15 @@ describe('renderStateView', () => {
     expect(view.length).toBeLessThan(6000);
   });
 
-  it('injects the pending proposal verbatim with its explanation', () => {
+  it('injects the pending draft verbatim with its explanation', () => {
+    // CHANGED (plan §4.2): the harness view now carries the operator's DRAFT
+    // (the accumulating composing thread) instead of a single candidate.
     const harness: HarnessView = {
-      pendingUtterance: 'tell the worker to hold phase 3 until my review',
-      pendingAgeTurns: 1,
+      draft: {
+        utterances: ['tell the worker to hold phase 3 until my review'],
+        ageTurns: 1,
+        needsReConfirmation: false,
+      },
       lastReleased: null,
     };
     const view = renderStateView(snapshot, harness);
@@ -73,10 +78,52 @@ describe('renderStateView', () => {
     expect(view).toContain('only if the operator explicitly confirms');
   });
 
+  it('renders a multi-part draft as numbered verbatim parts so the talker can ask which', () => {
+    const harness: HarnessView = {
+      draft: {
+        utterances: ['tell the worker to hold phase 3', 'and also make it use staging'],
+        ageTurns: 2,
+        needsReConfirmation: false,
+      },
+      lastReleased: null,
+    };
+    const view = renderStateView(snapshot, harness);
+    expect(view).toContain('2 part(s), held verbatim');
+    expect(view).toContain('1. "tell the worker to hold phase 3"');
+    expect(view).toContain('2. "and also make it use staging"');
+  });
+
+  it('tells the talker when the draft needs re-confirmation (lapsed window, nothing dropped)', () => {
+    const harness: HarnessView = {
+      draft: { utterances: ['hold phase 3'], ageTurns: 6, needsReConfirmation: true },
+      lastReleased: null,
+    };
+    const view = renderStateView(snapshot, harness);
+    expect(view).toContain('confirmation window has lapsed');
+    expect(view).toContain('re-confirm');
+    expect(view).toContain('Offer it back to the operator');
+    // The draft itself is still shown — never silently dropped.
+    expect(view).toContain('hold phase 3');
+  });
+
+  it('is bounded for a pathological multi-part draft', () => {
+    const long = 'y'.repeat(2000);
+    const harness: HarnessView = {
+      draft: {
+        utterances: Array.from({ length: 50 }, (_, i) => `part ${i} ${long}`),
+        ageTurns: 3,
+        needsReConfirmation: false,
+      },
+      lastReleased: null,
+    };
+    const view = renderStateView(snapshot, harness);
+    expect(view.match(/part \d+/g)?.length).toBeLessThanOrEqual(STATE_VIEW_LIMITS.draftUtterances);
+    expect(view.length).toBeLessThan(6000);
+  });
+
   it('injects the last released instruction with its delivery outcome', () => {
     const harness: HarnessView = {
-      pendingUtterance: null,
-      pendingAgeTurns: null,
+      draft: null,
       lastReleased: { text: 'hold phase 3', outcome: 'delivered (steer)' },
     };
     const view = renderStateView(snapshot, harness);

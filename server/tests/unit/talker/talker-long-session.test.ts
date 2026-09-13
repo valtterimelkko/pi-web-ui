@@ -152,14 +152,19 @@ class LongRun {
     hist.forEach((e, i) => {
       expect(e.role, `${where}: history slot ${i} pair alignment`).toBe(i % 2 === 0 ? 'user' : 'assistant');
     });
-    // While a proposal is alive its own utterance entry is still in the window
-    // (default config: the pending floor is far beyond the proposal lifetime).
+    // While a draft is alive, every one of its parts' history entries is
+    // still in the window (default config: the pending floor is far beyond
+    // the confirmation window). CHANGED (plan §4.2): the pending object is
+    // now the operator's accumulating DRAFT, so the check is per part.
     const pending = this.session.proposals.pending;
     if (pending && this.pendingEntryMustSurvive) {
-      expect(
-        hist.some(e => e.role === 'user' && e.turn === pending.createdTurn && e.content === pending.text),
-        `${where}: pending proposal's history entry must survive while it is alive`
-      ).toBe(true);
+      const parts = this.session.proposals.snapshotDraft()?.utterances ?? [];
+      for (const part of parts) {
+        expect(
+          hist.some(e => e.role === 'user' && e.turn === part.turn && e.content === part.text),
+          `${where}: every draft part's history entry must survive while the draft is alive`
+        ).toBe(true);
+      }
     }
     // Verbatim log is bounded server-side state.
     expect(this.session.utteranceLog.size).toBeLessThanOrEqual(50);
@@ -213,24 +218,29 @@ async function runAdversarialCycle(run: LongRun): Promise<void> {
   await run.say('yeah', { releases: b });
   await chatter(run, 2);
 
-  // C: proposal expires (confirm at age 6 releases nothing), then a fresh
-  // proposal confirms normally.
+  // C: the confirmation window lapses (confirm at age 6 releases nothing —
+  // and, since plan §4.2, SURFACES the draft instead of dropping it), the
+  // operator explicitly abandons it, then a fresh proposal confirms normally.
   const c = instr();
   await run.say(c);
   await chatter(run, 5);
-  await run.say('yes'); // expired — must release nothing
+  await run.say('yes'); // lapsed — must release nothing; surfaced + re-armed
+  await run.say('forget that'); // explicit abandon clears the surfaced draft
   await chatter(run, 1);
   const c2 = instr();
   await run.say(c2);
   await run.say('sure', { releases: c2 });
   await chatter(run, 2);
 
-  // D: a newer statement replaces the candidate; "ok" releases the NEWEST one.
-  await run.say(instr());
+  // D: supersession holds both (plan §4.2): a second unreleased instruction
+  // ACCUMULATES instead of replacing; "ok" releases the whole draft — both
+  // parts, in composition order, verbatim.
+  const d1 = instr();
+  await run.say(d1);
   const d2 = `also tell the worker to rerun the test suite (instruction ${++instructionSeq})`;
   await run.say(d2);
   await chatter(run, 1);
-  await run.say('ok', { releases: d2 });
+  await run.say('ok', { releases: `${d1}\n${d2}` });
   await chatter(run, 2);
 
   // E: double confirm — the second "yes" releases nothing.
@@ -396,27 +406,37 @@ describe('H4: the gate holds over a 150+ turn session with the window cycling re
 });
 
 describe('H4: expiry and double-release semantics under pressure', () => {
-  it('takeForRelease refuses a proposal that outlived its lifetime, even with no intervening tick', () => {
+  it('takeForRelease refuses a draft that outlived its confirmation window, even with no intervening tick', () => {
     const store = new PendingProposalStore({ maxPendingAgeTurns: 6 });
-    store.recordCandidate('hold the release until my review', 10, 3);
-    expect(store.takeForRelease(16)).toBeNull(); // age 6 — expired at the boundary itself
-    store.recordCandidate('hold the release until my review', 10, 3);
-    expect(store.takeForRelease(15)?.text).toBe('hold the release until my review'); // age 5 — live
-    expect(store.takeForRelease(15)).toBeNull(); // consumed — a second take has nothing
+    store.appendToDraft(3, 'hold the release until my review', 10);
+    expect(store.takeForRelease(16)).toBeNull(); // age 6 — lapsed at the boundary itself
+    // CHANGED (plan §4.2): the refusal marks the draft instead of consuming it.
+    expect(store.snapshotDraft()?.needsReConfirmation).toBe(true);
+    // After the harness surfaces it (re-arm), the re-confirmed draft releases.
+    store.markResurfaced(16);
+    expect(store.takeForRelease(17)?.text).toBe('hold the release until my review');
+    expect(store.takeForRelease(17)).toBeNull(); // consumed — a second take has nothing
   });
 
-  it('end-to-end expiry: propose, five unrelated turns, "yes" at age 6 releases nothing and stays conversational', async () => {
+  it('end-to-end expiry: propose, five unrelated turns, "yes" at age 6 releases nothing — and the draft is surfaced, not dropped (plan §4.2)', async () => {
     const { session, model, delivery } = makeSession();
     const run = new LongRun(session, 'expiry');
     const p = instr();
     await run.say(p);
     await chatter(run, 5); // ages 1..5 — still live
-    await run.say('yes'); // the yes turn's own boundary ages it to 6 → expired
-    expect(session.proposals.pending).toBeNull(); // expired at the turn boundary
+    const callsBeforeLapsedYes = model.calls.length;
+    await run.say('yes'); // the yes turn's own boundary ages it to 6 → lapsed
     expect(delivery.deliveredTexts()).toEqual([]);
-    // The stray "yes" went to the model as conversation (asked "send what?").
-    const lastCall = model.calls[model.calls.length - 1];
-    expect(lastCall[lastCall.length - 1].content).toContain('OPERATOR (out loud): yes');
+    // CHANGED (plan §4.2): the lapsed yes is refused MECHANICALLY (quoting the
+    // draft and re-arming the window) — no model call, no model interpretation
+    // of the stale confirmation — and the draft is still held, not dropped.
+    expect(model.calls.length).toBe(callsBeforeLapsedYes);
+    expect(session.proposals.pending).not.toBeNull();
+    expect(session.proposals.snapshotDraft()?.needsReConfirmation).toBe(false); // re-armed by the surfacing
+    // The re-confirmed yes now releases the whole draft, verbatim.
+    const reconfirmed = await session.handleOperatorTurn('yes');
+    expect(reconfirmed.released?.text).toBe(p);
+    expect(delivery.deliveredTexts()).toEqual([p]);
   });
 
   it('confirm with nothing pending at turn 1 delivers nothing', async () => {

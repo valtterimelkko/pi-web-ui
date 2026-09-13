@@ -24,6 +24,8 @@ export const STATE_VIEW_LIMITS = {
   pendingChars: 120,
   lastAssistantChars: 400,
   activityChars: 160,
+  draftUtterances: 8,
+  draftChars: 200,
 } as const;
 
 export function clip(text: string, max: number): string {
@@ -68,13 +70,28 @@ export function renderStateView(snapshot: WorkerStateSnapshot, harness: HarnessV
     lines.push(`Worker last said: ${clip(snapshot.lastAssistantText, STATE_VIEW_LIMITS.lastAssistantChars)}`);
   }
 
-  if (harness.pendingUtterance) {
-    lines.push(
-      '--- PENDING INSTRUCTION ---',
-      `The operator said: "${harness.pendingUtterance}"`,
-      'It is held for delivery and will be sent only if the operator explicitly confirms.' +
-        (harness.pendingAgeTurns !== null ? ` It has been waiting for ${harness.pendingAgeTurns} operator turn(s).` : '')
-    );
+  if (harness.draft && harness.draft.utterances.length > 0) {
+    const { utterances, ageTurns, needsReConfirmation } = harness.draft;
+    lines.push('--- PENDING INSTRUCTION ---');
+    if (utterances.length === 1) {
+      lines.push(`The operator said: "${clip(utterances[0], STATE_VIEW_LIMITS.draftChars)}"`);
+    } else {
+      // A multi-part draft (plan §4.2): every part is the operator's verbatim
+      // words, numbered so the talker can ask which part the operator means.
+      const shown = utterances.slice(-STATE_VIEW_LIMITS.draftUtterances);
+      const hidden = utterances.length - shown.length;
+      lines.push(`The operator is composing an instruction in ${utterances.length} part(s), held verbatim:`);
+      shown.forEach((u, i) => lines.push(`${i + 1 + hidden}. "${clip(u, STATE_VIEW_LIMITS.draftChars)}"`));
+      if (hidden > 0) lines.push(`(${hidden} earlier part(s) not shown)`);
+    }
+    let heldLine = 'It is held for delivery and will be sent only if the operator explicitly confirms.';
+    if (ageTurns !== null) heldLine += ` It has been waiting for ${ageTurns} operator turn(s).`;
+    lines.push(heldLine);
+    if (needsReConfirmation) {
+      lines.push(
+        'Its confirmation window has lapsed: nothing will be sent until the operator explicitly re-confirms. Offer it back to the operator.'
+      );
+    }
   }
 
   if (harness.lastReleased) {

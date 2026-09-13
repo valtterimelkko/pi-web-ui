@@ -116,7 +116,11 @@ describe('TalkerSession turn loop', () => {
     expect(session.proposals.pending).toBeNull();
   });
 
-  it('a stale proposal expires so a much later yes releases nothing', async () => {
+  it('a stale confirmation releases nothing — and the draft is surfaced, not dropped (plan §4.2)', async () => {
+    // RENAMED + strengthened (plan §4.2): was "a stale proposal expires so a
+    // much later yes releases nothing". The safety assertion — a much later
+    // yes releases nothing — is unchanged; what changed is that the draft is
+    // no longer silently dropped: it is held for re-confirmation.
     const delivery = createNullDelivery();
     const model = stubModel('noted.');
     const session = new TalkerSession({
@@ -126,12 +130,18 @@ describe('TalkerSession turn loop', () => {
       snapshotProvider: () => SNAPSHOT,
       config: { maxPendingAgeTurns: 2 },
     });
-    await session.handleOperatorTurn('tell the worker to hold phase 3'); // turn 1: candidate
-    await session.handleOperatorTurn('did you send it?'); // turn 2: meta question — candidate kept
-    await session.handleOperatorTurn('did you send it?'); // turn 3: tick expires the aged candidate
+    await session.handleOperatorTurn('tell the worker to hold phase 3'); // turn 1: draft
+    await session.handleOperatorTurn('did you send it?'); // turn 2: meta question — draft kept
+    await session.handleOperatorTurn('did you send it?'); // turn 3: window lapses
     const result = await session.handleOperatorTurn('yes');
     expect(result.released).toBeNull();
     expect(delivery.deliveredTexts()).toEqual([]);
+    // Surfaced, never dropped:
+    expect(session.proposals.pending).not.toBeNull();
+    expect(result.reply).toContain('tell the worker to hold phase 3');
+    // A re-confirmed yes then releases it verbatim.
+    const reconfirmed = await session.handleOperatorTurn('yes');
+    expect(reconfirmed.released?.text).toBe('tell the worker to hold phase 3');
   });
 
   it('a meta question about the send never replaces or releases the pending proposal', async () => {

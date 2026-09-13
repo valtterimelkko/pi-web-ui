@@ -14,12 +14,14 @@
  */
 
 import type { UtteranceClass } from './types.js';
+import type { DraftSelection, OrdinalPosition } from './pending-proposal.js';
 
 /** Explicit withdrawals of the pending proposal. */
 const CANCEL_PATTERNS: RegExp[] = [
   /^\s*no\b[.!\s]*$/i,
   /\bnever\s?mind\b/i,
   /\bforget it\b/i,
+  /\bforget (?:that|this)\b/i,
   /\bscratch (that|it)\b/i,
   /\bdon'?t send\b/i,
   /\bdo not send\b/i,
@@ -121,4 +123,35 @@ export function isMetaSendQuestion(raw: string): boolean {
   if (!text) return false;
   if (!QUESTION_TRAILING.test(text) && !QUESTION_LEADING.test(text)) return false;
   return META_SEND_QUESTION.test(text);
+}
+
+/**
+ * Mechanical subset selection for the operator's draft (plan §4.2 invariant
+ * 2): "just the second one" selects a subset of the draft's utterance ids so
+ * the harness can release exactly that part, verbatim. The vocabulary is a
+ * fixed, tightly anchored set of ordinal shapes — the same design as the
+ * confirm/cancel patterns above. Anything outside these shapes selects
+ * nothing (returns null): an instruction containing an ordinal, a question,
+ * or a plain yes never selects, so the gate cannot be widened by accident.
+ * Questions never select (checked by the caller against the classification);
+ * a plain confirm selects the whole draft implicitly.
+ */
+const ORDINAL_GROUP = '(first|second|third|fourth|fifth|last)';
+const BARE_SELECTION_PATTERN = new RegExp(
+  `^(?:(?:just|only)\\s+)?(?:please\\s+)?(?:(?:send|relay|pass)\\s+)?(?:me\\s+)?the\\s+${ORDINAL_GROUP}\\s*(?:one|part)?\\s*[.!,]?\\s*$`,
+  'i'
+);
+const CONFIRM_PREFIXED_SELECTION_PATTERN = new RegExp(
+  `^(?:yes|yeah|yep|yup|sure|ok|okay)\\s*[,;:!.]*\\s*(?:(?:just|only)\\s+)?(?:please\\s+)?(?:(?:send|relay|pass)\\s+)?(?:me\\s+)?the\\s+${ORDINAL_GROUP}\\s*(?:one|part)?\\s*[.!,]?\\s*$`,
+  'i'
+);
+const ORDINAL_ORDER: OrdinalPosition[] = ['first', 'second', 'third', 'fourth', 'fifth'];
+
+export function resolveDraftSelection(raw: string): DraftSelection | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const match = BARE_SELECTION_PATTERN.exec(text) ?? CONFIRM_PREFIXED_SELECTION_PATTERN.exec(text);
+  const word = match?.[1]?.toLowerCase() as OrdinalPosition | undefined;
+  if (!word) return null;
+  return { kind: 'ordinal', position: word === 'last' ? 'last' : ORDINAL_ORDER[ORDINAL_ORDER.indexOf(word)] };
 }

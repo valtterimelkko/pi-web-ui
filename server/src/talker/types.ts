@@ -30,8 +30,19 @@ export interface WorkerStateSnapshot {
  * from the pending-proposal store — never from model memory or history.
  */
 export interface HarnessView {
-  pendingUtterance: string | null;
-  pendingAgeTurns: number | null;
+  /**
+   * The operator's draft (plan §4.2): the accumulating, verbatim record of
+   * what they have said toward an instruction not yet released — harness
+   * state held by object reference, never model memory. Null when the
+   * operator is not composing. `needsReConfirmation` is set when the
+   * confirmation window has lapsed: the draft is still held, but nothing may
+   * release it until the operator explicitly re-confirms.
+   */
+  draft: {
+    utterances: string[];
+    ageTurns: number | null;
+    needsReConfirmation: boolean;
+  } | null;
   lastReleased: { text: string; outcome: string } | null;
 }
 

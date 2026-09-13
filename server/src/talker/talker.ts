@@ -29,17 +29,34 @@
  *      release that the adapter reports as delivered; honest failure and
  *      queue wording otherwise. The talker never claims the worker finished.
  *
+ * The operator's draft (plan §4.2, interleaved composition):
+ *   8. Statements and worker-directed questions ACCUMULATE into the draft —
+ *      the operator's composing thread. Nothing is ever silently replaced or
+ *      aged out of existence; supersession holds both parts and the state
+ *      view tells the talker, who asks which.
+ *   9. Ageing expires the CONFIRMATION, not the draft. A confirmation that
+ *      arrives after the window gets a mechanical refusal that quotes the
+ *      draft verbatim and re-arms the window — never a model-composed
+ *      answer, and never a silent drop. A released or explicitly abandoned
+ *      ("forget that") draft is gone; a lapsed one is always surfaced.
+ *  10. A release takes verbatim text by id — the whole draft, or a single
+ *      part via the fixed ordinal vocabulary ("just the second one"). An
+ *      unresolved selection is ambiguous: it never acts.
+ *
  * Turn flow:
  *   utterance → verbatim log → mechanical classification →
- *     confirm + live proposal  → release: deliver verbatim → fixed ack (no model call)
- *     cancel                   → clear proposal → conversational model turn
- *     otherwise                → record/update candidate → conversational model turn
+ *     confirm + live fresh draft  → release: deliver verbatim → fixed ack (no model call)
+ *     confirm + lapsed draft      → mechanical refusal + surfacing + re-arm (no model call)
+ *     confirm, nothing pending    → conversational model turn ("send what?")
+ *     cancel                      → clear draft → conversational model turn
+ *     otherwise                   → append to draft → conversational model turn
  *   Every conversational turn rebuilds the state view fresh and sees the
- *   pending proposal and the last release as projection lines.
+ *   draft (parts, age, needs-re-confirmation) and the last release.
  */
 
-import { classifyOperatorUtterance, isMetaSendQuestion, isWorkerDirectedQuestion } from './utterance-classifier.js';
+import { classifyOperatorUtterance, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
 import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
+import type { DraftSelection, DraftSnapshot } from './pending-proposal.js';
 import { renderStateView } from './state-view.js';
 import { TalkerHistory } from './history.js';
 import { loadTalkerSystemPrompt } from './prompt.js';
@@ -53,7 +70,11 @@ import type {
 } from './types.js';
 
 export interface TalkerSessionConfig {
-  /** Turns a candidate stays alive without resolution before it expires. */
+  /**
+   * Operator turns of absence after which the draft's confirmation window
+   * lapses and the draft must be re-confirmed before it can release. The
+   * draft itself NEVER expires (plan §4.2) — only the confirmation does.
+   */
   maxPendingAgeTurns: number;
   historyMaxEntries: number;
   historyKeepEntries: number;
@@ -77,6 +98,25 @@ export interface TalkerSessionDeps {
   /** Fresh worker state material, called once per conversational turn. */
   snapshotProvider: () => WorkerStateSnapshot;
   config?: Partial<TalkerSessionConfig>;
+}
+
+/**
+ * Mechanical surfacing replies (plan §4.2). Like the release acks (ack.ts),
+ * these are produced by the harness from harness state — the only
+ * operator-facing words in them are the draft's own verbatim text — so the
+ * model can never compose, soften or suppress the safety-critical
+ * transitions: refusing a stale confirmation and asking for
+ * re-confirmation, and clarifying an ambiguous selection. (ack.ts itself is
+ * frozen for this package, so these live here.)
+ */
+function reconfirmAskReply(snapshot: DraftSnapshot): string {
+  const quoted = snapshot.utterances.map(u => `"${u.text}"`).join(' ... ');
+  return `You were composing something — still want that sent? Here is what I am holding: ${quoted}. Say yes and I will send it.`;
+}
+
+function selectionClarifyReply(snapshot: DraftSnapshot): string {
+  const parts = snapshot.utterances.map((u, i) => `${i + 1}. "${u.text}"`).join(' ');
+  return `I am holding ${snapshot.utterances.length} things — ${parts}. Which one?`;
 }
 
 export class TalkerSession {
@@ -120,16 +160,44 @@ export class TalkerSession {
     this.turnCount += 1;
     const turn = this.turnCount;
 
-    // Age/expire the live candidate at the boundary BEFORE this turn's events.
+    // Age the draft's confirmation at the boundary BEFORE this turn's events.
+    // Marks needs-re-confirmation; never drops the draft (plan §4.2).
     this.proposals.tickTurn(turn);
 
     const record = this.utteranceLog.record(utterance, turn);
-    const utteranceClass = classifyOperatorUtterance(utterance);
+    const classified = classifyOperatorUtterance(utterance);
+    const selection = resolveDraftSelection(utterance);
+    // A selection shape ("just the second one") is mechanically a
+    // confirmation of part of the draft. It is harness classification — the
+    // same nature as the confirm patterns — never model output, so the gate
+    // is not widened: a release still requires a live, fresh draft.
+    const utteranceClass: TalkerTurnResult['utteranceClass'] =
+      selection !== null && classified === 'statement' ? 'confirm' : classified;
 
     if (utteranceClass === 'confirm') {
-      const pending = this.proposals.pending;
-      if (pending) {
-        return this.release(utterance, turn);
+      const draftSnap = this.proposals.snapshotDraft();
+      if (draftSnap && this.proposals.isLapsed(turn)) {
+        // Stale confirmation (plan §4.2): refuse, quote the draft verbatim,
+        // re-arm the window. Mechanical — the model never owns this
+        // transition and never interprets the stale yes.
+        this.proposals.markResurfaced(turn);
+        const reply = reconfirmAskReply(draftSnap);
+        this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
+        this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
+        this.history.maybeTrim(this.proposals.pending !== null);
+        return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
+      }
+      if (draftSnap) {
+        if (selection && !this.proposals.canResolveSelection(selection)) {
+          // Ambiguous selection: never acts (invariant 6). Mechanical
+          // clarification; the draft is untouched.
+          const reply = selectionClarifyReply(draftSnap);
+          this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
+          this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
+          this.history.maybeTrim(this.proposals.pending !== null);
+          return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
+        }
+        return this.release(utterance, turn, selection ?? undefined);
       }
       // A confirmation with nothing pending falls through to conversation —
       // the model will ask "send what?". The "yes" itself is never recorded
@@ -143,16 +211,17 @@ export class TalkerSession {
     }
 
     // A meta question about the send in flight ("did you send it?") keeps the
-    // current proposal; a worker-directed question ("could you ask the worker
-    // to rebase?") and every statement become/replace the candidate a later
-    // confirmation would release; chat and status questions become nothing.
+    // draft untouched; a worker-directed question ("could you ask the worker
+    // to rebase?") and every statement ACCUMULATE into the draft — the
+    // operator's composing thread (plan §4.2). Nothing is ever replaced:
+    // supersession holds both, and the state view tells the talker.
     if (utteranceClass === 'question') {
       if (!isMetaSendQuestion(utterance) && isWorkerDirectedQuestion(utterance)) {
-        this.proposals.recordCandidate(utterance, turn, record.id);
+        this.proposals.appendToDraft(record.id, utterance, turn);
       }
       return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false });
     }
-    this.proposals.recordCandidate(utterance, turn, record.id);
+    this.proposals.appendToDraft(record.id, utterance, turn);
     return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: true });
   }
 
@@ -161,10 +230,10 @@ export class TalkerSession {
    * confirm branch above. It takes NO relay text — the text comes from the
    * pending-proposal store via takeForRelease(), which is null-safe, so even
    * a forced direct call cannot relay anything that was not a recorded,
-   * unexpired, live proposal.
+   * unexpired, live draft part.
    */
-  private async release(confirmingUtterance: string, turn: number): Promise<TalkerTurnResult> {
-    const taken = this.proposals.takeForRelease(turn);
+  private async release(confirmingUtterance: string, turn: number, selection?: DraftSelection): Promise<TalkerTurnResult> {
+    const taken = this.proposals.takeForRelease(turn, selection);
     if (!taken) {
       // Defensive: cannot happen from handleOperatorTurn (it checks pending
       // first), and cannot relay anything either way.
@@ -199,11 +268,16 @@ export class TalkerSession {
     flags: { recordedCandidate?: boolean; cancelled?: boolean }
   ): Promise<TalkerTurnResult> {
     const snapshot = this.snapshotProvider();
-    const pending = this.proposals.pending;
+    const draftSnap = this.proposals.snapshotDraft();
     const lastReleased = this.proposals.lastReleased;
     const stateView = renderStateView(snapshot, {
-      pendingUtterance: pending?.text ?? null,
-      pendingAgeTurns: pending?.ageTurns ?? null,
+      draft: draftSnap
+        ? {
+            utterances: draftSnap.utterances.map(u => u.text),
+            ageTurns: draftSnap.ageTurns,
+            needsReConfirmation: draftSnap.needsReConfirmation,
+          }
+        : null,
       lastReleased: lastReleased ? { text: lastReleased.text, outcome: lastReleased.outcome } : null,
     });
 
