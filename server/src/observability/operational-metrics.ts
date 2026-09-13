@@ -23,6 +23,31 @@ interface LatencySnapshot {
   buckets: { le1000: number; le5000: number; le30000: number; gt30000: number };
 }
 
+export type { LatencySnapshot };
+
+/**
+ * P10 Voice Mode metrics (docs/plans/VOICE-MODE-OBSERVABILITY-DESIGN.md D3).
+ * Same doctrine as every other section: process-local, low-cardinality,
+ * no session ids, no prompt text. Labels are bounded like the other dynamic
+ * maps; gate denials are healthy outcomes, not errors.
+ */
+export interface VoiceMetricsSnapshot {
+  /** voice_turn_total{phase} */
+  turnTotal: Record<string, number>;
+  /** voice_release_total{mechanism,outcome}, key "${mechanism}:${outcome}"; refusals (no mechanism) use "none:refused". */
+  releaseTotal: Record<string, number>;
+  /** voice_gate_denied_total{reason} — nothing_pending | lapsed | ambiguous | cancel_classified */
+  gateDeniedTotal: Record<string, number>;
+  /** voice_receipt_ack_total */
+  receiptAckTotal: number;
+  /** voice_turn_duration_ms */
+  turnDuration: LatencySnapshot;
+  /** voice_model_latency_ms */
+  modelLatency: LatencySnapshot;
+  /** voice_delivery_latency_ms{mechanism} — the delivery-adapter call duration */
+  deliveryLatency: Record<string, LatencySnapshot>;
+}
+
 export interface TurnMetricsSnapshot extends Record<TerminalStatus | 'accepted', number | LatencySnapshot> {
   accepted: number;
   completed: number;
@@ -67,10 +92,33 @@ export interface OperationalSnapshot {
     lastEventAt?: string;
     lastEventAgeMs?: number;
   };
+  /** P10 Voice Mode turn/release/gate metrics. Present (zeroed) even before any voice activity. */
+  voice: VoiceMetricsSnapshot;
 }
 
 export interface OperationalMetricsOptions {
   now?: () => number;
+}
+
+function recordLatency(target: LatencySnapshot, latencyMs: number): void {
+  if (!Number.isFinite(latencyMs) || latencyMs < 0) return;
+  const value = Math.floor(latencyMs);
+  target.count += 1;
+  target.totalMs += value;
+  target.maxMs = Math.max(target.maxMs, value);
+  if (value <= 1_000) target.buckets.le1000 += 1;
+  if (value <= 5_000) target.buckets.le5000 += 1;
+  if (value <= 30_000) target.buckets.le30000 += 1;
+  else target.buckets.gt30000 += 1;
+}
+
+function newLatencySnapshot(): LatencySnapshot {
+  return {
+    count: 0,
+    totalMs: 0,
+    maxMs: 0,
+    buckets: { le1000: 0, le5000: 0, le30000: 0, gt30000: 0 },
+  };
 }
 
 function newTurnMetrics(): TurnMetricsSnapshot {
@@ -80,12 +128,7 @@ function newTurnMetrics(): TurnMetricsSnapshot {
     failed: 0,
     cancelled: 0,
     interrupted: 0,
-    latency: {
-      count: 0,
-      totalMs: 0,
-      maxMs: 0,
-      buckets: { le1000: 0, le5000: 0, le30000: 0, gt30000: 0 },
-    },
+    latency: newLatencySnapshot(),
   };
 }
 
@@ -119,6 +162,14 @@ export class OperationalMetrics {
   private wsSlowClientsClosedTotal = 0;
   private memoryShedActive = false;
   private lastEventAt?: number;
+  // P10 voice metrics (low-cardinality; labels bounded via incrementBounded).
+  private readonly voiceTurnTotal = new Map<string, number>();
+  private readonly voiceReleaseTotal = new Map<string, number>();
+  private readonly voiceGateDeniedTotal = new Map<string, number>();
+  private voiceReceiptAckTotal = 0;
+  private readonly voiceTurnDuration = newLatencySnapshot();
+  private readonly voiceModelLatency = newLatencySnapshot();
+  private readonly voiceDeliveryLatency = new Map<string, LatencySnapshot>();
 
   constructor(options: OperationalMetricsOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -222,6 +273,52 @@ export class OperationalMetrics {
     this.memoryShedActive = active;
   }
 
+  /** P10 D3: voice_turn_total{phase}. */
+  recordVoiceTurn(phase: string): number {
+    return incrementBounded(this.voiceTurnTotal, boundedLabel(phase, 'unknown'));
+  }
+
+  /** P10 D3: voice_release_total{mechanism,outcome}. */
+  recordVoiceRelease(mechanism: string, outcome: string): number {
+    return incrementBounded(this.voiceReleaseTotal, boundedLabel(`${mechanism}:${outcome}`, 'unknown'));
+  }
+
+  /** P10 D3: voice_gate_denied_total{reason}. Denials are healthy, not errors. */
+  recordVoiceGateDenied(reason: string): number {
+    return incrementBounded(this.voiceGateDeniedTotal, boundedLabel(reason, 'unknown'));
+  }
+
+  /** P10 D3: voice_receipt_ack_total. */
+  recordVoiceReceiptAck(): void {
+    this.voiceReceiptAckTotal += 1;
+  }
+
+  /** P10 D3: voice_turn_duration_ms. */
+  recordVoiceTurnDuration(latencyMs: number): void {
+    recordLatency(this.voiceTurnDuration, latencyMs);
+  }
+
+  /** P10 D3: voice_model_latency_ms. */
+  recordVoiceModelLatency(latencyMs: number): void {
+    recordLatency(this.voiceModelLatency, latencyMs);
+  }
+
+  /** P10 D3: voice_delivery_latency_ms{mechanism} — adapter call duration. */
+  recordVoiceDeliveryLatency(mechanism: string, latencyMs: number): void {
+    // Bounded label space, same rule as incrementBounded: beyond the cap a new
+    // mechanism folds into 'other' instead of growing cardinality.
+    const label = boundedLabel(mechanism, 'unknown');
+    const key = this.voiceDeliveryLatency.has(label) || this.voiceDeliveryLatency.size < MAX_DYNAMIC_CATEGORIES
+      ? label
+      : 'other';
+    let snapshot = this.voiceDeliveryLatency.get(key);
+    if (!snapshot) {
+      snapshot = newLatencySnapshot();
+      this.voiceDeliveryLatency.set(key, snapshot);
+    }
+    recordLatency(snapshot, latencyMs);
+  }
+
   snapshot(): OperationalSnapshot {
     const now = this.now();
     const turns: OperationalSnapshot['turns'] = {};
@@ -265,6 +362,21 @@ export class OperationalMetrics {
             }
           : {}),
       },
+      voice: this.voiceSnapshot(),
+    };
+  }
+
+  private voiceSnapshot(): VoiceMetricsSnapshot {
+    return {
+      turnTotal: Object.fromEntries(this.voiceTurnTotal),
+      releaseTotal: Object.fromEntries(this.voiceReleaseTotal),
+      gateDeniedTotal: Object.fromEntries(this.voiceGateDeniedTotal),
+      receiptAckTotal: this.voiceReceiptAckTotal,
+      turnDuration: structuredClone(this.voiceTurnDuration),
+      modelLatency: structuredClone(this.voiceModelLatency),
+      deliveryLatency: Object.fromEntries(
+        [...this.voiceDeliveryLatency].map(([mechanism, latency]) => [mechanism, structuredClone(latency)]),
+      ),
     };
   }
 

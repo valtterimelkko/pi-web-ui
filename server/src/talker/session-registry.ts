@@ -32,6 +32,7 @@
 
 import { TalkerSession } from './talker.js';
 import { createDefaultDeliveries, type DefaultDeliveries } from './delivery.js';
+import { createObservedDelivery, createVoiceTurnRecorder, type VoiceTurnRecorder } from './observability.js';
 import { OpenRouterTalkerClient, resolveTalkerModelConfig } from './model-client.js';
 import { detectPromptInjection } from '../security/prompt-injection.js';
 import type { MultiSessionManager } from '../pi/multi-session-manager.js';
@@ -50,6 +51,29 @@ const DELIVERIES_UNAVAILABLE_ACK =
 
 /** Which runtime adapter relays for a worker session. Defaults to 'pi'. */
 export type TalkerRuntime = 'pi' | 'claude' | 'antigravity';
+
+/**
+ * Read-only view of Claude worker state for the talker's status view
+ * (P11, closing finding F3). Kept minimal and strictly observational: every
+ * method only reads what ClaudeService already holds; nothing here can drive,
+ * steer, or alter a worker. ClaudeService satisfies this structurally, so the
+ * production wiring needs no adapter.
+ */
+export interface TalkerClaudeWorkerState {
+  /** True when the server knows this Claude session at all (memory, disk, or registry). */
+  hasSession(sessionId: string): boolean;
+  /** True when a prompt is currently running for the session (live observation). */
+  isRunning(sessionId: string): boolean;
+  /** The session's registry entry (for its status field), when known. */
+  getSession(sessionId: string): Promise<{ status?: string } | null | undefined>;
+  /** Persisted history entries; read only for the last assistant text. */
+  loadSessionHistory(sessionId: string): Promise<Array<{ type: string; content?: string }>>;
+}
+
+/** Spoken in the state view when the worker's runtime has no snapshot provider here. */
+function honestUnavailableActivity(runtime: TalkerRuntime): string {
+  return `worker state for ${runtime} workers is not available on this server yet`;
+}
 
 export interface TalkerOperatorTurnInput {
   /** The worker session this talker relays to (Pi: the session path). */
@@ -79,6 +103,13 @@ export interface TalkerSessionRegistryDeps {
   modelEnv?: NodeJS.ProcessEnv;
   /** Cap on retained talker sessions; the least recently used is evicted beyond it. */
   maxSessions?: number;
+  /**
+   * Read-only Claude worker state (P11/F3). Default: the server's ClaudeService
+   * singleton, resolved lazily at the first claude snapshot build.
+   */
+  claudeWorkerState?: TalkerClaudeWorkerState;
+  /** P10 voice observability recorder. Default: the shared global VoiceMode recorder. */
+  voiceRecorder?: VoiceTurnRecorder;
 }
 
 const DEFAULT_MAX_SESSIONS = 32;
@@ -108,9 +139,19 @@ export class TalkerSessionRegistry {
   private readonly maxSessions: number;
   private deliveriesPromise?: Promise<DefaultDeliveries>;
   private resolvedModel?: TalkerModelClient | null;
+  /** Tri-state: undefined = not yet resolved; null = resolution failed (stays honest per build). */
+  private claudeWorkerState?: TalkerClaudeWorkerState | null;
+  /**
+   * P10 voice observability. Emits the correlated VoiceMode records and counts
+   * the voice_* metrics for pre-talk refusals and (via the talker sessions it
+   * creates) every operator turn. Observation only — it can never alter a
+   * refusal, a turn, or a delivery.
+   */
+  readonly voiceRecorder: VoiceTurnRecorder;
 
   constructor(deps: TalkerSessionRegistryDeps) {
     this.deps = deps;
+    this.voiceRecorder = deps.voiceRecorder ?? createVoiceTurnRecorder();
     this.manager = deps.multiSessionManager;
     this.maxSessions = deps.maxSessions ?? DEFAULT_MAX_SESSIONS;
   }
@@ -156,6 +197,14 @@ export class TalkerSessionRegistry {
     // BEFORE it can reach the model (and, later, a confirmed release path).
     const injection = detectPromptInjection(input.utterance);
     if (injection.recommendation === 'block') {
+      // P10: blocked attack text is recorded without an excerpt (pre-talk
+      // refusal — no talker turn exists, hence no voiceTurnId).
+      this.voiceRecorder.observeRegistryRefusal({
+        runtime,
+        workerSessionId: input.workerSessionId,
+        utterance: input.utterance,
+        refused: 'prompt_injection',
+      });
       return { reply: TALKER_INJECTION_BLOCKED_ACK, refused: 'prompt_injection' };
     }
 
@@ -163,6 +212,12 @@ export class TalkerSessionRegistry {
     try {
       deliveries = await this.resolveDeliveries();
     } catch (error) {
+      this.voiceRecorder.observeRegistryRefusal({
+        runtime,
+        workerSessionId: input.workerSessionId,
+        utterance: input.utterance,
+        refused: 'deliveries_unavailable',
+      });
       return {
         reply: `${DELIVERIES_UNAVAILABLE_ACK} (${error instanceof Error ? error.message : String(error)})`,
         refused: 'deliveries_unavailable',
@@ -170,6 +225,12 @@ export class TalkerSessionRegistry {
     }
     const delivery = deliveries[runtime];
     if (!delivery) {
+      this.voiceRecorder.observeRegistryRefusal({
+        runtime,
+        workerSessionId: input.workerSessionId,
+        utterance: input.utterance,
+        refused: 'deliveries_unavailable',
+      });
       return {
         reply: `${DELIVERIES_UNAVAILABLE_ACK} (no delivery adapter for runtime '${runtime}')`,
         refused: 'deliveries_unavailable',
@@ -178,6 +239,12 @@ export class TalkerSessionRegistry {
 
     const model = this.resolveModel();
     if (!model) {
+      this.voiceRecorder.observeRegistryRefusal({
+        runtime,
+        workerSessionId: input.workerSessionId,
+        utterance: input.utterance,
+        refused: 'model_unconfigured',
+      });
       return { reply: TALKER_MODEL_UNCONFIGURED_ACK, refused: 'model_unconfigured' };
     }
 
@@ -229,9 +296,13 @@ export class TalkerSessionRegistry {
     }
     const created = new TalkerSession({
       model,
-      delivery,
+      // P10: the adapter boundary is timed transparently (mechanism-labelled
+      // latency only) — outcomes and texts pass through byte-identical.
+      delivery: createObservedDelivery(delivery, { metrics: this.voiceRecorder.metrics }),
       workerSessionId,
-      snapshotProvider: () => this.buildSnapshot(workerSessionId),
+      runtime,
+      observability: this.voiceRecorder,
+      snapshotProvider: () => this.buildSnapshotFor(runtime, workerSessionId),
     });
     this.sessions.set(key, created);
     while (this.sessions.size > this.maxSessions) {
@@ -240,6 +311,101 @@ export class TalkerSessionRegistry {
       this.sessions.delete(oldest);
     }
     return created;
+  }
+
+  /**
+   * Per-runtime snapshot dispatch (P11, closing F3). Pi keeps the original
+   * Pi-manager read unchanged; Claude reads its own service through the
+   * read-only seam; every other runtime gets an explicit honest cannot-tell
+   * fallback — never an accidental read of the wrong manager, never an
+   * invented status.
+   */
+  private buildSnapshotFor(runtime: TalkerRuntime, workerSessionId: string): WorkerStateSnapshot | Promise<WorkerStateSnapshot> {
+    if (runtime === 'claude') return this.buildClaudeSnapshot(workerSessionId);
+    if (runtime === 'pi') return this.buildSnapshot(workerSessionId);
+    return { activity: honestUnavailableActivity(runtime) };
+  }
+
+  /** The registry's Claude state source: the injected one, or the server singleton (lazy, cached). */
+  private async resolveClaudeWorkerState(): Promise<TalkerClaudeWorkerState | null> {
+    if (this.deps.claudeWorkerState) return this.deps.claudeWorkerState;
+    if (this.claudeWorkerState === undefined) {
+      try {
+        // Lazy dynamic import: importing this module must not drag the runtime
+        // services into every test or harness runner (same rule as delivery.ts).
+        const { getClaudeService } = await import('../claude/index.js');
+        this.claudeWorkerState = getClaudeService();
+      } catch {
+        this.claudeWorkerState = null; // resolution failed: the honest cannot-observe line stays.
+      }
+    }
+    return this.claudeWorkerState;
+  }
+
+  /**
+   * Real Claude worker state for the status view (P11/F3). Reads only what the
+   * Claude service already observes. Live running-state wins over the (possibly
+   * stale) registry status; a stale 'running' registry entry is never reported
+   * as running once the live observation says otherwise. Every failure degrades
+   * to a plainer, weaker view — never to an invented one.
+   */
+  private async buildClaudeSnapshot(workerSessionId: string): Promise<WorkerStateSnapshot> {
+    let source: TalkerClaudeWorkerState | null = null;
+    try {
+      source = await this.resolveClaudeWorkerState();
+    } catch {
+      source = null;
+    }
+    if (!source) return { activity: honestUnavailableActivity('claude') };
+
+    let known: boolean;
+    try {
+      known = source.hasSession(workerSessionId);
+    } catch {
+      return { activity: honestUnavailableActivity('claude') };
+    }
+    if (!known) {
+      return { activity: 'worker session is not loaded on this server' };
+    }
+
+    let running = false;
+    try {
+      running = source.isRunning(workerSessionId);
+    } catch {
+      running = false;
+    }
+
+    let registryStatus: string | undefined;
+    if (!running) {
+      try {
+        const entry = await source.getSession(workerSessionId);
+        registryStatus = typeof entry?.status === 'string' ? entry.status : undefined;
+      } catch {
+        registryStatus = undefined;
+      }
+    }
+    // Live observation outranks the persisted status; a persisted non-running
+    // status ('idle' | 'error') is itself an observation and is kept.
+    const status = running ? 'running' : (registryStatus === 'error' ? 'error' : 'idle');
+
+    let lastAssistantText: string | undefined;
+    try {
+      const history = await source.loadSessionHistory(workerSessionId);
+      for (let i = history.length - 1; i >= 0; i--) {
+        const entry = history[i];
+        if (entry?.type === 'assistant' && typeof entry.content === 'string' && entry.content.trim()) {
+          lastAssistantText = entry.content;
+          break;
+        }
+      }
+    } catch {
+      // History unreadable: the status-derived view is still honest.
+    }
+
+    return {
+      activity: `worker status: ${status}`,
+      ...(lastAssistantText ? { lastAssistantText } : {}),
+    };
   }
 
   /**

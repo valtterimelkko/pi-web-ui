@@ -33,6 +33,8 @@ interface ParsedDiagnosticsQuery {
   runtime?: string;
   component?: string;
   since?: string;
+  /** P10 Voice Mode correlation selector — plain string match, additive. */
+  voiceTurnId?: string;
 }
 
 function parseQuery(q: URLSearchParams): ParsedDiagnosticsQuery {
@@ -44,7 +46,7 @@ function parseQuery(q: URLSearchParams): ParsedDiagnosticsQuery {
   }
   const levelRaw = q.get('minLevel');
   if (levelRaw !== null && VALID_LEVELS.has(levelRaw)) out.minLevel = levelRaw as LogLevel;
-  for (const key of ['sessionId', 'requestId', 'runId', 'runtime', 'component', 'since'] as const) {
+  for (const key of ['sessionId', 'requestId', 'runId', 'runtime', 'component', 'since', 'voiceTurnId'] as const) {
     const value = q.get(key)?.trim();
     if (value) out[key] = value;
   }

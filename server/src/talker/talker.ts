@@ -57,6 +57,7 @@
 import { classifyOperatorUtterance, extractPostCancelInstruction, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
 import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
 import type { DraftSelection, DraftSnapshot } from './pending-proposal.js';
+import { createVoiceTurnRecorder, type VoiceTurnObservation, type VoiceTurnRecorder, type VoiceRuntime } from './observability.js';
 import { renderStateView } from './state-view.js';
 import { TalkerHistory } from './history.js';
 import { loadTalkerSystemPrompt } from './prompt.js';
@@ -95,9 +96,20 @@ export interface TalkerSessionDeps {
   delivery: WorkerDelivery;
   /** The worker session this talker relays to. */
   workerSessionId: string;
-  /** Fresh worker state material, called once per conversational turn. */
-  snapshotProvider: () => WorkerStateSnapshot;
+  /**
+   * Fresh worker state material, called once per conversational turn. May be
+   * async for runtimes whose state lives behind an async service (P11/F3:
+   * Claude); a synchronous provider behaves exactly as before.
+   */
+  snapshotProvider: () => WorkerStateSnapshot | Promise<WorkerStateSnapshot>;
   config?: Partial<TalkerSessionConfig>;
+  /** Which runtime adapter relays for this worker (observation label only; default 'pi'). */
+  runtime?: VoiceRuntime;
+  /**
+   * P10 voice observability (observation only — it can never alter a turn).
+   * Default: the global VoiceMode recorder bound to the shared registries.
+   */
+  observability?: VoiceTurnRecorder;
 }
 
 /**
@@ -127,8 +139,12 @@ export class TalkerSession {
   private readonly model: TalkerModelClient;
   private readonly delivery: WorkerDelivery;
   private readonly workerSessionId: string;
-  private readonly snapshotProvider: () => WorkerStateSnapshot;
+  private readonly snapshotProvider: () => WorkerStateSnapshot | Promise<WorkerStateSnapshot>;
   private readonly config: TalkerSessionConfig;
+  /** Observation label only — never used for routing or gate decisions. */
+  private readonly runtime: VoiceRuntime;
+  /** P10 voice observability. Emissions swallow their own failures. */
+  private readonly observability: VoiceTurnRecorder;
   private turnCount = 0;
 
   constructor(deps: TalkerSessionDeps) {
@@ -137,6 +153,8 @@ export class TalkerSession {
     this.workerSessionId = deps.workerSessionId;
     this.snapshotProvider = deps.snapshotProvider;
     this.config = { ...DEFAULT_CONFIG, ...deps.config };
+    this.runtime = deps.runtime ?? 'pi';
+    this.observability = deps.observability ?? createVoiceTurnRecorder();
     this.utteranceLog = new UtteranceLog();
     this.proposals = new PendingProposalStore({ maxPendingAgeTurns: this.config.maxPendingAgeTurns });
     this.history = new TalkerHistory({
@@ -160,6 +178,46 @@ export class TalkerSession {
     this.turnCount += 1;
     const turn = this.turnCount;
 
+    // P10 voice observability: pure pre-state reads around the turn (snapshot
+    // copies and mechanical recomputation of the same formulas the branches
+    // below use). The gate is neither consulted nor altered by these, and
+    // every emission is swallow-failed — here and inside the recorder.
+    const observation: VoiceTurnObservation = {
+      runtime: this.runtime,
+      workerSessionId: this.workerSessionId,
+      turn,
+      utterance,
+      draftBefore: this.proposals.snapshotDraft(),
+      draftAfter: null,
+      lapsedBefore: this.proposals.isLapsed(turn),
+      selection: resolveDraftSelection(utterance),
+      selectionResolvable: null,
+    };
+    if (observation.selection !== null) {
+      observation.selectionResolvable = this.proposals.canResolveSelection(observation.selection);
+    }
+    const startedAtMs = Date.now();
+    try {
+      const result = await this.handleOperatorTurnBody(utterance, turn);
+      observation.draftAfter = this.proposals.snapshotDraft();
+      try {
+        this.observability.observeTurn(observation, result, Date.now() - startedAtMs);
+      } catch { /* observation must never alter the turn */ }
+      return result;
+    } catch (error) {
+      observation.draftAfter = this.proposals.snapshotDraft();
+      try {
+        this.observability.observeCrash(observation, error, Date.now() - startedAtMs);
+      } catch { /* observation must never alter the turn */ }
+      throw error;
+    }
+  }
+
+  /**
+   * The turn body exactly as before (P10 only moved it behind the observation
+   * wrapper above — no behaviour change; the gate suites pin every branch).
+   */
+  private async handleOperatorTurnBody(utterance: string, turn: number): Promise<TalkerTurnResult> {
     // Age the draft's confirmation at the boundary BEFORE this turn's events.
     // Marks needs-re-confirmation; never drops the draft (plan §4.2).
     this.proposals.tickTurn(turn);
@@ -316,7 +374,7 @@ export class TalkerSession {
     turn: number,
     flags: { recordedCandidate?: boolean; cancelled?: boolean; opensBatch?: boolean }
   ): Promise<TalkerTurnResult> {
-    const snapshot = this.snapshotProvider();
+    const snapshot = await this.snapshotProvider();
     const draftSnap = this.proposals.snapshotDraft();
     const lastReleased = this.proposals.lastReleased;
     const stateView = renderStateView(snapshot, {

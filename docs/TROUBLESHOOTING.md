@@ -120,6 +120,8 @@ curl -s --unix-socket "$SOCKET" \
 
 The diagnostics ring and operational snapshot are process-local and reset on restart. A missing older line is not evidence that the event never happened; use the durable run receipt, transcript, notification ledger, or runtime-owned file when the time window is older than the ring buffer.
 
+**Voice Mode questions** ("why did the talker say/refuse/send that?"): voice records are ordinary `VoiceMode`-component records in the same ring, correlated by `voiceTurnId`, with the browser-side speech decisions in the manual diagnostics bundle. Follow the Voice Mode section of [`OBSERVABILITY.md`](./OBSERVABILITY.md#voice-mode-observability) — one `voiceTurnId` query reconstructs the turn; the session-scoped route above will not match voice records (they carry `workerSessionId`, not the internal id).
+
 ### 5. Inspect the runtime-specific evidence printed by the locator
 
 Only after the API-first checks, follow the report's runtime branch. It tells you whether to inspect Pi JSONL, the Pi-owned Claude replay file plus Claude-native JSONL, OpenCode APIs/logs, Antigravity JSONL/DB/`agy` logs, or the Command Code session record, normalized event journal, and per-session native home. For central logs, use a bounded time window and the correlation field:

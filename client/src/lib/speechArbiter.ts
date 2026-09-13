@@ -21,11 +21,17 @@
  *   4. Talker chatter (tier 4) is lowest — dropped, not queued, when it
  *      cannot play immediately.
  *
+ * P10 D4: every scheduling decision is observed into the existing browser
+ * diagnostic ring (see speechTelemetry.ts) — submit/drop/floor/playback —
+ * so "why didn't I hear it?" is answerable from the manual diagnostics
+ * bundle. Observation only: the telemetry calls cannot alter scheduling.
  * Chunk boundaries are the only scheduling points. Nothing is ever cut
  * mid-chunk except an explicit `stopAll()`; barge-in ducks instead of
  * stopping, and pause/resume happen at chunk boundaries, so speech never
  * resumes mid-word (§4.1 "Chunked TTS is what makes barge-in clean").
  */
+
+import { recordSpeechEvent } from './speechTelemetry.js';
 
 /** Playback tiers. Tier 1 — the operator's floor — is not a playback tier;
  * it is expressed with `setOperatorSpeaking()` and outranks every intent. */
@@ -245,6 +251,10 @@ export function createSpeechArbiter(): SpeechArbiter {
           // moving — one failed chunk must not mute everything after it.
           current = null;
           onError(err);
+          recordSpeechEvent('playback_failed', {
+            tier: entry.intent.tier,
+            errorName: err instanceof Error ? err.name : typeof err === 'string' ? err : 'Unknown',
+          });
           continue;
         }
         playingChunk = false;
@@ -290,6 +300,7 @@ export function createSpeechArbiter(): SpeechArbiter {
       const tier = input.tier;
       const validTier = tier === TIER_RECEIPT_ACK || tier === TIER_ANSWER || tier === TIER_CHATTER;
       if (!validTier || chunks.length === 0) {
+        recordSpeechEvent('drop', { tier, reason: 'invalid' });
         return 'dropped';
       }
       if (tier === TIER_CHATTER) {
@@ -298,12 +309,14 @@ export function createSpeechArbiter(): SpeechArbiter {
         const busy =
           operatorSpeaking || paused || current !== null || queue.length > 0;
         if (busy) {
+          recordSpeechEvent('drop', { tier, reason: 'busy' });
           notify();
           return 'dropped';
         }
       }
       const id = input.id ?? `intent-${seqCounter}`;
       queue.push({ intent: { id, tier, chunks }, nextChunk: 0, seq: seqCounter++ });
+      recordSpeechEvent('submit', { tier });
       notify();
       pump();
       return 'queued';
@@ -320,6 +333,7 @@ export function createSpeechArbiter(): SpeechArbiter {
         }
         queue = queue.filter((e) => e.intent.tier !== TIER_CHATTER);
       }
+      recordSpeechEvent(speaking ? 'floor_held' : 'floor_released');
       // On release we deliberately do NOT restore live: volume is restored
       // at the next chunk boundary, so the ducked chunk stays ducked.
       notify();
@@ -332,11 +346,13 @@ export function createSpeechArbiter(): SpeechArbiter {
       // A global hold: the in-flight chunk finishes and the drive loop stops
       // at that boundary; submissions made while paused wait for resume.
       paused = true;
+      recordSpeechEvent('paused');
       notify();
     },
     resume() {
       if (!paused) return;
       paused = false;
+      recordSpeechEvent('resumed');
       notify();
       pump();
     },
@@ -348,6 +364,7 @@ export function createSpeechArbiter(): SpeechArbiter {
       paused = false;
       ducked = false;
       running = false;
+      recordSpeechEvent('stopped');
       player?.stopCurrent();
       notify();
     },

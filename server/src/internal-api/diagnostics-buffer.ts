@@ -68,6 +68,12 @@ export interface DiagnosticsQuery {
   component?: string;
   /** Inclusive ISO timestamp lower bound. Invalid timestamps match no records. */
   since?: string;
+  /**
+   * P10 Voice Mode correlation key (`${runtime}:${workerSessionId}:${turn}`);
+   * follows one spoken utterance's whole journey across its turn/release/
+   * gate-denial records. Plain string match, like the other selectors.
+   */
+  voiceTurnId?: string;
   limit?: number;
   minLevel?: LogLevel;
 }
@@ -80,6 +86,7 @@ function filteredRecords(query: DiagnosticsQuery): LogRecord[] {
   if (query.runId) recs = recs.filter((r) => r.runId === query.runId);
   if (query.runtime) recs = recs.filter((r) => r.runtime === query.runtime);
   if (query.component) recs = recs.filter((r) => r.component === query.component);
+  if (query.voiceTurnId) recs = recs.filter((r) => r.voiceTurnId === query.voiceTurnId);
   if (query.since) {
     const sinceMs = Date.parse(query.since);
     recs = Number.isFinite(sinceMs)

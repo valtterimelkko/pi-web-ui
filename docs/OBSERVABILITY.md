@@ -235,11 +235,131 @@ usable.
 ## Manual browser diagnostic bundle
 
 The browser keeps a small in-memory ring of connection lifecycle, abnormal
-close, protocol-drift, storage-failure, and React error evidence. It stores no
-chat text, tool payloads, session IDs, paths, auth data, or raw malformed
-messages. If the React error boundary appears, **Copy diagnostics** or
-**Download diagnostics** exports the bundle manually; nothing is uploaded
-automatically. Reloading clears the ring.
+close, protocol-drift, storage-failure, React error, and **speech-scheduling**
+evidence. It stores no chat text, tool payloads, session IDs, paths, auth
+data, or raw malformed messages. If the React error boundary appears, **Copy
+diagnostics** or **Download diagnostics** exports the bundle manually; nothing
+is uploaded automatically. Reloading clears the ring.
+
+## Voice Mode observability
+
+What the server's voice talker (Drive Mode two-lane harness) did, and why.
+Design + field table: [`docs/plans/VOICE-MODE-OBSERVABILITY-DESIGN.md`](./plans/VOICE-MODE-OBSERVABILITY-DESIGN.md).
+Everything below rides the existing doctrine: the records are ordinary
+central-logger records from the `VoiceMode` component, secret-scrubbed on
+entry into the same diagnostics ring; counters ride the same operational
+snapshot. No second buffer, no new endpoint. Records are process-local and
+bounded (ring: 1,000 records / 2 MiB) — they reset on restart; the durable
+evidence of a relay remains the worker transcript itself.
+
+### The exact queries
+
+Follow ONE spoken utterance end to end (records are correlated by
+`voiceTurnId` = `runtime:workerSessionId:turnIndex`):
+
+```bash
+SOCKET="$HOME/.pi-web-ui/internal-api.sock"   # or the disposable server's socket
+TOKEN="$(cat "$HOME/.pi-web-ui/internal-api-token")"
+VTID='pi:<workerSessionId>:3'                 # the turn you are investigating
+
+# 1. Everything recorded about that one turn (turn record + release/gate record):
+curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/diagnostics?voiceTurnId=$(node -p 'encodeURIComponent(process.argv[1])' "$VTID")"
+
+# 2. Enumerate the whole voice conversation (newest last), then filter by
+#    workerSessionId locally:
+curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/diagnostics?component=VoiceMode&limit=200" \
+  | jq '.recentLogs[] | select(.workerSessionId == "<workerSessionId>")'
+
+# 3. Machine-readable counters for the same story:
+curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice'
+```
+
+`voiceTurnId` is a plain string match and composes with the existing
+selectors (`component`, `runtime`, `since`, `minLevel`, `limit`).
+
+### Record shapes (what healthy looks like)
+
+Every operator turn emits one `voice turn` info record; a release or a gate
+refusal adds a second, same-`voiceTurnId` record:
+
+- **answered** — conversational turn; `modelCalled: true`, `phase:
+  "answered"`.
+- **proposed** — an instruction is now held (`draftAction: "accumulated"`,
+  `draftSizeAfter` grows). The turn that OPENED the batch also shows
+  `receiptAckEmitted: true` (the spoken "Noted — still holding that.").
+- **released** — the gate opened. The `voice turn` record has `phase:
+  "released"`, and the companion **`voice release`** record carries what a
+  confirmation actually sent: `releasedBytes` (UTF-8), `releasedSha256`
+  (first 16 hex of the text digest), `releasedExcerpt` (≤120 chars), and the
+  delivery adapter's own verdict: `deliveryOutcome` (`delivered` / `queued` /
+  `refused`), `releaseMechanism` (`steer` / `prompt` / `follow_up`),
+  `deliveryDisclosure`, and `deliveryError` on a refusal. Verify the exact
+  text against the worker transcript with the digest/bytes — the full text is
+  never logged.
+- **refused** — the gate HELD. A **`voice gate denied`** record carries
+  `gateDenialReason`: `nothing_pending` (a stray "yes"), `lapsed` (the
+  confirmation window expired; the draft is re-surfaced, never silently
+  dropped), or `ambiguous` (an ordinal selection that matched nothing).
+  **These are healthy, not errors** — a thinking-aloud operator produces many
+  `voice_gate_denied_total` and few releases.
+- **cancelled** — the operator withdrew the draft; the denial record shows
+  `gateDenialReason: "cancel_classified"`.
+
+The `operational.voice` block mirrors the same story as counters:
+`turnTotal{phase}`, `releaseTotal{"mechanism:outcome"}` (refusals have no
+mechanism and count under `"none:refused"`), `gateDeniedTotal{reason}`,
+`receiptAckTotal`, plus latency snapshots `turnDuration` (`voice_turn_duration_ms`),
+`modelLatency` (`voice_model_latency_ms`), and `deliveryLatency` per mechanism
+(`voice_delivery_latency_ms{mechanism}` — the delivery-adapter call duration).
+
+### Common failure signatures
+
+1. `phase: "error"` with an `error` message — the talker's model failed; the
+   operator heard the fixed fallback line. `modelCalled: false`.
+2. `voice release` with `deliveryOutcome: "refused"` + `deliveryError` — the
+   gate opened but the worker adapter refused (e.g. non-SDK Claude backend).
+   The operator heard "I couldn't deliver that…"; NOTHING reached the worker.
+3. `voice release` with `deliveryOutcome: "queued"`, `releaseMechanism:
+   "follow_up"` — the worker was busy; the utterance arrives after the
+   current turn. Not an error.
+4. `voice turn refused` (no `voiceTurnId` — it never became a talker turn):
+   `refused: "prompt_injection"` (blocked before anything, and never
+   excerpted), `"model_unconfigured"`, or `"deliveries_unavailable"`.
+5. No records at all → the ring evicted or restarted since the interaction;
+   fall back to the worker transcript + run receipts (durable).
+
+### Field-honesty notes
+
+- `classifierReason` from the design's field table is **not emitted**: the
+  mechanical classifier returns a class only, and observing may not change
+  it. Omitted rather than invented.
+- The correlation `sessionId` field is deliberately absent on voice records:
+  the talker path runs on the browser WebSocket, outside the request
+  correlation context, and `workerSessionId` (the runtime session id the
+  client already holds) is carried as a record field instead. That is why the
+  voice path is the plain `GET /api/v1/diagnostics` route — the
+  `/sessions/:id/diagnostics` route filters on the internal registry id and
+  will not match these records.
+- The WebSocket `talker_turn_result.phase` remains `answered` for gate
+  refusals (the transport is unchanged by observability); only the log
+  record's `phase` says `refused`.
+- Excerpts are bounded at 120 chars; no full utterance, draft, or reply body
+  is ever logged, and the ring's existing scrubber redacts credential-shaped
+  strings inside the excerpt fields on entry (verified by test).
+
+### The client half — "why didn't I hear it?"
+
+The speech arbiter records each scheduling decision into the browser
+diagnostic ring above: events with `kind: "speech"` carry an `operation`
+(`submit`, `drop`, `floor_held`/`floor_released` for barge-in,
+`playback_failed`, `paused`/`resumed`/`stopped`), the `speechTier` (2 receipt
+ack, 3 answer, 4 chatter), and a short bounded `state` reason for drops
+(`busy`, `invalid`). Recover them with **Copy/Download diagnostics** and look
+for `kind: "speech"` entries; a chatter tier dropped because an answer was
+playing shows as `drop`/`busy`. No text, ids, or server round-trips: the
+decisions stay in the browser ring, cleared on reload.
 
 ## Error codes & enrichment
 

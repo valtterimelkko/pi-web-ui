@@ -3,7 +3,9 @@ export type BrowserDiagnosticKind =
   | 'message'
   | 'protocol_drift'
   | 'storage_error'
-  | 'ui_error';
+  | 'ui_error'
+  /** P10 D4: speech-arbiter decisions (submit/drop/floor/playback), no text. */
+  | 'speech';
 
 export interface BrowserBuildIdentity {
   manifestSchemaVersion: number;
@@ -30,10 +32,13 @@ export interface BrowserDiagnosticEvent {
   reconnectAttempt?: number;
   operation?: string;
   errorName?: string;
+  /** P10 D4: playback tier of a speech event (2 receipt ack, 3 answer, 4 chatter). */
+  speechTier?: number;
 }
 
 export interface BrowserDiagnosticInput extends Omit<BrowserDiagnosticEvent, 'at'> {
   at?: string;
+  speechTier?: number;
 }
 
 const MAX_EVENTS = 200;
@@ -72,6 +77,11 @@ export function recordBrowserDiagnostic(input: BrowserDiagnosticInput): void {
     ...(Number.isFinite(input.reconnectAttempt) ? { reconnectAttempt: input.reconnectAttempt } : {}),
     ...(clean(input.operation) ? { operation: clean(input.operation) } : {}),
     ...(clean(input.errorName) ? { errorName: clean(input.errorName) } : {}),
+    ...(() => {
+      // Allowlisted numeric tier: only the real playback tiers pass.
+      const tier = input.speechTier;
+      return tier === 2 || tier === 3 || tier === 4 ? { speechTier: tier } : {};
+    })(),
   };
   events.push(event);
   if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);

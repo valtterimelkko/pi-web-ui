@@ -103,10 +103,11 @@ describe('NON-NEGOTIABLE 1: the talker cannot send — only the harness sends, o
     const publicMethods = (Object.getOwnPropertyNames(Object.getPrototypeOf(session)) as string[]).filter(
       name => name !== 'constructor'
     );
-    // handleOperatorTurn is the only operator-facing entry; the other two are
-    // TS-private internals (release path + model turn) that take no relay
-    // text from callers.
-    expect(publicMethods.sort()).toEqual(['conversationalTurn', 'handleOperatorTurn', 'release']);
+    // handleOperatorTurn is the only operator-facing entry; the rest are
+    // TS-private internals (the P10 observation wrapper's body, the release
+    // path + model turn) that take no relay text from callers and add no
+    // injection or delivery API.
+    expect(publicMethods.sort()).toEqual(['conversationalTurn', 'handleOperatorTurn', 'handleOperatorTurnBody', 'release']);
   });
 
   it('even a forced direct call to the internal release path cannot relay without a live pending proposal', async () => {
