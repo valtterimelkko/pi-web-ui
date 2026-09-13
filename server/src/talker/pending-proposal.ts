@@ -20,6 +20,8 @@ export interface VerbatimUtterance {
   text: string;
   /** Talker turn index at which the operator said this. */
   turn: number;
+  /** Set when a receipt ack (§4.1 rule 2) has covered this utterance. */
+  acknowledged: boolean;
 }
 
 export interface PendingProposal {
@@ -49,7 +51,7 @@ export class UtteranceLog {
   }
 
   record(text: string, turn: number): VerbatimUtterance {
-    const rec: VerbatimUtterance = { id: this.nextId++, text, turn };
+    const rec: VerbatimUtterance = { id: this.nextId++, text, turn, acknowledged: false };
     this.records.push(rec);
     if (this.records.length > this.limit) {
       this.records.splice(0, this.records.length - this.limit);
@@ -67,6 +69,27 @@ export class UtteranceLog {
 
   get size(): number {
     return this.records.length;
+  }
+
+  /** Recorded utterances not yet covered by a receipt ack (§4.1 rule 2). */
+  unacknowledgedCount(): number {
+    return this.records.reduce((n, r) => (r.acknowledged ? n : n + 1), 0);
+  }
+
+  /**
+   * Atomically consume the receipt-ack condition (plan §4.1 rule 2): if any
+   * recorded operator utterance is not yet acknowledged, mark the whole
+   * outstanding set acknowledged and report ONE receipt due, returning how
+   * many utterances it covers. Returns null when nothing is outstanding — so
+   * the receipt fires at most once per relay, never once per utterance, and
+   * repeated answer-ready moments cannot repeat it. Mirrors takeForRelease():
+   * the condition is consumed by the take, not by observation.
+   */
+  takeReceipt(): number | null {
+    const outstanding = this.records.filter(r => !r.acknowledged);
+    if (outstanding.length === 0) return null;
+    for (const rec of outstanding) rec.acknowledged = true;
+    return outstanding.length;
   }
 }
 
