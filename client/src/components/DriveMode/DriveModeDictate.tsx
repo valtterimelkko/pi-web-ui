@@ -8,6 +8,7 @@ import { ConfirmationCard } from './ConfirmationCard';
 import { FloorBanner } from './FloorBanner';
 import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
 import { speechArbiter, TIER_ANSWER } from '../../lib/speechArbiter';
+import { spokenLedger } from '../../lib/spokenLedger';
 import { getLastAssistantText } from '../../lib/driveModeUtils';
 
 export interface DriveModeDictateProps {
@@ -121,9 +122,15 @@ export function DriveModeDictate({
   // The worker's completed answer speaks at the next natural gap (§4.1 rule
   // 3): submit once per completed answer at tier 3. While the operator holds
   // the floor it waits queued — the held state makes that deliberate.
+  //
+  // The claim is the shared dedup record (P16), not a local ref: read-aloud
+  // submits at this same tier, and it may already have spoken these exact
+  // words (or be playing them right now). Claim BEFORE submitting — a failed
+  // claim means the surface has already said this, so it must not say it
+  // again. The claim is made at submission, so stopping playback later never
+  // re-opens the answer for a repeat (P15).
   // ---------------------------------------------------------------------------
   const prevStreamingRef = useRef(isStreaming);
-  const spokenAnswerRef = useRef<string | null>(null);
   const autoSeqRef = useRef(0);
   useEffect(() => {
     const wasStreaming = prevStreamingRef.current;
@@ -132,9 +139,8 @@ export function DriveModeDictate({
       wasStreaming &&
       !isStreaming &&
       lastAssistantText &&
-      spokenAnswerRef.current !== lastAssistantText
+      spokenLedger.claim(lastAssistantText)
     ) {
-      spokenAnswerRef.current = lastAssistantText;
       speechArbiter.submit({
         id: `answer-auto-${autoSeqRef.current++}`,
         tier: TIER_ANSWER,
@@ -169,9 +175,9 @@ export function DriveModeDictate({
   // Stop the talker: stop the current chunk AND discard the queue, and do not
   // resume the cancelled item. This is `stopAll()` — the arbiter's only hard
   // cancel — and nothing else: it never touches capture, the operator's floor,
-  // or anything server-side. The auto-speak guard (`spokenAnswerRef`) already
-  // keeps the cancelled answer from being re-submitted, so no suppression is
-  // layered on top (verified by the P15 stop-talker tests).
+  // or anything server-side. The shared spoken ledger already records the
+  // answer at submission time, so a cancelled answer is never re-submitted and
+  // no suppression is layered on top (verified by the P15 stop-talker tests).
   const handleStopTalker = useCallback(() => {
     speechArbiter.stopAll();
   }, []);

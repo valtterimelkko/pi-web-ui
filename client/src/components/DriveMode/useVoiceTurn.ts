@@ -28,6 +28,7 @@ import {
   TIER_RECEIPT_ACK,
   TIER_CHATTER,
 } from '../../lib/speechArbiter';
+import { spokenLedger } from '../../lib/spokenLedger';
 import type { TalkerRuntime } from '../../lib/talkerBus';
 
 /** The explicit confirm gesture — classified 'confirm' server-side, which
@@ -36,6 +37,27 @@ import type { TalkerRuntime } from '../../lib/talkerBus';
 export const CONFIRM_UTTERANCE = 'yes, send that';
 /** The explicit cancel gesture — classified 'cancel' server-side. */
 export const CANCEL_UTTERANCE = 'no, cancel that';
+
+/**
+ * Event identity for the mechanical acks (P16).
+ *
+ * The receipt ack is a CONSTANT string, and §4.1 rule 2 promises one for every
+ * unacknowledged utterance — so the same words must be allowed to speak again
+ * on a later turn. Acks are therefore scoped to the turn-result EVENT: the same
+ * event never speaks twice (a replayed/retained result is a duplicate, not new
+ * speech), while a new event always may. Identity is the result object itself,
+ * held weakly so the record cannot retain results.
+ */
+const eventScopes = new WeakMap<object, number>();
+let nextEventScope = 0;
+function turnScope(result: object): string {
+  let id = eventScopes.get(result);
+  if (id === undefined) {
+    id = nextEventScope++;
+    eventScopes.set(result, id);
+  }
+  return `turn-${id}`;
+}
 
 export interface ReleasedOutcome {
   text: string;
@@ -185,14 +207,20 @@ export function useVoiceTurn(
     // dropped, not queued, when it would delay tiers 1–3 — so on a receipt
     // turn the receipt is what the operator hears, and the reply remains in
     // the harness record. Release acks are tier 2; replies are tier 4.
-    if (lastResult.receiptAck) {
+    //
+    // Every submission claims the shared spoken ledger first (P16): a
+    // duplicate emission of THIS event is not repeated. The scope is the
+    // event, not the words, because these mechanical acks are constant by
+    // design and must speak again on the next turn.
+    const scope = turnScope(lastResult);
+    if (lastResult.receiptAck && spokenLedger.claim(lastResult.receiptAck, scope)) {
       speechArbiter.submit({
         id: `receipt-${workerSessionId}`,
         tier: TIER_RECEIPT_ACK,
         text: lastResult.receiptAck,
       });
     }
-    if (lastResult.reply) {
+    if (lastResult.reply && spokenLedger.claim(lastResult.reply, scope)) {
       const tier =
         lastResult.phase === 'released' ? TIER_RECEIPT_ACK : TIER_CHATTER;
       speechArbiter.submit({

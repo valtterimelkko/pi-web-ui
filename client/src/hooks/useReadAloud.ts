@@ -6,6 +6,7 @@ import {
   TIER_ANSWER,
   type ArbiterPlayer,
 } from '../lib/speechArbiter';
+import { spokenLedger } from '../lib/spokenLedger';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
@@ -236,6 +237,11 @@ export function useReadAloud(messageId: string) {
         });
       }
 
+      // Explicit operator action: always play what was asked for, even if the
+      // talker (or an earlier read-aloud) already said these words. Mark the
+      // text as spoken FIRST so no auto producer can repeat it (P16) — the
+      // explicit path updates the shared record, it is never refused by it.
+      spokenLedger.mark(text);
       speechArbiter.submit({ id: messageId, tier: TIER_ANSWER, chunks });
     },
     [messageId]

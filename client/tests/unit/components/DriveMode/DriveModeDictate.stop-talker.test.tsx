@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { DriveModeDictate } from '../../../../src/components/DriveMode/DriveModeDictate';
 import { emitTalkerTurnResult, resetTalkerTurnBus } from '../../../../src/lib/talkerBus';
 import { speechArbiter, type ArbiterPlayer } from '../../../../src/lib/speechArbiter';
+import { spokenLedger } from '../../../../src/lib/spokenLedger';
 
 /**
  * P15 — the "Stop talker" control.
@@ -175,6 +176,7 @@ beforeEach(() => {
   sessionState.isStreaming = false;
   sessionState.messages = [];
   driveState.phase = 'dictate';
+  spokenLedger.clear();
   speechArbiter.stopAll();
   harness = makeBlockedPlayer();
   speechArbiter.attachPlayer(harness.player);

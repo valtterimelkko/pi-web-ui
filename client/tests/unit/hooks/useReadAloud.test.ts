@@ -6,6 +6,7 @@ import {
   NORMAL_VOLUME,
   DUCKED_VOLUME,
 } from '../../../src/lib/speechArbiter';
+import { spokenLedger } from '../../../src/lib/spokenLedger';
 
 /**
  * P4 — useReadAloud rewired through the speech arbiter (plan §4.1):
@@ -84,6 +85,7 @@ beforeEach(() => {
   });
   vi.stubGlobal('fetch', fetchMock);
   vi.stubGlobal('AudioContext', FakeAudioContext);
+  spokenLedger.clear();
 });
 
 afterEach(() => {

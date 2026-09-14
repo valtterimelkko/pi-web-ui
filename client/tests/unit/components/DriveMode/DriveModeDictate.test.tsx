@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { DriveModeDictate } from '../../../../src/components/DriveMode/DriveModeDictate';
 import { emitTalkerTurnResult, resetTalkerTurnBus } from '../../../../src/lib/talkerBus';
 import { speechArbiter, type ArbiterPlayer } from '../../../../src/lib/speechArbiter';
+import { spokenLedger } from '../../../../src/lib/spokenLedger';
 
 // --- Transport: capture outgoing socket messages ----------------------------
 const sendMock = vi.fn();
@@ -117,6 +118,7 @@ beforeEach(() => {
   sessionState.isStreaming = false;
   sessionState.messages = [];
   driveState.phase = 'dictate';
+  spokenLedger.clear();
   speechArbiter.stopAll();
   speechArbiter.attachPlayer(makeBlockedPlayer().player);
 });

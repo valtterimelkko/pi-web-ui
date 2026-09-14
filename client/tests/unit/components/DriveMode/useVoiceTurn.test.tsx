@@ -332,3 +332,71 @@ describe('useVoiceTurn — the harness receipt ack speaks at tier 2 (§4.1 rule 
     expect(speechArbiter.getState().current?.tier).toBe(2);
   });
 });
+
+describe('useVoiceTurn — the ack producer consults the shared spoken ledger (P16)', () => {
+  let fake: ReturnType<typeof makeBlockedPlayer>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetTalkerTurnBus();
+    sendMock.mockReturnValue('sent');
+    speechArbiter.stopAll();
+    fake = makeBlockedPlayer();
+    speechArbiter.attachPlayer(fake.player);
+  });
+
+  afterEach(() => {
+    speechArbiter.stopAll();
+    fake.drain();
+  });
+
+  it('the constant receipt ack still speaks for every new turn — rule 2 is not deduped away', () => {
+    const submitSpy = vi.spyOn(speechArbiter, 'submit');
+    try {
+      const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+      act(() => {
+        result.current.sendText('first held utterance');
+      });
+      act(() => {
+        emit({ receiptAck: 'Noted — still holding that.' });
+      });
+      act(() => {
+        emit({ receiptAck: 'Noted — still holding that.' });
+      });
+
+      const acks = submitSpy.mock.calls.filter(
+        ([input]) => input.text === 'Noted — still holding that.'
+      );
+      // Two distinct turns, two receipts: the words repeat because the
+      // EVENT repeats, and the operator is owed an ack for each held utterance.
+      expect(acks).toHaveLength(2);
+    } finally {
+      submitSpy.mockRestore();
+    }
+  });
+
+  it('a remount replaying the retained turn result does not speak that same event twice', () => {
+    const submitSpy = vi.spyOn(speechArbiter, 'submit');
+    try {
+      const first = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+      act(() => {
+        first.result.current.sendText('held utterance');
+      });
+      act(() => {
+        emit({ receiptAck: 'Noted — still holding that.' });
+      });
+      const ackSubmissions = () =>
+        submitSpy.mock.calls.filter(([input]) => input.text === 'Noted — still holding that.');
+      expect(ackSubmissions()).toHaveLength(1);
+      first.unmount();
+
+      // A late-mounting surface hydrates the SAME retained result object…
+      renderHook(() => useVoiceTurn(WORKER, 'pi'));
+
+      // …and the event-scoped claim suppresses the replay.
+      expect(ackSubmissions()).toHaveLength(1);
+    } finally {
+      submitSpy.mockRestore();
+    }
+  });
+});
