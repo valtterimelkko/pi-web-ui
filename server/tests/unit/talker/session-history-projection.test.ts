@@ -84,36 +84,53 @@ describe('P20 renderer: the WORKER SESSION HISTORY block', () => {
       historyTotal: 400,
     };
     const view = renderStateView(bloated, emptyHarness);
-    expect(view.length).toBeLessThan(8000); // block budget + the rest of the view's own bounds
-    expect(view.match(/^(operator|worker): /gm)?.length ?? 0).toBeLessThanOrEqual(SESSION_HISTORY_LIMITS.entries);
+    // P23: the block's entry lines stay inside the total char budget (with
+    // label/disclosure slack), and the line count inside the count guard.
+    const entryLines = view.match(/^(operator|worker): .*$/gm) ?? [];
+    const entryChars = entryLines.reduce((n, l) => n + l.length, 0);
+    expect(entryChars).toBeLessThanOrEqual(SESSION_HISTORY_LIMITS.totalChars + 512);
+    expect(entryLines.length).toBeLessThanOrEqual(SESSION_HISTORY_LIMITS.entries);
+    expect(view.length).toBeLessThan(SESSION_HISTORY_LIMITS.totalChars + 2000);
   });
 
-  it('the total char budget trims the oldest entries within the window, and the disclosure still accounts for them', () => {
-    // entryChars * entries far exceeds totalChars: budget, not count, is the binder.
+  it('role-aware clips: the operator’s entries clip to entryChars, the worker’s own to the deeper assistantChars', () => {
+    const viewFor = (role: 'user' | 'assistant') =>
+      renderStateView({ recentHistory: [{ role, text: 'q'.repeat(5000) }], historyTotal: 1 }, emptyHarness);
+    const userLine = viewFor('user').split('\n').find(l => l.startsWith('operator: ')) as string;
+    expect(userLine.length).toBeLessThanOrEqual('operator: '.length + SESSION_HISTORY_LIMITS.entryChars + 2);
+    const workerLine = viewFor('assistant').split('\n').find(l => l.startsWith('worker: ')) as string;
+    expect(workerLine.length).toBeLessThanOrEqual('worker: '.length + SESSION_HISTORY_LIMITS.assistantChars + 2);
+    // The weighting is the point: the worker's own words get real depth.
+    expect(SESSION_HISTORY_LIMITS.assistantChars).toBeGreaterThan(SESSION_HISTORY_LIMITS.entryChars);
+  });
+
+  it('the total char budget selects newest-first: the oldest entries drop first, and the disclosure still accounts for them', () => {
+    // User-side entries clip to entryChars each; enough of them must overflow
+    // the total budget so the walk stops before reaching the oldest.
     const filler = 'w'.repeat(SESSION_HISTORY_LIMITS.entryChars);
-    const entries = Array.from({ length: SESSION_HISTORY_LIMITS.entries }, (_, i) => ({
-      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+    const entries = Array.from({ length: 45 }, (_, i) => ({
+      role: 'user' as const,
       text: `msg ${i} ${filler}`,
     }));
     const view = renderStateView({ recentHistory: entries, historyTotal: entries.length }, emptyHarness);
-    const shown = view.match(/^(operator|worker): /gm)?.length ?? 0;
+    const shown = view.match(/^operator: /gm)?.length ?? 0;
     expect(shown).toBeGreaterThan(0);
-    expect(shown).toBeLessThan(SESSION_HISTORY_LIMITS.entries);
+    expect(shown).toBeLessThan(entries.length);
     // Budget-dropped entries are disclosed as "earlier", not silently gone.
     expect(view).toContain(`Showing the most recent ${shown} of ${entries.length} messages`);
     expect(view).toContain(`${entries.length - shown} earlier are not included`);
-    // What IS shown is the NEWEST part of the window.
+    // What IS shown is the NEWEST part of the conversation.
     expect(view).toContain(`msg ${entries.length - 1} `);
-    expect(view).not.toContain(`msg 0 ${filler}`);
+    expect(view).not.toContain('msg 0 w');
   });
 
   it('per-entry text is clipped to entryChars', () => {
     const view = renderStateView(
-      { recentHistory: [{ role: 'assistant', text: 'q'.repeat(5000) }], historyTotal: 1 },
+      { recentHistory: [{ role: 'user', text: 'q'.repeat(5000) }], historyTotal: 1 },
       emptyHarness
     );
-    const line = view.split('\n').find(l => l.startsWith('worker: ')) as string;
-    expect(line.length).toBeLessThanOrEqual('worker: '.length + SESSION_HISTORY_LIMITS.entryChars + 2);
+    const line = view.split('\n').find(l => l.startsWith('operator: ')) as string;
+    expect(line.length).toBeLessThanOrEqual('operator: '.length + SESSION_HISTORY_LIMITS.entryChars + 2);
   });
 
   it('stays deterministic, and the pre-existing section shape is untouched', () => {
@@ -305,9 +322,11 @@ describe('P20 the turn: answered from history, or deferred honestly', () => {
   });
 
   it('an over-window question still defers honestly: the offer fires and holds the operator’s VERBATIM words', async () => {
-    // Thirty earlier turns exist; the view can hold only its recent window and
-    // says exactly that — a question about the March work falls outside it.
-    const longAgo = Array.from({ length: 30 }, (_, i) => ({
+    // More entries exist than the projection's count guard can show, so the
+    // view must state truncation — and a question about the March work (the
+    // oldest entries) falls outside what is shown.
+    const count = SESSION_HISTORY_LIMITS.entries + 5;
+    const longAgo = Array.from({ length: count }, (_, i) => ({
       role: i % 2 === 0 ? 'user' : 'assistant',
       content: `turn ${i}: the March retry-bug investigation continued`,
     }));

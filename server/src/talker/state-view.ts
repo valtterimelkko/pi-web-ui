@@ -29,27 +29,44 @@ export const STATE_VIEW_LIMITS = {
 } as const;
 
 /**
- * P20 — the worker session's recent conversation in the projection.
+ * P20/P23 — the worker session's conversation in the projection.
  *
- * The choice, made explicit: a RECENT-WINDOW view, not a transcript. A worker
- * session can be enormous, so the block carries at most the last 12
- * conversation messages, each clipped to 400 chars, under a 3600-char budget
- * for the block as a whole — roughly a screenful, the same order as the rest
- * of the state view, and a talker context that stays independent of session
- * length (plan §10.9). The newest tail is kept because "what happened
- * earlier?" is overwhelmingly about the recent stretch of a mid-session
- * attach; anything older is handled honestly: the block states exactly how
- * many messages it does not include, the prompt tells the talker never to
- * imply knowledge beyond the window, and the unchanged [[ask-worker]] offer
- * remains the fallback for questions that exceed it.
+ * The choice, made explicit: a BUDGET-SELECTED view, not a transcript. A
+ * worker session can be enormous, so the block carries at most a fixed char
+ * budget of conversation, selected newest-first — a talker context that stays
+ * independent of session length (plan §10.9).
+ *
+ * P23 (live defect, proven from a real worker session): the P20 flat
+ * newest-12 window with a 400-char clip could not answer "summarise the
+ * production queue". The session's substance — a 3,472-char assistant answer
+ * whose numbered items sat at offsets 448/1377/2099 — was either crowded
+ * toward exclusion by newer short bookkeeping messages (10 of the 12 window
+ * slots) or, when present, amputated above its first numbered item. The fix
+ * is weighting, not a bigger blind ceiling:
+ *
+ *   - the flat count window is GONE; the char budget is the selector, walked
+ *     newest-first. Short messages cost little, so bookkeeping can no longer
+ *     crowd substance out by count;
+ *   - the worker's OWN messages get a much deeper per-message allowance
+ *     (`assistantChars`) than the operator's (`entryChars`), so a long
+ *     answer's numbered structure survives. This is the deliberate cost:
+ *     the block can reach ~3x the old size, still hard-bounded;
+ *   - the count cap remains only as a line-count guard;
+ *   - honesty is unchanged and extended: exact counts of what is shown and
+ *     what is not, plus an explicit note when shown messages are shortened.
+ *     The prompt's never-imply-knowledge-beyond-the-window rule and the
+ *     [[ask-worker]] fallback are untouched.
  */
 export const SESSION_HISTORY_LIMITS = {
-  /** Max conversation messages shown (the newest tail; rendered oldest first). */
-  entries: 12,
-  /** Per-message clip. */
+  /** Line-count guard; the char budget below is the primary bound. */
+  entries: 40,
+  /** Per-message clip for the operator's (user) messages. */
   entryChars: 400,
+  /** Per-message clip for the worker's own (assistant) messages — deep enough
+   *  for a long answer's numbered items (the P23 case had them at ~2100). */
+  assistantChars: 2200,
   /** Total budget for the block's entry lines, enforced newest-first. */
-  totalChars: 3600,
+  totalChars: 12000,
 } as const;
 
 export function clip(text: string, max: number): string {
@@ -68,24 +85,37 @@ function elapsedLabel(snapshot: WorkerStateSnapshot): string {
 }
 
 /**
- * The bounded WORKER SESSION HISTORY block (P20), or null when the provider
- * supplied no history — absence is the honest statement that nothing earlier
- * is visible here. Entries are taken newest-first (the newest tail is what a
- * mid-session question is mostly about) and rendered oldest-first. The
- * disclosure line states the window's coverage with exact counts: complete
- * when nothing is hidden, otherwise how many messages are not included.
+ * The bounded WORKER SESSION HISTORY block (P20, selection reworked by P23),
+ * or null when the provider supplied no history — absence is the honest
+ * statement that nothing earlier is visible here.
+ *
+ * Selection (P23): newest-first budget walk over the provider's entries — no
+ * flat count pre-window. Each entry costs its clipped length plus label
+ * overhead against `totalChars`; the operator's entries clip to `entryChars`,
+ * the worker's own to `assistantChars`. The newest entry is always shown even
+ * if alone it exceeds the budget. The walk STOPS when the next older entry no
+ * longer fits, so what is shown is always the most recent contiguous run —
+ * which is exactly what the disclosure line then states. Entries are rendered
+ * oldest-first. Any shortened message is disclosed, and the coverage line
+ * gives exact counts: complete when nothing is hidden, otherwise how many
+ * messages are not included.
  */
 function renderSessionHistory(snapshot: WorkerStateSnapshot): string[] | null {
   const all = snapshot.recentHistory ?? [];
   if (all.length === 0) return null;
   const total = Math.max(snapshot.historyTotal ?? all.length, all.length);
 
-  const windowed = all.slice(-SESSION_HISTORY_LIMITS.entries);
   const shown: Array<{ label: string; text: string }> = [];
   let budget = SESSION_HISTORY_LIMITS.totalChars;
-  for (let i = windowed.length - 1; i >= 0; i--) {
-    const entry = windowed[i];
-    const text = clip(entry.text, SESSION_HISTORY_LIMITS.entryChars);
+  let shortened = false;
+  const first = Math.max(0, all.length - SESSION_HISTORY_LIMITS.entries);
+  for (let i = all.length - 1; i >= first; i--) {
+    const entry = all[i];
+    const allowance =
+      entry.role === 'assistant' ? SESSION_HISTORY_LIMITS.assistantChars : SESSION_HISTORY_LIMITS.entryChars;
+    const normalisedLength = entry.text.replace(/\s+/g, ' ').trim().length;
+    if (normalisedLength > allowance) shortened = true;
+    const text = clip(entry.text, allowance);
     const cost = text.length + 12; // "operator: " / "worker: " + newline
     if (shown.length > 0 && budget - cost < 0) break; // budget spent; the older tail is disclosed, not hidden
     budget -= cost;
@@ -99,6 +129,7 @@ function renderSessionHistory(snapshot: WorkerStateSnapshot): string[] | null {
       ? `Showing the most recent ${shown.length} of ${total} messages; ${hidden} earlier are not included.`
       : `All ${shown.length} messages of the session so far are shown.`
   );
+  if (shortened) lines.push('Some shown messages are shortened to fit (they end with …).');
   for (const s of shown) lines.push(`${s.label}: ${s.text}`);
   return lines;
 }
