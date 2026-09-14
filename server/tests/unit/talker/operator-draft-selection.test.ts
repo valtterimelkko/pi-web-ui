@@ -25,6 +25,13 @@ const SNAPSHOT: WorkerStateSnapshot = {
 };
 
 const PART_1 = 'tell the worker to hold phase 3 until my review';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_PART_1 = 'hold phase 3 until my review';
 const PART_2 = 'and also make it use staging credentials, not production';
 
 function stubModel(reply: string): TalkerModelClient & { calls: Array<Array<{ role: string; content: string }>> } {
@@ -82,11 +89,11 @@ describe('harness-level: "just the second one" releases exactly that utterance b
     expect(pick.released?.text).toBe(PART_2);
     expect(delivery.deliveredTexts()).toEqual([PART_2]);
     // The first part is still held — choosing one must not destroy the other.
-    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([PART_1]);
+    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([RELAYED_PART_1]);
     // A fresh confirmation releases the remainder.
     const rest = await session.handleOperatorTurn('yes');
-    expect(rest.released?.text).toBe(PART_1);
-    expect(delivery.deliveredTexts()).toEqual([PART_2, PART_1]);
+    expect(rest.released?.text).toBe(RELAYED_PART_1);
+    expect(delivery.deliveredTexts()).toEqual([PART_2, RELAYED_PART_1]);
   });
 
   it('an unknown ordinal never acts and never damages the draft (ambiguous never acts)', async () => {
@@ -95,6 +102,6 @@ describe('harness-level: "just the second one" releases exactly that utterance b
     const fifth = await session.handleOperatorTurn('the fifth one');
     expect(fifth.released).toBeNull();
     expect(delivery.deliveredTexts()).toEqual([]);
-    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([PART_1]);
+    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([RELAYED_PART_1]);
   });
 });

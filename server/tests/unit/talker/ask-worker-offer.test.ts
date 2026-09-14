@@ -79,6 +79,13 @@ const QUESTIONS = {
 };
 
 const INSTRUCTION = 'tell the worker to hold phase 3 until my review';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_INSTRUCTION = 'hold phase 3 until my review';
 const META = 'did you send it yet?';
 
 const OFFER = `I can't tell from what I hold — shall I ask the worker? ${ASK_WORKER_MARKER}`;
@@ -157,7 +164,7 @@ describe('P18/1 — the offer never widens the gate', () => {
     const result = await session.handleOperatorTurn(INSTRUCTION);
     expect(result.askWorkerOffer).toBeUndefined();
     // The statement still accumulates as an ordinary draft part — unchanged.
-    expect(session.proposals.pending?.text).toBe(INSTRUCTION);
+    expect(session.proposals.pending?.text).toBe(RELAYED_INSTRUCTION);
     expect(delivery.deliveredTexts()).toEqual([]);
   });
 
@@ -168,7 +175,7 @@ describe('P18/1 — the offer never widens the gate', () => {
     expect(result.askWorkerOffer).toBeUndefined();
     // The draft still holds exactly the instruction — the meta question did
     // not become a relay candidate.
-    expect(session.proposals.pending?.text).toBe(INSTRUCTION);
+    expect(session.proposals.pending?.text).toBe(RELAYED_INSTRUCTION);
     expect(delivery.deliveredTexts()).toEqual([]);
   });
 
@@ -222,8 +229,8 @@ describe('P18/1 — the offer never widens the gate', () => {
     await session.handleOperatorTurn(QUESTIONS.beyondWindow);
     // Both parts are held — nothing was silently replaced (§4.2).
     expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([
-      INSTRUCTION,
-      QUESTIONS.beyondWindow,
+      RELAYED_INSTRUCTION, // P25
+      QUESTIONS.beyondWindow, // a question with no strippable channel relays unchanged
     ]);
     expect(delivery.deliveredTexts()).toEqual([]);
   });

@@ -51,6 +51,13 @@ import type { DefaultDeliveries } from '../../../src/talker/delivery.js';
 import type { TalkerModelClient, ModelTurnResult } from '../../../src/talker/types.js';
 
 const INSTRUCTION = 'tell the worker to rerun the test suite after the migration lands';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_INSTRUCTION = 'rerun the test suite after the migration lands';
 
 function stubModel(reply = 'Understood — shall I send that to the worker?'): TalkerModelClient & { callCount(): number } {
   let calls = 0;
@@ -227,14 +234,14 @@ describe('Phase 3 gate through the integration (Pi delivery path)', () => {
     expect(propose.reply).not.toBe(REFUSED_ACK);
 
     const confirm = await registry.handleOperatorTurn({ workerSessionId: '/tmp/worker.jsonl', utterance: 'yes, go ahead' });
-    expect(confirm.turn?.released?.text).toBe(INSTRUCTION);
-    expect(pi.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(confirm.turn?.released?.text).toBe(RELAYED_INSTRUCTION);
+    expect(pi.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
     expect(confirm.reply).toBe('sending that now');
     expect(confirm.turn?.modelCalled).toBe(false);
 
     const again = await registry.handleOperatorTurn({ workerSessionId: '/tmp/worker.jsonl', utterance: 'yes' });
     expect(again.turn?.released ?? null).toBeNull();
-    expect(pi.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(pi.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
   });
 
   it('a refused delivery surfaces honestly as the acknowledgement', async () => {
@@ -257,7 +264,7 @@ describe('Phase 3 gate through the integration (Pi delivery path)', () => {
     });
     await registry.handleOperatorTurn({ runtime: 'claude', workerSessionId: 'cl-1', utterance: INSTRUCTION });
     await registry.handleOperatorTurn({ runtime: 'claude', workerSessionId: 'cl-1', utterance: 'yes, go ahead' });
-    expect(deliveries.byName('claude').deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(deliveries.byName('claude').deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
     expect(deliveries.byName('pi').deliveredTexts()).toEqual([]);
   });
 

@@ -77,7 +77,7 @@ describe('P18/2 — the operator’s focus is visible to the talker, and only as
     expect(lastProjection(model)).not.toMatch(/focus/i);
   });
 
-  it('focus changes nothing about the gate: a confirmation still releases the operator’s verbatim words', async () => {
+  it('focus changes nothing about the gate: a confirmation still releases the operator’s relayed words (P25)', async () => {
     const model = stubModel('Shall I send that?');
     const delivery = createNullDelivery();
     const session = new TalkerSession({
@@ -88,8 +88,8 @@ describe('P18/2 — the operator’s focus is visible to the talker, and only as
     });
     await session.handleOperatorTurn('tell the worker to rebase', { operatorFocus: true });
     const released = await session.handleOperatorTurn('yes', { operatorFocus: true });
-    expect(released.released?.text).toBe('tell the worker to rebase');
-    expect(delivery.deliveredTexts()).toEqual(['tell the worker to rebase']);
+    expect(released.released?.text).toBe('rebase'); // P25
+    expect(delivery.deliveredTexts()).toEqual(['rebase']); // P25
   });
 
   it('no talker-session method sets or clears focus (the model proposes, the operator presses)', () => {

@@ -102,7 +102,7 @@ describe('F2: a confirm with nothing pending cannot promise a send', () => {
     const { session, delivery } = makeSession();
     await session.handleOperatorTurn('tell the worker to rebase onto main');
     const yes = await session.handleOperatorTurn('yes');
-    expect(yes.released?.text).toBe('tell the worker to rebase onto main');
-    expect(delivery.deliveredTexts()).toEqual(['tell the worker to rebase onto main']);
+    expect(yes.released?.text).toBe('rebase onto main'); // P25
+    expect(delivery.deliveredTexts()).toEqual(['rebase onto main']); // P25
   });
 });

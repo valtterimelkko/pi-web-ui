@@ -90,7 +90,7 @@ describe('TalkerSession turn loop', () => {
     await session.handleOperatorTurn('actually, what is worker 2 doing?');
     const last = model.calls[1][model.calls[1].length - 1];
     expect(last.content).toContain('--- PENDING INSTRUCTION ---');
-    expect(last.content).toContain('tell the worker to hold phase 3 until my review');
+    expect(last.content).toContain('hold phase 3 until my review'); // P25: the projection quotes the draft's relay text
   });
 
   it('a bare yes resolves to the pending proposal without a model call (voice-safe confirmation)', async () => {
@@ -102,7 +102,7 @@ describe('TalkerSession turn loop', () => {
     expect(result.reply).toBe(RELEASE_ACK);
     expect(result.modelCalled).toBe(false);
     expect(model.calls).toHaveLength(0);
-    expect(delivery.deliveredTexts()).toEqual(['tell the worker to hold phase 3 until my review']);
+    expect(delivery.deliveredTexts()).toEqual(['hold phase 3 until my review']); // P25
   });
 
   it('an explicit cancel clears the proposal and the projection reflects it', async () => {
@@ -138,10 +138,10 @@ describe('TalkerSession turn loop', () => {
     expect(delivery.deliveredTexts()).toEqual([]);
     // Surfaced, never dropped:
     expect(session.proposals.pending).not.toBeNull();
-    expect(result.reply).toContain('tell the worker to hold phase 3');
+    expect(result.reply).toContain('hold phase 3'); // P25: the refusal quotes the relay text
     // A re-confirmed yes then releases it verbatim.
     const reconfirmed = await session.handleOperatorTurn('yes');
-    expect(reconfirmed.released?.text).toBe('tell the worker to hold phase 3');
+    expect(reconfirmed.released?.text).toBe('hold phase 3'); // P25
   });
 
   it('a meta question about the send never replaces or releases the pending proposal', async () => {
@@ -149,17 +149,17 @@ describe('TalkerSession turn loop', () => {
     await session.handleOperatorTurn('tell the worker to hold phase 3');
     const mid = await session.handleOperatorTurn('did you send it yet?');
     expect(mid.released).toBeNull();
-    expect(session.proposals.pending?.text).toBe('tell the worker to hold phase 3');
+    expect(session.proposals.pending?.text).toBe('hold phase 3'); // P25
     const done = await session.handleOperatorTurn('yes');
-    expect(done.released?.text).toBe('tell the worker to hold phase 3');
-    expect(delivery.deliveredTexts()).toEqual(['tell the worker to hold phase 3']);
+    expect(done.released?.text).toBe('hold phase 3'); // P25
+    expect(delivery.deliveredTexts()).toEqual(['hold phase 3']); // P25
   });
 
-  it('a question-shaped polite instruction is relayable (verbatim)', async () => {
+  it('a question-shaped polite instruction is relayable (P25: in relay form)', async () => {
     const { session, delivery } = makeSession();
     await session.handleOperatorTurn('could you ask the worker to rebase the branch before continuing?');
     await session.handleOperatorTurn('yes, go ahead');
-    expect(delivery.deliveredTexts()).toEqual(['could you ask the worker to rebase the branch before continuing?']);
+    expect(delivery.deliveredTexts()).toEqual(['rebase the branch before continuing?']); // P25: channel + politeness stripped
   });
 
   it('after a release, the next projection tells the model what was released (coherence)', async () => {
@@ -170,7 +170,7 @@ describe('TalkerSession turn loop', () => {
     const lastCall = model.calls[model.calls.length - 1];
     const last = lastCall[lastCall.length - 1];
     expect(last.content).toContain('--- LAST RELEASED ---');
-    expect(last.content).toContain('tell the worker to hold phase 3');
+    expect(last.content).toContain('hold phase 3'); // P25: LAST RELEASED carries the relay text
   });
 
   it('model failure produces an honest fallback and never throws at the caller', async () => {

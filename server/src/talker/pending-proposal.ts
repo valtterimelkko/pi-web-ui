@@ -8,10 +8,17 @@
  * instruction a confirmation refers to is resolved HERE, by object reference —
  * never from conversation history, never by the model.
  *
+ * P25 — semi-verbatim relay: draft parts carry the RELAY text (the
+ * operator's own words minus the channel and the disfluency, normalised
+ * mechanically by relay-normalise.ts at append time — the model never
+ * produces relay text), while the verbatim log below keeps the raw words
+ * byte-for-byte and each part keeps `originalText` as the reversible record.
+ *
  * Two objects, deliberately separated (plan §4.2):
  *
- *   - The DRAFT is the operator's composing thread. It accumulates verbatim
- *     parts held by object reference — never reconstructed from the utterance
+ *   - The DRAFT is the operator's composing thread. It accumulates the
+ *     operator's parts held by object reference (P25: each part in relay
+ *     form — see above) — never reconstructed from the utterance
  *     log window, never written by the model — and it is never expired,
  *     never silently replaced. It dies only two ways: released, or explicitly
  *     abandoned ("forget that").
@@ -23,6 +30,8 @@
  *
  * The model has no write access to any of this state.
  */
+
+import { normaliseRelayText } from './relay-normalise.js';
 
 const DEFAULT_UTTERANCE_LOG_LIMIT = 50;
 const DEFAULT_MAX_PENDING_AGE_TURNS = 6;
@@ -45,11 +54,21 @@ export interface DraftSelection {
   position: OrdinalPosition;
 }
 
-/** One verbatim part of the operator's draft, held by object reference. */
+/**
+ * One part of the operator's draft, held by object reference. P25: `text` is
+ * the RELAY text — the operator's own words minus the channel and the
+ * disfluency (mechanically normalised at append time by relay-normalise.ts,
+ * removal-only, model-free) — so the card shows exactly what a confirmation
+ * will release. `originalText` keeps the operator's raw words when the
+ * normalisation removed anything: the reversible record, so the original is
+ * always recoverable. Absent when the part is stored byte-identical to what
+ * was spoken.
+ */
 export interface DraftUtteranceEntry {
   id: number;
   text: string;
   turn: number;
+  originalText?: string;
 }
 
 /** Harness view of the live draft (null when the operator is not composing). */
@@ -70,7 +89,12 @@ export interface TakenRelease {
   text: string;
 }
 
-/** The draft's canonical verbatim text: parts joined in composition order. */
+/**
+ * The draft's canonical relay text: parts joined in composition order (P25:
+ * each part carries the RELAY text — the operator's words minus channel and
+ * disfluency, normalised mechanically at draft time — so what a confirmation
+ * releases is byte-identical to what the card showed).
+ */
 export function joinDraftText(utterances: ReadonlyArray<{ text: string }>): string {
   return utterances.map(u => u.text).join('\n');
 }
@@ -87,7 +111,8 @@ interface OperatorDraft {
 
 export interface PendingProposal {
   utteranceId: number;
-  /** The operator's verbatim words — exactly what a confirmation releases. */
+  /** The relay text (P25) — exactly what the card showed and what a
+   *  confirmation releases. */
   text: string;
   createdTurn: number;
   ageTurns: number;
@@ -219,18 +244,32 @@ export class PendingProposalStore {
    * Append an operator utterance to the draft. Accumulates — never replaces:
    * a second utterance holds both (supersession is loud, §4.2). Appending is
    * fresh operator engagement, so it re-arms the confirmation window.
+   *
+   * P25 — the single choke point of the semi-verbatim relay: the part stores
+   * the RELAY text — the operator's own words minus the channel and the
+   * disfluency (relay-normalise.ts: mechanical, removal-only, model-free) —
+   * so the transform happens BEFORE approval. The confirmation card, the
+   * mechanical re-confirmation quote and the release all read this one text:
+   * released bytes are byte-identical to the bytes the card showed, by
+   * construction. The raw words stay in the verbatim log and in the part's
+   * `originalText` (the reversible record); a clean utterance is stored
+   * byte-identical and carries no `originalText`.
    */
   appendToDraft(utteranceId: number, text: string, turn: number): DraftSnapshot {
+    const relay = normaliseRelayText(text);
+    const entry: DraftUtteranceEntry = relay.changed
+      ? { id: utteranceId, text: relay.text, turn, originalText: text }
+      : { id: utteranceId, text, turn };
     if (!this.draft) {
       this.draft = {
-        utterances: [{ id: utteranceId, text, turn }],
+        utterances: [entry],
         createdTurn: turn,
         lastTouchedTurn: turn,
         ageTurns: 0,
         needsReConfirmation: false,
       };
     } else {
-      this.draft.utterances.push({ id: utteranceId, text, turn });
+      this.draft.utterances.push(entry);
       this.draft.lastTouchedTurn = turn;
       this.draft.ageTurns = 0;
       this.draft.needsReConfirmation = false;

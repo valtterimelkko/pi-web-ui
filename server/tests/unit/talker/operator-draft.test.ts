@@ -40,6 +40,13 @@ const SNAPSHOT: WorkerStateSnapshot = {
 };
 
 const INSTRUCTION_1 = 'tell the worker to hold phase 3 until my review';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_1 = 'hold phase 3 until my review';
 const ADDENDUM = 'and also make it use staging credentials, not production';
 
 function stubModel(reply: string): TalkerModelClient & { calls: Array<Array<{ role: string; content: string }>> } {
@@ -81,8 +88,8 @@ describe('PROPERTY 1 (A12): the draft survives interleaving', () => {
     await session.handleOperatorTurn(ADDENDUM); // the operator resumes the half-finished thought
     const result = await session.handleOperatorTurn('yes, send that');
     expect(result.released).not.toBeNull();
-    expect(result.released?.text).toBe(`${INSTRUCTION_1}\n${ADDENDUM}`);
-    expect(delivery.deliveredTexts()).toEqual([`${INSTRUCTION_1}\n${ADDENDUM}`]);
+    expect(result.released?.text).toBe(`${RELAYED_1}\n${ADDENDUM}`);
+    expect(delivery.deliveredTexts()).toEqual([`${RELAYED_1}\n${ADDENDUM}`]);
   });
 
   it('interleaving without confirmation loses nothing: the draft is intact before the confirm', async () => {
@@ -90,7 +97,7 @@ describe('PROPERTY 1 (A12): the draft survives interleaving', () => {
     await session.handleOperatorTurn(INSTRUCTION_1);
     await interleave(session, 7);
     const snap = session.proposals.snapshotDraft();
-    expect(snap?.utterances.map(u => u.text)).toEqual([INSTRUCTION_1]);
+    expect(snap?.utterances.map(u => u.text)).toEqual([RELAYED_1]);
   });
 });
 
@@ -106,17 +113,17 @@ describe('PROPERTY 2 (A13): a lapsed draft is surfaced, never dropped', () => {
     expect(delivery.deliveredTexts()).toEqual([]);
     // Nothing is silently dropped: the draft is still held…
     expect(session.proposals.pending).not.toBeNull();
-    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([INSTRUCTION_1]);
+    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([RELAYED_1]);
     // …the talker surfaces it, quoting it verbatim, mechanically (no model call —
     // the model must never own this state transition).
-    expect(lapsedYes.reply).toContain(INSTRUCTION_1);
+    expect(lapsedYes.reply).toContain(RELAYED_1);
     expect(lapsedYes.modelCalled).toBe(false);
     expect(model.calls).toHaveLength(0);
 
     // The surfacing re-arms the confirmation: a fresh yes now releases.
     const reconfirmed = await session.handleOperatorTurn('yes');
-    expect(reconfirmed.released?.text).toBe(INSTRUCTION_1);
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION_1]);
+    expect(reconfirmed.released?.text).toBe(RELAYED_1);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_1]);
     // Exactly once: the draft is consumed by the release.
     expect(session.proposals.pending).toBeNull();
   });
@@ -126,11 +133,11 @@ describe('PROPERTY 2 (A13): a lapsed draft is surfaced, never dropped', () => {
     store.appendToDraft(101, INSTRUCTION_1, 1);
     expect(store.takeForRelease(50)).toBeNull(); // far-future turn: refused
     // Refusal is NOT destruction (the old code consumed the candidate here).
-    expect(store.snapshotDraft()?.utterances.map(u => u.text)).toEqual([INSTRUCTION_1]);
+    expect(store.snapshotDraft()?.utterances.map(u => u.text)).toEqual([RELAYED_1]);
     expect(store.snapshotDraft()?.needsReConfirmation).toBe(true);
     // After the harness surfaces it (re-arm), it can release.
     store.markResurfaced(51);
-    expect(store.takeForRelease(52)?.text).toBe(INSTRUCTION_1);
+    expect(store.takeForRelease(52)?.text).toBe(RELAYED_1);
   });
 
   it('tickTurn marks the lapsed draft but never drops it', () => {
@@ -153,9 +160,9 @@ describe('PROPERTY 3 (A14): supersession holds both — nothing is replaced sile
     await session.handleOperatorTurn(INSTRUCTION_1);
     await session.handleOperatorTurn(ADDENDUM);
     const snap = session.proposals.snapshotDraft();
-    expect(snap?.utterances.map(u => u.text)).toEqual([INSTRUCTION_1, ADDENDUM]);
+    expect(snap?.utterances.map(u => u.text)).toEqual([RELAYED_1, ADDENDUM]);
     await session.handleOperatorTurn('yes, send that');
-    expect(delivery.deliveredTexts()).toEqual([`${INSTRUCTION_1}\n${ADDENDUM}`]);
+    expect(delivery.deliveredTexts()).toEqual([`${RELAYED_1}\n${ADDENDUM}`]);
   });
 });
 
@@ -182,13 +189,13 @@ describe('an ambiguous confirmation never acts (§4.2 / invariant 6)', () => {
     expect(fifth.released).toBeNull();
     expect(delivery.deliveredTexts()).toEqual([]);
     // The draft is untouched and still requires confirmation.
-    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([INSTRUCTION_1]);
+    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([RELAYED_1]);
     // Mechanical clarification, not a model guess.
     expect(fifth.modelCalled).toBe(false);
     // And a plain yes afterwards still releases the whole (single-part) draft.
     const yes = await session.handleOperatorTurn('yes');
-    expect(yes.released?.text).toBe(INSTRUCTION_1);
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION_1]);
+    expect(yes.released?.text).toBe(RELAYED_1);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_1]);
   });
 });
 
@@ -202,7 +209,7 @@ describe('draft store mechanics (harness state, held by object reference)', () =
     for (let i = 0; i < 60; i++) log.record(`chatter ${i}`, i + 2);
     expect(log.resolve(rec.id)).toBeNull();
     // The draft still holds the verbatim text by reference.
-    expect(store.snapshotDraft()?.utterances[0]?.text).toBe(INSTRUCTION_1);
+    expect(store.snapshotDraft()?.utterances[0]?.text).toBe(RELAYED_1);
   });
 
   it('appending re-arms a lapsed draft: the operator touching it is fresh engagement', () => {
@@ -214,7 +221,7 @@ describe('draft store mechanics (harness state, held by object reference)', () =
     expect(store.snapshotDraft()?.needsReConfirmation).toBe(true);
     store.appendToDraft(102, ADDENDUM, 5); // the operator resumes
     expect(store.snapshotDraft()?.needsReConfirmation).toBe(false);
-    expect(store.takeForRelease(6)?.text).toBe(`${INSTRUCTION_1}\n${ADDENDUM}`);
+    expect(store.takeForRelease(6)?.text).toBe(`${RELAYED_1}\n${ADDENDUM}`);
   });
 
   it('a subset release takes exactly the selected utterance and leaves the rest held', () => {
@@ -225,12 +232,12 @@ describe('draft store mechanics (harness state, held by object reference)', () =
     expect(taken?.text).toBe(ADDENDUM);
     expect(taken?.utteranceIds).toEqual([102]);
     // The first part is still held, still requires its own confirmation.
-    expect(store.snapshotDraft()?.utterances.map(u => u.text)).toEqual([INSTRUCTION_1]);
+    expect(store.snapshotDraft()?.utterances.map(u => u.text)).toEqual([RELAYED_1]);
     // The taken part cannot be taken again: 'second' no longer resolves.
     expect(store.takeForRelease(3, { kind: 'ordinal', position: 'second' })).toBeNull();
     // The remainder releases on its own explicit selection.
     const rest = store.takeForRelease(3, { kind: 'ordinal', position: 'first' });
-    expect(rest?.text).toBe(INSTRUCTION_1);
+    expect(rest?.text).toBe(RELAYED_1);
     expect(store.snapshotDraft()).toBeNull();
     expect(store.takeForRelease(5)).toBeNull(); // exactly once, per part and overall
   });
@@ -250,7 +257,7 @@ describe('draft store mechanics (harness state, held by object reference)', () =
     store.appendToDraft(102, ADDENDUM, 2);
     const taken = store.takeForRelease(3);
     expect(taken?.utteranceIds).toEqual([101, 102]);
-    expect(taken?.text).toBe(`${INSTRUCTION_1}\n${ADDENDUM}`);
+    expect(taken?.text).toBe(`${RELAYED_1}\n${ADDENDUM}`);
     expect(store.snapshotDraft()).toBeNull();
     expect(store.takeForRelease(4)).toBeNull();
   });
@@ -261,17 +268,19 @@ describe('draft store mechanics (harness state, held by object reference)', () =
     const taken = store.takeForRelease(2);
     if (!taken) throw new Error('takeForRelease(2) returned null — the drafted proposal should be held');
     store.recordReleased({ utteranceId: taken.utteranceId, text: taken.text, outcome: 'delivered (steer)', turn: 2 });
-    expect(store.lastReleased?.text).toBe(INSTRUCTION_1);
+    expect(store.lastReleased?.text).toBe(RELAYED_1);
     expect(store.lastReleased?.utteranceId).toBe(101);
   });
 });
 
 describe('the verbatim release text of a multi-part draft is deterministic', () => {
-  it('parts are joined in composition order with newlines, each byte-verbatim', () => {
+  it('parts are joined in composition order with newlines, each part in relay form (P25)', () => {
     const store = new PendingProposalStore();
     const raw1 = '  Right, so — tell the worker to hold phase 3.  '; // untrimmed on purpose
     store.appendToDraft(1, raw1, 1);
     store.appendToDraft(2, ADDENDUM, 2);
-    expect(store.takeForRelease(3)?.text).toBe(`${raw1}\n${ADDENDUM}`);
+    // P25: part 1 is stored in relay form — markers, frame and outer
+    // whitespace stripped, words untouched; part 2 was already clean.
+    expect(store.takeForRelease(3)?.text).toBe(`hold phase 3.\n${ADDENDUM}`);
   });
 });

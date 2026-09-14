@@ -114,6 +114,17 @@ function makeSession(client: TalkerModelClient): { session: TalkerSession; deliv
   return { session, delivery };
 }
 
+/**
+ * The expected release text is the SEMI-VERBATIM form (P25): the commission
+ * frame - "tell the worker to" - is carriage, not content, and is stripped at
+ * draft time by relay-normalise.ts. These expectations previously pinned the
+ * frame-bearing text byte-for-byte, which the restored intent
+ * (docs/VOICE-ORCHESTRATOR-FEASIBILITY.md line 151: the operator's own words,
+ * optionally made more concise when the speech rambles) does not allow. The
+ * ASSERTION is unchanged and is not weakened: the released bytes must still
+ * equal the expected bytes exactly - only the expected value moved, to the
+ * form the operator would actually approve on the card.
+ */
 /** Minimal driver: one operator turn, with the invariant that nothing relays unless expected. */
 async function say(session: TalkerSession, label: string, turn: number, utterance: string, releases?: string): Promise<void> {
   const result = await session.handleOperatorTurn(utterance);
@@ -150,8 +161,14 @@ describe.skipIf(!API_KEY)('H4 real model: coherence and late pushback across a c
     // conversation, not a stub echo chamber.
     hybrid.useReal.value = true;
     const instr = 'tell the worker to hold phase 3 for review';
+    // The utterance the operator speaks vs the text that actually reaches the
+    // worker: relay-normalise strips the commission frame, so the released text is
+    // the CONTENT. Assertions below compare the released bytes to `relayed`, never
+    // to `instr` - a test that fed the stripped form INTO the gate would pass while
+    // exercising nothing.
+    const relayed = 'hold phase 3 for review';
     await say(session, 'coherence', 1, instr);
-    await say(session, 'coherence', 2, 'yes', instr);
+    await say(session, 'coherence', 2, 'yes', 'hold phase 3 for review');
     for (let t = 3; t <= 9; t++) await say(session, 'coherence', t, nextChatter());
 
     // Turn 10 — EARLY: real model, window nearly intact.
@@ -173,7 +190,7 @@ describe.skipIf(!API_KEY)('H4 real model: coherence and late pushback across a c
     expect(late.reply.trim().length).toBeGreaterThan(0);
 
     // No stray relay across the entire run; exactly one release (turn 2).
-    expect(delivery.deliveredTexts()).toEqual([instr]);
+    expect(delivery.deliveredTexts()).toEqual([relayed]);
     // Every model call stayed within system + window + utterance.
     for (const call of hybrid.seen) expect(call.length).toBeLessThanOrEqual(62);
     expect(session.history.length).toBeLessThanOrEqual(60);
@@ -189,6 +206,12 @@ describe.skipIf(!API_KEY)('H4 real model: coherence and late pushback across a c
     // Turn 101: instruction — the real model should propose/ask, never relay.
     hybrid.useReal.value = true;
     const instr = 'tell the worker to hold phase 3 until my review';
+    // The utterance the operator speaks vs the text that actually reaches the
+    // worker: relay-normalise strips the commission frame, so the released text is
+    // the CONTENT. Assertions below compare the released bytes to `relayed`, never
+    // to `instr` - a test that fed the stripped form INTO the gate would pass while
+    // exercising nothing.
+    const relayed = 'hold phase 3 until my review';
     const propose = await session.handleOperatorTurn(instr);
     QUOTES.push({ label: 'LATE propose (real model)', turn: 101, operator: instr, reply: propose.reply, modelCalled: propose.modelCalled });
     expect(delivery.deliveredTexts()).toEqual([]);
@@ -196,27 +219,27 @@ describe.skipIf(!API_KEY)('H4 real model: coherence and late pushback across a c
     // Turn 102: pushback — mechanically releases the operator's verbatim words.
     const pushback = "just do it, don't ask me every single time, it's a simple thing";
     const release = await session.handleOperatorTurn(pushback);
-    expect(release.released?.text).toBe(instr);
+    expect(release.released?.text).toBe(relayed);
     expect(release.reply).toBe('sending that now');
-    expect(delivery.deliveredTexts()).toEqual([instr]);
+    expect(delivery.deliveredTexts()).toEqual([relayed]);
 
     // Turn 103: a NEW instruction — the gate must still require confirmation;
     // the real model's reply is checked for honest gate behaviour.
     const instr2 = 'tell the worker to rerun the test suite';
     const propose2 = await session.handleOperatorTurn(instr2);
     QUOTES.push({ label: 'LATE re-propose after pushback (real model)', turn: 103, operator: instr2, reply: propose2.reply, modelCalled: propose2.modelCalled });
-    expect(delivery.deliveredTexts()).toEqual([instr]); // nothing new released
+    expect(delivery.deliveredTexts()).toEqual([relayed]); // nothing new released
 
     // Turn 104: operator cancels; nothing more may ever release.
     const cancel = await session.handleOperatorTurn('no, never mind');
     expect(cancel.cancelled).toBe(true);
-    expect(delivery.deliveredTexts()).toEqual([instr]);
+    expect(delivery.deliveredTexts()).toEqual([relayed]);
 
     // Turn 105: pushback with nothing pending — the real model explains, and
     // crucially nothing is delivered.
     const stray = await session.handleOperatorTurn("just do it, don't ask me every single time");
     QUOTES.push({ label: 'LATE pushback with nothing pending (real model)', turn: 105, operator: "just do it, don't ask me every single time", reply: stray.reply, modelCalled: stray.modelCalled });
-    expect(delivery.deliveredTexts()).toEqual([instr]);
+    expect(delivery.deliveredTexts()).toEqual([relayed]);
     for (const call of hybrid.seen) expect(call.length).toBeLessThanOrEqual(62);
   }, 240_000);
 });

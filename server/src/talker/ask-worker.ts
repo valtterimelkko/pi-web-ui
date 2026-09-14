@@ -14,6 +14,12 @@
  *   the operator says yes → the release branch delivers THAT question, word
  *                        for word — never a paraphrase the model composed
  *
+ * P25: "word for word" is now the draft's relay form — the held question
+ * goes through the SAME mechanical relay normalisation as any draft part
+ * (applied in the store's appendToDraft choke point), so an offered question
+ * relays as the operator's content, minus disfluency. The store stays the
+ * only source of relay text.
+ *
  * The offer is signalled by a fixed, end-anchored tag the model appends to its
  * reply. The tag is INSTRUCTED (the prompt asks for it) but its consequences
  * are MECHANICAL and deliberately narrow:

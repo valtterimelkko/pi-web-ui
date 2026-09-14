@@ -45,6 +45,13 @@ function makeSession(overrides?: { model?: ReturnType<typeof stubModel>; deliver
 }
 
 const INSTRUCTION = 'tell the worker to hold phase 3 until my review';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_INSTRUCTION = 'hold phase 3 until my review';
 
 describe('NON-NEGOTIABLE 1: the talker cannot send — only the harness sends, only from a confirmed pending proposal', () => {
   it('a relay attempt with no prior proposal delivers nothing', async () => {
@@ -81,7 +88,7 @@ describe('NON-NEGOTIABLE 1: the talker cannot send — only the harness sends, o
     await session.handleOperatorTurn(INSTRUCTION); // proposal recorded
     await session.handleOperatorTurn('yes, go ahead'); // released once
     await session.handleOperatorTurn('yes, go ahead'); // nothing pending — must not re-send
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
   });
 
   it('an ambiguous yes with no pending proposal triggers no delivery and answers MECHANICALLY (F2)', async () => {
@@ -121,13 +128,16 @@ describe('NON-NEGOTIABLE 1: the talker cannot send — only the harness sends, o
   });
 });
 
-describe('NON-NEGOTIABLE 2: relay text is the operator raw utterance, referenced by id', () => {
-  it('the worker receives the operator utterance byte-for-byte, not a model paraphrase', async () => {
+describe('NON-NEGOTIABLE 2 (P25): relay text is the draft stored text — the operator words minus the channel — referenced by id', () => {
+  it('the worker receives the operator’s own words minus the channel, never a model paraphrase (P25 semi-verbatim)', async () => {
     const raw = "Right, so — tell the worker to hold phase 3 until my review.  Not just until worker 1 finishes.";
     const { session, delivery } = makeSession();
     await session.handleOperatorTurn(raw);
     await session.handleOperatorTurn('yes, go ahead');
-    expect(delivery.deliveredTexts()).toEqual([raw]);
+    // P25: the relay is the operator's words minus the leading markers and
+    // the commission frame — the content after '.  ' is untouched. Never a
+    // model-composed paraphrase (the stub model's text is never consulted).
+    expect(delivery.deliveredTexts()).toEqual(['hold phase 3 until my review. Not just until worker 1 finishes.']);
   });
 
   it('a model paraphrase is never what gets delivered, even when the model restates it differently', async () => {
@@ -137,7 +147,7 @@ describe('NON-NEGOTIABLE 2: relay text is the operator raw utterance, referenced
     await session.handleOperatorTurn(INSTRUCTION);
     await session.handleOperatorTurn('yes');
     const delivered = delivery.deliveredTexts()[0];
-    expect(delivered).toBe(INSTRUCTION);
+    expect(delivered).toBe(RELAYED_INSTRUCTION);
     expect(delivered).not.toContain('pending your review');
   });
 
@@ -147,7 +157,7 @@ describe('NON-NEGOTIABLE 2: relay text is the operator raw utterance, referenced
     const rec = session.utteranceLog.recent(1)[0];
     const second = await session.handleOperatorTurn('yes');
     expect(second.released?.utteranceId).toBe(rec.id);
-    expect(second.released?.text).toBe(INSTRUCTION);
+    expect(second.released?.text).toBe(RELAYED_INSTRUCTION);
     expect(first.released).toBeNull();
   });
 });
@@ -157,7 +167,7 @@ describe('NON-NEGOTIABLE 4: the operator-pushback turn', () => {
     const { session, delivery } = makeSession();
     await session.handleOperatorTurn(INSTRUCTION);
     const result = await session.handleOperatorTurn("just do it, don't ask me every single time, it's a simple thing");
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
     expect(result.released).not.toBeNull();
   });
 
@@ -181,9 +191,9 @@ describe('NON-NEGOTIABLE 4: the operator-pushback turn', () => {
     await session.handleOperatorTurn("just do it, don't ask me every single time");
     // The next instruction still needs its own confirmation.
     await session.handleOperatorTurn('also tell the worker to rerun the test suite');
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
     await session.handleOperatorTurn('yes');
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION, 'also tell the worker to rerun the test suite']);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION, 'rerun the test suite']); // P25: 'also tell the worker to' is channel chaining
   });
 });
 
@@ -294,7 +304,7 @@ describe('structural bypass attempts (second-angle verification)', () => {
     await session.handleOperatorTurn(INSTRUCTION);
     await session.handleOperatorTurn('yes');
     expect(deliverSpy).toHaveBeenCalledTimes(1);
-    expect(deliverSpy.mock.calls[0][0].text).toBe(INSTRUCTION);
+    expect(deliverSpy.mock.calls[0][0].text).toBe(RELAYED_INSTRUCTION);
   });
 
   it('a second release call with the store empty cannot resend the previous instruction', async () => {
@@ -304,6 +314,6 @@ describe('structural bypass attempts (second-angle verification)', () => {
     const anySession = session as unknown as { release(u: string, turn: number): Promise<unknown> };
     const result = (await anySession.release('yes', 999)) as { released: unknown };
     expect(result.released).toBeNull();
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
   });
 });

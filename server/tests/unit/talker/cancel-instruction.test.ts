@@ -54,12 +54,12 @@ describe('F1: a cancel breath with an instruction keeps the instruction', () => 
   it('the s5/t4 utterance cancels the held draft AND captures the instruction half', async () => {
     const { session } = makeSession();
     await session.handleOperatorTurn('tell the worker to keep implementing the cache'); // a held draft
-    expect(session.proposals.pending?.text).toBe('tell the worker to keep implementing the cache');
+    expect(session.proposals.pending?.text).toBe('keep implementing the cache'); // P25: frame stripped
 
     const result = await session.handleOperatorTurn(S5_T4);
     // The cancel boundary did its job — the OLD draft is gone…
     expect(result.cancelled).toBe(true);
-    expect(session.proposals.pending?.text).not.toBe('tell the worker to keep implementing the cache');
+    expect(session.proposals.pending?.text).not.toBe('keep implementing the cache'); // P25: old draft's relay form is gone
     // …and the instruction half is HELD, verbatim residue text:
     expect(session.proposals.pending?.text).toBe(S5_T4_RESIDUE);
   });
