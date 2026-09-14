@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
-import { Mic, MicOff, Square } from 'lucide-react';
+import { Mic, MicOff, Square, VolumeX } from 'lucide-react';
 import { useDriveModeStore } from '../../store/driveModeStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useReadAloud } from '../../hooks/useReadAloud';
@@ -109,6 +109,14 @@ export function DriveModeDictate({
     return speechArbiter.subscribe(sync);
   }, [voice.operatorSpeaking, isStreaming]);
 
+  // Is there speech to stop? Playing, waiting (queued / held), or ducked under
+  // the operator's floor all count — the control is offered whenever a hard
+  // cancel would do something. Playback state only; never capture.
+  const talkerBusy =
+    floorView.state === 'talker-speaking' ||
+    floorView.state === 'answer-ready-held' ||
+    (floorView.state === 'you-have-the-floor' && (floorView.ducked || floorView.speechHeld));
+
   // ---------------------------------------------------------------------------
   // The worker's completed answer speaks at the next natural gap (§4.1 rule
   // 3): submit once per completed answer at tier 3. While the operator holds
@@ -157,6 +165,16 @@ export function DriveModeDictate({
   const handleToggleSpeed = useCallback(() => {
     readAloud.toggleSpeed();
   }, [readAloud]);
+
+  // Stop the talker: stop the current chunk AND discard the queue, and do not
+  // resume the cancelled item. This is `stopAll()` — the arbiter's only hard
+  // cancel — and nothing else: it never touches capture, the operator's floor,
+  // or anything server-side. The auto-speak guard (`spokenAnswerRef`) already
+  // keeps the cancelled answer from being re-submitted, so no suppression is
+  // layered on top (verified by the P15 stop-talker tests).
+  const handleStopTalker = useCallback(() => {
+    speechArbiter.stopAll();
+  }, []);
 
   const showAnswerControls = lastAssistantText != null || readAloud.state !== 'idle';
 
@@ -227,16 +245,34 @@ export function DriveModeDictate({
         </div>
       )}
 
-      {/* Stop worker — independent of speech */}
-      {isStreaming && onAbort && (
-        <button
-          onClick={onAbort}
-          className="mt-4 px-6 py-3 rounded-xl bg-red-600 text-white text-base font-medium hover:bg-red-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation"
-          type="button"
-        >
-          <Square className="w-4 h-4 fill-current" />
-          Stop worker
-        </button>
+      {/* Transport controls — siblings: stop the worker, or stop the talker.
+          Stop talker is a playback control only: it silences current speech
+          and clears the queue (the arbiter's one hard cancel), never capture,
+          never the floor, never the server. */}
+      {((isStreaming && onAbort) || talkerBusy) && (
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+          {isStreaming && onAbort && (
+            <button
+              onClick={onAbort}
+              className="px-6 py-3 rounded-xl bg-red-600 text-white text-base font-medium hover:bg-red-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation"
+              type="button"
+            >
+              <Square className="w-4 h-4 fill-current" />
+              Stop worker
+            </button>
+          )}
+          {talkerBusy && (
+            <button
+              onClick={handleStopTalker}
+              className="px-6 py-3 rounded-xl bg-amber-600 text-white text-base font-medium hover:bg-amber-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation"
+              type="button"
+              data-testid="stop-talker"
+            >
+              <VolumeX className="w-4 h-4" />
+              Stop talker
+            </button>
+          )}
+        </div>
       )}
 
       {/* The confirmation card — explicit, verbatim, ambiguous does nothing */}

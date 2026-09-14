@@ -63,6 +63,7 @@ vi.mock('lucide-react', () => ({
   Mic: () => <span data-testid="icon-mic" />,
   MicOff: () => <span data-testid="icon-micoff" />,
   Square: () => <span data-testid="icon-square" />,
+  VolumeX: () => <span data-testid="icon-volumex" />,
   Check: () => <span data-testid="icon-check" />,
   X: () => <span data-testid="icon-x" />,
   Send: () => <span data-testid="icon-send" />,
