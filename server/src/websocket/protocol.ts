@@ -128,7 +128,9 @@ export type ClientMessage =
   // Session context transfer
   | TransferSessionContext
   // Voice talker (Drive Mode Two-Lane plan, brief H7)
-  | TalkerTurnMessage;
+  | TalkerTurnMessage
+  // Voice reading levels (P17): the talker digest — one direction only
+  | TalkerDigestMessage;
 
 // Session information for listing
 export interface SessionInfo {
@@ -253,7 +255,9 @@ export type ServerMessage =
   | SessionTransferCompleted
   | SessionTransferFailed
   // Voice talker (Drive Mode Two-Lane plan, brief H7)
-  | TalkerTurnResultMessage;
+  | TalkerTurnResultMessage
+  // P17 reading levels: the digest answer for the operator's chosen level
+  | TalkerDigestResultMessage;
 
 // Message type guards
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -467,6 +471,65 @@ export function isTalkerTurnMessage(data: unknown): data is TalkerTurnMessage {
     msg.type === 'talker_turn' &&
     typeof msg.workerSessionId === 'string' &&
     typeof msg.utterance === 'string' &&
+    (msg.runtime === undefined || msg.runtime === 'pi' || msg.runtime === 'claude' || msg.runtime === 'antigravity') &&
+    (msg.requestId === undefined || typeof msg.requestId === 'string')
+  );
+}
+
+// ============================================================================
+// Voice reading levels (P17): the talker digest
+// ============================================================================
+
+/**
+ * Client → Server: ask the talker to digest a turn for the OPERATOR to hear.
+ *
+ * This is not an operator utterance and must never be mistaken for one: the text
+ * travels worker → talker → operator, and the relay gate exists for the opposite
+ * direction only. The handler has no delivery path, creates no talker session
+ * and records no draft — see session-registry.handleDigest.
+ */
+export interface TalkerDigestMessage {
+  type: 'talker_digest';
+  /** The worker session this digest belongs to. Either identifier works (P12). */
+  workerSessionId: string;
+  /** 'summary' digests the turn; 'headlines' reduces it to one status line. */
+  kind: 'summary' | 'headlines';
+  /** The worker's output to digest (the unplayed remainder after a flip). */
+  text: string;
+  /** What the operator has already heard — the digest never repeats it. */
+  spokenPrefix?: string;
+  runtime?: TalkerRuntime;
+  requestId?: string;
+}
+
+/** Server → Client: the digest, or an honest statement that there is none. */
+export interface TalkerDigestResultMessage {
+  type: 'talker_digest_result';
+  requestId?: string;
+  workerSessionId: string;
+  runtime: TalkerRuntime;
+  kind: 'summary' | 'headlines';
+  /** Null when the talker could not help; the client reads the turn in full. */
+  digest: string | null;
+  refused?: 'model_unconfigured' | 'unsafe_input' | 'empty_text';
+  error?: string;
+}
+
+/** A hard sanity bound; the digest budget itself lives in the digest module
+ *  (a turn longer than it is refused honestly rather than digested in part). */
+export const TALKER_DIGEST_WIRE_MAX_TEXT_CHARS = 200_000;
+
+export function isTalkerDigestMessage(data: unknown): data is TalkerDigestMessage {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'talker_digest' &&
+    typeof msg.workerSessionId === 'string' &&
+    (msg.kind === 'summary' || msg.kind === 'headlines') &&
+    typeof msg.text === 'string' &&
+    msg.text.length > 0 &&
+    msg.text.length <= TALKER_DIGEST_WIRE_MAX_TEXT_CHARS &&
+    (msg.spokenPrefix === undefined || typeof msg.spokenPrefix === 'string') &&
     (msg.runtime === undefined || msg.runtime === 'pi' || msg.runtime === 'claude' || msg.runtime === 'antigravity') &&
     (msg.requestId === undefined || typeof msg.requestId === 'string')
   );

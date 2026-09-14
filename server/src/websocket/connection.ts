@@ -27,8 +27,8 @@ import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
 import { getOperationalMetrics } from '../observability/operational-metrics.js';
-import type { ClientMessage, ServerMessage, ImageContent, SessionMessage, TalkerTurnMessage, TalkerTurnPhase } from './protocol.js';
-import { isTransferSessionContext, isTalkerTurnMessage } from './protocol.js';
+import type { ClientMessage, ServerMessage, ImageContent, SessionMessage, TalkerTurnMessage, TalkerTurnPhase, TalkerDigestMessage } from './protocol.js';
+import { isTransferSessionContext, isTalkerTurnMessage, isTalkerDigestMessage } from './protocol.js';
 import { handleSessionWebSocket } from './session-websocket.js';
 import { config } from '../config.js';
 import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
@@ -1014,6 +1014,13 @@ export class WebSocketConnectionManager {
 
       case 'talker_turn':
         await this.handleTalkerTurn(clientId, message);
+        break;
+
+      // P17 reading levels: the digest the talker produces for the operator.
+      // A separate message on purpose — it carries the WORKER's words toward the
+      // operator and can never be mistaken for an operator utterance.
+      case 'talker_digest':
+        await this.handleTalkerDigest(clientId, message);
         break;
 
       // Browser heartbeat (websocket.ts startHeartbeat). Answer it instead of
@@ -4096,6 +4103,60 @@ export class WebSocketConnectionManager {
    */
   getTalkerSessionRegistry(): TalkerSessionRegistry {
     return this.talkerSessionRegistry;
+  }
+
+  /**
+   * P17: the browser asks for a digest of the worker's turn (summary or the
+   * one-line headlines extraction). This handler adds no capability: the
+   * registry's digest entry point has no delivery path, creates no talker
+   * session and records no draft, and this handler only relays its answer.
+   * An unavailable digest is reported honestly — the client then reads the turn
+   * in full, so nothing the operator needed is ever lost to a summariser.
+   */
+  private async handleTalkerDigest(clientId: string, message: TalkerDigestMessage): Promise<void> {
+    if (!isTalkerDigestMessage(message)) {
+      const envelope = message as { requestId?: unknown };
+      const requestId = typeof envelope.requestId === 'string' ? envelope.requestId : undefined;
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Invalid talker_digest message format',
+        code: 'INVALID_MESSAGE',
+        ...(requestId !== undefined ? { requestId } : {}),
+      });
+      return;
+    }
+
+    const runtime = message.runtime ?? 'pi';
+    try {
+      const result = await this.talkerSessionRegistry.handleDigest({
+        workerSessionId: message.workerSessionId,
+        kind: message.kind,
+        text: message.text,
+        ...(message.spokenPrefix !== undefined ? { spokenPrefix: message.spokenPrefix } : {}),
+        runtime,
+      });
+
+      this.sendMessage(clientId, {
+        type: 'talker_digest_result',
+        ...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
+        workerSessionId: message.workerSessionId,
+        runtime,
+        kind: message.kind,
+        digest: result.digest ?? null,
+        ...(result.refused ? { refused: result.refused } : {}),
+        ...(result.error ? { error: result.error } : {}),
+      });
+    } catch (error) {
+      this.sendMessage(clientId, {
+        type: 'talker_digest_result',
+        ...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
+        workerSessionId: message.workerSessionId,
+        runtime,
+        kind: message.kind,
+        digest: null,
+        error: error instanceof Error ? error.message : 'Talker digest failed',
+      });
+    }
   }
 
   /**

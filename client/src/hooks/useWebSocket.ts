@@ -14,6 +14,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useSessionStore, useUIStore } from '../store';
 import { WebSocketClient, createWebSocketClient, type WebSocketSendResult, type WebSocketStatus } from '../lib/websocket';
 import { emitTalkerTurnResult } from '../lib/talkerBus';
+import { emitTurnDigestResult } from '../lib/turnDigest';
 
 export function useWebSocket() {
   const clientRef = useRef<WebSocketClient | null>(null);
@@ -43,6 +44,9 @@ export function useWebSocket() {
         // session store — the store does not know this message type and would
         // record it as protocol drift. See lib/talkerBus.ts.
         if (emitTalkerTurnResult(message)) return;
+        // P17 digest tap: the reading levels' digest answer is consumed the
+        // same way, and for the same reason (see lib/turnDigest.ts).
+        if (emitTurnDigestResult(message)) return;
         handleServerMessage(message);
       },
       onStatusChange: (status: WebSocketStatus) => {

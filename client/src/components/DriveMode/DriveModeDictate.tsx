@@ -1,14 +1,20 @@
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { Mic, MicOff, Square, VolumeX } from 'lucide-react';
 import { useDriveModeStore } from '../../store/driveModeStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useReadAloud } from '../../hooks/useReadAloud';
-import { useVoiceTurn } from './useVoiceTurn';
+import { useTurnDigest } from '../../hooks/useTurnDigest';
+import { useVoiceTurn, talkerRuntimeFor } from './useVoiceTurn';
 import { ConfirmationCard } from './ConfirmationCard';
 import { FloorBanner } from './FloorBanner';
+import { ReadingLevelControl } from './ReadingLevelControl';
+import { useAnswerReader } from './useAnswerReader';
+import {
+  useReadingLevelStore,
+  type ReadingLevel,
+} from './readingLevel';
 import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
-import { speechArbiter, TIER_ANSWER } from '../../lib/speechArbiter';
-import { spokenLedger } from '../../lib/spokenLedger';
+import { speechArbiter } from '../../lib/speechArbiter';
 import { getLastAssistantText } from '../../lib/driveModeUtils';
 
 export interface DriveModeDictateProps {
@@ -49,9 +55,28 @@ export function DriveModeDictate({
   const setPhase = useDriveModeStore((s) => s.setPhase);
   const isStreaming = useSessionStore((s) => s.isStreaming);
   const messages = useSessionStore((s) => s.messages);
+  const readingLevel = useReadingLevelStore((s) => s.level);
+  const setReadingLevel = useReadingLevelStore((s) => s.setLevel);
 
   const lastAssistantText = getLastAssistantText(messages);
   const isRecording = voice.state === 'recording';
+
+  // The talker in the reading path (P17): how much of the worker's output is
+  // spoken is the operator's choice, applied at turn end and — when they change
+  // it mid-answer — at the next chunk boundary. Playback only: nothing here can
+  // gate capture, and nothing here can condense the operator's words.
+  const talkerRuntime = talkerRuntimeFor(sdkType ?? undefined);
+  const { requestDigest } = useTurnDigest(sessionId, talkerRuntime);
+  const { spokenKind, fallbackNote } = useAnswerReader({
+    isStreaming,
+    lastAssistantText,
+    level: readingLevel,
+    requestDigest,
+  });
+  const handleReadingLevel = useCallback(
+    (level: ReadingLevel) => setReadingLevel(level),
+    [setReadingLevel]
+  );
 
   // Vibrate when recording starts
   useEffect(() => {
@@ -119,35 +144,14 @@ export function DriveModeDictate({
     (floorView.state === 'you-have-the-floor' && (floorView.ducked || floorView.speechHeld));
 
   // ---------------------------------------------------------------------------
-  // The worker's completed answer speaks at the next natural gap (§4.1 rule
-  // 3): submit once per completed answer at tier 3. While the operator holds
-  // the floor it waits queued — the held state makes that deliberate.
-  //
-  // The claim is the shared dedup record (P16), not a local ref: read-aloud
-  // submits at this same tier, and it may already have spoken these exact
-  // words (or be playing them right now). Claim BEFORE submitting — a failed
-  // claim means the surface has already said this, so it must not say it
-  // again. The claim is made at submission, so stopping playback later never
-  // re-opens the answer for a repeat (P15).
+  // The worker's completed answer speaks at the next natural gap (§4.1 rule 3)
+  // — now through the answer reader, so the operator's reading level decides
+  // whether it is read, digested, or reduced to the one Headlines line. This
+  // component no longer submits it directly: the reader owns the plan, the
+  // digest request, and the mid-speech level flip. The claim on the answer is
+  // made there, at the decision, so stopping playback later never re-opens it
+  // (P15) and read-aloud never collides with it (P16).
   // ---------------------------------------------------------------------------
-  const prevStreamingRef = useRef(isStreaming);
-  const autoSeqRef = useRef(0);
-  useEffect(() => {
-    const wasStreaming = prevStreamingRef.current;
-    prevStreamingRef.current = isStreaming;
-    if (
-      wasStreaming &&
-      !isStreaming &&
-      lastAssistantText &&
-      spokenLedger.claim(lastAssistantText)
-    ) {
-      speechArbiter.submit({
-        id: `answer-auto-${autoSeqRef.current++}`,
-        tier: TIER_ANSWER,
-        text: lastAssistantText,
-      });
-    }
-  }, [isStreaming, lastAssistantText]);
 
   const handleMicClick = useCallback(() => {
     // Taking the floor is ALWAYS available — including while speech plays.
@@ -201,6 +205,18 @@ export function DriveModeDictate({
           {sessionDisplayName}
         </div>
         <div className="text-sm text-gray-500 dark:text-gray-400">{modelName}</div>
+      </div>
+
+      {/* The reading level — how much of the worker's output is spoken, and
+          which level the answer in flight is being read at. Persisted as the
+          operator's default (P17). */}
+      <div className="mb-4">
+        <ReadingLevelControl
+          level={readingLevel}
+          onSelect={handleReadingLevel}
+          spokenKind={spokenKind}
+          fallbackNote={fallbackNote}
+        />
       </div>
 
       {/* The four states — who has the floor, at a glance */}

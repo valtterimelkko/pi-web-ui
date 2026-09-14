@@ -119,8 +119,9 @@ const REFUSAL_TEXT: Record<string, string> = {
 
 /** Map a session's sdkType onto the talker runtime (talker scope: pi, claude,
  *  antigravity — others fall back to the server default, which refuses
- *  honestly if unsupported). */
-function talkerRuntimeFor(sdkType: string | undefined): TalkerRuntime | undefined {
+ *  honestly if unsupported). Exported for the digest path (P17), which
+ *  correlates with the same runtime. */
+export function talkerRuntimeFor(sdkType: string | undefined): TalkerRuntime | undefined {
   if (sdkType === 'pi' || sdkType === 'claude' || sdkType === 'antigravity') {
     return sdkType;
   }

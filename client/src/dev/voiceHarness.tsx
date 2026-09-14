@@ -14,6 +14,7 @@
 
 // --- Network stubs must be installed before any component mounts ------------
 const openSockets: FakeWebSocket[] = [];
+const sentMessages: Record<string, unknown>[] = [];
 
 class FakeWebSocket {
   static CONNECTING = 0;
@@ -31,7 +32,29 @@ class FakeWebSocket {
     openSockets.push(this);
     setTimeout(() => this.onopen?.({ type: 'open' }), 0);
   }
-  send() {}
+  send(message: unknown) {
+    // P17 harness addition: record what the surface sent, and answer a digest
+    // request with a canned digest through the REAL result bus, so the reading
+    // levels can be driven end to end for a screenshot without a backend.
+    // WebSocketClient serialises here, so the message arrives as JSON text.
+    const parsed = typeof message === 'string' ? (JSON.parse(message) as Record<string, unknown>) : message;
+    sentMessages.push(parsed as Record<string, unknown>);
+    const msg = parsed as { type?: string; requestId?: string; kind?: string };
+    if (msg?.type === 'talker_digest' && msg.requestId) {
+      setTimeout(() => {
+        emitTurnDigestResult({
+          type: 'talker_digest_result',
+          requestId: msg.requestId,
+          workerSessionId: '/tmp/harness/worker.jsonl',
+          kind: msg.kind === 'headlines' ? 'headlines' : 'summary',
+          digest:
+            msg.kind === 'headlines'
+              ? 'Done: the auth refactor is complete and green. Needs you: approve the deploy.'
+              : 'The auth refactor is complete and every suite is green. The migration is half written, and the deploy is waiting on your approval.',
+        });
+      }, 60);
+    }
+  }
   close() {
     this.readyState = 3;
   }
@@ -104,9 +127,30 @@ import { DriveModeDictate } from '../components/DriveMode/DriveModeDictate';
 import { speechArbiter } from '../lib/speechArbiter';
 import { useSessionStore } from '../store/sessionStore';
 import { emitTalkerTurnResult } from '../lib/talkerBus';
+import { emitTurnDigestResult } from '../lib/turnDigest';
 import '../index.css';
 
-(window as any).__voice = { speechArbiter, emitTalkerTurnResult, sessionStore: useSessionStore };
+// Screenshot/evidence tap: what the arbiter was actually asked to SPEAK (the
+// arbiter itself is production code and is not modified — this wraps it).
+const spoken: Array<{ id: string; tier: number; text: string }> = [];
+const realSubmit = speechArbiter.submit.bind(speechArbiter);
+(speechArbiter as { submit: typeof speechArbiter.submit }).submit = (input) => {
+  spoken.push({
+    id: input.id ?? '',
+    tier: input.tier,
+    text: input.text ?? (input.chunks ? input.chunks.join(' ') : ''),
+  });
+  return realSubmit(input);
+};
+
+(window as any).__voice = {
+  speechArbiter,
+  emitTalkerTurnResult,
+  emitTurnDigestResult,
+  sessionStore: useSessionStore,
+  sentMessages,
+  spoken,
+};
 
 const app = document.getElementById('root')!;
 app.className =

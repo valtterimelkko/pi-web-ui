@@ -31,6 +31,7 @@
  */
 
 import { TalkerSession } from './talker.js';
+import { digestTurn, type DigestKind } from './digest.js';
 import { createDefaultDeliveries, type DefaultDeliveries } from './delivery.js';
 import { createObservedDelivery, createVoiceTurnRecorder, type VoiceTurnRecorder } from './observability.js';
 import { OpenRouterTalkerClient, resolveTalkerModelConfig } from './model-client.js';
@@ -90,6 +91,32 @@ export interface TalkerOperatorTurnResult {
   refused?: 'prompt_injection' | 'model_unconfigured' | 'deliveries_unavailable';
   /** Present when the talker session processed the turn. */
   turn?: TalkerTurnResult;
+}
+
+/**
+ * Why a digest could not be produced (P17). Every one of these means the caller
+ * falls back to reading the turn in full — an unavailable digest costs speech
+ * quality, never words.
+ */
+export type TalkerDigestRefusal = 'model_unconfigured' | 'unsafe_input' | 'empty_text';
+
+export interface TalkerDigestInput {
+  /** The worker session the digest belongs to (correlation only: the digest
+   *  reads the text it is given, not the session's state). */
+  workerSessionId: string;
+  kind: DigestKind;
+  /** The worker's output to digest (the unplayed remainder after a flip). */
+  text: string;
+  /** What the operator has already heard — never repeated by the digest. */
+  spokenPrefix?: string;
+  runtime?: TalkerRuntime;
+}
+
+export interface TalkerDigestResult {
+  /** The words to speak; absent whenever `refused`/`error` is set. */
+  digest?: string;
+  refused?: TalkerDigestRefusal;
+  error?: string;
 }
 
 export interface TalkerSessionRegistryDeps {
@@ -258,6 +285,46 @@ export class TalkerSessionRegistry {
     const talker = this.getOrCreate(workerRef, runtime, delivery, model);
     const turn = await talker.handleOperatorTurn(input.utterance);
     return { reply: turn.reply, turn };
+  }
+
+  /**
+   * The digest entry point (P17 reading levels).
+   *
+   * This is deliberately NOT an operator turn. It carries the WORKER's output to
+   * the talker's model and returns words for the OPERATOR — summarising runs in
+   * one direction only. It creates no talker session, records no utterance,
+   * touches no draft, and has no delivery adapter at all, so no reading-level
+   * convenience can reach the confirm-gated relay path.
+   */
+  async handleDigest(input: TalkerDigestInput): Promise<TalkerDigestResult> {
+    const text = input.text?.trim() ?? '';
+    if (!text) {
+      return { refused: 'empty_text' };
+    }
+
+    // The worker's own output is material to read, never instructions to obey.
+    // Text that trips the block-severity injection detector is refused rather
+    // than digested; the caller reads the turn in full instead, so nothing the
+    // operator needed is lost.
+    if (detectPromptInjection(text).recommendation === 'block') {
+      return { refused: 'unsafe_input' };
+    }
+
+    const model = this.resolveModel();
+    if (!model) {
+      return { refused: 'model_unconfigured' };
+    }
+
+    try {
+      const outcome = await digestTurn(model, {
+        kind: input.kind,
+        text,
+        ...(input.spokenPrefix ? { spokenPrefix: input.spokenPrefix } : {}),
+      });
+      return { digest: outcome.digest };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   private key(workerSessionId: string, runtime: TalkerRuntime): string {
