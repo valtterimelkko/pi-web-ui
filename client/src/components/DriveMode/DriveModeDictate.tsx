@@ -10,14 +10,13 @@ import { FloorBanner } from './FloorBanner';
 import { FocusControl, FocusRecap } from './FocusControl';
 import { useFocusHold } from './focusHold';
 import { ReadingLevelControl } from './ReadingLevelControl';
-import { useAnswerReader } from './useAnswerReader';
 import {
   useReadingLevelStore,
   type ReadingLevel,
 } from './readingLevel';
 import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
 import { speechArbiter } from '../../lib/speechArbiter';
-import { getLastAssistantText } from '../../lib/driveModeUtils';
+import { getTurnAssistantText, useAnswerReader } from './useAnswerReader';
 
 export interface DriveModeDictateProps {
   sessionId: string;
@@ -65,7 +64,11 @@ export function DriveModeDictate({
   const readingLevel = useReadingLevelStore((s) => s.level);
   const setReadingLevel = useReadingLevelStore((s) => s.setLevel);
 
-  const lastAssistantText = getLastAssistantText(messages);
+  // P19 — the answer is the whole turn, not the last message: read-aloud and
+  // the answer controls operate on everything the worker has said since the
+  // operator's last message, interim updates included. The answer reader scans
+  // the conversation itself, so its accounted-turn boundary lives in one place.
+  const turnAssistantText = getTurnAssistantText(messages);
   const isRecording = voice.state === 'recording';
 
   // The talker in the reading path (P17): how much of the worker's output is
@@ -76,7 +79,7 @@ export function DriveModeDictate({
   const { requestDigest } = useTurnDigest(sessionId, talkerRuntime);
   const { spokenKind, fallbackNote, heldWhileFocused, exitRecap, dismissRecap } = useAnswerReader({
     isStreaming,
-    lastAssistantText,
+    messages,
     level: readingLevel,
     focused: focus.focused,
     requestDigest,
@@ -174,11 +177,11 @@ export function DriveModeDictate({
       setPhase('dictate');
       return;
     }
-    if (lastAssistantText) {
-      readAloud.play(lastAssistantText);
+    if (turnAssistantText) {
+      readAloud.play(turnAssistantText);
       setPhase('audio-playing');
     }
-  }, [readAloud, lastAssistantText, setPhase]);
+  }, [readAloud, turnAssistantText, setPhase]);
 
   const handleToggleSpeed = useCallback(() => {
     readAloud.toggleSpeed();
@@ -194,7 +197,7 @@ export function DriveModeDictate({
     speechArbiter.stopAll();
   }, []);
 
-  const showAnswerControls = lastAssistantText != null || readAloud.state !== 'idle';
+  const showAnswerControls = turnAssistantText != null || readAloud.state !== 'idle';
 
   return (
     <div className="flex flex-col items-center h-full w-full px-4 py-6 relative overflow-y-auto">
@@ -385,7 +388,7 @@ export function DriveModeDictate({
         <div className="mt-6 flex items-center gap-3">
           <button
             onClick={handleReadAloud}
-            disabled={readAloud.state !== 'playing' && !lastAssistantText}
+            disabled={readAloud.state !== 'playing' && !turnAssistantText}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               readAloud.state === 'playing'
                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'

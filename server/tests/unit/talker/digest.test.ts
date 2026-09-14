@@ -53,6 +53,14 @@ describe('talker digest prompt (canonical file)', () => {
     expect(system.content).toBe(fromFile);
   });
 
+  it('tells the model the input may span the whole turn: interim updates plus a final message (P19)', () => {
+    const prompt = readFileSync(path.join(repoRoot, DIGEST_PROMPT_RELATIVE_PATH), 'utf8');
+    expect(prompt).toMatch(/whole turn/i);
+    expect(prompt).toMatch(/interim/i);
+    // One coherent account — never an itemised replay of each update.
+    expect(prompt).toMatch(/one coherent/i);
+  });
+
   it('states the two extractions, including the exact Headlines shape', () => {
     const prompt = readFileSync(path.join(repoRoot, DIGEST_PROMPT_RELATIVE_PATH), 'utf8');
     // Headlines is a DIFFERENT extraction, not a shorter summary: one line,

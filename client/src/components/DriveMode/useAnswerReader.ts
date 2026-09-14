@@ -1,11 +1,37 @@
 /**
- * useAnswerReader — the talker in the reading path (P17 package A).
+ * useAnswerReader — the talker in the reading path (P17 package A, whole-turn
+ * input P19 package B).
  *
  * Before this existed the surface read the worker's final answer VERBATIM with
  * no talker involvement at all: raw text straight to TTS at tier 3. This hook is
  * where the reading level applies — it decides what speaks at turn end, asks the
  * talker for a digest when the level calls for one, and applies a level change
  * immediately and boundedly while an answer is being read.
+ *
+ * P19 — THE ANSWER IS THE WHOLE TURN. The auto-speak path used to plan on the
+ * LAST assistant message only, which is why mid-turn detail was reachable only
+ * by clicking read-aloud. The digest input is now the turn's assistant output:
+ * every assistant message since the operator's last message, interim updates
+ * included (see `getTurnAssistantParts`). Recorded decisions that are easy to
+ * get wrong again:
+ *   - VERBATIM reads the whole turn, interim included. If it stayed on the last
+ *     message, the faithful level would surface strictly less than Summary
+ *     (which reads the whole turn) — an incoherent hierarchy.
+ *   - The short-turn threshold applies to the TURN (the text being considered):
+ *     a long turn is digested even when its last message is short, because the
+ *     threshold exists to avoid compressing trivially little text, and a long
+ *     turn with a short tail is exactly the case the operator does not want
+ *     spoken line by line.
+ *   - A turn is ACCOUNTED for once this surface has taken it on — spoken, held
+ *     for the focus recap, or already surfaced another way. The next turn's
+ *     scan stops there, so successive turns — including UNPROMPTED
+ *     continuations (goal loops, watch wakes) where no operator message
+ *     separates them — can never re-digest content that was already spoken.
+ *     The P16 spoken ledger alone cannot provide this: two turns produce two
+ *     different strings, so exact-text claims never collide while content does.
+ *     The boundary is id AND words: a completed message never changes under
+ *     the same id in a real stream, but content that appears with new words is
+ *     new content, and new content surfaces rather than being silenced.
  *
  * Rules this hook implements, and will not soften:
  *   - Summary and Headlines speak at TIER_ANSWER (3) — they are the answer,
@@ -17,13 +43,15 @@
  *   - A mid-speech flip stops the current item at the NEXT CHUNK BOUNDARY —
  *     never mid-word — and digests only what the operator has not yet heard.
  *   - Nothing here can condense the operator's words. There is no send-to-worker
- *     path in this module at all.
+ *     path in this module at all, and the operator's messages bound the turn
+ *     scan without ever entering it.
  *
  * Playback only: nothing here gates capture, and a failed digest falls back to
  * reading the turn in full, so an answer can never be lost to a summariser.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Message } from '../../store/sessionStore';
 import {
   chunkIntoSentences,
   speechArbiter,
@@ -47,7 +75,13 @@ export const DIGEST_FALLBACK_NOTE = 'Could not summarise — read in full.';
 
 export interface AnswerReaderOptions {
   isStreaming: boolean;
-  lastAssistantText: string | null;
+  /**
+   * P19 — the conversation the answer is read from. The hook scans it for the
+   * whole turn itself (`getTurnAssistantParts`), so the accounted-turn
+   * boundary that keeps a later turn from re-digesting already-spoken content
+   * lives in exactly one place.
+   */
+  messages: Message[];
   /** The operator's chosen level. */
   level: ReadingLevel;
   /**
@@ -157,8 +191,88 @@ function heardText(chunks: readonly string[], heardChunks: number): string {
     .join(' ');
 }
 
+// ---------------------------------------------------------------------------
+// P19 — the whole-turn scan. The digest input is the TURN, not the last
+// message: detail the worker emits mid-turn surfaces in the digest without
+// the operator asking, and verbatim mode reads the turn faithfully.
+// ---------------------------------------------------------------------------
+
+/** The words of one assistant message that can be spoken: its text parts.
+ *  Thinking is never spoken, and tool messages are not the worker's voice at
+ *  all. Same extraction rule the surface has always used for the last
+ *  message, now applied to every message of the turn. */
+function assistantMessageText(message: Message): string {
+  if (typeof message.content === 'string') return message.content.trim();
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text ?? '')
+      .join('\n')
+      .trim();
+  }
+  return '';
+}
+
+export interface TurnAssistantParts {
+  /** The turn's assistant output (messages joined by a blank line); null when
+   *  the tail of the conversation has no assistant words. */
+  text: string | null;
+  /** The ids of the assistant messages composing it, oldest first. */
+  ids: string[];
+  /** Each message's own contribution, oldest first — what the caller records
+   *  as accounted so the next scan can recognise the same content again. */
+  parts: Array<{ id: string; text: string }>;
+}
+
+/**
+ * The whole turn: every assistant message back to the operator's last message
+ * — or back to already-accounted content, whichever comes first — interim
+ * updates included.
+ *
+ * Scan rules, each load-bearing:
+ *   - a USER message stops the scan: the operator's words bound the turn and
+ *     are never part of it (one direction only);
+ *   - TOOL messages are skipped WITHOUT stopping: the worker's activity is not
+ *     its voice, but it is not a turn boundary either;
+ *   - an ACCOUNTED message stops the scan: `accounted` maps message id to the
+ *     exact words already taken on by a previous turn of this surface (spoken,
+ *     or held for the focus recap). Same id and same words means that content
+ *     was already handled, so a later turn — an unprompted continuation
+ *     included — must not re-digest it. The WORDS are half of the key on
+ *     purpose: content arriving under a reused id with new words is new
+ *     content, and new content surfaces — it is never silenced by bookkeeping;
+ *   - a message with no speakable words contributes nothing.
+ */
+export function getTurnAssistantParts(
+  messages: readonly Message[],
+  accounted?: ReadonlyMap<string, string>
+): TurnAssistantParts {
+  const collected: Array<{ id: string; text: string }> = [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === 'user') break;
+    if (message.role !== 'assistant') continue;
+    const text = assistantMessageText(message);
+    if (!text) continue;
+    if (accounted?.get(message.id) === text) break;
+    collected.push({ id: message.id, text });
+  }
+  collected.reverse();
+  return {
+    text: collected.length > 0 ? collected.map((part) => part.text).join('\n\n') : null,
+    ids: collected.map((part) => part.id),
+    parts: collected,
+  };
+}
+
+/** Text-only convenience for callers that only need to know whether (and what)
+ *  the worker has produced for this turn — read-aloud and the answer controls. */
+export function getTurnAssistantText(messages: readonly Message[]): string | null {
+  return getTurnAssistantParts(messages).text;
+}
+
 export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView {
-  const { isStreaming, lastAssistantText, level, focused, requestDigest } = options;
+  const { isStreaming, messages, level, focused, requestDigest } = options;
   const [spokenKind, setSpokenKind] = useState<ReadingLevel | null>(null);
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   /** P18/2 — the answers held while focus is on, and the recap they produce. */
@@ -166,6 +280,14 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
   const [exitRecap, setExitRecap] = useState<HeldAnswer[] | null>(null);
 
   const answerRef = useRef<AnswerSpeech | null>(null);
+  /** P19 — what this surface has already taken on in a turn: message id → the
+   *  exact words (spoken, held for the focus recap, or already surfaced
+   *  another way). The next turn's scan stops at the same id AND same words;
+   *  successive turns — unprompted continuations included — never re-digest
+   *  content that was already accounted for. The spoken ledger cannot do this
+   *  job: two turns produce two different strings, so its exact-text claims
+   *  never collide while content overlaps. */
+  const accountedTurnMessages = useRef<Map<string, string>>(new Map());
   /** Bumped whenever this answer's reading is re-planned; anything in flight
    *  for an older plan is discarded rather than spoken. */
   const generationRef = useRef(0);
@@ -344,29 +466,41 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
   useEffect(() => {
     const wasStreaming = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
-    if (!wasStreaming || isStreaming || !lastAssistantText) return;
+    if (!wasStreaming || isStreaming) return;
+
+    // P19 — the answer is the whole turn, interim updates included.
+    const turn = getTurnAssistantParts(messages, accountedTurnMessages.current);
+    const turnText = turn.text;
+    if (!turnText) return;
+
+    // This run's output is now this surface's business, whichever way the
+    // decision below goes: spoken, held for the focus recap, or already
+    // surfaced another way (a failed ledger claim means read-aloud got there
+    // first). Accounting at the decision is what keeps a later turn — an
+    // unprompted continuation included — from re-digesting the same content.
+    for (const part of turn.parts) accountedTurnMessages.current.set(part.id, part.text);
 
     // P18/2 — focus gates PLAYBACK ONLY. While focus is on the answer is not
     // spoken; it is held (and the shared ledger claim is deliberately NOT made
     // here — claiming would mark the words as already heard and the exit recap
     // could never speak them).
     if (focusedRef.current) {
-      holdAnswer(`answer-auto-${autoSeqRef.current++}`, lastAssistantText);
+      holdAnswer(`answer-auto-${autoSeqRef.current++}`, turnText);
       return;
     }
 
     // One answer speaks once, whichever producer got there first — the shared
     // record (P16). Claimed at the decision, so a repeated turn-end cannot
     // double-speak while a digest is still being fetched.
-    if (!spokenLedger.claim(lastAssistantText)) return;
+    if (!spokenLedger.claim(turnText)) return;
 
     const generation = ++generationRef.current;
     const itemId = `answer-auto-${autoSeqRef.current++}`;
-    const plan = planSpeechForText(level, lastAssistantText);
+    const plan = planSpeechForText(level, turnText);
     answerRef.current = {
       itemId,
-      text: lastAssistantText,
-      chunks: chunkIntoSentences(lastAssistantText),
+      text: turnText,
+      chunks: chunkIntoSentences(turnText),
       spokenForm: null,
     };
     setFallbackNote(null);
@@ -380,7 +514,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
     }
 
     digestInFlightRef.current = true;
-    void requestDigest({ kind: plan.digestKind, text: lastAssistantText }).then((outcome) => {
+    void requestDigest({ kind: plan.digestKind, text: turnText }).then((outcome) => {
       if (generation !== generationRef.current) return;
       digestInFlightRef.current = false;
       if (focusedRef.current) {
@@ -388,13 +522,13 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
         // has been spoken of this answer, so the whole of it is held.
         answerRef.current = null;
         setSpokenKind(null);
-        holdAnswer(itemId, lastAssistantText);
+        holdAnswer(itemId, turnText);
         return;
       }
       if (!outcome.ok) {
         setFallbackNote(DIGEST_FALLBACK_NOTE);
         setSpokenKind('verbatim');
-        submitAnswerText(itemId, lastAssistantText, 'verbatim');
+        submitAnswerText(itemId, turnText, 'verbatim');
         return;
       }
       const spoken = digestSpokenText(plan.digestKind, outcome.digest);
@@ -403,12 +537,12 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
         // say nothing at all.
         setFallbackNote(DIGEST_FALLBACK_NOTE);
         setSpokenKind('verbatim');
-        submitAnswerText(itemId, lastAssistantText, 'verbatim');
+        submitAnswerText(itemId, turnText, 'verbatim');
         return;
       }
       submitAnswerText(itemId, spoken, plan.digestKind);
     });
-  }, [isStreaming, lastAssistantText, level, requestDigest, submitAnswerText]);
+  }, [isStreaming, messages, level, requestDigest, submitAnswerText]);
 
   // ---------------------------------------------------------------------------
   // The mid-speech flip. Reaching for the switch means the operator wants it
