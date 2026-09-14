@@ -18,8 +18,7 @@ rather than a listening impression.
 ## Quickstart
 
 ```bash
-cd /root/pi-web-ui-wt-audio-lab        # isolated worktree
-npm ci                                  # needs Node >= 22.19, Chrome, Xvfb, PulseAudio, FFmpeg
+cd /root/pi-web-ui                      # canonical repo (needs Node >= 22.19, Chrome, Xvfb, PulseAudio, FFmpeg)
 
 # 1. Does this host actually support the lab?
 npx tsx scripts/audio-lab/cli.ts doctor
@@ -30,12 +29,22 @@ npx tsx scripts/audio-lab/cli.ts fixtures --provider local
 # 3. Run the required scenario matrix
 npx tsx scripts/audio-lab/cli.ts run
 
-# 4. Re-check the record offline (no browser, no audio daemon, no network)
+# 4. Authenticated compiled-app lane (real login + real /api/tts).
+#    The TTS credential is imported ONLY via the launcher allowlist — never
+#    exported in your shell (an exported empty value shadows the import).
+env -u NODE_ENV -u OPENAI_API_KEY \
+  npx tsx scripts/audio-lab/cli.ts app --env-file /root/.pi-web-ui/secrets.env
+
+# 5. Re-check the record offline (no browser, no audio daemon, no network)
 npx tsx scripts/audio-lab/cli.ts verify-record <attempt-dir>
 
-# 5. Regenerate the HTML report for any finalised attempt
+# 6. Regenerate the HTML report for any finalised attempt
 npx tsx scripts/audio-lab/cli.ts report <attempt-dir>
 ```
+
+Run working state and attempt records live under **`/root/audio-lab`**
+(`runs/<label>/attempt-NN/…`, cached fixtures) — outside Git by the lab's path
+guard. The same commands exist as `npm run audio-lab:*` scripts.
 
 `doctor` exits non-zero when the host cannot run the lab, and says exactly
 which dependency is missing. `run` exits **0** only when every required
@@ -151,7 +160,8 @@ That is exactly the “words were eaten / came late” class the lab was built t
 measure, on the real transport, with immutable evidence. **An app-lane exit 1
 with evidence like this is a finding to triage in the product player (one-ahead
 priming under slow synthesis), not a lab defect** — reproduce with
-`cli.ts app --label app-repro`, then root-cause in `useReadAloud`/
+`env -u NODE_ENV -u OPENAI_API_KEY npx tsx scripts/audio-lab/cli.ts app --env-file /root/.pi-web-ui/secrets.env --label app-repro`,
+then root-cause in `useReadAloud`/
 `speechArbiter` with TDD before any behavioural change.
 
 ## The authenticated app lane (`app`)
