@@ -20,7 +20,12 @@ export interface ExecResult {
 export async function runTool(
   command: string,
   args: string[],
-  options: { timeoutMs?: number; maxBufferBytes?: number; env?: NodeJS.ProcessEnv } = {}
+  options: {
+    timeoutMs?: number;
+    maxBufferBytes?: number;
+    env?: NodeJS.ProcessEnv;
+    cwd?: string;
+  } = {}
 ): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -30,6 +35,7 @@ export async function runTool(
         timeout: options.timeoutMs ?? 120_000,
         maxBuffer: options.maxBufferBytes ?? 64 * 1024 * 1024,
         env: options.env ?? process.env,
+        ...(options.cwd ? { cwd: options.cwd } : {}),
       },
       (error, stdout, stderr) => {
         if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
