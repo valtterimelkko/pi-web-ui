@@ -165,7 +165,7 @@ function createEmptyMessage(role: 'user' | 'assistant' | 'tool'): LiveMessage {
 function buildContentParts(
   text: string,
   thinking: string,
-  toolCalls: Map<string, ToolCallState>
+  _toolCalls: Map<string, ToolCallState>
 ): ContentPart[] {
   const parts: ContentPart[] = [];
 
@@ -476,7 +476,7 @@ export function useSessionStream(
    * Handle turn begin events
    */
   const handleTurnBegin = useCallback(
-    withIdentityGuard((params: unknown) => {
+    withIdentityGuard(() => {
       // Reset refs for new turn
       textRef.current = '';
       thinkingRef.current = '';

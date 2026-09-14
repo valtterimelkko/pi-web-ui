@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { WorkerStatus, WorkerOptions, WorkerInfo, InternalCommand, NormalizedEvent } from '../src/protocol-types.js';
+import type { WorkerStatus, WorkerOptions, InternalCommand, NormalizedEvent } from '../src/protocol-types.js';
 
 describe('protocol-types', () => {
   it('should define valid worker statuses', () => {

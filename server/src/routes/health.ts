@@ -93,7 +93,6 @@ router.get('/ready', async (_req: Request, res: Response) => {
     const pool = getWorkerPool();
     workerStats = pool.getStats();
     
-    const hasCapacity = workerStats.total < workerStats.maxWorkers;
     const atMaxCapacity = workerStats.total >= workerStats.maxWorkers;
     
     if (atMaxCapacity) {

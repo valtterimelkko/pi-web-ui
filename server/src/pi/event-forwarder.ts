@@ -28,7 +28,8 @@ function stripSubagentInnerMessages(result: unknown): unknown {
   const cleanedResults = d.results.map((res) => {
     if (!res || typeof res !== 'object') return res;
     // Drop `messages`; keep every other field (agent/task/exitCode/usage/…).
-    const { messages: _messages, ...rest } = res as Record<string, unknown>;
+    const rest = { ...(res as Record<string, unknown>) };
+    delete rest.messages;
     return rest;
   });
   return { ...r, details: { ...d, results: cleanedResults } };

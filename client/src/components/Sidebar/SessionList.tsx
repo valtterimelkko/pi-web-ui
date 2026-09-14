@@ -17,7 +17,6 @@ export function SessionList({ sessions, currentSessionId }: SessionListProps) {
   const hoverTargetId = useTransferStore(state => state.hoverTargetId);
   const setHoverTarget = useTransferStore(state => state.setHoverTarget);
   const openConfirmNew = useTransferStore(state => state.openConfirmNew);
-  const openConfirmExisting = useTransferStore(state => state.openConfirmExisting);
   const endDrag = useTransferStore(state => state.endDrag);
   const getSessionDisplayName = useSessionStore(state => state.getSessionDisplayName);
 

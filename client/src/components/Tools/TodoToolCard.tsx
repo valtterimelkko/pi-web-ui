@@ -42,19 +42,6 @@ interface TodoDetails {
   error?: string;
 }
 
-// Parse todo result from tool result
-function parseTodoResult(result: { output: string; isError: boolean } | null | undefined): TodoDetails | null {
-  if (!result) return null;
-  
-  try {
-    // The details are stored in the result, not in output JSON
-    // The todo extension stores state in details field
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 // Extract todo details from args for display
 function extractTodoDetails(args: unknown, result?: { output: string; isError: boolean } | null): TodoDetails | null {
   if (!args || typeof args !== 'object') return null;
@@ -131,7 +118,7 @@ function formatElapsed(seconds: number): string {
 }
 
 export const TodoToolCard = memo(function TodoToolCard({ 
-  name, 
+  name: _name, 
   args, 
   result,
   startTime

@@ -41,7 +41,6 @@ export function OrchestrationSidebar({ onStartAll, onPauseAll, onMergeReady }: O
   const activeOrchestration = useOrchestrationStore((s) => s.activeOrchestration);
   const tasks = useOrchestrationStore((s) => s.tasks);
   const summary = useOrchestrationStore((s) => s.getSummary());
-  const updateTaskStatus = useOrchestrationStore((s) => s.updateTaskStatus);
 
   if (!activeOrchestration) {
     return (

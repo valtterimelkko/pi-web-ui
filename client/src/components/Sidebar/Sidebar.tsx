@@ -102,9 +102,6 @@ export function Sidebar() {
   const newTargetCwd = useTransferStore(state => state.newTargetCwd);
   const transferScope = useTransferStore(state => state.scope);
   const transferSetSubmitting = useTransferStore(state => state.setSubmitting);
-  const transferSetSucceeded = useTransferStore(state => state.setSucceeded);
-  const transferSetFailed = useTransferStore(state => state.setFailed);
-  const transferReset = useTransferStore(state => state.reset);
   const { sendMessage } = useWebSocket();
 
   const handleTransferConfirm = () => {

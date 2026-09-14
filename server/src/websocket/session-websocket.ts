@@ -719,9 +719,8 @@ export async function replayHistory(
     throw new Error('Session path is required');
   }
 
-  let stats;
   try {
-    stats = await stat(sessionPath);
+    await stat(sessionPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return;

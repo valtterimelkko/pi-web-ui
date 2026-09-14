@@ -563,7 +563,7 @@ export class JSONRPCClient {
   }
 
   private rejectAllPending(error: Error): void {
-    this.requestTracker.forEach((pending, id) => {
+    this.requestTracker.forEach((pending) => {
       clearTimeout(pending.timeout);
       pending.reject(error);
     });

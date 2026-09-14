@@ -14,7 +14,7 @@ import { WorkspaceTabs } from './WorkspaceTabs';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 import { WorktreeList } from './WorktreeList';
 import { MergePreview } from './MergePreview';
-import { useOrchestrationStore, type TaskInfo } from '../../store/orchestrationStore';
+import { useOrchestrationStore } from '../../store/orchestrationStore';
 
 interface OrchestrationPageProps {
   onSendMessage?: (sessionId: string | null, message: string) => void;
@@ -22,23 +22,12 @@ interface OrchestrationPageProps {
 
 export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
   const activeOrchestration = useOrchestrationStore((s) => s.activeOrchestration);
-  const worktrees = useOrchestrationStore((s) => s.worktrees);
-  const tasks = useOrchestrationStore((s) => s.tasks);
   const selectedSessionId = useOrchestrationStore((s) => s.selectedSessionId);
   const mergePreview = useOrchestrationStore((s) => s.mergePreview);
   const isLoading = useOrchestrationStore((s) => s.isLoading);
 
-  const setActiveOrchestration = useOrchestrationStore((s) => s.setActiveOrchestration);
   const setSelectedSession = useOrchestrationStore((s) => s.setSelectedSession);
   const clearMergePreview = useOrchestrationStore((s) => s.clearMergePreview);
-
-  // Group tasks for plan preview
-  const parallelGroups = tasks.reduce((acc, task) => {
-    const group = task.parallelGroup || 0;
-    if (!acc[group]) acc[group] = [];
-    acc[group].push(task);
-    return acc;
-  }, [] as TaskInfo[][]);
 
   // If no active orchestration, show plan selection/creation
   if (!activeOrchestration) {

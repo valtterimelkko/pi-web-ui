@@ -4,12 +4,6 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  // Types
-  JSONRPCRequest,
-  JSONRPCResponse,
-  JSONRPCNotification,
-  JSONRPCError,
-  
   // Error codes
   JSONRPCErrorCode,
   JSONRPCServerErrorCode,
@@ -19,8 +13,6 @@ import {
   createJSONRPCError,
   
   // Schemas
-  JSONRPCVersionSchema,
-  JSONRPCIdSchema,
   JSONRPCErrorSchema,
   JSONRPCRequestSchema,
   JSONRPCResponseSchema,
@@ -31,12 +23,9 @@ import {
   InitializeParamsSchema,
   InitializeResultSchema,
   PromptParamsSchema,
-  PromptResultSchema,
   CancelParamsSchema,
   SteerParamsSchema,
   ReplayParamsSchema,
-  ReplayEventSchema,
-  ReplayResultSchema,
   ContentPartEventSchema,
   ToolCallEventSchema,
   ToolResultEventSchema,

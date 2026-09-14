@@ -5,8 +5,6 @@ import { normalizeToolName } from '../../lib/messageAdapter';
 import { TOOL_COLLAPSED_BY_DEFAULT } from '@pi-web-ui/shared';
 import {
   Terminal,
-  CheckCircle,
-  XCircle,
   ChevronRight,
   FileText,
   Edit3,
@@ -89,20 +87,6 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   send_command_input: 'Background input',
   wait: 'Wait',
 };
-
-// Get status icon based on tool state
-function getStatusIcon(hasResult: boolean, isError: boolean, isPending: boolean): React.ReactNode {
-  if (isPending) {
-    return <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />;
-  }
-  if (isError) {
-    return <XCircle className="w-3 h-3 text-red-500" />;
-  }
-  if (hasResult) {
-    return <CheckCircle className="w-3 h-3 text-emerald-500" />;
-  }
-  return null;
-}
 
 // Get primary parameter value for inline display (Kimi-style)
 function getPrimaryParam(args: unknown): string | null {
@@ -596,7 +580,6 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
   const displayName = TOOL_DISPLAY_NAMES[normalizeToolName(name)] ?? TOOL_DISPLAY_NAMES[name] ?? name;
   const icon = TOOL_ICONS[normalizeToolName(name)] ?? TOOL_ICONS[name] ?? <Terminal className="w-3.5 h-3.5" />;
   const primaryParam = getPrimaryParam(args);
-  const statusIcon = getStatusIcon(hasResult, isError, isPending);
 
   const handleToggleExpand = useCallback(() => {
     setIsExpanded(!isExpanded);

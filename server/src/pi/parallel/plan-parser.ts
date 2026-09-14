@@ -257,7 +257,7 @@ function findTaskId(tasks: TaskNode[], partialId: string): string | null {
  * Analyze parallelizability using topological sort with level grouping
  */
 function analyzeParallelizability(graph: DependencyGraph): TaskNode[][] {
-  const { nodes, edges } = graph;
+  const { nodes } = graph;
   const groups: TaskNode[][] = [];
   
   // Calculate in-degree for each node

@@ -47,7 +47,6 @@ let throttleWriteTimer: ReturnType<typeof setTimeout> | null = null;
  * broadcast event, which saturated the main thread during large session
  * replays (the 15s+ Command Code loads). */
 let throttlePendingValue: { state: unknown; version?: number } | null = null;
-let throttleCommittedValue: string | null = null;
 
 const persistStorageFlush = (name: string): void => {
   throttleWriteTimer = null;
@@ -55,7 +54,6 @@ const persistStorageFlush = (name: string): void => {
   try {
     const serialized = JSON.stringify(throttlePendingValue);
     localStorage.setItem(name, serialized);
-    throttleCommittedValue = serialized;
   } catch (error) {
     recordStorageFailure('write', error);
   }
@@ -86,7 +84,6 @@ const throttledStorage: PersistStorage<unknown> = {
   getItem: (name: string): { state: unknown; version?: number } | null => {
     try {
       const raw = localStorage.getItem(name);
-      throttleCommittedValue = raw;
       if (raw === null) return null;
       return JSON.parse(raw) as { state: unknown; version?: number };
     } catch (error) {
@@ -111,7 +108,6 @@ const throttledStorage: PersistStorage<unknown> = {
       throttleWriteTimer = null;
     }
     throttlePendingValue = null;
-    throttleCommittedValue = null;
     try {
       localStorage.removeItem(name);
     } catch (error) {
@@ -1446,14 +1442,14 @@ export const useSessionStore = create<SessionState>()(
           const prefs = await getPreferences();
           const serverMeta = (prefs.sessions as Record<string, SessionMeta> | undefined);
           if (serverMeta) {
-            set((state) => ({ sessionMeta: { ...serverMeta }, ...deriveLegacyFromMeta(serverMeta) }));
+            set(() => ({ sessionMeta: { ...serverMeta }, ...deriveLegacyFromMeta(serverMeta) }));
           } else if (prefs.archivedSessionPaths !== undefined) {
             set({ archivedSessionPaths: prefs.archivedSessionPaths });
             if (prefs.pinnedSessionPaths !== undefined) set({ pinnedSessionPaths: prefs.pinnedSessionPaths });
           }
         } catch (e) {
           console.warn('Failed to archive all sessions on server; reverting:', e);
-          set((state) => ({ sessionMeta: { ...prevMeta }, ...deriveLegacyFromMeta(prevMeta) }));
+          set(() => ({ sessionMeta: { ...prevMeta }, ...deriveLegacyFromMeta(prevMeta) }));
         }
       },
 
@@ -3571,7 +3567,6 @@ if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
     if (event.key !== STORAGE_KEY || event.newValue === null) return;
     if (event.storageArea && event.storageArea !== localStorage) return;
-    throttleCommittedValue = event.newValue;
 
     const incoming = parseCrossTabSessionMeta(event.newValue);
     if (!incoming) return;

@@ -35,7 +35,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
       
       try {
         getSessionInfo();
-      } catch (err) {
+      } catch {
         setError('Failed to load session info');
       }
       
@@ -120,7 +120,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                             setError('Request timed out. Please try again.');
                           }
                         }, 5000);
-                      } catch (err) {
+                      } catch {
                         setError('Failed to load session info');
                         setIsLoading(false);
                       }

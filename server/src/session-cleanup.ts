@@ -408,7 +408,7 @@ export class SessionCleanupService {
       return;
     }
 
-    for (const { key, path } of toDelete) {
+    for (const { path } of toDelete) {
       try {
         const entry = await registry.get(path)
           ?? await registry.getByPath(path)

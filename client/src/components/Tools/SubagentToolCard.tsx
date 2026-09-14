@@ -152,7 +152,7 @@ function getPrimaryParam(toolName: string, args: Record<string, unknown>): strin
   }
 
   // Fall back to first string param
-  for (const [key, value] of Object.entries(args)) {
+  for (const value of Object.values(args)) {
     if (typeof value === 'string' && value.length > 0) {
       return value.length > 60 ? '...' + value.slice(-57) : value;
     }
@@ -173,20 +173,10 @@ function getEditLines(args: Record<string, unknown>): string | null {
   return null;
 }
 
-// Format file size/line count
-function formatOutputStats(output: string): string {
-  const lines = output.split('\n').length;
-  const chars = output.length;
-  if (lines > 1) {
-    return `${lines} lines, ${chars.toLocaleString()} chars`;
-  }
-  return `${chars.toLocaleString()} chars`;
-}
-
 // Individual tool execution item
 const ToolExecutionItem = memo(function ToolExecutionItem({ 
   toolResult, 
-  index,
+  index: _index,
   isLast 
 }: { 
   toolResult: ToolResult; 
@@ -268,7 +258,7 @@ const ToolExecutionItem = memo(function ToolExecutionItem({
 // Task result section (for parallel/chain modes)
 const TaskSection = memo(function TaskSection({
   task,
-  index,
+  index: _index,
   isExpanded,
   onToggle,
 }: {
@@ -398,7 +388,7 @@ const SubagentSummarySection = memo(function SubagentSummarySection({
 });
 
 export const SubagentToolCard = memo(function SubagentToolCard({ 
-  name, 
+  name: _name, 
   args, 
   result,
   startTime,

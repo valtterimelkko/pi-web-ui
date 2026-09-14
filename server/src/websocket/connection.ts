@@ -781,7 +781,7 @@ export class WebSocketConnectionManager {
     clientId: string,
     data: Buffer,
     ws: WebSocket,
-    req: IncomingMessage
+    _req: IncomingMessage
   ): Promise<void> {
     const dataStr = data.toString();
     const protocol = detectProtocol(dataStr);

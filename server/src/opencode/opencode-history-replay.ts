@@ -2,7 +2,7 @@ import type { OpenCodeMessage } from './opencode-types.js';
 
 export function opencodeMessagesToReplayEvents(
   messages: OpenCodeMessage[],
-  piSessionId: string,
+  _piSessionId: string,
 ): Array<Record<string, unknown>> {
   const events: Array<Record<string, unknown>> = [];
 

@@ -46,7 +46,7 @@ const statusIcons: Record<string, string> = {
 };
 
 export function MergePreview({
-  worktreeId,
+  worktreeId: _worktreeId,
   branch,
   baseBranch,
   files,

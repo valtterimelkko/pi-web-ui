@@ -51,7 +51,6 @@ const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const MAX_PINNED_SESSIONS = MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME;
 const PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
 const LATE_PROMPT_LISTENER_TTL_MS = 30 * 60 * 1000;
-const IDLE_DETECTION_GRACE_MS = 3_000;
 /**
  * How recently a channel event must have arrived for the PTY idle handler
  * to leave the turn alone. Channel/MCP prompts may not produce PTY busy

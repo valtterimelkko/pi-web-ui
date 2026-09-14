@@ -352,7 +352,7 @@ export class SessionBroadcaster {
 
     const deadSockets: WebSocket[] = [];
 
-    for (const [sessionId, sockets] of this.subscribers) {
+    for (const sockets of this.subscribers.values()) {
       for (const ws of sockets) {
         if (ws.readyState === WebSocket.OPEN) {
           try {

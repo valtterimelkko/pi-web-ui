@@ -33,7 +33,6 @@ export function PlanPreview({
   }));
 
   const totalParallelizable = groupStats.filter((g) => g.canParallelize).length;
-  const estimatedTime = parallelGroups.length * 3; // Rough estimate: 3 min per group
 
   return (
     <div className="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden">

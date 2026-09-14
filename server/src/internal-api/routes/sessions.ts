@@ -1206,7 +1206,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** Bounded-bundle projection: drop §5 top-level mirrors, keep raw evidence. */
   function compactReceiptForEvidenceBundle(receipt: RunReceipt): RunReceipt {
-    const { cessation: _cessation, workState: _workState, ...rest } = receipt;
+    const rest = { ...receipt };
+    delete (rest as Partial<RunReceipt>).cessation;
+    delete (rest as Partial<RunReceipt>).workState;
     return rest;
   }
 

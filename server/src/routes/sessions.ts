@@ -427,15 +427,6 @@ function generateSessionMarkdown(session: SessionInfo, entries: SessionEntry[]):
     })
     .join('\n---\n\n');
 
-  const frontMatter = `---
-title: "Session ${session.id}"
-cwd: "${session.cwd}"
-exported: "${new Date().toISOString()}"
-message_count: ${entries.filter(e => e.type === 'message').length}
----
-
-`;
-
   return `# Session ${session.id}
 
 **Working Directory:** \`${session.cwd}\`

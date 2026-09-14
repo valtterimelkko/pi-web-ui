@@ -37,7 +37,6 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const inputValue = useChatStore((state) => state.inputValue);
   const selectedFiles = useChatStore((state) => state.selectedFiles);
   const uploadedFiles = useChatStore((state) => state.uploadedFiles);
   const isDragging = useChatStore((state) => state.isDragging);
