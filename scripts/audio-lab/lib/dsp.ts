@@ -267,6 +267,61 @@ export function silenceRuns(
   return runs;
 }
 
+/**
+ * Estimate the fundamental frequency of a (near-)periodic signal by
+ * autocorrelation.
+ *
+ * Used to prove that a recording contains the audio that was asked for, not
+ * merely that it contains energy: a capture chain that resampled or reordered
+ * bytes could still show plenty of energy while playing the wrong thing.
+ * Returns 0 when no convincing periodicity exists in the search band.
+ */
+export function estimateFundamental(
+  samples: Float32Array,
+  sampleRate: number,
+  minHz = 80,
+  maxHz = 2000
+): { frequencyHz: number; confidence: number } {
+  const minLag = Math.max(2, Math.floor(sampleRate / maxHz));
+  const maxLag = Math.min(Math.floor(samples.length / 2), Math.ceil(sampleRate / minHz));
+  if (maxLag <= minLag) return { frequencyHz: 0, confidence: 0 };
+
+  // Work on the loudest contiguous region so leading/trailing silence does not
+  // dilute the correlation.
+  const windowSamples = Math.min(samples.length, Math.round(sampleRate * 0.25));
+  let bestOffset = 0;
+  let bestEnergy = -1;
+  const step = Math.max(1, Math.floor(windowSamples / 4));
+  for (let start = 0; start + windowSamples <= samples.length; start += step) {
+    let energy = 0;
+    for (let i = start; i < start + windowSamples; i += 1) energy += samples[i] * samples[i];
+    if (energy > bestEnergy) {
+      bestEnergy = energy;
+      bestOffset = start;
+    }
+  }
+  const window = samples.subarray(bestOffset, bestOffset + windowSamples);
+  let zeroLag = 0;
+  for (let i = 0; i < window.length; i += 1) zeroLag += window[i] * window[i];
+  if (zeroLag <= EPSILON) return { frequencyHz: 0, confidence: 0 };
+
+  let bestLag = 0;
+  let bestValue = 0;
+  for (let lag = minLag; lag <= maxLag; lag += 1) {
+    let sum = 0;
+    for (let i = 0; i + lag < window.length; i += 1) sum += window[i] * window[i + lag];
+    const normalised = sum / zeroLag;
+    if (normalised > bestValue) {
+      bestValue = normalised;
+      bestLag = lag;
+    }
+  }
+  if (bestLag === 0 || bestValue < 0.2) {
+    return { frequencyHz: 0, confidence: Math.max(0, bestValue) };
+  }
+  return { frequencyHz: sampleRate / bestLag, confidence: Math.min(1, bestValue) };
+}
+
 /** Peak of a signal with parabolic sub-frame interpolation, in frames. */
 export function parabolicPeak(values: Float32Array, index: number): { position: number; value: number } {
   if (index <= 0 || index >= values.length - 1) {

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Audio lab harness</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      button { font-size: 1.2rem; padding: 0.6rem 1.2rem; }
+      #log { margin-top: 1rem; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+      .state { color: #555; }
+    </style>
+  </head>
+  <body>
+    <h1>Audio lab harness</h1>
+    <p class="state">
+      Lab-only browser entrypoint. It exists so the lab can render known audio through a real
+      browser audio graph and measure what the operating system received. It is not a substitute
+      for the product player; the product lane drives the real application.
+    </p>
+    <p>
+      <button id="arm">Arm audio (user gesture)</button>
+      <button id="silence">Render nothing</button>
+    </p>
+    <div id="log">idle</div>
+    <script src="./harness.js"></script>
+  </body>
+</html>
