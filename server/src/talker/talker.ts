@@ -33,7 +33,9 @@
  *   8. Statements and worker-directed questions ACCUMULATE into the draft —
  *      the operator's composing thread. Nothing is ever silently replaced or
  *      aged out of existence; supersession holds both parts and the state
- *      view tells the talker, who asks which.
+ *      view tells the talker, who asks which. (P22 narrowing: a statement
+ *      the model marked as addressed to the talker itself — [[to-talker]] —
+ *      does not join; suppression only ever shrinks what a "yes" can reach.)
  *   9. Ageing expires the CONFIRMATION, not the draft. A confirmation that
  *      arrives after the window gets a mechanical refusal that quotes the
  *      draft verbatim and re-arms the window — never a model-composed
@@ -49,7 +51,10 @@
  *     confirm + lapsed draft      → mechanical refusal + surfacing + re-arm (no model call)
  *     confirm, nothing pending    → conversational model turn ("send what?")
  *     cancel                      → clear draft → conversational model turn
- *     otherwise                   → append to draft → conversational model turn
+ *     otherwise                   → conversational model turn, then the
+ *                                   utterance joins the draft — unless the
+ *                                   model marked it addressed to the talker
+ *                                   ([[to-talker]], P22): nothing is held
  *   Every conversational turn rebuilds the state view fresh and sees the
  *   draft (parts, age, needs-re-confirmation) and the last release.
  */
@@ -130,6 +135,47 @@ function reconfirmAskReply(snapshot: DraftSnapshot): string {
 function selectionClarifyReply(snapshot: DraftSnapshot): string {
   const parts = snapshot.utterances.map((u, i) => `${i + 1}. "${u.text}"`).join(' ');
   return `I am holding ${snapshot.utterances.length} things — ${parts}. Which one?`;
+}
+
+/**
+ * P22 — the to-talker marker (the [[ask-worker]] mould, narrowed to drafting).
+ *
+ * The draft gate had a hole on the talker's own side of the relay: an
+ * imperative addressed to the TALKER — "summarise what's been done", "read
+ * that back" — is not a question, so it classified as `statement` and was
+ * held, verbatim, as a pending WORKER instruction. The model then offered to
+ * send the operator's own words back at them, and a stray "yes" could
+ * release them.
+ *
+ * The repair is narrowing, in the [[ask-worker]] mould: the model may end a
+ * reply with an end-anchored [[to-talker]] tag when it judged the utterance
+ * was addressed to it and it answered from what it holds; the harness then
+ * does not draft the utterance. The consequences are mechanical and one-way:
+ *   - suppression only: the tag can keep words OUT of the draft, never put
+ *     anything in and never release anything — a wrong guess reduces what a
+ *     later "yes" can reach, so it is always the safe direction (the
+ *     mis-marked instruction meets the mechanical nothing-pending reply);
+ *   - honoured only on statement-classified turns — the harness passes a
+ *     draft candidate nowhere else, so worker-directed questions and
+ *     ask-the-worker offers keep their own classification-based paths and
+ *     model behaviour cannot widen the gate;
+ *   - the tag is stripped wherever it appears: a protocol marker is never
+ *     spoken aloud, honoured or not.
+ * A marked utterance joins no draft, so it opens no composition batch and
+ * earns no receipt: the operator asked the talker, and the talker answered.
+ */
+
+const ADDRESSED_TAG_AT_END = /\[\[\s*to-talker\s*\]\]\s*$/i;
+const ADDRESSED_TAG_ANYWHERE = /\[\[\s*to-talker\s*\]\]/gi;
+
+/** True when the reply ENDS with the tag (trailing whitespace tolerated). */
+function isAddressedToTalkerMark(reply: string): boolean {
+  return ADDRESSED_TAG_AT_END.test(reply);
+}
+
+/** The reply as the operator should hear it: the tag removed. */
+function stripTalkerAddressedMarker(reply: string): string {
+  return reply.replace(ADDRESSED_TAG_ANYWHERE, '').trim();
 }
 
 export class TalkerSession {
@@ -302,10 +348,17 @@ export class TalkerSession {
           (residueClass === 'question' && !isMetaSendQuestion(residue) && isWorkerDirectedQuestion(residue));
         if (residueIsDraftable) {
           // The residue opens a fresh composition batch (the cancel cleared
-          // any held draft), so its answer-ready moment owes one receipt.
+          // any held draft), so its answer-ready moment owes one receipt —
+          // unless the model marks the residue addressed to the talker
+          // ([[to-talker]], P22): then nothing is held and nothing opened.
+          // The append happens in conversationalTurn, after the model turn.
           const residueRecord = this.utteranceLog.record(residue, turn);
-          this.proposals.appendToDraft(residueRecord.id, residue, turn);
-          return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled, opensBatch: true, ...focusFlag });
+          return this.conversationalTurn(utterance, utteranceClass, turn, {
+            cancelled,
+            draftCandidate: { utteranceId: residueRecord.id, text: residue },
+            opensBatch: true,
+            ...focusFlag,
+          });
         }
       }
       if (!cancelled && !residue) {
@@ -349,16 +402,20 @@ export class TalkerSession {
           : undefined;
       return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false, offerCandidate, ...focusFlag });
     }
-    // Receipt emission point (plan §4.1 rule 2): when this utterance OPENS a
-    // composition batch (no draft was held), the harness owes one receipt for
-    // the whole batch. It is consumed atomically here — takeReceipt(), the
-    // same once-per-relay consumption pinned in pending-proposal.ts — and
-    // travels on the turn result as a fixed-vocabulary string, spoken ahead
-    // of everything else. Continuing utterances in the same batch mint no
-    // further receipt: at most one per relay, never one per utterance.
+    // P22: the statement still ACCUMULATES into the draft — but the append
+    // now happens after the model turn (in conversationalTurn), so the model
+    // can first judge whether the utterance was addressed to the talker
+    // itself. Unmarked, the behaviour is exactly as before: the operator's
+    // verbatim words join the draft, and the batch this utterance opened
+    // (opensBatch, taken pre-turn) still owes its one receipt. Marked
+    // [[to-talker]], nothing is held and no batch opened — no receipt either.
     const opensBatch = this.proposals.snapshotDraft() === null;
-    this.proposals.appendToDraft(record.id, utterance, turn);
-    return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: true, opensBatch, ...focusFlag });
+    return this.conversationalTurn(utterance, utteranceClass, turn, {
+      recordedCandidate: true,
+      draftCandidate: { utteranceId: record.id, text: utterance },
+      opensBatch,
+      ...focusFlag,
+    });
   }
 
   /**
@@ -407,6 +464,8 @@ export class TalkerSession {
       opensBatch?: boolean;
       /** P18/1: the operator's unanswered question, held verbatim if the model offers. */
       offerCandidate?: { utteranceId: number; text: string };
+      /** P22: a statement/residue that joins the draft unless the model marks it addressed to the talker. */
+      draftCandidate?: { utteranceId: number; text: string };
       /** P18/2: the operator's focus control, projection input only. */
       operatorFocus?: boolean;
     }
@@ -461,7 +520,22 @@ export class TalkerSession {
     // otherwise). The marker is stripped in every case — a protocol tag must
     // never be spoken aloud, whether or not it was honoured.
     const offered = flags.offerCandidate !== undefined && isAskWorkerOffer(reply);
+    // P22 — the narrowed draft decision. A statement (or cancel residue)
+    // joins the draft unless the model marked the utterance as addressed to
+    // the talker itself; the tag is honoured only here, only end-anchored,
+    // and it can only SUPPRESS a draft — never create or release one.
+    const addressedToTalker = flags.draftCandidate !== undefined && isAddressedToTalkerMark(reply);
     let opensBatch = flags.opensBatch ?? false;
+    if (addressedToTalker) {
+      // A marked utterance joins nothing: no batch opens, so no receipt —
+      // the operator asked the talker, and the talker answered it.
+      opensBatch = false;
+    } else if (flags.draftCandidate) {
+      // Unmarked: the exact pre-P22 behaviour — the operator's verbatim
+      // words join the draft and still need their own confirmation.
+      opensBatch = opensBatch || this.proposals.snapshotDraft() === null;
+      this.proposals.appendToDraft(flags.draftCandidate.utteranceId, flags.draftCandidate.text, turn);
+    }
     if (offered && flags.offerCandidate) {
       // A question that opens a composition batch is a receipt moment like any
       // append (§4.1 rule 2) — computed here because the batch exists only if
@@ -469,7 +543,7 @@ export class TalkerSession {
       opensBatch = opensBatch || this.proposals.snapshotDraft() === null;
       this.proposals.appendToDraft(flags.offerCandidate.utteranceId, flags.offerCandidate.text, turn);
     }
-    reply = stripAskWorkerMarker(reply);
+    reply = stripTalkerAddressedMarker(stripAskWorkerMarker(reply));
 
     this.history.append({ role: 'assistant', content: reply, kind: 'talker', turn });
     this.history.maybeTrim(this.proposals.pending !== null);
@@ -493,6 +567,7 @@ export class TalkerSession {
       latency,
       ...(receiptAck !== undefined ? { receiptAck } : {}),
       ...(offered ? { askWorkerOffer: true } : {}),
+      ...(addressedToTalker ? { addressedToTalker: true } : {}),
       ...(error !== undefined ? { error } : {}),
     };
   }

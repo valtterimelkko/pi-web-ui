@@ -148,4 +148,15 @@ export interface TalkerTurnResult {
    * any other proposal. The model's reply is never the relay text.
    */
   askWorkerOffer?: boolean;
+  /**
+   * Present when the harness honoured a [[to-talker]] mark this turn (P22):
+   * the model judged the operator's utterance was addressed to the talker
+   * itself — a request it could answer from what it holds ("summarise what's
+   * been done", "read that back") — so the harness did NOT hold those words
+   * as a pending worker instruction. Narrowing only: the mark can suppress a
+   * draft, never create or release one, and it is honoured solely on
+   * statement-classified turns. A marked utterance opens no composition
+   * batch, so no receipt accompanies it.
+   */
+  addressedToTalker?: boolean;
 }

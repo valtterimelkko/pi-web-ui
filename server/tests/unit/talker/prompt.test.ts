@@ -22,7 +22,13 @@ describe('talker system prompt (v3 harness variant)', () => {
     // P20 raised this from 4200: the new WORKER SESSION HISTORY section costs
     // ~450 chars, existing prose was tightened to compensate, and the prompt
     // must stay a one-screen leanness budget — not grow per feature.
-    expect(prompt.length).toBeLessThanOrEqual(4600); // ~1150 tokens hard ceiling
+    // P22 raised it to 4650: the new TALKING-TO-YOU-NOT-THE-WORKER section
+    // costs ~465 chars; ~210 chars were tightened from existing prose in the
+    // same edit (pushback, history, unsure, pending-line paragraphs), and the
+    // remaining ~35 chars of growth are covered by this ceiling, not drift.
+    // Parent review restored 'and do not act confused' (a designed guard on the
+    // mandatory pushback path, no other test covers it): +~28 chars, ceiling +30.
+    expect(prompt.length).toBeLessThanOrEqual(4680); // ~1170 tokens hard ceiling
   });
 
   it('justifies the gate rather than merely asserting it (plan §10.11 binding finding)', () => {
@@ -35,6 +41,10 @@ describe('talker system prompt (v3 harness variant)', () => {
   it('names the operator-pushback situation explicitly (mandatory scenario)', () => {
     const prompt = loadTalkerSystemPrompt();
     expect(prompt).toMatch(/just do it|stop asking|don't ask/i);
+    // The designed response, not just the situation (parent review, P22): a
+    // pushback must not collapse the gate into either caving or muddle.
+    expect(prompt).toMatch(/do not simply agree/i);
+    expect(prompt).toMatch(/do not act confused/i);
   });
 
   it('tells the model it never composes or announces relay text (harness owns both)', () => {
@@ -74,6 +84,25 @@ describe('talker system prompt (v3 harness variant)', () => {
     const prompt = loadTalkerSystemPrompt();
     expect(prompt).toMatch(/focus on/i);
     expect(prompt).toMatch(/cannot switch it/i);
+  });
+
+  // P22: requests addressed to the talker itself are answered, not held. The
+  // prompt teaches the [[to-talker]] tag with the same narrowness as
+  // [[ask-worker]]: only for a request actually answered from what the
+  // talker holds, never for a worker instruction however phrased, and the
+  // unsure default is to hold the words as usual.
+  it('teaches the self-service answer with its mechanical tag and its narrow scope', () => {
+    const prompt = loadTalkerSystemPrompt();
+    expect(prompt).toContain('[[to-talker]]');
+    expect(prompt).toMatch(/talking to you, not the worker/i);
+    expect(prompt).toMatch(/summarise what's been done|read that back/i);
+    // The narrow scope: not worker instructions; not the ask-worker case.
+    expect(prompt).toMatch(/never for an instruction to the worker/i);
+    expect(prompt).toMatch(/never for a question you cannot answer/i);
+    // Unsure default: hold, don't mark.
+    expect(prompt).toMatch(/omit the tag/i);
+    // The two tags are distinguished from each other.
+    expect(prompt).toContain('[[ask-worker]]');
   });
 
   // P20: the snapshot may now carry the worker session's earlier turns. The
