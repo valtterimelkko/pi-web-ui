@@ -15,7 +15,23 @@ import { fileURLToPath } from 'node:url';
 const implementation = /^(server|client|shared|packages\/internal-api-mcp)\/src\/.*\.(?:[cm]?[jt]s|[jt]sx)$/;
 const testFile = /\.(?:test|spec)\.[^.]+$/;
 function parseArgs(args) {
-  const options = { root: fileURLToPath(new URL('..', import.meta.url)), base: 'HEAD', maxWarnings: 1738 };
+  // RE-BASELINED 2026-09-14 (was 1738). Test files and utility scripts are now
+  // exempt from no-explicit-any / no-non-null-assertion in .eslintrc.json — mock
+  // stubs and `!` after an assertion are normal test practice, and they had grown
+  // to ~1,400 of the 1,700 warnings, so every thorough test file became a debt
+  // payment. The actual count fell 1700 -> 306.
+  //
+  // The ceiling MUST move with that change. Leaving it at 1738 would hand out
+  // ~1,432 phantom warnings of headroom, and since this ceiling is a GLOBAL
+  // number covering production as well, the ratchet could then never fire at all
+  // — turning a working gate into a dead one, which is worse than a tight gate
+  // because nothing looks wrong. Headroom is a measurement gap, not safety.
+  //
+  // 306 actual + 20 of genuine margin. The margin is modest and deliberately so:
+  // the per-file check below already fails any NEW warning in changed production
+  // source, so this ceiling is the backstop against gradual drift, not the
+  // primary gate. Raise it only with the same reasoning recorded.
+  const options = { root: fileURLToPath(new URL('..', import.meta.url)), base: 'HEAD', maxWarnings: 326 };
   while (args.length) {
     const key = args.shift(); const value = args.shift();
     if (!value || !['--root', '--base', '--max-warnings'].includes(key)) throw new Error('Usage: check-lint-ratchet.mjs [--root dir] [--base revision] [--max-warnings N]');
