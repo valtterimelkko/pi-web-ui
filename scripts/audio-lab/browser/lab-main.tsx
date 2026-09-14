@@ -23,7 +23,6 @@ import { createRoot } from 'react-dom/client';
 import {
   chunkIntoSentences,
   speechArbiter,
-  TIER_ANSWER,
   type ArbiterState,
 } from '../../../client/src/lib/speechArbiter.js';
 import { useReadAloud, primePlaybackQueue } from '../../../client/src/hooks/useReadAloud.js';

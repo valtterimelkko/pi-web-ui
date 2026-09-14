@@ -16,7 +16,7 @@
  *     independently captured audio instead of asserting that an event happened.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { startStaticServer, type StaticServer } from './static-server.js';
@@ -43,6 +43,13 @@ export interface ProductLaneOptions {
   fixtures: FixtureManifest;
   /** When set, requests are forwarded to a REAL server instead of fixtures. */
   realServerBase?: string;
+  /** Cookie header for the real server (cookie-authenticated lane). Applied
+   *  explicitly so auth is guaranteed to be exercised server-side rather than
+   *  depending on the interception context's cookie jar. */
+  authCookieHeader?: string;
+  /** When true, served 200 bodies are dumped per request (real-transport
+   *  source-of-truth) under attemptDir/source/. */
+  dumpServedBodies?: boolean;
   attemptDir: string;
   /** Extra browser flags (e.g. fake microphone for the capture scenarios). */
   chromeArgs?: string[];
@@ -161,8 +168,19 @@ export class ProductLane {
       if (this.options.realServerBase) {
         // Real transport: forward to the disposable server and record what came
         // back. This keeps the production path exercised rather than concealed.
-        const forwarded = await route.fetch();
+        const target = `${this.options.realServerBase.replace(/\/$/, '')}/api/tts`;
+        const forwarded = await route.fetch({
+          url: target,
+          ...(this.options.authCookieHeader
+          ? { headers: { cookie: this.options.authCookieHeader, 'content-type': 'application/json' } }
+          : {}),
+        });
         const bytes = Buffer.from(await forwarded.body());
+        if (this.options.dumpServedBodies && forwarded.status() === 200) {
+          const servedDir = path.join(this.options.attemptDir, 'source');
+          mkdirSync(servedDir, { recursive: true, mode: 0o700 });
+          writeFileSync(path.join(servedDir, `req-${String(index).padStart(2, '0')}.mp3`), bytes, { mode: 0o600 });
+        }
         const entry: TtsRequestRecord = {
           index: index++,
           text,

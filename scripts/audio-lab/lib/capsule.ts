@@ -15,7 +15,7 @@
 
 import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { OwnedProcess, parseListeners, verifyNoResiduals, type CleanupReport } from './proc.js';
+import { parseListeners, verifyNoResiduals, type CleanupReport } from './proc.js';
 import { PulseCapsule } from './pulse.js';
 import { XvfbCapsule, launchChrome, type ChromeRun } from './platform.js';
 import { findFreeDisplay, findFreePort, sha256File } from './layout.js';

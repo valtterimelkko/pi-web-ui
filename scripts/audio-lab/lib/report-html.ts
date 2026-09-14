@@ -26,8 +26,8 @@ export interface ReportOptions {
   maxClips?: number;
 }
 
-function escapeHtml(value: string): string {
-  return value
+function escapeHtml(value: string | undefined | null): string {
+  return (value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

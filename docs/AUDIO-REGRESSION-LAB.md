@@ -113,6 +113,7 @@ jitter, natural pauses, repeated identical text) to keep passing.
 | `doctor` | check binaries, private daemon start, real capture, bundle, fixtures, disk |
 | `fixtures [--provider local\|endpoint]` | build/verify the speech corpus |
 | `run [--scenario id,…] [--root dir] [--label id]` | run the matrix, write an immutable record |
+| `app [--env-file <file>]` | authenticated compiled-app lane: real login + real `/api/tts` (see below) |
 | `soak [--minutes N \| --repeat N] [--scenario id]` | repeat runs or a long-horizon soak; samples disk per pass |
 | `verify-record <attempt-dir>` | offline re-verification of hashes and verdict consistency |
 | `report <attempt-dir>` | regenerate the self-contained HTML report |
@@ -138,6 +139,44 @@ can never silently reuse a stale recording.
 One registry (`scripts/audio-lab/lib/scenarios.ts`); add scenarios there rather
 than as new scripts. Each scenario declares whether it is required, runs its
 own negative control in its own capture, and drives the real product modules.
+
+## Reading a failed app-lane run — the lab working, not broken
+
+The app lane's job is to find what instant-fixture lanes cannot. First real
+run (app‑2026‑09‑14T18‑00‑25‑195Z): with the REAL `/api/tts` backend, the
+read played `chunk-00, chunk-01, [5.5 s hole], chunk-03, chunk-02, chunk-04,
+chunk-05` — one chunk arrived seconds late and audibly AFTER its successor
+(waveform-scored at 0.995 at 15.8 s, while its slot sat silent from 7.3 s).
+That is exactly the “words were eaten / came late” class the lab was built to
+measure, on the real transport, with immutable evidence. **An app-lane exit 1
+with evidence like this is a finding to triage in the product player (one-ahead
+priming under slow synthesis), not a lab defect** — reproduce with
+`cli.ts app --label app-repro`, then root-cause in `useReadAloud`/
+`speechArbiter` with TDD before any behavioural change.
+
+## The authenticated app lane (`app`)
+
+The product-player lane serves cached fixture bytes, so it deliberately does
+not exercise transport or auth. The `app` command covers exactly those:
+
+- boots the **real compiled server** through the repo's disposable validation
+  launcher (isolated state dir, a throwaway bcrypt password minted per boot —
+  never the production secret; only `OPENAI_API_KEY` is imported from an
+  explicit env file by the launcher's allowlist);
+- **denial control first**: a no-cookie `POST /api/tts` against that server
+  must be refused, or the lane refuses to run;
+- logs in over HTTP exactly as the browser does and drives the real product
+  player with the cookie attached, forwarding every `/api/tts` request to the
+  live endpoint;
+- the oracle's source of truth is the **bytes actually served in that run**
+  (dumped per request under the attempt's `source/`), not an earlier
+  synthesis, so non-deterministic TTS cannot fake or break the comparison.
+
+Credentials stay outside the repo (see `SECURITY.md`): the env file is
+referenced by path at runtime only, `verify.sh` unsets credential variables,
+and evidence/audio never enters Git. Known honest gap: the reading-level-change
+scenario is recorded `not_run` until a Drive-Mode harness exists — the app
+lane exits 2 (missing proof), never green, while that gap stands.
 
 | ID | What it proves |
 |---|---|

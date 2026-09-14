@@ -101,6 +101,11 @@ export interface BuildSourceOptions {
   analysisRate: number;
   /** Time-compress the source to match a non-1.0 playback rate. */
   sourceTimeScale?: number;
+  /** Real-transport lane: directory of per-request served bodies (req-NN.mp3).
+   *  When a matching file exists it is the source of truth INSTEAD of the
+   *  fixture — the live endpoint, not an earlier synthesis, defines what the
+   *  browser should have rendered. */
+  servedDir?: string;
 }
 
 /**
@@ -121,6 +126,30 @@ export async function buildSourceChunks(options: BuildSourceOptions): Promise<So
   for (let index = 0; index < options.chunkTexts.length; index += 1) {
     const text = options.chunkTexts[index];
     const fixture = byText.get(text);
+    const servedPath =
+      options.servedDir &&
+      options.requests[index] &&
+      existsSync(path.join(options.servedDir, `req-${String(options.requests[index].index).padStart(2, '0')}.mp3`))
+        ? path.join(options.servedDir, `req-${String(options.requests[index].index).padStart(2, '0')}.mp3`)
+        : null;
+    if (servedPath) {
+      // Real transport: the served bytes are the source of truth. The fixture
+      // text match still guards against the endpoint synthesising the wrong
+      // words — the request log records what text produced these bytes.
+      const served = await decodeToMonoF32(servedPath, options.analysisRate);
+      const scaled =
+        options.sourceTimeScale && options.sourceTimeScale !== 1
+          ? resampleLinear(served, options.analysisRate, options.analysisRate / options.sourceTimeScale)
+          : served;
+      const servedRequest = options.requests[index];
+      chunks.push({
+        id: `chunk-${String(index).padStart(2, '0')}`,
+        text,
+        samples: scaled,
+        encodedHash: servedRequest.sha256 || 'served',
+      });
+      continue;
+    }
     if (!fixture) throw new Error(`No fixture for chunk text: ${JSON.stringify(text)}`);
     const raw = await decodeToMonoF32(fixture.mp3Path, options.analysisRate);
     // resampleLinear(x, rate, rate/scale) yields a source of length
@@ -174,6 +203,8 @@ export interface RunScenarioOptions {
   /** Capture window tail after the drive settles, ms. */
   settleMs?: number;
   tolerances?: OracleTolerances;
+  /** Real-transport lane: per-request served bodies become the oracle source. */
+  servedDir?: string;
 }
 
 /** Run one scenario: negative control, drive, capture, measure, assert. */
@@ -236,6 +267,7 @@ export async function runScenario(options: RunScenarioOptions): Promise<Scenario
     fixtures,
     analysisRate: tolerances.analysisRate,
     sourceTimeScale: scenario.sourceTimeScale,
+    ...(options.servedDir ? { servedDir: options.servedDir } : {}),
   });
   const output = await decodeToMonoF32(capture.wavPath, tolerances.analysisRate);
   const effectiveTolerances: OracleTolerances =

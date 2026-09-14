@@ -5,6 +5,7 @@
  *   doctor          check the host can actually run the lab, and say what is missing
  *   fixtures        build or verify the speech fixture corpus
  *   run             run the required scenario matrix in the product-player lane
+ *   app             authenticated compiled-app lane (real login + real /api/tts)
  *   app             run the authenticated full-application lane
  *   soak            repeat runs / long-horizon soak with resource sampling
  *   verify-record   re-check a finalised attempt offline (hashes + consistency)
@@ -30,6 +31,8 @@ import {
 import { buildFixtures, allFixtureSpecs, DIAGNOSTIC_CORPUS, loadFixtureManifest, verifyFixtureManifest, corpusHash } from './lib/fixtures.js';
 import { ProductLane } from './lib/product-lane.js';
 import { PRODUCT_LANE_SCENARIOS, scenarioById } from './lib/scenarios.js';
+import { APP_LANE_SCENARIOS } from './lib/app-scenarios.js';
+import { bootDisposableApp, assertUnauthenticatedDenied } from './lib/app-server.js';
 import { runScenario, verifyChunking, type LabPage, type ScenarioResult } from './lib/runner.js';
 import { runTool } from './lib/audio-io.js';
 import { writeManifest } from './lib/manifest.js';
@@ -236,11 +239,6 @@ async function buildLabBundle(root: string): Promise<string> {
   return out;
 }
 
-async function connectChrome(port: number): Promise<unknown> {
-  const { chromium } = await import('playwright');
-  return chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-}
-
 export interface LaneOptions {
   root: string;
   scenarioIds: string[];
@@ -390,6 +388,171 @@ async function runProductLane(options: LaneOptions): Promise<{ results: Scenario
   return { results, attemptDir: layout.attemptDir, runId };
 }
 
+async function commandApp(args: ParsedArgs): Promise<number> {
+  const root = resolveRoot(args);
+  const envFile = flagString(args, 'env-file');
+  const app = await bootDisposableApp({
+    repoRoot: REPOSITORY_ROOT,
+    workDir: path.join(root, 'app'),
+    envFile,
+    log: (message) => log(`[app] ${message}`),
+  });
+  let exitCode = 2;
+  try {
+    const denial = await assertUnauthenticatedDenied(app);
+    log(`[app] denial control: ${denial.detail} -> ${denial.ok ? 'PASS' : 'FAIL'}`);
+    if (!denial.ok) throw new Error('unauthenticated /api/tts was not denied — refusing to continue');
+
+    const endpointCorpus = corpusHash(allFixtureSpecs(), 'endpoint', 'alloy');
+    const fixtures =
+      loadFixtureManifest(root, endpointCorpus) ??
+      (await buildFixtures({
+        root,
+        specs: allFixtureSpecs(),
+        provider: 'endpoint',
+        voice: 'alloy',
+        endpoint: { baseUrl: app.baseUrl, password: app.password },
+        log: (message) => log(`[app] ${message}`),
+      }));
+
+    const bundleDir = existsSync(path.join(labBundleDir(root), 'scripts/audio-lab/browser/lab.html'))
+      ? labBundleDir(root)
+      : await buildLabBundle(root);
+
+    const runId = flagString(args, 'label') ?? `app-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    const attempt = nextAttempt(root, runId);
+    const layout = createRunLayout(root, runId, attempt);
+    log(`[app] ${runId} attempt ${attempt} -> ${layout.attemptDir}`);
+
+    const capsule = new AudioLabCapsule({ attemptDir: layout.attemptDir });
+    const results: ScenarioResult[] = [];
+    let cleanup: unknown = null;
+    try {
+      const calibration = await capsule.prepare();
+      log(`[app] calibration: ${calibration.detail}`);
+      if (!calibration.ok) throw new Error(`Calibration failed: ${calibration.detail}`);
+
+      await capsule.launchBrowser();
+      const { chromium } = await import('playwright');
+      const browser = await chromium.connectOverCDP(`http://127.0.0.1:${capsule.debugPort}`);
+      const context = browser.contexts()[0];
+      if (!context) throw new Error('Chrome exposed no browser context over CDP');
+      const page = (context.pages()[0] ?? (await context.newPage())) as unknown as LabPage;
+      await page.setViewportSize({ width: 1280, height: 800 });
+
+      const lane = new ProductLane({
+        bundleDir,
+        fixtures,
+        attemptDir: layout.attemptDir,
+        realServerBase: app.baseUrl,
+        authCookieHeader: app.cookieHeader,
+        dumpServedBodies: true,
+      });
+      await lane.start(page);
+      await page.goto(lane.pageUrl, { waitUntil: 'load' });
+      await page.click('#arm');
+      const armed = await page.evaluate(() => {
+        const api = (
+          globalThis as unknown as { __labProduct: { contextState(): { state: string; sampleRate: number } } }
+        ).__labProduct;
+        return api.contextState();
+      });
+      log(`[app] armed: ${JSON.stringify(armed)}`);
+
+      const firstCorpus = fixtures.chunks.map((chunk) => chunk.text).slice(0, 6);
+      const chunkCheck = await verifyChunking(page, firstCorpus.join(' '), firstCorpus);
+      if (!chunkCheck.ok) throw new Error(`chunking mismatch: ${JSON.stringify(chunkCheck.actual)}`);
+
+      for (const scenario of APP_LANE_SCENARIOS) {
+        log(`[app] scenario ${scenario.id}: ${scenario.title}`);
+        const started = Date.now();
+        let result: ScenarioResult;
+        try {
+          result = await runScenario({
+            scenario,
+            capsule,
+            lane,
+            page,
+            fixtures,
+            servedDir: path.join(layout.attemptDir, 'source'),
+            log: (message) => log(`      ${message}`),
+          });
+          result.evidence.durationMs = Date.now() - started;
+        } catch (error) {
+          const messageText = error instanceof Error ? error.message : String(error);
+          const notRun = messageText.startsWith('not_run:');
+          result = {
+            id: scenario.id,
+            title: scenario.title,
+            required: scenario.required,
+            status: notRun ? 'not_run' : 'indeterminate',
+            assertions: [],
+            reasons: [messageText],
+            measurement: null,
+            evidence: { durationMs: Date.now() - started },
+            capturePath: null,
+            controlStatus: 'unknown',
+            requests: [],
+          };
+        }
+        results.push(result);
+        mkdirSync(path.join(layout.attemptDir, 'scenarios'), { recursive: true, mode: 0o700 });
+        writeFileSync(
+          path.join(layout.attemptDir, 'scenarios', `${result.id}.json`),
+          `${JSON.stringify(result, null, 2)}\n`
+        );
+        log(`[app] scenario ${result.id}: ${result.status}`);
+      }
+
+      lane.writeRequestLog();
+      writeFileSync(
+        path.join(layout.attemptDir, 'events', 'lane.json'),
+        `${JSON.stringify(
+          {
+            lane: 'app',
+            appServer: { baseUrl: app.baseUrl, pid: app.process.pid, auth: 'throwaway bcrypt cookie' },
+            denialControl: denial,
+            fixtures: { provider: fixtures.provider, voice: fixtures.voice, corpusHash: fixtures.corpusHash },
+            requests: lane.requests,
+          },
+          null,
+          2
+        )}\n`
+      );
+      await lane.stop();
+      await page.screenshot({ path: path.join(layout.attemptDir, 'screenshots', 'final.png') });
+    } finally {
+      cleanup = await capsule.shutdown();
+      log(`[app] cleanup ok=${(cleanup as { ok?: boolean }).ok === true}`);
+    }
+
+    writeManifest({
+      attemptDir: layout.attemptDir,
+      runId,
+      attempt,
+      results,
+      capsuleIdentity: capsule.capsuleIdentity,
+      cleanup,
+      labVersion: LAB_VERSION,
+      fixturesProvider: 'endpoint',
+    });
+    await writeHtmlReport(layout.attemptDir);
+
+    const failed = results.filter((r) => r.status === 'failed');
+    const unresolved = results.filter((r) => r.status === 'not_run' || r.status === 'indeterminate');
+    const passed = results.filter((r) => r.status === 'passed').length;
+    log(`\n[app] ${passed}/${APP_LANE_SCENARIOS.length} scenarios passed` +
+      `${failed.length ? `, failed: ${failed.map((r) => r.id).join(', ')}` : ''}` +
+      `${unresolved.length ? `, not run/indeterminate: ${unresolved.map((r) => r.id).join(', ')}` : ''} (exit ${failed.length ? 1 : unresolved.length ? 2 : 0})`);
+    log(`[app] manifest: ${path.join(layout.attemptDir, 'manifest.json')}`);
+    exitCode = failed.length > 0 ? 1 : unresolved.length > 0 ? 2 : 0;
+  } finally {
+    await app.stop();
+    log('[app] disposable server stopped');
+  }
+  return exitCode;
+}
+
 async function commandRun(args: ParsedArgs): Promise<number> {
   const root = resolveRoot(args);
   const only = flagString(args, 'scenario');
@@ -477,7 +640,7 @@ async function commandSoak(args: ParsedArgs): Promise<number> {
   const deadline = minutes ? Date.now() + Number.parseFloat(minutes) * 60_000 : null;
   let index = 0;
   let exitCode = 0;
-  while (true) {
+  for (;;) {
     index += 1;
     const started = Date.now();
     log(`[soak] pass ${index}${deadline ? ` (until ${new Date(deadline).toISOString()})` : ''}`);
@@ -494,7 +657,13 @@ async function commandSoak(args: ParsedArgs): Promise<number> {
         sum + (result.measurement ? result.measurement.chunks.filter((chunk) => chunk.status === 'present').length : 0),
       0
     );
-    const status = summarise(results, PRODUCT_LANE_SCENARIOS.filter((s) => s.required).map((s) => s.id)).exitCode === 0
+    // Judge the pass by the scenarios IT ran, not the full required set:
+    // a soak pass that runs one scenario is not "missing proof" of the other
+    // ten — that misclassification turned 16 passing passes into exit 1.
+    const passRequiredIds = PRODUCT_LANE_SCENARIOS.filter(
+      (s) => s.required && scenarioIds.includes(s.id)
+    ).map((s) => s.id);
+    const status = summarise(results, passRequiredIds).exitCode === 0
       ? 'passed'
       : results.some((result) => result.status === 'failed')
         ? 'failed'
@@ -550,6 +719,8 @@ export async function main(argv: string[]): Promise<number> {
       return commandFixtures(args);
     case 'run':
       return commandRun(args);
+    case 'app':
+      return commandApp(args);
     case 'soak':
       return commandSoak(args);
     case 'verify-record':

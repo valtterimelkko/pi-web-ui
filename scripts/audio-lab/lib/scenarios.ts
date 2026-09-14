@@ -46,24 +46,6 @@ function textsOf(corpus: number): string[] {
   return DIAGNOSTIC_CORPUS[corpus];
 }
 
-/** Submit a whole message and wait for the arbiter to go quiet. */
-async function readWhole(context: ScenarioContext, corpus: number, waitMs: number): Promise<ScenarioOutcome> {
-  const texts = textsOf(corpus);
-  const message = texts.join(' ');
-  const chunkCheck = await verifyChunking(context.page, message, texts);
-  if (!chunkCheck.ok) {
-    throw new Error(
-      `lab corpus does not match the product chunker: expected ${JSON.stringify(texts)} got ${JSON.stringify(chunkCheck.actual)}`
-    );
-  }
-  await context.page.evaluate((text: string) => {
-    const api = (globalThis as unknown as { __labProduct: { readAloud(t: string): unknown } }).__labProduct;
-    api.readAloud(text);
-  }, message);
-  await new Promise((resolve) => setTimeout(resolve, waitMs));
-  return { assertions: completenessGate(), evidence: { chunkTexts: texts, chunkingVerified: true } };
-}
-
 /** Wait for the arbiter to report it is idle, bounded. */
 async function waitForArbiterIdle(page: ScenarioContext['page'], timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs;
