@@ -232,7 +232,7 @@ export function useVoiceTurn(
     },
     [workerSessionId, attemptSend]
   );
-  const dictation = useDictation(handleTranscript);
+  const dictation = useDictation(handleTranscript, { runtime, workerSessionId });
 
   /** §4.1 rule 1 — the operator's floor. Flows INTO the arbiter only. */
   const operatorSpeaking = dictation.state === 'recording';

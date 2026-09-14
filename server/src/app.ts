@@ -19,6 +19,7 @@ import { gitRouter } from './routes/git.js';
 import { terminalRouter } from './routes/terminal.js';
 import dictationRoutes from './routes/dictation.js';
 import ttsRoutes from './routes/tts.js';
+import clientDiagnosticsRoutes from './routes/client-diagnostics.js';
 import { createNotificationsWebRouter } from './routes/notifications-web.js';
 import type { NotificationManager } from './notifications/notification-manager.js';
 import { fileURLToPath } from 'url';
@@ -141,6 +142,7 @@ export function createApp(notifications?: NotificationsWebMount): express.Applic
 
   // Text-to-speech (read-aloud) routes
   app.use('/api/tts', ttsRoutes);
+  app.use('/api/client-diagnostics', clientDiagnosticsRoutes);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {

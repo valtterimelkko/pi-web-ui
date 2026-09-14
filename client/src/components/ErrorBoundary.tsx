@@ -5,6 +5,7 @@ import {
   downloadBrowserDiagnostics,
   recordBrowserDiagnostic,
 } from '../lib/browserDiagnostics.js';
+import { reportClientError } from '../lib/clientDiagnosticsReporter.js';
 
 interface Props {
   children: ReactNode;
@@ -26,6 +27,14 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
     recordBrowserDiagnostic({ kind: 'ui_error', errorName: error.name, operation: 'react_render' });
     console.error('ErrorBoundary caught:', error, errorInfo);
+    // P13: the boundary is the crash the operator SEES — upload it so the
+    // server-side query path can answer "it errored" after a reload.
+    void reportClientError({
+      operation: 'react_render',
+      message: error.message,
+      errorName: error.name,
+      stack: error.stack,
+    });
   }
 
   private copyDiagnostics = async (): Promise<void> => {

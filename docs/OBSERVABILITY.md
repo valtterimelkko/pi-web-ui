@@ -361,6 +361,49 @@ for `kind: "speech"` entries; a chatter tier dropped because an answer was
 playing shows as `drop`/`busy`. No text, ids, or server round-trips: the
 decisions stay in the browser ring, cleared on reload.
 
+### Client error reports (P13 — the crash that survives a reload)
+
+The manual bundle above is the fallback for survivable states. A crash is not
+survivable: once the tab reloads, the browser ring is gone and the error
+boundary's export is unreachable. Client errors of the voice surface are
+therefore ALSO uploaded — by a small, additive, bounded client reporter — and
+re-emitted server-side as ordinary `ClientVoice` central-logger records, so
+they land in the SAME diagnostics ring as every other record (no second
+buffer, no query surface).
+
+What is uploaded: uncaught errors, unhandled promise rejections, React error
+boundary catches (`react_render`), speech `playback_failed` (the barge-in
+path), dictation errors (mic / STT pipeline), and talker-bus listener
+failures. Each report is scrubbed client-side AND again by the ring's
+scrubber on entry, length-capped (message 300 chars, stack 1500), and carries
+up to 12 allowlisted recent browser-ring events as context — the barge-in
+story (floor held/duck/playback) rides along with the failure it preceded.
+Voice-surface reports carry `runtime` + `workerSessionId` (the same key
+`VoiceMode` records use) so a client error joins the server-side story.
+The client caps itself at 10 uploads per page load; the route sits behind
+the shared `/api` rate limit and auth (cookieAuthMiddleware).
+
+The documented retrieval path (same ring, one new component selector):
+
+```bash
+# Recent client error reports, newest last:
+curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/diagnostics?component=ClientVoice&limit=50"
+
+# Scoped to the worker session the voice surface was bound to
+# (workerSessionId is a plain record field — filter locally with jq):
+curl -s … "http://localhost/api/v1/diagnostics?component=ClientVoice&limit=200" \
+  | jq '.recentLogs[] | select(.workerSessionId == "<workerSessionId>")'
+```
+
+A report's `msg` is `client error report:`, `level` is `error`, `operation`
+names the surface path (`uncaught_error`, `unhandled_rejection`,
+`react_render`, `playback_failed`, `dictation_error`, `talker_listener`), the
+conventional `error` object carries name/message/bounded stack, and
+`recentEvents` is the preceding browser-ring tail. Absent fields were
+absent — a global-handler report legitimately carries no session
+correlation.
+
 ## Error codes & enrichment
 
 Every Internal API error response has the stable shape `{ error, code }`. Codes

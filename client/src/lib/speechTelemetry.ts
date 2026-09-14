@@ -11,6 +11,7 @@
  */
 
 import { recordBrowserDiagnostic } from './browserDiagnostics.js';
+import { reportClientError } from './clientDiagnosticsReporter.js';
 
 export type SpeechTelemetryOperation =
   | 'submit'
@@ -55,6 +56,18 @@ export function recordSpeechEvent(operation: SpeechTelemetryOperation, detail: S
         ? { errorName: detail.errorName.trim().slice(0, 80) }
         : {}),
     });
+    // P13: a playback failure on the speech surface (the barge-in path
+    // especially) must be visible server-side, not only in the manual
+    // bundle. The arbiter deliberately holds no session identity, so this
+    // report carries no correlation — the bounded recent-event context
+    // (floor/duck/playback story) rides with it instead.
+    if (operation === 'playback_failed') {
+      void reportClientError({
+        operation: 'playback_failed',
+        message: `speech playback failed (${detail.errorName ?? 'Unknown'})`,
+        errorName: detail.errorName,
+      });
+    }
   } catch {
     // Telemetry must never alter arbiter behaviour.
   }

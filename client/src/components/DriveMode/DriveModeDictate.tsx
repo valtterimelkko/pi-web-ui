@@ -64,23 +64,26 @@ export function DriveModeDictate({
   // of the app — NOTHING in this surface is gated on `phase` any more: the
   // old agent-working block is replaced by the floor banner below, and the
   // mic stays usable in every state.
+  //
+  // ONE writer with explicit precedence (P13): the previous three competing
+  // effects each called setPhase unconditionally and shared `phase` in their
+  // dependency arrays, so when the operator barged in (recording) while the
+  // worker streamed, 'dictate' and 'agent-working' re-fired each other in an
+  // unbounded nested-update loop — React error #185, full-screen error
+  // boundary. Precedence: capture (recording/processing) > worker streaming
+  // > audio-playing handback; every write is conditional on a real change.
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (isRecording || voice.state === 'processing') {
       if (phase !== 'dictate') setPhase('dictate');
-    }
-  }, [voice.state, isRecording, phase, setPhase]);
-
-  useEffect(() => {
-    if (isStreaming && phase !== 'agent-working') setPhase('agent-working');
-    if (!isStreaming && phase === 'agent-working') setPhase('read-aloud-ready');
-  }, [isStreaming, phase, setPhase]);
-
-  useEffect(() => {
-    if (phase === 'audio-playing' && readAloud.state === 'idle') {
+    } else if (isStreaming) {
+      if (phase !== 'agent-working') setPhase('agent-working');
+    } else if (phase === 'agent-working') {
+      setPhase('read-aloud-ready');
+    } else if (phase === 'audio-playing' && readAloud.state === 'idle') {
       setPhase('dictate');
     }
-  }, [readAloud.state, phase, setPhase]);
+  }, [voice.state, isRecording, isStreaming, readAloud.state, phase, setPhase]);
 
   // ---------------------------------------------------------------------------
   // The four states, derived from what the surface receives (§4.1).

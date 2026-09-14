@@ -164,6 +164,26 @@ export function clearBrowserDiagnostics(): void {
   unknownTypes.clear();
 }
 
+/**
+ * P13: bounded read of the ring's newest events (oldest first), for attaching
+ * as context to a client error report — the barge-in story (floor/duck/
+ * playback events) rides along with the failure it preceded. Same allowlisted
+ * projection as the exported bundle: no text, no ids.
+ */
+export function getRecentBrowserEvents(max = 12): BrowserDiagnosticEvent[] {
+  const capped = Math.max(1, Math.min(max, MAX_EVENTS));
+  return events.slice(-capped).map((event) => ({ ...event }));
+}
+
+/**
+ * P13: the canonical client-side scrubber, exported for the client error
+ * reporter so credential-shaped text is redacted BEFORE upload (the server
+ * ring scrubs again on entry — defence in depth, not a substitute).
+ */
+export function scrubClientText(value: string): string {
+  return scrub(value);
+}
+
 function readEmbeddedBuildIdentity(): BrowserBuildIdentity {
   const raw = import.meta.env.VITE_BUILD_IDENTITY;
   if (!raw) return unknownBrowserBuildIdentity('source');

@@ -11,6 +11,8 @@
  * durability work) and out of sessionStore.
  */
 
+import { reportClientError } from './clientDiagnosticsReporter.js';
+
 /** Which runtime adapter relays for a worker session (client mirror). */
 export type TalkerRuntime = 'pi' | 'claude' | 'antigravity';
 
@@ -72,6 +74,16 @@ export function emitTalkerTurnResult(message: unknown): boolean {
       listener(message);
     } catch (error) {
       console.error('[talkerBus] listener failed:', error);
+      // P13: a surface listener crashing on a talker result is a client-side
+      // failure the server would never see — make it queryable too.
+      void reportClientError({
+        operation: 'talker_listener',
+        message: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : 'Error',
+        stack: error instanceof Error ? error.stack : undefined,
+        runtime: message.runtime,
+        workerSessionId: message.workerSessionId,
+      });
     }
   }
   return true;

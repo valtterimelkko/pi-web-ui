@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { reportClientError } from '../lib/clientDiagnosticsReporter.js';
 
 type DictationState = 'idle' | 'recording' | 'processing' | 'error';
 
@@ -30,7 +31,14 @@ async function apiPost(path: string, options?: RequestInit): Promise<unknown> {
   return res.json();
 }
 
-export function useDictation(onTranscript: (text: string) => void) {
+/** Optional voice-surface correlation attached to dictation error reports
+ *  (P13): the same worker-session key the server's VoiceMode records carry. */
+export interface DictationErrorContext {
+  runtime?: string;
+  workerSessionId?: string;
+}
+
+export function useDictation(onTranscript: (text: string) => void, errorContext?: DictationErrorContext) {
   const [state, setState] = useState<DictationState>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -40,6 +48,21 @@ export function useDictation(onTranscript: (text: string) => void) {
   const pendingChunksRef = useRef<Promise<void>>(Promise.resolve());
   const onTranscriptRef = useRef(onTranscript);
   onTranscriptRef.current = onTranscript;
+  const errorContextRef = useRef<DictationErrorContext | undefined>(errorContext);
+  errorContextRef.current = errorContext;
+
+  /** P13: dictation failures (mic, STT pipeline) are voice-surface errors
+   *  invisible to every server-side query today. Report bounded, scrubbed,
+   *  correlated — never altering the hook's own behaviour. */
+  const reportDictationError = useCallback((message: string) => {
+    const ctx = errorContextRef.current;
+    void reportClientError({
+      operation: 'dictation_error',
+      message,
+      ...(ctx?.runtime ? { runtime: ctx.runtime } : {}),
+      ...(ctx?.workerSessionId ? { workerSessionId: ctx.workerSessionId } : {}),
+    });
+  }, []);
 
   useEffect(() => {
     apiPost('/api/dictation/warmup').catch(() => {});
@@ -51,6 +74,7 @@ export function useDictation(onTranscript: (text: string) => void) {
     if (!navigator.mediaDevices?.getUserMedia) {
       setErrorMessage('Microphone not supported in this browser.');
       setState('error');
+      reportDictationError('Microphone not supported in this browser.');
       return;
     }
 
@@ -59,14 +83,17 @@ export function useDictation(onTranscript: (text: string) => void) {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      let reason: string;
       if (msg.includes('Permission') || msg.includes('NotAllowed') || msg.includes('denied')) {
-        setErrorMessage('Microphone permission denied.');
+        reason = 'Microphone permission denied.';
       } else if (msg.includes('NotFound') || msg.includes('Requested device not found')) {
-        setErrorMessage('No microphone found.');
+        reason = 'No microphone found.';
       } else {
-        setErrorMessage(`Microphone error: ${msg}`);
+        reason = `Microphone error: ${msg}`;
       }
+      setErrorMessage(reason);
       setState('error');
+      reportDictationError(reason);
       return;
     }
 
@@ -79,8 +106,10 @@ export function useDictation(onTranscript: (text: string) => void) {
     } catch (err: unknown) {
       stream.getTracks().forEach(t => t.stop());
       streamRef.current = null;
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to start recording');
+      const msg = err instanceof Error ? err.message : 'Failed to start recording';
+      setErrorMessage(msg);
       setState('error');
+      reportDictationError(msg);
       return;
     }
 
@@ -137,8 +166,10 @@ export function useDictation(onTranscript: (text: string) => void) {
       onTranscriptRef.current(result.text);
       setState('idle');
     } catch (err: unknown) {
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
+      const msg = err instanceof Error ? err.message : 'Failed to process recording';
+      setErrorMessage(msg);
       setState('error');
+      reportDictationError(msg);
     }
   }, []);
 

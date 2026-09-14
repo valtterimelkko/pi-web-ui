@@ -42,7 +42,7 @@ export function useDriveModeDictation(sessionId: string | null) {
     setPendingText(null);
   }, []);
 
-  const dictation = useDictation(handleTranscript);
+  const dictation = useDictation(handleTranscript, { workerSessionId: sessionId ?? undefined });
 
   /** The operator holds the floor while the mic is capturing their voice
    *  (§4.1 rule 1). This signal only ever feeds playback scheduling — it is
