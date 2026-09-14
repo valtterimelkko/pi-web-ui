@@ -28,6 +28,30 @@ export const STATE_VIEW_LIMITS = {
   draftChars: 200,
 } as const;
 
+/**
+ * P20 — the worker session's recent conversation in the projection.
+ *
+ * The choice, made explicit: a RECENT-WINDOW view, not a transcript. A worker
+ * session can be enormous, so the block carries at most the last 12
+ * conversation messages, each clipped to 400 chars, under a 3600-char budget
+ * for the block as a whole — roughly a screenful, the same order as the rest
+ * of the state view, and a talker context that stays independent of session
+ * length (plan §10.9). The newest tail is kept because "what happened
+ * earlier?" is overwhelmingly about the recent stretch of a mid-session
+ * attach; anything older is handled honestly: the block states exactly how
+ * many messages it does not include, the prompt tells the talker never to
+ * imply knowledge beyond the window, and the unchanged [[ask-worker]] offer
+ * remains the fallback for questions that exceed it.
+ */
+export const SESSION_HISTORY_LIMITS = {
+  /** Max conversation messages shown (the newest tail; rendered oldest first). */
+  entries: 12,
+  /** Per-message clip. */
+  entryChars: 400,
+  /** Total budget for the block's entry lines, enforced newest-first. */
+  totalChars: 3600,
+} as const;
+
 export function clip(text: string, max: number): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
@@ -41,6 +65,42 @@ function elapsedLabel(snapshot: WorkerStateSnapshot): string {
     return minutes > 0 ? `${minutes}m${seconds % 60}s` : `${seconds}s`;
   }
   return 'unknown';
+}
+
+/**
+ * The bounded WORKER SESSION HISTORY block (P20), or null when the provider
+ * supplied no history — absence is the honest statement that nothing earlier
+ * is visible here. Entries are taken newest-first (the newest tail is what a
+ * mid-session question is mostly about) and rendered oldest-first. The
+ * disclosure line states the window's coverage with exact counts: complete
+ * when nothing is hidden, otherwise how many messages are not included.
+ */
+function renderSessionHistory(snapshot: WorkerStateSnapshot): string[] | null {
+  const all = snapshot.recentHistory ?? [];
+  if (all.length === 0) return null;
+  const total = Math.max(snapshot.historyTotal ?? all.length, all.length);
+
+  const windowed = all.slice(-SESSION_HISTORY_LIMITS.entries);
+  const shown: Array<{ label: string; text: string }> = [];
+  let budget = SESSION_HISTORY_LIMITS.totalChars;
+  for (let i = windowed.length - 1; i >= 0; i--) {
+    const entry = windowed[i];
+    const text = clip(entry.text, SESSION_HISTORY_LIMITS.entryChars);
+    const cost = text.length + 12; // "operator: " / "worker: " + newline
+    if (shown.length > 0 && budget - cost < 0) break; // budget spent; the older tail is disclosed, not hidden
+    budget -= cost;
+    shown.unshift({ label: entry.role === 'assistant' ? 'worker' : 'operator', text });
+  }
+  const hidden = Math.max(0, total - shown.length);
+
+  const lines = ['--- WORKER SESSION HISTORY ---'];
+  lines.push(
+    hidden > 0
+      ? `Showing the most recent ${shown.length} of ${total} messages; ${hidden} earlier are not included.`
+      : `All ${shown.length} messages of the session so far are shown.`
+  );
+  for (const s of shown) lines.push(`${s.label}: ${s.text}`);
+  return lines;
 }
 
 export function renderStateView(snapshot: WorkerStateSnapshot, harness: HarnessView): string {
@@ -69,6 +129,11 @@ export function renderStateView(snapshot: WorkerStateSnapshot, harness: HarnessV
   if (snapshot.lastAssistantText) {
     lines.push(`Worker last said: ${clip(snapshot.lastAssistantText, STATE_VIEW_LIMITS.lastAssistantChars)}`);
   }
+
+  // P20: the session's earlier turns, so a mid-session question about them is
+  // answerable from real history. Absent when the provider supplied none.
+  const historyBlock = renderSessionHistory(snapshot);
+  if (historyBlock) lines.push(...historyBlock);
 
   if (harness.draft && harness.draft.utterances.length > 0) {
     const { utterances, ageTurns, needsReConfirmation } = harness.draft;

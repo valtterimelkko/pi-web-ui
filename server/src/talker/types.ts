@@ -23,6 +23,28 @@ export interface WorkerStateSnapshot {
   pendingItems?: string[];
   /** The worker's last assistant text. Clipped by renderStateView. */
   lastAssistantText?: string;
+  /**
+   * P20: the worker session's earlier conversation, oldest first. `user` is
+   * what was sent to the worker (the operator's prompts and steers);
+   * `assistant` is what the worker replied. A provider that cannot read
+   * history omits it — the view then has no history block, and the talker is
+   * taught to say so rather than imply knowledge. Bounded by renderStateView
+   * (SESSION_HISTORY_LIMITS); truncation against `historyTotal` is disclosed
+   * in the view itself, never hidden.
+   */
+  recentHistory?: WorkerHistoryEntry[];
+  /**
+   * P20: how many conversation messages (user/assistant, non-empty) the
+   * provider saw in the session in total, so the renderer can state
+   * truncation honestly. Defaults to recentHistory.length when omitted.
+   */
+  historyTotal?: number;
+}
+
+/** One message of the worker session's earlier conversation (P20). */
+export interface WorkerHistoryEntry {
+  role: 'user' | 'assistant';
+  text: string;
 }
 
 /**

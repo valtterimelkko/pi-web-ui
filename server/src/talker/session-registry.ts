@@ -37,7 +37,7 @@ import { createObservedDelivery, createVoiceTurnRecorder, type VoiceTurnRecorder
 import { OpenRouterTalkerClient, resolveTalkerModelConfig } from './model-client.js';
 import { detectPromptInjection } from '../security/prompt-injection.js';
 import type { MultiSessionManager } from '../pi/multi-session-manager.js';
-import type { TalkerModelClient, TalkerTurnResult, WorkerStateSnapshot } from './types.js';
+import type { TalkerModelClient, TalkerTurnResult, WorkerHistoryEntry, WorkerStateSnapshot } from './types.js';
 /** Spoken when the operator's utterance is blocked by the injection gate. */
 export const TALKER_INJECTION_BLOCKED_ACK =
   "I can't pass that on — it looked like a prompt-injection attempt, so I dropped it before it reached anything.";
@@ -163,6 +163,35 @@ function extractTextContent(content: unknown): string | undefined {
     return parts.length > 0 ? parts.join(' ') : undefined;
   }
   return undefined;
+}
+
+/**
+ * P20: how many conversation messages a provider passes to the projection at
+ * most (references to strings the session already holds — cheap). The full
+ * count travels separately as `historyTotal`, so the view's truncation
+ * disclosure stays true even when the tail is capped.
+ */
+const HISTORY_PROVIDER_TAIL = 200;
+
+/**
+ * P20: the session's earlier conversation for the projection — user and
+ * assistant messages only (tool results are harness noise, never spoken
+ * material), non-empty text only, oldest first. The renderer bounds and
+ * clips; the provider's job is only to be truthful about the total.
+ */
+function toHistoryEntries(list: Array<{ role?: unknown; content?: unknown }>): {
+  entries: WorkerHistoryEntry[];
+  total: number;
+} {
+  const entries: WorkerHistoryEntry[] = [];
+  for (const m of list) {
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    const text = extractTextContent(m.content)?.trim();
+    if (!text) continue;
+    entries.push({ role: m.role, text });
+  }
+  const total = entries.length;
+  return { entries: entries.slice(-HISTORY_PROVIDER_TAIL), total };
 }
 
 export class TalkerSessionRegistry {
@@ -492,6 +521,7 @@ export class TalkerSessionRegistry {
     // status ('idle' | 'error') is itself an observation and is kept.
     const status = running ? 'running' : (registryStatus === 'error' ? 'error' : 'idle');
 
+    let claudeHistory: { entries: WorkerHistoryEntry[]; total: number } | undefined;
     let lastAssistantText: string | undefined;
     try {
       const history = await source.loadSessionHistory(workerSessionId);
@@ -502,24 +532,38 @@ export class TalkerSessionRegistry {
           break;
         }
       }
+      // P20: the session's earlier conversation, mapped to the projection's
+      // entry shape. meta/tool/tool_result/error entries are harness noise,
+      // never spoken material.
+      const built = toHistoryEntries(
+        history.map(e => ({ role: e.type, content: e.content }))
+      );
+      if (built.total > 0) claudeHistory = built;
     } catch {
       // History unreadable: the status-derived view is still honest.
     }
+    const historyFields = claudeHistory
+      ? { recentHistory: claudeHistory.entries, historyTotal: claudeHistory.total }
+      : {};
 
     return {
       activity: `worker status: ${status}`,
       ...(lastAssistantText ? { lastAssistantText } : {}),
+      ...historyFields,
     };
   }
 
   /**
    * Fresh worker-state material, rebuilt on every conversational turn (plan
    * §10.9 state-view freshness). Reads only what the manager already holds in
-   * memory; an unloaded session yields an honest minimal view.
+   * memory; an unloaded session yields an honest minimal view. P20: the
+   * session's earlier conversation joins the view, bounded by the renderer,
+   * with a truthful total so truncation is disclosed, never hidden.
    */
   private buildSnapshot(workerSessionId: string): WorkerStateSnapshot {
     const status = this.manager.getSessionStatus(workerSessionId);
     let lastAssistantText: string | undefined;
+    let history: { entries: WorkerHistoryEntry[]; total: number } | undefined;
     try {
       const messages = this.manager.getAgentSession(workerSessionId)?.messages ?? [];
       for (let i = messages.length - 1; i >= 0; i--) {
@@ -529,16 +573,22 @@ export class TalkerSessionRegistry {
           break;
         }
       }
+      const built = toHistoryEntries(messages as Array<{ role?: unknown; content?: unknown }>);
+      if (built.total > 0) history = built;
     } catch {
       // Unloaded/disposed session: the status-derived view is still honest.
     }
+    const historyFields = history
+      ? { recentHistory: history.entries, historyTotal: history.total }
+      : {};
     if (!status) {
-      return { activity: 'worker session is not loaded on this server', ...(lastAssistantText ? { lastAssistantText } : {}) };
+      return { activity: 'worker session is not loaded on this server', ...(lastAssistantText ? { lastAssistantText } : {}), ...historyFields };
     }
     const stepSuffix = typeof status.currentStep === 'number' && status.currentStep > 0 ? `, step ${status.currentStep}` : '';
     return {
       activity: `worker status: ${status.status}${stepSuffix}`,
       ...(lastAssistantText ? { lastAssistantText } : {}),
+      ...historyFields,
     };
   }
 }

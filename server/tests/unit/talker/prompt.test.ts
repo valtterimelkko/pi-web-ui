@@ -19,7 +19,10 @@ describe('talker system prompt (v3 harness variant)', () => {
   it('is lean: stays in the low hundreds of tokens', () => {
     const prompt = loadTalkerSystemPrompt();
     expect(prompt.length).toBeGreaterThan(500);
-    expect(prompt.length).toBeLessThanOrEqual(4200); // ~1000 tokens hard ceiling
+    // P20 raised this from 4200: the new WORKER SESSION HISTORY section costs
+    // ~450 chars, existing prose was tightened to compensate, and the prompt
+    // must stay a one-screen leanness budget — not grow per feature.
+    expect(prompt.length).toBeLessThanOrEqual(4600); // ~1150 tokens hard ceiling
   });
 
   it('justifies the gate rather than merely asserting it (plan §10.11 binding finding)', () => {
@@ -71,5 +74,20 @@ describe('talker system prompt (v3 harness variant)', () => {
     const prompt = loadTalkerSystemPrompt();
     expect(prompt).toMatch(/focus on/i);
     expect(prompt).toMatch(/cannot switch it/i);
+  });
+
+  // P20: the snapshot may now carry the worker session's earlier turns. The
+  // prompt must teach answering from that window, stating its limits, never
+  // inventing beyond it — and keeping the offer as the honest fallback.
+  it('teaches the worker session history window and its honest limits', () => {
+    const prompt = loadTalkerSystemPrompt();
+    expect(prompt).toMatch(/session history/i);
+    // Truncation is stated, never hidden: never imply knowledge beyond the window.
+    expect(prompt).toMatch(/not included|not shown|only the most recent/i);
+    expect(prompt).toMatch(/never imply|never invent/i);
+    // Absence is honest too: no history block means nothing earlier is visible.
+    expect(prompt).toMatch(/no history|no earlier|nothing earlier/i);
+    // The offer stays the fallback when a question exceeds the window.
+    expect(prompt).toMatch(/\[\[ask-worker\]\]/);
   });
 });
