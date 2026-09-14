@@ -66,10 +66,14 @@ class FakeWebSocket {
 
 (window as any).WebSocket = FakeWebSocket;
 
-/** A 3-second 440 Hz mono 16 kHz WAV — long enough to screenshot mid-play. */
-function toneWav(seconds = 3, freq = 440): ArrayBuffer {
+/** A mono 16 kHz WAV: an 80 ms full-scale 1600 Hz MARKER, then a 440 Hz body.
+ *  P21 reproduction instrument: the marker is a ruler at the head of every
+ *  TTS response, so the recorded audible output shows exactly how much of
+ *  each chunk's beginning reaches the ear. */
+function toneWav(seconds = 1.0, freq = 440): ArrayBuffer {
   const rate = 16000;
-  const n = rate * seconds;
+  const markerN = Math.round(rate * 0.08);
+  const n = Math.round(rate * seconds);
   const buffer = new ArrayBuffer(44 + n * 2);
   const view = new DataView(buffer);
   const w = (off: number, s: string) => {
@@ -89,7 +93,11 @@ function toneWav(seconds = 3, freq = 440): ArrayBuffer {
   w(36, 'data');
   view.setUint32(40, n * 2, true);
   for (let i = 0; i < n; i++) {
-    view.setInt16(44 + i * 2, Math.round(Math.sin((2 * Math.PI * freq * i) / rate) * 8000), true);
+    const sample =
+      i < markerN
+        ? Math.round(Math.sin((2 * Math.PI * 1600 * i) / rate) * 32000)
+        : Math.round(Math.sin((2 * Math.PI * freq * i) / rate) * 8000);
+    view.setInt16(44 + i * 2, sample, true);
   }
   return buffer;
 }
@@ -98,6 +106,10 @@ const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   if (url.includes('/api/tts')) {
+    // P21 reproduction knob: a configurable synthesis round-trip so the
+    // chunk-boundary gap matches a real TTS backend. Default 0 (instant).
+    const delay = (window as any).__TTS_DELAY_MS ?? 0;
+    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
     return new Response(toneWav(), {
       headers: { 'Content-Type': 'audio/wav' },
     });

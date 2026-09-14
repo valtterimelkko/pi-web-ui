@@ -103,9 +103,11 @@ describe('useReadAloud — chunked playback through the speech arbiter', () => {
       await flush();
     });
 
-    // Only the FIRST chunk is fetched — speech starts after a short
-    // synthesis, not after the whole text (§4.1 chunked TTS).
-    expect(fetchCalls).toHaveLength(1);
+    // Only the first TWO chunks are fetched — speech starts after a short
+    // synthesis, not after the whole text (§4.1 chunked TTS). The second is
+    // P21 one-ahead priming: it is warm before the first finishes, so the
+    // boundary costs no synthesis round trip.
+    expect(fetchCalls).toHaveLength(2);
     expect(fetchCalls[0]).toMatchObject({ body: { text: 'First sentence.' } });
     expect(result.current.state).toBe('playing');
     expect(speechArbiter.getState().current).toMatchObject({
@@ -163,6 +165,77 @@ describe('useReadAloud — chunked playback through the speech arbiter', () => {
     });
   });
 
+  it('synthesises one chunk ahead so a chunk boundary never waits on synthesis', async () => {
+    // P21 — the boundary pause defect: synthesis for chunk N+1 used to start
+    // only after chunk N finished playing, leaving a full TTS round trip of
+    // silence at every boundary. The guarantee pinned here: while chunk N is
+    // playing, chunk N+1 is ALREADY synthesised (one ahead — never the whole
+    // text, which would break §4.1's start-after-one-synthesis property).
+    const { result } = renderHook(() => useReadAloud('msg-1'));
+    await act(async () => {
+      result.current.play('First sentence. Second sentence. Third sentence.');
+      await flush();
+    });
+
+    expect(FakeAudioContext.lastSource().started).toBe(true);
+    // Chunk 0 plays; chunk 1 is already synthesised.
+    expect(fetchCalls.map((c) => c.body?.text)).toEqual(['First sentence.', 'Second sentence.']);
+
+    // The boundary consumes the warm chunk: no NEW synthesis at the boundary.
+    await act(async () => {
+      FakeAudioContext.lastSource().fireEnded();
+      await flush();
+    });
+    expect(fetchCalls.map((c) => c.body?.text)).toEqual([
+      'First sentence.',
+      'Second sentence.',
+      'Third sentence.',
+    ]);
+  });
+
+  it('retries a chunk whose synthesis failed so a transient error never swallows the read', async () => {
+    // P21 — the arbiter drops the whole intent when a chunk fails, so a
+    // single failed fetch used to make the beginning of an answer vanish
+    // entirely ("words eaten at the start"). One retry is the player's own
+    // defence; the arbiter is untouched (read-only).
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 502,
+          json: async () => ({ error: 'upstream blew up' }),
+        })
+        .mockImplementation(async (url: string, init?: RequestInit) => {
+          fetchCalls.push({ url, body: init?.body ? JSON.parse(init.body as string) : null });
+          return {
+            ok: true,
+            arrayBuffer: async () => new ArrayBuffer(8),
+            json: async () => ({}),
+          };
+        })
+    );
+    const { result } = renderHook(() => useReadAloud('msg-1'));
+    await act(async () => {
+      result.current.play('Only sentence.');
+      await flush();
+    });
+    // The retry waits out RETRY_BACKOFF_MS before re-synthesising.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    // The chunk was synthesised on the SECOND attempt and actually plays.
+    expect(fetchCalls).toHaveLength(1);
+    expect(FakeAudioContext.lastSource().started).toBe(true);
+    expect(speechArbiter.getState().current).toMatchObject({
+      id: 'msg-1',
+      chunkIndex: 0,
+      totalChunks: 1,
+    });
+  });
+
   it('pause takes effect at the chunk boundary; resume continues from the next chunk', async () => {
     const { result } = renderHook(() => useReadAloud('msg-1'));
     await act(async () => {
@@ -174,12 +247,13 @@ describe('useReadAloud — chunked playback through the speech arbiter', () => {
     });
     expect(speechArbiter.getState().paused).toBe(true);
 
-    // The in-flight chunk finishes; nothing further is fetched.
+    // The in-flight chunk finishes; nothing further is fetched beyond the
+    // P21 one-ahead warm chunk ('Two.' was synthesised while 'One.' played).
     await act(async () => {
       FakeAudioContext.lastSource().fireEnded();
       await flush();
     });
-    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls).toHaveLength(2);
     expect(result.current.state).toBe('paused');
 
     act(() => {

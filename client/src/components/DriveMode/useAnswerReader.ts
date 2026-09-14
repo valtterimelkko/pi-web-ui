@@ -60,6 +60,7 @@ import {
 } from '../../lib/speechArbiter';
 import { spokenLedger } from '../../lib/spokenLedger';
 import type { TurnDigestKind, TurnDigestOutcome } from '../../lib/turnDigest';
+import { primePlaybackQueue } from '../../hooks/useReadAloud';
 import { focusRecapAnnouncement, type HeldAnswer } from './focusHold';
 import {
   digestSpokenText,
@@ -309,6 +310,9 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
   const submitAnswerText = useCallback((itemId: string, text: string, form: ReadingLevel) => {
     const answer = answerRef.current;
     if (answer && answer.itemId === itemId) answer.spokenForm = form;
+    // P21 — prime one-ahead synthesis so chunk boundaries in the read do not
+    // wait on a TTS round trip, and the first synthesis starts at submit.
+    primePlaybackQueue(chunkIntoSentences(text));
     speechArbiter.submit({ id: itemId, tier: TIER_ANSWER, text });
   }, []);
 
