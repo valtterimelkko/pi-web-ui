@@ -100,7 +100,7 @@ function log(message: string): void {
   process.stdout.write(`${message}\n`);
 }
 
-const DEFAULT_ROOT = '/root/.pi-web-ui/audio-lab';
+const DEFAULT_ROOT = '/root/audio-lab';
 const DEFAULT_EVIDENCE_ROOT = '/root/.pi-web-ui/operations/audio-lab-20260914/implementation/evidence';
 
 function resolveRoot(args: ParsedArgs): string {

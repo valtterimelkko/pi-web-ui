@@ -41,8 +41,24 @@ export interface OracleTolerances {
   analysisRate: number;
   envelopeWindowMs: number;
   envelopeHopMs: number;
-  /** Minimum normalised envelope correlation for a chunk to count as present. */
+  /** Minimum normalised correlation for a chunk to count as present. */
   chunkMatchMin: number;
+  /**
+   * How a chunk candidate is scored.
+   *
+   * `waveform` (default) re-scores every envelope candidate on the sample
+   * waveform. That is what makes omission/duplication/reorder detection real:
+   * the envelope of any two sentences is a similar burst-and-pause pattern, so
+   * envelope-only scoring once matched a REMOVED chunk at 0.98.
+   *
+   * `envelope` is required for the playback-rate lane. `playbackRate` on an
+   * AudioBufferSourceNode shifts PITCH as well as duration, so a 1.25x render
+   * cannot correlate with the 1x waveform at all (measured: 0.19-0.49, i.e.
+   * every chunk looked missing on a perfectly good render). The envelope is
+   * duration- and pitch-insensitive, so the speed lane uses it and states that
+   * its gate is duration-normalised content coverage, not waveform identity.
+   */
+  chunkScoring: 'waveform' | 'envelope';
   /** Candidates below this are not even considered by the alignment DP. */
   candidateFloor: number;
   /** Minimum separation between two distinct candidate occurrences. */
@@ -75,6 +91,7 @@ export const DEFAULT_TOLERANCES: OracleTolerances = {
   envelopeWindowMs: 10,
   envelopeHopMs: 5,
   chunkMatchMin: 0.6,
+  chunkScoring: 'waveform',
   candidateFloor: 0.35,
   candidateSeparationMs: 200,
   maxCandidatesPerChunk: 16,
@@ -266,6 +283,10 @@ export function findChunkCandidates(
   const candidates: ChunkCandidate[] = [];
   for (const peak of peaks) {
     const coarse = peak.lagFrames * env.hopSamples;
+    if (tolerances.chunkScoring === 'envelope') {
+      candidates.push({ lagSamples: coarse, score: peak.score, envelopeScore: peak.score });
+      continue;
+    }
     const refined = refineLagSamples(
       chunk.samples,
       output,
@@ -802,6 +823,24 @@ export function measure(
     }
   }
 
+  // Audible span: independent of chunk matching, so it still reports
+  // something useful when a render was cut short mid-chunk.
+  let audibleMs = 0;
+  {
+    const threshold = dbfsToAmplitude(tolerances.silenceThresholdDb);
+    let first = -1;
+    let last = -1;
+    for (let i = 0; i < env.values.length; i += 1) {
+      if (env.values[i] >= threshold) {
+        if (first < 0) first = i;
+        last = i;
+      }
+    }
+    if (first >= 0) {
+      audibleMs = ((last - first) * env.hopSamples + env.windowSamples) / rate * 1000;
+    }
+  }
+
   const missing = measured.filter((m) => m.status === 'missing').map((m) => m.id);
   const presentOrdered = measured.filter((m) => m.status === 'present');
   const totalHeadLossMs = presentOrdered.length > 0 ? presentOrdered[0].headLossMs : 0;
@@ -842,6 +881,7 @@ export function measure(
     misordered,
     matchedCoverage,
     unexplainedMs: (unexplainedSamples / rate) * 1000,
+    audibleMs,
     invalid,
   };
 }
@@ -960,6 +1000,31 @@ export function expectNoUnexplainedContent(measurement: Measurement, limitMs = 0
     id: 'recording.no-unexplained-content',
     ok: measurement.unexplainedMs <= limitMs,
     detail: `unexplained content ${measurement.unexplainedMs.toFixed(0)} ms (limit ${limitMs} ms)`,
+  };
+}
+
+/**
+ * Gain loss is only a defect when it is UNEXPLAINED.
+ *
+ * A scenario that deliberately takes the operator floor (barge-in) attenuates
+ * on purpose; requiring "no gain loss at all" there would contradict the
+ * scenario, and a gate that must be softened to let an intended behaviour pass
+ * is a broken gate. This asserts the stronger property: every attenuation run
+ * coincides with a duck event that restored, and there are no extra runs.
+ */
+export function expectGainLossFullyExplainedByDucking(measurement: Measurement): AssertionResult {
+  const unexplained = measurement.gainLossRuns.filter(
+    (run) => !run.recovered || run.meanRatio >= DEFAULT_TOLERANCES.gainLossMinRatio
+  );
+  return {
+    id: 'gain.loss-explained-by-ducking',
+    ok: unexplained.length === 0 && measurement.duckEvents.every((event) => event.restored),
+    detail:
+      unexplained.length === 0
+        ? `${measurement.gainLossRuns.length} attenuation run(s), all matching a restored duck event`
+        : unexplained
+            .map((run) => `${run.durationMs.toFixed(0)} ms at ${(run.meanRatio * 100).toFixed(0)}% after ${run.afterChunkId} (recovered=${run.recovered})`)
+            .join('; '),
   };
 }
 

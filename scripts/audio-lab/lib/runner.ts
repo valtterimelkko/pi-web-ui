@@ -26,6 +26,7 @@ import {
   type Verdict,
 } from './oracle.js';
 import { decodeToMonoF32, probeAudio } from './audio-io.js';
+import { resampleLinear } from './dsp.js';
 import type { FixtureManifest } from './fixtures.js';
 import { ProductLane, type TtsRequestRecord } from './product-lane.js';
 
@@ -61,6 +62,18 @@ export interface Scenario {
   required: boolean;
   /** Corpus index this scenario reads from. */
   corpus: number;
+  /**
+   * Time-compression factor of the SOURCE before comparison.
+   *
+   * The speed lane renders at playbackRate 1.25, which shortens the audio by
+   * 1.25x AND shifts its pitch. The oracle therefore has to compare against a
+   * correspondingly compressed source, and uses envelope scoring (see
+   * OracleTolerances.chunkScoring) because the pitch shift destroys waveform
+   * correlation.
+   */
+  sourceTimeScale?: number;
+  /** Override the oracle's candidate scoring for this scenario. */
+  scoring?: 'waveform' | 'envelope';
   /** Drive the UI and capture. The returned assertions are run on the
    *  measurement of the scenario capture. */
   run: (context: ScenarioContext) => Promise<ScenarioOutcome>;
@@ -86,6 +99,8 @@ export interface BuildSourceOptions {
   requests: TtsRequestRecord[];
   fixtures: FixtureManifest;
   analysisRate: number;
+  /** Time-compress the source to match a non-1.0 playback rate. */
+  sourceTimeScale?: number;
 }
 
 /**
@@ -107,7 +122,14 @@ export async function buildSourceChunks(options: BuildSourceOptions): Promise<So
     const text = options.chunkTexts[index];
     const fixture = byText.get(text);
     if (!fixture) throw new Error(`No fixture for chunk text: ${JSON.stringify(text)}`);
-    const decoded = await decodeToMonoF32(fixture.mp3Path, options.analysisRate);
+    const raw = await decodeToMonoF32(fixture.mp3Path, options.analysisRate);
+    // resampleLinear(x, rate, rate/scale) yields a source of length
+    // x.length/scale, i.e. compressed by `scale` — the same time base the
+    // browser produces when it plays the buffer at that rate.
+    const decoded =
+      options.sourceTimeScale && options.sourceTimeScale !== 1
+        ? resampleLinear(raw, options.analysisRate, options.analysisRate / options.sourceTimeScale)
+        : raw;
     const request = options.requests.find((entry) => entry.text === text);
     chunks.push({
       id: `chunk-${String(index).padStart(2, '0')}`,
@@ -213,9 +235,14 @@ export async function runScenario(options: RunScenarioOptions): Promise<Scenario
     requests: lane.requests,
     fixtures,
     analysisRate: tolerances.analysisRate,
+    sourceTimeScale: scenario.sourceTimeScale,
   });
   const output = await decodeToMonoF32(capture.wavPath, tolerances.analysisRate);
-  const measurement = measure(source, output, tolerances.analysisRate, tolerances);
+  const effectiveTolerances: OracleTolerances =
+    scenario.scoring && scenario.scoring !== tolerances.chunkScoring
+      ? { ...tolerances, chunkScoring: scenario.scoring }
+      : tolerances;
+  const measurement = measure(source, output, tolerances.analysisRate, effectiveTolerances);
   // The PRODUCT's own speech diagnostics. Recorded alongside the audio so a
   // verdict can be read together with what the scheduler believed it was doing.
   const productTelemetry = await readProductTelemetry(page);
@@ -247,6 +274,9 @@ export async function runScenario(options: RunScenarioOptions): Promise<Scenario
       captureSha256: capture.rawSha256,
       captureRawBytes: capture.rawBytes,
       productTelemetry,
+      chunkScoring: effectiveTolerances.chunkScoring,
+      sourceTimeScale: scenario.sourceTimeScale ?? 1,
+      audibleMs: measurement.audibleMs,
       ...(outcome.evidence ?? {}),
     },
     capturePath: capture.wavPath,

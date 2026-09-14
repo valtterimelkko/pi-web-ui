@@ -22,6 +22,7 @@ import {
   expectNoDuplicates,
   expectNoSustainedGainLoss,
   expectRecordingEnergy,
+  expectGainLossFullyExplainedByDucking,
   type AssertionResult,
   type Measurement,
 } from './oracle.js';
@@ -196,6 +197,12 @@ const speed: Scenario = {
   title: 'Playback speed 1.0 then the existing 1.25 path, duration-normalised',
   required: true,
   corpus: 2,
+  // 1.25x shortens AND pitch-shifts the render (playbackRate on an
+  // AudioBufferSourceNode), so the source must be time-compressed to the
+  // same time base and scored on the envelope: waveform correlation of a
+  // pitch-shifted render is meaningless (measured 0.19-0.49 on a good render).
+  sourceTimeScale: 1.25,
+  scoring: 'envelope',
   run: async (context) => {
     const texts = textsOf(2);
     const message = texts.join(' ');
@@ -281,8 +288,12 @@ const stopCancel: Scenario = {
           // read. A "complete read" here would mean the stop did not work.
           {
             id: 'stop.partial-playback',
-            ok: present.length > 0 && present.length < texts.length,
-            detail: `${present.length} of ${texts.length} chunks played after stop at chunk ${stoppedAt}`,
+            // The oracle counts a chunk 'present' only when the WHOLE chunk
+            // is audible; the chunk the stop cut is correctly 'missing'. So
+            // honest partial progress is proven by audible span, not by the
+            // present-count — and the read must NOT have completed.
+            ok: measurement.audibleMs > 0 && present.length < texts.length,
+            detail: `${present.length} of ${texts.length} chunks fully present, ${measurement.audibleMs.toFixed(0)} ms audible, after stop at chunk ${stoppedAt}`,
           },
           {
             id: 'stop.no-stale-replay',
@@ -626,7 +637,10 @@ const bargeDuck: Scenario = {
           ok: measurement.missingChunks.length === 0,
           detail: `missing after duck: ${measurement.missingChunks.join(', ') || 'none'}`,
         },
-        expectNoSustainedGainLoss(measurement),
+        // Ducking IS intentional gain loss: the honest gate is that every
+        // attenuation run is explained by a restored duck event, not that no
+        // attenuation happened.
+        expectGainLossFullyExplainedByDucking(measurement),
       ],
       evidence: { chunkTexts: texts, arbiterIdleAfterMs: waited },
     };

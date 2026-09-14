@@ -23,6 +23,7 @@ import {
   expectJoinGapsWithin,
   expectNoDuplicates,
   expectNoSustainedGainLoss,
+  expectGainLossFullyExplainedByDucking,
   expectRecordingEnergy,
   expectValid,
   measure,
@@ -313,3 +314,61 @@ describe('oracle — per-detector sanity', () => {
     expect(verdict.status).toBe('passed');
   });
 });
+
+describe('oracle — duck-explained gain loss and audible span', () => {
+  it('accepts attenuation runs that are restored duck events', () => {
+    const measurement = {
+      gainLossRuns: [
+        { startSample: 0, endSample: 1000, durationMs: 100, meanRatio: 0.4, recovered: true, afterChunkId: 'chunk-00' },
+      ],
+      duckEvents: [{ startSample: 0, endSample: 1000, depth: 0.4, restored: true }],
+    } as unknown as Measurement;
+    expect(expectGainLossFullyExplainedByDucking(measurement).ok).toBe(true);
+  });
+
+  it('rejects an unrecovered attenuation run as unexplained gain loss', () => {
+    const measurement = {
+      gainLossRuns: [
+        { startSample: 0, endSample: 48000, durationMs: 1000, meanRatio: 0.2, recovered: false, afterChunkId: 'chunk-01' },
+      ],
+      duckEvents: [],
+    } as unknown as Measurement;
+    const result = expectGainLossFullyExplainedByDucking(measurement);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('recovered=false');
+  });
+
+  it('reports a positive audible span on a clean render and zero on silence', () => {
+    const { source, clean } = scenario();
+    const measured = measure(source, clean, RATE);
+    expect(measured.audibleMs).toBeGreaterThan((sourceDurationMs(source) * 0.8));
+    const silent = new Float32Array(clean.length);
+    const silentMeasurement = measure(source, silent, RATE);
+    expect(silentMeasurement.audibleMs).toBe(0);
+  });
+
+  it('marks chunks present on a pitch-shifted render using envelope scoring against a time-compressed source', () => {
+    const { source, clean } = scenario();
+    // Simulate playbackRate 1.25: decimate the clean render (shortens + shifts
+    // pitch) and compress the source to the same time base.
+    const compressedClean = new Float32Array(Math.floor(clean.length / 1.25));
+    for (let i = 0; i < compressedClean.length; i += 1) compressedClean[i] = clean[Math.floor(i * 1.25)];
+    const compressedSource: SourceChunk[] = source.map((chunk) => ({
+      ...chunk,
+      samples: chunk.samples.filter((_, i) => i % 1.25 < 1).filter((_, i) => Math.floor(i * 1.25) < Math.floor((chunk.samples.length) / 1.25) * 1.25),
+    }));
+    const compressed = compressedSource.map((chunk) => {
+      const out = new Float32Array(Math.floor(chunk.samples.length / 1.25));
+      for (let i = 0; i < out.length; i += 1) out[i] = chunk.samples[Math.floor(i * 1.25)];
+      return { ...chunk, samples: out };
+    });
+    const tolerances = { ...DEFAULT_TOLERANCES, chunkScoring: 'envelope' as const };
+    const measured = measure(compressed, compressedClean, RATE, tolerances);
+    expect(measured.missingChunks.length).toBe(0);
+  });
+});
+
+function sourceDurationMs(source: SourceChunk[]): number {
+  const samples = source.reduce((total, chunk) => total + chunk.samples.length, 0);
+  return (samples / RATE) * 1000;
+}
