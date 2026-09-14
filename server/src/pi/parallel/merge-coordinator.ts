@@ -7,7 +7,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { WorktreeManager, WorktreeInfo, ConflictInfo } from './worktree-manager.js';
+import type { WorktreeManager, ConflictInfo } from './worktree-manager.js';
 import { createLogger } from '../../logging/logger.js';
 
 const logger = createLogger('MergeCoordinator');

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect, memo } from 'react';
 import { normalizeToolName } from '../../lib/messageAdapter';
 // Shared rules — same values the server-side screen-view projection uses:
 // collapsed-by-default for tool cards, and the truncation length for output.
-import { MAX_TOOL_OUTPUT_LENGTH, TOOL_COLLAPSED_BY_DEFAULT } from '@pi-web-ui/shared';
+import { TOOL_COLLAPSED_BY_DEFAULT } from '@pi-web-ui/shared';
 import {
   Terminal,
   CheckCircle,

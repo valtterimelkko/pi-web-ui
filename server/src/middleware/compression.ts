@@ -1,5 +1,5 @@
 import compression from 'compression';
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 
 /**
  * Performance metrics interface for compression monitoring

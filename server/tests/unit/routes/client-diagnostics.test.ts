@@ -7,10 +7,7 @@ vi.mock('../../../src/middleware/auth.js', () => ({
 
 import clientDiagnosticsRoutes from '../../../src/routes/client-diagnostics.js';
 import request from 'supertest';
-import {
-  setLogTap,
-  type LogRecord,
-} from '../../../src/logging/logger.js';
+import { setLogTap } from '../../../src/logging/logger.js';
 import {
   pushDiagnosticsRecord,
   clearDiagnosticsBuffer,
@@ -117,7 +114,7 @@ describe('POST /api/client-diagnostics (P13 client error ingest)', () => {
   });
 
   it('rejects too many recentEvents (ring hygiene: the client cannot flood one record)', async () => {
-    const flood = Array.from({ length: 13 }, (_, i) => ({
+    const flood = Array.from({ length: 13 }, () => ({
       at: '2026-09-13T21:00:00.000Z',
       kind: 'speech',
       operation: 'submit',

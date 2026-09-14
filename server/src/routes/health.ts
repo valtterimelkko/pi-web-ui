@@ -2,7 +2,6 @@ import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import fs from 'fs/promises';
 import { getWorkerPool } from './sessions.js';
-import { getCrashLogger } from '../workers/crash-logger.js';
 import { getOpenCodeService } from '../opencode/index.js';
 import { getClaudeService } from '../claude/index.js';
 import { getAntigravityService } from '../antigravity/index.js';
@@ -44,7 +43,7 @@ router.get('/ready', async (_req: Request, res: Response) => {
       throw new Error('Not a directory');
     }
     checks.piAgentDir = { status: 'ok', message: config.piAgentDir };
-  } catch (error) {
+  } catch {
     checks.piAgentDir = { 
       status: 'error', 
       message: `Pi agent directory not accessible: ${config.piAgentDir}` 

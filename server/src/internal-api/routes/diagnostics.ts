@@ -14,7 +14,6 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { LogLevel } from '../../config.js';
 import {
   getRecentLogs,
-  getRecentErrors,
   getDiagnosticsSummary,
 } from '../diagnostics-buffer.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';

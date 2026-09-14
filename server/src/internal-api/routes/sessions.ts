@@ -57,7 +57,6 @@ import type {
   SessionEventsSnapshotResponse,
   TranscriptResponse,
   ScreenViewResponse,
-  NativeSessionItem,
   NativeSessionsResponse,
   RegisterWatchRequest,
   DeleteWatchRequest,

@@ -21,7 +21,7 @@ import { readSessionCwd } from '../pi/session-cwd.js';
 import { parsePiSessionHistory } from '../pi/session-history.js';
 import { readBackgroundTasksSnapshot } from '../internal-api/background-children.js';
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
-import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
+import { MultiSessionManager } from '../pi/multi-session-manager.js';
 import { TalkerSessionRegistry } from '../talker/session-registry.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';

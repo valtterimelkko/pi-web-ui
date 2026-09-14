@@ -12,7 +12,6 @@ import type {
   RunOutputEvidence,
 } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
-import { assertCommandCodeEffort } from '../../command-code/command-code-model-catalog.js';
 
 const logger = createLogger('RunReceiptStore');
 

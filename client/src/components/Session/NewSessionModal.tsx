@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp, History, ChevronDown, ChevronUp, Star, Mic, Lock } from 'lucide-react';
+import { X, Folder, FolderOpen, ChevronRight, Loader2, ArrowUp, History, ChevronDown, ChevronUp, Star, Mic, Lock } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useUIStore } from '../../store/uiStore';
 import { useSessionStore } from '../../store';

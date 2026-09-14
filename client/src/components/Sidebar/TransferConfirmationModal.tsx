@@ -14,7 +14,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { useTransferStore, type TransferScope } from '../../store/transferStore';
+import { useTransferStore } from '../../store/transferStore';
 import { useSessionStore } from '../../store';
 import { TRANSFER_READY_MESSAGE } from '../../store/sessionStore';
 import { useUIStore } from '../../store/uiStore';

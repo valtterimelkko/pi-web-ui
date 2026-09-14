@@ -4,7 +4,6 @@ import {
   CheckCircle,
   XCircle,
   ChevronRight,
-  Loader2,
   Clock,
   Check,
   Circle,

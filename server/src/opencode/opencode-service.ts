@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';

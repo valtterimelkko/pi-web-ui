@@ -10,7 +10,7 @@
  */
 
 import type { NormalizedEvent } from '@pi-web-ui/shared';
-import type { Verbosity, SSETaskStatusEvent } from './types.js';
+import type { SSETaskStatusEvent } from './types.js';
 
 // ─── Tool name → human-readable summary mapping ──────────────────────────────
 

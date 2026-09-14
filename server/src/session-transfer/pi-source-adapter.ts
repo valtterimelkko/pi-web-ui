@@ -1,8 +1,6 @@
 import fs from 'fs/promises';
-import { stat } from 'fs/promises';
-import { replayEventsToVisibleItems, buildVisibleTranscript } from './visible-transcript.js';
+import { buildVisibleTranscript } from './visible-transcript.js';
 import type { VisibleTranscript, VisibleTranscriptSource, TransferScope } from './types.js';
-import type { SdkType } from '@pi-web-ui/shared';
 import { isToolVisible, extractToolPrimaryArg } from './transfer-validation.js';
 import { MAX_TOOL_OUTPUT_LENGTH, RECENT_ITEM_COUNT } from './types.js';
 import type { VisibleTranscriptItem } from './types.js';

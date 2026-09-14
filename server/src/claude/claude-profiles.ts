@@ -13,7 +13,7 @@
 
 import { z } from 'zod';
 import { readFileSync, statSync, accessSync, constants } from 'node:fs';
-import { resolve, isAbsolute, dirname } from 'node:path';
+import { resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createLogger } from '../logging/logger.js';
 

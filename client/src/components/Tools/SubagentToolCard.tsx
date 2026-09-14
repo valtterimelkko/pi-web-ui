@@ -14,7 +14,6 @@ import {
   Terminal,
   Brain,
   ListTodo,
-  ChevronDown,
   Clock,
 } from 'lucide-react';
 import { formatSubagentOneLine, type SubagentToolSummary, type ChildCardProjection } from '@pi-web-ui/shared';

@@ -38,7 +38,7 @@ export const useAuth = create<AuthState>()(
           });
 
           return { success: true };
-        } catch (_error) {
+        } catch {
           return { success: false, error: 'Network error' };
         }
       },

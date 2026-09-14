@@ -1,9 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
-import { config, ServerConfig } from '../config.js';
-import { createLogger } from '../logging/logger.js';
-
-const logger = createLogger('Config');
+import { config } from '../config.js';
 
 
 const router = Router();

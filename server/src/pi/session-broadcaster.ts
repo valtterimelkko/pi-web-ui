@@ -165,7 +165,7 @@ export class SessionBroadcaster {
       if (ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(message);
-        } catch (error) {
+        } catch {
           // Mark for removal if send fails
           deadSockets.push(ws);
         }

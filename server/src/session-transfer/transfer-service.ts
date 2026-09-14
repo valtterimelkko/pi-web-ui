@@ -6,7 +6,7 @@ import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
 import type { AntigravityService } from '../antigravity/antigravity-service.js';
 import type { CommandCodeService } from '../command-code/command-code-service.js';
-import { validateTransferRequest, type ValidationResult } from './transfer-validation.js';
+import { validateTransferRequest } from './transfer-validation.js';
 import { TRANSFER_ERROR_CODES } from './types.js';
 import type { TransferRequest, VisibleTranscriptSource } from './types.js';
 import { buildHandoffPayload } from './transfer-framing.js';

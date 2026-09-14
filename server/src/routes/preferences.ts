@@ -11,7 +11,6 @@ import {
   type SessionMeta,
   type SessionRuntime,
   type RuntimeResolver,
-  piSessionIdFromPath,
   toV2Key,
   migrateV1ToV2,
   deriveLegacyArrays,

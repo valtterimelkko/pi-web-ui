@@ -9,7 +9,7 @@
 
 import WebSocket from 'ws';
 import type { IncomingMessage } from 'http';
-import { readFile, stat } from 'fs/promises';
+import { stat } from 'fs/promises';
 import { createInterface } from 'readline';
 import { createReadStream } from 'fs';
 import { WorkerPool } from '../workers/worker-pool.js';

@@ -1,7 +1,7 @@
 // WebSocket Protocol Types
 // Defines the message format for client-server communication
 
-import type { CommandCodeCatalogueMetadata, CommandCodeEffort, CommandCodeModelInfo, SdkType, SubagentToolSummary } from '@pi-web-ui/shared';
+import type { CommandCodeEffort, CommandCodeModelInfo, SdkType, SubagentToolSummary } from '@pi-web-ui/shared';
 
 // ============================================================================
 // Multi-Session Protocol Types

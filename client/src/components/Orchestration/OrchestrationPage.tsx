@@ -13,7 +13,6 @@ import React from 'react';
 import { WorkspaceTabs } from './WorkspaceTabs';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 import { WorktreeList } from './WorktreeList';
-import { PlanPreview } from './PlanPreview';
 import { MergePreview } from './MergePreview';
 import { useOrchestrationStore, type TaskInfo } from '../../store/orchestrationStore';
 

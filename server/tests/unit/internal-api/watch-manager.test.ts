@@ -488,8 +488,7 @@ describe('watch surfacing (contract 1.34.0)', () => {
 
 describe('watch surfacing — pure-observer watches (contract 1.34.0)', () => {
   it('emits watch_fired at firing time for a pure-observer watch (no onFire), without deliveryKind', async () => {
-    let dir2: string;
-    dir2 = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-surf2-'));
+    const dir2 = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-surf2-'));
     const broker2 = new InternalApiEventBroker({ replayBufferSize: 10 });
     const surface = vi.fn();
     const pin2 = vi.fn(() => true);

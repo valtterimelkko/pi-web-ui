@@ -2,7 +2,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { getSessionRegistry } from './session-registry.js';
 import { withPrefsLock, PREFS_FILE, buildRegistryResolver } from './routes/preferences.js';
-import type { Preferences } from './routes/preferences.js';
 import { toV2Key, type SessionMeta } from './routes/session-meta.js';
 import type { MultiSessionManager } from './pi/multi-session-manager.js';
 import type { ClaudeService } from './claude/index.js';

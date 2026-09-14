@@ -6,8 +6,6 @@
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
-import * as path from 'node:path';
-import * as fs from 'node:fs/promises';
 import type { WorktreeManager, WorktreeInfo } from './worktree-manager.js';
 import type { TaskNode } from './plan-parser.js';
 import { createLogger } from '../../logging/logger.js';
