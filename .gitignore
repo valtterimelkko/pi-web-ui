@@ -88,3 +88,6 @@ tests/e2e_*_debug*.py
 tests/benchmarks/results/
 # Generated workload run output
 tests/workloads/results/
+
+# Audio regression lab scratch (worktree-local scratch only)
+.audio-lab-tmp/
