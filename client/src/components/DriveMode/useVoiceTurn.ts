@@ -10,10 +10,11 @@
  *   - route a finished transcript to the talker VERBATIM (never to the
  *     worker directly — the confirm-gated release path on the server is the
  *     only way speech reaches the worker);
- *   - mirror the harness's pending proposal with the operator's verbatim
- *     words (client-side record of what THIS surface sent when the server
- *     reports a proposal is held — the server's own store remains the
- *     authority and releases its own text, never client text);
+ *   - mirror the harness's pending proposal: the exact text Confirm will
+ *     release — the server's reported outgoing text when it sends one, else
+ *     this surface's verbatim record of what was spoken (the server's own
+ *     store remains the authority and releases its own text, never client
+ *     text);
  *   - speak talker output through the arbiter at the ladder's tiers
  *     (receipt ack tier 2, conversational reply tier 4);
  *   - keep a failed send's words for retry (a dropped utterance is the
@@ -87,6 +88,45 @@ export interface ReleasedOutcome {
   outcome: string;
 }
 
+/**
+ * The proposal held for the operator's confirmation (P26).
+ *
+ * `text` is the exact bytes Confirm will release. `cleaned`/`removed` exist
+ * ONLY when the server reports the proposal was tidied — absent on an older
+ * server or an untouched utterance, in which case the surface makes no claim
+ * and the card's "your words, exactly" stays truthful.
+ */
+export interface PendingProposal {
+  text: string;
+  cleaned?: boolean;
+  removed?: string;
+}
+
+/**
+ * P26 — the harness's cleaned proposal, read defensively off the turn result.
+ *
+ * The agreed interface: a `proposed` result may carry a `proposal` object
+ * holding the exact outgoing `text`, whether it was `cleaned`, and what was
+ * `removed`. The server side (P25) had NOT landed when this was written, so
+ * every field is validated independently and anything absent or malformed
+ * falls back to today's behaviour — the surface's own verbatim record, with
+ * no cleaning claim. An old server therefore renders exactly as before, and
+ * a malformed one can never put junk on the card. If P25 lands with
+ * different names, this is the ONE function to reconcile.
+ */
+function proposalFromResult(
+  result: TalkerTurnResult
+): Pick<PendingProposal, 'cleaned' | 'removed'> & { text?: string } | null {
+  const raw = (result as { proposal?: unknown }).proposal;
+  if (typeof raw !== 'object' || raw === null) return null;
+  const p = raw as { text?: unknown; cleaned?: unknown; removed?: unknown };
+  const proposal: { text?: string; cleaned?: boolean; removed?: string } = {};
+  if (typeof p.text === 'string' && p.text.length > 0) proposal.text = p.text;
+  if (typeof p.cleaned === 'boolean') proposal.cleaned = p.cleaned;
+  if (typeof p.removed === 'string') proposal.removed = p.removed;
+  return Object.keys(proposal).length > 0 ? proposal : null;
+}
+
 export interface UseVoiceTurnResult {
   /** Dictation pass-through. */
   state: 'idle' | 'recording' | 'processing' | 'error';
@@ -101,9 +141,10 @@ export interface UseVoiceTurnResult {
    *  Returns false when the send was refused (words are kept for retry). */
   sendText: (text: string) => boolean;
 
-  /** The pending proposal, verbatim — exactly what the surface sent and the
-   *  server reports as held. Null when nothing is pending. */
-  pendingProposal: { text: string } | null;
+  /** The pending proposal — the exact text Confirm will release, plus the
+   *  harness's cleaning facts when the server reports them (P26). Null when
+   *  nothing is pending. */
+  pendingProposal: PendingProposal | null;
   confirmPending: () => boolean;
   cancelPending: () => boolean;
 
@@ -161,7 +202,7 @@ export function useVoiceTurn(
   const { sendTalkerTurn, lastResult } = useTalkerTurn();
   const runtime = talkerRuntimeFor(sdkType ?? undefined);
 
-  const [pendingProposal, setPendingProposal] = useState<{ text: string } | null>(null);
+  const [pendingProposal, setPendingProposal] = useState<PendingProposal | null>(null);
   const [lastReleased, setLastReleased] = useState<ReleasedOutcome | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
@@ -216,9 +257,20 @@ export function useVoiceTurn(
     }
 
     if (lastResult.phase === 'proposed') {
-      // The server holds a proposal. Show THIS surface's verbatim record of
-      // what was sent — compared text, not the model's paraphrase in `reply`.
-      if (lastSentRef.current) setPendingProposal({ text: lastSentRef.current });
+      // The server holds a proposal. Prefer the harness's exact outgoing text
+      // (P25: the released bytes will equal what the card showed); fall back
+      // to THIS surface's verbatim record of what was sent — which on an old
+      // server, where the relay is verbatim, IS exactly what will go. The
+      // cleaning facts ride along only when the server actually reported
+      // them; they are never guessed.
+      if (lastSentRef.current) {
+        const fromServer = proposalFromResult(lastResult);
+        setPendingProposal({
+          text: fromServer?.text ?? lastSentRef.current,
+          ...(fromServer?.cleaned !== undefined ? { cleaned: fromServer.cleaned } : {}),
+          ...(fromServer?.removed !== undefined ? { removed: fromServer.removed } : {}),
+        });
+      }
     } else if (lastResult.phase === 'answered') {
       // Mechanically derived server-side: nothing pending after this turn.
       setPendingProposal(null);

@@ -252,6 +252,72 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     expect(result.current.pendingText).toBeNull();
   });
 
+  it('a proposed result carrying the harness proposal prefers the exact outgoing text and passes the cleaning facts through', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('okay um ask the worker if it has enough materials');
+    });
+    act(() => {
+      emit({
+        reply: 'Shall I send the tidied version?',
+        phase: 'proposed',
+        proposal: {
+          text: 'if it has enough materials',
+          cleaned: true,
+          removed: 'okay, um, ask the worker',
+        },
+      });
+    });
+    // The card must show the EXACT bytes that will be released (P25's
+    // invariant), not the raw spoken words.
+    expect(result.current.pendingProposal).toEqual({
+      text: 'if it has enough materials',
+      cleaned: true,
+      removed: 'okay, um, ask the worker',
+    });
+  });
+
+  it('an old server (no proposal on the result) keeps the verbatim record with NO cleaning claim — never a guessed one', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    const WORDS = 'rebase the auth branch';
+    act(() => {
+      result.current.sendText(WORDS);
+    });
+    act(() => {
+      emit({ reply: 'Shall I send that?', phase: 'proposed' });
+    });
+    expect(result.current.pendingProposal).toEqual({ text: WORDS });
+    expect(result.current.pendingProposal?.cleaned).toBeUndefined();
+    expect(result.current.pendingProposal?.removed).toBeUndefined();
+  });
+
+  it('a partial proposal (flag without text) falls back to the spoken record but keeps the flag honest', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    const WORDS = 'deploy the fix to staging';
+    act(() => {
+      result.current.sendText(WORDS);
+    });
+    act(() => {
+      emit({ reply: 'Holding.', phase: 'proposed', proposal: { cleaned: true } });
+    });
+    expect(result.current.pendingProposal?.text).toBe(WORDS);
+    expect(result.current.pendingProposal?.cleaned).toBe(true);
+  });
+
+  it('junk shapes on the proposal field are ignored, not trusted', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    const WORDS = 'run the smoke tests';
+    act(() => {
+      result.current.sendText(WORDS);
+    });
+    act(() => {
+      emit({ reply: 'Holding.', phase: 'proposed', proposal: { text: 42, cleaned: 'yes', removed: 7 } });
+    });
+    // A malformed proposal must not overwrite the operator's words with
+    // garbage on the card — fall back to the verbatim record.
+    expect(result.current.pendingProposal).toEqual({ text: WORDS });
+  });
+
   it('the operator floor signal feeds the arbiter and never the other way round', () => {
     // While the fake dictation is recording, the floor is the operator's.
     // useDictation is driven through the hook; simulate by driving the media
