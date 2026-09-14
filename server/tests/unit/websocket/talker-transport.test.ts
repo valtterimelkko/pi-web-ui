@@ -359,4 +359,49 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
     await sendBrowserMessage({ type: 'steer', message: 'pivot to the schema' });
     expect(lastOfType('error')).toBeUndefined();
   });
+
+  /**
+   * P27 finding D1 — the P26 card contract had no server half.
+   *
+   * The client (useVoiceTurn.proposalFromResult) reads an optional
+   * `proposal: { text, cleaned, removed }` from a proposed turn result, and
+   * falls back to the RAW utterance when it is absent — which made the card
+   * show the operator's raw words while Confirm released the TIDIED relay, and
+   * meant P26's truth-telling ("tidied" + what was removed) could never fire.
+   * Found by the P27 live matrix (66/67; the one FAIL was exactly this seam).
+   */
+  describe('D1 — the proposed result carries the card proposal', () => {
+    it('proposal.text is BYTE-IDENTICAL to what a confirm actually releases (the P25 invariant, on the wire)', async () => {
+      buildHarness();
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'tell the worker to hold phase 3 for review', requestId: 'd1a' });
+
+      const proposed = lastOfType('talker_turn_result');
+      expect(proposed?.message.phase).toBe('proposed');
+      const proposal = (proposed?.message as { proposal?: { text?: string } }).proposal;
+      expect(proposal).toBeDefined();
+      expect(proposal?.text).toBe('hold phase 3 for review');
+
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'yes', requestId: 'd1a2' });
+      const released = lastOfType('talker_turn_result');
+      expect(released?.message.phase).toBe('released');
+      expect((released?.message as { released?: { text?: string } }).released?.text).toBe(proposal?.text);
+    });
+
+    it('a tidied draft tells the truth: cleaned=true and the removed field carries the operator\'s raw words', async () => {
+      buildHarness();
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'Um, tell the worker to rerun the suite', requestId: 'd1b' });
+      const proposed = lastOfType('talker_turn_result')?.message as { proposal?: { cleaned?: boolean; removed?: string } };
+      expect(proposed?.proposal?.cleaned).toBe(true);
+      expect(proposed?.proposal?.removed).toContain('Um, tell the worker to rerun the suite');
+    });
+
+    it('a clean draft does not cry wolf: cleaned=false, text equals the utterance, no removed', async () => {
+      buildHarness();
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'run the deploy checks', requestId: 'd1c' });
+      const proposed = lastOfType('talker_turn_result')?.message as { proposal?: { text?: string; cleaned?: boolean; removed?: string } };
+      expect(proposed?.proposal?.text).toBe('run the deploy checks');
+      expect(proposed?.proposal?.cleaned).toBe(false);
+      expect(proposed?.proposal?.removed).toBeUndefined();
+    });
+  });
 });

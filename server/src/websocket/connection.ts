@@ -23,6 +23,7 @@ import { readBackgroundTasksSnapshot } from '../internal-api/background-children
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager } from '../pi/multi-session-manager.js';
 import { TalkerSessionRegistry } from '../talker/session-registry.js';
+import { joinDraftText } from '../talker/pending-proposal.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
@@ -4209,6 +4210,35 @@ export class WebSocketConnectionManager {
         phase = 'answered';
       }
 
+      // P27 finding D1: the card contract's server half. Built from the SAME
+      // draft snapshot and the SAME join the release path uses, so the bytes the
+      // card shows are the bytes a confirm releases - never an approximation.
+      // removed carries the operator's own original words for the tidied parts
+      // (what the card shows as changed), which the store already keeps; no
+      // per-strip removals list is invented.
+      // NB: `pending` is a projection (utteranceId/text), NOT the draft
+      // snapshot - the per-part originals live in snapshotDraft(). Feeding
+      // `pending` into this threw at runtime (no .utterances) on the first
+      // attempt of this fix and broke every turn via the handler's catch.
+      const draftSnapshotForCard =
+        phase === 'proposed'
+          ? this.talkerSessionRegistry.get(message.workerSessionId, runtime)?.proposals.snapshotDraft() ?? null
+          : null;
+      const proposalForCard = draftSnapshotForCard
+        ? {
+            text: joinDraftText(draftSnapshotForCard.utterances),
+            ...(draftSnapshotForCard.utterances.some(u => u.originalText !== undefined)
+              ? {
+                  cleaned: true,
+                  removed: draftSnapshotForCard.utterances
+                    .filter(u => u.originalText !== undefined)
+                    .map(u => u.originalText)
+                    .join(' '),
+                }
+              : { cleaned: false }),
+          }
+          : undefined;
+
       this.sendMessage(clientId, {
         type: 'talker_turn_result',
         ...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
@@ -4223,6 +4253,7 @@ export class WebSocketConnectionManager {
         ...(result.refused ? { refused: result.refused } : {}),
         released: result.turn?.released ?? null,
         cancelled: result.turn?.cancelled ?? false,
+      ...(phase === 'proposed' && proposalForCard ? { proposal: proposalForCard } : {}),
         // The harness's mechanical receipt ack (§4.1 rule 2), when one was
         // due this turn. Additive pass-through — the harness produced it;
         // this handler only relays it.

@@ -470,6 +470,17 @@ export interface TalkerTurnResultMessage {
   /** True when this turn cancelled a pending proposal. */
   cancelled: boolean;
   /**
+   * Present only when phase === 'proposed' (P27 finding D1): the exact text a
+   * confirmation would release, plus whether the harness tidied the operator's
+   * words to produce it. `text` is built by the SAME join the release path
+   * uses, so the card displays bytes byte-identical to what Confirm sends —
+   * the operator approves exactly what will go. `removed`, when cleaned is
+   * true, carries the operator's own original words for the tidied parts, so
+   * the card can show what changed. Absent on every other phase; the client
+   * treats absence as "not proposed", never as an error. Additive, optional.
+   */
+  proposal?: { text: string; cleaned?: boolean; removed?: string };
+  /**
    * The harness's mechanical classification of the operator's utterance (P18
    * package C). Additive and optional: the client only uses it to choose the
    * speech tier for the reply (elicited answer vs unprompted commentary).
