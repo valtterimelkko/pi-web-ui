@@ -47,6 +47,15 @@ export interface ParsedArgs {
   positional: string[];
 }
 
+/**
+ * Flags that never take a value.
+ *
+ * Without this set, `--force positional` is ambiguous and is parsed as
+ * `--force=positional`, which silently swallows a positional argument. Listing
+ * the boolean flags is the only unambiguous option short of a full grammar.
+ */
+export const BOOLEAN_FLAGS = new Set(['force', 'keep', 'help', 'json', 'quiet']);
+
 export function parseArgs(argv: string[]): ParsedArgs {
   const [command = '', ...rest] = argv;
   const flags = new Map<string, string | true>();
@@ -58,12 +67,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
     const name = token.slice(2);
-    const next = rest[i + 1];
     if (name.includes('=')) {
       const [key, value] = name.split('=');
       flags.set(key, value);
       continue;
     }
+    if (BOOLEAN_FLAGS.has(name)) {
+      flags.set(name, true);
+      continue;
+    }
+    const next = rest[i + 1];
     if (next !== undefined && !next.startsWith('--')) {
       flags.set(name, next);
       i += 1;

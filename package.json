@@ -42,7 +42,15 @@
     "validate:proxy": "npx tsx scripts/validation-logging-proxy.ts",
     "mcp:start": "npm run start --workspace=@pi-web-ui/internal-api-mcp",
     "validate:mcp:wire": "npm run build --workspace=@pi-web-ui/internal-api-mcp && npm run validate:wire --workspace=@pi-web-ui/internal-api-mcp",
-    "validate:mcp:live": "npm run build --workspace=@pi-web-ui/internal-api-mcp && npm run validate:live --workspace=@pi-web-ui/internal-api-mcp --"
+    "validate:mcp:live": "npm run build --workspace=@pi-web-ui/internal-api-mcp && npm run validate:live --workspace=@pi-web-ui/internal-api-mcp --",
+    "audio-lab": "tsx scripts/audio-lab/cli.ts",
+    "audio-lab:doctor": "tsx scripts/audio-lab/cli.ts doctor",
+    "audio-lab:fixtures": "tsx scripts/audio-lab/cli.ts fixtures",
+    "audio-lab:run": "tsx scripts/audio-lab/cli.ts run",
+    "audio-lab:soak": "tsx scripts/audio-lab/cli.ts soak",
+    "audio-lab:verify": "tsx scripts/audio-lab/cli.ts verify-record",
+    "audio-lab:report": "tsx scripts/audio-lab/cli.ts report",
+    "audio-lab:import": "tsx scripts/audio-lab/cli.ts import"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

@@ -22,6 +22,7 @@ Capped at ~10 items; older entries drop off (the rolling prose delta lives in [`
 - **Observability/introspection** — `GET /api/v1/diagnostics`, session-scoped diagnostics, event-type introspection, correlation filters, and a bounded operational snapshot are documented in [`OBSERVABILITY.md`](./OBSERVABILITY.md) and [`INTERNAL-API.md`](./INTERNAL-API.md)
 - **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
 - **Run receipts and execution instance identity** — durable Internal-API dispatch identity, session-scoped idempotency, restart recovery, and configured runtime-instance projection; see [`INTERNAL-API.md`](./INTERNAL-API.md) and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
+- **Audio regression lab (`2026-09-14`)** — a reusable lab that measures the audio a real Chrome actually renders for the speech features: private Xvfb display, the REAL product player and arbiter, a private PulseAudio null sink and an independent `parec` monitor, with a deterministic adversarial oracle, immutable hash-verified run records and offline re-verification. Canonical doc: [`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md). Referenced from [`VOICE-MODE.md`](./VOICE-MODE.md) and [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md).
 - **Fast delta summary:** [`RECENT-CHANGES.md`](./RECENT-CHANGES.md)
 
 ## 1. Agent quick start

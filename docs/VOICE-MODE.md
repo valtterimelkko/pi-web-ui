@@ -92,3 +92,23 @@ Counters in `GET /api/v1/diagnostics` → `.operational.voice`: `turnTotal{phase
 - Speech scheduling → `client/src/lib/speechArbiter.ts` (never add capture authority).
 - Delivery semantics per runtime → `server/src/talker/delivery.ts`.
 - Voice observability fields → `server/src/talker/observability.ts`, then update this table **and** `OBSERVABILITY.md` §Voice Mode in the same change.
+
+## Measuring what was actually heard
+
+"The first words were eaten", "a chunk vanished", "it stopped instead of ducking"
+are claims about **rendered audio**, and nothing above can confirm or refute
+them: server logs describe scheduling, and a transcript describes text. The
+[`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md) measures the OS-level
+output of a real Chrome running these exact modules — real `useReadAloud` and
+`speechArbiter`, a private PulseAudio null sink, and an independent `parec`
+monitor — and reports head/tail loss, omissions, duplications, reordering,
+join gaps and gain behaviour against frozen tolerances.
+
+Run it before changing anything in the speech path, and again afterwards:
+
+```bash
+npx tsx scripts/audio-lab/cli.ts run
+```
+
+A green lab result is evidence about the **render**, not proof that a user's
+laptop is fine; read its limitations section before quoting a pass.

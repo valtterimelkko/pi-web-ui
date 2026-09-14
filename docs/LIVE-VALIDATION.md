@@ -19,6 +19,12 @@ by what you need to observe:
 | 1 | **Internal API** (Unix socket + bearer token) | Backend runtime behaviour, normalized events, transcripts | Runtime dispatch, event normalization, replay, session lifecycle, orchestration surfaces | This document (below) |
 | 2 | **Browser E2E via Playwright** | The full UI in a real browser | User-visible flows: login, session UI, chat rendering, model selector, cross-tab state | `tests/e2e/` + [`../tests/README.md`](../tests/README.md) |
 | 3 | **Browser WebSocket path** (cookie auth + `/ws`, no browser) | The exact protocol the browser speaks, without a browser | Extension slash commands + `notification` toasts, browser-native messages like `compact`, any `shared/src/protocol-types.ts` message; also the fallback when Playwright auth is a blocker | [Browser-WebSocket validation](#option-3-browser-websocket-validation-cookie-auth-no-browser) below |
+| 4 | **Audio regression lab** (private display + private null sink) | The OS-rendered **audio** of the real speech player | "I could not hear it": eaten openings, missing/duplicated/reordered chunks, join gaps, duck-vs-stop, cancellation accounting | [`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md) |
+
+Option 4 is the only method here that says anything about sound. Options 1–3
+observe scheduling, protocol and text; they cannot distinguish "the audio was
+never rendered" from "the audio was rendered and inaudible on the user's
+device".
 
 Two facts that decide between 1 and 3:
 
