@@ -33,7 +33,7 @@
 import { TalkerSession } from './talker.js';
 import { digestTurn, type DigestKind } from './digest.js';
 import { createDefaultDeliveries, type DefaultDeliveries } from './delivery.js';
-import { createObservedDelivery, createVoiceTurnRecorder, type VoiceTurnRecorder } from './observability.js';
+import { createObservedDelivery, createVoiceTurnRecorder, noteVoiceLaneBound, noteVoiceLaneDisposed, type VoiceTurnRecorder } from './observability.js';
 import { OpenRouterTalkerClient, resolveTalkerModelConfig } from './model-client.js';
 import { detectPromptInjection } from '../security/prompt-injection.js';
 import type { MultiSessionManager } from '../pi/multi-session-manager.js';
@@ -148,6 +148,12 @@ export interface TalkerSessionRegistryDeps {
 
 const DEFAULT_MAX_SESSIONS = 32;
 
+/** Split a `${runtime}:${workerSessionId}` key — refs are paths and may contain colons. */
+function splitLaneKey(key: string): [TalkerRuntime, string] {
+  const sep = key.indexOf(':');
+  return [key.slice(0, sep) as TalkerRuntime, key.slice(sep + 1)];
+}
+
 function extractTextContent(content: unknown): string | undefined {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -237,10 +243,14 @@ export class TalkerSessionRegistry {
   }
 
   dispose(workerSessionId: string, runtime: TalkerRuntime = 'pi'): void {
-    this.sessions.delete(this.key(this.canonicalWorkerRef(workerSessionId, runtime), runtime));
+    const key = this.key(this.canonicalWorkerRef(workerSessionId, runtime), runtime);
+    this.sessions.delete(key);
+    // P24: the lane is no longer live — the binding query must not name it.
+    noteVoiceLaneDisposed(...splitLaneKey(key));
   }
 
   disposeAll(): void {
+    for (const key of this.sessions.keys()) noteVoiceLaneDisposed(...splitLaneKey(key));
     this.sessions.clear();
   }
 
@@ -438,10 +448,14 @@ export class TalkerSessionRegistry {
       snapshotProvider: () => this.buildSnapshotFor(runtime, workerSessionId),
     });
     this.sessions.set(key, created);
+    // P24: a talker session now exists for this lane — record the binding so
+    // "which worker session is the talker attached to?" is one query.
+    noteVoiceLaneBound(runtime, workerSessionId);
     while (this.sessions.size > this.maxSessions) {
       const oldest = this.sessions.keys().next().value;
       if (oldest === undefined) break;
       this.sessions.delete(oldest);
+      noteVoiceLaneDisposed(...splitLaneKey(oldest));
     }
     return created;
   }

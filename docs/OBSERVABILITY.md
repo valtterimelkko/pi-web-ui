@@ -281,6 +281,47 @@ curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice'
 `voiceTurnId` is a plain string match and composes with the existing
 selectors (`component`, `runtime`, `since`, `minLevel`, `limit`).
 
+The `VoiceMode` log lines also carry the correlation triple in the message
+itself — `voice turn pi:<workerSessionId>:<turn>` (and `voice release …`,
+`voice gate denied …`, `voice turn refused runtime=… worker=…`) — so the
+worker session a lane is bound to is greppable from `journalctl` without a
+JSON formatter (P24).
+
+### The lane and the conversation (P24)
+
+Voice records ride the shared diagnostics ring, which is bounded (1,000
+records / 2 MiB): on a busy server the ring rotates and the documented
+`?component=VoiceMode` read can legitimately return nothing. Two small
+process-local stores in the talker's observability module therefore answer
+the two ordinary operator questions directly, through the SAME diagnostics
+route (no new endpoint, no second ring — the stores are written on the same
+observation path and are reset on restart, exactly like the ring):
+
+```bash
+# 1. Which worker session is the voice lane attached to? (always in the response)
+curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/diagnostics" | jq '.voiceMode.lanes'
+# → [{ runtime, workerSessionId, boundAt, lastTurnAt, turnCount }]
+
+# 2. What was actually said — opt-in, bounded excerpts of the last n turns:
+curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/diagnostics?voiceConversation=10" | jq '.voiceMode.recentTurns'
+# → [{ voiceTurnId, ts, phase, utteranceExcerpt, replyExcerpt, … }]
+```
+
+Privacy (a deliberate decision, vetoable by the operator): the conversation
+store holds the operator's own utterances and the talker's replies — bounded
+(50 turns; excerpts length-capped at 500 chars with `utteranceTruncated` /
+`replyTruncated` disclosing truncation), secret-scrubbed on the same path as
+every record, local runtime state only: never persisted, never committed,
+never leaving the machine. It is write-only observation — nothing in the
+talker reads it back, it feeds no draft and no release path, and the
+confirm-release gate is untouched (`release()` keeps its single caller). The
+DEFAULT diagnostics response carries lane metadata only; utterance text is
+returned only behind the explicit `?voiceConversation=<n>` opt-in, so
+ordinary agent-facing diagnostics traffic never carries operator speech.
+Utterances the prompt-injection gate blocked are never excerpted anywhere.
+
 ### Record shapes (what healthy looks like)
 
 Every operator turn emits one `voice turn` info record; a release or a gate
@@ -334,7 +375,8 @@ mechanism and count under `"none:refused"`), `gateDeniedTotal{reason}`,
    `refused: "prompt_injection"` (blocked before anything, and never
    excerpted), `"model_unconfigured"`, or `"deliveries_unavailable"`.
 5. No records at all → the ring evicted or restarted since the interaction;
-   fall back to the worker transcript + run receipts (durable).
+   fall back to `?voiceConversation=<n>` (P24, survives ring rotation for the
+   last 50 turns), then to the worker transcript + run receipts (durable).
 
 ### Field-honesty notes
 

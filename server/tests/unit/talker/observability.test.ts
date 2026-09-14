@@ -81,6 +81,12 @@ function voiceRecords(): LogRecord[] {
   return records.filter((r) => r.component === VOICE_LOG_COMPONENT);
 }
 
+// P24: turn/release/denial messages carry the correlation triple in the line
+// itself (`voice turn pi:<workerSessionId>:<n>`); pre-talk refusals are
+// `voice turn refused …` and never carry a voiceTurnId.
+const isVoiceTurnRecord = (r: LogRecord): boolean => r.msg.startsWith('voice turn ') && r.voiceTurnId !== undefined;
+const isVoiceRefusalRecord = (r: LogRecord): boolean => r.msg.startsWith('voice turn refused');
+
 beforeEach(() => {
   records = [];
   clearDiagnosticsBuffer();
@@ -103,7 +109,7 @@ describe('D1 — one correlated voice turn record per operator turn', () => {
     const utterance = "morning — how's it going?";
     await turn(utterance);
 
-    const turns = voiceRecords().filter((r) => r.msg === 'voice turn');
+    const turns = voiceRecords().filter((r) => isVoiceTurnRecord(r));
     expect(turns).toHaveLength(1);
     const rec = turns[0];
     expect(rec.level).toBe('info');
@@ -135,7 +141,7 @@ describe('D1 — one correlated voice turn record per operator turn', () => {
     const { turn } = makeSession();
     await turn(INSTRUCTION);
 
-    const rec = voiceRecords().find((r) => r.msg === 'voice turn') as LogRecord;
+    const rec = voiceRecords().find((r) => isVoiceTurnRecord(r)) as LogRecord;
     expect(rec.phase).toBe('proposed');
     expect(rec.draftAction).toBe('accumulated');
     expect(rec.draftSizeBefore).toBeUndefined();
@@ -151,7 +157,7 @@ describe('D1 — one correlated voice turn record per operator turn', () => {
     await turn(INSTRUCTION);
     await turn('and also tell the worker to rerun the suite');
 
-    const rec = voiceRecords().filter((r) => r.msg === 'voice turn')[1];
+    const rec = voiceRecords().filter((r) => isVoiceTurnRecord(r))[1];
     expect(rec.draftSizeBefore).toBe(1);
     expect(rec.draftSizeAfter).toBe(2);
     expect(rec.draftAction).toBe('accumulated');
@@ -174,7 +180,7 @@ describe('D1 — one correlated voice turn record per operator turn', () => {
     const { turn } = makeSession({ failModel: true });
     await turn('what is the status?');
 
-    const rec = voiceRecords().find((r) => r.msg === 'voice turn') as LogRecord;
+    const rec = voiceRecords().find((r) => isVoiceTurnRecord(r)) as LogRecord;
     expect(rec.phase).toBe('error');
     expect(rec.modelCalled).toBe(false);
     expect(rec.modelTtftMs).toBeUndefined();
@@ -189,7 +195,7 @@ describe('D1 — one correlated voice turn record per operator turn', () => {
     const { turn } = makeSession();
     await turn(long);
 
-    const rec = voiceRecords().find((r) => r.msg === 'voice turn') as LogRecord;
+    const rec = voiceRecords().find((r) => isVoiceTurnRecord(r)) as LogRecord;
     expect(rec.utteranceChars).toBe(long.length);
     expect(String(rec.utteranceExcerpt).length).toBeLessThanOrEqual(120);
     expect(JSON.stringify(rec)).not.toContain(long);
@@ -204,7 +210,7 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     const result = await turn('yes, go ahead');
 
     expect(result.released).not.toBeNull();
-    const turnRec = voiceRecords().filter((r) => r.msg === 'voice turn')[1] as LogRecord;
+    const turnRec = voiceRecords().filter((r) => isVoiceTurnRecord(r))[1] as LogRecord;
     expect(turnRec.phase).toBe('released');
     expect(turnRec.gatePending).toBe(true);
     expect(turnRec.draftSizeBefore).toBe(1);
@@ -212,7 +218,7 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     // Full-draft release: no draft remains, and absence is encoded by omission.
     expect(turnRec.draftSizeAfter).toBeUndefined();
 
-    const releases = voiceRecords().filter((r) => r.msg === 'voice release');
+    const releases = voiceRecords().filter((r) => r.msg.startsWith('voice release '));
     expect(releases).toHaveLength(1);
     const rel = releases[0];
     expect(rel.level).toBe('info');
@@ -234,13 +240,13 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     const { turn, metrics } = makeSession();
     await turn('yes, go ahead');
 
-    const rec = voiceRecords().find((r) => r.msg === 'voice turn') as LogRecord;
+    const rec = voiceRecords().find((r) => isVoiceTurnRecord(r)) as LogRecord;
     expect(rec.phase).toBe('refused');
     expect(rec.gatePending).toBe(false);
     expect(rec.draftAction).toBe('none');
     expect(rec.modelCalled).toBe(false);
 
-    const denials = voiceRecords().filter((r) => r.msg === 'voice gate denied');
+    const denials = voiceRecords().filter((r) => r.msg.startsWith('voice gate denied '));
     expect(denials).toHaveLength(1);
     expect(denials[0].gateDenialReason).toBe('nothing_pending');
     expect(denials[0].voiceTurnId).toBe('pi:worker-1:1');
@@ -254,9 +260,9 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     const result = await turn('yes, go ahead'); // turn 3: stale confirmation
 
     expect(result.released).toBeNull();
-    const rec = voiceRecords().filter((r) => r.msg === 'voice turn')[2] as LogRecord;
+    const rec = voiceRecords().filter((r) => isVoiceTurnRecord(r))[2] as LogRecord;
     expect(rec.phase).toBe('refused');
-    const denials = voiceRecords().filter((r) => r.msg === 'voice gate denied');
+    const denials = voiceRecords().filter((r) => r.msg.startsWith('voice gate denied '));
     expect(denials).toHaveLength(1);
     expect(denials[0].gateDenialReason).toBe('lapsed');
     // The draft survives the refusal (never dropped silently).
@@ -270,9 +276,9 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     const result = await turn('just the fifth one');
 
     expect(result.released).toBeNull();
-    const rec = voiceRecords().filter((r) => r.msg === 'voice turn')[2] as LogRecord;
+    const rec = voiceRecords().filter((r) => isVoiceTurnRecord(r))[2] as LogRecord;
     expect(rec.phase).toBe('refused');
-    const denials = voiceRecords().filter((r) => r.msg === 'voice gate denied');
+    const denials = voiceRecords().filter((r) => r.msg.startsWith('voice gate denied '));
     expect(denials).toHaveLength(1);
     expect(denials[0].gateDenialReason).toBe('ambiguous');
     expect(rec.draftSizeAfter).toBe(2);
@@ -284,10 +290,10 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     const result = await turn('no, forget it');
 
     expect(result.cancelled).toBe(true);
-    const rec = voiceRecords().filter((r) => r.msg === 'voice turn')[1] as LogRecord;
+    const rec = voiceRecords().filter((r) => isVoiceTurnRecord(r))[1] as LogRecord;
     expect(rec.phase).toBe('cancelled');
     expect(rec.draftAction).toBe('cleared');
-    const denials = voiceRecords().filter((r) => r.msg === 'voice gate denied');
+    const denials = voiceRecords().filter((r) => r.msg.startsWith('voice gate denied '));
     expect(denials).toHaveLength(1);
     expect(denials[0].gateDenialReason).toBe('cancel_classified');
   });
@@ -295,8 +301,8 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
   it('a cancel with nothing held emits no gate-denial record', async () => {
     const { turn } = makeSession();
     await turn('no, forget it');
-    expect(voiceRecords().filter((r) => r.msg === 'voice gate denied')).toHaveLength(0);
-    const rec = voiceRecords().find((r) => r.msg === 'voice turn') as LogRecord;
+    expect(voiceRecords().filter((r) => r.msg.startsWith('voice gate denied '))).toHaveLength(0);
+    const rec = voiceRecords().find((r) => isVoiceTurnRecord(r)) as LogRecord;
     expect(rec.phase).toBe('answered');
   });
 });
@@ -359,8 +365,8 @@ describe('V4 — the existing scrubber applies to the new fields', () => {
 
     const buffered = getRecentLogs({ component: VOICE_LOG_COMPONENT, limit: 50 });
     expect(buffered.length).toBeGreaterThanOrEqual(3);
-    const turnRec = buffered.filter((r) => r.msg === 'voice turn')[0] as LogRecord;
-    const relRec = buffered.find((r) => r.msg === 'voice release') as LogRecord;
+    const turnRec = buffered.filter((r) => isVoiceTurnRecord(r))[0] as LogRecord;
+    const relRec = buffered.find((r) => r.msg.startsWith('voice release ')) as LogRecord;
     expect(String(turnRec.utteranceExcerpt)).not.toContain(secret);
     expect(String(turnRec.utteranceExcerpt)).toContain('[REDACTED]');
     expect(String(relRec.releasedExcerpt)).not.toContain(secret);
@@ -378,7 +384,7 @@ describe('observation is inert — it cannot alter the talker', () => {
     await turn(INSTRUCTION);
     await expect(turn('yes, go ahead')).rejects.toThrow('synthetic adapter crash');
 
-    const recs = voiceRecords().filter((r) => r.msg === 'voice turn');
+    const recs = voiceRecords().filter((r) => isVoiceTurnRecord(r));
     const crashRec = recs[recs.length - 1];
     expect(crashRec.phase).toBe('error');
     expect(String(crashRec.error)).toContain('synthetic adapter crash');
@@ -421,7 +427,7 @@ describe('pre-talk registry refusals', () => {
     });
     expect(result.refused).toBe('prompt_injection');
 
-    const rec = voiceRecords().find((r) => r.msg === 'voice turn refused') as LogRecord;
+    const rec = voiceRecords().find((r) => isVoiceRefusalRecord(r)) as LogRecord;
     expect(rec).toBeDefined();
     expect(rec.phase).toBe('refused');
     expect(rec.refused).toBe('prompt_injection');

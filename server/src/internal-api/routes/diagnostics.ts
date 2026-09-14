@@ -16,6 +16,11 @@ import {
   getRecentLogs,
   getDiagnosticsSummary,
 } from '../diagnostics-buffer.js';
+import {
+  getRecentVoiceTurns,
+  getVoiceLaneBindings,
+  VOICE_CONVERSATION_MAX_TURNS,
+} from '../../talker/observability.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
 import type { SessionRuntime, DiagnosticsResponseTruncation } from '../types.js';
 import type { LogRecord } from '../../logging/logger.js';
@@ -34,6 +39,12 @@ interface ParsedDiagnosticsQuery {
   since?: string;
   /** P10 Voice Mode correlation selector — plain string match, additive. */
   voiceTurnId?: string;
+  /**
+   * P24: opt-in count of recent voice-conversation turns to include. The
+   * operator's own speech is never in the default response — only this
+   * explicit flag returns excerpt text (clamped to the ring bound).
+   */
+  voiceConversation?: number;
 }
 
 function parseQuery(q: URLSearchParams): ParsedDiagnosticsQuery {
@@ -49,7 +60,31 @@ function parseQuery(q: URLSearchParams): ParsedDiagnosticsQuery {
     const value = q.get(key)?.trim();
     if (value) out[key] = value;
   }
+  const voiceRaw = q.get('voiceConversation');
+  if (voiceRaw !== null) {
+    const requested = voiceRaw.trim() === '' || voiceRaw.trim() === 'true' ? 10 : parseInt(voiceRaw, 10);
+    out.voiceConversation = Number.isFinite(requested)
+      ? Math.min(VOICE_CONVERSATION_MAX_TURNS, Math.max(1, Math.floor(requested)))
+      : 10;
+  }
   return out;
+}
+
+/**
+ * P24: the voice-lane picture for this process — which worker session each
+ * live talker session is bound to (one-query answer), plus, only behind the
+ * explicit `voiceConversation` opt-in, bounded excerpts of the most recent
+ * voice turns (operator utterance + talker reply). The stores live in
+ * talker/observability.ts (write-only observation); this route adds no store
+ * of its own.
+ */
+function voiceModeSection(query: ParsedDiagnosticsQuery): Record<string, unknown> {
+  return {
+    lanes: getVoiceLaneBindings(),
+    ...(query.voiceConversation !== undefined
+      ? { recentTurns: getRecentVoiceTurns(query.voiceConversation) }
+      : {}),
+  };
 }
 
 interface DiagnosticsRoutesDeps {
@@ -159,8 +194,9 @@ export function createDiagnosticsRoutes(deps: DiagnosticsRoutesDeps = {}) {
   ): Promise<void> {
     const context = await readContext();
     if (unavailable(res, context)) return;
-    const view = buildDiagnosticView(parseQuery(query), context);
-    sendDiagnosticJson(res, { ...view, sources: { registry: { state: context.sourceState } }, operational: operationalSnapshot(context) });
+    const parsed = parseQuery(query);
+    const view = buildDiagnosticView(parsed, context);
+    sendDiagnosticJson(res, { ...view, voiceMode: voiceModeSection(parsed), sources: { registry: { state: context.sourceState } }, operational: operationalSnapshot(context) });
   }
 
   async function handleGetSessionDiagnostics(
