@@ -82,6 +82,9 @@ vi.mock('lucide-react', () => ({
   X: () => <span data-testid="icon-x" />,
   Send: () => <span data-testid="icon-send" />,
   Car: () => <span data-testid="icon-car" />,
+  Eye: () => <span data-testid="icon-eye" />,
+  EyeOff: () => <span data-testid="icon-eyeoff" />,
+  Inbox: () => <span data-testid="icon-inbox" />,
 }));
 
 // The read-aloud hook resumes the shared AudioContext during the user gesture.

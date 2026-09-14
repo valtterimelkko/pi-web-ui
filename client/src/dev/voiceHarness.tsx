@@ -150,6 +150,18 @@ const realSubmit = speechArbiter.submit.bind(speechArbiter);
   sessionStore: useSessionStore,
   sentMessages,
   spoken,
+  /**
+   * P18 harness addition: drive one completed worker answer through the REAL
+   * surface — the store's streaming transition is exactly what the answer
+   * reader listens to, so the focus/hold path is exercised as production does.
+   */
+  pushAnswer: (text: string) => {
+    useSessionStore.setState({
+      isStreaming: true,
+      messages: [{ id: `m-${Date.now()}`, role: 'assistant', content: text, timestamp: Date.now() }],
+    });
+    setTimeout(() => useSessionStore.setState({ isStreaming: false }), 40);
+  },
 };
 
 const app = document.getElementById('root')!;

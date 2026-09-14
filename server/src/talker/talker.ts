@@ -55,6 +55,7 @@
  */
 
 import { classifyOperatorUtterance, extractPostCancelInstruction, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
+import { isAskWorkerOffer, stripAskWorkerMarker } from './ask-worker.js';
 import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
 import type { DraftSelection, DraftSnapshot } from './pending-proposal.js';
 import { createVoiceTurnRecorder, type VoiceTurnObservation, type VoiceTurnRecorder, type VoiceRuntime } from './observability.js';
@@ -169,8 +170,14 @@ export class TalkerSession {
    * The only entry point. Operator speech in; what the operator hears out.
    * There is deliberately no other public method: nothing can inject context
    * and nothing can trigger a delivery outside the confirmed release path.
+   *
+   * `opts.operatorFocus` is the operator's focus/hold control, pressed on the
+   * client (P18 package C). It is per-turn INPUT for the state view only — the
+   * talker is told, so that it can suggest leaving focus when something needs
+   * the operator. There is no session state and no method that switches it, and
+   * it is never an input to the gate.
    */
-  async handleOperatorTurn(utterance: string): Promise<TalkerTurnResult> {
+  async handleOperatorTurn(utterance: string, opts?: { operatorFocus?: boolean }): Promise<TalkerTurnResult> {
     if (!utterance || !utterance.trim()) {
       throw new Error('operator utterance must be non-empty');
     }
@@ -198,7 +205,9 @@ export class TalkerSession {
     }
     const startedAtMs = Date.now();
     try {
-      const result = await this.handleOperatorTurnBody(utterance, turn);
+      const result = await this.handleOperatorTurnBody(utterance, turn, {
+        ...(opts?.operatorFocus !== undefined ? { operatorFocus: opts.operatorFocus } : {}),
+      });
       observation.draftAfter = this.proposals.snapshotDraft();
       try {
         this.observability.observeTurn(observation, result, Date.now() - startedAtMs);
@@ -217,7 +226,15 @@ export class TalkerSession {
    * The turn body exactly as before (P10 only moved it behind the observation
    * wrapper above — no behaviour change; the gate suites pin every branch).
    */
-  private async handleOperatorTurnBody(utterance: string, turn: number): Promise<TalkerTurnResult> {
+  private async handleOperatorTurnBody(
+    utterance: string,
+    turn: number,
+    opts: { operatorFocus?: boolean } = {}
+  ): Promise<TalkerTurnResult> {
+    // P18/2: the operator's focus control is projection input for every
+    // conversational turn this turn takes (and for nothing else — the
+    // mechanical release/refusal paths never build a projection).
+    const focusFlag = opts.operatorFocus !== undefined ? { operatorFocus: opts.operatorFocus } : {};
     // Age the draft's confirmation at the boundary BEFORE this turn's events.
     // Marks needs-re-confirmation; never drops the draft (plan §4.2).
     this.proposals.tickTurn(turn);
@@ -288,7 +305,7 @@ export class TalkerSession {
           // any held draft), so its answer-ready moment owes one receipt.
           const residueRecord = this.utteranceLog.record(residue, turn);
           this.proposals.appendToDraft(residueRecord.id, residue, turn);
-          return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled, opensBatch: true });
+          return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled, opensBatch: true, ...focusFlag });
         }
       }
       if (!cancelled && !residue) {
@@ -302,7 +319,7 @@ export class TalkerSession {
         this.history.maybeTrim(this.proposals.pending !== null);
         return { reply: NOTHING_TO_CANCEL_ACK, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
       }
-      return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled });
+      return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled, ...focusFlag });
     }
 
     // A meta question about the send in flight ("did you send it?") keeps the
@@ -311,14 +328,26 @@ export class TalkerSession {
     // operator's composing thread (plan §4.2). Nothing is ever replaced:
     // supersession holds both, and the state view tells the talker.
     if (utteranceClass === 'question') {
-      if (!isMetaSendQuestion(utterance) && isWorkerDirectedQuestion(utterance)) {
+      const metaSend = isMetaSendQuestion(utterance);
+      const workerDirected = isWorkerDirectedQuestion(utterance);
+      if (!metaSend && workerDirected) {
         // A draft-opening question is a receipt moment like any append
         // (§4.1 rule 2) — the ack travels on this turn's result.
         const opensBatch = this.proposals.snapshotDraft() === null;
         this.proposals.appendToDraft(record.id, utterance, turn);
-        return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false, opensBatch });
+        return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false, opensBatch, ...focusFlag });
       }
-      return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false });
+      // P18/1: a question the talker was asked to ANSWER may be offered for
+      // relay if the talker cannot answer it. The candidate is the operator's
+      // own utterance, by id — the harness stays the only source of relay
+      // text. Whether the offer actually fires is decided after the model
+      // turn (the marker), and it only ever creates a candidate: a delivery
+      // still needs the operator's own confirmation.
+      const offerCandidate =
+        !metaSend && !workerDirected
+          ? { utteranceId: record.id, text: utterance }
+          : undefined;
+      return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false, offerCandidate, ...focusFlag });
     }
     // Receipt emission point (plan §4.1 rule 2): when this utterance OPENS a
     // composition batch (no draft was held), the harness owes one receipt for
@@ -329,7 +358,7 @@ export class TalkerSession {
     // further receipt: at most one per relay, never one per utterance.
     const opensBatch = this.proposals.snapshotDraft() === null;
     this.proposals.appendToDraft(record.id, utterance, turn);
-    return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: true, opensBatch });
+    return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: true, opensBatch, ...focusFlag });
   }
 
   /**
@@ -372,7 +401,15 @@ export class TalkerSession {
     utterance: string,
     utteranceClass: TalkerTurnResult['utteranceClass'],
     turn: number,
-    flags: { recordedCandidate?: boolean; cancelled?: boolean; opensBatch?: boolean }
+    flags: {
+      recordedCandidate?: boolean;
+      cancelled?: boolean;
+      opensBatch?: boolean;
+      /** P18/1: the operator's unanswered question, held verbatim if the model offers. */
+      offerCandidate?: { utteranceId: number; text: string };
+      /** P18/2: the operator's focus control, projection input only. */
+      operatorFocus?: boolean;
+    }
   ): Promise<TalkerTurnResult> {
     const snapshot = await this.snapshotProvider();
     const draftSnap = this.proposals.snapshotDraft();
@@ -386,6 +423,7 @@ export class TalkerSession {
           }
         : null,
       lastReleased: lastReleased ? { text: lastReleased.text, outcome: lastReleased.outcome } : null,
+      ...(flags.operatorFocus !== undefined ? { operatorFocus: flags.operatorFocus } : {}),
     });
 
     // History carries the plain conversational turns; the projection is
@@ -413,6 +451,26 @@ export class TalkerSession {
       reply = MODEL_FAILURE_REPLY;
     }
 
+    // P18/1 — the offer. The model PROPOSES (the end-anchored marker); the
+    // harness converts that proposal into a relay candidate holding the
+    // operator's own question, verbatim, by utterance id. This is the only
+    // effect model text can have on the draft, and it is deliberately narrow:
+    // it creates a candidate that still needs the operator's own confirmation,
+    // it can never deliver anything, and it fires only on a turn that was an
+    // answerable question in the first place (callers pass no candidate
+    // otherwise). The marker is stripped in every case — a protocol tag must
+    // never be spoken aloud, whether or not it was honoured.
+    const offered = flags.offerCandidate !== undefined && isAskWorkerOffer(reply);
+    let opensBatch = flags.opensBatch ?? false;
+    if (offered && flags.offerCandidate) {
+      // A question that opens a composition batch is a receipt moment like any
+      // append (§4.1 rule 2) — computed here because the batch exists only if
+      // the model actually offered.
+      opensBatch = opensBatch || this.proposals.snapshotDraft() === null;
+      this.proposals.appendToDraft(flags.offerCandidate.utteranceId, flags.offerCandidate.text, turn);
+    }
+    reply = stripAskWorkerMarker(reply);
+
     this.history.append({ role: 'assistant', content: reply, kind: 'talker', turn });
     this.history.maybeTrim(this.proposals.pending !== null);
 
@@ -421,7 +479,7 @@ export class TalkerSession {
     // chosen purely by how many recorded utterances are outstanding. The
     // model's reply is never an input; a model failure cannot suppress it.
     let receiptAck: string | undefined;
-    if (flags.opensBatch) {
+    if (opensBatch) {
       const ack = receiptAckFor(this.utteranceLog.takeReceipt() ?? 0);
       if (ack) receiptAck = ack;
     }
@@ -434,6 +492,7 @@ export class TalkerSession {
       modelCalled: error === undefined,
       latency,
       ...(receiptAck !== undefined ? { receiptAck } : {}),
+      ...(offered ? { askWorkerOffer: true } : {}),
       ...(error !== undefined ? { error } : {}),
     };
   }

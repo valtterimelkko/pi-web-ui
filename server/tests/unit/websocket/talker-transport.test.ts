@@ -302,6 +302,53 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
     expect(piDelivery.deliveredTexts()).toEqual([]);
   });
 
+  // ---------------------------------------------------------------------------
+  // P18 package C wire additions: the harness's utterance class and the
+  // operator's focus flag. Both are pass-throughs — the class is read by the
+  // client only to pick the right speech tier, and the focus flag only ever
+  // reaches the state view the model reads.
+  // ---------------------------------------------------------------------------
+  it('carries the harness’s mechanical utterance class (P18 tier split)', async () => {
+    buildHarness();
+    await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'how is it going?', requestId: 'r20' });
+    expect(lastOfType('talker_turn_result')?.message.utteranceClass).toBe('question');
+
+    await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: INSTRUCTION, requestId: 'r21' });
+    expect(lastOfType('talker_turn_result')?.message.utteranceClass).toBe('statement');
+
+    await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: CONFIRM, requestId: 'r22' });
+    expect(lastOfType('talker_turn_result')?.message.utteranceClass).toBe('confirm');
+  });
+
+  it('routes the operator’s focus flag into the projection the model reads (the talker may suggest, never switch)', async () => {
+    buildHarness();
+    await sendBrowserMessage({
+      type: 'talker_turn',
+      workerSessionId: PATH,
+      utterance: 'what is the worker doing?',
+      operatorFocus: true,
+      requestId: 'r23',
+    });
+    const projection = model.calls[0].join('\n');
+    expect(projection).toMatch(/focus/i);
+    expect(projection).toMatch(/cannot switch|only the operator/i);
+    // Focus is not a gate input: nothing was delivered and the turn was answered.
+    expect(piDelivery.deliveredTexts()).toEqual([]);
+    expect(lastOfType('talker_turn_result')?.message.phase).toBe('answered');
+  });
+
+  it('rejects a malformed operatorFocus with INVALID_MESSAGE', async () => {
+    buildHarness();
+    await sendBrowserMessage({
+      type: 'talker_turn',
+      workerSessionId: PATH,
+      utterance: 'hello',
+      operatorFocus: 'yes',
+    });
+    expect(lastOfType('error')?.message.code).toBe('INVALID_MESSAGE');
+    expect(lastOfType('talker_turn_result')).toBeUndefined();
+  });
+
   it('does not disturb existing message types (steer still routes)', async () => {
     buildHarness();
     (mgr as unknown as { clientViewingSession: Map<string, string> }).clientViewingSession.set('c1', PATH);

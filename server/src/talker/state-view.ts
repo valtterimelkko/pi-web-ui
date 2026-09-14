@@ -98,6 +98,17 @@ export function renderStateView(snapshot: WorkerStateSnapshot, harness: HarnessV
     lines.push('--- LAST RELEASED ---', `"${harness.lastReleased.text}" — ${harness.lastReleased.outcome}`);
   }
 
+  if (harness.operatorFocus) {
+    // P18/2: the operator's focus control is ON. The talker is told the truth
+    // about the mechanism — it cannot switch it — so the only thing it can
+    // usefully do is suggest.
+    lines.push(
+      '--- OPERATOR FOCUS ---',
+      'The operator has FOCUS ON: the worker\'s answers are NOT being spoken to them, so they can concentrate on talking with you.',
+      'If something genuinely needs their attention, say so briefly and suggest they leave focus. It is their control: you cannot switch it, so never claim you did.'
+    );
+  }
+
   lines.push('--- END STATE ---');
   return lines.join('\n');
 }

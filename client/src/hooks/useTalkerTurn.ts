@@ -26,6 +26,10 @@ export interface SendTalkerTurnInput {
   workerSessionId: string;
   utterance: string;
   runtime?: TalkerRuntime;
+  /** P18: the operator's focus/hold control, when it is on. Projection input
+   *  for the talker only (it may suggest leaving focus); it can never switch
+   *  the control and never touches the gate. */
+  operatorFocus?: boolean;
 }
 
 export function useTalkerTurn() {
@@ -54,6 +58,7 @@ export function useTalkerTurn() {
         workerSessionId: input.workerSessionId,
         utterance: input.utterance,
         ...(input.runtime ? { runtime: input.runtime } : {}),
+        ...(input.operatorFocus !== undefined ? { operatorFocus: input.operatorFocus } : {}),
       });
       const accepted = result !== 'failed';
       if (accepted) {

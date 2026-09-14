@@ -43,6 +43,14 @@ export interface HarnessView {
     ageTurns: number | null;
     needsReConfirmation: boolean;
   } | null;
+  /**
+   * The OPERATOR'S focus/hold control, when it is on (P18 package C,
+   * deliverable 2). Per-turn projection input only: the talker is TOLD, so it
+   * can suggest that the operator leave focus when something needs them.
+   * Nothing stores it — the operator presses the control, never the model —
+   * and it is never an input to the gate.
+   */
+  operatorFocus?: boolean;
   lastReleased: { text: string; outcome: string } | null;
 }
 
@@ -109,4 +117,13 @@ export interface TalkerTurnResult {
    * TIER_RECEIPT_ACK, ahead of everything else.
    */
   receiptAck?: string;
+  /**
+   * Present when the harness honoured an ask-the-worker offer this turn (P18
+   * package C, deliverable 1): the talker could not answer the operator's
+   * question from what it holds, offered to pass it on, and the harness is now
+   * holding the OPERATOR'S OWN QUESTION verbatim as a draft candidate. Nothing
+   * is delivered on this turn — the operator still confirms, exactly as for
+   * any other proposal. The model's reply is never the relay text.
+   */
+  askWorkerOffer?: boolean;
 }

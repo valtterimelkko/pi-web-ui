@@ -29,6 +29,13 @@ export type TalkerTurnResult = {
   runtime: 'pi' | 'claude' | 'antigravity';
   reply: string;
   phase: 'answered' | 'proposed' | 'released' | 'refused';
+  /**
+   * The harness's mechanical classification of the operator's utterance (P18).
+   * Used for one decision only: an ELICITED reply (the answer to a question
+   * the operator just asked) speaks at the answer tier; unprompted commentary
+   * stays at the chatter tier. Absent on older/refused turns — never guessed.
+   */
+  utteranceClass?: 'confirm' | 'cancel' | 'question' | 'statement';
   refused?: 'prompt_injection' | 'model_unconfigured' | 'deliveries_unavailable';
   released: {
     utteranceId: number;

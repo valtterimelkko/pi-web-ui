@@ -7,6 +7,8 @@ import { useTurnDigest } from '../../hooks/useTurnDigest';
 import { useVoiceTurn, talkerRuntimeFor } from './useVoiceTurn';
 import { ConfirmationCard } from './ConfirmationCard';
 import { FloorBanner } from './FloorBanner';
+import { FocusControl, FocusRecap } from './FocusControl';
+import { useFocusHold } from './focusHold';
 import { ReadingLevelControl } from './ReadingLevelControl';
 import { useAnswerReader } from './useAnswerReader';
 import {
@@ -49,7 +51,12 @@ export function DriveModeDictate({
   onExit,
   onAbort,
 }: DriveModeDictateProps) {
-  const voice = useVoiceTurn(sessionId, sdkType);
+  // P18/2 — the operator's focus/hold control. Session-local, pressed only by
+  // the operator: while it is on, the worker's answers are transcript-only and
+  // held; on exit what arrived is surfaced explicitly. The talker is TOLD (so
+  // it can suggest leaving focus) but has no way to switch it.
+  const focus = useFocusHold();
+  const voice = useVoiceTurn(sessionId, sdkType, focus.focused);
   const readAloud = useReadAloud('drive-mode');
   const phase = useDriveModeStore((s) => s.phase);
   const setPhase = useDriveModeStore((s) => s.setPhase);
@@ -67,10 +74,11 @@ export function DriveModeDictate({
   // gate capture, and nothing here can condense the operator's words.
   const talkerRuntime = talkerRuntimeFor(sdkType ?? undefined);
   const { requestDigest } = useTurnDigest(sessionId, talkerRuntime);
-  const { spokenKind, fallbackNote } = useAnswerReader({
+  const { spokenKind, fallbackNote, heldWhileFocused, exitRecap, dismissRecap } = useAnswerReader({
     isStreaming,
     lastAssistantText,
     level: readingLevel,
+    focused: focus.focused,
     requestDigest,
   });
   const handleReadingLevel = useCallback(
@@ -219,6 +227,17 @@ export function DriveModeDictate({
         />
       </div>
 
+      {/* Focus/hold (P18): concentrate on the conversation, keep the worker's
+          answers in the transcript, and have everything that arrived surfaced
+          on exit. Playback only — the mic is never gated. */}
+      <div className="mb-4">
+        <FocusControl
+          focused={focus.focused}
+          onToggle={focus.toggle}
+          heldCount={heldWhileFocused.length}
+        />
+      </div>
+
       {/* The four states — who has the floor, at a glance */}
       <div className="mb-6">
         <FloorBanner view={floorView} />
@@ -252,6 +271,13 @@ export function DriveModeDictate({
           />
         )}
       </button>
+
+      {/* The exit recap (P18/2): everything that arrived while focus was on,
+          surfaced explicitly — the thing that happened while you were away
+          never disappears. */}
+      {exitRecap && (
+        <FocusRecap items={exitRecap} onDismiss={dismissRecap} />
+      )}
 
       {/* Refusal — surfaced honestly (never swallowed) */}
       {voice.refusal && (

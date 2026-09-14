@@ -52,4 +52,24 @@ describe('talker system prompt (v3 harness variant)', () => {
     const fromFile = readFileSync(path.join(repoRoot, TALKER_PROMPT_RELATIVE_PATH), 'utf8').trim();
     expect(loadTalkerSystemPrompt()).toBe(fromFile);
   });
+
+  // P18 package C: the two new instructed behaviours. The prompt is where the
+  // judge-and-act asymmetry lives — the model may OFFER a relay and may SUGGEST
+  // leaving focus, but both are acted on by the operator (and by the harness),
+  // never by the model.
+  it('teaches the ask-the-worker offer with its mechanical tag and its narrow scope', () => {
+    const prompt = loadTalkerSystemPrompt();
+    expect(prompt).toContain('[[ask-worker]]');
+    expect(prompt).toMatch(/cannot answer/i);
+    // The relay text is the operator's, never the model's paraphrase.
+    expect(prompt).toMatch(/their words — not your wording|word for word/i);
+    // The narrow scope: not instructions, not "did you send it".
+    expect(prompt).toMatch(/never for an instruction/i);
+  });
+
+  it('teaches the focus suggestion without ever claiming a switch', () => {
+    const prompt = loadTalkerSystemPrompt();
+    expect(prompt).toMatch(/focus on/i);
+    expect(prompt).toMatch(/cannot switch it/i);
+  });
 });

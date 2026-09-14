@@ -25,11 +25,34 @@ import { useDictation } from '../../hooks/useDictation';
 import { useTalkerTurn } from '../../hooks/useTalkerTurn';
 import {
   speechArbiter,
+  TIER_ANSWER,
   TIER_RECEIPT_ACK,
   TIER_CHATTER,
+  type SpeechTier,
 } from '../../lib/speechArbiter';
 import { spokenLedger } from '../../lib/spokenLedger';
-import type { TalkerRuntime } from '../../lib/talkerBus';
+import type { TalkerRuntime, TalkerTurnResult } from '../../lib/talkerBus';
+
+/**
+ * P18/3 — which tier the talker's reply speaks at.
+ *
+ * The ladder's tier 4 held two different things: a reply to a question the
+ * operator just asked, and unprompted commentary. A direct answer is not
+ * chatter — it is the conversation — and it must not be the first thing
+ * dropped when anything else speaks. So the split is by ELICITATION, using the
+ * harness's own mechanical classification (never a client guess):
+ *
+ *   the operator asked a question → TIER_ANSWER (3): queued, never dropped
+ *   anything else                  → TIER_CHATTER (4): dropped if it would
+ *                                    defer higher speech (§4.1 rule 4)
+ *
+ * The mechanical acks keep their own tier-2 slot, and an absent class (an
+ * older server, a refused turn) falls back to chatter — never to a guess.
+ */
+export function replyTier(result: Pick<TalkerTurnResult, 'phase' | 'utteranceClass'>): SpeechTier {
+  if (result.phase === 'released') return TIER_RECEIPT_ACK;
+  return result.utteranceClass === 'question' ? TIER_ANSWER : TIER_CHATTER;
+}
 
 /** The explicit confirm gesture — classified 'confirm' server-side, which
  *  releases the server's OWN stored verbatim proposal. The surface never
@@ -130,7 +153,10 @@ export function talkerRuntimeFor(sdkType: string | undefined): TalkerRuntime | u
 
 export function useVoiceTurn(
   workerSessionId: string,
-  sdkType?: string | null
+  sdkType?: string | null,
+  /** P18/2 — the operator's focus control. Projection input for the talker
+   *  (so it can suggest leaving focus); it never gates capture or the send. */
+  operatorFocus = false
 ): UseVoiceTurnResult {
   const { sendTalkerTurn, lastResult } = useTalkerTurn();
   const runtime = talkerRuntimeFor(sdkType ?? undefined);
@@ -151,6 +177,9 @@ export function useVoiceTurn(
         workerSessionId,
         utterance: text,
         ...(runtime ? { runtime } : {}),
+        // Sent only when focus is ON: the flag tells the talker the worker's
+        // answers are not being spoken, so it can suggest leaving focus.
+        ...(operatorFocus ? { operatorFocus: true } : {}),
       });
       if (!accepted) {
         setPendingText(text);
@@ -160,7 +189,7 @@ export function useVoiceTurn(
       lastSentRef.current = text;
       return true;
     },
-    [sendTalkerTurn, workerSessionId, runtime]
+    [sendTalkerTurn, workerSessionId, runtime, operatorFocus]
   );
 
   const sendText = useCallback(
@@ -204,10 +233,12 @@ export function useVoiceTurn(
     // Speak what the operator hears, at the ladder's tier (playback only —
     // this never gates capture). §4.1 rule 2: the harness's mechanical
     // receipt ack speaks FIRST (tier 2, before anything else). The
-    // conversational reply stays tier 4: per the decided ladder, chatter is
-    // dropped, not queued, when it would delay tiers 1–3 — so on a receipt
-    // turn the receipt is what the operator hears, and the reply remains in
-    // the harness record. Release acks are tier 2; replies are tier 4.
+    // conversational reply speaks at the tier its elicitation earns (P18/3):
+    // the answer to a question the operator just asked is the conversation and
+    // QUEUES at the answer tier, while unprompted commentary stays at the
+    // chatter tier, where it is dropped rather than delaying tiers 1–3 — so on
+    // a receipt turn the receipt is what the operator hears, and the reply
+    // remains in the harness record. Release acks are tier 2.
     //
     // Every submission claims the shared spoken ledger first (P16): a
     // duplicate emission of THIS event is not repeated. The scope is the
@@ -222,8 +253,8 @@ export function useVoiceTurn(
       });
     }
     if (lastResult.reply && spokenLedger.claim(lastResult.reply, scope)) {
-      const tier =
-        lastResult.phase === 'released' ? TIER_RECEIPT_ACK : TIER_CHATTER;
+      // P18/3 — elicited reply vs unprompted commentary (see replyTier).
+      const tier = replyTier(lastResult);
       speechArbiter.submit({
         id: lastResult.phase === 'released'
           ? `ack-${lastResult.released?.utteranceId ?? 'x'}`

@@ -409,6 +409,17 @@ export type TalkerRuntime = 'pi' | 'claude' | 'antigravity';
  */
 export type TalkerTurnPhase = 'answered' | 'proposed' | 'released' | 'refused';
 
+/**
+ * The harness's mechanical classification of the operator's utterance, as the
+ * server computed it (P18 package C). The client uses it for one decision
+ * only: whether the reply to this turn is ELICITED (the answer to a question
+ * the operator just asked — spoken at the answer tier, because it is the
+ * conversation) or unprompted commentary (spoken at the chatter tier, where it
+ * may be dropped rather than deferring anything that matters). Absent on
+ * older/refused turns, which fall back to chatter — never to a guess.
+ */
+export type TalkerUtteranceClass = 'confirm' | 'cancel' | 'question' | 'statement';
+
 /** Wire shape of the talker library's DeliveryOutcome (JSON-safe passthrough). */
 export type TalkerDeliveryOutcome =
   | { outcome: 'delivered'; mechanism: 'steer' | 'prompt'; disclosure?: string }
@@ -434,6 +445,13 @@ export interface TalkerTurnMessage {
   /** Defaults to 'pi'. */
   runtime?: TalkerRuntime;
   requestId?: string;
+  /**
+   * The operator's focus/hold control, when it is on (P18 package C).
+   * Projection input for the talker only: it lets the talker suggest leaving
+   * focus. It cannot switch the control (the operator presses it on the
+   * client) and it is never an input to the confirm gate.
+   */
+  operatorFocus?: boolean;
 }
 
 /** Server → Client: what happened on one operator talker turn. */
@@ -451,6 +469,12 @@ export interface TalkerTurnResultMessage {
   released: { utteranceId: number; text: string; delivery: TalkerDeliveryOutcome } | null;
   /** True when this turn cancelled a pending proposal. */
   cancelled: boolean;
+  /**
+   * The harness's mechanical classification of the operator's utterance (P18
+   * package C). Additive and optional: the client only uses it to choose the
+   * speech tier for the reply (elicited answer vs unprompted commentary).
+   */
+  utteranceClass?: TalkerUtteranceClass;
   /**
    * Present when the harness emitted a receipt ack this turn (plan §4.1
    * rule 2): a fixed-vocabulary string from the server's ack vocabulary —
@@ -472,7 +496,8 @@ export function isTalkerTurnMessage(data: unknown): data is TalkerTurnMessage {
     typeof msg.workerSessionId === 'string' &&
     typeof msg.utterance === 'string' &&
     (msg.runtime === undefined || msg.runtime === 'pi' || msg.runtime === 'claude' || msg.runtime === 'antigravity') &&
-    (msg.requestId === undefined || typeof msg.requestId === 'string')
+    (msg.requestId === undefined || typeof msg.requestId === 'string') &&
+    (msg.operatorFocus === undefined || typeof msg.operatorFocus === 'boolean')
   );
 }
 

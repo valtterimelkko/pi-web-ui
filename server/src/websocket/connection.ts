@@ -4189,6 +4189,8 @@ export class WebSocketConnectionManager {
         workerSessionId: message.workerSessionId,
         utterance: message.utterance,
         runtime,
+        // P18/2: the operator's focus control, projection input only.
+        ...(message.operatorFocus !== undefined ? { operatorFocus: message.operatorFocus } : {}),
       });
 
       // Mechanically derived phase. 'proposed' means the harness holds an
@@ -4214,6 +4216,10 @@ export class WebSocketConnectionManager {
         runtime,
         reply: result.reply,
         phase,
+        // P18/3: the harness's own classification of the operator's utterance,
+        // passed through so the client can speak an ELICITED reply at the
+        // answer tier and unprompted commentary at the chatter tier.
+        ...(result.turn?.utteranceClass !== undefined ? { utteranceClass: result.turn.utteranceClass } : {}),
         ...(result.refused ? { refused: result.refused } : {}),
         released: result.turn?.released ?? null,
         cancelled: result.turn?.cancelled ?? false,

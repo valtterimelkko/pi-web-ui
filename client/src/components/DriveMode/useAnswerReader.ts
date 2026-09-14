@@ -32,6 +32,7 @@ import {
 } from '../../lib/speechArbiter';
 import { spokenLedger } from '../../lib/spokenLedger';
 import type { TurnDigestKind, TurnDigestOutcome } from '../../lib/turnDigest';
+import { focusRecapAnnouncement, type HeldAnswer } from './focusHold';
 import {
   digestSpokenText,
   planSpeechForText,
@@ -49,6 +50,13 @@ export interface AnswerReaderOptions {
   lastAssistantText: string | null;
   /** The operator's chosen level. */
   level: ReadingLevel;
+  /**
+   * The operator's focus/hold control (P18 package C). While it is on, the
+   * worker's answers are transcript-only: they are HELD, never spoken, and
+   * surfaced explicitly when focus is left. Focus gates playback only —
+   * nothing here can touch capture.
+   */
+  focused: boolean;
   /** The digest seam (useTurnDigest in the surface). Returns ok:false whenever
    *  the talker cannot help, which is a normal, handled outcome. */
   requestDigest: (request: {
@@ -64,6 +72,13 @@ export interface AnswerReaderView {
   spokenKind: ReadingLevel | null;
   /** Honest note when a digest was unavailable and the turn was read in full. */
   fallbackNote: string | null;
+  /** Answers that have arrived while focus is on (oldest first), currently
+   *  held: visible while focused, spoken on exit. Never dropped. */
+  heldWhileFocused: HeldAnswer[];
+  /** What arrived while focused, set when focus is left with something held —
+   *  the explicit surfacing that makes "exit focus" safe. Null otherwise. */
+  exitRecap: HeldAnswer[] | null;
+  dismissRecap: () => void;
 }
 
 interface AnswerSpeech {
@@ -143,9 +158,12 @@ function heardText(chunks: readonly string[], heardChunks: number): string {
 }
 
 export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView {
-  const { isStreaming, lastAssistantText, level, requestDigest } = options;
+  const { isStreaming, lastAssistantText, level, focused, requestDigest } = options;
   const [spokenKind, setSpokenKind] = useState<ReadingLevel | null>(null);
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
+  /** P18/2 — the answers held while focus is on, and the recap they produce. */
+  const [heldWhileFocused, setHeldWhileFocused] = useState<HeldAnswer[]>([]);
+  const [exitRecap, setExitRecap] = useState<HeldAnswer[] | null>(null);
 
   const answerRef = useRef<AnswerSpeech | null>(null);
   /** Bumped whenever this answer's reading is re-planned; anything in flight
@@ -155,10 +173,34 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
   const autoSeqRef = useRef(0);
   const prevStreamingRef = useRef(isStreaming);
 
+  // P18/2 — focus and the digest seam are read inside ASYNC continuations
+  // (a digest that comes back after the operator pressed focus must not
+  // start speaking), so both are mirrored in refs.
+  const focusedRef = useRef(focused);
+  const heldRef = useRef<HeldAnswer[]>([]);
+  const levelRef = useRef(level);
+  const requestDigestRef = useRef(requestDigest);
+  levelRef.current = level;
+  requestDigestRef.current = requestDigest;
+  const recapSeqRef = useRef(0);
+
   const submitAnswerText = useCallback((itemId: string, text: string, form: ReadingLevel) => {
     const answer = answerRef.current;
     if (answer && answer.itemId === itemId) answer.spokenForm = form;
     speechArbiter.submit({ id: itemId, tier: TIER_ANSWER, text });
+  }, []);
+
+  /**
+   * P18/2 — hold an answer that arrived (or was left unplayed) while focus is
+   * on. The words are never dropped and never spoken here; they are surfaced
+   * and spoken when focus is left.
+   */
+  const holdAnswer = useCallback((itemId: string, text: string) => {
+    const spoken = text.trim();
+    if (!spoken) return;
+    if (heldRef.current.some((held) => held.text === spoken)) return;
+    heldRef.current = [...heldRef.current, { id: itemId, text: spoken }];
+    setHeldWhileFocused(heldRef.current);
   }, []);
 
   /**
@@ -204,6 +246,97 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
   }, []);
 
   // ---------------------------------------------------------------------------
+  // P18/2 — leaving focus. Everything that arrived while focus was on is
+  // surfaced explicitly: the recap is shown, and it SPEAKS (the mechanical
+  // announcement, then each answer through the operator's reading level). This
+  // is the part that matters — "exit focus" must never mean "the thing that
+  // happened while you were away disappeared".
+  // ---------------------------------------------------------------------------
+  const speakFocusRecapItem = useCallback(
+    async (item: HeldAnswer) => {
+      const generation = ++generationRef.current;
+      const plan = planSpeechForText(levelRef.current, item.text);
+      // Tracked as the current answer so a mid-recap level flip still lands
+      // (the flip path supersedes this item through the same generation rule
+      // the normal turn-end path uses).
+      answerRef.current = {
+        itemId: item.id,
+        text: item.text,
+        chunks: chunkIntoSentences(item.text),
+        spokenForm: null,
+      };
+      setSpokenKind(plan.kind === 'read' ? 'verbatim' : plan.digestKind);
+
+      if (plan.kind === 'read') {
+        // A held answer was never claimed (nothing was spoken while focused),
+        // so the shared record still protects it: if the operator read it aloud
+        // while focus was on, the recap does not say the same words twice.
+        if (!spokenLedger.claim(item.text)) return;
+        submitAnswerText(item.id, item.text, 'verbatim');
+        return;
+      }
+      digestInFlightRef.current = true;
+      let outcome: TurnDigestOutcome;
+      try {
+        outcome = await requestDigestRef.current({ kind: plan.digestKind, text: item.text });
+      } catch {
+        outcome = { ok: false, reason: 'failed' };
+      } finally {
+        digestInFlightRef.current = false;
+      }
+      if (generation !== generationRef.current) return; // a level flip superseded this item
+      if (outcome.ok) {
+        const spoken = digestSpokenText(plan.digestKind, outcome.digest);
+        if (spoken && spokenLedger.claim(spoken)) {
+          submitAnswerText(item.id, spoken, plan.digestKind);
+          return;
+        }
+      }
+      // The talker could not help: read the held answer rather than lose it.
+      setFallbackNote(DIGEST_FALLBACK_NOTE);
+      setSpokenKind('verbatim');
+      if (!spokenLedger.claim(item.text)) return;
+      submitAnswerText(item.id, item.text, 'verbatim');
+    },
+    [submitAnswerText]
+  );
+
+  const speakFocusRecap = useCallback(
+    async (items: HeldAnswer[]) => {
+      const count = items.length;
+      if (count === 0) return;
+      // The announcement is a mechanical, constant-shaped line, so it is held
+      // under its own event scope: a second focus session must be able to say
+      // the same words again (P16's event-scoping rule).
+      const scope = `focus-recap-${recapSeqRef.current++}`;
+      const announcement = focusRecapAnnouncement(count);
+      if (spokenLedger.claim(announcement, scope)) {
+        speechArbiter.submit({ id: scope, tier: TIER_ANSWER, text: announcement });
+      }
+      for (const item of items) {
+        await speakFocusRecapItem(item);
+      }
+    },
+    [speakFocusRecapItem]
+  );
+
+  const prevFocusedRef = useRef(focused);
+  useEffect(() => {
+    const wasFocused = prevFocusedRef.current;
+    prevFocusedRef.current = focused;
+    focusedRef.current = focused;
+    if (!wasFocused || focused) return; // only on a real exit
+    const held = heldRef.current;
+    if (held.length === 0) return;
+    heldRef.current = [];
+    setHeldWhileFocused([]);
+    setExitRecap(held);
+    void speakFocusRecap(held);
+  }, [focused, speakFocusRecap]);
+
+  const dismissRecap = useCallback(() => setExitRecap(null), []);
+
+  // ---------------------------------------------------------------------------
   // Turn end: the plan speaks. A digest plan asks the talker; while the request
   // is in flight nothing has been spoken yet, so a digest that never arrives
   // costs latency, never words — the fallback reads the turn in full.
@@ -212,6 +345,15 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
     const wasStreaming = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
     if (!wasStreaming || isStreaming || !lastAssistantText) return;
+
+    // P18/2 — focus gates PLAYBACK ONLY. While focus is on the answer is not
+    // spoken; it is held (and the shared ledger claim is deliberately NOT made
+    // here — claiming would mark the words as already heard and the exit recap
+    // could never speak them).
+    if (focusedRef.current) {
+      holdAnswer(`answer-auto-${autoSeqRef.current++}`, lastAssistantText);
+      return;
+    }
 
     // One answer speaks once, whichever producer got there first — the shared
     // record (P16). Claimed at the decision, so a repeated turn-end cannot
@@ -241,6 +383,14 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
     void requestDigest({ kind: plan.digestKind, text: lastAssistantText }).then((outcome) => {
       if (generation !== generationRef.current) return;
       digestInFlightRef.current = false;
+      if (focusedRef.current) {
+        // The operator pressed focus while the digest was in flight. Nothing
+        // has been spoken of this answer, so the whole of it is held.
+        answerRef.current = null;
+        setSpokenKind(null);
+        holdAnswer(itemId, lastAssistantText);
+        return;
+      }
       if (!outcome.ok) {
         setFallbackNote(DIGEST_FALLBACK_NOTE);
         setSpokenKind('verbatim');
@@ -327,6 +477,12 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
       void stopped.then(() => {
         if (generation !== generationRef.current) return;
         digestInFlightRef.current = false;
+        if (focusedRef.current) {
+          holdAnswer(answer.itemId, remainder);
+          answerRef.current = null;
+          setSpokenKind(null);
+          return;
+        }
         speakAnswerPiece(answer.itemId, remainder, 'verbatim');
       });
       return;
@@ -343,6 +499,14 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
     ]).then(([, outcome]) => {
       if (generation !== generationRef.current) return;
       digestInFlightRef.current = false;
+      if (focusedRef.current) {
+        // Focus arrived while the digest was in flight: hold the unplayed
+        // remainder rather than speaking over the operator's request for quiet.
+        holdAnswer(answer.itemId, remainder);
+        answerRef.current = null;
+        setSpokenKind(null);
+        return;
+      }
       if (outcome.ok) {
         const spoken = digestSpokenText(plan.digestKind, outcome.digest);
         if (spoken && spokenLedger.claim(spoken)) {
@@ -359,5 +523,5 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
     });
   }, [level, requestDigest, submitAnswerText, speakAnswerPiece]);
 
-  return { spokenKind, fallbackNote };
+  return { spokenKind, fallbackNote, heldWhileFocused, exitRecap, dismissRecap };
 }

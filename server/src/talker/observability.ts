@@ -176,6 +176,8 @@ export function createVoiceTurnRecorder(options: VoiceTurnRecorderOptions = {}):
           draftAction: deriveDraftAction(observation, result),
           gatePending: observation.draftBefore !== null && !observation.lapsedBefore,
           receiptAckEmitted,
+          // P18/1: an honoured ask-the-worker offer (observation only).
+          askWorkerOfferEmitted: result.askWorkerOffer === true,
           modelCalled: result.modelCalled,
           durationMs,
         };

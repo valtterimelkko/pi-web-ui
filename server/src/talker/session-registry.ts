@@ -82,6 +82,13 @@ export interface TalkerOperatorTurnInput {
   /** The operator's verbatim utterance. */
   utterance: string;
   runtime?: TalkerRuntime;
+  /**
+   * The operator's focus/hold control, when it is on (P18 package C).
+   * Projection input only: it tells the talker that worker answers are not
+   * being spoken, so it can suggest leaving focus. It cannot switch anything
+   * and it is never an input to the gate.
+   */
+  operatorFocus?: boolean;
 }
 
 export interface TalkerOperatorTurnResult {
@@ -283,7 +290,9 @@ export class TalkerSessionRegistry {
     }
 
     const talker = this.getOrCreate(workerRef, runtime, delivery, model);
-    const turn = await talker.handleOperatorTurn(input.utterance);
+    const turn = await talker.handleOperatorTurn(input.utterance, {
+      ...(input.operatorFocus !== undefined ? { operatorFocus: input.operatorFocus } : {}),
+    });
     return { reply: turn.reply, turn };
   }
 
