@@ -16,17 +16,19 @@
 import type { UtteranceClass } from './types.js';
 import type { DraftSelection, OrdinalPosition } from './pending-proposal.js';
 
-/** Explicit withdrawals of the pending proposal. */
+/** Explicit withdrawals of the pending proposal. Each pattern consumes its
+ *  natural object ("cancel that" / "cancel it") — see extractPostCancelInstruction
+ *  for why a pattern that stops at the verb is a defect, not a detail. */
 const CANCEL_PATTERNS: RegExp[] = [
   /^\s*no\b[.!\s]*$/i,
-  /\bnever\s?mind\b/i,
+  /\bnever\s?mind(?:\s+(?:that|it|this))?\b/i,
   /\bforget it\b/i,
   /\bforget (?:that|this)\b/i,
-  /\bscratch (that|it)\b/i,
-  /\bdon'?t send\b/i,
-  /\bdo not send\b/i,
-  /\bcancel that\b/i,
-  /\bno,?\s*(wait|hold|stop|don'?t|cancel)\b/i,
+  /\bscratch (?:that|it)\b/i,
+  /\bdon'?t send(?:\s+(?:that|it|this))?\b/i,
+  /\bdo not send(?:\s+(?:that|it|this))?\b/i,
+  /\bcancel (?:that|it|this)\b/i,
+  /\bno,?\s*(?!\s)(wait|hold|stop|don'?t|cancel|forget)(?:\s+(?:that|it|this))?\b/i,
   /\bactually,?\s*no\b/i,
 ];
 
@@ -112,6 +114,11 @@ export function classifyOperatorUtterance(raw: string): UtteranceClass {
   return 'statement';
 }
 
+/** A residue that is nothing but the tail of a cancel phrase is not an
+ *  instruction ("don't send /that/"). Safe by construction: dropping a draft
+ *  can only reduce what a release could ever carry. */
+const DANGLING_OBJECT = /^(?:that|it|this|these|those|them)(?:\s+one)?[.!,]?$/i;
+
 /**
  * Locate the instruction residue AFTER the cancel boundary of a
  * cancel-classified utterance (finding F1, P7). "Never mind, forget it. Tell
@@ -120,34 +127,50 @@ export function classifyOperatorUtterance(raw: string): UtteranceClass {
  * draft-captured — before this existed, the operator's words vanished from
  * the harness while remaining in the talker's conversation.
  *
- * Purely mechanical: repeatedly cut at the EARLIEST cancel-pattern match end
- * until the remainder no longer classifies as cancel (a cancel run — "no,
- * wait — cancel that" — is skipped whole), then strip leftover leading
- * punctuation. Returns the trimmed residue, or null when the utterance is a
- * pure cancel or cancels itself down to nothing (an instruction that takes
- * itself back mid-breath cancels wholly — the last cancel phrase wins, same
- * as the pre-fix classifier). This function only LOCATES the boundary; the
- * caller classifies the residue and decides what it means. It never touches
- * the release path: a residue can only ever join the draft, which still
+ * P25: matches are now MERGED where they overlap. The cancel vocabulary
+ * contains nested phrases — "cancel that" sits inside "no, cancel that" — and
+ * cutting at the earliest match end used to stop between them, leaving the
+ * tail ("that") looking like an instruction. The visible effect was that the
+ * confirmation card's Cancel button, which sends the fixed utterance
+ * "no, cancel that", cleared the draft and then instantly re-drafted the
+ * fragment as a FRESH proposal: the card reappeared and could never be
+ * dismissed (operator-reported). Cutting at the end of the merged phrase fixes
+ * every shape of it — "no, cancel that. Tell the worker to stop." now yields
+ * "Tell the worker to stop." rather than "that. Tell the worker to stop."
+ *
+ * Purely mechanical: this function only LOCATES the boundary. It never touches
+ * the release path — a residue can only ever join the draft, which still
  * requires its own confirmation to release.
  */
 export function extractPostCancelInstruction(raw: string): string | null {
   let text = raw.trim();
   for (;;) {
     if (!text) return null;
-    if (!CANCEL_PATTERNS.some(p => p.test(text))) break;
-    let earliestEnd: number | null = null;
+    const spans: Array<{ start: number; end: number }> = [];
     for (const pattern of CANCEL_PATTERNS) {
-      const m = pattern.exec(text);
-      if (m && (earliestEnd === null || m.index + m[0].length < earliestEnd)) {
-        earliestEnd = m.index + m[0].length;
+      const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+      const re = new RegExp(pattern.source, flags);
+      for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+        if (m[0].length === 0) {
+          re.lastIndex += 1;
+          continue;
+        }
+        spans.push({ start: m.index, end: m.index + m[0].length });
       }
     }
-    if (earliestEnd === null) return null; // unreachable while the .some() matched
-    text = text.slice(earliestEnd).trim();
+    if (spans.length === 0) break;
+    spans.sort((a, b) => a.start - b.start);
+    let end = spans[0].end;
+    for (const span of spans) {
+      if (span.start > end) break; // a separate, later cancel phrase: next pass
+      if (span.end > end) end = span.end;
+    }
+    text = text.slice(end).trim();
   }
   if (!text) return null;
-  return text.replace(/^[,.;:!—-]+\s*/, '').trim() || null;
+  const residue = text.replace(/^[,.;:!—-]+\s*/, '').trim();
+  if (!residue) return null;
+  return DANGLING_OBJECT.test(residue) ? null : residue;
 }
 
 /**

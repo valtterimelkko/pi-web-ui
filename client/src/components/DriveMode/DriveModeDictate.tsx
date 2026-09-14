@@ -275,6 +275,20 @@ export function DriveModeDictate({
         )}
       </button>
 
+      {/* The contract, taught where the operator speaks (P26). Display and
+          teaching only — it changes no behaviour: capture, the send path and
+          the confirm gate are exactly as before. The three facts it must
+          convey: the words are passed on (not re-invented); they may be
+          tidied; the worker never knows this lane exists. */}
+      <p
+        data-testid="voice-contract-hint"
+        className="mt-3 max-w-md text-center text-xs leading-relaxed text-gray-500 dark:text-gray-400"
+      >
+        Say it however you like — your words are passed on as spoken, tidied
+        only when they ramble, never rewritten. The worker never knows this
+        voice exists.
+      </p>
+
       {/* The exit recap (P18/2): everything that arrived while focus was on,
           surfaced explicitly — the thing that happened while you were away
           never disappears. */}
@@ -326,11 +340,15 @@ export function DriveModeDictate({
         </div>
       )}
 
-      {/* The confirmation card — explicit, verbatim, ambiguous does nothing */}
+      {/* The confirmation card — explicit, exact, ambiguous does nothing.
+          The cleaning facts pass through when the server reported them (P26);
+          when absent, the card's exact-words claim stands, truthfully. */}
       {voice.pendingProposal && (
         <div className="mt-4 w-full flex justify-center">
           <ConfirmationCard
             proposalText={voice.pendingProposal.text}
+            cleaned={voice.pendingProposal.cleaned}
+            removed={voice.pendingProposal.removed}
             onConfirm={voice.confirmPending}
             onCancel={voice.cancelPending}
             onSubmitText={voice.sendText}

@@ -15,6 +15,14 @@ Typical flow:
 5. wait while the agent works
 6. optionally use read-aloud
 
+## Talking to your agent (Voice Mode)
+
+When you dictate, your words go to a helper agent (the *talker*) — never straight to the working session:
+
+- your words are passed on as spoken — tidied only when they ramble, never rewritten;
+- the worker never knows the talker or your voice exists — it just receives an instruction;
+- before anything reaches the worker, a confirmation card shows the exact text that will be sent (and what was tidied out of it, if anything). **Confirm** sends it, **Cancel** drops it, and typed text replies to the talker instead.
+
 ## Key Files
 
 ### UI

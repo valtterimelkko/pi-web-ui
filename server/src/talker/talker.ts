@@ -13,9 +13,13 @@
  *      utterance mechanically classifies as a confirmation. Model output is
  *      never an input to this decision, so no model behaviour — compliant or
  *      not — can move the gate.
- *   2. The relay text is always the operator's raw utterance, referenced by
- *      id in the verbatim log. The model decides whether and when to ask;
- *      it never composes what is sent.
+ *   2. The relay text is the draft's stored text: the operator's own words
+ *      (P25 semi-verbatim: minus the channel and the disfluency — normalised
+ *      mechanically at draft time by relay-normalise.ts, removal only, never
+ *      model-composed), referenced by id in the verbatim log. The model
+ *      decides whether and when to ask; it never composes what is sent. The
+ *      transform happens BEFORE approval: the card shows exactly the bytes a
+ *      confirmation will release.
  *   3. The system prompt justifies the gate (see prompt.ts / v3-harness.txt).
  *   4. The operator-pushback turn is a mandatory test (talker-gate.test.ts).
  *   5. Input hygiene: the only writes into the talker's context are the

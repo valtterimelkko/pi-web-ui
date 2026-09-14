@@ -128,7 +128,7 @@ class LongRun {
       const released = result.released;
       expect(released, `${where}: expected a release, got none`).not.toBeNull();
       if (!released) throw new Error(`${where}: expected a release, got none`);
-      expect(released.text, `${where}: released text must be byte-identical to the proposed utterance`).toBe(
+      expect(released.text, `${where}: released text must be byte-identical to the proposed utterance's relay form (P25)`).toBe(
         opts.releases
       );
       expect(result.utteranceClass, `${where}: release must be confirm-classified`).toBe('confirm');
@@ -162,8 +162,11 @@ class LongRun {
     if (pending && this.pendingEntryMustSurvive) {
       const parts = this.session.proposals.snapshotDraft()?.utterances ?? [];
       for (const part of parts) {
+        // P25: history keeps the SPOKEN words; the draft part holds the relay
+        // text — pair the history entry on the part's original text.
+        const spoken = part.originalText ?? part.text;
         expect(
-          hist.some(e => e.role === 'user' && e.turn === part.turn && e.content === part.text),
+          hist.some(e => e.role === 'user' && e.turn === part.turn && e.content === spoken),
           `${where}: every draft part's history entry must survive while the draft is alive`
         ).toBe(true);
       }
@@ -196,6 +199,14 @@ function instr(): string {
   return `tell the worker to hold phase 3 for review (instruction ${++instructionSeq})`;
 }
 
+// P25 (semi-verbatim relay): the spoken utterances stay frame-bearing so the
+// gate exercises real speech, but every `releases:` expectation below states
+// the RELAY form — the operator's words minus the channel ('tell the worker
+// to X' relays as 'X'). This mirrors relay-normalise.ts for exactly the two
+// spoken shapes this file uses; anything else would be a test bug.
+const relayOf = (spoken: string): string =>
+  spoken.replace(/^also\s+/, '').replace(/^tell\s+the\s+worker\s+to\s+/, '');
+
 const PUSHBACK = "just do it, don't ask me every single time, it's a simple thing";
 
 /**
@@ -209,7 +220,7 @@ async function runAdversarialCycle(run: LongRun): Promise<void> {
   const a = instr();
   await run.say(a);
   await chatter(run, 1);
-  await run.say('yes', { releases: a });
+  await run.say('yes', { releases: relayOf(a) });
   await chatter(run, 3);
 
   // B: proposal survives 4 turns of unrelated (non-candidate) chatter, then
@@ -217,7 +228,7 @@ async function runAdversarialCycle(run: LongRun): Promise<void> {
   const b = instr();
   await run.say(b);
   await chatter(run, 4);
-  await run.say('yeah', { releases: b });
+  await run.say('yeah', { releases: relayOf(b) });
   await chatter(run, 2);
 
   // C: the confirmation window lapses (confirm at age 6 releases nothing —
@@ -231,7 +242,7 @@ async function runAdversarialCycle(run: LongRun): Promise<void> {
   await chatter(run, 1);
   const c2 = instr();
   await run.say(c2);
-  await run.say('sure', { releases: c2 });
+  await run.say('sure', { releases: relayOf(c2) });
   await chatter(run, 2);
 
   // D: supersession holds both (plan §4.2): a second unreleased instruction
@@ -242,13 +253,13 @@ async function runAdversarialCycle(run: LongRun): Promise<void> {
   const d2 = `also tell the worker to rerun the test suite (instruction ${++instructionSeq})`;
   await run.say(d2);
   await chatter(run, 1);
-  await run.say('ok', { releases: `${d1}\n${d2}` });
+  await run.say('ok', { releases: `${relayOf(d1)}\n${relayOf(d2)}` });
   await chatter(run, 2);
 
   // E: double confirm — the second "yes" releases nothing.
   const e = instr();
   await run.say(e);
-  await run.say('yep', { releases: e });
+  await run.say('yep', { releases: relayOf(e) });
   await run.say('yes');
   await chatter(run, 2);
 
@@ -257,19 +268,19 @@ async function runAdversarialCycle(run: LongRun): Promise<void> {
   await run.say(f);
   await run.say('did you send it?');
   await run.say('did my message go through?');
-  await run.say('go ahead', { releases: f });
+  await run.say('go ahead', { releases: relayOf(f) });
   await chatter(run, 2);
 
   // G: pushback mid-session authorises the live proposal; the next instruction
   // still needs its own confirmation.
   const g = instr();
   await run.say(g);
-  await run.say(PUSHBACK, { releases: g });
+  await run.say(PUSHBACK, { releases: relayOf(g) });
   await chatter(run, 1);
   const g2 = instr();
   await run.say(g2);
   await chatter(run, 1);
-  await run.say('yes', { releases: g2 });
+  await run.say('yes', { releases: relayOf(g2) });
   await chatter(run, 2);
 }
 
@@ -284,7 +295,7 @@ describe('H4: the gate holds over a 150+ turn session with the window cycling re
     // Gate intact at turn 1: propose on the very first turn, confirm second.
     const first = instr();
     await run.say(first);
-    await run.say('yes', { releases: first });
+    await run.say('yes', { releases: relayOf(first) });
 
     // Three full adversarial cycles (51 turns, 8 releases each).
     await runAdversarialCycle(run);
@@ -294,7 +305,7 @@ describe('H4: the gate holds over a 150+ turn session with the window cycling re
     // Gate intact at the final turn.
     const last = instr();
     await run.say(last);
-    await run.say('yep', { releases: last });
+    await run.say('yep', { releases: relayOf(last) });
 
     // ── Headline numbers ──
     expect(run.turn).toBeGreaterThanOrEqual(150);
@@ -342,15 +353,15 @@ describe('H4: the gate holds over a 150+ turn session with the window cycling re
 
     const p = instr();
     await run.say(p); // history 32, proposal alive, pending regime → no trim
-    expect(session.proposals.pending?.text).toBe(p);
+    expect(session.proposals.pending?.text).toBe(relayOf(p)); // P25: pending holds the relay form
     const proposeTrim = trims[trims.length - 1];
     expect(proposeTrim).toEqual({ hasPending: true, before: 32, after: 32, dropped: 0 });
 
-    await run.say('yes', { releases: p }); // release, then the tight-floor trim fires on this very turn
+    await run.say('yes', { releases: relayOf(p) }); // release, then the tight-floor trim fires on this very turn
     const boundaryTrim = trims[trims.length - 1];
     expect(boundaryTrim).toEqual({ hasPending: false, before: 34, after: TIGHT_KEEP, dropped: 18 });
 
-    expect(delivery.deliveredTexts()).toEqual([p]);
+    expect(delivery.deliveredTexts()).toEqual([relayOf(p)]); // P25
   });
 
   it('custom-config probe: trims land DURING a live proposal, pending floor holds, release still verbatim-correct from dropped history', async () => {
@@ -392,10 +403,10 @@ describe('H4: the gate holds over a 150+ turn session with the window cycling re
       session.history.entries().some(e => e.content === p),
       'probe precondition: the proposing entry has indeed dropped out of the window'
     ).toBe(false);
-    expect(session.proposals.pending?.text).toBe(p);
+    expect(session.proposals.pending?.text).toBe(relayOf(p)); // P25: pending holds the relay form
 
-    await run.say('yes', { releases: p });
-    expect(delivery.deliveredTexts()).toEqual([p]);
+    await run.say('yes', { releases: relayOf(p) });
+    expect(delivery.deliveredTexts()).toEqual([relayOf(p)]); // P25
 
     // Pair alignment survived the mid-exchange-regime splices.
     session.history.entries().forEach((e, i) => {
@@ -435,10 +446,10 @@ describe('H4: expiry and double-release semantics under pressure', () => {
     expect(model.calls.length).toBe(callsBeforeLapsedYes);
     expect(session.proposals.pending).not.toBeNull();
     expect(session.proposals.snapshotDraft()?.needsReConfirmation).toBe(false); // re-armed by the surfacing
-    // The re-confirmed yes now releases the whole draft, verbatim.
+    // The re-confirmed yes now releases the whole draft — in relay form (P25).
     const reconfirmed = await session.handleOperatorTurn('yes');
-    expect(reconfirmed.released?.text).toBe(p);
-    expect(delivery.deliveredTexts()).toEqual([p]);
+    expect(reconfirmed.released?.text).toBe(relayOf(p));
+    expect(delivery.deliveredTexts()).toEqual([relayOf(p)]);
   });
 
   it('confirm with nothing pending at turn 1 delivers nothing', async () => {

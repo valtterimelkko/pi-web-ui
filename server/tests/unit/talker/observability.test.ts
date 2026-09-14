@@ -102,6 +102,13 @@ afterEach(() => {
 });
 
 const INSTRUCTION = 'tell the worker to hold phase 3 until my review';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_INSTRUCTION = 'hold phase 3 until my review';
 
 describe('D1 — one correlated voice turn record per operator turn', () => {
   it('emits exactly one VoiceMode info record with the design field table for a conversational turn', async () => {
@@ -227,10 +234,10 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     expect(rel.runtime).toBe('pi');
     expect(rel.turnIndex).toBe(2);
     expect(rel.releasedUtteranceId).toBe(1);
-    expect(rel.releasedBytes).toBe(Buffer.byteLength(INSTRUCTION, 'utf8'));
-    const expectedDigest = createHash('sha256').update(INSTRUCTION, 'utf8').digest('hex').slice(0, 16);
+    expect(rel.releasedBytes).toBe(Buffer.byteLength(RELAYED_INSTRUCTION, 'utf8'));
+    const expectedDigest = createHash('sha256').update(RELAYED_INSTRUCTION, 'utf8').digest('hex').slice(0, 16); // P25: bytes of the released text
     expect(rel.releasedSha256).toBe(expectedDigest);
-    expect(rel.releasedExcerpt).toBe(INSTRUCTION);
+    expect(rel.releasedExcerpt).toBe(RELAYED_INSTRUCTION);
     // The delivery adapter's own reported outcome/mechanism.
     expect(rel.deliveryOutcome).toBe('delivered');
     expect(rel.releaseMechanism).toBe('prompt');

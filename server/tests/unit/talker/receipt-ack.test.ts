@@ -61,6 +61,13 @@ function makeSession(overrides?: { model?: TalkerModelClient; delivery?: ReturnT
 }
 
 const INSTRUCTION = 'tell the worker to hold phase 3 until my review';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_INSTRUCTION = 'hold phase 3 until my review';
 
 describe('PROPERTY 1: the receipt ack is a receipt, never an agreement', () => {
   it('the receipt ack string is pinned exactly', () => {
@@ -87,11 +94,11 @@ describe('PROPERTY 1: the receipt ack is a receipt, never an agreement', () => {
     // its explicit confirmation.
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(delivery.deliveredTexts()).toEqual([]);
-    expect(session.proposals.pending?.text).toBe(INSTRUCTION);
+    expect(session.proposals.pending?.text).toBe(RELAYED_INSTRUCTION);
     // The confirmation step still follows and still releases the verbatim text.
     const yes = await session.handleOperatorTurn('yes, go ahead');
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
-    expect(yes.released?.text).toBe(INSTRUCTION);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
+    expect(yes.released?.text).toBe(RELAYED_INSTRUCTION);
   });
 });
 
@@ -201,10 +208,10 @@ describe('PROPERTY 3: produced by the harness, never by the model', () => {
     const result = await session.handleOperatorTurn(INSTRUCTION);
     expect(result.receiptAck).toBe(RECEIPT_ACK); // emitted at the answer-ready moment
     expect(deliverSpy).not.toHaveBeenCalled(); // receipt ≠ relay
-    expect(session.proposals.pending?.text).toBe(INSTRUCTION); // confirmation still required
+    expect(session.proposals.pending?.text).toBe(RELAYED_INSTRUCTION); // confirmation still required
     const yes = await session.handleOperatorTurn('yes, go ahead');
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
-    expect(yes.released?.text).toBe(INSTRUCTION);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
+    expect(yes.released?.text).toBe(RELAYED_INSTRUCTION);
     expect(deliverSpy).toHaveBeenCalledTimes(1); // exactly one send, exactly from the confirm branch
   });
 });
@@ -244,7 +251,7 @@ describe('LIVE EMISSION: the harness emits the receipt on the turn result', () =
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(result.modelCalled).toBe(true);
     expect(result.reply).not.toBe(RECEIPT_ACK);
-    expect(session.proposals.pending?.text).toBe(INSTRUCTION);
+    expect(session.proposals.pending?.text).toBe(RELAYED_INSTRUCTION);
     expect(model.calls.length).toBe(1);
   });
 
@@ -252,7 +259,7 @@ describe('LIVE EMISSION: the harness emits the receipt on the turn result', () =
     const { session } = makeSession();
     const result = await session.handleOperatorTurn('could you ask the worker to rebase onto main?');
     expect(result.receiptAck).toBe(RECEIPT_ACK);
-    expect(session.proposals.pending?.text).toBe('could you ask the worker to rebase onto main?');
+    expect(session.proposals.pending?.text).toBe('rebase onto main?'); // P25: politeness + frame stripped
   });
 
   it('three statements in a row produce exactly ONE emitted receipt — on the first turn, not per utterance', async () => {
@@ -275,7 +282,7 @@ describe('LIVE EMISSION: the harness emits the receipt on the turn result', () =
     await session.handleOperatorTurn('yes, go ahead'); // release — its own ack, no receipt
     const t3 = await session.handleOperatorTurn('also tell the worker to rerun the flaky suite');
     expect(t3.receiptAck).toBe(RECEIPT_ACK);
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
   });
 
   it('no receipt on turns that hold nothing new: status question, meta question, cancel, release, confirm dead-end', async () => {

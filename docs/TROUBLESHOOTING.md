@@ -764,3 +764,47 @@ This works in `server`, `client`, and `shared`. Genuine test-framework output
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 - [`SHARP-EDGES.md`](./SHARP-EDGES.md)
 - [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
+
+## Unexplained restarts: what is instrumented, and one dead end (2026-09-14)
+
+Four SIGKILLs occurred in one afternoon and the journal could not explain them.
+**The cause was not identified** — the notes below record what was *ruled out* and
+what instrument now exists, so the next occurrence is cheaper to diagnose.
+
+What the evidence showed: `State 'stop-sigterm' timed out. Killing.` after
+`TimeoutStopSec=30`, with **no** `Stopping pi-web-ui.service` line anywhere, no
+`Shutting down...` from the app, and the service still serving requests
+(prompts, client pings) right up to the kill. A clean SIGTERM to a disposable
+server runs the graceful path and exits in ~2 seconds, so the shutdown code is
+sound — the production stop is the anomaly.
+
+Ruled out, with evidence:
+
+- **Watchdog.** Zero watchdog events were ever logged. The `WATCHDOG=1` ping was
+  nonetheless moved off the event loop (see `server/src/watchdog-policy.ts`),
+  because a ping scheduled by the loop it watches cannot report that loop's
+  death.
+- **Event-loop stall.** The service was actively logging and answering at the
+  moment of the stop.
+- **The health probe** (`pi-web-ui-health-probe.timer`). It is alert-only by
+  design and never restarts anything; all runs completed cleanly.
+- **The model-catalogue refresh jobs.** They last ran ~11 h earlier and were not
+  due for another six days.
+- **The audio-regression worktree agent.** Isolated worktree; their child
+  survived.
+
+Instrument that now exists:
+
+- `ExecStopPost` on the unit logs
+  `pi-web-ui STOP OBSERVED code=... signal=... at <time>` — so every stop leaves
+  a record **even when the app cannot write one**. Backups of the unit file are
+  at `/root/.pi-web-ui/pi-web-ui.service.bak-*`.
+
+Dead end — do not repeat it: **`dbus-monitor` cannot see `systemctl` calls made
+by root.** Root `systemctl` talks to systemd's *private* socket
+(`/run/systemd/private`), not the system bus, so bus monitoring is structurally
+blind to it. Verified: a genuine `systemctl stop` produced no bus traffic at
+all. Capturing the caller needs `LogLevel=debug` in `/etc/systemd/system.conf`
+plus `daemon-reexec`, or an audit rule (`auditd` is **not installed** on this
+host) — both of which are heavier than a diagnostic should be without the
+owner's agreement.

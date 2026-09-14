@@ -59,3 +59,88 @@ describe('ConfirmationCard — explicit, quoted, ambiguous-does-nothing', () => 
     expect(onSubmitText).not.toHaveBeenCalled();
   });
 });
+
+describe('ConfirmationCard P26 — the card tells the truth about what will be sent', () => {
+  // What the operator actually SAID (rambling), and what the harness's
+  // mechanical transform leaves after removing the noise.
+  const RAW = 'okay um ask the worker if it has enough materials to start';
+  const TIDIED = 'if it has enough materials to start';
+  const REMOVED = 'okay, um, ask the worker';
+
+  let onConfirm: ReturnType<typeof vi.fn>;
+  let onCancel: ReturnType<typeof vi.fn>;
+  let onSubmitText: ReturnType<typeof vi.fn>;
+
+  // Own mock setup — this suite must NOT inherit the outer describe's
+  // beforeEach render, or every test here starts with a second card mounted.
+  beforeEach(() => {
+    onConfirm = vi.fn();
+    onCancel = vi.fn();
+    onSubmitText = vi.fn();
+  });
+
+  const renderCard = (props: { cleaned?: boolean; removed?: string }) =>
+    render(
+      <ConfirmationCard
+        proposalText={TIDIED}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        onSubmitText={onSubmitText}
+        {...props}
+      />
+    );
+
+  const renderPlain = () =>
+    render(
+      <ConfirmationCard
+        proposalText={RAW}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        onSubmitText={onSubmitText}
+      />
+    );
+
+  it('an UNCLEANED utterance keeps the exact-words claim and shows no disclosure — no crying wolf', () => {
+    renderPlain();
+    expect(screen.getByText('Ready to send — your words, exactly:')).toBeTruthy();
+    expect(screen.queryByTestId('relay-tidied-note')).toBeNull();
+    expect(screen.queryByTestId('relay-removed-text')).toBeNull();
+  });
+
+  it('cleaned=false behaves exactly like an old server: the exact-words claim stands', () => {
+    renderCard({ cleaned: false });
+    expect(screen.getByText('Ready to send — your words, exactly:')).toBeTruthy();
+    expect(screen.queryByTestId('relay-tidied-note')).toBeNull();
+  });
+
+  it('a CLEANED utterance says tidied, shows the exact outgoing text, and shows what was removed', () => {
+    renderCard({ cleaned: true, removed: REMOVED });
+    // The claim changes to match reality — an untrue safety claim is worse
+    // than no claim.
+    expect(screen.getByText('Ready to send — your words, tidied:')).toBeTruthy();
+    expect(screen.queryByText('Ready to send — your words, exactly:')).toBeNull();
+    // The exact text that will go, compared not eyeballed (P25 invariant).
+    expect(screen.getByTestId('pending-proposal-text').textContent).toBe(TIDIED);
+    // What was removed is on the card, not hidden behind a click.
+    expect(screen.getByTestId('relay-removed-text').textContent).toBe(REMOVED);
+  });
+
+  it('cleaned=true with no removed detail still says tidied and invents no removal', () => {
+    renderCard({ cleaned: true });
+    expect(screen.getByText('Ready to send — your words, tidied:')).toBeTruthy();
+    expect(screen.getByTestId('pending-proposal-text').textContent).toBe(TIDIED);
+    expect(screen.queryByTestId('relay-removed-text')).toBeNull();
+  });
+
+  it('the three responses still work on a cleaned card — the transform changes nothing about consent', () => {
+    renderCard({ cleaned: true, removed: REMOVED });
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    const input = screen.getByLabelText(/type a reply/i) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'send the shorter one instead' } });
+    fireEvent.click(screen.getByRole('button', { name: /^send reply$/i }));
+    expect(onSubmitText).toHaveBeenCalledWith('send the shorter one instead');
+  });
+});

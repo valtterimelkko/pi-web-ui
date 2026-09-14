@@ -86,6 +86,13 @@ const MARKER = '[[to-talker]]';
 
 const REQUEST = 'summarise what has been done in this session';
 const INSTRUCTION = 'tell the worker to rebase the branch';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_INSTRUCTION = 'rebase the branch';
 
 const SUMMARY_REPLY = `Sure — you asked it to run phase 1 of the refactor, and the parser part is done with suites green. ${MARKER}`;
 
@@ -143,12 +150,12 @@ describe('P22 — a genuine worker instruction still drafts and still releases',
     const t1 = await session.handleOperatorTurn(INSTRUCTION);
 
     expect(t1.addressedToTalker).toBeUndefined();
-    expect(session.proposals.pending?.text).toBe(INSTRUCTION);
+    expect(session.proposals.pending?.text).toBe(RELAYED_INSTRUCTION);
     expect(t1.receiptAck).toBe(RECEIPT_ACK);
 
     const yes = await session.handleOperatorTurn('yes, go ahead');
-    expect(yes.released?.text).toBe(INSTRUCTION);
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(yes.released?.text).toBe(RELAYED_INSTRUCTION);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
   });
 });
 
@@ -176,10 +183,10 @@ describe('P22 — a wrong mark is safe and self-correcting, and never widens the
     expect(q.addressedToTalker).toBeUndefined();
     expect(q.receiptAck).toBe(RECEIPT_ACK);
     expect(q.reply).not.toContain(MARKER);
-    expect(session.proposals.pending?.text).toBe('could you ask the worker to rebase the branch?');
+    expect(session.proposals.pending?.text).toBe('rebase the branch?'); // P25
 
     const yes = await session.handleOperatorTurn('yes');
-    expect(delivery.deliveredTexts()).toEqual(['could you ask the worker to rebase the branch?']);
+    expect(delivery.deliveredTexts()).toEqual(['rebase the branch?']); // P25
   });
 
   it('a marked continuing utterance never destroys the draft held so far', async () => {
@@ -195,11 +202,11 @@ describe('P22 — a wrong mark is safe and self-correcting, and never widens the
     const second = await session.handleOperatorTurn('and also summarise what has been done so far');
     expect(second.addressedToTalker).toBe(true);
     // Only the genuine instruction is held — the recap request joined nothing.
-    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([INSTRUCTION]);
+    expect(session.proposals.snapshotDraft()?.utterances.map(u => u.text)).toEqual([RELAYED_INSTRUCTION]);
 
     const yes = await session.handleOperatorTurn('yes, go ahead');
-    expect(yes.released?.text).toBe(INSTRUCTION);
-    expect(delivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(yes.released?.text).toBe(RELAYED_INSTRUCTION);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
   });
 });
 
@@ -237,7 +244,7 @@ describe('P22 — residue and failure edges', () => {
     expect(result.reply).toBe(MODEL_FAILURE_REPLY);
     expect(result.addressedToTalker).toBeUndefined();
     // Deferral must not lose the operator's words when the model is down.
-    expect(session.proposals.pending?.text).toBe(INSTRUCTION);
+    expect(session.proposals.pending?.text).toBe(RELAYED_INSTRUCTION);
     expect(result.receiptAck).toBe(RECEIPT_ACK);
   });
 });

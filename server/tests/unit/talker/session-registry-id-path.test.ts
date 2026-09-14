@@ -29,6 +29,13 @@ import type { DefaultDeliveries } from '../../../src/talker/delivery.js';
 import type { TalkerModelClient, ModelTurnResult } from '../../../src/talker/types.js';
 
 const INSTRUCTION = 'tell the worker to rerun the test suite after the migration lands';
+// P25 (semi-verbatim relay, docs/VOICE-ORCHESTRATOR-FEASIBILITY.md §3.2
+// rule 3): the draft and the release carry the operator's words MINUS the
+// channel — a commission frame like 'tell the worker to ...' is how the
+// operator addresses the relay, not part of the instruction. EXPECTATION
+// constants below hold the relay form; spoken-input call sites keep the raw
+// utterance (the harness normalises at draft time, before approval).
+const RELAYED_INSTRUCTION = 'rerun the test suite after the migration lands';
 const CONFIRM = 'yes, send that';
 
 /** A session id of the exact shape the server issues in `session_created`. */
@@ -126,8 +133,8 @@ describe('P12: a confirmed relay reaches the pi worker whichever identifier the 
       delivery?.outcome,
       `expected delivered, got ${delivery?.outcome}${delivery && 'reason' in delivery ? ` (${delivery.reason})` : ''}`,
     ).toBe('delivered');
-    expect(confirmation.turn?.released?.text).toBe(INSTRUCTION); // verbatim, byte-for-byte
-    expect(prompted).toEqual([{ ref: SESSION_PATH, text: INSTRUCTION }]); // under the manager's OWN key
+    expect(confirmation.turn?.released?.text).toBe(RELAYED_INSTRUCTION); // verbatim, byte-for-byte
+    expect(prompted).toEqual([{ ref: SESSION_PATH, text: RELAYED_INSTRUCTION }]); // under the manager's OWN key
   });
 
   it('path pin: release with workerSessionId = session PATH delivers exactly as before', async () => {
@@ -140,8 +147,8 @@ describe('P12: a confirmed relay reaches the pi worker whichever identifier the 
       delivery?.outcome,
       `expected delivered, got ${delivery?.outcome}${delivery && 'reason' in delivery ? ` (${delivery.reason})` : ''}`,
     ).toBe('delivered');
-    expect(confirmation.turn?.released?.text).toBe(INSTRUCTION);
-    expect(prompted).toEqual([{ ref: SESSION_PATH, text: INSTRUCTION }]);
+    expect(confirmation.turn?.released?.text).toBe(RELAYED_INSTRUCTION);
+    expect(prompted).toEqual([{ ref: SESSION_PATH, text: RELAYED_INSTRUCTION }]);
   });
 
   it('one talker session per worker regardless of identifier (id and path resolve to the same session)', async () => {
