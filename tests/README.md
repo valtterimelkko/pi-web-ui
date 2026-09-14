@@ -106,10 +106,35 @@ npm run lint:ratchet -- --base HEAD
 Use the branch base revision in CI/review, or HEAD for local uncommitted changes.
 The gate lints TS/JS source, compares changed implementation warning signatures
 against that revision, and preserves warning multiplicity across line shifts and
-detected renames. Existing warnings are not permission to add more. The broader
-whole-tree ceiling is 1,696: the reconciled 1,690 legacy warnings plus six existing
-warnings in the previously unchecked Node CLI-helper tests. Lower this ceiling
-when debt is removed; do not raise it to absorb new implementation warnings.
+detected renames. Existing warnings are not permission to add more.
+
+### Lint ratchet policy
+
+Two layers, one script (`scripts/check-lint-ratchet.mjs`, whose header comment is
+the rationale of record):
+
+- **Per-file gate (primary):** any NEW warning in *changed implementation* source
+  fails the gate, regardless of the ceiling. Existing warnings are never licence
+  for new ones.
+- **Whole-tree ceiling (backstop):** `maxWarnings: 326` in the script — **306
+  actual warnings + 20 genuine margin** (re-baselined 2026-09-14, from 1,738).
+  Raise it only when debt is genuinely removed, and record the reasoning in the
+  script next to the value; lower it as debt shrinks. **Never raise it to absorb
+  new implementation warnings.**
+
+Exemptions and why they exist: `.eslintrc.json` exempts **test and script files**
+from `no-explicit-any` and `no-non-null-assertion` — mock stubs and `!` after an
+assertion are normal test practice, and those two rules had grown to ~1,400 of the
+~1,700 warnings, making every thorough test file a "debt payment". Production code
+(`server/src`, `client/src`, `shared/src`, `packages/internal-api-mcp/src`) keeps
+strict enforcement.
+
+**Headroom must be maintained.** When the actual count falls (as in the 2026-09-14
+restoration: 1,700 → 306), the ceiling MUST move down with it. Leaving a stale
+high ceiling would hand out phantom headroom, and because the ceiling is a global
+number covering production too, the ratchet could then never fire at all — turning
+a working gate into a dead one, where nothing looks wrong while the gate protects
+nothing. Headroom is a measurement gap, not safety.
 
 `.github/workflows/application.yml` runs locked installation, docs, lint/ratchet,
 typecheck, build, all workspace tests and coverage without provider credentials.

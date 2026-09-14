@@ -4,7 +4,7 @@
 > **Status:** READY FOR EXECUTION — full end-to-end owner authority granted 2026-09-11; awaiting goal-engine start  
 > **Target Service:** `pi-web-ui.service` (Port 3456)  
 > **Target Workload:** High-concurrency multi-agent orchestration, Benchmark 1 (`execute_children.py`), Benchmark 2 (`supervisor.py`), and parallel specialist subagent dispatch.  
-> **Related Incidents & Observations:** `docs/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md`, `docs/plans/execution-reports/INTERNAL-API-CAPACITY-REPAIR-2026-09-07.md`, commit `87e0b7b`.
+> **Related Incidents & Observations:** `docs/archive/observations/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md`, `docs/plans/execution-reports/INTERNAL-API-CAPACITY-REPAIR-2026-09-07.md`, commit `87e0b7b`.
 
 ---
 
@@ -102,7 +102,7 @@ Scaling concurrency cannot just patch `TasksMax`; it must resolve all 7 cascadin
 - `.env.example` (Document `PI_MAX_SESSIONS`; refresh the admission knob examples to the new defaults)
 
 ### Documentation (same-ship factual sync)
-- `docs/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md` (Phase 4: verified resolution notes)
+- `docs/archive/observations/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md` (Phase 4: verified resolution notes)
 - `DEPLOYMENT.md` and `docs/INTERNAL-API.md` (capacity/admission sections stating 6-turn conservative posture — update to Tier 2 truth)
 
 ### Disposable validation tooling (not committed)
@@ -352,7 +352,7 @@ Execute an operator-authorized restart of `pi-web-ui.service` under the maintena
 - [ ] `GET /api/v1/capacity` returns `executionCapacity: 14`, `maxActiveTurns: 16`, `pids.max: 8192`, `reservedPidsPerTurn: 96`.
 - [ ] 4 concurrent turns dispatch simultaneously without any `503 Service Unavailable` or `pid_pressure` refusals.
 - [ ] `/root/agent-benchmarks/benchmarks/01-workload-capability/execute_children.py` executes all 4 specialist probes in parallel.
-- [ ] The observation in `docs/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md` is verified fixed and documented as resolved.
+- [ ] The observation in `docs/archive/observations/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md` is verified fixed and documented as resolved.
 - [ ] **ANTI-VICTORY CHECK:** Do NOT claim victory if `execute_children.py` still logs `queued for prompt` for probe 4.
 
 ---
@@ -429,5 +429,5 @@ If any regression occurs during Phase 4:
   - [ ] Restart pi-web-ui.service under production lock
   - [ ] Verify live /api/v1/capacity output
   - [ ] Run execute_children.py in /root/agent-benchmarks and confirm all 4 probes run in parallel
-  - [ ] Update docs/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md with resolution notes
+  - [ ] Update docs/archive/observations/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md with resolution notes
 ```

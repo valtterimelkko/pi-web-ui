@@ -243,8 +243,10 @@ is uploaded automatically. Reloading clears the ring.
 
 ## Voice Mode observability
 
-What the server's voice talker (Drive Mode two-lane harness) did, and why.
-Design + field table: [`docs/plans/VOICE-MODE-OBSERVABILITY-DESIGN.md`](./plans/VOICE-MODE-OBSERVABILITY-DESIGN.md).
+What the server's voice talker (Voice Mode two-lane harness) did, and why. The
+canonical feature doc — architecture, speech policy, reading levels, and the
+voice field table — is [`docs/VOICE-MODE.md`](./VOICE-MODE.md); this section owns
+the retrieval path and the record shapes.
 Everything below rides the existing doctrine: the records are ordinary
 central-logger records from the `VoiceMode` component, secret-scrubbed on
 entry into the same diagnostics ring; counters ride the same operational
@@ -288,7 +290,11 @@ refusal adds a second, same-`voiceTurnId` record:
   "answered"`.
 - **proposed** — an instruction is now held (`draftAction: "accumulated"`,
   `draftSizeAfter` grows). The turn that OPENED the batch also shows
-  `receiptAckEmitted: true` (the spoken "Noted — still holding that.").
+  `receiptAckEmitted: true` (the spoken "Noted — still holding that."). When
+  the draft was opened by an ask-the-worker OFFER (P18: the talker could not
+  answer the operator's question and proposed passing it on), the record also
+  carries `askWorkerOfferEmitted: true`; the held text is still the operator's
+  own question, never the model's paraphrase.
 - **released** — the gate opened. The `voice turn` record has `phase:
   "released"`, and the companion **`voice release`** record carries what a
   confirmation actually sent: `releasedBytes` (UTF-8), `releasedSha256`
@@ -355,7 +361,9 @@ The speech arbiter records each scheduling decision into the browser
 diagnostic ring above: events with `kind: "speech"` carry an `operation`
 (`submit`, `drop`, `floor_held`/`floor_released` for barge-in,
 `playback_failed`, `paused`/`resumed`/`stopped`), the `speechTier` (2 receipt
-ack, 3 answer, 4 chatter), and a short bounded `state` reason for drops
+ack and release ack, 3 the answer — the worker's completed answer or, since
+P18, the talker's elicited reply to a question the operator just asked — and
+4 unprompted chatter), and a short bounded `state` reason for drops
 (`busy`, `invalid`). Recover them with **Copy/Download diagnostics** and look
 for `kind: "speech"` entries; a chatter tier dropped because an answer was
 playing shows as `drop`/`busy`. No text, ids, or server round-trips: the

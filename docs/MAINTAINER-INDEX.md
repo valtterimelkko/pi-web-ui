@@ -7,17 +7,20 @@ Many docs below intentionally contain concrete paths, socket locations, service 
 If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md). Given a session identifier, run `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` first; do not begin with a repository-wide grep. The locator resolves the registry/native identity and prints the relevant API, log, and session-file paths.
 
 ## Recent major doc-relevant changes
+
+Capped at ~10 items; older entries drop off (the rolling prose delta lives in [`RECENT-CHANGES.md`](./RECENT-CHANGES.md)).
+
 - **Contract version history** — [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) is the version authority; its changelog is the canonical per-version record. Per docs governance this index keeps no secondary version summary — for a rolling prose delta use [`RECENT-CHANGES.md`](./RECENT-CHANGES.md).
+- **Voice Mode (`2026-09-12…14`)** — the Drive Mode two-lane programme shipped end to end: server-side talker harness with a mechanical confirm-gated relay, transport binding over the browser WebSocket, client speech arbiter (anti-duet ladder), receipt ack, stop-talker, verbatim/summary/headlines reading levels, mobile socket durability, and voice observability. Canonical feature doc: [`VOICE-MODE.md`](./VOICE-MODE.md); observability records in [`OBSERVABILITY.md`](./OBSERVABILITY.md) §Voice Mode.
+- **Lint ratchet headroom restored (`2026-09-14`)** — test/script files exempted from `no-explicit-any` / `no-non-null-assertion`; actual warnings fell 1,700 → 306 and the whole-tree ceiling was re-baselined to 326 so the gate stays alive. Policy: [`../tests/README.md`](../tests/README.md) §Lint ratchet policy.
+- **Secrets migrated out of the repository (`2026-09-13`)** — every live secret now lives in `/root/.pi-web-ui/secrets.env` (mode 600, loaded by a systemd drop-in after `.env.production`); the dev env moved to `/root/.pi-web-ui/env.dev`; `.env` is gone and no longer load-bearing; `.env.production` holds zero secret values. Layout + rotation caveat: [`../DEPLOYMENT.md`](../DEPLOYMENT.md) §Secrets layout and [`../SECURITY.md`](../SECURITY.md) §Secrets hygiene.
 - **Whole-codebase hardening** — request/body bounds, prompt-boundary coverage, WebSocket upgrade guards, path/worktree protections, private/atomic persistence, listener/timer cleanup, bounded worker output, and truthful validation/coverage gates were completed. The operator-facing consequences are summarised in [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) and [`SHARP-EDGES.md`](./SHARP-EDGES.md); the evidence ledger is [`plans/CODEBASE-HARDENING-IMPLEMENTATION-REPORT.md`](./plans/CODEBASE-HARDENING-IMPLEMENTATION-REPORT.md).
-- **Pi Codex compaction session-ID patch retired** — OpenAI fixed the Codex backend server-side (upstream #6477/#6555 closed without a pi code change); postinstall hook, patch scripts, extension auto-heal, and regression tests removed; both SDK installs restored to pristine. History: [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md)
 - **Third live-validation option: browser-WebSocket path** — cookie auth + `/ws` without a browser, for extension slash commands, `notification` toasts, and browser-native messages; runbook + `scripts/ws-validate.mjs` in [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 - **Mid-run steering on Claude + Command Code** — steer/follow-up now work on the Claude SDK and Command Code paths over the existing WebSocket shapes; per-runtime semantics (Claude: next tool boundary; CMD: interrupt + redirect), verified wire research in [`STEERING-RUNTIME-RESEARCH.md`](./STEERING-RUNTIME-RESEARCH.md), validation runbook in [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) §Steering
 - **Claude SDK `AskUserQuestion` support** — first-class browser dialog, cancel/timeout handling, and `extension_ui_cancel`. See [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md), [`PROTOCOL.md`](./PROTOCOL.md), and [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - **Antigravity stream-json integration** — persistent per-session agy process (streaming, tool events, real usage, native follow-up queueing, sibling-slug thinking levels); stall watchdog configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` and `ANTIGRAVITY_MAX_ATTEMPTS`. See [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
-- **Files tab Markdown editor** — shipped: source editor + GFM live preview for `.md`/`.mdx`/`.markdown`/`.txt`, explicit Save via `/api/files/write`, truncated files read-only. Plan (now delivered) at [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
 - **Observability/introspection** — `GET /api/v1/diagnostics`, session-scoped diagnostics, event-type introspection, correlation filters, and a bounded operational snapshot are documented in [`OBSERVABILITY.md`](./OBSERVABILITY.md) and [`INTERNAL-API.md`](./INTERNAL-API.md)
 - **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
-- **Notification layer (Telegram on `agent_end`)** — one-way operator notifications when an agent yields control, across all five runtimes, with a durable outbox; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
 - **Run receipts and execution instance identity** — durable Internal-API dispatch identity, session-scoped idempotency, restart recovery, and configured runtime-instance projection; see [`INTERNAL-API.md`](./INTERNAL-API.md) and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
 - **Fast delta summary:** [`RECENT-CHANGES.md`](./RECENT-CHANGES.md)
 
@@ -35,7 +38,8 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md) — how native events from Pi, Claude, OpenCode, Antigravity, and Command Code converge into one frontend stream
 - [`OBSERVABILITY.md`](./OBSERVABILITY.md) — logging (levels/namespaces/format), correlation IDs, diagnostics endpoint, error-code catalog, request logging, fatal-error handlers
 - [`SESSION-METADATA.md`](./SESSION-METADATA.md) — the unified v2 model for per-session archived/pinned/display-name metadata and its sync channel
-- [`DRIVE-MODE.md`](./DRIVE-MODE.md) — Drive Mode, the shipped distraction-reduced voice-first frontend overlay over the ordinary session/prompt path
+- [`VOICE-MODE.md`](./VOICE-MODE.md) — **Voice Mode**, the shipped two-lane voice harness: talker + confirm-gated relay, speech policy, reading levels, mobile socket durability, observability
+- [`DRIVE-MODE.md`](./DRIVE-MODE.md) — Drive Mode, the distraction-reduced frontend overlay; for the voice/talker surface it hosts, read [`VOICE-MODE.md`](./VOICE-MODE.md)
 
 ## 4. WebSocket contract
 - [`PROTOCOL.md`](./PROTOCOL.md) — message types, connection lifecycle, error codes
@@ -49,11 +53,11 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode architecture, provider auth storage, credential-safe model routing, and the provider allowlist
 - [`OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md) — analysis/proposal for keeping the OpenCode model list current (Kilo Gateway, OpenCode Zen) automatically
 - [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) — keeping the Pi runtime model list current with the OpenRouter gateway automatically (weekly refresh, no secrets stored)
-- [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md) — RETIRED: the Codex compaction session-ID patch ecosystem (postinstall patch, auto-heal extension probe), why it existed, and how it was retired after OpenAI's server-side fix
+- [`archive/PI-CODEX-COMPACTION-SESSION-ID.md`](./archive/PI-CODEX-COMPACTION-SESSION-ID.md) — RETIRED (tombstone): the Codex compaction session-ID patch ecosystem, retired after OpenAI's server-side fix; history in the archive
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
 - [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md) — Command Code (`cmd`) as the fifth runtime family: single env gate, model+effort catalogue and weekly refresh, session/event storage, and fixture-based validation
 - [`STEERING-RUNTIME-RESEARCH.md`](./STEERING-RUNTIME-RESEARCH.md) — verified wire-level steering research: Claude Agent SDK streaming-input `priority` semantics (now/next/later/omitted-drop) and Command Code print-mode stdin limits, with probe evidence and source links
-- [`KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md`](./KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md) — proposed Kimi Code sixth-runtime feasibility evidence, KAP-first architecture, fidelity findings, risks, and staged delivery plan; not yet implemented
+- [`archive/KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md`](./archive/KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md) — RETIRED (tombstone): proposed Kimi Code sixth-runtime design; the Kimi runtime was retired 2026-09-09 before implementation
 - [`HEADROOM-TYPE-CONTEXT-LAYER.md`](./HEADROOM-TYPE-CONTEXT-LAYER.md) — design note on borrowing Headroom-style context compression: per-runtime feasibility, Phase 1 pre-conditions, and risks; researched, not yet implemented
 
 ## 6. Internal API and orchestration
@@ -74,7 +78,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`../API.md`](../API.md) — WebSocket / REST / local automation API surface index
 
 ## 9. Tests
-- [`../tests/README.md`](../tests/README.md) — test layers, running commands
+- [`../tests/README.md`](../tests/README.md) — test layers, running commands, and the lint ratchet policy (ceiling semantics, exemptions, re-baseline rules)
 
 ## 10. Public-facing context
 When you are changing docs or product positioning, also read:

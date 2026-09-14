@@ -112,6 +112,33 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 - Relevant code:
   - `server/src/security/rate-limit.ts`
 
+## Secrets hygiene
+
+As of the **2026-09-13 migration**, the repository tree holds **zero live
+secrets**, by construction rather than convention:
+
+- All live production secrets sit in `/root/.pi-web-ui/secrets.env` (mode `600`,
+  root-owned) **outside the repo**, loaded by a systemd drop-in applied after
+  `.env.production`. The full layout (including the dev env at
+  `/root/.pi-web-ui/env.dev` and the not-load-bearing status of a repo `.env`) is
+  documented in [`DEPLOYMENT.md`](./DEPLOYMENT.md) §Secrets layout.
+- `.env.production` was audited to **zero** secret variables; `.env.example`
+  carries placeholder values only (verified distinct from live values); no live
+  value was ever committed (history scan found only literal placeholders).
+- Claude provider profiles never store auth tokens; profile secrets resolve from
+  env vars or secret files at session launch time (`claude-profiles.ts`).
+
+**Never reintroduce a live secret into the repo.** Gitignore is a convention, not
+a control: `git add -f` bypasses it, and secrets inside the repo tree are exposed
+to backups and tooling. New secrets go into `secrets.env`.
+
+**Rotation caveat (operator-owned, recorded 2026-09-13, not yet done):** before
+the migration, six secret values — including `AUTH_PASSWORD`, `JWT_SECRET`, and
+`CSRF_SECRET` — sat in a world-readable (`644`) file inside a public repo's
+directory for an unknown period. Nothing was committed, but rotating those three
+is recommended as defence-in-depth. Rotation is the operator's call and is
+deliberately not automated.
+
 ## Threat Model Summary
 
 ### Cross-site WebSocket hijacking

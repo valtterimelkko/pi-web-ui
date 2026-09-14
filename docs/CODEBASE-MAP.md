@@ -27,12 +27,18 @@
 - `components/Chat/MessageBubble.tsx` — Individual message bubble.
 - `components/Chat/MessageInput.tsx` — Chat input box.
 
-### Drive Mode
+### Drive Mode / Voice Mode (client)
 - `components/DriveMode/DriveModeOverlay.tsx` — Voice-first overlay and phase routing.
-- `components/DriveMode/DriveModeDictate.tsx` — Dictation and read-aloud control surface.
+- `components/DriveMode/DriveModeDictate.tsx` — Dictation and read-aloud control surface; hosts the Voice Mode states (listening/holding/speaking/stopped), the Stop-talker control, and the reading-level selector.
+- `components/DriveMode/useVoiceTurn.ts` — Voice turn submission/read-out flow over the talker transport.
 - `components/DriveMode/DriveModeSessionPicker.tsx` / `DriveModeModelPicker.tsx` / `DriveModeFolderPicker.tsx` — Drive Mode navigation.
 - `store/driveModeStore.ts` — Drive Mode state machine.
 - `hooks/useDriveModeDictation.ts` — Drive Mode prompt-send flow.
+- `lib/talkerBus.ts` — Client-side talker transport binding (`talker_turn` / `talker_turn_result` / `talker_digest` over the session WebSocket).
+- `lib/speechArbiter.ts` — Client playback scheduler: speech priority ladder, anti-duet ducking, chunk-boundary scheduling; no capture authority.
+- `lib/voiceFloor.ts` / `lib/speechTelemetry.ts` — Operator-floor (barge-in) signal and speech-decision telemetry into the browser diagnostic ring.
+
+The server side of Voice Mode is the talker harness under `server/src/talker/` — see the Voice Mode section below and [`docs/VOICE-MODE.md`](./VOICE-MODE.md).
 
 ### Files
 - `components/Files/FilesTab.tsx` — Files tab: file tree, read-only preview for other files, and the full-screen Markdown editor overlay for editable (non-truncated) Markdown files.
@@ -51,6 +57,18 @@
 - `websocket/protocol.ts` — Shared WebSocket message type definitions and guards.
 - `websocket/session-websocket.ts` — JSON-RPC endpoint for Pi Coding Agent worker communication (`/ws/sessions/:sessionId`).
 - `websocket/handlers.ts` — Legacy WebSocket message handlers.
+
+### Voice Mode / talker harness (`server/src/talker/`)
+Canonical feature doc: [`docs/VOICE-MODE.md`](./VOICE-MODE.md). One talker serves one worker session; the relay gate is mechanical (never widen its reachability).
+- `talker/talker.ts` — per-turn loop: classify → release / refuse / converse; header comment documents the ten harness invariants.
+- `talker/utterance-classifier.ts` — mechanical confirmation/cancel/ordinal classification (model output is never an input to the gate).
+- `talker/pending-proposal.ts` — accumulating verbatim draft + confirmation window (ageing expires the confirmation, never the draft).
+- `talker/session-registry.ts` — one talker per worker session; the single server-side entry point.
+- `talker/delivery.ts` — per-runtime relay adapters: Pi steer/prompt, Claude SDK steer/follow-up (non-SDK refuses), Antigravity follow-up queueing; honest outcomes.
+- `talker/digest.ts` — reading-level digests (summary / headlines) for the talker's reading path.
+- `talker/ask-worker.ts` — ask-the-worker offer handling.
+- `talker/observability.ts` + `talker/state-view.ts` + `talker/types.ts` — `voiceTurnId`-correlated records, per-turn state projection, and harness types (see [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md) §Voice Mode).
+- `websocket/connection.ts` (talker messages) — `talker_turn` / `talker_turn_result` / `talker_digest` transport binding between browser and talker registry.
 
 ### Pi Coding Agent Path (`server/src/pi/`)
 - `pi/multi-session-manager.ts` — **Pi session lifecycle, idle cleanup, pinning, stale-stream reset (15min threshold), API-error grace timer (60s), memory monitoring, skill-content transformation.**

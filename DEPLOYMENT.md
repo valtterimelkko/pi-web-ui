@@ -309,6 +309,40 @@ Telegram delivery; poll the returned status URL before declaring delivery
 successful. A server restart preserves durable receipts/ledgers, but process-local
 diagnostics counters and in-memory rings reset.
 
+## Secrets layout (post-2026-09-13 migration)
+
+Every live secret lives **outside the repository directory**. The repo tree is
+treated as permanently capable of leaking (public repo, backups, tooling), so
+secrets are not kept in it at all:
+
+- **Production secrets:** `<state-dir>/secrets.env` (e.g. `/root/.pi-web-ui/secrets.env`),
+  mode `600`, loaded by a systemd **drop-in** so it is applied after the main env
+  file:
+
+  ```ini
+  # /etc/systemd/system/<service>.service.d/secrets.conf
+  [Service]
+  EnvironmentFile=/root/.pi-web-ui/secrets.env
+  ```
+
+  With the repo-owned unit carrying `EnvironmentFile=<repo>/.env.production`, the
+  drop-in's values win for any duplicate name. Secrets currently in this file
+  include `JWT_SECRET`, `CSRF_SECRET`, `AUTH_PASSWORD`, `OPENCODE_SERVER_PASSWORD`,
+  `OPENAI_API_KEY`, `GLM_CODING_PLAN_TOKEN`, `TELEGRAM_BOT_TOKEN`, and
+  `TALKER_API_KEY` (the voice talker's own key, kept separate from any other
+  OpenRouter use).
+- **Dev env:** the old repo `.env` moved to `/root/.pi-web-ui/env.dev` (mode `600`).
+  A repo `.env` is **not load-bearing**: `dotenv.config()` never overrides real
+  environment, systemd supplies production values, and no `.env` exists in the tree.
+- **`.env.production`** holds non-secret configuration only — audited to **zero**
+  secret variables after the migration. `.env.example` contains placeholder values
+  only (verified distinct from live values).
+
+Never reintroduce a live secret into the repository tree; add new secrets to
+`secrets.env` (and document the name in `.env.example` with a placeholder if the
+name is operator-visible). See [`SECURITY.md`](./SECURITY.md) §Secrets hygiene for
+the security posture and rotation notes.
+
 ## systemd Example
 
 ### Pi Web UI service

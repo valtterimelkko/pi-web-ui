@@ -24,6 +24,7 @@ Canonical runbook: [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md#session
 
 ## Start here
 
+- **2-minute orientation for agents:** [`docs/AGENT-ORIENTATION.md`](./docs/AGENT-ORIENTATION.md)
 - **Maintainer index:** [`docs/MAINTAINER-INDEX.md`](./docs/MAINTAINER-INDEX.md)
 - **Public overview:** [`README.md`](./README.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)

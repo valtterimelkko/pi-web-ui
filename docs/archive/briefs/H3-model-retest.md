@@ -51,7 +51,7 @@ Note: candidates 2–5 may not be reachable through this OpenRouter client if th
 ## Scope and paths
 
 **Owned (yours to create):**
-- A results artifact: `docs/plans/H3-TALKER-RETEST-RESULTS.md` — the table plus your verdict.
+- A results artifact: `docs/archive/observations/H3-TALKER-RETEST-RESULTS.md` — the table plus your verdict.
 - Any small script/report you need under `scripts/` (do not modify `scripts/talker-harness.ts` unless genuinely required; if you must, say so and why).
 
 **Do not touch:** `server/src/talker/*` (another child is testing it concurrently), the plan file, or the briefs.

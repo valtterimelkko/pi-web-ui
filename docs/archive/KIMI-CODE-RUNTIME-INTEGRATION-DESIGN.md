@@ -6,13 +6,13 @@
 >
 > **Validated against:** Kimi Code `0.31.0`, source commit [`ed7a4cc`](https://github.com/MoonshotAI/kimi-code/commit/ed7a4cc095e1619e4dbb6c2c77c89a52e312b085), on 2026-07-31
 >
-> **Recommended Pi Web UI precedent:** [`server/src/opencode/`](../server/src/opencode/)
+> **Recommended Pi Web UI precedent:** [`server/src/opencode/`](../../server/src/opencode/)
 >
-> **Implementation checklist:** [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md)
+> **Implementation checklist:** [`ADDING-A-RUNTIME.md`](../ADDING-A-RUNTIME.md)
 
 This document records the feasibility research, local runtime experiments, architectural decision, risks, and proposed delivery plan for adding the renewed [MoonshotAI Kimi Code](https://github.com/MoonshotAI/kimi-code) CLI as a sixth Pi Web UI runtime alongside Pi Coding Agent, Claude Code, OpenCode, Antigravity, and Command Code (which has since shipped as the fifth).
 
-It is deliberately a **prospective design document**, not a statement that Kimi support is already shipped. When implementation begins, code and emitted runtime contracts take precedence over this research according to [`DOCS-GOVERNANCE.md`](./DOCS-GOVERNANCE.md).
+It is deliberately a **prospective design document**, not a statement that Kimi support is already shipped. When implementation begins, code and emitted runtime contracts take precedence over this research according to [`DOCS-GOVERNANCE.md`](../DOCS-GOVERNANCE.md).
 
 ## Executive summary
 
@@ -72,15 +72,15 @@ The findings combine four evidence sources:
 
 The principal Pi Web UI materials reviewed were:
 
-- [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md)
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md)
-- [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
-- [`PROTOCOL.md`](./PROTOCOL.md)
-- [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
-- [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
-- [`INTERNAL-API.md`](./INTERNAL-API.md)
-- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
-- [`SECURITY.md`](../SECURITY.md)
+- [`ADDING-A-RUNTIME.md`](../ADDING-A-RUNTIME.md)
+- [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+- [`EVENT-PIPELINE.md`](../EVENT-PIPELINE.md)
+- [`PROTOCOL.md`](../PROTOCOL.md)
+- [`OPENCODE-DIRECT-INTEGRATION.md`](../OPENCODE-DIRECT-INTEGRATION.md)
+- [`ANTIGRAVITY-INTEGRATION.md`](../ANTIGRAVITY-INTEGRATION.md)
+- [`INTERNAL-API.md`](../INTERNAL-API.md)
+- [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
+- [`SECURITY.md`](../../SECURITY.md)
 
 The Kimi source checkout used for code-level verification was commit [`ed7a4cc095e1619e4dbb6c2c77c89a52e312b085`](https://github.com/MoonshotAI/kimi-code/commit/ed7a4cc095e1619e4dbb6c2c77c89a52e312b085). The repository is MIT licensed. The installed renewed CLI reported version `0.31.0`. Source links below use the convenient mutable `main` view unless the commit is shown explicitly; reproducibility claims refer to the pinned commit, and later `main` content must not be assumed to match the evaluated checkout.
 
@@ -855,7 +855,7 @@ Do not use:
 
 ## 11. Security and operational design
 
-Kimi integration must preserve all existing Pi Web UI security requirements in [`SECURITY.md`](../SECURITY.md).
+Kimi integration must preserve all existing Pi Web UI security requirements in [`SECURITY.md`](../../SECURITY.md).
 
 ### 11.1 Network boundary
 
@@ -975,7 +975,7 @@ A schema fingerprint can be recorded in health diagnostics, but exact byte equal
 
 ## 13. Integration touchpoints in Pi Web UI
 
-The exact checklist remains [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md). Expected changes include the following.
+The exact checklist remains [`ADDING-A-RUNTIME.md`](../ADDING-A-RUNTIME.md). Expected changes include the following.
 
 ### Shared packages
 
@@ -1042,16 +1042,16 @@ In `server/src/websocket/connection.ts`:
 
 When Kimi ships, update:
 
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md)
-- [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
-- [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
-- [`PROTOCOL.md`](./PROTOCOL.md)
-- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
-- [`OBSERVABILITY.md`](./OBSERVABILITY.md)
-- [`INTERNAL-API.md`](./INTERNAL-API.md)
-- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
-- [`DEPLOYMENT.md`](../DEPLOYMENT.md)
-- [`.env.example`](../.env.example)
+- [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+- [`CODEBASE-MAP.md`](../CODEBASE-MAP.md)
+- [`EVENT-PIPELINE.md`](../EVENT-PIPELINE.md)
+- [`PROTOCOL.md`](../PROTOCOL.md)
+- [`TROUBLESHOOTING.md`](../TROUBLESHOOTING.md)
+- [`OBSERVABILITY.md`](../OBSERVABILITY.md)
+- [`INTERNAL-API.md`](../INTERNAL-API.md)
+- [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
+- [`DEPLOYMENT.md`](../../DEPLOYMENT.md)
+- [`.env.example`](../../.env.example)
 
 This design document should then be updated with implementation status, commit/PR, supported Kimi version range, and a link to the new canonical runtime guide.
 
@@ -1427,17 +1427,17 @@ The source-code links below intentionally open the latest `main` view for conven
 
 ### Relevant Pi Web UI resources
 
-- [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md)
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md)
-- [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
-- [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
-- [`PROTOCOL.md`](./PROTOCOL.md)
-- [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
-- [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
-- [`INTERNAL-API.md`](./INTERNAL-API.md)
-- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
-- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
-- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
-- [`OBSERVABILITY.md`](./OBSERVABILITY.md)
-- [`SHARP-EDGES.md`](./SHARP-EDGES.md)
-- [`SECURITY.md`](../SECURITY.md)
+- [`ADDING-A-RUNTIME.md`](../ADDING-A-RUNTIME.md)
+- [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+- [`CODEBASE-MAP.md`](../CODEBASE-MAP.md)
+- [`EVENT-PIPELINE.md`](../EVENT-PIPELINE.md)
+- [`PROTOCOL.md`](../PROTOCOL.md)
+- [`OPENCODE-DIRECT-INTEGRATION.md`](../OPENCODE-DIRECT-INTEGRATION.md)
+- [`ANTIGRAVITY-INTEGRATION.md`](../ANTIGRAVITY-INTEGRATION.md)
+- [`INTERNAL-API.md`](../INTERNAL-API.md)
+- [`INTERNAL-API-ORCHESTRATION.md`](../INTERNAL-API-ORCHESTRATION.md)
+- [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
+- [`TROUBLESHOOTING.md`](../TROUBLESHOOTING.md)
+- [`OBSERVABILITY.md`](../OBSERVABILITY.md)
+- [`SHARP-EDGES.md`](../SHARP-EDGES.md)
+- [`SECURITY.md`](../../SECURITY.md)
