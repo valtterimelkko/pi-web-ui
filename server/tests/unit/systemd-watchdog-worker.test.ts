@@ -99,3 +99,27 @@ describe('watchdog worker loop', () => {
     expect(ping.mock.calls.length).toBe(before);
   });
 });
+
+/**
+ * Regression: the production restart loop of 2026-09-14.
+ *
+ * The worker's timer was unref'd, so the thread's event loop had nothing
+ * keeping it alive and the worker exited immediately after start-up. The pings
+ * stopped, systemd saw a service that never certified itself, and restarted it
+ * every `WatchdogSec` + boot time — about 68 seconds — for as long as it took
+ * to notice. Thirty unit tests were green throughout, because every one of them
+ * injected the ping and none exercised the real thread lifecycle.
+ *
+ * This asserts the property directly rather than by proxy.
+ */
+describe('watchdog worker — the timer must keep its thread alive', () => {
+  it('holds a REFERENCED timer (an unref\'d one lets the worker exit and the pings stop)', () => {
+    const beats = new BigInt64Array(new SharedArrayBuffer(8));
+    const w = runWatchdogWorker(
+      { beats, pingIntervalMs: 1_000, stallAfterMs: 20_000 },
+      { ping: async () => {}, report: () => {}, now: () => 1 },
+    );
+    expect(w.refed).toBe(true);
+    w.stop();
+  });
+});

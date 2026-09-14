@@ -53,7 +53,10 @@ function ping(): Promise<void> {
   });
 }
 
-export function runWatchdogWorker(data: WatchdogWorkerData, deps: WatchdogWorkerDeps = {}): { stop: () => void } {
+export function runWatchdogWorker(
+  data: WatchdogWorkerData,
+  deps: WatchdogWorkerDeps = {},
+): { stop: () => void; refed: boolean } {
   const { beats, pingIntervalMs, stallAfterMs } = data;
   const pingImpl = deps.ping ?? ping;
   const report = deps.report ?? ((line: string) => process.stderr.write(`${line}\n`));
@@ -90,14 +93,33 @@ export function runWatchdogWorker(data: WatchdogWorkerData, deps: WatchdogWorker
       .finally(() => { inFlight = false; });
   }, pingIntervalMs);
 
-  // Never hold the process open on our account.
-  timer.unref?.();
+  // DO NOT unref this timer.
+  //
+  // An unref'd timer does not keep a worker's event loop alive, so the worker
+  // exits immediately after start-up and the pings stop - silently, because a
+  // worker that has exited cannot report anything. systemd then sees no
+  // WATCHDOG=1, declares the service hung, and restarts it every
+  // WatchdogSec + boot time. That is not hypothetical: it caused a
+  // restart-every-68s loop in production on 2026-09-14, caught by the
+  // ExecStopPost added the same evening (`Failed with result 'watchdog'`,
+  // signal=ABRT). `worker.unref()` on the MAIN thread is what keeps this thread
+  // from holding the process open; keeping this thread alive is the entire
+  // point of it.
 
   return {
     stop: () => {
       stopped = true;
       clearInterval(timer);
     },
+    /**
+     * Whether the ping timer is keeping this thread's event loop alive.
+     *
+     * Exposed purely so the defect that caused a production restart loop on
+     * 2026-09-14 is directly testable: an unref'd timer lets the worker exit
+     * silently, so the service stops being certified and systemd restarts it
+     * forever. Asserted in systemd-watchdog-worker.test.ts.
+     */
+    refed: typeof timer.hasRef === 'function' ? timer.hasRef() : true,
   };
 }
 
