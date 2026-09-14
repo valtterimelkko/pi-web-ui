@@ -277,6 +277,14 @@ const shutdownCoordinator = new ShutdownCoordinator({
   ],
   onStepError: (name, err) => logger.errorObject(`Shutdown step '${name}' failed`, err),
   onForceExit: () => logger.error('Forced shutdown: teardown exceeded the deadline'),
+    // 2026-09-14: four systemd SIGKILLs in one afternoon could not be explained from
+    // the journal - teardown either completed or it did not, with nothing recording
+    // WHICH owner was slow, or indeed whether the graceful path ran at all. A clean
+    // SIGTERM on a disposable server exits in ~2s, so a production stop that instead
+    // runs to TimeoutStopSec leaves no record of why. These lines are that record.
+    onStepComplete: (name, durationMs, failed) =>
+      logger.info(`Shutdown step '${name}' ${failed ? 'FAILED ' : ''}in ${durationMs}ms`),
+    onComplete: (totalMs) => logger.info(`Shutdown complete in ${totalMs}ms`),
 });
 
 function shutdown(): void {
