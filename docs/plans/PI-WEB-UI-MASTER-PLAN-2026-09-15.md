@@ -331,14 +331,39 @@ bump with its mirror keeps the contract story coherent.
 
 ## 6. Status ledger
 
-| Item | Decision | Started | Shipped |
+**All four work items are MERGED into master as of 2026-09-15 16:0xZ** (`b4cd12d`, three `--no-ff`
+merges over the other agent's `1c05f6f`, **zero conflicts**). Post-merge gates on the merged tree:
+typecheck, lint, build clean; **server 4464/4464**; **client 1349/1349**; the combined
+"both agents' restart work together" bundle **47/47**. Deployment is a separate step (below),
+because a restart is what makes merged code live.
+
+| Item | Decision | Started | Merged / shipped |
 |---|---|---|---|
-| W-A catalogue-script restart path | D1 approved | **no** | **no** |
-| W-B card identity + variant gate (contract 1.44.0) | D2, D3 approved | **no** | **no** |
-| W-C `talkerBus` correlation | D4 approved | **no** | **no** |
-| W-D multi-lane in one tab | D5, D6 approved | **no** | **no** |
-| W-E mirror discipline | process, owner declined a new gate | n/a | applies per bump |
-| W-F(i) session-file investigation | conductor: worth it, not urgent | **no** | **no** |
-| W-F(ii) card browser harness | conductor: worth it, do with W-B | **no** | **no** |
-| W-F(iii) Agent OS live-proof harness | conductor: worth it, small | **no** | **no** |
+| W-A catalogue-script restart path | D1 approved | **yes** — child A, conductor-verified (14/14, positive control failed 6 ways on the old source) | **merged** `51e6d81`-adjacent `b4cd12d` (via `task/restart-path`) |
+| W-B card identity + variant gate (contract 1.44.0) | D2, D3 approved | **yes** — child D, conductor-verified (server 4452/4452, client 1349/1349, drift+pins 17/17, card harness 9/9 driven by the conductor, positive control: neutering the identity check fails 4/16) | **merged** `495dd97` (via `task/card-identity`); **production still serves 1.43.0 until the restart** |
+| W-C `talkerBus` correlation | D4 approved | **yes** — child B, folded into the multi-lane work | **merged** `51e6d81` |
+| W-D multi-lane in one tab | D5, D6 approved | **yes** — child B; conductor drove the 14-verdict harness itself, and re-ran it against the card branch to prove the stacked merge did not regress lanes | **merged** `51e6d81` |
+| W-E mirror discipline | process, owner declined a new gate | **yes, per bump** — held at 1.43.0 while 1.44.0 is unshipped (an unchanged mirror cannot lie about what production serves) | **owed**: resync to 1.44.0 immediately after the production restart serves it |
+| W-F(i) session-file investigation | conductor: worth it, not urgent | **yes** — child C, read-only; accepted with one citation correction (`:557` → `:568`, content verbatim) | delivered as a finding, not code |
+| W-F(ii) card browser harness | conductor: worth it, do with W-B | **yes** — written as part of W-B | **merged** with `495dd97` |
+| W-F(iii) Agent OS live-proof harness (Stage J) | conductor: worth it, small | **no** — deferred while `/root/agent-os` was contended by four agents | **not done, not dropped** |
 | D7 desktop layout accepted | — | — | **live** |
+
+### Post-merge integration fix (found by the merge itself, not by any child)
+
+The merge put the other agent's capacity pre-flight in front of W-A's restart. That pre-flight refuses
+with **exit 1** and a documented message while admitted child turns are running — a deliberate,
+test-pinned contract, so it was left alone. But the weekly catalogue script read *any* non-zero restart
+exit as a hard failure, which would have reported a run that had **already committed and pushed the
+catalogue** as a **failed weekly job** whenever the wrapper correctly declined to restart. Fixed with
+RED-first TDD in `28ea8b5`: only the wrapper's documented refusal is a deferral (identical in meaning
+to the script's existing busy-session branch, and matching its own summary wording), any other
+non-zero exit still throws, and the refusal's reason is carried into the summary so a deferral is
+visible rather than silent. 16/16 in that file; typecheck and lint clean.
+
+**Open integration caveat, deliberately not "fixed" by softening anything:** the wrapper's pre-flight
+keys on `/capacity.activeTurns`, which is *proven* to read `0` while work is provably running. W-A's
+path does not depend on it (it counts busy sessions from `/sessions`), so the catalogue refresh cannot
+be fooled — but the wrapper's own gate can still admit a restart during unadmitted work. That belongs
+to the restart root-cause work, not to this merge.
+
