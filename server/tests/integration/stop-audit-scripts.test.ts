@@ -225,3 +225,63 @@ describe('restart-pi-web-ui.sh', () => {
     }
   });
 });
+
+describe('the systemd drop-in declares only real directives', () => {
+  /**
+   * The drop-in originally declared `ExecStopPre=` to record a pre-SIGTERM line.
+   * **systemd has no such directive** — `systemd-analyze verify` reports
+   * "Unknown key name 'ExecStopPre' in section 'Service', ignoring" — so the hook
+   * never ran during a real stop and the phase=pre evidence its decision table
+   * relied on could only be produced by running the script by hand. The conductor
+   * found this on the first production install (2026-09-15 10:15Z); the
+   * signal-arrival record now comes from the app's synchronous
+   * `[Shutdown] event=stop_signal` line instead.
+   *
+   * A typo in a unit directive fails silently, which is exactly the class of
+   * defect this whole workstream exists to remove, so it is pinned here.
+   */
+  const dropIn = fileURLToPath(
+    new URL('../../../deploy/systemd/pi-web-ui.service.d/10-stop-audit.conf', import.meta.url),
+  );
+
+  /** Real systemd [Service] directives this drop-in is allowed to use. */
+  const ALLOWED_SERVICE_KEYS = new Set(['ExecStopPost']);
+
+  it('uses only directives systemd actually implements', () => {
+    const lines = readFileSync(dropIn, 'utf8').split('\n');
+    let inServiceSection = false;
+    const declared: string[] = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        inServiceSection = trimmed === '[Service]';
+        continue;
+      }
+      if (!inServiceSection || trimmed.startsWith('#') || trimmed === '') continue;
+      const match = /^([A-Za-z][A-Za-z0-9]*)=/.exec(trimmed);
+      if (match?.[1]) declared.push(match[1]);
+    }
+
+    expect(declared.length, 'the drop-in declares no directives at all').toBeGreaterThan(0);
+    for (const key of declared) {
+      expect(
+        ALLOWED_SERVICE_KEYS.has(key),
+        `${key}= is not a real systemd [Service] directive (systemd ignores unknown keys silently)`,
+      ).toBe(true);
+    }
+  });
+
+  it('does not resurrect ExecStopPre, and says why in the file itself', () => {
+    const text = readFileSync(dropIn, 'utf8');
+    // The comment must mention it (so a future reader learns the trap) …
+    expect(text).toContain('ExecStopPre');
+    expect(text.toLowerCase()).toContain('unknown key');
+    // … but no active directive may declare it.
+    const active = text
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .some((line) => /^\s*ExecStopPre\s*=/.test(line));
+    expect(active, 'ExecStopPre= is ignored by systemd; it must not be declared').toBe(false);
+  });
+});
