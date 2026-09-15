@@ -2353,13 +2353,13 @@ export const useSessionStore = create<SessionState>()(
               break;
             }
             
-            const { type, sessionId, info } = msg as {
-              type: 'add' | 'change' | 'unlink';
+            const { changeType, sessionId, info } = msg as unknown as {
+              changeType: 'add' | 'change' | 'unlink';
               sessionId: string;
               info?: Session;
             };
             
-            if (type === 'unlink') {
+            if (changeType === 'unlink') {
               // Remove deleted session (use path for matching)
               set((state) => {
                 const transferReadySessionIds = { ...state.transferReadySessionIds };
@@ -2379,9 +2379,19 @@ export const useSessionStore = create<SessionState>()(
                 const existingIndex = existingByPath >= 0 ? existingByPath : existingById;
                 
                 if (existingIndex >= 0) {
-                  // Update existing
+                  // MERGE, never replace. The SessionWatcher's `info` is a
+                  // partial projection (id/path/cwd/firstMessage/messageCount/
+                  // name/createdAt/lastActivity) and carries no sdkType, model,
+                  // effort or origin. Replacing the entry stripped sdkType
+                  // within a second of a session being created, which left
+                  // pinSession() unable to resolve the runtime — it then fell
+                  // back to comparing the TOTAL pinned set against the
+                  // per-runtime cap and silently dropped the pin (and its
+                  // durable write). Operator report 2026-09-15: "can't create a
+                  // session and pin it in the same go ... need to refresh
+                  // browser in between".
                   const newSessions = [...state.sessions];
-                  newSessions[existingIndex] = info;
+                  newSessions[existingIndex] = { ...state.sessions[existingIndex], ...info };
                   return { sessions: newSessions };
                 } else {
                   // Add new
