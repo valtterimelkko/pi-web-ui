@@ -7,7 +7,7 @@ import { PiService, getPiService, initializePiService } from '../../src/pi/pi-se
 // load — pi-service now imports fs/promises eagerly via its refresh module.
 const { resourceLoaderInstances, accessMock, readFileMock, modelRuntime } = vi.hoisted(() => ({
   // Track DefaultResourceLoader constructor calls
-  resourceLoaderInstances: [] as Array<{ cwd: string; agentDir: string }>,
+  resourceLoaderInstances: [] as Array<{ cwd: string; agentDir: string; getExtensions: ReturnType<typeof vi.fn> }>,
   // fs.access is non-configurable on Node's fs/promises module, so we mock the
   // whole module. `accessMock` lets individual tests simulate existing vs new files.
   accessMock: vi.fn().mockRejectedValue(
@@ -28,6 +28,7 @@ const { resourceLoaderInstances, accessMock, readFileMock, modelRuntime } = vi.h
     getModel: vi.fn().mockReturnValue({ id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' }),
     hasConfiguredAuth: vi.fn().mockReturnValue(false),
     registerProvider: vi.fn(),
+    refresh: vi.fn().mockResolvedValue({ aborted: false, errors: new Map() }),
   },
 }));
 
@@ -106,10 +107,15 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
     create: vi.fn().mockResolvedValue(modelRuntime),
   },
   DefaultResourceLoader: vi.fn().mockImplementation((opts: { cwd: string; agentDir: string }) => {
-    resourceLoaderInstances.push({ cwd: opts.cwd, agentDir: opts.agentDir });
+    const getExtensions = vi.fn().mockReturnValue({
+      extensions: [],
+      errors: [],
+      runtime: { pendingProviderRegistrations: [], pendingNativeProviderRegistrations: [] },
+    });
+    resourceLoaderInstances.push({ cwd: opts.cwd, agentDir: opts.agentDir, getExtensions });
     return {
       reload: vi.fn().mockResolvedValue(undefined),
-      getExtensions: vi.fn().mockReturnValue({ extensions: [], errors: [] }),
+      getExtensions,
       getSkills: vi.fn().mockReturnValue({ skills: [], diagnostics: [] }),
       getAgentsFiles: vi.fn().mockReturnValue({ agentsFiles: [] }),
     };
@@ -159,6 +165,42 @@ describe('PiService', () => {
   describe('initialize', () => {
     it('should initialize the service', async () => {
       await expect(service.initialize()).resolves.not.toThrow();
+    });
+
+    it('registers extension providers before advertising available models', async () => {
+      const loader = resourceLoaderInstances[0];
+      expect(loader).toBeDefined();
+      loader.getExtensions.mockReturnValue({
+        extensions: [],
+        errors: [],
+        runtime: {
+          pendingProviderRegistrations: [{
+            name: 'commandcode',
+            config: {
+              api: 'cc-gateway',
+              apiKey: 'test-key',
+              models: [{ id: 'deepseek/deepseek-v4.1-flash' }],
+            },
+            extensionPath: '/tmp/commandcode-provider/index.ts',
+          }],
+          pendingNativeProviderRegistrations: [],
+        },
+      });
+
+      modelRuntime.getAvailable.mockImplementationOnce(async () => {
+        expect(modelRuntime.registerProvider).toHaveBeenCalledWith(
+          'commandcode',
+          expect.objectContaining({ models: [{ id: 'deepseek/deepseek-v4.1-flash' }] }),
+        );
+        return [{ id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', provider: 'commandcode' }];
+      });
+
+      await service.initialize();
+
+      expect(modelRuntime.registerProvider).toHaveBeenCalledWith(
+        'commandcode',
+        expect.objectContaining({ models: [{ id: 'deepseek/deepseek-v4.1-flash' }] }),
+      );
     });
   });
 

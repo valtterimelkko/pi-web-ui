@@ -297,6 +297,40 @@ export class PiService {
       await modelRuntime.setRuntimeApiKey('deepseek', deepseekApiKey);
     }
 
+    // Provider extensions are loaded asynchronously by DefaultResourceLoader.
+    // Register their queued providers before taking the model snapshot used by
+    // the REST/Internal API model projections. The SDK's higher-level
+    // createAgentSessionServices() performs this same flush; PiService creates
+    // the shared ModelRuntime itself, so it must do the flush explicitly.
+    await this.resourceLoader.reload();
+    const extensionsResult = this.resourceLoader.getExtensions();
+    for (const { name, config: providerConfig, extensionPath } of extensionsResult.runtime?.pendingProviderRegistrations ?? []) {
+      try {
+        modelRuntime.registerProvider(name, providerConfig);
+      } catch (error) {
+        logger.errorObject(`[PiService] Extension provider registration failed (${extensionPath})`, error);
+      }
+    }
+    if (extensionsResult.runtime) {
+      extensionsResult.runtime.pendingProviderRegistrations = [];
+    }
+    for (const { provider, extensionPath } of extensionsResult.runtime?.pendingNativeProviderRegistrations ?? []) {
+      try {
+        modelRuntime.registerNativeProvider(provider);
+      } catch (error) {
+        logger.errorObject(`[PiService] Native extension provider registration failed (${extensionPath})`, error);
+      }
+    }
+    if (extensionsResult.runtime) {
+      extensionsResult.runtime.pendingNativeProviderRegistrations = [];
+    }
+    // Restore dynamic provider caches after extension registration without
+    // allowing a boot-time network refresh. This is a no-op for static
+    // providers such as commandcode-provider, but keeps this boundary aligned
+    // with the Pi SDK service factory.
+    await modelRuntime.refresh?.({ allowNetwork: false });
+    this.logExtensions(extensionsResult);
+
     const modelError = modelRuntime.getError();
     if (modelError) {
       logger.error('[PiService] ModelRuntime error:', modelError);
@@ -308,9 +342,6 @@ export class PiService {
     const availableProviders = [...new Set(availableModels.map(m => m.provider))];
     logger.info('[PiService] All providers loaded:', allProviders.join(', '));
     logger.info('[PiService] Available providers (with auth):', availableProviders.join(', '));
-
-    await this.resourceLoader.reload();
-    this.logExtensions(this.resourceLoader.getExtensions());
 
     // Surface the cached OpenRouter catalogue (if any) so models survive a
     // server restart without a network fetch. See refreshOpenRouterModels().

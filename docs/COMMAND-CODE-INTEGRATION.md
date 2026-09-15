@@ -158,6 +158,14 @@ Monday automation to that consumer is authorised work tracked in the
 [four-angle sequence](plans/FOUR-ANGLE-IMPROVEMENT-SEQUENCE.md#owner-authorised-catalogue-extension--8-september-2026),
 not yet a claim that those surfaces refresh automatically.
 
+The 15 September 2026 refresh replaces the disappeared beta id with the exact
+`deepseek/deepseek-v4.1-flash` Command Code model. In Pi, the provider-qualified
+selector is `commandcode/deepseek/deepseek-v4.1-flash`; the Internal API and
+browser model list return that selector rather than the native Command Code id
+alone. `PiService` flushes provider registrations queued by the shared
+`DefaultResourceLoader` before taking its model snapshot, so provider-backed
+models are visible to `/api/models` and `/api/v1/models` before a session is
+created.
 
 ## Goal function (contract 1.27.0)
 
