@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.43.0",
+  "contractVersion": "1.44.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -32,6 +32,14 @@ Current contract:
 **Policy default change (`2026-09-11`, no contract version change)** — the `INTERNAL_API_BLOCKED_PI_PROVIDERS` default became **empty** by operator decision: both previously blocked metered providers are now intentionally served through the Internal API — the direct `openai` provider (liberated 2026-09-11) and the OpenRouter gateway catalogue (surfaced in the Pi runtime by `PI_OPENROUTER_MODELS_ENABLED`, unblocked 2026-09-07). `/models` lists both and session creation/prompt/model-switch accept `openai/…` and `openrouter/…` selectors. Wire schema, routes, and error codes are unchanged (contract stays at its current version); `/capabilities.features.piProviderPolicy.blockedProviders` continues to expose the effective per-deployment list. Operators can re-block any exact provider id (e.g. `openai,openrouter`) via the env override.
 
 **Policy default change (`2026-09-07`, no contract version change)** — the `INTERNAL_API_BLOCKED_PI_PROVIDERS` default narrowed from `openai,openrouter` to `openai` by operator decision: the full OpenRouter gateway catalogue (surfaced in the Pi runtime by `PI_OPENROUTER_MODELS_ENABLED`) became intentionally served through the Internal API — `/models` lists it and session creation/prompt/model-switch accept `openrouter/…` selectors. Wire schema, routes, and error codes are unchanged (contract stays at its current version); `/capabilities.features.piProviderPolicy.blockedProviders` continues to expose the effective per-deployment list. Operators can re-block `openrouter` (or any exact provider id) via the env override.
+
+- **1.44.0** (minor, additive voice confirmation-card proposal identity) — the Voice Mode confirmation card now carries and echoes an identity for the exact bytes it displays, so a confirmation can only release what was actually approved. Two wire changes, both additive:
+  - browser→server `talker_turn` gains an optional `proposalRef: { version: number; hash: string }` — the identity of the proposal the card displayed, echoed by the confirm gesture (and by the card's "Send my exact words" action alongside the existing `releaseVariant: 'original'`). A bare spoken "yes" carries no `proposalRef` and behaves exactly as before.
+  - server→browser `talker_turn_result.proposal` (present only on `phase === 'proposed'`) gains two required-when-present fields: `version` (a monotonic per-draft counter, bumped on every draft mutation) and `hash` (a stable SHA-256 content digest over the exact release bytes — the tidied text and, when advertised, the original).
+
+  Behaviour: when a confirm arrives WITH a `proposalRef` that no longer matches the current proposal (the draft moved underneath the card — the operator spoke again, another lane or tab mutated the same worker's draft, or the proposal was cancelled and re-typed), the harness refuses mechanically: nothing is released, the draft is untouched, the spoken refusal quotes the current text, and the result carries a fresh `proposal` payload so the card re-shows what is really held. Additionally, `releaseVariant: 'original'` is now refused unless the CURRENT proposal's descriptor advertises an `original` (a visible removal happened) — a stale or buggy client can no longer release raw text the card never offered. These refusals ride the existing mechanical refusal paths (fixed strings, no model call), the same class as the lapsed-window, ambiguous-selection and nothing-pending refusals.
+
+  Consumer guidance: clients that render the confirmation card should read `proposal.version`/`proposal.hash` off a `proposed` result and send them back as `proposalRef` on their confirm gesture; a client that does not (or an older client) keeps working — the server simply cannot detect staleness for it, exactly as before 1.44.0. Clients that ignore the new `proposal` fields are unaffected. Rollback: reverting the server drops the identity fields and the `proposalRef` handling; every client still functions, with pre-1.44.0 staleness exposure restored.
 
 - **1.43.0** (minor, additive run-stall reason `no_activity`) — the watchdog evidence on a terminalised run receipt gains a third value on the wire: `liveness.watchdog.reason` is now `'idle' | 'absolute' | 'no_activity'` (`RunStallReason`, `server/src/internal-api/types.ts`). Everything else about the receipt is unchanged; this is an additive enum value, the same class of change as 1.41.0's `ChildCardKind` gaining `'background_shell'`.
 

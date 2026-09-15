@@ -98,6 +98,14 @@ export interface TalkerOperatorTurnInput {
    * and has no release path of its own.
    */
   releaseVariant?: ReleaseVariant;
+  /**
+   * D-card (contract 1.44.0): the proposal identity the confirming card
+   * displayed, echoed back for the release gate. Passed straight through to
+   * the talker's confirm branch, which refuses mechanically when it no longer
+   * describes the current draft; this registry adds no capability and has no
+   * release path of its own.
+   */
+  proposalRef?: { version: number; hash: string };
 }
 
 export interface TalkerOperatorTurnResult {
@@ -341,6 +349,7 @@ export class TalkerSessionRegistry {
     const turn = await talker.handleOperatorTurn(input.utterance, {
       ...(input.operatorFocus !== undefined ? { operatorFocus: input.operatorFocus } : {}),
       ...(input.releaseVariant !== undefined ? { releaseVariant: input.releaseVariant } : {}),
+      ...(input.proposalRef !== undefined ? { proposalRef: input.proposalRef } : {}),
     });
     return { reply: turn.reply, turn };
   }

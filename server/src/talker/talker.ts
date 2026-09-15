@@ -65,7 +65,7 @@
 
 import { classifyOperatorUtterance, extractPostCancelInstruction, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
 import { isAskWorkerOffer, stripAskWorkerMarker } from './ask-worker.js';
-import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
+import { PendingProposalStore, UtteranceLog, describeProposal } from './pending-proposal.js';
 import type { DraftSelection, DraftSnapshot, ReleaseVariant } from './pending-proposal.js';
 import { createVoiceTurnRecorder, type VoiceTurnObservation, type VoiceTurnRecorder, type VoiceRuntime } from './observability.js';
 import { renderStateView } from './state-view.js';
@@ -139,6 +139,29 @@ function reconfirmAskReply(snapshot: DraftSnapshot): string {
 function selectionClarifyReply(snapshot: DraftSnapshot): string {
   const parts = snapshot.utterances.map((u, i) => `${i + 1}. "${u.text}"`).join(' ');
   return `I am holding ${snapshot.utterances.length} things — ${parts}. Which one?`;
+}
+
+/**
+ * D-card — the stale-card refusal. The confirming gesture echoed the identity
+ * of bytes that are no longer what is held (the draft moved underneath the
+ * card: append-after-render, another lane or tab, a replace). Mechanical:
+ * nothing is released, the draft is untouched, and the reply quotes the
+ * CURRENT text so the operator can confirm against what is really held.
+ */
+function staleProposalReply(snapshot: DraftSnapshot): string {
+  const quoted = snapshot.utterances.map(u => `"${u.text}"`).join(' ... ');
+  return `That card is out of date — the wording has changed since it was shown, so I sent nothing. Here is what I am holding now: ${quoted}. Confirm this current version and I will send it.`;
+}
+
+/**
+ * D-card — the original-variant gate refusal. The current proposal advertised
+ * no original (no visible removal happened), so the operator's raw words are
+ * not a separate offer; a stale or buggy client cannot release raw bytes the
+ * card never showed as a choice. Mechanical: nothing released, draft intact.
+ */
+function originalNotOfferedReply(snapshot: DraftSnapshot): string {
+  const quoted = snapshot.utterances.map(u => `"${u.text}"`).join(' ... ');
+  return `Your exact raw words are not on offer here — nothing visible was taken out of what I am holding: ${quoted}. Say yes and I will send it as shown.`;
 }
 
 /**
@@ -229,7 +252,12 @@ export class TalkerSession {
    */
   async handleOperatorTurn(
     utterance: string,
-    opts?: { operatorFocus?: boolean; releaseVariant?: ReleaseVariant }
+    opts?: {
+      operatorFocus?: boolean;
+      releaseVariant?: ReleaseVariant;
+      /** D-card: the identity the confirming card displayed, echoed back. */
+      proposalRef?: { version: number; hash: string };
+    }
   ): Promise<TalkerTurnResult> {
     if (!utterance || !utterance.trim()) {
       throw new Error('operator utterance must be non-empty');
@@ -261,6 +289,7 @@ export class TalkerSession {
       const result = await this.handleOperatorTurnBody(utterance, turn, {
         ...(opts?.operatorFocus !== undefined ? { operatorFocus: opts.operatorFocus } : {}),
         ...(opts?.releaseVariant !== undefined ? { releaseVariant: opts.releaseVariant } : {}),
+        ...(opts?.proposalRef !== undefined ? { proposalRef: opts.proposalRef } : {}),
       });
       observation.draftAfter = this.proposals.snapshotDraft();
       try {
@@ -283,7 +312,11 @@ export class TalkerSession {
   private async handleOperatorTurnBody(
     utterance: string,
     turn: number,
-    opts: { operatorFocus?: boolean; releaseVariant?: ReleaseVariant } = {}
+    opts: {
+      operatorFocus?: boolean;
+      releaseVariant?: ReleaseVariant;
+      proposalRef?: { version: number; hash: string };
+    } = {}
   ): Promise<TalkerTurnResult> {
     // P18/2: the operator's focus control is projection input for every
     // conversational turn this turn takes (and for nothing else — the
@@ -317,6 +350,30 @@ export class TalkerSession {
         return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
       }
       if (draftSnap) {
+        // D-card identity gate: the card gestures echo the identity of the
+        // exact bytes they displayed. A mismatch means the draft moved under
+        // the card (append-after-render, another lane or tab, a replace) —
+        // refuse the send, keep the draft, quote the current text. The same
+        // mechanical refusal class as the lapsed check above: model-free,
+        // fixed vocabulary, nothing released, nothing consumed. A bare
+        // spoken "yes" carries no echo and keeps today's semantics.
+        if (opts.proposalRef && !this.proposals.identityMatches(opts.proposalRef)) {
+          const reply = staleProposalReply(draftSnap);
+          this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
+          this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
+          this.history.maybeTrim(this.proposals.pending !== null);
+          return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
+        }
+        // D-card variant gate: 'original' exists only where the CURRENT
+        // proposal advertised one — a visible removal happened. A stale or
+        // buggy client cannot release raw bytes the card never offered.
+        if (opts.releaseVariant === 'original' && !describeProposal(draftSnap.utterances).original) {
+          const reply = originalNotOfferedReply(draftSnap);
+          this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
+          this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
+          this.history.maybeTrim(this.proposals.pending !== null);
+          return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
+        }
         if (selection && !this.proposals.canResolveSelection(selection)) {
           // Ambiguous selection: never acts (invariant 6). Mechanical
           // clarification; the draft is untouched.
