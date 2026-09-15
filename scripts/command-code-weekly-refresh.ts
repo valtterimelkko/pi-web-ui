@@ -156,6 +156,19 @@ function processExitDescription(result: ProcResult): string {
   return result.timedOut ? 'timeout' : String(result.exitCode ?? 'error');
 }
 
+/**
+ * scripts/restart-pi-web-ui.sh runs its own capacity pre-flight and, while the
+ * Internal API reports admitted child turns, refuses with exit 1 and a
+ * "refusing restart" message (an override exists as --force). That refusal is
+ * not a failure of this job: the catalogue has already been committed by the
+ * time the wrapper runs, and the changes simply go live at the next restart.
+ * Only this documented refusal is read as a deferral; every other non-zero
+ * restart exit stays a hard failure.
+ */
+function isRestartCapacityRefusal(result: ProcResult): boolean {
+  return !result.timedOut && result.exitCode === 1 && /refusing restart/.test(result.stderr);
+}
+
 function probeEligibility(model: string, paths: WeeklyRefreshPaths, run: ProcessRunner): Promise<ProcResult> {
   // Real-auth probe: the operator's own CLI home supplies auth, exactly like an
   // interactive `cmd` run. One tiny one-turn prompt per unseen model.
@@ -357,6 +370,7 @@ export async function runWeeklyRefresh(
   //    scripts/restart-pi-web-ui.sh so the journal/stop audit names the
   //    requester and the production lock is held.
   let restarted = false;
+  let restartDeferredReason: string | undefined;
   if (flags.restart && committed) {
     const client = dependencies.createInternalApiClient?.() ?? new InternalApiClient();
     const deadline = now() + RESTART_WAIT_WINDOW_MS;
@@ -378,10 +392,14 @@ export async function runWeeklyRefresh(
     }
     if (idle) {
       const restart = await run(paths.restartScript, ['--reason', RESTART_REASON], { timeoutMs: 60_000, cwd: paths.repoRoot });
-      if (!processSucceeded(restart)) {
+      if (processSucceeded(restart)) {
+        restarted = true;
+      } else if (isRestartCapacityRefusal(restart)) {
+        restartDeferredReason = restart.stderr.trim().replace(/^restart-pi-web-ui:\s*/, '').slice(-200);
+        console.warn(`! restart refused by its own capacity pre-flight (${restartDeferredReason}); restart deferred`);
+      } else {
         throw new Error(`pi-web-ui restart failed (exit ${processExitDescription(restart)}): ${restart.stderr.slice(-300)}`);
       }
-      restarted = true;
     } else {
       console.warn(`! server busy or sessions probe failed (${busyProbeError ?? 'busy sessions still active'}); restart deferred`);
     }
@@ -394,7 +412,7 @@ export async function runWeeklyRefresh(
     ineligible.length ? `Newly excluded (not in GOAT plan): ${ineligible.join(', ')}.` : 'No new exclusions.',
     inconclusive.length ? `Inconclusive probes (left eligible, retried next week): ${inconclusive.join(', ')}.` : undefined,
     committed ? 'Committed and pushed the catalogue files.' : (flags.git ? 'No commit needed.' : 'Git step skipped (--no-git).'),
-    restarted ? 'pi-web-ui restarted; new models are live in the selector and Internal API.' : 'Service not restarted this run; changes go live at the next restart.',
+    restarted ? 'pi-web-ui restarted; new models are live in the selector and Internal API.' : `Service not restarted this run; changes go live at the next restart.${restartDeferredReason ? ` (${restartDeferredReason})` : ''}`,
   ].filter(Boolean).join('\n');
   await notify('milestone', 'Command Code weekly catalogue refresh', lines, paths, run);
   console.log(lines);

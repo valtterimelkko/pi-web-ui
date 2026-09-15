@@ -297,5 +297,43 @@ describe('runWeeklyRefresh', () => {
       expect(client.listSessions).toHaveBeenCalledTimes(1);
       expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
     });
+
+    // scripts/restart-pi-web-ui.sh carries its own capacity pre-flight: while
+    // the Internal API reports admitted child turns it refuses with exit 1 and
+    // the "refusing restart" message. By the time that wrapper runs, this job
+    // has already committed the catalogue, so the honest reading of a refusal
+    // is the same deferral as the busy-session branch above — the changes go
+    // live at the next restart. Throwing here would report a successful
+    // refresh as a failed one.
+    it('treats a wrapper capacity refusal as a deferral, not a failed run', async () => {
+      const client = sessionsClient({ sessions: [{ sessionId: 's1', busy: false }] });
+      resolveProcess = (command, args) => {
+        if (command === RESTART_SCRIPT) {
+          return {
+            exitCode: 1,
+            stderr: 'restart-pi-web-ui: refusing restart: 2 active child turn(s) in progress. Wait for children to settle or pass --force.',
+          };
+        }
+        return defaultResolver(command, args);
+      };
+
+      const result = await runWeeklyRefresh([], options(client));
+
+      expect(result.restarted).toBe(false);
+      // The run still completed its work: the catalogue was pushed.
+      expect(invocations.some(({ command, args }) => command === 'git' && args[0] === 'push')).toBe(true);
+    });
+
+    // Only the wrapper's documented refusal is a deferral. Any other restart
+    // failure is a real problem and must keep failing loudly.
+    it('still fails the run when the restart command fails for another reason', async () => {
+      const client = sessionsClient({ sessions: [{ sessionId: 's1', busy: false }] });
+      resolveProcess = (command, args) => {
+        if (command === RESTART_SCRIPT) return { exitCode: 1, stderr: 'Failed to restart pi-web-ui.service: Unit not found.' };
+        return defaultResolver(command, args);
+      };
+
+      await expect(runWeeklyRefresh([], options(client))).rejects.toThrow(/restart failed/);
+    });
   });
 });
