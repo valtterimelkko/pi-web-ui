@@ -40,6 +40,13 @@ export interface SendTalkerTurnInput {
    * only on the confirm branch.
    */
   releaseVariant?: 'tidied' | 'original';
+  /**
+   * D-card: the identity of the proposal the confirming card displayed (the
+   * `version` + `hash` the proposed payload carried). The server refuses the
+   * release when it no longer matches the current draft. Transport only: this
+   * hook passes it through verbatim and never derives it.
+   */
+  proposalRef?: { version: number; hash: string };
 }
 
 /**
@@ -95,6 +102,9 @@ export function useTalkerTurn(lane?: TalkerLaneIdentity) {
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.operatorFocus !== undefined ? { operatorFocus: input.operatorFocus } : {}),
         ...(input.releaseVariant !== undefined ? { releaseVariant: input.releaseVariant } : {}),
+        // D-card: the echoed identity rides the same additive pattern — an old
+        // server drops the field harmlessly (its guard never sees it).
+        ...(input.proposalRef !== undefined ? { proposalRef: input.proposalRef } : {}),
       });
       const accepted = result !== 'failed';
       if (accepted) {

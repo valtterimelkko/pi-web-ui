@@ -593,3 +593,168 @@ describe('useVoiceTurn — the ack producer consults the shared spoken ledger (P
     }
   });
 });
+
+describe('useVoiceTurn — proposal identity: the card echoes what it displayed (D-card)', () => {
+  let fake: ReturnType<typeof makeBlockedPlayer>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetTalkerTurnBus();
+    sendMock.mockReturnValue('sent');
+    speechArbiter.stopAll();
+    fake = makeBlockedPlayer();
+    speechArbiter.attachPlayer(fake.player);
+  });
+
+  afterEach(() => {
+    speechArbiter.stopAll();
+    fake.drain();
+  });
+
+  const PROPOSE = (over: Record<string, unknown> = {}) =>
+    emit({
+      reply: 'Send it?',
+      phase: 'proposed',
+      proposal: {
+        text: 'hold phase 3 for review',
+        cleaned: false,
+        version: 4,
+        hash: 'abc123',
+      },
+      ...over,
+    });
+
+  it('the confirm gesture echoes the displayed proposal identity as proposalRef', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('hold phase 3 for review');
+    });
+    act(() => {
+      PROPOSE();
+    });
+    expect(result.current.pendingProposal?.version).toBe(4);
+    expect(result.current.pendingProposal?.hash).toBe('abc123');
+
+    act(() => {
+      expect(result.current.confirmPending()).toBe(true);
+    });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'talker_turn',
+        workerSessionId: WORKER,
+        utterance: CONFIRM_UTTERANCE,
+        proposalRef: { version: 4, hash: 'abc123' },
+      })
+    );
+  });
+
+  it("the 'Send my exact words' gesture echoes the identity AND releaseVariant 'original'", () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('Um, tell the worker to rerun the suite');
+    });
+    act(() => {
+      PROPOSE({
+        proposal: {
+          text: 'rerun the suite',
+          cleaned: true,
+          removed: 'Um, tell the worker to',
+          original: 'Um, tell the worker to rerun the suite',
+          version: 7,
+          hash: 'def456',
+        },
+      });
+    });
+    act(() => {
+      expect(result.current.releaseOriginal()).toBe(true);
+    });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'talker_turn',
+        workerSessionId: WORKER,
+        utterance: CONFIRM_UTTERANCE,
+        releaseVariant: 'original',
+        proposalRef: { version: 7, hash: 'def456' },
+      })
+    );
+  });
+
+  it('an old server (no identity on the proposal) sends NO proposalRef — the gesture is byte-identical to before', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('deploy the fix');
+    });
+    act(() => {
+      emit({ reply: 'Send it?', phase: 'proposed', proposal: { text: 'deploy the fix', cleaned: false } });
+    });
+    act(() => {
+      expect(result.current.confirmPending()).toBe(true);
+    });
+    const sent = sendMock.mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect(sent.utterance).toBe(CONFIRM_UTTERANCE);
+    expect('proposalRef' in sent).toBe(false);
+  });
+
+  it('a stale-card refusal (proposed result with a NEW identity) re-shows the CURRENT text — never the old bytes', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('hold phase 3 for review');
+    });
+    act(() => {
+      PROPOSE();
+    });
+    // The confirm goes out with the OLD identity...
+    act(() => {
+      expect(result.current.confirmPending()).toBe(true);
+    });
+    // ...and the server refuses: same lane, fresh proposed result carrying the
+    // current draft (both parts) under a NEW identity. The card must adopt it.
+    act(() => {
+      PROPOSE({
+        reply:
+          'That card is out of date — the wording has changed since it was shown, so I sent nothing.',
+        proposal: {
+          text: 'hold phase 3 for review\nand also update the changelog',
+          cleaned: false,
+          version: 5,
+          hash: 'next999',
+        },
+      });
+    });
+    expect(result.current.pendingProposal?.text).toBe(
+      'hold phase 3 for review\nand also update the changelog'
+    );
+    expect(result.current.pendingProposal?.version).toBe(5);
+    expect(result.current.pendingProposal?.hash).toBe('next999');
+    // Nothing was released: no released outcome may appear.
+    expect(result.current.lastReleased).toBeNull();
+    // ...and a confirm on the RE-SHOWN card echoes the NEW identity.
+    act(() => {
+      expect(result.current.confirmPending()).toBe(true);
+    });
+    expect(sendMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        utterance: CONFIRM_UTTERANCE,
+        proposalRef: { version: 5, hash: 'next999' },
+      })
+    );
+  });
+
+  it('junk identity fields are ignored, like every other proposal field', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('run the smoke tests');
+    });
+    act(() => {
+      emit({ reply: 'Holding.', phase: 'proposed', proposal: { text: 'run tests', cleaned: false, version: 'four', hash: 42 } });
+    });
+    expect(result.current.pendingProposal?.text).toBe('run tests');
+    expect(result.current.pendingProposal?.version).toBeUndefined();
+    expect(result.current.pendingProposal?.hash).toBeUndefined();
+    act(() => {
+      expect(result.current.confirmPending()).toBe(true);
+    });
+    const sent = sendMock.mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect('proposalRef' in sent).toBe(false);
+  });
+});

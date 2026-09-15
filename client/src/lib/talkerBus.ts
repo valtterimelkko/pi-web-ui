@@ -52,10 +52,12 @@ export type TalkerTurnResult = {
    * server's `proposal` shape, P26/D1). `text` is the exact bytes a default
    * Confirm releases; `cleaned` is true only when tidying removed VISIBLE
    * content; `removed` carries the removed FRAGMENTS; `original` (D2) carries
-   * the raw bytes an original-variant release sends. Absent on an older
-   * server — never guessed.
+   * the raw bytes an original-variant release sends; `version` + `hash`
+   * (D-card) are the identity of THESE bytes — the confirm gesture echoes
+   * them back as `proposalRef`, and the server refuses a confirm whose echo
+   * no longer matches. Absent on an older server — never guessed.
    */
-  proposal?: { text: string; cleaned: boolean; removed?: string; original?: string };
+  proposal?: { text: string; cleaned: boolean; removed?: string; original?: string; version: number; hash: string };
   /** Harness receipt ack (§4.1 rule 2) — mirror of the server wire shape. */
   receiptAck?: string;
   error?: string;

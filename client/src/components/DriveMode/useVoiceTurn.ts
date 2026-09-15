@@ -108,31 +108,43 @@ export interface PendingProposal {
    * utterance (or an older server) surfaces none. Never invented client-side.
    */
   original?: string;
+  /**
+   * D-card identity of the exact bytes this proposal displays: the server's
+   * draft version and content hash. The confirm gestures echo it back as
+   * `proposalRef`; a mismatch refuses the release instead of sending bytes
+   * the operator never saw. Absent on an older server — then the gesture
+   * sends nothing extra and behaves exactly as before.
+   */
+  version?: number;
+  hash?: string;
 }
 
 /**
  * P26 — the harness's cleaned proposal, read defensively off the turn result.
  *
  * The agreed interface: a `proposed` result may carry a `proposal` object
- * holding the exact outgoing `text`, whether it was `cleaned`, and what was
- * `removed`. The server side (P25) had NOT landed when this was written, so
+ * holding the exact outgoing `text`, whether it was `cleaned`, what was
+ * `removed`, and (D-card) the identity — `version` + `hash` — of those exact
+ * bytes. The server side (P25) had NOT landed when this was written, so
  * every field is validated independently and anything absent or malformed
  * falls back to today's behaviour — the surface's own verbatim record, with
- * no cleaning claim. An old server therefore renders exactly as before, and
- * a malformed one can never put junk on the card. If P25 lands with
- * different names, this is the ONE function to reconcile.
+ * no cleaning claim and no identity. An old server therefore renders exactly
+ * as before, and a malformed one can never put junk on the card. If the wire
+ * names change, this is the ONE function to reconcile.
  */
 function proposalFromResult(
   result: TalkerTurnResult
-): Pick<PendingProposal, 'cleaned' | 'removed' | 'original'> & { text?: string } | null {
+): Pick<PendingProposal, 'cleaned' | 'removed' | 'original' | 'version' | 'hash'> & { text?: string } | null {
   const raw = (result as { proposal?: unknown }).proposal;
   if (typeof raw !== 'object' || raw === null) return null;
-  const p = raw as { text?: unknown; cleaned?: unknown; removed?: unknown; original?: unknown };
-  const proposal: { text?: string; cleaned?: boolean; removed?: string; original?: string } = {};
+  const p = raw as { text?: unknown; cleaned?: unknown; removed?: unknown; original?: unknown; version?: unknown; hash?: unknown };
+  const proposal: { text?: string; cleaned?: boolean; removed?: string; original?: string; version?: number; hash?: string } = {};
   if (typeof p.text === 'string' && p.text.length > 0) proposal.text = p.text;
   if (typeof p.cleaned === 'boolean') proposal.cleaned = p.cleaned;
   if (typeof p.removed === 'string') proposal.removed = p.removed;
   if (typeof p.original === 'string' && p.original.length > 0) proposal.original = p.original;
+  if (typeof p.version === 'number' && Number.isFinite(p.version)) proposal.version = p.version;
+  if (typeof p.hash === 'string' && p.hash.length > 0) proposal.hash = p.hash;
   return Object.keys(proposal).length > 0 ? proposal : null;
 }
 
@@ -153,8 +165,10 @@ export interface UseVoiceTurnResult {
   sendText: (text: string) => boolean;
 
   /** The pending proposal — the exact text Confirm will release, plus the
-   *  harness's cleaning facts when the server reports them (P26), and the raw
-   *  words the operator may choose instead (D2). Null when nothing is pending. */
+   *  harness's cleaning facts when the server reports them (P26), the raw
+   *  words the operator may choose instead (D2), and the identity of the
+   *  exact bytes displayed (D-card), echoed on confirm. Null when nothing is
+   *  pending. */
   pendingProposal: PendingProposal | null;
   confirmPending: () => boolean;
   cancelPending: () => boolean;
@@ -240,7 +254,14 @@ export function useVoiceTurn(
   const lastSentRef = useRef<string | null>(null);
 
   const attemptSend = useCallback(
-    (text: string, releaseVariant?: 'tidied' | 'original'): boolean => {
+    (
+      text: string,
+      opts?: {
+        releaseVariant?: 'tidied' | 'original';
+        /** D-card: the identity of the proposal the confirming card displayed. */
+        proposalRef?: { version: number; hash: string };
+      }
+    ): boolean => {
       const accepted = sendTalkerTurn({
         workerSessionId,
         utterance: text,
@@ -250,7 +271,10 @@ export function useVoiceTurn(
         ...(operatorFocus ? { operatorFocus: true } : {}),
         // D2: sent only for the explicit original action; the default confirm
         // path stays byte-identical to before (no field at all).
-        ...(releaseVariant !== undefined ? { releaseVariant } : {}),
+        ...(opts?.releaseVariant !== undefined ? { releaseVariant: opts.releaseVariant } : {}),
+        // D-card: sent only by the confirming gestures, and only when the
+        // server reported an identity to echo (an old server gets none).
+        ...(opts?.proposalRef !== undefined ? { proposalRef: opts.proposalRef } : {}),
       });
       if (!accepted) {
         setPendingText(text);
@@ -291,8 +315,10 @@ export function useVoiceTurn(
       // (P25: the released bytes will equal what the card showed); fall back
       // to THIS surface's verbatim record of what was sent — which on an old
       // server, where the relay is verbatim, IS exactly what will go. The
-      // cleaning facts ride along only when the server actually reported
-      // them; they are never guessed.
+      // cleaning facts and the identity (D-card) ride along only when the
+      // server actually reported them; they are never guessed. On a stale-card
+      // refusal the server sends THIS result with the CURRENT text and a new
+      // identity, so the card re-shows what is really held.
       if (lastSentRef.current) {
         const fromServer = proposalFromResult(lastResult);
         setPendingProposal({
@@ -300,6 +326,8 @@ export function useVoiceTurn(
           ...(fromServer?.cleaned !== undefined ? { cleaned: fromServer.cleaned } : {}),
           ...(fromServer?.removed !== undefined ? { removed: fromServer.removed } : {}),
           ...(fromServer?.original !== undefined ? { original: fromServer.original } : {}),
+          ...(fromServer?.version !== undefined ? { version: fromServer.version } : {}),
+          ...(fromServer?.hash !== undefined ? { hash: fromServer.hash } : {}),
         });
       }
     } else if (lastResult.phase === 'answered') {
@@ -348,10 +376,24 @@ export function useVoiceTurn(
     }
   }, [lastResult, workerSessionId]);
 
+  /**
+   * The confirm gestures echo the identity of the exact bytes the card
+   * displayed (D-card): the server refuses the release when the draft no
+   * longer matches them, instead of sending something the operator never
+   * saw. No identity (an older server) → no echo, byte-identical behaviour.
+   */
+  const identityEcho = useCallback(
+    (): { proposalRef: { version: number; hash: string } } | undefined =>
+      pendingProposal?.version !== undefined && pendingProposal?.hash !== undefined
+        ? { proposalRef: { version: pendingProposal.version, hash: pendingProposal.hash } }
+        : undefined,
+    [pendingProposal]
+  );
+
   const confirmPending = useCallback((): boolean => {
     if (!pendingProposal) return false;
-    return attemptSend(CONFIRM_UTTERANCE);
-  }, [pendingProposal, attemptSend]);
+    return attemptSend(CONFIRM_UTTERANCE, identityEcho());
+  }, [pendingProposal, attemptSend, identityEcho]);
 
   const cancelPending = useCallback((): boolean => {
     if (!pendingProposal) return false;
@@ -359,11 +401,12 @@ export function useVoiceTurn(
   }, [pendingProposal, attemptSend]);
 
   /** D2 — the operator chose his own words. One gesture, one variant field:
-   *  the server's single release path does the rest. */
+   *  the server's single release path does the rest — and the D-card identity
+   *  rides along, gated on what the card actually displayed. */
   const releaseOriginal = useCallback((): boolean => {
     if (!pendingProposal) return false;
-    return attemptSend(CONFIRM_UTTERANCE, 'original');
-  }, [pendingProposal, attemptSend]);
+    return attemptSend(CONFIRM_UTTERANCE, { releaseVariant: 'original', ...identityEcho() });
+  }, [pendingProposal, attemptSend, identityEcho]);
 
   const retryLastSend = useCallback((): boolean => {
     if (pendingText === null) return true;
