@@ -17,7 +17,10 @@ import { useWebSocket } from './useWebSocket';
 import {
   emitTalkerTurnResult,
   getLastTalkerTurnResult,
+  getLastTalkerTurnResultFor,
+  noteTalkerRequestIssued,
   subscribeTalkerTurnResults,
+  type TalkerLaneIdentity,
   type TalkerRuntime,
   type TalkerTurnResult,
 } from '../lib/talkerBus';
@@ -39,24 +42,48 @@ export interface SendTalkerTurnInput {
   releaseVariant?: 'tidied' | 'original';
 }
 
-export function useTalkerTurn() {
+/**
+ * One talker lane's transport.
+ *
+ * Multi-lane (2026-09-15): every send generates a client correlation id — an
+ * existing optional wire field the server echoes on the result — and the bus
+ * applies a result to this lane only when it carries this lane's id (see
+ * lib/talkerBus.ts). With `lane` given, the subscription and the hydration
+ * source are lane-scoped, so lane A never sees lane B's results and a late
+ * result from a previous request never overwrites a newer card. Without
+ * `lane`, behaviour is today's: unfiltered subscription, global hydration.
+ */
+export function useTalkerTurn(lane?: TalkerLaneIdentity) {
   const { sendMessage } = useWebSocket();
-  const [lastResult, setLastResult] = useState<TalkerTurnResult | null>(getLastTalkerTurnResult());
+  const [lastResult, setLastResult] = useState<TalkerTurnResult | null>(
+    lane ? getLastTalkerTurnResultFor(lane) : getLastTalkerTurnResult()
+  );
   const pendingCount = useRef(0);
   const [awaitingReply, setAwaitingReply] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = subscribeTalkerTurnResults((result) => {
-      setLastResult(result);
-      pendingCount.current = Math.max(0, pendingCount.current - 1);
-      if (pendingCount.current === 0) setAwaitingReply(false);
-    });
+    const unsubscribe = subscribeTalkerTurnResults(
+      (result) => {
+        setLastResult(result);
+        pendingCount.current = Math.max(0, pendingCount.current - 1);
+        if (pendingCount.current === 0) setAwaitingReply(false);
+      },
+      lane
+    );
     return unsubscribe;
-  }, []);
+  }, [lane?.workerSessionId, lane?.runtime]);
 
   const sendTalkerTurn = useCallback(
     (input: SendTalkerTurnInput): boolean => {
       if (!input.utterance || !input.utterance.trim()) return false;
+      // Client-generated correlation id: the server echoes it on the result,
+      // which is how THIS lane recognises (and only accepts) its own turn's
+      // answer. Additive optional field — an old server just drops it.
+      const laneId: TalkerLaneIdentity = {
+        workerSessionId: input.workerSessionId,
+        ...(input.runtime !== undefined ? { runtime: input.runtime } : {}),
+      };
+      const requestId = noteTalkerRequestIssued(laneId);
       // E1 changed sendMessage's contract from boolean to
       // 'sent' | 'queued' | 'failed'. A queued message is still an accepted
       // send (it flushes on reconnect), so only 'failed' is a refusal here.
@@ -64,6 +91,7 @@ export function useTalkerTurn() {
         type: 'talker_turn',
         workerSessionId: input.workerSessionId,
         utterance: input.utterance,
+        requestId,
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.operatorFocus !== undefined ? { operatorFocus: input.operatorFocus } : {}),
         ...(input.releaseVariant !== undefined ? { releaseVariant: input.releaseVariant } : {}),

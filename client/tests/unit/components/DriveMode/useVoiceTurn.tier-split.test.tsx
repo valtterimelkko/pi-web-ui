@@ -10,6 +10,7 @@ import {
   type ArbiterPlayer,
 } from '../../../../src/lib/speechArbiter';
 import { spokenLedger } from '../../../../src/lib/spokenLedger';
+import { lastSentTalkerRequestId } from '../../helpers/talkerEcho';
 
 /**
  * P18 package C, deliverable 3 — the tier-4 split.
@@ -62,6 +63,9 @@ function emit(over: Record<string, unknown>) {
     phase: 'answered',
     released: null,
     cancelled: false,
+    // The server echoes the correlation id the send carried; without one this
+    // is a result this surface never sent (and would rightly refuse).
+    requestId: lastSentTalkerRequestId(sendMock),
     ...over,
   });
 }
@@ -153,6 +157,11 @@ describe('P18/3 — an elicited reply is the conversation; unprompted commentary
     });
     expect(speechArbiter.getState().current?.tier).toBe(TIER_CHATTER);
 
+    // The release answers the CONFIRM gesture — a second send, whose echo
+    // identifies its result.
+    act(() => {
+      result.current.confirmPending();
+    });
     act(() => {
       emit({
         reply: 'sending that now',

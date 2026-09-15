@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { DriveModeDictate } from '../../../../src/components/DriveMode/DriveModeDictate';
-import { emitTalkerTurnResult, resetTalkerTurnBus } from '../../../../src/lib/talkerBus';
+import { emitTalkerTurnResult as emitRawTalkerTurnResult, resetTalkerTurnBus } from '../../../../src/lib/talkerBus';
+import { lastSentTalkerRequestId } from '../../helpers/talkerEcho';
 import { speechArbiter, type ArbiterPlayer } from '../../../../src/lib/speechArbiter';
 import { spokenLedger } from '../../../../src/lib/spokenLedger';
 
@@ -32,6 +33,18 @@ function dictate(text: string): void {
   if (!capture.transcript) throw new Error('useDictation was never invoked — the transcript capture is unwired');
   capture.transcript(text);
 }
+/** Emit a result the way the server does: echoing the correlation id of the
+ *  surface's last talker send (results are matched on requestId + lane). */
+function emitTalkerTurnResult(over: Record<string, unknown>) {
+  emitRawTalkerTurnResult({
+    type: 'talker_turn_result',
+    workerSessionId: WORKER,
+    runtime: 'pi',
+    requestId: lastSentTalkerRequestId(sendMock),
+    ...over,
+  });
+}
+
 vi.mock('../../../../src/hooks/useDictation', () => ({
   useDictation: vi.fn((onTranscript: (text: string) => void) => {
     capture.transcript = onTranscript;

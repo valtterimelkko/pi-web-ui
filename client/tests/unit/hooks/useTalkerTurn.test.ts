@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useTalkerTurn } from '../../../src/hooks/useTalkerTurn';
 import { emitTalkerTurnResult, resetTalkerTurnBus } from '../../../src/lib/talkerBus';
+import { lastSentTalkerRequestId } from '../helpers/talkerEcho';
 
 // Mock useWebSocket: capture the outgoing message, return send success.
 const sendMock = vi.fn();
@@ -16,7 +17,7 @@ describe('useTalkerTurn', () => {
     sendMock.mockReturnValue(true);
   });
 
-  it('sends a talker_turn message and marks a reply as awaited', () => {
+  it('sends a talker_turn message with a client correlation id and marks a reply as awaited', () => {
     const { result } = renderHook(() => useTalkerTurn());
     let sent = false;
     act(() => {
@@ -26,11 +27,15 @@ describe('useTalkerTurn', () => {
       });
     });
     expect(sent).toBe(true);
-    expect(sendMock).toHaveBeenCalledWith({
-      type: 'talker_turn',
-      workerSessionId: '/pi/worker.jsonl',
-      utterance: 'please add a smoke test',
-    });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'talker_turn',
+        workerSessionId: '/pi/worker.jsonl',
+        utterance: 'please add a smoke test',
+      })
+    );
+    // The correlation id rides the send (the server echoes it on the result).
+    expect(typeof sendMock.mock.calls[0][0].requestId).toBe('string');
     expect(result.current.awaitingReply).toBe(true);
   });
 
@@ -47,7 +52,9 @@ describe('useTalkerTurn', () => {
     act(() => {
       emitTalkerTurnResult({
         type: 'talker_turn_result',
-        requestId: 'r9',
+        // The echo of the id the send carried — how the lane knows this
+        // result is its own turn's answer.
+        requestId: lastSentTalkerRequestId(sendMock),
         workerSessionId: '/pi/worker.jsonl',
         runtime: 'pi',
         reply: 'all quiet — still running step 3',
@@ -67,6 +74,7 @@ describe('useTalkerTurn', () => {
     act(() => {
       emitTalkerTurnResult({
         type: 'talker_turn_result',
+        requestId: lastSentTalkerRequestId(sendMock),
         workerSessionId: '/pi/worker.jsonl',
         runtime: 'pi',
         reply: 'sending that now',

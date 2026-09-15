@@ -213,8 +213,15 @@ export function useVoiceTurn(
    *  (so it can suggest leaving focus); it never gates capture or the send. */
   operatorFocus = false
 ): UseVoiceTurnResult {
-  const { sendTalkerTurn, lastResult } = useTalkerTurn();
   const runtime = talkerRuntimeFor(sdkType ?? undefined);
+  // The lane identity: results are correlated on requestId plus THIS identity
+  // (lib/talkerBus.ts), so another lane's answer can never become this
+  // surface's card, and a late result from an older request cannot overwrite
+  // a newer one.
+  const { sendTalkerTurn, lastResult } = useTalkerTurn({
+    workerSessionId,
+    ...(runtime ? { runtime } : {}),
+  });
 
   const [pendingProposal, setPendingProposal] = useState<PendingProposal | null>(null);
   const [lastReleased, setLastReleased] = useState<ReleasedOutcome | null>(null);
@@ -327,7 +334,7 @@ export function useVoiceTurn(
       const tier = replyTier(lastResult);
       speechArbiter.submit({
         id: lastResult.phase === 'released'
-          ? `ack-${lastResult.released?.utteranceId ?? 'x'}`
+          ? `ack-${workerSessionId}-${lastResult.released?.utteranceId ?? 'x'}`
           : `chat-${workerSessionId}-${lastResult.reply.length}`,
         tier,
         text: lastResult.reply,
