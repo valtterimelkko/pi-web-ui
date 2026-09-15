@@ -99,6 +99,9 @@ export interface AnswerReaderOptions {
     text: string;
     spokenPrefix?: string;
   }) => Promise<TurnDigestOutcome>;
+  /** Multi-lane: prefix for this surface's intent ids (the worker session id),
+   *  so the shared arbiter's queue attributes speech to the right lane. */
+  intentIdPrefix?: string;
 }
 
 export interface AnswerReaderView {
@@ -273,7 +276,7 @@ export function getTurnAssistantText(messages: readonly Message[]): string | nul
 }
 
 export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView {
-  const { isStreaming, messages, level, focused, requestDigest } = options;
+  const { isStreaming, messages, level, focused, requestDigest, intentIdPrefix } = options;
   const [spokenKind, setSpokenKind] = useState<ReadingLevel | null>(null);
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   /** P18/2 — the answers held while focus is on, and the recap they produce. */
@@ -303,9 +306,18 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
   const heldRef = useRef<HeldAnswer[]>([]);
   const levelRef = useRef(level);
   const requestDigestRef = useRef(requestDigest);
+  const intentPrefixRef = useRef(intentIdPrefix);
   levelRef.current = level;
   requestDigestRef.current = requestDigest;
+  intentPrefixRef.current = intentIdPrefix;
   const recapSeqRef = useRef(0);
+
+  /** Lane-scoped intent id: `${prefix}answer-auto-N` (or the recap scope),
+   *  so the shared arbiter can attribute a playing intent to its lane. */
+  const scopedItemId = useCallback(
+    (suffix: string) => `${intentPrefixRef.current ?? ''}${suffix}`,
+    []
+  );
 
   const submitAnswerText = useCallback((itemId: string, text: string, form: ReadingLevel) => {
     const answer = answerRef.current;
@@ -434,7 +446,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
       // The announcement is a mechanical, constant-shaped line, so it is held
       // under its own event scope: a second focus session must be able to say
       // the same words again (P16's event-scoping rule).
-      const scope = `focus-recap-${recapSeqRef.current++}`;
+      const scope = scopedItemId(`focus-recap-${recapSeqRef.current++}`);
       const announcement = focusRecapAnnouncement(count);
       if (spokenLedger.claim(announcement, scope)) {
         speechArbiter.submit({ id: scope, tier: TIER_ANSWER, text: announcement });
@@ -489,7 +501,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
     // here — claiming would mark the words as already heard and the exit recap
     // could never speak them).
     if (focusedRef.current) {
-      holdAnswer(`answer-auto-${autoSeqRef.current++}`, turnText);
+      holdAnswer(scopedItemId(`answer-auto-${autoSeqRef.current++}`), turnText);
       return;
     }
 
@@ -499,7 +511,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
     if (!spokenLedger.claim(turnText)) return;
 
     const generation = ++generationRef.current;
-    const itemId = `answer-auto-${autoSeqRef.current++}`;
+    const itemId = scopedItemId(`answer-auto-${autoSeqRef.current++}`);
     const plan = planSpeechForText(level, turnText);
     answerRef.current = {
       itemId,

@@ -76,6 +76,18 @@ describe('lane floor — one writer for the operator floor', () => {
 });
 
 describe('lane floor — capture handoff (the operator addresses another lane)', () => {
+  it('finaliseCapture commands one named lane to stop (closing a capturing lane)', () => {
+    coordinator.registerLane(LANE_A);
+    const stopA = vi.fn();
+    coordinator.setCaptureControls(LANE_A, { stopCapture: stopA });
+    coordinator.setLaneCapture(LANE_A, true);
+    expect(coordinator.finaliseCapture(LANE_A)).toBe(true);
+    expect(stopA).toHaveBeenCalledTimes(1);
+    // A lane with no controls registered still reports honestly.
+    coordinator.registerLane(LANE_B);
+    expect(coordinator.finaliseCapture(LANE_B)).toBe(false);
+  });
+
   it('taking the mic on another lane stops the current lane\'s capture first', () => {
     coordinator.registerLane(LANE_A);
     coordinator.registerLane(LANE_B);

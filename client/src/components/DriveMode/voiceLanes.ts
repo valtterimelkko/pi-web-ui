@@ -34,6 +34,7 @@
 
 import type { SpeechArbiter } from '../../lib/speechArbiter';
 import { recordBrowserDiagnostic } from '../../lib/browserDiagnostics';
+import { speechArbiter } from '../../lib/speechArbiter';
 
 /** What a lane registers so its capture can be commanded by the coordinator
  *  (the handoff must reach the OTHER lane's dictation instance). */
@@ -58,6 +59,9 @@ export interface LaneFloorCoordinator {
    *  lane's capture (finalising its words into its own talker). True when a
    *  stop was commanded. */
   yieldFloorTo(laneId: string): boolean;
+  /** Command ONE named lane to finalise its capture (closing/replacing that
+   *  lane). True when a stop was commanded. */
+  finaliseCapture(laneId: string): boolean;
   /** Which lane's speech intent is playing, by session-scoped id prefix. */
   laneOfSpeechIntent(): string | null;
   /** Strip re-render subscription. */
@@ -150,6 +154,13 @@ export function createLaneFloorCoordinator(arbiter: SpeechArbiter): LaneFloorCoo
       return false;
     },
 
+    finaliseCapture(laneId) {
+      const stop = controls.get(laneId)?.stopCapture;
+      if (!stop) return false;
+      stop();
+      return true;
+    },
+
     laneOfSpeechIntent() {
       const current = arbiter.getState().current?.id;
       if (!current) return null;
@@ -172,6 +183,9 @@ export function createLaneFloorCoordinator(arbiter: SpeechArbiter): LaneFloorCoo
     },
 
     dispose() {
+      // Releasing the floor the coordinator may have set: a disposed
+      // coordinator must not leave the shared arbiter silenced.
+      arbiter.setOperatorSpeaking(false);
       listeners.clear();
       lanes.clear();
       capturing.clear();
@@ -182,6 +196,6 @@ export function createLaneFloorCoordinator(arbiter: SpeechArbiter): LaneFloorCoo
   return coordinator;
 }
 
-/** App-wide coordinator — every lane surface on this tab shares this one. */
-// Created lazily by the module that also imports the arbiter singleton, so
-// tests can build isolated coordinators against a fresh arbiter instance.
+/** App-wide coordinator — every lane surface on this tab shares this one,
+ *  and it writes the app-wide arbiter singleton. */
+export const laneFloor: LaneFloorCoordinator = createLaneFloorCoordinator(speechArbiter);
