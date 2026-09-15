@@ -159,13 +159,16 @@ describe('describeProposal — the card payload, built pure (R1–R5)', () => {
     const parts = draftOf('Proceed.\n');
     expect(parts[0].text).toBe('Proceed.');
     expect(parts[0].originalText).toBe('Proceed.\n'); // the store still holds the raw bytes
-    expect(describeProposal(parts)).toEqual({ text: 'Proceed.', cleaned: false });
+    expect(describeProposal(parts)).toEqual({ text: 'Proceed.', cleaned: false, hash: expect.any(String) });
   });
 
   it('R4: an already-clean utterance invents nothing', () => {
     expect(describeProposal(draftOf('run the deploy checks'))).toEqual({
       text: 'run the deploy checks',
       cleaned: false,
+      // D-card identity: the descriptor carries the content hash of its own
+      // release bytes (version rides on the store, not the pure descriptor).
+      hash: expect.any(String),
     });
   });
 
@@ -176,9 +179,13 @@ describe('describeProposal — the card payload, built pure (R1–R5)', () => {
       cleaned: true,
       removed: 'Um, tell the worker to',
       original: 'Um, tell the worker to rerun the suite',
+      hash: expect.any(String),
     });
     // R2 hard rule: `removed` never carries the operator's whole utterance.
     expect(described.removed).not.toBe('Um, tell the worker to rerun the suite');
+    // D-card identity: the hash covers the ORIGINAL bytes too — a tidied
+    // draft and its clean twin must not share an identity.
+    expect(described.hash).not.toBe(describeProposal(draftOf('rerun the suite')).hash);
   });
 
   it('R3: a multi-part original is each part\'s raw bytes (originalText ?? text), same join as the relay', () => {

@@ -463,6 +463,17 @@ export interface TalkerTurnMessage {
    * Additive and optional — an older client omits it and gets 'tidied'.
    */
   releaseVariant?: 'tidied' | 'original';
+  /**
+   * D-card (contract 1.44.0): the identity of the proposal the operator SAW,
+   * echoed back by the confirming gesture — the `version` and content `hash`
+   * the `proposed` payload carried for the exact bytes displayed. Optional and
+   * additive: a bare spoken "yes" carries none and keeps today's semantics.
+   * When present, the release gate additionally requires it to still describe
+   * the CURRENT draft — a mismatch refuses mechanically (nothing released,
+   * draft untouched, current text quoted) instead of releasing bytes that no
+   * longer match what was approved.
+   */
+  proposalRef?: { version: number; hash: string };
 }
 
 /** Server → Client: what happened on one operator talker turn. */
@@ -494,11 +505,16 @@ export interface TalkerTurnResultMessage {
    *     operator's whole utterance).
    *   - `original`, when cleaned, is the exact raw text the original-variant
    *     release sends, so the card can offer the operator his own words (D2).
+   *   - `version` + `hash` (D-card, contract 1.44.0) are the identity of THESE
+   *     bytes: a monotonic draft version and a stable content digest. The card
+   *     echoes them back as `proposalRef` on confirm; the server refuses a
+   *     confirm whose echo no longer matches (the card was stale) instead of
+   *     releasing bytes the operator never saw.
    *
    * Absent on every other phase; the client treats absence as "not proposed",
    * never as an error. Additive, optional.
    */
-  proposal?: { text: string; cleaned: boolean; removed?: string; original?: string };
+  proposal?: { text: string; cleaned: boolean; removed?: string; original?: string; version: number; hash: string };
   /**
    * The harness's mechanical classification of the operator's utterance (P18
    * package C). Additive and optional: the client only uses it to choose the
@@ -518,6 +534,13 @@ export interface TalkerTurnResultMessage {
   error?: string;
 }
 
+/** Structural check for the D-card echoed proposal identity. */
+function isProposalRef(value: unknown): value is { version: number; hash: string } {
+  if (typeof value !== 'object' || value === null) return false;
+  const ref = value as Record<string, unknown>;
+  return typeof ref.version === 'number' && Number.isFinite(ref.version) && typeof ref.hash === 'string';
+}
+
 export function isTalkerTurnMessage(data: unknown): data is TalkerTurnMessage {
   if (typeof data !== 'object' || data === null) return false;
   const msg = data as Record<string, unknown>;
@@ -528,7 +551,8 @@ export function isTalkerTurnMessage(data: unknown): data is TalkerTurnMessage {
     (msg.runtime === undefined || msg.runtime === 'pi' || msg.runtime === 'claude' || msg.runtime === 'antigravity') &&
     (msg.requestId === undefined || typeof msg.requestId === 'string') &&
     (msg.operatorFocus === undefined || typeof msg.operatorFocus === 'boolean') &&
-    (msg.releaseVariant === undefined || msg.releaseVariant === 'tidied' || msg.releaseVariant === 'original')
+    (msg.releaseVariant === undefined || msg.releaseVariant === 'tidied' || msg.releaseVariant === 'original') &&
+    (msg.proposalRef === undefined || isProposalRef(msg.proposalRef))
   );
 }
 

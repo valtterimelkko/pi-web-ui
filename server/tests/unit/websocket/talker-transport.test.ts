@@ -490,4 +490,115 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
       expect(piDelivery.deliveredTexts()).toEqual([]);
     });
   });
+
+  /**
+   * D-card — proposal identity on the wire.
+   *
+   * The `proposed` payload carries an identity for the exact bytes displayed
+   * (version + content hash); the confirm gesture echoes it as `proposalRef`;
+   * a stale echo refuses mechanically: nothing released, the draft intact,
+   * and a FRESH proposal payload rides the refusal result so the card
+   * re-shows the current text. The lane work's correlation rules are why the
+   * stale case is real on the wire: a foreign lane/tab's append mutates the
+   * server draft without this lane ever seeing a result.
+   */
+  describe('D-card — proposal identity on the wire', () => {
+    it('the proposed payload carries version + hash, and a matching echo releases the displayed bytes', async () => {
+      buildHarness();
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'tell the worker to hold phase 3 for review', requestId: 'id-1' });
+      const proposal = (lastOfType('talker_turn_result')?.message as {
+        proposal?: { text: string; cleaned: boolean; version: number; hash: string };
+      }).proposal;
+      expect(typeof proposal?.version).toBe('number');
+      expect(typeof proposal?.hash).toBe('string');
+      expect((proposal?.hash.length ?? 0)).toBeGreaterThan(0);
+
+      await sendBrowserMessage({
+        type: 'talker_turn', workerSessionId: PATH, utterance: 'yes', requestId: 'id-2',
+        proposalRef: { version: proposal!.version, hash: proposal!.hash },
+      });
+      const released = lastOfType('talker_turn_result')?.message as { phase: string; released?: { text: string } };
+      expect(released.phase).toBe('released');
+      expect(released.released?.text).toBe(proposal?.text);
+      expect(piDelivery.deliveredTexts()).toEqual([proposal?.text]);
+    });
+
+    it('a STALE echo refuses on the wire: no release, and the result carries the CURRENT proposal so the card re-shows it', async () => {
+      buildHarness();
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'hold phase 3 for review', requestId: 'st-1' });
+      const stale = (lastOfType('talker_turn_result')?.message as {
+        proposal?: { text: string; version: number; hash: string };
+      }).proposal!;
+
+      // A foreign lane/tab mutates the same worker's draft between render and
+      // confirm: this connection never sees that turn's result.
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'and also update the changelog', requestId: 'st-2-foreign' });
+
+      await sendBrowserMessage({
+        type: 'talker_turn', workerSessionId: PATH, utterance: 'yes', requestId: 'st-3',
+        proposalRef: { version: stale.version, hash: stale.hash },
+      });
+      const refusal = lastOfType('talker_turn_result')?.message as {
+        phase: string; released?: unknown; cancelled: boolean;
+        proposal?: { text: string; version: number; hash: string };
+      };
+      expect(refusal.phase).toBe('proposed'); // re-proposed: the current text, for the card to re-show
+      expect(refusal.released ?? null).toBeNull();
+      expect(piDelivery.deliveredTexts()).toEqual([]);
+      expect(refusal.reply).toContain('out of date');
+      // The fresh payload's identity differs from the echoed one and quotes
+      // the whole current draft — the operator approves what is REALLY held.
+      expect(refusal.proposal?.version).not.toBe(stale.version);
+      expect(refusal.proposal?.text).toBe('hold phase 3 for review\nand also update the changelog');
+
+      // The draft was NOT consumed: the fresh identity releases both parts.
+      await sendBrowserMessage({
+        type: 'talker_turn', workerSessionId: PATH, utterance: 'yes', requestId: 'st-4',
+        proposalRef: { version: refusal.proposal!.version, hash: refusal.proposal!.hash },
+      });
+      const released = lastOfType('talker_turn_result')?.message as { phase: string; released?: { text: string } };
+      expect(released.phase).toBe('released');
+      expect(released.released?.text).toBe('hold phase 3 for review\nand also update the changelog');
+    });
+
+    it("the 'original' variant is refused on the wire when the current proposal advertised none", async () => {
+      buildHarness();
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'run the deploy checks', requestId: 'og-1' });
+      const proposal = (lastOfType('talker_turn_result')?.message as {
+        proposal?: { text: string; cleaned: boolean; original?: string; version: number; hash: string };
+      }).proposal!;
+      expect(proposal.cleaned).toBe(false);
+      expect(proposal.original).toBeUndefined();
+
+      await sendBrowserMessage({
+        type: 'talker_turn', workerSessionId: PATH, utterance: 'yes', requestId: 'og-2',
+        releaseVariant: 'original',
+        proposalRef: { version: proposal.version, hash: proposal.hash },
+      });
+      const refusal = lastOfType('talker_turn_result')?.message as {
+        phase: string; released?: unknown; proposal?: { text: string };
+      };
+      expect(refusal.phase).toBe('proposed');
+      expect(refusal.released ?? null).toBeNull();
+      expect(piDelivery.deliveredTexts()).toEqual([]);
+      // The draft survives: the ordinary confirm still releases the card's text.
+      await sendBrowserMessage({
+        type: 'talker_turn', workerSessionId: PATH, utterance: 'yes', requestId: 'og-3',
+        proposalRef: { version: proposal.version, hash: proposal.hash },
+      });
+      expect((lastOfType('talker_turn_result')?.message as { released?: { text: string } }).released?.text)
+        .toBe(proposal.text);
+    });
+
+    it('a malformed proposalRef fails the message schema, not coerced', async () => {
+      buildHarness();
+      await sendBrowserMessage({
+        type: 'talker_turn', workerSessionId: PATH, utterance: 'yes',
+        proposalRef: { version: 'one', hash: 7 },
+        requestId: 'mr-1',
+      });
+      expect(lastOfType('error')?.message.code).toBe('INVALID_MESSAGE');
+      expect(lastOfType('talker_turn_result')).toBeUndefined();
+    });
+  });
 });

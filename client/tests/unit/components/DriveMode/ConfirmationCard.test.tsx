@@ -238,3 +238,35 @@ describe('ConfirmationCard D2 — the operator can choose his original words', (
     expect(screen.queryByRole('button', { name: /send my exact words/i })).toBeNull();
   });
 });
+
+describe('ConfirmationCard D-card — the card carries the identity of the bytes it displays', () => {
+  it('renders the proposal identity as observable attributes when the server sent one', () => {
+    const { container } = render(
+      <ConfirmationCard
+        proposalText="hold phase 3 for review"
+        version={4}
+        hash="abc123"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+        onSubmitText={() => {}}
+      />
+    );
+    const card = container.querySelector('[data-testid="confirmation-card"]');
+    expect(card?.getAttribute('data-proposal-version')).toBe('4');
+    expect(card?.getAttribute('data-proposal-hash')).toBe('abc123');
+  });
+
+  it('omits the identity attributes when no identity exists (old server)', () => {
+    const { container } = render(
+      <ConfirmationCard
+        proposalText="hold phase 3 for review"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+        onSubmitText={() => {}}
+      />
+    );
+    const card = container.querySelector('[data-testid="confirmation-card"]');
+    expect(card?.getAttribute('data-proposal-version')).toBeNull();
+    expect(card?.getAttribute('data-proposal-hash')).toBeNull();
+  });
+});

@@ -31,6 +31,8 @@
  * The model has no write access to any of this state.
  */
 
+import { createHash } from 'node:crypto';
+
 import { normaliseRelayText, relayHasVisibleRemoval, repairRelaySeams, visibleRemovalFragments } from './relay-normalise.js';
 
 const DEFAULT_UTTERANCE_LOG_LIMIT = 50;
@@ -101,6 +103,35 @@ export interface ProposalDescriptor {
   removed?: string;
   /** The raw bytes an original-variant release sends — present only when cleaned. */
   original?: string;
+  /**
+   * D-card identity: a stable content hash over the proposal's release bytes
+   * (the tidied text and, when present, the original). Deterministic, so the
+   * same bytes always carry the same hash — the card echoes it on confirm and
+   * a mismatch refuses the release.
+   */
+  hash: string;
+}
+
+/**
+ * D-card identity of the CURRENT proposal: the content hash above plus the
+ * draft's version counter, bumped on every draft mutation. Both must match on
+ * a confirm echo — the hash alone would pass a cancel-then-retype of the very
+ * same words, the version alone would pass a partial release that left the
+ * displayed bytes behind.
+ */
+export interface ProposalIdentity {
+  version: number;
+  hash: string;
+}
+
+/**
+ * The content half of the proposal identity: a deterministic digest over the
+ * exact bytes a default confirm releases and (when advertised) the bytes an
+ * original-variant release sends. Pure and importable anywhere — one source
+ * of truth for hash, shared by the pure descriptor and the live store.
+ */
+export function proposalHash(text: string, original?: string): string {
+  return createHash('sha256').update(text).update('\u0000').update(original ?? '').digest('hex');
 }
 
 /** Harness view of the live draft (null when the operator is not composing). */
@@ -161,10 +192,11 @@ export function describeProposal(utterances: readonly DraftUtteranceEntry[]): Pr
   const removals = utterances.flatMap(u => u.removals ?? []);
   if (!relayHasVisibleRemoval(removals)) {
     // Byte-level change without a visible removal: not a tidy.
-    return { text, cleaned: false };
+    return { text, cleaned: false, hash: proposalHash(text) };
   }
   const fragments = utterances.flatMap(u => visibleRemovalFragments(u.removals ?? []));
-  const descriptor: ProposalDescriptor = { text, cleaned: true, original: joinOriginalDraftText(utterances) };
+  const original = joinOriginalDraftText(utterances);
+  const descriptor: ProposalDescriptor = { text, cleaned: true, original, hash: proposalHash(text, original) };
   if (fragments.length > 0) {
     // Joined once, with the same seam semantics the relay text itself gets,
     // so the note reads as the words that left rather than as raw strips.
@@ -181,6 +213,8 @@ interface OperatorDraft {
   lastTouchedTurn: number;
   ageTurns: number;
   needsReConfirmation: boolean;
+  /** D-card identity: the store-wide counter's value at the last mutation. */
+  version: number;
 }
 
 export interface PendingProposal {
@@ -261,6 +295,8 @@ export class PendingProposalStore {
    */
   private draft: OperatorDraft | null = null;
   private released: ReleasedRecord[] = [];
+  /** D-card identity: bumped on every draft mutation (append, partial take). */
+  private nextProposalVersion = 0;
   private readonly maxPendingAgeTurns: number;
   private readonly releasedHistoryLimit: number;
 
@@ -334,6 +370,8 @@ export class PendingProposalStore {
     const entry: DraftUtteranceEntry = relay.changed
       ? { id: utteranceId, text: relay.text, turn, originalText: text, removals: relay.removals }
       : { id: utteranceId, text, turn };
+    // Every append moves the proposal: a fresh identity for the fresh bytes.
+    this.nextProposalVersion += 1;
     if (!this.draft) {
       this.draft = {
         utterances: [entry],
@@ -341,14 +379,41 @@ export class PendingProposalStore {
         lastTouchedTurn: turn,
         ageTurns: 0,
         needsReConfirmation: false,
+        version: this.nextProposalVersion,
       };
     } else {
       this.draft.utterances.push(entry);
       this.draft.lastTouchedTurn = turn;
       this.draft.ageTurns = 0;
       this.draft.needsReConfirmation = false;
+      this.draft.version = this.nextProposalVersion;
     }
     return this.snapshotDraft() as DraftSnapshot;
+  }
+
+  /**
+   * D-card identity of the CURRENT proposal: the pure descriptor (text,
+   * cleaning facts, content hash) plus the draft's version counter. Null when
+   * nothing is held. This is what a `proposed` turn reports and what the card
+   * echoes back on confirm; identityMatches() is the release-side check.
+   */
+  describeCurrentProposal(): (ProposalDescriptor & ProposalIdentity) | null {
+    const d = this.draft;
+    if (!d || d.utterances.length === 0) return null;
+    return { ...describeProposal(d.utterances), version: d.version };
+  }
+
+  /**
+   * Whether an echoed proposal identity still describes the CURRENT draft.
+   * Both halves must match: the hash alone would accept a cancel-then-retype
+   * of the very same words, the version alone would accept a partial release
+   * that left different bytes on the card. Nothing here mutates state — the
+   * caller owns the refusal.
+   */
+  identityMatches(echo: { version: number; hash: string }): boolean {
+    const current = this.describeCurrentProposal();
+    if (!current) return false;
+    return current.version === echo.version && current.hash === echo.hash;
   }
 
   /**
@@ -424,11 +489,14 @@ export class PendingProposalStore {
     }
     // Atomic consume: what is taken here cannot be taken again. A subset
     // release leaves the rest of the draft held, still requiring its own
-    // confirmation.
+    // confirmation — and moves the identity, because what a card displayed
+    // before the take no longer describes what remains.
     if (remaining.length === 0) {
       this.draft = null;
     } else {
       d.utterances = remaining;
+      this.nextProposalVersion += 1;
+      d.version = this.nextProposalVersion;
     }
     return {
       utteranceIds: selected.map(u => u.id),

@@ -42,6 +42,15 @@ export interface ConfirmationCardProps {
    * secondary action; the primary Confirm still sends `proposalText`.
    */
   original?: string;
+  /**
+   * D-card — the identity of the exact bytes this card displays (the server's
+   * draft version and content hash). Rendered only as observable attributes:
+   * the echo itself is the confirm gesture's job (useVoiceTurn reads the same
+   * proposal state), the card just makes the identity visible and testable.
+   * Absent on an older server.
+   */
+  version?: number;
+  hash?: string;
   onConfirm: () => void;
   onCancel: () => void;
   /** The operator's typed words, passed verbatim. */
@@ -57,6 +66,8 @@ export function ConfirmationCard({
   cleaned,
   removed,
   original,
+  version,
+  hash,
   onConfirm,
   onCancel,
   onSubmitText,
@@ -83,6 +94,8 @@ export function ConfirmationCard({
       role="region"
       aria-label="Pending proposal"
       data-testid="confirmation-card"
+      {...(version !== undefined ? { 'data-proposal-version': String(version) } : {})}
+      {...(hash !== undefined ? { 'data-proposal-hash': hash } : {})}
     >
       <div className="text-sm font-medium text-blue-800 dark:text-blue-200">
         {cleaned

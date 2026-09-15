@@ -428,6 +428,8 @@ export function DriveModeDictate({
             cleaned={voice.pendingProposal.cleaned}
             removed={voice.pendingProposal.removed}
             original={voice.pendingProposal.original}
+            version={voice.pendingProposal.version}
+            hash={voice.pendingProposal.hash}
             onConfirm={voice.confirmPending}
             onCancel={voice.cancelPending}
             onSubmitText={voice.sendText}

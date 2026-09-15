@@ -23,7 +23,6 @@ import { readBackgroundTasksSnapshot } from '../internal-api/background-children
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager } from '../pi/multi-session-manager.js';
 import { TalkerSessionRegistry } from '../talker/session-registry.js';
-import { describeProposal } from '../talker/pending-proposal.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
@@ -4196,6 +4195,10 @@ export class WebSocketConnectionManager {
         // registry passes it to the talker's single release path, where it is
         // honoured only on the confirm branch; there is no second door here.
         ...(message.releaseVariant !== undefined ? { releaseVariant: message.releaseVariant } : {}),
+        // D-card (contract 1.44.0): the identity of the proposal the operator
+        // saw, echoed back for the release gate. The talker refuses
+        // mechanically when it no longer describes the current draft.
+        ...(message.proposalRef !== undefined ? { proposalRef: message.proposalRef } : {}),
       });
 
       // Mechanically derived phase. 'proposed' means the harness holds an
@@ -4215,26 +4218,27 @@ export class WebSocketConnectionManager {
       }
 
       // P27 finding D1: the card contract's server half. Built from the SAME
-      // draft snapshot and the SAME joins the release path uses, so the bytes
+      // draft state and the SAME joins the release path uses, so the bytes
       // the card shows are the bytes a confirm releases - never an
       // approximation, and never a claim the harness cannot support.
       // D1 fix: `cleaned` now means a VISIBLE tidy (a whitespace-only
       // normalisation no longer cries wolf), `removed` carries the removed
       // FRAGMENTS rather than the operator's whole utterance, and `original`
       // carries the raw bytes the operator may choose instead (D2).
-      // The descriptor is a pure helper (pending-proposal.describeProposal),
-      // unit-tested without this handler; this is a pass-through only.
+      // D-card (contract 1.44.0): the payload now carries the proposal's
+      // IDENTITY — describeCurrentProposal() adds the draft's version and a
+      // content hash over the exact release bytes. The card echoes it back as
+      // `proposalRef` on confirm; a stale echo refuses instead of releasing.
+      // Pure helpers (pending-proposal.ts), unit-tested without this handler;
+      // this is a pass-through only.
       // NB: `pending` is a projection (utteranceId/text), NOT the draft
-      // snapshot - the per-part originals live in snapshotDraft(). Feeding
-      // `pending` into this threw at runtime (no .utterances) on the first
-      // attempt of this fix and broke every turn via the handler's catch.
-      const draftSnapshotForCard =
+      // snapshot - the per-part originals live in the store itself. Feeding
+      // `pending` into the descriptor threw at runtime (no .utterances) on the
+      // first attempt of this fix and broke every turn via the handler's catch.
+      const proposalForCard =
         phase === 'proposed'
-          ? this.talkerSessionRegistry.get(message.workerSessionId, runtime)?.proposals.snapshotDraft() ?? null
-          : null;
-      const proposalForCard = draftSnapshotForCard
-        ? describeProposal(draftSnapshotForCard.utterances)
-        : undefined;
+          ? this.talkerSessionRegistry.get(message.workerSessionId, runtime)?.proposals.describeCurrentProposal() ?? undefined
+          : undefined;
 
       this.sendMessage(clientId, {
         type: 'talker_turn_result',
