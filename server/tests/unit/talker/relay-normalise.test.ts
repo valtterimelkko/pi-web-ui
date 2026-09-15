@@ -230,3 +230,43 @@ describe('R1/R2: visible tidy vs byte-level change', () => {
     expect(visibleRemovalFragments([])).toEqual([]);
   });
 });
+
+describe('the card must not claim "exactly" over a visible change (W3 review, 2026-09-15)', () => {
+  /**
+   * Found by the W3 read-only reviewer and confirmed by the conductor on
+   * 0798661's code: `repairRelaySeams()` deleted the operator's duplicated
+   * punctuation (`run!! tests` -> `run! tests`) under a comment claiming
+   * whitespace/punctuation-only changes "are not recorded as removals".
+   *
+   * Collapsing whitespace is invisible and correctly unclaimed. DELETING a
+   * punctuation character the operator spoke is visible, so with no removal
+   * recorded the descriptor returned `cleaned: false` and the card claimed
+   * "your words, exactly" over text that differed from what was said — the
+   * mirror image of the defect this commit fixed (a claim that was false in
+   * the other direction).
+   */
+  const cases = ['run!! tests', 'run !!! tests', 'deploy, then wait;; go'];
+
+  it('records dropped punctuation, so a visible change is never claimed as exact', () => {
+    for (const raw of cases) {
+      const result = normaliseRelayText(raw);
+      if (result.text === raw) continue; // nothing changed: nothing to claim
+      expect(
+        relayHasVisibleRemoval(result.removals),
+        `"${raw}" became "${result.text}" but recorded no visible removal, so the card would claim "exactly"`,
+      ).toBe(true);
+    }
+  });
+
+  it('still makes no claim for an invisible change (the original defect stays fixed)', () => {
+    const result = normaliseRelayText('Proceed.\n');
+    expect(result.text).toBe('Proceed.');
+    expect(relayHasVisibleRemoval(result.removals), 'trailing whitespace must not claim a tidy').toBe(false);
+  });
+
+  it('names the removed punctuation in the fragments the card shows', () => {
+    const result = normaliseRelayText('run!! tests');
+    expect(result.text).toBe('run! tests');
+    expect(visibleRemovalFragments(result.removals).join('')).toContain('!');
+  });
+});

@@ -289,8 +289,9 @@ export function normaliseRelayText(raw: string): RelayNormalisation {
     if (!stripped) break;
   }
 
-  // 5. Interior seam repair — separator bytes only, never words.
-  work = repairRelaySeams(work);
+  // 5. Interior seam repair — separator bytes only, never words. Records the
+  //    punctuation it drops, so a visible change is never claimed as exact.
+  work = repairRelaySeams(work, record);
 
   // Never relay an empty instruction: a transform that would empty the text
   // is aborted wholesale and the raw words stand.
@@ -312,13 +313,22 @@ function repairHeadSeam(work: string, record: (piece: string) => void, set: (nex
 }
 
 /** Interior seams: double spaces collapse; space before punctuation closes;
- *  duplicated punctuation merges. Whitespace/punctuation only — no word is
- *  touched, so these are not recorded as removals. Exported (as the same
- *  function) so the card's removal note is joined with identical semantics. */
-export function repairRelaySeams(work: string): string {
+ *  duplicated punctuation merges. The two whitespace rules are invisible and
+ *  are deliberately not recorded; **merging duplicated punctuation deletes
+ *  characters the operator spoke**, so it IS recorded — otherwise the
+ *  descriptor reports `cleaned: false` and the card claims "your words,
+ *  exactly" over text that differs from what was said (W3 review,
+ *  2026-09-15: `run!! tests` became `run! tests` with no removal recorded).
+ *  Exported (as the same function) so the card's removal note is joined with
+ *  identical semantics. */
+export function repairRelaySeams(work: string, record?: (piece: string) => void): string {
   return work
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/[ \t]+([,.;:!?])/g, '$1')
-    .replace(/([,.;:!?])[ \t]*[,.;:!?]+/g, '$1')
+    .replace(/([,.;:!?])[ \t]*[,.;:!?]+/g, (match: string, first: string) => {
+      const dropped = match.slice(first.length);
+      if (dropped.length > 0) record?.(dropped);
+      return first;
+    })
     .trim();
 }
