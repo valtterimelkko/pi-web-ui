@@ -157,6 +157,23 @@ function readLog(logPath: string): string[] {
 }
 
 /**
+ * A `systemctl` stub at the FRONT of PATH, sharing the env-var stub's call log.
+ *
+ * This is deliberately independent of the script under test. The env-var seam
+ * (`PI_WEB_UI_RESTART_SYSTEMCTL`) is honoured by the implementation, so it
+ * disappears exactly when that implementation is reverted for a red-proof run —
+ * which is how production was restarted for real at 2026-09-15T14:27:05Z. A
+ * PATH shim is supplied by the test environment, not by the code under test,
+ * so it cannot be reverted along with it.
+ */
+function writeSystemctlPathStub(dir: string, logPath: string): string {
+  const stubPath = path.join(dir, 'systemctl');
+  writeFileSync(stubPath, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> '${logPath}'\nexit 0\n`);
+  chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+/**
  * A bound on each script run so a pathological hang fails the test instead of
  * wedging the whole suite. Healthy runs finish in well under a second.
  */
@@ -177,6 +194,9 @@ describe('restart drainage — capacity pre-flight before production restarts', 
     dir = mkdtempSync(path.join(tmpdir(), 'pi-restart-drainage-'));
     api = await startCapacityApi(dir);
     systemctl = writeRecordingStub(dir, 'systemctl-stub');
+    // Defence in depth: the PATH shim shares the same call log, so every
+    // assertion below holds whichever route a script takes to `systemctl`.
+    writeSystemctlPathStub(dir, systemctl.logPath);
     notify = writeRecordingStub(dir, 'notify-stub');
     auditFile = path.join(dir, 'stop-audit.log');
   });
@@ -317,6 +337,30 @@ describe('restart drainage — capacity pre-flight before production restarts', 
       expect(readFileSync(auditFile, 'utf8')).toContain('RESTART-REQUESTED');
       // The reason is recorded %q-quoted, so assert the stem, not the phrase.
       expect(readFileSync(auditFile, 'utf8')).toContain('reason=drainage');
+    });
+
+    it('intercepts a bare `systemctl` call through PATH, not only the env-var seam', () => {
+      // The lesson of the 2026-09-15T14:27:05Z production restart, which this
+      // suite caused: its only interception was PI_WEB_UI_RESTART_SYSTEMCTL, an
+      // env seam honoured BY THE SCRIPT UNDER TEST. Reverting the implementation
+      // for a red-proof run therefore removed the guard and the interception
+      // together, the script fell through to a bare `systemctl restart
+      // pi-web-ui`, and it restarted production for real — killing the session
+      // that was running the test. A PATH shim cannot be stashed away with the
+      // implementation, so a bare call is intercepted however the script under
+      // test treats its env seams.
+      //
+      // Deliberately a READ-ONLY subcommand: this test must not be able to stop
+      // the service even while it is red, which is the whole point of it.
+      const naive = path.join(dir, 'naive-restart-script.sh');
+      writeFileSync(naive, '#!/usr/bin/env bash\nsystemctl status pi-web-ui\n');
+      chmodSync(naive, 0o755);
+      const before = readLog(systemctl.logPath).length;
+
+      const result = spawnSync('bash', [naive], { encoding: 'utf8', env: scriptEnv() });
+
+      expect(result.status).toBe(0);
+      expect(readLog(systemctl.logPath).slice(before)).toEqual(['status pi-web-ui']);
     });
   });
 });
