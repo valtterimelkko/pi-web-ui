@@ -29,6 +29,7 @@ interface Invocation {
 const KNOWN_MODEL = 'deepseek/deepseek-v4-pro';
 const NEW_MODEL = 'newvendor/new-model';
 const EXCLUDED_MODEL = 'claude-sonnet-5';
+const RESTART_SCRIPT = '/tmp/restart-pi-web-ui';
 const CATALOGUE_SOURCE = [
   'export const COMMAND_CODE_EXCLUDED_MODELS = [',
   "  'existing/model',",
@@ -90,7 +91,7 @@ function defaultResolver(command: string, args: string[]): ProcessResult {
     return {};
   }
   if (command === '/tmp/weekly-refresh-notify') return {};
-  if (command === 'systemctl') return {};
+  if (command === RESTART_SCRIPT) return {};
   throw new Error(`unexpected child process: ${command} ${args.join(' ')}`);
 }
 
@@ -100,6 +101,7 @@ function testPaths(): WeeklyRefreshPaths {
     executablePath: '/tmp/mock-cmd',
     cataloguePath,
     notify: '/tmp/weekly-refresh-notify',
+    restartScript: RESTART_SCRIPT,
     effortTableRel: 'efforts.ts',
     catalogueRel: 'catalogue.ts',
   };
@@ -108,7 +110,7 @@ function testPaths(): WeeklyRefreshPaths {
 function options(overrides: Partial<Parameters<typeof runWeeklyRefresh>[1]> = {}) {
   return {
     paths: testPaths(),
-    createInternalApiClient: () => ({ getCapacity: vi.fn().mockResolvedValue({ activeTurns: 0, stalledRuns: 0 }) }),
+    createInternalApiClient: () => ({ listSessions: vi.fn().mockResolvedValue({ sessions: [] }) }),
     sleep: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -140,7 +142,7 @@ describe('runWeeklyRefresh', () => {
     await expect(runWeeklyRefresh([], options())).rejects.toThrow(/working tree is not clean.*unrelated\.txt/);
     expect(invocations.some(({ command, args }) => command === '/tmp/mock-cmd' && args.includes('--model'))).toBe(false);
     expect(invocations.some(({ command, args }) => command === 'git' && args[0] === 'add')).toBe(false);
-    expect(invocations.some(({ command }) => command === 'systemctl')).toBe(false);
+    expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
   });
 
   it('stages only the two intended catalogue artefacts before committing', async () => {
@@ -171,7 +173,7 @@ describe('runWeeklyRefresh', () => {
 
     await expect(runWeeklyRefresh([], options())).rejects.toThrow(errorText);
     expect(invocations.some(({ command, args }) => command === 'git' && ['add', 'commit', 'push'].includes(args[0]))).toBe(false);
-    expect(invocations.some(({ command }) => command === 'systemctl')).toBe(false);
+    expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
   });
 
   it('performs no file, git, restart, or notification action in dry-run mode', async () => {
@@ -182,7 +184,7 @@ describe('runWeeklyRefresh', () => {
     expect(await readFile(cataloguePath, 'utf8')).toBe(before);
     expect(invocations.some(({ command }) => command === 'npm' || command === 'npx')).toBe(false);
     expect(invocations.some(({ command }) => command === 'git')).toBe(false);
-    expect(invocations.some(({ command }) => command === 'systemctl')).toBe(false);
+    expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
     expect(invocations.some(({ command }) => command === '/tmp/weekly-refresh-notify')).toBe(false);
   });
 
@@ -218,11 +220,82 @@ describe('runWeeklyRefresh', () => {
 
   it('fails when the idle restart command fails instead of returning success', async () => {
     resolveProcess = (command, args) => {
-      if (command === 'systemctl') return { exitCode: 1, stderr: 'restart failed' };
+      if (command === RESTART_SCRIPT) return { exitCode: 1, stderr: 'restart failed' };
       return defaultResolver(command, args);
     };
 
     await expect(runWeeklyRefresh([], options())).rejects.toThrow(/restart failed/);
     expect(invocations.some(({ command, args }) => command === 'git' && args[0] === 'push')).toBe(true);
+  });
+
+  describe('idle decision from live busy sessions', () => {
+    // The fake mirrors InternalApiClient.listSessions(): the restart decision
+    // reads the live sessions response and counts busy === true entries.
+    function sessionsClient(response: { sessions?: unknown } | Error) {
+      const listSessions = response instanceof Error
+        ? vi.fn().mockRejectedValue(response)
+        : vi.fn().mockResolvedValue(response);
+      return { listSessions, createInternalApiClient: () => ({ listSessions }) };
+    }
+
+    // Drives the wait loop to exit after its first busy poll regardless of
+    // the real wait window: first tick computes the deadline, second enters
+    // the loop, then time jumps past any deadline.
+    function singlePollNow() {
+      const ticks = [0, 0];
+      return vi.fn(() => (ticks.length > 0 ? (ticks.shift() as number) : Number.POSITIVE_INFINITY));
+    }
+
+    it('defers the restart while any live session reports busy', async () => {
+      const client = sessionsClient({ sessions: [{ sessionId: 's1', busy: true }, { sessionId: 's2', busy: false }] });
+
+      const result = await runWeeklyRefresh([], options({ ...client, now: singlePollNow() }));
+
+      expect(result.restarted).toBe(false);
+      expect(client.listSessions).toHaveBeenCalledTimes(1);
+      expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
+    });
+
+    it('restarts through restart-pi-web-ui.sh with the named reason when every live session is idle', async () => {
+      const client = sessionsClient({ sessions: [{ sessionId: 's1', busy: false }] });
+
+      const result = await runWeeklyRefresh([], options(client));
+
+      expect(result.restarted).toBe(true);
+      const restarts = invocations.filter(({ command }) => command === '/tmp/restart-pi-web-ui');
+      expect(restarts).toHaveLength(1);
+      expect(restarts[0]?.args).toEqual(['--reason', 'weekly command-code catalogue refresh']);
+      expect(invocations.some(({ command }) => command === 'systemctl')).toBe(false);
+    });
+
+    it('defers the restart when the live sessions probe throws', async () => {
+      const client = sessionsClient(new Error('sessions probe failed'));
+
+      const result = await runWeeklyRefresh([], options(client));
+
+      expect(result.restarted).toBe(false);
+      expect(client.listSessions).toHaveBeenCalledTimes(1);
+      expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
+    });
+
+    it('defers the restart when one busy session sits among idle ones', async () => {
+      const client = sessionsClient({ sessions: [{ busy: false }, { busy: true }, { busy: false }] });
+
+      const result = await runWeeklyRefresh([], options({ ...client, now: singlePollNow() }));
+
+      expect(result.restarted).toBe(false);
+      expect(client.listSessions).toHaveBeenCalledTimes(1);
+      expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
+    });
+
+    it('defers the restart when the sessions response is malformed', async () => {
+      const client = sessionsClient({ sessions: 'not-an-array' });
+
+      const result = await runWeeklyRefresh([], options(client));
+
+      expect(result.restarted).toBe(false);
+      expect(client.listSessions).toHaveBeenCalledTimes(1);
+      expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
+    });
   });
 });
