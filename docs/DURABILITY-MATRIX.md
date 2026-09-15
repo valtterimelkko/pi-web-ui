@@ -26,7 +26,7 @@ This page summarizes where state lives and what evidence survives refresh or res
 | Sent/failed notification log | Yes | Yes, bounded | Terminal ledger is capped |
 | Telegram delivery exactly-once guarantee | No | No | Delivery is at least once around crash boundary |
 | Long-horizon watch evidence | Yes | Yes | Recorded ledger survives |
-| Active long-horizon observation | Yes while process lives | **No** | Reloaded watch is detached and must be registered again |
+| Active long-horizon observation | Yes while process lives | **Yes** | Reloaded `active` watches are rehydrated (conditions re-resolved, broker re-subscribed, pins re-acquired); only unresolvable conditions demote to `detached` and then need re-registration |
 | Browser-only unsaved Files edit | Yes until navigation/refresh guard | No | Save explicitly before restart/navigation |
 | Files loaded truncated | Yes | Yes | Read-only safety state; partial content cannot overwrite full file |
 | WebSocket/event subscriptions | No | No | Reconnect and reattach required |

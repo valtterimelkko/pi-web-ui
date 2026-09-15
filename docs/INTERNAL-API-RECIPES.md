@@ -95,7 +95,7 @@ Do not point automated validation at the default production socket without expli
 - diagnostics and runtime-health snapshots are process-local;
 - run receipts and transcript/runtime files are the durable evidence layer;
 - pending notifications survive restart through the durable outbox;
-- reloaded long-horizon watches preserve recorded evidence but must be registered again to resume observation;
+- reloaded long-horizon watches preserve recorded evidence and are rehydrated to resume observation; only a watch whose conditions can no longer be resolved demotes to `detached` and then needs re-registration;
 - any API token holder can inspect and control all sessions.
 
 See [`DURABILITY-MATRIX.md`](./DURABILITY-MATRIX.md) and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).

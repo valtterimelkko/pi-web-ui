@@ -66,7 +66,7 @@ Capped at ~10 items; older entries drop off (the rolling prose delta lives in [`
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes (including run receipts)
 - [`ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md`](./ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md) — shipped `1.14.0` liveness/recovery contract, remaining intent, provenance, and responsibility boundaries
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the three live-validation options (Internal API, Playwright E2E, browser-WebSocket path) with full runbooks; includes `scripts/ws-validate.mjs`
-- [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watch ledgers + headless `validate:long-horizon` runner for long-running validation; recorded firings survive restart, but reloaded watches must be re-registered to resume live observation
+- [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watch ledgers + headless `validate:long-horizon` runner for long-running validation; recorded firings survive restart and reloaded `active` watches are rehydrated to keep observing (only unresolvable conditions demote to `detached`)
 - [`MCP-SERVER.md`](./MCP-SERVER.md) — retained inactive seven-tool MCP experiment: validation evidence, completed shutdown, and fresh-authorisation reactivation boundary
 
 ## 7. Integration & extension

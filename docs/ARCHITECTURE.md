@@ -304,8 +304,11 @@ The Internal API is a trusted same-host multi-client boundary, not tenant
 isolation: possession of the shared bearer token grants session inspection and
 control. Detached answer-mode prompts are the disconnect-safe job primitive;
 `tasks`/`full` are live supervision streams. Durable watch ledgers preserve
-past firings across a server restart, but a reloaded watch is `detached` until
-explicitly re-registered.
+past firings across a server restart, and a reloaded `active` watch is
+**rehydrated** — conditions re-resolved, broker re-subscribed, pins re-acquired
+— so it keeps observing; only a watch whose conditions can no longer be resolved
+demotes to `detached`. Re-registration is optional for a rehydrated watch and
+creates a replacement when used (see `INTERNAL-API.md`).
 
 Canonical docs:
 - [`./INTERNAL-API.md`](./INTERNAL-API.md)
