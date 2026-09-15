@@ -8,10 +8,13 @@
  *   16  /api/v1/diagnostics: lanes present by default, recentTurns OPT-IN
  *       (?voiceConversation=n, bounded, clamped); "voice turn pi:<worker>"
  *       greppable in the server log
- *   17  WIRE REPRO: a `proposed` talker_turn_result carries NO `proposal`
- *       object (text/cleaned/removed) — the P26 field the confirmation card
- *       reads is never sent, so the card falls back to the RAW utterance and
- *       claims "your words, exactly" while the release is tidied
+ *   17  WIRE CONTRACT: a `proposed` talker_turn_result CARRIES the `proposal`
+ *       object the confirmation card reads — `text` (the bytes a default confirm
+ *       releases), `cleaned` (true only for a visible tidy), and, when cleaned,
+ *       `removed` (the removed fragments only) and `original` (the bytes an
+ *       original-variant release sends). This row used to assert the object was
+ *       ABSENT, which is exactly the defect 0798661 fixed; the assertion now
+ *       pins the fixed contract instead (P26/P27 card contract).
  *   18  Confirm / Cancel / typed-text over the wire; Cancel (the client's
  *       exact CANCEL_UTTERANCE) clears the card and the P25 regression shape
  *       ("no, cancel that" must not re-draft a residue)
@@ -136,17 +139,26 @@ async function main() {
     `reply=${JSON.stringify(w1.reply)} phase=${w1.phase}`,
     w1.reply === NOTHING_PENDING && w1.phase === 'answered');
 
-  // w2 — messy instruction → proposed; receipt ack on the wire; ROW 17 REPRO:
-  // the `proposal` object (text/cleaned/removed) the P26 card reads is ABSENT.
+  // w2 — messy instruction → proposed; receipt ack on the wire; ROW 17:
+  // the `proposal` object (text/cleaned/removed/original) the card reads is
+  // PRESENT and self-consistent — the fixed contract, not the old absence.
   const messy = 'Um okay, could you ask the worker to reply with exactly P27-WS-RELAY';
   const w2 = await talkerTurn('w2', messy, workerSessionId, 'proposed');
   const hasProposal = Object.prototype.hasOwnProperty.call(w2, 'proposal');
   record('14-wire', `"${messy}" (opens the batch)`,
     `phase=${w2.phase} receiptAck=${JSON.stringify(w2.receiptAck ?? null)}`,
     w2.phase === 'proposed' && w2.receiptAck === RECEIPT_ACK);
-  record('17-wire-REPRO', 'inspect the proposed result for the P26 card contract',
-    `wire result keys=${JSON.stringify(Object.keys(w2))} — has proposal object: ${hasProposal}`,
-    hasProposal === false);
+  const proposal = w2.proposal ?? null;
+  record('17-wire-contract', 'inspect the proposed result for the card contract',
+    `wire result keys=${JSON.stringify(Object.keys(w2))} — proposal=${JSON.stringify(proposal)}`,
+    hasProposal === true &&
+      proposal !== null &&
+      typeof proposal.text === 'string' &&
+      proposal.text.length > 0 &&
+      typeof proposal.cleaned === 'boolean' &&
+      (proposal.cleaned === false
+        ? proposal.removed === undefined && proposal.original === undefined
+        : typeof proposal.removed === 'string' && typeof proposal.original === 'string'));
 
   // w3 — the client's exact CANCEL_UTTERANCE → cancelled; card source cleared.
   const w3 = await talkerTurn('w3', 'no, cancel that', workerSessionId, 'cancel');
