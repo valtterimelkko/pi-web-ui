@@ -32,8 +32,12 @@ This is the single entry point for the work that follows the 2026-09-15 deployme
 
 ## 1. Baseline — what is already deployed and live (2026-09-15)
 
-Production `pi-web-ui.service` serves **contract 1.43.0** at revision **`a27c12b`** (= `master`), status ok,
-restarts pre-checked on the **busy-session count** (never `activeTurns` alone).
+Production `pi-web-ui.service` serves **contract 1.43.0**, built from revision **`a27c12b`**, status ok, restarts
+pre-checked on the **busy-session count** (never `activeTurns` alone).
+
+> **Note on revisions:** `master` is ahead of the built revision by **documentation only** (this plan and its
+> signposts). The served build is the code of `a27c12b`; no rebuild or restart is needed for a docs-only change,
+> and none was taken. When the next code item ships, the build and the restart go together as usual.
 
 | Delivered | Commit | Verified by |
 |---|---|---|
