@@ -233,6 +233,19 @@ describe('DriveModeOverlay — one tab holds the lanes', () => {
     expect(screen.getAllByTestId('drive-mode-dictate')).toHaveLength(2); // lanes stayed mounted
   });
 
+  it('adding the FIRST extra lane opens the picker from the collapsed strip, over the mounted surface', () => {
+    // The harness caught this: with one lane, the '+' must reach the same
+    // in-place picker — never a dead button.
+    driveModeStoreState = baseStore({ lanes: [], activeSessionId: 's1', addingLane: true });
+    render(<DriveModeOverlay />);
+    expect(screen.getByRole('button', { name: /add a lane/i })).toBeInTheDocument();
+    expect(screen.getByTestId('drive-mode-session-picker')).toBeInTheDocument();
+    expect(driveModeStoreState.phase).toBe('dictate');
+    expect(screen.getAllByTestId('drive-mode-dictate')).toHaveLength(1); // surface stayed mounted
+    fireEvent.click(screen.getByText('Select Session'));
+    expect(driveModeStoreState.addVoiceLane).toHaveBeenCalledWith('s-new');
+  });
+
   it('adding a lane subscribes it and addresses it', () => {
     driveModeStoreState = baseStore({ lanes: LANES, activeSessionId: 's1', addingLane: true });
     render(<DriveModeOverlay />);

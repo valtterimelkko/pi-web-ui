@@ -281,7 +281,14 @@ export function DriveModeOverlay() {
                 return (
                   <div
                     key={lane.sessionId}
-                    className="absolute inset-0 flex flex-col"
+                    className={`absolute inset-0 flex flex-col ${
+                      lane.sessionId === activeSessionId
+                        ? 'z-10'
+                        // Non-addressed wrappers must never intercept the
+                        // addressed surface's clicks (real-browser hit
+                        // testing, invisible to jsdom).
+                        : 'invisible pointer-events-none'
+                    }`}
                   >
                     <DriveModeDictate
                       sessionId={lane.sessionId}
@@ -296,47 +303,6 @@ export function DriveModeOverlay() {
                   </div>
                 );
               })}
-              {addingLane && !askReplace && (
-                <div className="absolute inset-0 z-10 bg-white dark:bg-gray-950 overflow-y-auto">
-                  <DriveModeSessionPicker onBack={closeAddFlow} onSelectSession={handleAddLaneSession} />
-                </div>
-              )}
-              {askReplace && (
-                <div
-                  data-testid="lane-cap-ask"
-                  className="absolute inset-0 z-10 bg-white dark:bg-gray-950 flex flex-col items-center justify-center gap-4 px-6"
-                >
-                  <p className="text-lg font-medium text-gray-900 dark:text-gray-100 text-center">
-                    Voice Mode holds {lanes.length} of {MAX_VOICE_LANES} lanes.
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center max-w-md">
-                    Replace one of the lanes with the session you pick, or cancel. A fourth lane is never added silently.
-                  </p>
-                  <div className="w-full max-w-md flex flex-col gap-2">
-                    {lanes.map((lane) => (
-                      <button
-                        key={lane.sessionId}
-                        onClick={() => {
-                          beginLaneReplace(lane.sessionId);
-                          setAskReplace(false);
-                        }}
-                        aria-label={`Replace ${laneLabels[lane.sessionId] ?? lane.sessionId}`}
-                        className="w-full rounded-lg border border-gray-200 dark:border-gray-700 p-3 text-left font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-                        type="button"
-                      >
-                        Replace {laneLabels[lane.sessionId] ?? lane.sessionId}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    onClick={closeAddFlow}
-                    className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                    type="button"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         ) : layout.layout === 'split' ? (
@@ -385,6 +351,51 @@ export function DriveModeOverlay() {
             </div>
           </div>
         ))}
+
+      {/* The add-lane flow renders OVER the whole overlay — in BOTH single-lane
+          and multi-lane — so the dictate surfaces never unmount (their capture,
+          cards and focus live on). The phase never leaves dictate. */}
+      {addingLane && !askReplace && (
+        <div className="absolute inset-0 z-20 bg-white dark:bg-gray-950 overflow-y-auto">
+          <DriveModeSessionPicker onBack={closeAddFlow} onSelectSession={handleAddLaneSession} />
+        </div>
+      )}
+      {askReplace && (
+        <div
+          data-testid="lane-cap-ask"
+          className="absolute inset-0 z-20 bg-white dark:bg-gray-950 flex flex-col items-center justify-center gap-4 px-6"
+        >
+          <p className="text-lg font-medium text-gray-900 dark:text-gray-100 text-center">
+            Voice Mode holds {lanes.length} of {MAX_VOICE_LANES} lanes.
+          </p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 text-center max-w-md">
+            Replace one of the lanes with the session you pick, or cancel. A fourth lane is never added silently.
+          </p>
+          <div className="w-full max-w-md flex flex-col gap-2">
+            {lanes.map((lane) => (
+              <button
+                key={lane.sessionId}
+                onClick={() => {
+                  beginLaneReplace(lane.sessionId);
+                  setAskReplace(false);
+                }}
+                aria-label={`Replace ${laneLabels[lane.sessionId] ?? lane.sessionId}`}
+                className="w-full rounded-lg border border-gray-200 dark:border-gray-700 p-3 text-left font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                type="button"
+              >
+                Replace {laneLabels[lane.sessionId] ?? lane.sessionId}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={closeAddFlow}
+            className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            type="button"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   );
 }
