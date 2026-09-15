@@ -17,8 +17,6 @@ if (!process.env.PI_WEB_UI_STOP_AUDIT_FILE) {
   process.env.PI_WEB_UI_STOP_AUDIT_FILE = path.join(tmpdir(), `pi-web-ui-test-stop-audit-${process.pid}.log`);
 }
 
-import { installSystemctlGuard } from './systemctl-guard.js';
-
 // No test process may reach the host service manager (2026-09-15).
 //
 // A red-proof run `git stash`-ed scripts/restart-pi-web-ui.sh back to its

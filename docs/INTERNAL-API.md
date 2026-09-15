@@ -2530,6 +2530,20 @@ a watchable terminal event instead of per-run `agent_end` churn.
 | antigravity (contract 1.38.0) | `POST /goal {action:"start"}` arms the server-side store and dispatches a goal prompt; `/goal <objective>` typed at the prompt boundary (HTTP or WebSocket) is intercepted as goal control — even while busy | **server-side**: disarms the sweeper (the in-flight turn still settles) | **server-side**: re-arms + continuation prompt | **server-side**: store record | No native CLI goal — fully server-owned: a turn-driven sweeper verifies each completed turn via `verifyCommand` (exit 0 = achieved) or the `GOAL_STATUS: ACHIEVED` self-report sentinel, then continues while unmet (budget `maxTurns` ≤ 100) |
 | opencode | out of scope (OpenCode keeps its own server bridge via the goal-engine plugin) | | | | `supported:false` |
 
+**Antigravity control is honest about a busy session (2026-09-15).** A goal
+control action owns the ledger, not the runtime: `start` and `resume` write the
+store first, and the prompt they dispatch is a best-effort kick. When that
+dispatch is refused with `409 SESSION_BUSY`, the action has *already succeeded* —
+the session is still finishing a turn, and the turn-driven sweeper continues from
+it — so both answer `200` with a note saying so rather than failing the control
+command with a forwarded refusal. This matters because `antigravityService.isRunning()`
+is not the only busy definition: the prompt pipeline also holds a per-session
+dispatch token for a detached turn until that turn's run receipt terminalises,
+so a control action arriving in that window sees "idle" and a refusal at the same
+time. Every other dispatch refusal (400/409-idempotency/500) is still forwarded
+verbatim, and `resume`'s 409 "no goal is armed for this session" (no record, or a
+cleared one) is unchanged.
+
 Canonical status vocabulary: `idle` (no goal) · `running` · `wrapping_up` ·
 `paused` (with `pausedReason`) · `suggested` (contract 1.28.0 — `8d18f41` 2026-08-30 — an agent has
 proposed a goal via the Pi extension's suggestion flow and is awaiting

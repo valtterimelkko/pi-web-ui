@@ -674,6 +674,12 @@ describe('goal function (contract 1.27.0)', () => {
 
       await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' }), mockRes(), 'session-1');
       antigravityService.sendPrompt.mockClear();
+      // Determinism (2026-09-15 CI flake): the start dispatch above is DETACHED, so
+      // its turn settles on later ticks and holds the route's per-session dispatch
+      // token until its run receipt terminalises. Asserting the continuation
+      // dispatch before that settles races a receipt write; wait for the turn to
+      // settle so this test asserts the intended behaviour, not a scheduling order.
+      await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
 
       const pause = mockRes();
       await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' }), pause, 'session-1');
@@ -682,7 +688,7 @@ describe('goal function (contract 1.27.0)', () => {
 
       const resume = mockRes();
       await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'resume' }), resume, 'session-1');
-      expect(resume.statusCode).toBe(200);
+      expect(resume.statusCode, resume.body).toBe(200);
       expect(JSON.parse(resume.body).goal).toMatchObject({ status: 'running', autoContinue: true });
       expect(antigravityService.sendPrompt).toHaveBeenCalledTimes(1);
       expect(antigravityService.sendPrompt.mock.calls[0][1] as string).toContain('Ship it');
@@ -691,6 +697,63 @@ describe('goal function (contract 1.27.0)', () => {
       await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'clear' }), clear, 'session-1');
       expect(clear.statusCode).toBe(200);
       expect(JSON.parse(clear.body).goal).toMatchObject({ status: 'cleared' });
+    });
+
+    it('resume re-arms without failing while the previous turn is still settling', async () => {
+      agyEntry();
+      // A detached turn that has not finished yet: the pipeline's per-session
+      // dispatch token is still held, so a new prompt-mode dispatch is refused
+      // with 409 SESSION_BUSY even though the service reports idle. Forwarding
+      // that refusal made a resume that merely raced the previous turn's
+      // settlement fail with a raw 409 — the 2026-09-15 CI failure. The control
+      // action (re-arm) has succeeded by that point, and the sibling `start`
+      // branch already tolerates the same situation, so resume must too.
+      let finishTurn: (() => void) | undefined;
+      antigravityService.sendPrompt.mockImplementation((_id: string, _message: string, _broadcast: unknown, complete: (error?: Error) => void) => {
+        finishTurn = () => complete();
+        return Promise.resolve();
+      });
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' }), mockRes(), 'session-1');
+      antigravityService.sendPrompt.mockClear();
+
+      const pause = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' }), pause, 'session-1');
+      expect(pause.statusCode, pause.body).toBe(200);
+
+      const resume = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'resume' }), resume, 'session-1');
+      expect(resume.statusCode, resume.body).toBe(200);
+      expect(JSON.parse(resume.body).goal).toMatchObject({ status: 'running', autoContinue: true });
+      expect(JSON.parse(resume.body).note).toMatch(/finishing a turn/i);
+      expect(antigravityService.sendPrompt).not.toHaveBeenCalled();
+
+      // Let the held turn settle so nothing is left in flight for the teardown.
+      finishTurn?.();
+      await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+    });
+
+    it('start re-arms a goal without failing while the previous turn is still settling', async () => {
+      agyEntry();
+      let finishTurn: (() => void) | undefined;
+      antigravityService.sendPrompt.mockImplementation((_id: string, _message: string, _broadcast: unknown, complete: (error?: Error) => void) => {
+        finishTurn = () => complete();
+        return Promise.resolve();
+      });
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'First objective' }), mockRes(), 'session-1');
+      antigravityService.sendPrompt.mockClear();
+
+      // Re-arming with a new objective while the first turn settles: the store
+      // write must succeed and be reported honestly, not be masked by a
+      // forwarded busy refusal from the best-effort prompt.
+      const restarted = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Second objective' }), restarted, 'session-1');
+      expect(restarted.statusCode, restarted.body).toBe(200);
+      expect(JSON.parse(restarted.body).goal).toMatchObject({ status: 'running', objective: 'Second objective' });
+      expect(JSON.parse(restarted.body).note).toMatch(/busy|finishing a turn/i);
+      expect(antigravityService.sendPrompt).not.toHaveBeenCalled();
+
+      finishTurn?.();
+      await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
     });
 
     it('POST action status answers read-only with the projection', async () => {

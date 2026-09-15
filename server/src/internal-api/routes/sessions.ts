@@ -4524,6 +4524,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   /** Contract 1.38.0 — antigravity goal control (server-side manager; agy has no native /goal). */
+  /** Does this dispatch refusal mean only "the session is still finishing a turn"?
+   *
+   *  The goal-control branches own the ledger; the continuation prompt is a
+   *  best-effort kick. `handleSendPrompt` claims a per-session direct-dispatch
+   *  token for a prompt-mode turn and, for a DETACHED dispatch, answers 202
+   *  without releasing it — the token is released only when that turn's run
+   *  receipt terminalises (and terminalising writes receipts). A control action
+   *  that arrives in that window therefore sees the pipeline refuse with
+   *  409 SESSION_BUSY while `antigravityService.isRunning()` reads idle: two busy
+   *  definitions disagreeing. Forwarding that refusal fails the control action
+   *  for a turn that is merely settling, which is what made a `resume` racing the
+   *  previous detached turn fail with a raw 409 in CI (2026-09-15, goal-routes).
+   *  `start` already tolerated the busy case; both branches now answer 200 with an
+   *  honest note, and the sweeper continues from the next completed turn. Every
+   *  other refusal is still forwarded unchanged. */
+  function agyDispatchRefusedAsBusy(dispatched: { statusCode: number; body: Record<string, unknown> }): boolean {
+    return dispatched.statusCode === 409 && dispatched.body?.code === ErrorCode.SESSION_BUSY;
+  }
+
   async function handleSessionGoalControlAntigravity(
     res: ServerResponse,
     sessionId: string,
@@ -4583,15 +4602,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         createdAt: previous?.createdAt ?? Date.now(),
       });
       const busy = antigravityService.isRunning(sessionId);
+      let settling = false;
       if (!busy) {
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalStartPrompt(objective, verifyCommand !== undefined));
-        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+        const accepted = dispatched.statusCode === 200 || dispatched.statusCode === 202;
+        if (!accepted && !agyDispatchRefusedAsBusy(dispatched)) {
           sendJson(res, dispatched.statusCode || 500, dispatched.body);
           return;
         }
+        settling = !accepted;
       }
       await respond({
-        note: busy
+        note: busy || settling
           ? 'goal armed; the session is busy \u2014 the sweeper verifies the turn in flight and continues from there'
           : 'goal armed and start prompt dispatched; the sweeper verifies each completed turn and continues while unmet',
       });
@@ -4616,14 +4638,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
       await agyGoalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true });
+      let continuationDispatched = false;
       if (!antigravityService.isRunning(sessionId)) {
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalContinuationPrompt(existing.objective, existing.verifyCommand !== undefined));
-        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+        const accepted = dispatched.statusCode === 200 || dispatched.statusCode === 202;
+        if (!accepted && !agyDispatchRefusedAsBusy(dispatched)) {
           sendJson(res, dispatched.statusCode || 500, dispatched.body);
           return;
         }
+        continuationDispatched = accepted;
       }
-      await respond({ note: 'auto-continue re-armed; continuation prompt dispatched' });
+      await respond({
+        note: continuationDispatched
+          ? 'auto-continue re-armed; continuation prompt dispatched'
+          : 'auto-continue re-armed; the session is still finishing a turn \u2014 the sweeper continues from it and the next continuation is dispatched when that turn completes',
+      });
       return;
     }
 
