@@ -265,9 +265,14 @@ production only with explicit owner approval.
   `agent-os` (other agents work there), commit on `main`, and push.
 - **Acceptance.** `curl /capabilities` on production, the pi-web-ui constant, the pi-web-ui doc and the Agent OS
   mirror all report the same version; `npm run validate:offline` in agent-os passes including Stage H.
-- **Note on Stage J.** Agent OS `validate:live` Stage J fails for **environmental** reasons that predate this work
-  (identical three-way failures, identical reasons, recorded 2026-09-11): the pi attempt exceeds the harness's
-  30 s client timeout, opencode is disabled on this host, and the claude direct backend returns 500. See W-F(iii).
+- **Note on Stage J — resolved 2026-09-15.** Stage J used to fail on every run, and the failure read as an
+  environment problem (recorded 2026-09-11: the pi attempt exceeding the harness's 30 s client timeout, opencode
+  disabled on this host, the claude direct backend returning 500). That reading was wrong about the decisive
+  cause: the harness itself carried no request timeout, so the *first* candidate timed out on its prompt call and
+  masked every other candidate's real result. W-F(iii) repaired the harness — a real-turn budget (180 s), detached
+  dispatch for the main proof instead of one HTTP request spanning a whole turn, and a Step 5 verdict that asserts
+  the watch ledger and identity the contract actually promises. `validate --live --stage J` now reports
+  **pass (1/1)** (agent-os `14deb69`). Runtime health is a separate question the stage can now answer honestly.
 
 ---
 
@@ -357,7 +362,7 @@ because a restart is what makes merged code live.
 | W-E mirror discipline | process, owner declined a new gate | **yes, per bump** — held at 1.43.0 while 1.44.0 was unshipped, then resynced within the hour of production serving it | **done** `agent-os` `88d967e` (constant, doc note with consumer guidance + rollback, pin test; `validate:offline` Stage H pass, pins 10/10, checked against the live socket before committing) |
 | W-F(i) session-file investigation | conductor: worth it, not urgent | **yes** — child C, read-only; accepted with one citation correction (`:557` → `:568`, content verbatim) | delivered as a finding, not code |
 | W-F(ii) card browser harness | conductor: worth it, do with W-B | **yes** — written as part of W-B | **merged** with `495dd97` |
-| W-F(iii) Agent OS live-proof harness (Stage J) | conductor: worth it, small | **no** — deferred while `/root/agent-os` was contended by four agents | **not done, not dropped** |
+| W-F(iii) Agent OS live-proof harness (Stage J) | conductor: worth it, small | **yes** — started in `01a0a455` (16:52Z), that session died mid-turn at 17:02:57Z, and the work was completed and verified in `01a0a6a0` | **done** — `agent-os` `14deb69`; `validate --live --stage J` passes 1/1 |
 | D7 desktop layout accepted | — | — | **live** |
 
 ### Post-merge integration fix (found by the merge itself, not by any child)

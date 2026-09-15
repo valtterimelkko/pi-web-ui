@@ -2350,8 +2350,10 @@ OpenCode, Antigravity, Command Code), regardless of the child's runtime.
 ```
 
 `GET ...?sinceIndex=N` returns only firings after the caller's last poll;
-`firingCount` stays the absolute total. `status` is `active`, `detached`
-(reloaded from disk after a restart — past firings readable, new ones need a
+`firingCount` stays the absolute total. `status` is `active` (rehydrated
+across a restart — conditions re-resolved, broker re-subscribed, pins
+re-acquired, and it keeps observing), `detached` (its persisted conditions can
+no longer be resolved, so past firings stay readable but new ones need a
 re-register), `done` (all one-shot conditions fired, no wake work remains,
 watch-owned claims released, ledger still readable), or `closed`. A successful
 replacement registration also carries `replaced: true`. When `onFire` is
