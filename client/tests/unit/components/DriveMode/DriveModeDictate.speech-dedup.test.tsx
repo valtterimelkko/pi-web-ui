@@ -75,6 +75,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
 
 vi.mock('lucide-react', () => ({
   Mic: () => <span data-testid="icon-mic" />,
+  Smartphone: () => <span data-testid="icon-smartphone" />,
+  Monitor: () => <span data-testid="icon-monitor" />,
   MicOff: () => <span data-testid="icon-micoff" />,
   Square: () => <span data-testid="icon-square" />,
   VolumeX: () => <span data-testid="icon-volumex" />,

@@ -15,6 +15,8 @@ import {
   type ReadingLevel,
 } from './readingLevel';
 import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
+import { VoiceLayoutToggle } from './VoiceLayoutToggle';
+import { useVoiceLayout } from './useVoiceLayout';
 import { speechArbiter } from '../../lib/speechArbiter';
 import { getTurnAssistantText, useAnswerReader } from './useAnswerReader';
 
@@ -63,6 +65,10 @@ export function DriveModeDictate({
   const messages = useSessionStore((s) => s.messages);
   const readingLevel = useReadingLevelStore((s) => s.level);
   const setReadingLevel = useReadingLevelStore((s) => s.setLevel);
+  // The layout mode is the operator's persisted preference; the surface only
+  // offers the switch (the overlay decides whether a split is rendered, and a
+  // narrow window degrades the desktop mode back to this layout).
+  const voiceLayout = useVoiceLayout();
 
   // P19 — the answer is the whole turn, not the last message: read-aloud and
   // the answer controls operate on everything the worker has said since the
@@ -70,6 +76,9 @@ export function DriveModeDictate({
   // the conversation itself, so its accounted-turn boundary lives in one place.
   const turnAssistantText = getTurnAssistantText(messages);
   const isRecording = voice.state === 'recording';
+  // The acquisition window: the browser can already be capturing while the
+  // recorder is still being set up. Shown, never silently reported as idle.
+  const isStarting = voice.state === 'starting';
 
   // The talker in the reading path (P17): how much of the worker's output is
   // spoken is the operator's choice, applied at turn end and — when they change
@@ -111,7 +120,7 @@ export function DriveModeDictate({
   // > audio-playing handback; every write is conditional on a real change.
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (isRecording || voice.state === 'processing') {
+    if (isStarting || isRecording || voice.state === 'processing') {
       if (phase !== 'dictate') setPhase('dictate');
     } else if (isStreaming) {
       if (phase !== 'agent-working') setPhase('agent-working');
@@ -120,7 +129,7 @@ export function DriveModeDictate({
     } else if (phase === 'audio-playing' && readAloud.state === 'idle') {
       setPhase('dictate');
     }
-  }, [voice.state, isRecording, isStreaming, readAloud.state, phase, setPhase]);
+  }, [voice.state, isStarting, isRecording, isStreaming, readAloud.state, phase, setPhase]);
 
   // ---------------------------------------------------------------------------
   // The four states, derived from what the surface receives (§4.1).
@@ -218,6 +227,16 @@ export function DriveModeDictate({
         <div className="text-sm text-gray-500 dark:text-gray-400">{modelName}</div>
       </div>
 
+      {/* The two modes: the existing voice-only surface, or the desktop split
+          that shows the live session beside it. Persisted — set once. */}
+      <div className="mb-4">
+        <VoiceLayoutToggle
+          mode={voiceLayout.mode}
+          onSelect={voiceLayout.setMode}
+          degraded={voiceLayout.mode === 'desktop' && voiceLayout.layout === 'mobile'}
+        />
+      </div>
+
       {/* The reading level — how much of the worker's output is spoken, and
           which level the answer in flight is being read at. Persisted as the
           operator's default (P17). */}
@@ -246,18 +265,24 @@ export function DriveModeDictate({
         <FloorBanner view={floorView} />
       </div>
 
-      {/* Mic button — never disabled because the surface is speaking */}
+      {/* Mic button — never disabled because the surface is speaking. It IS
+          disabled while the device is being acquired: at that point the lane
+          already exists and a second tap must not open a second one. */}
       <button
         onClick={handleMicClick}
-        disabled={voice.state === 'processing'}
+        disabled={voice.state === 'processing' || isStarting}
+        aria-busy={isStarting || undefined}
+        data-testid="drive-mic"
         className={`w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation ${
-          voice.state === 'processing' ? 'cursor-not-allowed' : 'active:scale-95'
+          voice.state === 'processing' || isStarting ? 'cursor-wait' : 'active:scale-95'
         } ${
           isRecording
             ? 'bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse'
+            : isStarting
+            ? 'bg-amber-50 dark:bg-amber-950 border-4 border-amber-400'
             : 'bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700'
         }`}
-        aria-label={isRecording ? 'Stop recording' : 'Start recording'}
+        aria-label={isStarting ? 'Starting microphone' : isRecording ? 'Stop recording' : 'Start recording'}
         type="button"
       >
         {voice.state === 'error' ? (
@@ -269,11 +294,24 @@ export function DriveModeDictate({
         ) : (
           <Mic
             className={`w-10 h-10 ${
-              isRecording ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'
+              isRecording
+                ? 'text-red-500'
+                : isStarting
+                ? 'text-amber-500 animate-pulse'
+                : 'text-gray-500 dark:text-gray-400'
             }`}
           />
         )}
       </button>
+
+      {/* The acquisition window, named. The browser's own recording indicator
+          can be on before the lane is ready; the surface says so instead of
+          looking untouched. */}
+      {isStarting && (
+        <p data-testid="mic-starting-hint" className="mt-2 text-sm text-amber-600 dark:text-amber-400">
+          Starting microphone…
+        </p>
+      )}
 
       {/* The contract, taught where the operator speaks (P26). Display and
           teaching only — it changes no behaviour: capture, the send path and

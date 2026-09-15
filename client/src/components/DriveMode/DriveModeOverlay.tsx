@@ -11,6 +11,8 @@ import { DriveModeModelPicker } from './DriveModeModelPicker';
 import { DriveModeFolderPicker } from './DriveModeFolderPicker';
 import { DriveModeSessionPicker } from './DriveModeSessionPicker';
 import { DriveModeDictate } from './DriveModeDictate';
+import { DriveModeSessionPane } from './DriveModeSessionPane';
+import { useVoiceLayout } from './useVoiceLayout';
 
 export function DriveModeOverlay() {
   const isOpen = useUIStore((s) => s.driveModeOpen);
@@ -22,6 +24,7 @@ export function DriveModeOverlay() {
   const currentModel = useSessionStore((s) => s.currentModel);
   const getSessionDisplayName = useSessionStore((s) => s.getSessionDisplayName);
   const prevSessionIdRef = useRef<string | null>(null);
+  const layout = useVoiceLayout();
 
   // Session creation flow: watch for new session after createNewSession
   useEffect(() => {
@@ -127,16 +130,37 @@ export function DriveModeOverlay() {
           onSelectSession={handleSelectSession}
         />
       )}
-      {(phase === 'dictate' || phase === 'agent-working' || phase === 'read-aloud-ready' || phase === 'audio-playing') && (
-        <DriveModeDictate
-          sessionId={activeSessionId || currentSessionId || ''}
-          sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
-          modelName={modelName}
-          sessionDisplayName={sessionDisplayName}
-          onExit={handleClose}
-          onAbort={abortGeneration}
-        />
-      )}
+      {(phase === 'dictate' || phase === 'agent-working' || phase === 'read-aloud-ready' || phase === 'audio-playing') &&
+        (layout.layout === 'split' ? (
+          // Desktop mode: the voice surface and the live session share the
+          // screen. Both panes render the same components as before — the
+          // split only decides how the window is divided, so capture, the
+          // floor banner, the confirmation card and read-aloud are unchanged.
+          <div data-testid="drive-mode-split" className="flex flex-1 min-h-0 w-full overflow-hidden">
+            <div className="flex-1 min-w-0 h-full min-h-0 overflow-y-auto border-r border-gray-200 dark:border-gray-800">
+              <DriveModeDictate
+                sessionId={activeSessionId || currentSessionId || ''}
+                sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
+                modelName={modelName}
+                sessionDisplayName={sessionDisplayName}
+                onExit={handleClose}
+                onAbort={abortGeneration}
+              />
+            </div>
+            <div className="flex-1 min-w-0 h-full min-h-0">
+              <DriveModeSessionPane sessionDisplayName={sessionDisplayName} modelName={modelName} />
+            </div>
+          </div>
+        ) : (
+          <DriveModeDictate
+            sessionId={activeSessionId || currentSessionId || ''}
+            sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
+            modelName={modelName}
+            sessionDisplayName={sessionDisplayName}
+            onExit={handleClose}
+            onAbort={abortGeneration}
+          />
+        ))}
     </div>
   );
 }

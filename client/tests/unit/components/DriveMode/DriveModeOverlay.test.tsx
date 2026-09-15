@@ -5,6 +5,7 @@ import { useUIStore } from '../../../../src/store/uiStore';
 import { useDriveModeStore } from '../../../../src/store/driveModeStore';
 import { useWebSocket } from '../../../../src/hooks/useWebSocket';
 import { useSessionStore } from '../../../../src/store/sessionStore';
+import { useVoiceLayoutStore, VOICE_LAYOUT_STORAGE_KEY } from '../../../../src/components/DriveMode/voiceLayout';
 
 const mockUIStoreState = {
   driveModeOpen: true,
@@ -85,6 +86,15 @@ vi.mock('../../../../src/components/DriveMode/DriveModeSessionPicker', () => ({
     <div data-testid="drive-mode-session-picker">
       <button onClick={() => props.onSelectSession('s1', '/path/1.jsonl')}>Select Session</button>
       <button onClick={props.onBack}>Back</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../../../src/components/DriveMode/DriveModeSessionPane', () => ({
+  DriveModeSessionPane: (props: { sessionDisplayName: string; modelName: string }) => (
+    <div data-testid="drive-session-pane">
+      <span>{props.sessionDisplayName}</span>
+      <span>{props.modelName}</span>
     </div>
   ),
 }));
@@ -281,5 +291,100 @@ describe('DriveModeOverlay', () => {
       type: 'error',
       message: 'Failed to create session. Please try again.',
     });
+  });
+});
+
+/**
+ * Child V — the two layout modes (operator request, 2026-09-15).
+ *
+ * 'mobile' is the existing surface. 'desktop' puts the live session beside the
+ * voice surface — but only when the window can hold two readable halves, so a
+ * wide preference on a narrow window degrades instead of squashing both.
+ */
+describe('DriveModeOverlay — Voice Mode layout modes', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let driveModeStoreState: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let sessionStoreState: any;
+
+  const setWidth = (width: number) => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });
+    window.dispatchEvent(new Event('resize'));
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useVoiceLayoutStore.setState({ mode: 'mobile' });
+    driveModeStoreState = {
+      phase: 'dictate',
+      selectedModelId: null,
+      activeSessionId: 's1',
+      close: vi.fn(),
+      setPhase: vi.fn(),
+      selectModel: vi.fn(),
+      setActiveSession: vi.fn(),
+      reset: vi.fn(),
+    };
+    sessionStoreState = {
+      sessions: [
+        { id: 's1', path: '/path/1.jsonl', name: 'Test Session', model: 'claude-3-opus', firstMessage: 'Hello', messageCount: 1, cwd: '/' },
+      ],
+      currentSessionId: 's1',
+      currentModel: 'claude-3-opus',
+      getSessionDisplayName: () => 'Test Session',
+    };
+    (useDriveModeStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
+      selector ? selector(driveModeStoreState) : driveModeStoreState
+    );
+    (useSessionStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
+      selector ? selector(sessionStoreState) : sessionStoreState
+    );
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    useVoiceLayoutStore.setState({ mode: 'mobile' });
+  });
+
+  it('renders the existing voice-only surface in mobile mode, even on a wide window', () => {
+    setWidth(1600);
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-mode-split')).toBeNull();
+    expect(screen.queryByTestId('drive-session-pane')).toBeNull();
+  });
+
+  it('splits the screen — voice surface and live session — in desktop mode on a wide window', () => {
+    useVoiceLayoutStore.setState({ mode: 'desktop' });
+    setWidth(1600);
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-split')).toBeInTheDocument();
+    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
+    expect(screen.getByTestId('drive-session-pane')).toBeInTheDocument();
+  });
+
+  it('degrades a desktop preference to the mobile layout when the window is narrow', () => {
+    useVoiceLayoutStore.setState({ mode: 'desktop' });
+    setWidth(420);
+    render(<DriveModeOverlay />);
+    expect(screen.queryByTestId('drive-mode-split')).toBeNull();
+    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
+  });
+
+  it('keeps the desktop mode across a remount (the choice is persisted)', () => {
+    useVoiceLayoutStore.setState({ mode: 'desktop' });
+    const stored = JSON.parse(localStorage.getItem(VOICE_LAYOUT_STORAGE_KEY) as string) as {
+      state?: { mode?: string };
+    };
+    expect(stored.state?.mode).toBe('desktop');
+
+    setWidth(1600);
+    const first = render(<DriveModeOverlay />);
+    expect(first.getByTestId('drive-mode-split')).toBeInTheDocument();
+    first.unmount();
+
+    // A later mount reads the same persisted preference.
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-split')).toBeInTheDocument();
   });
 });

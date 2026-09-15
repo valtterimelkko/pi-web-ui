@@ -61,6 +61,16 @@ router.post('/:id/stream', (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+router.post('/:id/abort', (req: Request, res: Response) => {
+  // The surface released the microphone. Drop the buffered audio WITHOUT
+  // transcribing or cleaning it: these words were never submitted, no
+  // transcript was ever asked for, and the buffer must not outlive the capture
+  // that produced it. Idempotent — a teardown path must not have to care
+  // whether the recording still exists.
+  const aborted = activeRecordings.delete(req.params.id);
+  res.json({ ok: true, aborted });
+});
+
 router.post('/:id/finish', async (req: Request, res: Response) => {
   const recording = activeRecordings.get(req.params.id);
   if (!recording) {

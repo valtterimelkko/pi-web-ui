@@ -1,6 +1,6 @@
 import { Mic, MicOff, Loader2 } from 'lucide-react';
 
-export type DictationButtonState = 'idle' | 'recording' | 'processing' | 'error';
+export type DictationButtonState = 'idle' | 'starting' | 'recording' | 'processing' | 'error';
 
 interface DictationButtonProps {
   state: DictationButtonState;
@@ -9,7 +9,7 @@ interface DictationButtonProps {
 }
 
 export function DictationButton({ state, onToggle, errorMessage }: DictationButtonProps) {
-  const isDisabled = state === 'processing';
+  const isDisabled = state === 'processing' || state === 'starting';
 
   return (
     <div className="flex flex-col items-center gap-1">
@@ -25,12 +25,16 @@ export function DictationButton({ state, onToggle, errorMessage }: DictationButt
             ? 'bg-red-100 hover:bg-red-200 text-red-600'
             : state === 'processing'
             ? 'bg-blue-50 text-blue-500'
+            : state === 'starting'
+            ? 'bg-blue-50 text-blue-500'
             : 'bg-orange-100 hover:bg-orange-200 text-orange-600'
         }`}
         type="button"
         title={
           state === 'idle'
             ? 'Start dictation'
+            : state === 'starting'
+            ? 'Starting microphone…'
             : state === 'recording'
             ? 'Stop dictation'
             : state === 'processing'
@@ -40,8 +44,11 @@ export function DictationButton({ state, onToggle, errorMessage }: DictationButt
         aria-label={
           state === 'recording'
             ? 'Stop dictation'
+            : state === 'starting'
+            ? 'Starting microphone'
             : 'Start dictation'
         }
+        aria-busy={state === 'starting' || undefined}
         aria-pressed={state === 'recording'}
       >
         {state === 'idle' && <Mic className="w-4 h-4" />}
@@ -52,6 +59,7 @@ export function DictationButton({ state, onToggle, errorMessage }: DictationButt
           </>
         )}
         {state === 'processing' && <Loader2 className="w-4 h-4 animate-spin" />}
+        {state === 'starting' && <Loader2 className="w-4 h-4 animate-spin" />}
         {state === 'error' && <Mic className="w-4 h-4" />}
       </button>
       {state === 'error' && errorMessage && (

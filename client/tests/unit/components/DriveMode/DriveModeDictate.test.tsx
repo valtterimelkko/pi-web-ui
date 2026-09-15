@@ -16,7 +16,7 @@ vi.mock('../../../../src/hooks/useWebSocket', () => ({
 // The mock also exposes the transcript callback so tests can drive a finished
 // utterance through the REAL pipeline (capture → talker send → bus → surface).
 const capture: {
-  state: 'idle' | 'recording' | 'processing' | 'error';
+  state: 'idle' | 'starting' | 'recording' | 'processing' | 'error';
   errorMessage: string;
   toggle: ReturnType<typeof vi.fn>;
   transcript: ((text: string) => void) | null;
@@ -62,6 +62,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
 
 vi.mock('lucide-react', () => ({
   Mic: () => <span data-testid="icon-mic" />,
+  Smartphone: () => <span data-testid="icon-smartphone" />,
+  Monitor: () => <span data-testid="icon-monitor" />,
   MicOff: () => <span data-testid="icon-micoff" />,
   Square: () => <span data-testid="icon-square" />,
   VolumeX: () => <span data-testid="icon-volumex" />,
@@ -507,5 +509,25 @@ describe('DriveModeDictate — the Voice Mode surface (talking while working)', 
     capture.errorMessage = 'Microphone permission denied.';
     renderSurface();
     expect(screen.getByText('Microphone permission denied.')).toBeInTheDocument();
+  });
+
+  // Child V (2026-09-15) — the operator's report: "the microphone button does
+  // not seem to activate, even if the browser tab activates the red
+  // 'recording' button". While the device is being acquired the microphone is
+  // already hot at the browser level, so the surface must name that window
+  // rather than render as though nothing is happening.
+  it('names the acquisition window instead of looking idle while the microphone is being acquired', () => {
+    capture.state = 'starting';
+    renderSurface();
+    const mic = screen.getByLabelText('Starting microphone');
+    expect(mic).toBeDisabled();
+    expect(mic).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByTestId('mic-starting-hint')).toHaveTextContent('Starting microphone…');
+  });
+
+  it('does not offer the idle mic control while the acquisition is in flight', () => {
+    capture.state = 'starting';
+    renderSurface();
+    expect(screen.queryByLabelText('Start recording')).toBeNull();
   });
 });

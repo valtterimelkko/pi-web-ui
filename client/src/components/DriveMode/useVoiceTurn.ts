@@ -136,8 +136,10 @@ function proposalFromResult(
 }
 
 export interface UseVoiceTurnResult {
-  /** Dictation pass-through. */
-  state: 'idle' | 'recording' | 'processing' | 'error';
+  /** Dictation pass-through. `starting` is the acquisition window: the browser
+   *  may already be capturing while the recorder is still being set up, so the
+   *  surface must show it rather than read as idle. */
+  state: 'idle' | 'starting' | 'recording' | 'processing' | 'error';
   errorMessage: string;
   /** Takes the floor (starts/stops capture). Never disabled by playback. */
   toggle: () => void;

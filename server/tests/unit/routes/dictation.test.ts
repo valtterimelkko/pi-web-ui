@@ -114,6 +114,50 @@ describe('Dictation Routes', () => {
     });
   });
 
+  // Child V (2026-09-15): the Voice Mode surface releases the microphone when
+  // it goes away, and the server-side recording must not be left holding an
+  // entire utterance's buffered audio with no reader. Abort drops it WITHOUT
+  // transcribing and WITHOUT cleaning — nobody asked for those words.
+  describe('POST /api/dictation/:id/abort', () => {
+    it('drops the recording without transcribing or cleaning it', async () => {
+      const startRes = await request(app).post('/api/dictation/start');
+      const id = startRes.body.id;
+      await request(app)
+        .post(`/api/dictation/${id}/stream`)
+        .set('Content-Type', 'application/octet-stream')
+        .send(Buffer.from('abandoned-audio'));
+
+      const res = await request(app).post(`/api/dictation/${id}/abort`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, aborted: true });
+      expect(transcribeWithFallback).not.toHaveBeenCalled();
+      expect(cleanupTranscript).not.toHaveBeenCalled();
+    });
+
+    it('leaves nothing behind that a later finish could resurrect', async () => {
+      const startRes = await request(app).post('/api/dictation/start');
+      const id = startRes.body.id;
+
+      await request(app).post(`/api/dictation/${id}/abort`);
+      const finish = await request(app).post(`/api/dictation/${id}/finish`);
+
+      expect(finish.status).toBe(404);
+      expect(transcribeWithFallback).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent for an already-abandoned recording id', async () => {
+      const startRes = await request(app).post('/api/dictation/start');
+      const id = startRes.body.id;
+
+      await request(app).post(`/api/dictation/${id}/abort`);
+      const second = await request(app).post(`/api/dictation/${id}/abort`);
+
+      expect(second.status).toBe(200);
+      expect(second.body).toEqual({ ok: true, aborted: false });
+    });
+  });
+
   describe('POST /api/dictation/:id/finish', () => {
     it('should transcribe and clean up audio', async () => {
       const startRes = await request(app).post('/api/dictation/start');
