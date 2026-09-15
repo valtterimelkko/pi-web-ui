@@ -2,14 +2,20 @@
 
 Canonical reference for how `pi-web-ui.service` is stopped, why stops used to
 run to systemd's `TimeoutStopSec` and lose the control group with them, what is
-now instrumented, and what remains unestablished.
+now instrumented, what remains unestablished, and (added 2026-09-15) who can
+restart it, what that costs when a test does it, and which guards now make a
+silent restart loud instead of invisible.
 
 Companion surfaces:
 
 - `deploy/systemd/pi-web-ui.service` — the unit (unchanged by this work)
 - `deploy/systemd/pi-web-ui.service.d/10-stop-audit.conf` — the stop-audit drop-in
 - `scripts/systemd-stop-audit.sh` — the `ExecStopPre`/`ExecStopPost` hook
+- `scripts/record-restart-requester.sh` — the one requester record both restart paths write
 - `scripts/restart-pi-web-ui.sh` — the restart path that names its requester
+- `scripts/restart-production.sh` — the canonical pre-flight restart path
+- `scripts/check-unexplained-stops.ts` — cross-checks systemd's stops against the requester records
+- `server/tests/systemctl-guard.ts` — the guard that stops a test process driving the host service manager
 - [`docs/TROUBLESHOOTING.md`](./TROUBLESHOOTING.md#unexplained-restarts-what-is-instrumented-and-one-dead-end-2026-09-14) — session-ID evidence ladder and log lookup
 - [`docs/LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the cgroup guard for disposable validation
 
@@ -253,20 +259,85 @@ stop the unit:
 
 What the repo can do, and now does, is make every restart path it owns announce
 itself *before* restarting — uid, user, pid, ppid, tty, cwd, argv, reason, and
-the ancestor chain up to PID 1 — in the journal and the durable audit file. A
-restart that does not appear there is, by elimination, not one of ours.
+the ancestor chain up to PID 1 — in the journal and the durable audit file.
+
+**Corrected 2026-09-15 (this claim was falsified twice in one day).** This
+section used to end: "A restart that does not appear there is, by elimination,
+not one of ours." That inference is wrong, and acting on it wasted real time.
+The record is written by the requesting code itself, so it can be redirected or
+simply never written:
+
+- **14:27:05Z** — the record was redirected. A Vitest run of
+  `restart-drainage.test.ts` executed a `git stash`-ed revision of
+  `scripts/restart-pi-web-ui.sh`; the suite pointed `PI_WEB_UI_STOP_AUDIT_FILE`
+  at its own temp file, so production's record has no `RESTART-REQUESTED` line
+  for a restart that was entirely repository-caused. A fixed suite (commit
+  `d921ac7`) put a `systemctl` stub on PATH so this cannot recur from that suite;
+  the test workspace now installs that guard for every test process (see below).
+- **15:35:23Z** — the record was never written. The restart went through
+  `scripts/restart-production.sh`, the repo's own canonical path, which
+  announced itself only through the notification hook. Both paths now share one
+  recorder, `scripts/record-restart-requester.sh`.
+
+What is true instead: a restart with no record is a restart nobody claimed, and
+the honest instrument is a cross-check of two independently written lanes — the
+stops systemd logged and the records the repository claims. That is
+`scripts/check-unexplained-stops.ts` (see below).
 
 ## Restart paths reachable on this host
 
 | Path | Can it restart while turns are active? | Notes |
 |---|---|---|
 | `scripts/command-code-weekly-refresh.ts` (§8) | **Yes, by design** | Only when `--restart` is set *and* it committed. It polls `/capacity.activeTurns` for up to 30 min (30s poll) and restarts once it reads `0`. |
-| `scripts/restart-pi-web-ui.sh` (new) | Yes, immediately | Names the requester; takes the cooperative production lock by default. Use this for deliberate restarts. |
-| `scripts/with-production-lock.sh` | No — it is a lock, not a restart | Prevents two builds/restarts/deploys interleaving. |
+| `scripts/restart-pi-web-ui.sh` | Yes, immediately | Names the requester via `record-restart-requester.sh`; takes the cooperative production lock by default. Use this for deliberate restarts. |
+| `scripts/restart-production.sh` | Yes, immediately | The canonical pre-flight path; since 2026-09-15 it names the requester too, and refuses unknown arguments rather than ignoring them. |
+| `server/tests/unit/restart-drainage.test.ts` and any suite that runs those scripts | **Yes, if a stub is missing** | This is the path that actually restarted production at 14:27:05Z. Three layers now protect it: the scripts' own pre-flight; the suite's own PATH stub (`d921ac7`); and the **test-workspace guard** (`server/tests/systemctl-guard.ts`, installed by `tests/setup-env.ts`) which refuses any state-changing `systemctl` verb in any test process, whatever revision of whatever script asks. |
+| `with-production-lock.sh` | No — it is a lock, not a restart | Prevents two builds/restarts/deploys interleaving. |
 | `docs/TROUBLESHOOTING.md` (`sudo systemctl restart pi-web-ui`) | Yes, immediately, no idle check | Documentation only, but it is an instruction an agent may follow. |
 | `deploy/systemd/*.service` | No | The three refresh units run one-shots and call the Internal API; only the Command Code weekly refresh restarts, via the script above. |
 | `agent-os-supervisor.service` | No | `Wants=pi-web-ui.service`; a one-shot orphan-recovery scan that never restarts the unit. |
 | `pi-web-ui-health-probe.service` | No, by design | Alert-only; asserted by `server/tests/integration/health-probe-script.test.ts`. |
+
+### Preventing a repeat, and what is honestly not preventable
+
+The 14:27:05Z restart was not bad luck: it had a mechanism, and the mechanism had
+three structural enablers — the interception lived **inside the code under test**
+(so the red-proof `git stash` removed the guard and the interception together),
+the suite could reach the **production unit name** from any worktree, and the
+suite ran **inside the unit's own control group**, so it killed itself too.
+
+Layers now in place, each deliberately owned by something *other* than the code
+under test (all shipped 2026-09-15, `server/tests/systemctl-guard.ts`):
+
+1. **The test workspace cannot drive the service manager.** A `systemctl` shim is
+   prepended to `PATH` for every Vitest process by `tests/setup-env.ts`. Mutating
+   verbs are refused with a non-zero exit and recorded in a durable log
+   (`$TMPDIR/pi-web-ui-systemctl-guard-*.log`); read-only verbs pass through to
+   the real binary. No test may remove it, because no test owns it — reverting an
+   implementation cannot revert the environment that runs it.
+2. **A test cannot pollute production's restart record.** `tests/setup-env.ts`
+   redirects `PI_WEB_UI_STOP_AUDIT_FILE` to a per-process temp path, so even a
+   suite that forgets the seam cannot append a false requester line.
+3. **Silences are made loud.** `scripts/check-unexplained-stops.ts` compares
+   systemd's stop events with the requester records and reports every stop nobody
+   claimed (with the surrounding journal context and a heuristic split between
+   systemd's own restart policy and an unclaimed request). Read-only; installing
+   it on a timer is an owner decision.
+
+What remains possible, stated plainly: any human or agent with root on this host
+and a checkout can still run `systemctl restart pi-web-ui`, and a test *outside*
+Vitest (a bare `node`, a shell script, a CI runner) is not covered by the guard.
+Preventing that class entirely is not a script change — it is containment, which
+is the unstarted out-of-process-worker roadmap in
+[`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md): workers in their
+own scope/slice, so production's unit is not reachable from, and not killed by,
+the things that share the host with it. Friction-bearing alternatives were
+considered and rejected for now (they buy less than they cost): a mandatory
+approval token for non-dry-run restarts would break the weekly catalogue
+refresh's unattended restart; making `--no-lock` verify lock ownership is
+narrower but does nothing against a reverted revision, because that check lives
+in the code under test; and `RefuseManualStop=yes` on the unit would refuse *all*
+restarts, including the repository's own audited path.
 
 ### The idle check can be raced
 

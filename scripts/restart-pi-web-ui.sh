@@ -38,8 +38,16 @@
 #   scripts/restart-pi-web-ui.sh --reason "dry run" --dry-run
 #   scripts/restart-pi-web-ui.sh --reason "owner-approved override" --force
 #
-# The cooperative production lock is taken by default so two restarts cannot
-# interleave; --no-lock is for callers that already hold it.
+# Use this for deliberate restarts:
+#
+#   --reason    why, in the caller's own words (required for a useful record)
+#   --no-lock   the caller already holds the production lock
+#   --force     name the override of the active-turn pre-flight
+#   --dry-run   record the requester and stop before restarting
+#
+# The record itself is written by scripts/record-restart-requester.sh, which
+# scripts/restart-production.sh also uses — one implementation, so a restart by
+# either repository path is attributable (2026-09-15).
 #
 # TEST SEAMS (defaults are the production values; tests override them so no
 # test can restart the real service or write the real journal/audit record):
@@ -56,6 +64,7 @@ set -uo pipefail
 # Captured before the argument loop consumes them, so the record shows what was
 # actually asked for.
 ARGV_ORIGINAL="$*"
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 REASON="(unspecified)"
 USE_LOCK=1
@@ -114,48 +123,11 @@ if (( ! FORCE )); then
   fi
 fi
 
-AUDIT_FILE="${PI_WEB_UI_STOP_AUDIT_FILE:-/root/.pi-web-ui/stop-audit.log}"
-ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-# Full argv of this invocation, so the record shows what was actually asked for.
-argv="$ARGV_ORIGINAL"
-
-# Ancestor chain, deepest first, bounded so a pathological tree cannot make the
-# record enormous. Each entry is "pid:comm".
-ancestors=""
-pid="$$"
-depth=0
-while [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) && (( depth < 6 )); do
-  comm="$(head -c 48 "/proc/$pid/comm" 2>/dev/null | tr -d '\n')"
-  # /proc/<pid>/stat: field 4 is PPID, but field 2 (comm) may contain spaces and
-  # parentheses, so strip everything up to and including the last ')' first.
-  ppid="$(sed -e 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $2}')"
-  ancestors="${ancestors}${pid}:${comm}>"
-  pid="${ppid:-}"
-  depth=$((depth + 1))
-done
-ancestors="${ancestors%,}"
-ancestors="${ancestors%>}"
-
-# coreutils `tty` prints "not a tty" on stdout AND exits non-zero, so neither a
-# plain capture nor an `||` fallback yields a clean single-line value.
-tty_name="$(tty 2>/dev/null)"
-tty_name="${tty_name//$'\n'/ }"
-[[ -z "$tty_name" ]] && tty_name="none"
-
-LINE="RESTART-REQUESTED ts=$ts uid=$(id -u) user=$(id -un 2>/dev/null) pid=$$ ppid=$PPID tty=$tty_name cwd=$(pwd 2>/dev/null) reason=$(printf '%q' "$REASON") argv=$(printf '%q' "$argv") ancestors=$ancestors"
-
-# Journal first, then the durable file — the same two sinks the stop audit uses,
-# for the same reason: each has been lost at least once.
-printf '%s\n' "$LINE"
-mkdir -p "$(dirname "$AUDIT_FILE")" 2>/dev/null
-printf '%s\n' "$LINE" >> "$AUDIT_FILE" 2>/dev/null
-# systemd-cat gives the line a stable identifier in the journal even when this
-# script is run from a context that is not a unit's own stdout.
-systemd_cat="${PI_WEB_UI_SYSTEMD_CAT:-systemd-cat}"
-if command -v "$systemd_cat" >/dev/null 2>&1; then
-  printf '%s\n' "$LINE" | "$systemd_cat" -t pi-web-ui-restart 2>/dev/null
-fi
+# THE RECORD, from the one shared implementation both restart paths use.
+# Written before the restart, and only on the path that actually restarts: a
+# restart refused by the pre-flight above never stops the service, so it must
+# not appear in the record.
+"$script_dir/record-restart-requester.sh" "$REASON" "$ARGV_ORIGINAL" || true
 
 if (( DRY_RUN )); then
   printf 'restart-pi-web-ui: dry run — would restart pi-web-ui.service\n' >&2
@@ -163,7 +135,6 @@ if (( DRY_RUN )); then
 fi
 
 if (( USE_LOCK )); then
-  script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 70
   exec "$script_dir/with-production-lock.sh" "${PI_WEB_UI_RESTART_SYSTEMCTL:-systemctl}" restart pi-web-ui
 fi
 

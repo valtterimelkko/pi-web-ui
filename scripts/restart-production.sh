@@ -27,7 +27,12 @@
 # USE
 #
 #   scripts/restart-production.sh
-#   scripts/restart-production.sh --force          # override active-turn refusal
+#   scripts/restart-production.sh --force                    # override active-turn refusal
+#   scripts/restart-production.sh --reason "why"              # named in the requester record
+#
+# Unknown arguments are refused rather than ignored: a caller who passes
+# `--dry-run` (which this script does not implement) must not silently get a
+# real restart.
 #
 # TEST SEAMS (defaults are the production values; tests override them so no
 # test can touch the real service, socket, or journal):
@@ -46,8 +51,22 @@
 
 set -euo pipefail
 
+# Captured before any argument parsing, so the record shows what was asked for.
+ARGV_ORIGINAL="$*"
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+
 FORCE=0
-if [ "${1:-}" = "--force" ]; then FORCE=1; fi
+REASON="(unspecified)"
+while [ $# -gt 0 ]; do
+  case "${1:-}" in
+    --force) FORCE=1; shift ;;
+    --reason) REASON="${2:-(unspecified)}"; shift 2 ;;
+    *)
+      echo "restart-production.sh: unknown argument: ${1}" >&2
+      exit 64
+      ;;
+  esac
+done
 
 SOCKET="${PI_WEB_UI_INTERNAL_API_SOCKET:-/root/.pi-web-ui/internal-api.sock}"
 TOKEN_FILE="${PI_WEB_UI_INTERNAL_API_TOKEN_FILE:-/root/.pi-web-ui/internal-api-token}"
@@ -66,6 +85,11 @@ if [ "$FORCE" -eq 0 ] && [ -S "$SOCKET" ] && [ -n "$TOKEN" ]; then
 fi
 
 echo "Initiating production restart of pi-web-ui.service..."
+# Name the requester in the journal and the durable record BEFORE restarting —
+# the same shared recorder scripts/restart-pi-web-ui.sh uses. Without this the
+# 2026-09-15T15:35:23Z restart by this path left production's stop-audit file
+# with no requester, indistinguishable from an unexplained stop.
+"$script_dir/record-restart-requester.sh" "$REASON" "$ARGV_ORIGINAL" || true
 "$NOTIFY_SCRIPT" milestone "Production restart initiated" "pi-web-ui.service restarting cleanly (active turns: 0)" || true
 "$SYSTEMCTL_BIN" restart pi-web-ui.service
 echo "Production restart complete."
