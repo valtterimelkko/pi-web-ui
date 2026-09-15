@@ -43,6 +43,7 @@ interface CollapsibleToolCardProps {
   result?: ToolResult | null;
   startTime?: number; // Unix timestamp when tool started
   forceExpanded?: boolean; // externally controlled (e.g. "Expand all" toggle)
+  embedded?: boolean; // true when rendered inside a ToolGroupContainer row
 }
 
 // Map tool names to icons (following Kimi's approach)
@@ -119,6 +120,48 @@ function getPrimaryParam(args: unknown): string | null {
   return null;
 }
 
+// Format natural action and target for Claude Code-like tool headers
+function formatToolActionSummary(name: string, args: unknown): { action: string; target?: string } {
+  const norm = normalizeToolName(name).toLowerCase();
+  const record = (args && typeof args === 'object') ? (args as Record<string, unknown>) : {};
+
+  if (norm === 'bash' || norm === 'run_command') {
+    const cmd = (record.command || record.CommandLine || record.cmd || '') as string;
+    return { action: 'Run', target: cmd ? (cmd.length > 60 ? `${cmd.slice(0, 60)}…` : cmd) : undefined };
+  }
+  if (norm === 'read' || norm === 'view_file') {
+    const path = (record.path || record.AbsolutePath || record.file_path || '') as string;
+    const basename = path.split('/').filter(Boolean).pop() || path;
+    return { action: 'Read', target: basename || path };
+  }
+  if (norm === 'write' || norm === 'write_to_file') {
+    const path = (record.path || record.TargetFile || record.file_path || '') as string;
+    const basename = path.split('/').filter(Boolean).pop() || path;
+    return { action: 'Write', target: basename || path };
+  }
+  if (norm === 'edit' || norm === 'replace_file_content') {
+    const path = (record.path || record.TargetFile || record.file_path || '') as string;
+    const basename = path.split('/').filter(Boolean).pop() || path;
+    return { action: 'Edit', target: basename || path };
+  }
+  if (norm === 'glob' || norm === 'find_by_name') {
+    const pat = (record.pattern || record.Pattern || '') as string;
+    return { action: 'Find files', target: pat ? `"${pat}"` : undefined };
+  }
+  if (norm === 'grep' || norm === 'grep_search') {
+    const q = (record.pattern || record.query || record.Query || '') as string;
+    return { action: 'Search', target: q ? `"${q}"` : undefined };
+  }
+  if (norm.includes('skill')) {
+    const skillName = (record.skill || record.name || '') as string;
+    return { action: 'Ran skill', target: skillName ? `/${skillName}` : undefined };
+  }
+
+  const displayName = TOOL_DISPLAY_NAMES[normalizeToolName(name)] ?? TOOL_DISPLAY_NAMES[name] ?? name;
+  const primary = getPrimaryParam(args);
+  return { action: displayName, target: primary ?? undefined };
+}
+
 // Format args for display
 function formatArgs(args: unknown): string {
   try {
@@ -154,11 +197,11 @@ const ShortParam = memo(function ShortParam({
 }) {
   return (
     <div className="flex items-baseline gap-2 text-xs font-mono">
-      <span className="text-gray-500 shrink-0 select-none">{paramKey}</span>
-      <span className="text-gray-700 truncate">
-        <span className="text-gray-400">"</span>
+      <span className="text-content-muted dark:text-content-muted-dark shrink-0 select-none">{paramKey}</span>
+      <span className="text-content-secondary dark:text-content-secondary-dark truncate">
+        <span className="text-content-muted dark:text-content-muted-dark">"</span>
         {value}
-        <span className="text-gray-400">"</span>
+        <span className="text-content-muted dark:text-content-muted-dark">"</span>
       </span>
     </div>
   );
@@ -184,16 +227,16 @@ const LongParam = memo(function LongParam({
         className="flex items-baseline gap-2 text-xs font-mono w-full text-left group"
         type="button"
       >
-        <span className="text-gray-500 shrink-0 select-none">{paramKey}</span>
-        <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`} />
+        <span className="text-content-muted dark:text-content-muted-dark shrink-0 select-none">{paramKey}</span>
+        <ChevronRight className={`w-3 h-3 text-content-muted dark:text-content-muted-dark transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`} />
         {!expanded && (
-          <span className="text-gray-400 truncate group-hover:text-gray-600">
+          <span className="text-content-muted dark:text-content-muted-dark truncate group-hover:text-content-secondary dark:group-hover:text-content-secondary-dark">
             {preview}…
           </span>
         )}
       </button>
       {expanded && (
-        <pre className="ml-4 bg-gray-50 border border-gray-200 rounded p-2 overflow-x-auto text-xs">
+        <pre className="ml-4 bg-surface-subtle dark:bg-surface-dark-subtle border border-outline-subtle dark:border-outline-subtle-dark rounded p-2 overflow-x-auto text-xs font-mono text-content-secondary dark:text-content-secondary-dark">
           <code>{cleanValue}</code>
         </pre>
       )}
@@ -219,10 +262,10 @@ const ToolInputSection = memo(function ToolInputSection({ args }: { args: unknow
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-gray-500 font-mono">Arguments</span>
+        <span className="text-xs text-content-muted dark:text-content-muted-dark font-mono">Arguments</span>
         <button
           onClick={handleCopy}
-          className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+          className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark transition-colors"
           title="Copy arguments"
         >
           {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
@@ -395,17 +438,17 @@ const ToolOutput = memo(function ToolOutput({
       </button>
       
       {isExpanded && (
-        <div className={`ml-4 rounded-lg overflow-hidden ${
+        <div className={`ml-4 rounded-lg overflow-hidden border ${
           isError
-            ? 'bg-red-50 border border-red-200'
-            : 'bg-gray-50 border border-gray-200'
+            ? 'bg-red-50/50 dark:bg-red-950/20 border-red-200 dark:border-red-900/40'
+            : 'bg-surface-subtle dark:bg-surface-dark-subtle border-outline-subtle dark:border-outline-subtle-dark'
         }`}>
           {/* Special display for todo tool results */}
           {todoInfo && (
             <div className={`px-3 py-2 text-sm border-b ${
-              todoInfo.isToggle ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-100 border-gray-200'
+              todoInfo.isToggle ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/40' : 'bg-surface dark:bg-surface-dark border-outline-subtle dark:border-outline-subtle-dark'
             }`}>
-              <span className={todoInfo.isToggle ? 'text-emerald-700 font-medium' : 'text-gray-700'}>
+              <span className={todoInfo.isToggle ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-content-secondary dark:text-content-secondary-dark'}>
                 {todoInfo.isToggle && '✓ '}
                 {todoInfo.message}
               </span>
@@ -414,8 +457,8 @@ const ToolOutput = memo(function ToolOutput({
           
           {/* Special display for brief-only tools - summary only, no raw output */}
           {isBriefOnly && briefInfo && (
-            <div className="px-3 py-2 text-sm bg-emerald-50 border-b border-emerald-200">
-              <span className="text-emerald-700 font-medium">
+            <div className="px-3 py-2 text-sm bg-emerald-50 dark:bg-emerald-950/20 border-b border-emerald-200 dark:border-emerald-900/40">
+              <span className="text-emerald-700 dark:text-emerald-400 font-medium">
                 {getBriefSummary()}
               </span>
             </div>
@@ -423,8 +466,8 @@ const ToolOutput = memo(function ToolOutput({
           
           {/* Full output - hidden for brief-only tools to reduce verbosity */}
           {!(isBriefOnly && briefInfo) && (
-            <pre className={`p-3 overflow-x-auto text-xs font-mono ${
-              isError ? 'text-red-700' : 'text-gray-700'
+            <pre className={`p-3 overflow-x-auto text-xs font-mono max-h-80 leading-relaxed ${
+              isError ? 'text-red-700 dark:text-red-400' : 'text-content-secondary dark:text-content-secondary-dark'
             }`}>
               <code>{formattedOutput}</code>
             </pre>
@@ -535,6 +578,7 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
   result,
   startTime,
   forceExpanded,
+  embedded = false,
 }: CollapsibleToolCardProps) {
   // Collapsed by default (shared rule — matches the screen-view projection).
   const [isExpanded, setIsExpanded] = useState(!TOOL_COLLAPSED_BY_DEFAULT);
@@ -590,35 +634,40 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
   }, [showResult]);
 
   return (
-    <div className="w-full border border-gray-200 rounded-md overflow-hidden bg-white text-xs group">
+    <div className={embedded
+      ? "w-full text-xs group transition-colors"
+      : "w-full border border-outline-default dark:border-outline-default-dark rounded-lg overflow-hidden bg-surface dark:bg-surface-dark text-xs group my-1.5 shadow-xs transition-colors"
+    }>
       {/* Header - always visible, clickable to expand */}
       <button
         onClick={handleToggleExpand}
-        className={`flex items-center gap-1.5 w-full min-w-0 px-2.5 py-1.5 text-left transition-colors ${
-          isExpanded ? 'bg-gray-50 border-b border-gray-200' : 'hover:bg-gray-50'
+        className={`flex items-center gap-2 w-full min-w-0 px-3.5 py-2.5 text-left transition-colors ${
+          isExpanded
+            ? 'bg-surface-subtle dark:bg-surface-dark-subtle border-b border-outline-subtle dark:border-outline-subtle-dark'
+            : 'hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle'
         }`}
         type="button"
       >
-        {/* Tool icon – spinner (blue) when pending, green on success, red on error */}
+        {/* Tool icon – spinner (blue) when pending, red on error */}
         <span className={`shrink-0 ${
           isPending ? 'text-blue-500' :
           isError   ? 'text-red-500' :
-          'text-emerald-500'
+          'text-content-muted dark:text-content-muted-dark group-hover:text-content-primary dark:group-hover:text-content-primary-dark transition-colors'
         }`}>
           {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : icon}
         </span>
 
-        {/* "Using {displayName}" */}
-        <span className="font-medium text-gray-700 text-xs shrink-0">
-          Using {displayName}
-        </span>
-
-        {/* Primary parameter - inline, subtle */}
-        {primaryParam && !isExpanded && (
-          <span className="text-gray-400 truncate flex-1 min-w-0 text-xs font-mono">
-            {primaryParam}
+        {/* Action / Tool name + Primary parameter */}
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+          <span className="font-medium text-content-primary dark:text-content-primary-dark text-xs shrink-0">
+            Using {displayName}
           </span>
-        )}
+          {primaryParam && !isExpanded && (
+            <span className="text-content-secondary dark:text-content-secondary-dark truncate flex-1 min-w-0 text-xs font-mono">
+              {primaryParam}
+            </span>
+          )}
+        </div>
 
         {/* Brief status inline when collapsed */}
         {!isExpanded && (
@@ -628,12 +677,12 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
         )}
 
         {/* Chevron toggle – moved to RIGHT side */}
-        <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform duration-200 shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
+        <ChevronRight className={`w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark transition-transform duration-200 shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
       </button>
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="px-2.5 py-1.5 space-y-1.5">
+        <div className="px-3.5 py-2.5 space-y-2 bg-surface-subtle/40 dark:bg-surface-dark-subtle/40">
           {/* Brief status at top of expanded card */}
           <BriefStatus result={result} isPending={isPending} toolName={name} elapsedSeconds={elapsedSeconds} />
 
@@ -642,14 +691,14 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
             <div>
               <button
                 onClick={() => setShowInputs(prev => !prev)}
-                className="flex items-center gap-1 text-xs text-gray-500 font-mono hover:text-gray-700 py-0.5 w-full text-left"
+                className="flex items-center gap-1.5 text-xs text-content-muted dark:text-content-muted-dark font-mono hover:text-content-primary dark:hover:text-content-primary-dark py-0.5 w-full text-left"
                 type="button"
               >
                 <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${showInputs ? 'rotate-90' : ''}`} />
                 Input parameters
               </button>
               {showInputs && (
-                <div className="mt-1 pl-3 border-l border-gray-100">
+                <div className="mt-1 pl-3 border-l border-outline-subtle dark:border-outline-subtle-dark">
                   <ToolInputSection args={args} />
                 </div>
               )}

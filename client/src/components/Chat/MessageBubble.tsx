@@ -149,10 +149,10 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     <button
       onClick={handleCopy}
       className={`
-        p-2 rounded-lg transition-all duration-200 touch-manipulation
+        p-1.5 rounded-lg transition-all duration-200 touch-manipulation
         ${copied
-          ? 'bg-green-100 text-green-600'
-          : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
+          ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400'
+          : 'bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark text-content-muted dark:text-content-muted-dark sm:opacity-0 sm:group-hover:opacity-100 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle hover:text-content-primary dark:hover:text-content-primary-dark'
         }
       `}
       title={copied ? 'Copied!' : 'Copy message'}
@@ -299,10 +299,10 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
           className={`
             relative group break-words overflow-hidden
             ${isUser
-              ? 'bg-gray-100 rounded-lg p-3 text-gray-900 text-sm'
+              ? 'bg-gray-100 dark:bg-neutral-800 rounded-2xl px-4 py-3 text-content-primary dark:text-content-primary-dark text-sm shadow-xs'
               : isTool
-                ? 'bg-gray-50 border border-gray-200 rounded-lg p-3'
-                : 'pl-3 pr-8 border-l-2 border-blue-400 text-gray-900'
+                ? 'bg-surface-subtle dark:bg-surface-dark-subtle border border-outline-default dark:border-outline-default-dark rounded-lg p-3'
+                : 'pl-3 pr-8 border-l-2 border-transparent text-content-primary dark:text-content-primary-dark text-sm leading-relaxed'
             }
           `}
         >
@@ -419,7 +419,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       )}
 
       {/* Timestamp */}
-      <span className="text-[10px] text-gray-400 mt-0.5 block">
+      <span className="text-[10px] text-content-muted dark:text-content-muted-dark mt-1 block">
         {formatTime(message.timestamp)}
       </span>
     </div>

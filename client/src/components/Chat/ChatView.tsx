@@ -128,7 +128,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   }, [sessionCreation]);
 
   return (
-    <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
+    <div className="flex flex-col h-full bg-canvas dark:bg-canvas-dark transition-colors" data-testid="chat-interface">
       {/* Main content area */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
         {/* Message List - Virtualized for performance */}
@@ -148,15 +148,15 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {showScrollButton && (
           <button
             onClick={handleScrollToBottom}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 p-2 bg-white border border-gray-200 rounded-full shadow-md hover:bg-gray-50 transition-colors z-10"
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 p-2 bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded-full shadow-md hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors z-10"
             title="Scroll to bottom"
           >
-            <ArrowDown className="w-4 h-4 text-gray-600" />
+            <ArrowDown className="w-4 h-4 text-content-secondary dark:text-content-secondary-dark" />
           </button>
         )}
 
         {/* Message Input */}
-        <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
+        <div className={`bg-canvas dark:bg-canvas-dark pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
             <GoalPanel
               sessionId={currentSessionId}

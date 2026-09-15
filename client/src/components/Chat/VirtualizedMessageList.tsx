@@ -5,6 +5,7 @@ import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import type { WorkerStatus } from '../../store';
 import { TRANSFER_READY_MESSAGE } from '../../store/sessionStore';
 import { MessageBubble } from './MessageBubble';
+import { ToolGroupContainer } from '../Tools';
 import { useSessionStore } from '../../store';
 // Screen-view rule primitives are imported from the shared package so the
 // message list and the Internal API `view=screen` projection are defined by
@@ -50,6 +51,7 @@ type ToolGroupListItem = {
   groupId: string;
   groupSize: number;
   startIndex: number;
+  messages: LiveMessage[];
 };
 
 type ListItem = MessageListItem | ToolGroupListItem;
@@ -178,27 +180,6 @@ function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCr
   );
 }
 
-function ToolGroupToggle({
-  size,
-  isExpanded,
-  onToggle,
-}: {
-  size: number;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      onClick={onToggle}
-      className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 mb-1 transition-colors"
-      type="button"
-    >
-      {isExpanded ? '▲ Collapse all' : '▼ Expand all'}
-      <span className="text-gray-400">({size} tools)</span>
-    </button>
-  );
-}
-
 // Memoized message item component for performance
 const MessageItem = memo(function MessageItem({
   message,
@@ -305,34 +286,30 @@ export const VirtualizedMessageList = memo(forwardRef<
     return meta;
   }, [visibleMessages]);
 
-  // Create list items from visible messages. In the default/resting view, a
-  // consecutive run of 3+ tools is represented by a single group row, matching
-  // `projectDefaultViewFromEvents`. Expanding the group replaces that row with
-  // the individual tool cards.
+  // Create list items from visible messages. Consecutive runs of 3+ tools are
+  // represented by a single unified ToolGroupContainer containing all tools in the run.
   const listItems = useMemo<ListItem[]>(() => {
     const items: ListItem[] = [];
     let i = 0;
     while (i < visibleMessages.length) {
       const meta = toolGroupMeta[visibleMessages[i].id];
       if (meta?.isFirst) {
-        const isExpanded = toolGroupExpanded[meta.groupId] ?? false;
-        if (!isExpanded) {
-          items.push({
-            kind: 'tool_group',
-            groupId: meta.groupId,
-            groupSize: meta.groupSize,
-            startIndex: i,
-          });
-          i += meta.groupSize;
-          continue;
-        }
+        items.push({
+          kind: 'tool_group',
+          groupId: meta.groupId,
+          groupSize: meta.groupSize,
+          startIndex: i,
+          messages: visibleMessages.slice(i, i + meta.groupSize),
+        });
+        i += meta.groupSize;
+        continue;
       }
 
       items.push({ kind: 'message', message: visibleMessages[i], index: i });
       i++;
     }
     return items;
-  }, [visibleMessages, toolGroupMeta, toolGroupExpanded]);
+  }, [visibleMessages, toolGroupMeta]);
 
   // Find the index of the last user message to scope collapsing to the current agent run
   const lastUserMessageIndex = useMemo(() => {
@@ -490,14 +467,16 @@ export const VirtualizedMessageList = memo(forwardRef<
           }
           itemContent={(_index, item) => {
             if (item.kind === 'tool_group') {
+              const isGroupExpanded = toolGroupExpanded[item.groupId] ?? false;
               return (
-                <ToolGroupToggle
-                  size={item.groupSize}
-                  isExpanded={false}
+                <ToolGroupContainer
+                  groupId={item.groupId}
+                  messages={item.messages}
+                  isExpanded={isGroupExpanded}
                   onToggle={() =>
                     setToolGroupExpanded(prev => ({
                       ...prev,
-                      [item.groupId]: true,
+                      [item.groupId]: !prev[item.groupId],
                     }))
                   }
                 />
@@ -506,31 +485,12 @@ export const VirtualizedMessageList = memo(forwardRef<
 
             const isLast = item.index === visibleMessages.length - 1;
             const isCurrentRun = item.index > lastUserMessageIndex;
-            const groupMeta = toolGroupMeta[item.message.id];
-            const isGroupExpanded = groupMeta
-              ? (toolGroupExpanded[groupMeta.groupId] ?? false)
-              : false;
             return (
-              <>
-                {groupMeta?.isFirst && (
-                  <ToolGroupToggle
-                    size={groupMeta.groupSize}
-                    isExpanded={isGroupExpanded}
-                    onToggle={() =>
-                      setToolGroupExpanded(prev => ({
-                        ...prev,
-                        [groupMeta.groupId]: !prev[groupMeta.groupId],
-                      }))
-                    }
-                  />
-                )}
-                <MessageItem
-                  message={item.message}
-                  isLast={isLast}
-                  isCurrentRun={isCurrentRun}
-                  forceExpanded={groupMeta ? isGroupExpanded : undefined}
-                />
-              </>
+              <MessageItem
+                message={item.message}
+                isLast={isLast}
+                isCurrentRun={isCurrentRun}
+              />
             );
           }}
         />
