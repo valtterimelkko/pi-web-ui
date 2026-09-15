@@ -31,7 +31,7 @@
  * The model has no write access to any of this state.
  */
 
-import { normaliseRelayText } from './relay-normalise.js';
+import { normaliseRelayText, relayHasVisibleRemoval, repairRelaySeams, visibleRemovalFragments } from './relay-normalise.js';
 
 const DEFAULT_UTTERANCE_LOG_LIMIT = 50;
 const DEFAULT_MAX_PENDING_AGE_TURNS = 6;
@@ -69,6 +69,38 @@ export interface DraftUtteranceEntry {
   text: string;
   turn: number;
   originalText?: string;
+  /**
+   * The exact pieces the relay normalisation removed when this part was
+   * appended (relay-normalise.ts). Kept beside `originalText` so the card's
+   * "taken out of your words" note can show the FRAGMENTS the harness
+   * actually removed — never the operator's whole utterance. Empty/absent
+   * when the part was stored byte-identical.
+   */
+  removals?: string[];
+}
+
+/**
+ * Which bytes a release sends (card-contract brief, D2/R6/R7):
+ *   - 'tidied'   the default — the relay text the card quoted;
+ *   - 'original' the operator's raw words per part (`originalText ?? text`),
+ *                reachable only through the confirm gesture.
+ */
+export type ReleaseVariant = 'tidied' | 'original';
+
+/**
+ * The card payload a `proposed` turn reports (R1–R5). Built by a pure helper
+ * so the seam is unit-testable without the WebSocket handler, and so the
+ * release path uses the same joins BY CONSTRUCTION.
+ */
+export interface ProposalDescriptor {
+  /** The exact bytes a default Confirm releases (unchanged semantics). */
+  text: string;
+  /** True IFF tidying removed VISIBLE content. */
+  cleaned: boolean;
+  /** The removed FRAGMENTS only, joined — present only when cleaned. */
+  removed?: string;
+  /** The raw bytes an original-variant release sends — present only when cleaned. */
+  original?: string;
 }
 
 /** Harness view of the live draft (null when the operator is not composing). */
@@ -97,6 +129,48 @@ export interface TakenRelease {
  */
 export function joinDraftText(utterances: ReadonlyArray<{ text: string }>): string {
   return utterances.map(u => u.text).join('\n');
+}
+
+/**
+ * The draft's ORIGINAL text (R3): the same parts in the same order, each
+ * `originalText ?? text`, joined with the same separator as the relay text —
+ * exactly the bytes an 'original' release sends. A part with nothing removed
+ * has no `originalText`; its raw words ARE its relay text.
+ */
+export function joinOriginalDraftText(
+  utterances: ReadonlyArray<{ text: string; originalText?: string }>
+): string {
+  return utterances.map(u => u.originalText ?? u.text).join('\n');
+}
+
+/**
+ * R1–R5 — the pure proposal descriptor.
+ *
+ * R1: `cleaned` is true iff at least one recorded removal contains a
+ * non-whitespace character. A whitespace-only normalisation (trimmed trailing
+ * newline, collapsed double space, closed space before punctuation) is NOT a
+ * tidy, so the card's "your words, exactly" claim stays true.
+ * R2: `removed` carries the recorded FRAGMENTS, visible ones only, joined —
+ * never the whole utterance.
+ * R3: `original` is the raw bytes an original-variant release sends, present
+ * only when cleaned (there is a meaningful choice only then).
+ * R4: nothing is invented — every field comes from bytes the store holds.
+ */
+export function describeProposal(utterances: readonly DraftUtteranceEntry[]): ProposalDescriptor {
+  const text = joinDraftText(utterances);
+  const removals = utterances.flatMap(u => u.removals ?? []);
+  if (!relayHasVisibleRemoval(removals)) {
+    // Byte-level change without a visible removal: not a tidy.
+    return { text, cleaned: false };
+  }
+  const fragments = utterances.flatMap(u => visibleRemovalFragments(u.removals ?? []));
+  const descriptor: ProposalDescriptor = { text, cleaned: true, original: joinOriginalDraftText(utterances) };
+  if (fragments.length > 0) {
+    // Joined once, with the same seam semantics the relay text itself gets,
+    // so the note reads as the words that left rather than as raw strips.
+    descriptor.removed = repairRelaySeams(fragments.join(' '));
+  }
+  return descriptor;
 }
 
 /** Internal, mutable draft state. */
@@ -258,7 +332,7 @@ export class PendingProposalStore {
   appendToDraft(utteranceId: number, text: string, turn: number): DraftSnapshot {
     const relay = normaliseRelayText(text);
     const entry: DraftUtteranceEntry = relay.changed
-      ? { id: utteranceId, text: relay.text, turn, originalText: text }
+      ? { id: utteranceId, text: relay.text, turn, originalText: text, removals: relay.removals }
       : { id: utteranceId, text, turn };
     if (!this.draft) {
       this.draft = {
@@ -317,8 +391,18 @@ export class PendingProposalStore {
    * Returns null when nothing is pending (a second "yes" after a release has
    * nothing to act on) and when a selection cannot be resolved to an existing
    * part (an ambiguous selection never acts and changes nothing).
+   *
+   * `variant` (card-contract brief, R7) chooses WHICH bytes the one release
+   * path sends: 'tidied' (default) is the relay text the card quoted;
+   * 'original' is the raw bytes per part (`originalText ?? text`, same join).
+   * The gates are identical either way — a lapsed draft, an ambiguous
+   * selection and an empty draft refuse exactly as before.
    */
-  takeForRelease(turn: number, selection?: DraftSelection): TakenRelease | null {
+  takeForRelease(
+    turn: number,
+    selection?: DraftSelection,
+    variant: ReleaseVariant = 'tidied'
+  ): TakenRelease | null {
     const d = this.draft;
     if (!d || d.utterances.length === 0) return null;
     const age = Math.max(d.ageTurns, turn - d.lastTouchedTurn);
@@ -349,7 +433,7 @@ export class PendingProposalStore {
     return {
       utteranceIds: selected.map(u => u.id),
       utteranceId: selected[0].id,
-      text: joinDraftText(selected),
+      text: variant === 'original' ? joinOriginalDraftText(selected) : joinDraftText(selected),
     };
   }
 

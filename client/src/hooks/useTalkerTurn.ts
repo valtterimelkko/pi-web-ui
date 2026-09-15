@@ -30,6 +30,13 @@ export interface SendTalkerTurnInput {
    *  for the talker only (it may suggest leaving focus); it can never switch
    *  the control and never touches the gate. */
   operatorFocus?: boolean;
+  /**
+   * D2: which bytes a confirmation releases — 'tidied' (default) the relay
+   * text, 'original' the operator's raw words (the card's "Send my exact
+   * words"). Sent only by the explicit original action; the server honours it
+   * only on the confirm branch.
+   */
+  releaseVariant?: 'tidied' | 'original';
 }
 
 export function useTalkerTurn() {
@@ -59,6 +66,7 @@ export function useTalkerTurn() {
         utterance: input.utterance,
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.operatorFocus !== undefined ? { operatorFocus: input.operatorFocus } : {}),
+        ...(input.releaseVariant !== undefined ? { releaseVariant: input.releaseVariant } : {}),
       });
       const accepted = result !== 'failed';
       if (accepted) {

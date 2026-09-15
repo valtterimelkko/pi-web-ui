@@ -66,7 +66,7 @@
 import { classifyOperatorUtterance, extractPostCancelInstruction, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
 import { isAskWorkerOffer, stripAskWorkerMarker } from './ask-worker.js';
 import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
-import type { DraftSelection, DraftSnapshot } from './pending-proposal.js';
+import type { DraftSelection, DraftSnapshot, ReleaseVariant } from './pending-proposal.js';
 import { createVoiceTurnRecorder, type VoiceTurnObservation, type VoiceTurnRecorder, type VoiceRuntime } from './observability.js';
 import { renderStateView } from './state-view.js';
 import { TalkerHistory } from './history.js';
@@ -227,7 +227,10 @@ export class TalkerSession {
    * the operator. There is no session state and no method that switches it, and
    * it is never an input to the gate.
    */
-  async handleOperatorTurn(utterance: string, opts?: { operatorFocus?: boolean }): Promise<TalkerTurnResult> {
+  async handleOperatorTurn(
+    utterance: string,
+    opts?: { operatorFocus?: boolean; releaseVariant?: ReleaseVariant }
+  ): Promise<TalkerTurnResult> {
     if (!utterance || !utterance.trim()) {
       throw new Error('operator utterance must be non-empty');
     }
@@ -257,6 +260,7 @@ export class TalkerSession {
     try {
       const result = await this.handleOperatorTurnBody(utterance, turn, {
         ...(opts?.operatorFocus !== undefined ? { operatorFocus: opts.operatorFocus } : {}),
+        ...(opts?.releaseVariant !== undefined ? { releaseVariant: opts.releaseVariant } : {}),
       });
       observation.draftAfter = this.proposals.snapshotDraft();
       try {
@@ -279,7 +283,7 @@ export class TalkerSession {
   private async handleOperatorTurnBody(
     utterance: string,
     turn: number,
-    opts: { operatorFocus?: boolean } = {}
+    opts: { operatorFocus?: boolean; releaseVariant?: ReleaseVariant } = {}
   ): Promise<TalkerTurnResult> {
     // P18/2: the operator's focus control is projection input for every
     // conversational turn this turn takes (and for nothing else — the
@@ -322,7 +326,7 @@ export class TalkerSession {
           this.history.maybeTrim(this.proposals.pending !== null);
           return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
         }
-        return this.release(utterance, turn, selection ?? undefined);
+        return this.release(utterance, turn, selection ?? undefined, opts.releaseVariant ?? 'tidied');
       }
       // A confirmation with nothing pending is a DEAD END, and the harness
       // owns it (finding F2, P7): the model's conversational answer promised
@@ -428,9 +432,19 @@ export class TalkerSession {
    * pending-proposal store via takeForRelease(), which is null-safe, so even
    * a forced direct call cannot relay anything that was not a recorded,
    * unexpired, live draft part.
+   *
+   * `variant` (card-contract brief, R6/R7/R8) is a PARAMETER of this one path,
+   * never a second door: 'tidied' releases the relay text the card quoted,
+   * 'original' releases the operator's raw bytes per part. Nothing else on the
+   * path changes — the same store call, the same gates, the same delivery.
    */
-  private async release(confirmingUtterance: string, turn: number, selection?: DraftSelection): Promise<TalkerTurnResult> {
-    const taken = this.proposals.takeForRelease(turn, selection);
+  private async release(
+    confirmingUtterance: string,
+    turn: number,
+    selection: DraftSelection | undefined,
+    variant: ReleaseVariant
+  ): Promise<TalkerTurnResult> {
+    const taken = this.proposals.takeForRelease(turn, selection, variant);
     if (!taken) {
       // Defensive: cannot happen from handleOperatorTurn (it checks pending
       // first), and cannot relay anything either way.

@@ -31,6 +31,7 @@
  */
 
 import { TalkerSession } from './talker.js';
+import type { ReleaseVariant } from './pending-proposal.js';
 import { digestTurn, type DigestKind } from './digest.js';
 import { createDefaultDeliveries, type DefaultDeliveries } from './delivery.js';
 import { createObservedDelivery, createVoiceTurnRecorder, noteVoiceLaneBound, noteVoiceLaneDisposed, type VoiceTurnRecorder } from './observability.js';
@@ -89,6 +90,14 @@ export interface TalkerOperatorTurnInput {
    * and it is never an input to the gate.
    */
   operatorFocus?: boolean;
+  /**
+   * D2 (card-contract brief): which bytes a confirmation releases —
+   * 'tidied' (default) the relay text, 'original' the operator's raw words.
+   * Passed straight through to the talker's single release path, which
+   * honours it ONLY on the confirm branch; this registry adds no capability
+   * and has no release path of its own.
+   */
+  releaseVariant?: ReleaseVariant;
 }
 
 export interface TalkerOperatorTurnResult {
@@ -331,6 +340,7 @@ export class TalkerSessionRegistry {
     const talker = this.getOrCreate(workerRef, runtime, delivery, model);
     const turn = await talker.handleOperatorTurn(input.utterance, {
       ...(input.operatorFocus !== undefined ? { operatorFocus: input.operatorFocus } : {}),
+      ...(input.releaseVariant !== undefined ? { releaseVariant: input.releaseVariant } : {}),
     });
     return { reply: turn.reply, turn };
   }

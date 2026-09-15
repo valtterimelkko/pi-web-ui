@@ -387,21 +387,107 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
       expect((released?.message as { released?: { text?: string } }).released?.text).toBe(proposal?.text);
     });
 
-    it('a tidied draft tells the truth: cleaned=true and the removed field carries the operator\'s raw words', async () => {
+    it("a tidied draft tells the truth: cleaned=true and removed carries the FRAGMENTS, not the whole utterance", async () => {
       buildHarness();
       await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'Um, tell the worker to rerun the suite', requestId: 'd1b' });
-      const proposed = lastOfType('talker_turn_result')?.message as { proposal?: { cleaned?: boolean; removed?: string } };
+      const proposed = lastOfType('talker_turn_result')?.message as {
+        proposal?: { text?: string; cleaned?: boolean; removed?: string; original?: string };
+      };
+      expect(proposed?.proposal?.text).toBe('rerun the suite');
       expect(proposed?.proposal?.cleaned).toBe(true);
-      expect(proposed?.proposal?.removed).toContain('Um, tell the worker to rerun the suite');
+      // R2: the removed fragments only — the operator's whole utterance is NOT
+      // 'taken out of his words'; it is what the original variant would send.
+      expect(proposed?.proposal?.removed).toBe('Um, tell the worker to');
+      expect(proposed?.proposal?.removed).not.toBe('Um, tell the worker to rerun the suite');
+      // R3: the raw bytes an original-variant release sends.
+      expect(proposed?.proposal?.original).toBe('Um, tell the worker to rerun the suite');
     });
 
     it('a clean draft does not cry wolf: cleaned=false, text equals the utterance, no removed', async () => {
       buildHarness();
       await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'run the deploy checks', requestId: 'd1c' });
-      const proposed = lastOfType('talker_turn_result')?.message as { proposal?: { text?: string; cleaned?: boolean; removed?: string } };
+      const proposed = lastOfType('talker_turn_result')?.message as { proposal?: { text?: string; cleaned?: boolean; removed?: string; original?: string } };
       expect(proposed?.proposal?.text).toBe('run the deploy checks');
       expect(proposed?.proposal?.cleaned).toBe(false);
       expect(proposed?.proposal?.removed).toBeUndefined();
+      expect(proposed?.proposal?.original).toBeUndefined();
+    });
+
+    it('a whitespace-only normalisation (trailing newline) is NOT a tidy — R1, the operator-reported case', async () => {
+      buildHarness();
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'Proceed.\n', requestId: 'd1d' });
+      const proposed = lastOfType('talker_turn_result')?.message as {
+        phase?: string;
+        proposal?: { text?: string; cleaned?: boolean; removed?: string; original?: string };
+      };
+      expect(proposed?.phase).toBe('proposed');
+      expect(proposed?.proposal?.text).toBe('Proceed.'); // relay text is still normalised...
+      expect(proposed?.proposal?.cleaned).toBe(false); // ...but nothing visible was removed
+      expect(proposed?.proposal?.removed).toBeUndefined();
+      expect(proposed?.proposal?.original).toBeUndefined();
+    });
+
+    it('the SEAM invariant: proposal.text === default release bytes AND proposal.original === original-variant release bytes', async () => {
+      buildHarness();
+      const SPOKEN = 'Um, tell the worker to rerun the suite';
+
+      // Half one: what the card quotes is what a default Confirm sends.
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: SPOKEN, requestId: 'seam-1' });
+      const proposal = (lastOfType('talker_turn_result')?.message as {
+        proposal?: { text?: string; cleaned?: boolean; removed?: string; original?: string };
+      }).proposal;
+      expect(proposal?.cleaned).toBe(true);
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: 'yes', requestId: 'seam-2' });
+      const defaultRelease = (lastOfType('talker_turn_result')?.message as { phase?: string; released?: { text?: string } });
+      expect(defaultRelease.phase).toBe('released');
+      expect(defaultRelease.released?.text).toBe(proposal?.text);
+      expect(piDelivery.deliveredTexts()).toEqual([proposal?.text]);
+
+      // Half two: what the disclosure shows is what the original send sends.
+      await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: SPOKEN, requestId: 'seam-3' });
+      const proposal2 = (lastOfType('talker_turn_result')?.message as {
+        proposal?: { text?: string; cleaned?: boolean; removed?: string; original?: string };
+      }).proposal;
+      expect(proposal2?.original).toBe(SPOKEN);
+      await sendBrowserMessage({
+        type: 'talker_turn',
+        workerSessionId: PATH,
+        utterance: 'yes',
+        releaseVariant: 'original',
+        requestId: 'seam-4',
+      });
+      const originalRelease = (lastOfType('talker_turn_result')?.message as { phase?: string; released?: { text?: string } });
+      expect(originalRelease.phase).toBe('released');
+      expect(originalRelease.released?.text).toBe(proposal2?.original);
+      expect(piDelivery.deliveredTexts()).toEqual([proposal?.text, proposal2?.original]);
+    });
+
+    it("R6: the variant is honoured ONLY on the confirm branch — a non-confirm utterance releases nothing", async () => {
+      buildHarness();
+      await sendBrowserMessage({
+        type: 'talker_turn',
+        workerSessionId: PATH,
+        utterance: 'Um, tell the worker to rerun the suite',
+        releaseVariant: 'original',
+        requestId: 'r6a',
+      });
+      const proposed = lastOfType('talker_turn_result')?.message as { phase?: string };
+      expect(proposed?.phase).toBe('proposed');
+      expect(piDelivery.deliveredTexts()).toEqual([]); // nothing released by a non-confirm turn
+    });
+
+    it('R6: an invalid releaseVariant is rejected by the message schema, not coerced', async () => {
+      buildHarness();
+      await sendBrowserMessage({
+        type: 'talker_turn',
+        workerSessionId: PATH,
+        utterance: 'yes',
+        releaseVariant: 'raw',
+        requestId: 'r6b',
+      });
+      expect(lastOfType('error')?.message.code).toBe('INVALID_MESSAGE');
+      expect(lastOfType('talker_turn_result')).toBeUndefined();
+      expect(piDelivery.deliveredTexts()).toEqual([]);
     });
   });
 });

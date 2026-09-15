@@ -349,9 +349,11 @@ export function DriveModeDictate({
             proposalText={voice.pendingProposal.text}
             cleaned={voice.pendingProposal.cleaned}
             removed={voice.pendingProposal.removed}
+            original={voice.pendingProposal.original}
             onConfirm={voice.confirmPending}
             onCancel={voice.cancelPending}
             onSubmitText={voice.sendText}
+            onSendOriginal={voice.releaseOriginal}
           />
         </div>
       )}

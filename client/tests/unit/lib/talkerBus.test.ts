@@ -44,6 +44,19 @@ describe('talkerBus', () => {
     unsubscribe();
   });
 
+  it('carries a proposed result\'s card payload through intact — cleaned, removed fragments, original (D1/D2 mirror)', () => {
+    const proposal = {
+      text: 'rerun the suite',
+      cleaned: true,
+      removed: 'Um, tell the worker to',
+      original: 'Um, tell the worker to rerun the suite',
+    };
+    const result = makeResult({ phase: 'proposed', released: null, proposal });
+    expect(emitTalkerTurnResult(result)).toBe(true);
+    // The mirror adds no interpretation: the server's own account arrives as sent.
+    expect((getLastTalkerTurnResult() as { proposal?: unknown }).proposal).toEqual(proposal);
+  });
+
   it('stops delivering after unsubscribe and keeps lastResult for late hydration', () => {
     const seen: unknown[] = [];
     const unsubscribe = subscribeTalkerTurnResults((r) => seen.push(r));

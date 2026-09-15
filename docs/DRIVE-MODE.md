@@ -21,7 +21,7 @@ When you dictate, your words go to a helper agent (the *talker*) — never strai
 
 - your words are passed on as spoken — tidied only when they ramble, never rewritten;
 - the worker never knows the talker or your voice exists — it just receives an instruction;
-- before anything reaches the worker, a confirmation card shows the exact text that will be sent (and what was tidied out of it, if anything). **Confirm** sends it, **Cancel** drops it, and typed text replies to the talker instead.
+- before anything reaches the worker, a confirmation card shows the exact text that will be sent. When the tidying changed your words, the card says so, shows the fragments it took out, and offers **Send my exact words** — your original wording instead of the tidied relay. When nothing visible changed it makes no tidy claim at all. **Confirm** sends the tidied text, **Cancel** drops it, and typed text replies to the talker instead.
 
 ## Key Files
 

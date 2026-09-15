@@ -23,7 +23,7 @@ import { readBackgroundTasksSnapshot } from '../internal-api/background-children
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager } from '../pi/multi-session-manager.js';
 import { TalkerSessionRegistry } from '../talker/session-registry.js';
-import { joinDraftText } from '../talker/pending-proposal.js';
+import { describeProposal } from '../talker/pending-proposal.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
@@ -4192,6 +4192,10 @@ export class WebSocketConnectionManager {
         runtime,
         // P18/2: the operator's focus control, projection input only.
         ...(message.operatorFocus !== undefined ? { operatorFocus: message.operatorFocus } : {}),
+        // D2 (card-contract brief): which bytes a confirmation releases. The
+        // registry passes it to the talker's single release path, where it is
+        // honoured only on the confirm branch; there is no second door here.
+        ...(message.releaseVariant !== undefined ? { releaseVariant: message.releaseVariant } : {}),
       });
 
       // Mechanically derived phase. 'proposed' means the harness holds an
@@ -4211,11 +4215,15 @@ export class WebSocketConnectionManager {
       }
 
       // P27 finding D1: the card contract's server half. Built from the SAME
-      // draft snapshot and the SAME join the release path uses, so the bytes the
-      // card shows are the bytes a confirm releases - never an approximation.
-      // removed carries the operator's own original words for the tidied parts
-      // (what the card shows as changed), which the store already keeps; no
-      // per-strip removals list is invented.
+      // draft snapshot and the SAME joins the release path uses, so the bytes
+      // the card shows are the bytes a confirm releases - never an
+      // approximation, and never a claim the harness cannot support.
+      // D1 fix: `cleaned` now means a VISIBLE tidy (a whitespace-only
+      // normalisation no longer cries wolf), `removed` carries the removed
+      // FRAGMENTS rather than the operator's whole utterance, and `original`
+      // carries the raw bytes the operator may choose instead (D2).
+      // The descriptor is a pure helper (pending-proposal.describeProposal),
+      // unit-tested without this handler; this is a pass-through only.
       // NB: `pending` is a projection (utteranceId/text), NOT the draft
       // snapshot - the per-part originals live in snapshotDraft(). Feeding
       // `pending` into this threw at runtime (no .utterances) on the first
@@ -4225,19 +4233,8 @@ export class WebSocketConnectionManager {
           ? this.talkerSessionRegistry.get(message.workerSessionId, runtime)?.proposals.snapshotDraft() ?? null
           : null;
       const proposalForCard = draftSnapshotForCard
-        ? {
-            text: joinDraftText(draftSnapshotForCard.utterances),
-            ...(draftSnapshotForCard.utterances.some(u => u.originalText !== undefined)
-              ? {
-                  cleaned: true,
-                  removed: draftSnapshotForCard.utterances
-                    .filter(u => u.originalText !== undefined)
-                    .map(u => u.originalText)
-                    .join(' '),
-                }
-              : { cleaned: false }),
-          }
-          : undefined;
+        ? describeProposal(draftSnapshotForCard.utterances)
+        : undefined;
 
       this.sendMessage(clientId, {
         type: 'talker_turn_result',

@@ -100,6 +100,13 @@ export interface PendingProposal {
   text: string;
   cleaned?: boolean;
   removed?: string;
+  /**
+   * D2 (card-contract brief): the operator's raw words — the exact bytes an
+   * original-variant release sends. The store held them all along; the server
+   * reports them only when the tidying removed visible content, so a clean
+   * utterance (or an older server) surfaces none. Never invented client-side.
+   */
+  original?: string;
 }
 
 /**
@@ -116,14 +123,15 @@ export interface PendingProposal {
  */
 function proposalFromResult(
   result: TalkerTurnResult
-): Pick<PendingProposal, 'cleaned' | 'removed'> & { text?: string } | null {
+): Pick<PendingProposal, 'cleaned' | 'removed' | 'original'> & { text?: string } | null {
   const raw = (result as { proposal?: unknown }).proposal;
   if (typeof raw !== 'object' || raw === null) return null;
-  const p = raw as { text?: unknown; cleaned?: unknown; removed?: unknown };
-  const proposal: { text?: string; cleaned?: boolean; removed?: string } = {};
+  const p = raw as { text?: unknown; cleaned?: unknown; removed?: unknown; original?: unknown };
+  const proposal: { text?: string; cleaned?: boolean; removed?: string; original?: string } = {};
   if (typeof p.text === 'string' && p.text.length > 0) proposal.text = p.text;
   if (typeof p.cleaned === 'boolean') proposal.cleaned = p.cleaned;
   if (typeof p.removed === 'string') proposal.removed = p.removed;
+  if (typeof p.original === 'string' && p.original.length > 0) proposal.original = p.original;
   return Object.keys(proposal).length > 0 ? proposal : null;
 }
 
@@ -142,11 +150,15 @@ export interface UseVoiceTurnResult {
   sendText: (text: string) => boolean;
 
   /** The pending proposal — the exact text Confirm will release, plus the
-   *  harness's cleaning facts when the server reports them (P26). Null when
-   *  nothing is pending. */
+   *  harness's cleaning facts when the server reports them (P26), and the raw
+   *  words the operator may choose instead (D2). Null when nothing is pending. */
   pendingProposal: PendingProposal | null;
   confirmPending: () => boolean;
   cancelPending: () => boolean;
+  /** D2 — release the operator's ORIGINAL words instead of the tidied relay
+   *  text: the same confirm gesture carrying `releaseVariant: 'original'`.
+   *  No-ops without a live proposal, exactly like confirmPending. */
+  releaseOriginal: () => boolean;
 
   /** Last released relay (verbatim text + delivery outcome) for display. */
   lastReleased: ReleasedOutcome | null;
@@ -213,7 +225,7 @@ export function useVoiceTurn(
   const lastSentRef = useRef<string | null>(null);
 
   const attemptSend = useCallback(
-    (text: string): boolean => {
+    (text: string, releaseVariant?: 'tidied' | 'original'): boolean => {
       const accepted = sendTalkerTurn({
         workerSessionId,
         utterance: text,
@@ -221,6 +233,9 @@ export function useVoiceTurn(
         // Sent only when focus is ON: the flag tells the talker the worker's
         // answers are not being spoken, so it can suggest leaving focus.
         ...(operatorFocus ? { operatorFocus: true } : {}),
+        // D2: sent only for the explicit original action; the default confirm
+        // path stays byte-identical to before (no field at all).
+        ...(releaseVariant !== undefined ? { releaseVariant } : {}),
       });
       if (!accepted) {
         setPendingText(text);
@@ -269,6 +284,7 @@ export function useVoiceTurn(
           text: fromServer?.text ?? lastSentRef.current,
           ...(fromServer?.cleaned !== undefined ? { cleaned: fromServer.cleaned } : {}),
           ...(fromServer?.removed !== undefined ? { removed: fromServer.removed } : {}),
+          ...(fromServer?.original !== undefined ? { original: fromServer.original } : {}),
         });
       }
     } else if (lastResult.phase === 'answered') {
@@ -327,6 +343,13 @@ export function useVoiceTurn(
     return attemptSend(CANCEL_UTTERANCE);
   }, [pendingProposal, attemptSend]);
 
+  /** D2 — the operator chose his own words. One gesture, one variant field:
+   *  the server's single release path does the rest. */
+  const releaseOriginal = useCallback((): boolean => {
+    if (!pendingProposal) return false;
+    return attemptSend(CONFIRM_UTTERANCE, 'original');
+  }, [pendingProposal, attemptSend]);
+
   const retryLastSend = useCallback((): boolean => {
     if (pendingText === null) return true;
     return attemptSend(pendingText);
@@ -365,6 +388,7 @@ export function useVoiceTurn(
     pendingProposal,
     confirmPending,
     cancelPending,
+    releaseOriginal,
     lastReleased,
     refusal,
     pendingText,

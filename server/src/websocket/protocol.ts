@@ -452,6 +452,17 @@ export interface TalkerTurnMessage {
    * client) and it is never an input to the confirm gate.
    */
   operatorFocus?: boolean;
+  /**
+   * Which bytes a confirmation releases (card-contract brief, D2/R6).
+   *   - 'tidied'   (default) the relay text the card quoted;
+   *   - 'original' the operator's raw words per part, offered by the card's
+   *                "Send my exact words" action.
+   * Honoured ONLY on the confirm branch with a live pending draft: a
+   * non-confirm utterance carrying it behaves exactly as before, and an
+   * invalid value fails the message schema rather than being coerced.
+   * Additive and optional — an older client omits it and gets 'tidied'.
+   */
+  releaseVariant?: 'tidied' | 'original';
 }
 
 /** Server → Client: what happened on one operator talker turn. */
@@ -471,15 +482,23 @@ export interface TalkerTurnResultMessage {
   cancelled: boolean;
   /**
    * Present only when phase === 'proposed' (P27 finding D1): the exact text a
-   * confirmation would release, plus whether the harness tidied the operator's
-   * words to produce it. `text` is built by the SAME join the release path
-   * uses, so the card displays bytes byte-identical to what Confirm sends —
-   * the operator approves exactly what will go. `removed`, when cleaned is
-   * true, carries the operator's own original words for the tidied parts, so
-   * the card can show what changed. Absent on every other phase; the client
-   * treats absence as "not proposed", never as an error. Additive, optional.
+   * confirmation would release, plus the harness's own honest account of the
+   * relay transform. `text` is built by the SAME join the release path uses,
+   * so the card displays bytes byte-identical to what Confirm sends — the
+   * operator approves exactly what will go.
+   *
+   *   - `cleaned` is true IFF tidying removed VISIBLE content. A whitespace-only
+   *     normalisation (a trimmed trailing newline) is NOT a tidy: the card's
+   *     "your words, exactly" claim is then true, because the words ARE exact.
+   *   - `removed`, when cleaned, carries the removed FRAGMENTS only (never the
+   *     operator's whole utterance).
+   *   - `original`, when cleaned, is the exact raw text the original-variant
+   *     release sends, so the card can offer the operator his own words (D2).
+   *
+   * Absent on every other phase; the client treats absence as "not proposed",
+   * never as an error. Additive, optional.
    */
-  proposal?: { text: string; cleaned?: boolean; removed?: string };
+  proposal?: { text: string; cleaned: boolean; removed?: string; original?: string };
   /**
    * The harness's mechanical classification of the operator's utterance (P18
    * package C). Additive and optional: the client only uses it to choose the
@@ -508,7 +527,8 @@ export function isTalkerTurnMessage(data: unknown): data is TalkerTurnMessage {
     typeof msg.utterance === 'string' &&
     (msg.runtime === undefined || msg.runtime === 'pi' || msg.runtime === 'claude' || msg.runtime === 'antigravity') &&
     (msg.requestId === undefined || typeof msg.requestId === 'string') &&
-    (msg.operatorFocus === undefined || typeof msg.operatorFocus === 'boolean')
+    (msg.operatorFocus === undefined || typeof msg.operatorFocus === 'boolean') &&
+    (msg.releaseVariant === undefined || msg.releaseVariant === 'tidied' || msg.releaseVariant === 'original')
   );
 }
 

@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
 // RED: module does not exist yet.
-import { PendingProposalStore, UtteranceLog } from '../../../src/talker/pending-proposal.js';
+import {
+  PendingProposalStore,
+  UtteranceLog,
+  describeProposal,
+  joinOriginalDraftText,
+} from '../../../src/talker/pending-proposal.js';
 
 describe('UtteranceLog', () => {
   it('stores verbatim operator utterances with ids and resolves them by id', () => {
@@ -129,5 +134,115 @@ describe('PendingProposalStore', () => {
     // Internal history must not grow unbounded.
     const history = store.releasedHistory();
     expect(history.length).toBe(2);
+  });
+});
+
+/**
+ * R1–R5 (card-contract brief, D1) — the pure proposal descriptor the card
+ * payload is built from. `changed` is byte-level and cannot be the card's
+ * truth claim: a trimmed trailing newline marks a part changed with zero
+ * recorded removals, which made the card cry wolf and strike through the
+ * operator's whole utterance. The descriptor answers the visible question
+ * instead, and carries the raw bytes the operator can choose (D2, R3).
+ */
+describe('describeProposal — the card payload, built pure (R1–R5)', () => {
+  const draftOf = (...utterances: string[]) => {
+    const store = new PendingProposalStore();
+    utterances.forEach((u, i) => store.appendToDraft(i + 1, u, i + 1));
+    const snap = store.snapshotDraft();
+    if (!snap) throw new Error('draft expected');
+    return snap.utterances;
+  };
+
+  it('R1: a whitespace-only normalisation is NOT a tidy — cleaned false, no removed, no original', () => {
+    // The operator-reported case, exactly: a dictation trailing newline.
+    const parts = draftOf('Proceed.\n');
+    expect(parts[0].text).toBe('Proceed.');
+    expect(parts[0].originalText).toBe('Proceed.\n'); // the store still holds the raw bytes
+    expect(describeProposal(parts)).toEqual({ text: 'Proceed.', cleaned: false });
+  });
+
+  it('R4: an already-clean utterance invents nothing', () => {
+    expect(describeProposal(draftOf('run the deploy checks'))).toEqual({
+      text: 'run the deploy checks',
+      cleaned: false,
+    });
+  });
+
+  it('R2/R3: visible removals → cleaned true, removed = the FRAGMENTS only, original = the raw bytes', () => {
+    const described = describeProposal(draftOf('Um, tell the worker to rerun the suite'));
+    expect(described).toEqual({
+      text: 'rerun the suite',
+      cleaned: true,
+      removed: 'Um, tell the worker to',
+      original: 'Um, tell the worker to rerun the suite',
+    });
+    // R2 hard rule: `removed` never carries the operator's whole utterance.
+    expect(described.removed).not.toBe('Um, tell the worker to rerun the suite');
+  });
+
+  it('R3: a multi-part original is each part\'s raw bytes (originalText ?? text), same join as the relay', () => {
+    const parts = draftOf('Um, rebase main', 'run the suite');
+    const described = describeProposal(parts);
+    expect(described.text).toBe('rebase main\nrun the suite');
+    expect(described.cleaned).toBe(true);
+    expect(described.removed).toBe('Um,');
+    expect(described.original).toBe('Um, rebase main\nrun the suite');
+    expect(described.original).toBe(joinOriginalDraftText(parts));
+  });
+
+  it('R2: fragments of several removals are joined once, seam-repaired — not the whole utterance', () => {
+    const described = describeProposal(draftOf('Okay, um, could you ask the worker to rebase the auth branch?'));
+    expect(described.text).toBe('rebase the auth branch?');
+    expect(described.cleaned).toBe(true);
+    expect(described.removed).not.toContain('rebase the auth branch');
+    expect(described.removed).toContain('um');
+    expect(described.removed).toContain('ask the worker to');
+    expect(described.original).toBe('Okay, um, could you ask the worker to rebase the auth branch?');
+  });
+});
+
+/**
+ * R7 (card-contract brief, D2) — the release path takes the variant as a
+ * parameter and nothing else changes: the same selection, the same gates, the
+ * same single door.
+ */
+describe('takeForRelease variant (R7)', () => {
+  it("default 'tidied' releases the relay text — unchanged behaviour", () => {
+    const store = new PendingProposalStore();
+    store.appendToDraft(1, 'Um, tell the worker to rerun the suite', 1);
+    expect(store.takeForRelease(2)?.text).toBe('rerun the suite');
+  });
+
+  it("R7: 'original' releases the raw bytes per part — exactly what the descriptor's original promised", () => {
+    const store = new PendingProposalStore();
+    store.appendToDraft(1, 'Um, tell the worker to rerun the suite', 1);
+    const parts = store.snapshotDraft()?.utterances;
+    const described = describeProposal(parts as never);
+    expect(store.takeForRelease(2, undefined, 'original')?.text).toBe(described.original);
+    expect(store.takeForRelease(3)).toBeNull(); // consumed once — no second door
+  });
+
+  it("R7: the variant selects exactly the parts the same selection resolves", () => {
+    const store = new PendingProposalStore();
+    store.appendToDraft(1, 'Um, rebase main', 1);
+    store.appendToDraft(2, 'run the suite', 2);
+    const taken = store.takeForRelease(3, { kind: 'ordinal', position: 'second' }, 'original');
+    // The clean second part has no originalText: the raw bytes ARE its text.
+    expect(taken?.text).toBe('run the suite');
+    expect(taken?.utteranceIds).toEqual([2]);
+  });
+
+  it("R7: every existing gate is unchanged with the original variant — lapsed draft still refuses", () => {
+    const store = new PendingProposalStore({ maxPendingAgeTurns: 3 });
+    store.appendToDraft(1, 'Um, rebase main', 1);
+    expect(store.takeForRelease(50, undefined, 'original')).toBeNull();
+    expect(store.snapshotDraft()?.needsReConfirmation).toBe(true);
+    expect(store.snapshotDraft()?.utterances.length).toBe(1); // nothing silently dropped
+  });
+
+  it("R7: nothing pending releases nothing, whatever the variant", () => {
+    const store = new PendingProposalStore();
+    expect(store.takeForRelease(1, undefined, 'original')).toBeNull();
   });
 });

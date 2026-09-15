@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 
 // RED: the module does not exist yet (P25 — restore the intent's rule:
 // semi-verbatim relay).
-import { normaliseRelayText } from '../../../src/talker/relay-normalise.js';
+import {
+  normaliseRelayText,
+  relayHasVisibleRemoval,
+  visibleRemovalFragments,
+} from '../../../src/talker/relay-normalise.js';
 
 /**
  * P25 — the relay transform unit suite.
@@ -184,5 +188,45 @@ describe('P25: the transform is removal-only', () => {
     expect(result.text).toBe(clean);
     expect(result.changed).toBe(false);
     expect(result.removals).toEqual([]);
+  });
+});
+
+/**
+ * R1/R2 (card-contract brief) — `changed` is a BYTE-level fact, so a trimmed
+ * trailing newline marks a part 'changed' with zero recorded removals. The
+ * card must not cry wolf: only a removal that took VISIBLE content is a tidy.
+ * These two helpers are the pure predicate over `removals` that draws the
+ * line, exported here so the card payload and the release agree by
+ * construction.
+ */
+describe('R1/R2: visible tidy vs byte-level change', () => {
+  it('a whitespace-only normalisation records no visible removal', () => {
+    const result = normaliseRelayText('Proceed.\n');
+    expect(result.text).toBe('Proceed.');
+    expect(result.changed).toBe(true); // bytes changed...
+    expect(result.removals).toEqual([]);
+    expect(relayHasVisibleRemoval(result.removals)).toBe(false); // ...but nothing visible was removed
+  });
+
+  it('a whitespace-only removal piece is not visible', () => {
+    expect(relayHasVisibleRemoval([])).toBe(false);
+    expect(relayHasVisibleRemoval(['  ', '\n', ' \t '])).toBe(false);
+  });
+
+  it('a removal containing a non-whitespace character IS visible', () => {
+    expect(relayHasVisibleRemoval(['Um'])).toBe(true);
+    expect(relayHasVisibleRemoval(['  ', ', ', ''])).toBe(true);
+    const result = normaliseRelayText('Um, tell the worker to rerun the suite');
+    expect(relayHasVisibleRemoval(result.removals)).toBe(true);
+  });
+
+  it('visibleRemovalFragments keeps only visible pieces, trims them, and invents nothing', () => {
+    expect(visibleRemovalFragments(['Um', ', ', '  ', 'tell the worker to '])).toEqual([
+      'Um',
+      ',',
+      'tell the worker to',
+    ]);
+    expect(visibleRemovalFragments(['  ', '\n'])).toEqual([]);
+    expect(visibleRemovalFragments([])).toEqual([]);
   });
 });

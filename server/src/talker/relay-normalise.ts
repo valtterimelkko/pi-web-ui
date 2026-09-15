@@ -50,6 +50,34 @@ export interface RelayNormalisation {
 }
 
 /**
+ * R1 (card-contract brief) — the "visible tidy" distinction.
+ *
+ * `changed` is a BYTE-level fact: a dictation trailing newline, a collapsed
+ * double space or a space closed before punctuation sets it with ZERO recorded
+ * removals. Treating that as a tidy made the confirmation card cry wolf — it
+ * claimed "your words, tidied" while showing text visually identical to what
+ * the operator said, and struck through the whole utterance as if discarded.
+ *
+ * A tidy is only real when a removal took content the operator can SEE. This
+ * predicate is the single definition of it; the card payload and the release
+ * both derive from it, so they cannot disagree.
+ */
+export function relayHasVisibleRemoval(removals: readonly string[]): boolean {
+  return removals.some(piece => /\S/.test(piece));
+}
+
+/**
+ * R2 — the visible removal fragments themselves: non-whitespace pieces only,
+ * trimmed for display. Never the operator's whole utterance.
+ */
+export function visibleRemovalFragments(removals: readonly string[]): string[] {
+  return removals
+    .filter(piece => /\S/.test(piece))
+    .map(piece => piece.trim())
+    .filter(piece => piece.length > 0);
+}
+
+/**
  * Hesitation fillers, word-bounded so 'her' / 'thermal' survive. Alternation
  * is longest-first so 'erm' wins over 'er'. A trailing single space is
  * consumed with the token; a following comma is left for seam repair.
@@ -262,7 +290,7 @@ export function normaliseRelayText(raw: string): RelayNormalisation {
   }
 
   // 5. Interior seam repair — separator bytes only, never words.
-  work = repairInteriorSeams(work);
+  work = repairRelaySeams(work);
 
   // Never relay an empty instruction: a transform that would empty the text
   // is aborted wholesale and the raw words stand.
@@ -285,8 +313,9 @@ function repairHeadSeam(work: string, record: (piece: string) => void, set: (nex
 
 /** Interior seams: double spaces collapse; space before punctuation closes;
  *  duplicated punctuation merges. Whitespace/punctuation only — no word is
- *  touched, so these are not recorded as removals. */
-function repairInteriorSeams(work: string): string {
+ *  touched, so these are not recorded as removals. Exported (as the same
+ *  function) so the card's removal note is joined with identical semantics. */
+export function repairRelaySeams(work: string): string {
   return work
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/[ \t]+([,.;:!?])/g, '$1')

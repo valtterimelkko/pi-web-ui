@@ -144,3 +144,97 @@ describe('ConfirmationCard P26 — the card tells the truth about what will be s
     expect(onSubmitText).toHaveBeenCalledWith('send the shorter one instead');
   });
 });
+
+/**
+ * D2 (card-contract brief, R6 client half) — the operator's original words
+ * were held by the store all along but the card offered no way to send them.
+ * The disclosure is VIEW-ONLY: the primary Confirm still sends the relay text
+ * (and is labelled so no hidden mode exists), and the original is released
+ * only by one explicit secondary action.
+ */
+describe('ConfirmationCard D2 — the operator can choose his original words', () => {
+  const TIDIED = 'if it has enough materials to start';
+  const RAW = 'okay, um, ask the worker if it has enough materials to start';
+  const REMOVED = 'okay, um, ask the worker';
+
+  let onConfirm: ReturnType<typeof vi.fn>;
+  let onCancel: ReturnType<typeof vi.fn>;
+  let onSubmitText: ReturnType<typeof vi.fn>;
+  let onSendOriginal: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    onConfirm = vi.fn();
+    onCancel = vi.fn();
+    onSubmitText = vi.fn();
+    onSendOriginal = vi.fn();
+  });
+
+  const renderWithOriginal = (original?: string) =>
+    render(
+      <ConfirmationCard
+        proposalText={TIDIED}
+        cleaned
+        removed={REMOVED}
+        {...(original !== undefined ? { original } : {})}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        onSubmitText={onSubmitText}
+        onSendOriginal={onSendOriginal}
+      />
+    );
+
+  it('offers a collapsed disclosure of the exact words and one explicit secondary action', () => {
+    renderWithOriginal(RAW);
+    // The disclosure is closed by default: the card does not shout.
+    const disclosure = screen.getByTestId('relay-original-disclosure') as HTMLDetailsElement;
+    expect(disclosure.open).toBe(false);
+    expect(screen.getByTestId('relay-original-text').textContent).toBe(RAW);
+    expect(screen.getByRole('button', { name: /send my exact words/i })).toBeTruthy();
+  });
+
+  it('the secondary action releases the original and never the tidied confirm', () => {
+    renderWithOriginal(RAW);
+    fireEvent.click(screen.getByRole('button', { name: /send my exact words/i }));
+    expect(onSendOriginal).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onSubmitText).not.toHaveBeenCalled();
+  });
+
+  it('the primary Confirm still sends the tidied text, and says so — no hidden mode', () => {
+    renderWithOriginal(RAW);
+    const confirm = screen.getByRole('button', { name: /confirm/i });
+    expect(confirm.textContent).toMatch(/tidied/i);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onSendOriginal).not.toHaveBeenCalled();
+  });
+
+  it('no original (an old server, or a clean utterance) → no disclosure, no second action, plain Confirm', () => {
+    renderWithOriginal(undefined);
+    expect(screen.queryByTestId('relay-original-disclosure')).toBeNull();
+    expect(screen.queryByRole('button', { name: /send my exact words/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /confirm/i }).textContent).not.toMatch(/tidied/i);
+  });
+
+  it('an original identical to the tidied text offers no meaningless choice', () => {
+    renderWithOriginal(TIDIED);
+    expect(screen.queryByTestId('relay-original-disclosure')).toBeNull();
+    expect(screen.queryByRole('button', { name: /send my exact words/i })).toBeNull();
+  });
+
+  it('cleaned=false never offers the original, even if a server sends one', () => {
+    render(
+      <ConfirmationCard
+        proposalText={RAW}
+        cleaned={false}
+        original={RAW}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        onSubmitText={onSubmitText}
+        onSendOriginal={onSendOriginal}
+      />
+    );
+    expect(screen.queryByTestId('relay-original-disclosure')).toBeNull();
+    expect(screen.queryByRole('button', { name: /send my exact words/i })).toBeNull();
+  });
+});

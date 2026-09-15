@@ -30,22 +30,37 @@ export interface ConfirmationCardProps {
    *  Absent or false: the untouched-words claim stands (an old server relays
    *  verbatim, so there the claim is true — never guessed, never faked). */
   cleaned?: boolean;
-  /** What the tidying removed, shown on the card so the operator can see it
-   *  without a click. Only rendered when `cleaned` is true. */
+  /** What the tidying removed — the removed FRAGMENTS only, joined (the
+   *  server reports fragments, never the operator's whole utterance). Shown on
+   *  the card so the operator can see it without a click. Only rendered when
+   *  `cleaned` is true. */
   removed?: string;
+  /**
+   * D2 — the operator's exact words: the bytes an original-variant release
+   * sends. Present only when the server reported a visible tidy, so there is a
+   * real choice. The card offers it as a VIEW-ONLY disclosure plus one explicit
+   * secondary action; the primary Confirm still sends `proposalText`.
+   */
+  original?: string;
   onConfirm: () => void;
   onCancel: () => void;
   /** The operator's typed words, passed verbatim. */
   onSubmitText: (text: string) => void;
+  /** Release the operator's original words instead of the tidied relay text
+   *  (CONFIRM + releaseVariant 'original' on the surface). Optional: absent on
+   *  an older surface, in which case no original action is offered. */
+  onSendOriginal?: () => void;
 }
 
 export function ConfirmationCard({
   proposalText,
   cleaned,
   removed,
+  original,
   onConfirm,
   onCancel,
   onSubmitText,
+  onSendOriginal,
 }: ConfirmationCardProps) {
   const [draft, setDraft] = useState('');
 
@@ -54,6 +69,13 @@ export function ConfirmationCard({
     onSubmitText(draft);
     setDraft('');
   };
+
+  // A choice only exists when the harness visibly tidied AND the raw words
+  // differ from what the card quotes. Both facts come from the server's own
+  // report — the client never derives relay text and never guesses.
+  const offersOriginal = Boolean(
+    cleaned && original && original !== proposalText && onSendOriginal
+  );
 
   return (
     <div
@@ -87,6 +109,30 @@ export function ConfirmationCard({
           </span>
         </div>
       )}
+      {offersOriginal && (
+        <details
+          className="mt-2 text-xs text-gray-600 dark:text-gray-300"
+          data-testid="relay-original-disclosure"
+        >
+          <summary className="cursor-pointer select-none hover:text-gray-800 dark:hover:text-gray-100">
+            Show your exact words
+          </summary>
+          <div
+            className="mt-1 border-l-4 border-gray-300 dark:border-gray-600 pl-3 text-sm text-gray-800 dark:text-gray-100 break-words whitespace-pre-wrap"
+            data-testid="relay-original-text"
+          >
+            {original}
+          </div>
+          <button
+            onClick={() => onSendOriginal?.()}
+            className="mt-2 px-3 py-1.5 rounded-lg border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-gray-200 font-medium hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-[0.98] transition-colors select-none touch-manipulation flex items-center gap-1.5"
+            type="button"
+          >
+            <Send className="w-3.5 h-3.5" />
+            Send my exact words
+          </button>
+        </details>
+      )}
       <div className="mt-3 flex items-center gap-2">
         <button
           onClick={onConfirm}
@@ -94,7 +140,7 @@ export function ConfirmationCard({
           type="button"
         >
           <Check className="w-4 h-4" />
-          Confirm
+          {offersOriginal ? 'Confirm — send tidied' : 'Confirm'}
         </button>
         <button
           onClick={onCancel}

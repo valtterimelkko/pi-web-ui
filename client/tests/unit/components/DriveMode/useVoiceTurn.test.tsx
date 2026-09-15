@@ -304,6 +304,105 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     expect(result.current.pendingProposal?.cleaned).toBe(true);
   });
 
+  it('a proposed result carrying the raw original surfaces it for the card — and only when the server sent one', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('Um, tell the worker to rerun the suite');
+    });
+    act(() => {
+      emit({
+        reply: 'Shall I send the tidied version?',
+        phase: 'proposed',
+        proposal: {
+          text: 'rerun the suite',
+          cleaned: true,
+          removed: 'Um, tell the worker to',
+          original: 'Um, tell the worker to rerun the suite',
+        },
+      });
+    });
+    expect(result.current.pendingProposal).toEqual({
+      text: 'rerun the suite',
+      cleaned: true,
+      removed: 'Um, tell the worker to',
+      original: 'Um, tell the worker to rerun the suite',
+    });
+  });
+
+  it('an old server sending no proposal fields surfaces no original — never an invented one', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('rebase the auth branch');
+    });
+    act(() => {
+      emit({ reply: 'Shall I send that?', phase: 'proposed' });
+    });
+    expect(result.current.pendingProposal?.original).toBeUndefined();
+  });
+
+  it('junk on the original field is ignored, like every other proposal field', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('run the smoke tests');
+    });
+    act(() => {
+      emit({ reply: 'Holding.', phase: 'proposed', proposal: { text: 'run tests', cleaned: true, original: 7 } });
+    });
+    expect(result.current.pendingProposal?.text).toBe('run tests');
+    expect(result.current.pendingProposal?.original).toBeUndefined();
+  });
+
+  it("releaseOriginal sends the confirm gesture with releaseVariant 'original' — and no-ops without a proposal", () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    expect(result.current.releaseOriginal()).toBe(false);
+    expect(sendMock).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.sendText('Um, tell the worker to rerun the suite');
+    });
+    act(() => {
+      emit({
+        reply: 'Send it?',
+        phase: 'proposed',
+        proposal: {
+          text: 'rerun the suite',
+          cleaned: true,
+          removed: 'Um, tell the worker to',
+          original: 'Um, tell the worker to rerun the suite',
+        },
+      });
+    });
+    act(() => {
+      expect(result.current.releaseOriginal()).toBe(true);
+    });
+    expect(sendMock).toHaveBeenCalledWith({
+      type: 'talker_turn',
+      workerSessionId: WORKER,
+      utterance: CONFIRM_UTTERANCE,
+      runtime: 'pi',
+      releaseVariant: 'original',
+    });
+  });
+
+  it('the default confirm gesture sends NO releaseVariant — the tidied path is unchanged', () => {
+    const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
+    act(() => {
+      result.current.sendText('deploy the fix');
+    });
+    act(() => {
+      emit({ reply: 'Send it?', phase: 'proposed' });
+    });
+    act(() => {
+      expect(result.current.confirmPending()).toBe(true);
+    });
+    expect(sendMock).toHaveBeenCalledWith({
+      type: 'talker_turn',
+      workerSessionId: WORKER,
+      utterance: CONFIRM_UTTERANCE,
+      runtime: 'pi',
+    });
+  });
+
   it('junk shapes on the proposal field are ignored, not trusted', () => {
     const { result } = renderHook(() => useVoiceTurn(WORKER, 'pi'));
     const WORDS = 'run the smoke tests';
