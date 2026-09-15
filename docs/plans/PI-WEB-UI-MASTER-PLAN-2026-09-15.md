@@ -32,6 +32,17 @@ This is the single entry point for the work that follows the 2026-09-15 deployme
 
 ## 1. Baseline — what is already deployed and live (2026-09-15)
 
+> **UPDATED AFTER THE MERGE + DEPLOY (2026-09-15 16:37Z).** Production `pi-web-ui.service` now serves
+> **contract 1.44.0**, built from merged master revision **`c1dedf0`**, restarted at **16:37:43Z** through
+> `scripts/restart-pi-web-ui.sh --reason …` (so the journal names the requester), after a pre-check of the
+> **busy-session count from `/sessions`** — the reliable signal — which read **0 busy of 200 sessions**.
+> Deploy verified three ways, not one: `/capabilities.contract.contractVersion` = **1.44.0**; the UI on
+> `:3456` serving **exactly** the freshly built client bundle (`index-C67PQPyS.js`), which contains the
+> merged lane/`proposalRef` code; and a real headless browser loading production and rendering the app
+> shell (`HTTP 200`, React root mounted, login screen, no page errors). The upstream baseline this work
+> started from was **contract 1.43.0** at revision `a27c12b` — the rest of this section is that starting
+> state, kept for the record.
+
 Production `pi-web-ui.service` serves **contract 1.43.0**, built from revision **`a27c12b`**, status ok, restarts
 pre-checked on the **busy-session count** (never `activeTurns` alone).
 
@@ -343,7 +354,7 @@ because a restart is what makes merged code live.
 | W-B card identity + variant gate (contract 1.44.0) | D2, D3 approved | **yes** — child D, conductor-verified (server 4452/4452, client 1349/1349, drift+pins 17/17, card harness 9/9 driven by the conductor, positive control: neutering the identity check fails 4/16) | **merged** `495dd97` (via `task/card-identity`); **production still serves 1.43.0 until the restart** |
 | W-C `talkerBus` correlation | D4 approved | **yes** — child B, folded into the multi-lane work | **merged** `51e6d81` |
 | W-D multi-lane in one tab | D5, D6 approved | **yes** — child B; conductor drove the 14-verdict harness itself, and re-ran it against the card branch to prove the stacked merge did not regress lanes | **merged** `51e6d81` |
-| W-E mirror discipline | process, owner declined a new gate | **yes, per bump** — held at 1.43.0 while 1.44.0 is unshipped (an unchanged mirror cannot lie about what production serves) | **owed**: resync to 1.44.0 immediately after the production restart serves it |
+| W-E mirror discipline | process, owner declined a new gate | **yes, per bump** — held at 1.43.0 while 1.44.0 was unshipped, then resynced within the hour of production serving it | **done** `agent-os` `88d967e` (constant, doc note with consumer guidance + rollback, pin test; `validate:offline` Stage H pass, pins 10/10, checked against the live socket before committing) |
 | W-F(i) session-file investigation | conductor: worth it, not urgent | **yes** — child C, read-only; accepted with one citation correction (`:557` → `:568`, content verbatim) | delivered as a finding, not code |
 | W-F(ii) card browser harness | conductor: worth it, do with W-B | **yes** — written as part of W-B | **merged** with `495dd97` |
 | W-F(iii) Agent OS live-proof harness (Stage J) | conductor: worth it, small | **no** — deferred while `/root/agent-os` was contended by four agents | **not done, not dropped** |
