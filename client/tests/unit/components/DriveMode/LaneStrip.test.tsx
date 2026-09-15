@@ -63,14 +63,19 @@ afterEach(() => {
 });
 
 describe('LaneStrip — the strip collapses when it is not needed', () => {
-  it('renders nothing for a single lane (the shipped surface, unchanged)', () => {
-    const { container } = renderStrip({ lanes: [{ sessionId: A }] });
-    expect(container).toBeEmptyDOMElement();
+  it('renders only the collapsed add affordance for a single lane (no rows, no cap)', () => {
+    renderStrip({ lanes: [{ sessionId: A }] });
+    expect(screen.queryByTestId('lane-strip')).toBeNull();
+    expect(screen.queryByTestId('lane-row')).toBeNull();
+    expect(screen.queryByTestId('lane-cap')).toBeNull();
+    expect(screen.getByTestId('lane-strip-collapsed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add a lane/i })).toBeInTheDocument();
   });
 
-  it('renders nothing for an empty lane set', () => {
-    const { container } = renderStrip({ lanes: [] });
-    expect(container).toBeEmptyDOMElement();
+  it('renders only the collapsed add affordance for an empty lane set', () => {
+    renderStrip({ lanes: [] });
+    expect(screen.queryByTestId('lane-strip')).toBeNull();
+    expect(screen.getByTestId('lane-strip-collapsed')).toBeInTheDocument();
   });
 });
 

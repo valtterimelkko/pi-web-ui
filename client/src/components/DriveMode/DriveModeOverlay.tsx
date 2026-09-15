@@ -344,6 +344,8 @@ export function DriveModeOverlay() {
           // screen. Both panes render the same components as before — the
           // split only decides how the window is divided, so capture, the
           // floor banner, the confirmation card and read-aloud are unchanged.
+          // (Single-lane split: adding a lane happens from the voice-only
+          // layout, where the collapsed add affordance lives.)
           <div data-testid="drive-mode-split" className="flex flex-1 min-h-0 w-full overflow-hidden">
             <div className="flex-1 min-w-0 h-full min-h-0 overflow-y-auto border-r border-gray-200 dark:border-gray-800">
               <DriveModeDictate
@@ -360,14 +362,28 @@ export function DriveModeOverlay() {
             </div>
           </div>
         ) : (
-          <DriveModeDictate
-            sessionId={activeSessionId || currentSessionId || ''}
-            sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
-            modelName={modelName}
-            sessionDisplayName={sessionDisplayName}
-            onExit={handleClose}
-            onAbort={abortGeneration}
-          />
+          // Single-lane voice-only: today's surface, with the strip collapsed
+          // to the "+" affordance above it.
+          <div className="flex flex-col flex-1 min-h-0 w-full">
+            <LaneStrip
+              lanes={[]}
+              addressedSessionId={activeSessionId}
+              labels={{}}
+              onAddress={handleAddressLane}
+              onAdd={handleAddLaneClick}
+              onRemove={handleRemoveLane}
+            />
+            <div className="relative flex-1 min-h-0 w-full overflow-hidden">
+              <DriveModeDictate
+                sessionId={activeSessionId || currentSessionId || ''}
+                sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
+                modelName={modelName}
+                sessionDisplayName={sessionDisplayName}
+                onExit={handleClose}
+                onAbort={abortGeneration}
+              />
+            </div>
+          </div>
         ))}
     </div>
   );

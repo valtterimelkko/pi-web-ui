@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act, within } from '@testing-library/react';
+import { render, fireEvent, act, within } from '@testing-library/react';
 import { DriveModeDictate } from '../../../../src/components/DriveMode/DriveModeDictate';
 import { resetTalkerTurnBus } from '../../../../src/lib/talkerBus';
 import { speechArbiter, type ArbiterPlayer } from '../../../../src/lib/speechArbiter';

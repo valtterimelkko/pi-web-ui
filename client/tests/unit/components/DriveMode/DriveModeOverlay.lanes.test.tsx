@@ -178,14 +178,20 @@ beforeEach(() => {
 });
 
 describe('DriveModeOverlay — one tab holds the lanes', () => {
-  it('single-lane (no lanes): exactly today — one surface, no strip, no picker', () => {
+  it('single-lane (no lanes): exactly today — one surface, no strip rows; only the collapsed add affordance', () => {
     render(<DriveModeOverlay />);
     const surfaces = screen.getAllByTestId('drive-mode-dictate');
     expect(surfaces).toHaveLength(1);
-    expect(screen.queryByTestId('lane-strip')).toBeNull();
     expect(screen.queryByTestId('drive-mode-session-picker')).toBeNull();
     // And the single surface is NOT in lane mode.
     expect(dictatedLanes[0]?.laneEnabled).toBeFalsy();
+    // The strip collapses: no rows, no cap counter — but the '+' (the feature
+    // entry point the brief mandates) is still reachable in single-lane use.
+    expect(screen.queryByTestId('lane-row')).toBeNull();
+    expect(screen.queryByTestId('lane-cap')).toBeNull();
+    expect(screen.getByRole('button', { name: /add a lane/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /add a lane/i }));
+    expect(driveModeStoreState.openAddLane).toHaveBeenCalled();
   });
 
   it('multi-lane: one mounted surface PER lane, the strip with the cap, only the addressed lane addressed', () => {

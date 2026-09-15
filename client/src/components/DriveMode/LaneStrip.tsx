@@ -60,7 +60,24 @@ export function LaneStrip({ lanes, addressedSessionId, labels, onAddress, onAdd,
     };
   }, []);
 
-  if (lanes.length < 2) return null; // the strip collapses to the shipped banner
+  if (lanes.length < 2) {
+    // COLLAPSED: single-lane use is the shipped surface — no rows, no cap
+    // counter. The only lane UI is the "+" affordance, the entry point to
+    // the feature (the brief mandates a "+" that adds a second worker).
+    return (
+      <div className="w-full px-4 pt-3 flex justify-center" data-testid="lane-strip-collapsed">
+        <button
+          onClick={onAdd}
+          aria-label="Add a lane"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+          type="button"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Add lane
+        </button>
+      </div>
+    );
+  }
 
   const capturingLane = laneFloor.capturingLaneId();
   const speakingLane = laneFloor.laneOfSpeechIntent();

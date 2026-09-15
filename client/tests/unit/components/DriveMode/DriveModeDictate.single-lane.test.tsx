@@ -137,11 +137,14 @@ afterEach(() => {
 });
 
 describe('single-lane identity — the surface the operator ships with', () => {
-  it('renders NO lane strip and no lane rows', () => {
+  it('renders NO lane rows, no cap counter and no strip inside the surface', () => {
     renderSurface();
-    expect(document.querySelector('[data-testid="lane-strip"]')).toBeNull();
     expect(document.querySelector('[data-testid="lane-row"]')).toBeNull();
     expect(screen.queryByText(/of 3/)).toBeNull();
+    expect(document.querySelector('[data-testid="lane-strip"]')).toBeNull();
+    // The collapsed add affordance lives at the OVERLAY level (see
+    // DriveModeOverlay.lanes.test.tsx), not inside the dictate surface.
+    expect(screen.queryByRole('button', { name: /add a lane/i })).toBeNull();
   });
 
   it('renders exactly today\'s four-state banner and mic control', () => {
