@@ -16,8 +16,10 @@
  * permission denials exclude a model), so a flaky week can never hide usable
  * models. When files change, the job typechecks the server, runs the focused
  * catalogue tests, commits and pushes just those files on the current branch,
- * then restarts pi-web-ui once no turn is active — every step summarised over
- * Telegram via scripts/notify.sh.
+ * then restarts pi-web-ui — via scripts/restart-pi-web-ui.sh, which names its
+ * requester in the journal/stop audit and takes the production lock — once the
+ * live busy-session count is zero, deferring otherwise; every step summarised
+ * over Telegram via scripts/notify.sh.
  *
  * No secrets live here: the CLI's own ~/.commandcode auth is used in place,
  * and the internal-API token is only read by InternalApiClient for the
@@ -60,6 +62,7 @@ const PROBE_TIMEOUT_MS = 120_000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const RESTART_WAIT_WINDOW_MS = 30 * 60_000;
 const RESTART_POLL_MS = 30_000;
+const RESTART_REASON = 'weekly command-code catalogue refresh';
 const ELIGIBILITY_PROMPT = 'Reply with one word: ok';
 
 export interface ProcResult {
@@ -82,13 +85,16 @@ export interface WeeklyRefreshPaths {
   effortTableRel: string;
   catalogueRel: string;
   notify: string;
+  restartScript: string;
 }
 
 export interface WeeklyRefreshDependencies {
   processRunner?: ProcessRunner;
   readFile?: (path: string, encoding: 'utf8') => Promise<string>;
   writeFile?: (path: string, data: string, encoding: 'utf8') => Promise<void>;
-  createInternalApiClient?: () => { getCapacity(): Promise<{ activeTurns?: number; [key: string]: unknown }> };
+  createInternalApiClient?: () => {
+    listSessions(): Promise<{ sessions?: ReadonlyArray<{ busy?: boolean }> }>;
+  };
   sleep?: (milliseconds: number) => Promise<void>;
   now?: () => number;
   paths?: Partial<WeeklyRefreshPaths>;
@@ -101,6 +107,7 @@ const DEFAULT_PATHS: WeeklyRefreshPaths = {
   effortTableRel: EFFORT_TABLE_REL,
   catalogueRel: CATALOGUE_REL,
   notify: NOTIFY,
+  restartScript: path.join(REPO_ROOT, 'scripts', 'restart-pi-web-ui.sh'),
 };
 
 function resolvePaths(overrides: Partial<WeeklyRefreshPaths> = {}): WeeklyRefreshPaths {
@@ -339,33 +346,44 @@ export async function runWeeklyRefresh(
   summary.committed = committed;
 
   // 8. Idle-aware restart so the running server re-discovers the catalogue
-  //    (discovery happens at init). A busy server defers the restart; the
-  //    committed changes simply take effect at the next ordinary restart.
+  //    (discovery happens at init). Idleness is decided from the live
+  //    busy-session count (GET /api/v1/sessions, entries with busy === true),
+  //    NOT from /capacity.activeTurns: that counter has been measured reading
+  //    zero while a session was provably mid-turn, and a restart kills every
+  //    process in the service cgroup. If any session is busy, or the busy
+  //    count cannot be determined (probe error, malformed response), the
+  //    restart is deferred; the committed changes simply take effect at the
+  //    next ordinary restart. The restart itself goes through
+  //    scripts/restart-pi-web-ui.sh so the journal/stop audit names the
+  //    requester and the production lock is held.
   let restarted = false;
   if (flags.restart && committed) {
     const client = dependencies.createInternalApiClient?.() ?? new InternalApiClient();
     const deadline = now() + RESTART_WAIT_WINDOW_MS;
     let idle = false;
-    let capacityError: string | undefined;
+    let busyProbeError: string | undefined;
     while (now() < deadline) {
       try {
-        const capacity = await client.getCapacity();
-        capacityError = undefined;
-        if ((capacity.activeTurns ?? 0) === 0) { idle = true; break; }
+        const response = await client.listSessions();
+        const sessions = Array.isArray(response.sessions) ? response.sessions : undefined;
+        if (!sessions) throw new Error('malformed sessions response (sessions is not an array)');
+        busyProbeError = undefined;
+        const busyCount = sessions.filter((session) => session.busy === true).length;
+        if (busyCount === 0) { idle = true; break; }
       } catch (error) {
-        capacityError = error instanceof Error ? error.message : String(error);
+        busyProbeError = error instanceof Error ? error.message : String(error);
         break;
       }
       await sleep(RESTART_POLL_MS);
     }
     if (idle) {
-      const restart = await run('systemctl', ['restart', 'pi-web-ui'], { timeoutMs: 60_000, cwd: paths.repoRoot });
+      const restart = await run(paths.restartScript, ['--reason', RESTART_REASON], { timeoutMs: 60_000, cwd: paths.repoRoot });
       if (!processSucceeded(restart)) {
         throw new Error(`pi-web-ui restart failed (exit ${processExitDescription(restart)}): ${restart.stderr.slice(-300)}`);
       }
       restarted = true;
     } else {
-      console.warn(`! server busy or capacity probe failed (${capacityError ?? 'turns still active'}); restart deferred`);
+      console.warn(`! server busy or sessions probe failed (${busyProbeError ?? 'busy sessions still active'}); restart deferred`);
     }
   }
   summary.restarted = restarted;
