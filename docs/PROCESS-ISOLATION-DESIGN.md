@@ -110,9 +110,75 @@ for abandoning the hybrid direction if automatic useful selection, one shared
 lifecycle authority, real Pi parity, throughput/control SLOs or truthful cleanup
 cannot be sustained.
 
+## Out-of-process worker migration roadmap (architecture, unstarted)
+
+This section is the recorded architecture for the **migration of ordinary Pi execution from in-process `MultiSessionManager`/`AgentSession` ownership in the main daemon to per-session out-of-process workers**. It is a roadmap, not a description of current behaviour: ordinary Pi browser and Internal API prompts remain in-process today, and no part of this section is switched on. It exists so the migration can be reviewed, costed and gated before any code moves traffic.
+
+### Why migrate
+
+Today a single runaway Pi turn (prompt-injection spiral, tool loop, transcript growth into the multi-GB class) shares the main daemon's heap and event loop with every other session, the browser WebSocket fan-out, and the Internal API. A worker that exhausts its heap — the default V8 old-space ceiling sits in the 2 GB class, or the launcher-imposed cgroup ceiling for contained launches — currently terminates the daemon with it. Out-of-process workers turn that failure class into a per-session, recoverable event: the daemon survives, detects the worker exit, and reports the turn as failed.
+
+### Topology
+
+```
+   Browser ──/ws, /ws/sessions/:id──┐
+                                    ▼
+                        ┌───────────────────────┐   newline-delimited JSON-RPC   ┌────────────────────────────┐
+   Internal API ───────▶│  main daemon          │─────────── over stdio ────────▶│ worker per session path    │
+                        │  session registry     │◀─────── events / responses ────│ own process group, or a    │
+                        │  MultiSessionManager  │                                │ transient systemd unit     │
+                        │  WorkerPool (1 owner  │                                │ (pi --mode rpc / SDK       │
+                        │  per session path)    │   process exit / heartbeat     │  session inside)           │
+                        │  event projection ────│◀─── loss ⇒ detect, isolate,    └────────────────────────────┘
+                        │  (session_event       │     emit turn_failed, rehydrate
+                        │   envelopes)          │
+                        └───────────────────────┘
+```
+
+The worker owns the agent session; the daemon owns everything shared (registry, admission, receipts, projection, sockets). A worker death removes exactly its own session from service.
+
+### IPC protocol
+
+The transport is the worker path's existing newline-delimited JSON-RPC over stdio (`server/src/workers/session-worker.ts`, shapes in `server/src/workers/types.ts`):
+
+- **daemon→worker commands:** `prompt`, `steer`, `abort`, `get_state`, `set_model`, `set_thinking_level`, `compact`, `get_messages`;
+- **worker→daemon responses:** `{type:'response', command, success, data|error}` correlated by id;
+- **worker→daemon events:** `message_start|update|end`, `tool_execution_start|update|end`, `extension_ui_request`, `session_compaction`, `error`, `streaming_started|ended`, `agent_start|agent_end`, each carrying the `pilotCorrelation` `{runId, executionInstanceId, attemptEpoch}` echo contract so stale terminals cannot cross worker replacements.
+
+Stdio is deliberate: no listening socket per worker, no port allocation, no extra auth surface; the pipe's lifecycle is the worker's lifecycle. Frame-size and back-pressure limits must be explicit in the launcher hardening (below) so a runaway worker cannot exhaust the daemon through its own stdout.
+
+### Heartbeat and crash recovery
+
+Today the worker path has **no heartbeat**: failure is observed only as process exit (ownership invariant 10). The migration adds:
+
+1. **Worker heartbeat.** A periodic cheap liveness frame (worker→daemon) with a monotonic timestamp, plus a daemon-side watchdog: a worker that misses N consecutive beats while a turn is open is treated as dead even if the OS process lingers ( wedged event loop, stopped cgroup, hung provider call).
+2. **Crash containment.** The daemon is never inside the worker's cgroup/process group, so a worker OOM kill, `SIGKILL`, or abnormal exit cannot take the daemon, sibling sessions, or browser sockets down.
+3. **`turn_failed` projection.** On detected death (exit or heartbeat loss) during an open turn, the daemon emits a `turn_failed` session event on that session's stream — a new projected event; today a crash surfaces only as a vanished `agent_end` or a raw `{type:'error'}`. The event carries the session path, run/execution/epoch correlation, and the observed cause (`worker_exit`, `heartbeat_timeout`, `oom`).
+4. **Clean recovery for parent orchestrators.** A parent that dispatched a child turn receives `turn_failed` as a terminal, attributable signal (instead of silence), releases/retries against its own policy, and the session path is rehydrated with a replacement worker on the next prompt — resuming from the durable session JSONL transcript, which the worker never owned.
+5. **Receipt honesty.** The failed turn terminalises through the existing `RunReceiptManager` path (receipt retained, admission released, draining debt quarantined on uncertainty), so crash recovery never fabricates a successful `agent_end`.
+
+### Preserving WebSocket event streaming and session resume
+
+The migration changes **who produces** events, not **how browsers receive** them:
+
+- `/ws` and `/ws/sessions/:id` keep delivering the same `session_event` envelopes; worker RPC events are projected through the existing normaliser/`json-rpc-to-rpc-converter` and pilot-session projection, so no client-side contract changes and no second WebSocket API is introduced.
+- Replay and resume stay anchored to the durable session JSONL and the shared session registry, exactly as for in-process sessions: reconnecting clients replay from the transcript; a replaced worker re-attaches by session path + immutable launch identity, and epoch fencing (invariant 6) guarantees a dead worker's late events cannot finish a newer turn.
+- Session identity, pinning, transfer, and Internal API contracts are untouched: workers are an execution-location change behind the canonical session/prompt surface, per the PAUSE 6 resolver rule.
+
+### Hardening roadmap: `worker-launcher.ts` and `worker-pool.ts`
+
+| Step | Scope | Gate |
+|---|---|---|
+| R1 — liveness + failure truth | Worker heartbeat frames; daemon watchdog; end-to-end `turn_failed` projection on exit/OOM/heartbeat loss, fixture-proven in the frozen `worker-cgroup-conformance` harness with a new crash-scenario version | New fixture version, owner-approved; no production routing |
+| R2 — ownership durability | `worker-pool.ts` persists ownership records (path, identity, epoch, worker pid) so a **daemon** restart reconciles or adopts live workers instead of orphaning them — explicitly not claimed today | Reconciliation evidence under kill -9 of the daemon; all-settled shutdown unchanged |
+| R3 — launcher hardening | `worker-launcher.ts`: frame size/back-pressure limits on the stdio pipe; re-verification of `MainPID`/`ControlGroup` identity on rehydrate; failed-launch collection parity for the plain baseline; an owner-approved ordinary-session resource envelope (the frozen heavy envelope — 384M `MemoryMax`, 128M old-space — is a pilot setting, not the migration default) | Identity mismatch fails closed; no fallback to in-process on launch failure |
+| R4 — gated migration | Ordinary Pi traffic moves to workers behind a server-owned policy in shadow mode (per the PAUSE 6 direction), then canary, then default; rollback is a configuration flip back to in-process `MultiSessionManager` execution | Shadow evidence, SLOs met, owner sign-off at every step; Phases 8–9 of the scaling plan remain paused until separately authorised |
+
+Each step consumes the existing conformance fixture contract; none of them, by itself, migrates ordinary traffic or enables a second public worker API.
+
 ## What Phase 6 does not claim
 
-- Ordinary Pi WebSocket/Internal API prompts are **not** migrated.
+- Ordinary Pi WebSocket/Internal API prompts are **not** migrated. (The migration roadmap above is the recorded architecture for changing that, not a claim that it has happened.)
 - The pilot is not enabled in production configuration.
 - A deterministic local fixture is not provider/model parity evidence.
 - The short harness does not cover several-hour sessions, growing real JSONL transcripts, real tool distributions, classifier accuracy, expected route utilisation, or the relative historical contribution of Agent OS and ordinary browser sessions.

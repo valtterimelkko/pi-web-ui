@@ -178,7 +178,11 @@ describe('restart-pi-web-ui.sh', () => {
     const result = spawnSync(
       'bash',
       [restartScript, '--reason', 'child-S evidence run', '--dry-run'],
-      { encoding: 'utf8', env: { ...process.env, PI_WEB_UI_STOP_AUDIT_FILE: auditFile } },
+      // Pin a socket that cannot exist so the capacity pre-flight is skipped:
+      // these tests cover the requester record, not drainage (which
+      // restart-drainage.test.ts covers). Without the pin, a host with a live
+      // production socket makes this test query it and refuse on busy days.
+      { encoding: 'utf8', env: { ...process.env, PI_WEB_UI_STOP_AUDIT_FILE: auditFile, PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'no-such.sock') } },
     );
 
     expect(result.status).toBe(0);
@@ -201,7 +205,8 @@ describe('restart-pi-web-ui.sh', () => {
     const auditFile = path.join(dir, 'stop-audit.log');
     spawnSync('bash', [restartScript, '--reason', 'durable', '--dry-run'], {
       encoding: 'utf8',
-      env: { ...process.env, PI_WEB_UI_STOP_AUDIT_FILE: auditFile },
+      // See the dry-run test above: no live capacity queries in this suite.
+      env: { ...process.env, PI_WEB_UI_STOP_AUDIT_FILE: auditFile, PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'no-such.sock') },
     });
     expect(readFileSync(auditFile, 'utf8')).toContain('RESTART-REQUESTED');
     expect(readFileSync(auditFile, 'utf8')).toContain('reason=durable');
