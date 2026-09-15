@@ -1387,7 +1387,16 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         const assertions = [
           { name: 'admitted_prompt_dispatch', passed: receipt.dispatchMode === 'prompt', details: `dispatchMode=${receipt.dispatchMode ?? 'missing'}` },
           { name: 'turn_stalled_terminal', passed: receipt.status === 'failed' && receipt.errorCode === 'TURN_STALLED', details: `status=${receipt.status} code=${receipt.errorCode ?? 'missing'}` },
-          { name: 'idle_watchdog_evidence', passed: receipt.liveness?.watchdog?.reason === 'idle', details: `reason=${receipt.liveness?.watchdog?.reason ?? 'missing'}` },
+          {
+            // The reason must describe what actually happened (2026-09-15): a run
+            // that produced observable work and then went quiet is 'idle', while
+            // one that never produced anything is 'no_activity'. Asserting a bare
+            // 'idle' would either hide a never-executed run or fail on an honest
+            // classification; asserting the pairing keeps both claims checkable.
+            name: 'idle_watchdog_evidence',
+            passed: receipt.liveness?.watchdog?.reason === ((receipt.outputEvidence?.toolCalls ?? 0) > 0 ? 'idle' : 'no_activity'),
+            details: `reason=${receipt.liveness?.watchdog?.reason ?? 'missing'} toolCalls=${receipt.outputEvidence?.toolCalls ?? 'missing'}`,
+          },
           {
             name: 'cessation_not_overclaimed',
             passed: receipt.liveness?.cessation?.state === 'unknown' && receipt.liveness.cessation.basis === 'watchdog',

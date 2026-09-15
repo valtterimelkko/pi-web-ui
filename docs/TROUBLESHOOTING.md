@@ -808,3 +808,22 @@ all. Capturing the caller needs `LogLevel=debug` in `/etc/systemd/system.conf`
 plus `daemon-reexec`, or an audit rule (`auditd` is **not installed** on this
 host) — both of which are heavier than a diagnostic should be without the
 owner's agreement.
+
+### Update 2026-09-15 — narrowed, and now instrumented both ways
+
+A second event of the same class occurred on 2026-09-15 08:30:26 (SIGKILL after
+`TimeoutStopSec`, taking a disposable validation server, `npm exec tsx`, three
+`esbuild` processes and four mid-turn orchestration children with it). Counting
+every stop of this unit between 2026-09-14 and 2026-09-15 gives **seven** such
+SIGKILLs, and one property separates all seven from every clean stop: the
+`Stopping pi-web-ui.service...` line is **absent**. systemd only emits that line
+when `unit_stop()` returns > 0, so its absence proves the stop did not come from
+a stop job against a RUNNING unit.
+
+That does **not** yet identify the cause. What it does is make the next event
+classifiable: `ExecStopPre` now records that a stop was starting *before*
+SIGTERM, the app records the signal synchronously before any `await`, and a
+worker-thread backstop ends the process at 12s instead of letting systemd reach
+30s. See [`PRODUCTION-STOP-ROBUSTNESS.md`](./PRODUCTION-STOP-ROBUSTNESS.md) for
+the full correlation table, the ruled-out list, the timing ladder, and the
+install and verification steps.

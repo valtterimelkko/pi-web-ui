@@ -23,7 +23,7 @@ export interface ShutdownStep {
 
 export interface ShutdownCoordinatorOptions {
   steps: ShutdownStep[];
-  /** Hard exit(1) after this many ms if teardown hasn't completed. Default 25000 (below systemd 30s). */
+  /** Hard exit(1) after this many ms if teardown hasn't completed. Default 20000 (below systemd 30s). */
   forceExitAfterMs?: number;
   /** Injectable; default `process.exit`. */
   exit?: (code: number) => void;
@@ -50,8 +50,16 @@ export interface ShutdownCoordinatorOptions {
   now?: () => number;
 }
 
-/** Default deadline: below systemd's `TimeoutStopSec=30`. */
-export const DEFAULT_FORCE_EXIT_AFTER_MS = 25000;
+/**
+ * Default deadline: below systemd's `TimeoutStopSec=30`.
+ *
+ * Lowered from 25s on 2026-09-15. Twice on 2026-09-14 this deadline was the
+ * only thing that ended a stop (the `http-server` step never completed), which
+ * left the total stop a few seconds inside systemd's window — and systemd's
+ * escalation is a SIGKILL of the whole control group. 20s keeps a 10s margin,
+ * and the shutdown escape worker (see `shutdown-signal.ts`) bounds it further.
+ */
+export const DEFAULT_FORCE_EXIT_AFTER_MS = 20000;
 
 export class ShutdownCoordinator {
   private promise: Promise<void> | null = null;

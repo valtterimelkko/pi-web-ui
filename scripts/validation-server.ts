@@ -25,6 +25,7 @@ import {
   createDefaultValidationDirectory,
   reserveValidationPorts,
 } from '../server/src/live-validation/validation-server-options.js';
+import { checkValidationCgroup, readSelfCgroup } from '../server/src/live-validation/validation-cgroup-guard.js';
 
 function getFlag(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
@@ -43,6 +44,28 @@ function explicitPort(args: string[], flag: string, envName: string): number | u
 }
 
 async function main(): Promise<void> {
+  // Cgroup hygiene, checked FIRST — before any directory, lock or port is taken.
+  //
+  // 2026-09-15 08:30: systemd SIGKILLed /system.slice/pi-web-ui.service with
+  // KillMode=control-group and the process list included a disposable
+  // validation server (`npm run validate:server`, `npm exec tsx`, three esbuild
+  // processes) alongside four mid-turn orchestration children. The docs already
+  // warn against running validation inside the production cgroup; this is the
+  // guard that makes the warning binding. `--allow-production-cgroup` exists for
+  // the rare deliberate case.
+  const cgroupVerdict = checkValidationCgroup({
+    // `PI_WEB_UI_VALIDATION_CGROUP_FILE` is a diagnostic/test seam only: it lets
+    // the refusal be exercised without actually being inside the production
+    // service cgroup (see validation-server-cgroup-guard.test.ts).
+    cgroupPath: readSelfCgroup(process.env.PI_WEB_UI_VALIDATION_CGROUP_FILE ?? '/proc/self/cgroup'),
+    overrideEnv: process.argv.includes('--allow-production-cgroup') ? '1' : undefined,
+  });
+  if (!cgroupVerdict.allowed) {
+    console.error(`[validation-server] ${cgroupVerdict.message}`);
+    process.exitCode = 78; // EX_CONFIG
+    return;
+  }
+
   const validationArgs = process.argv.slice(2);
   const validationEnvFile = resolveValidationEnvFile(validationArgs);
   const validationEnvKeys = resolveValidationEnvKeys(validationArgs);

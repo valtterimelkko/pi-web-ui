@@ -19,6 +19,14 @@ import { ShutdownCoordinator } from './shutdown-coordinator.js';
 import { CommandCodeService } from './command-code/command-code-service.js';
 import { setCommandCodeService } from './command-code/command-code-instance.js';
 import { startSystemdNotifier } from './systemd-notifier.js';
+import { closeHttpServer } from './http-server-close.js';
+import {
+  DEFAULT_ESCAPE_POLL_INTERVAL_MS,
+  installStopSignalHandlers,
+  resolveEscapeAfterMs,
+  spawnShutdownEscapeWorker,
+} from './shutdown-signal.js';
+import { createSignalReceivedBuffer } from './shutdown-signal.js';
 
 // State used by createApp's lazy notification-router getters. Declared before
 // createApp() (which runs at module load) so the getters close over initialized
@@ -273,7 +281,14 @@ const shutdownCoordinator = new ShutdownCoordinator({
     { name: 'websocket-clients', run: async () => { if (wsManager) await wsManager.close(); } },
     { name: 'session-cleanup', run: () => { sessionCleanup?.stop(); } },
     { name: 'internal-api', run: async () => { if (internalApiServer) await internalApiServer.stop(); } },
-    { name: 'http-server', run: () => new Promise<void>((resolve) => { server.close(() => resolve()); }) },
+    // Bounded close (2026-09-15). `server.close()` alone only calls back once
+    // every connection has gone, and this process holds long-lived WebSocket
+    // clients by design: on 2026-09-14 18:04:17 and 21:15:56 this step never
+    // completed at all, so the coordinator's own deadline was the only thing
+    // that ended the stop, a few seconds inside systemd's TimeoutStopSec=30.
+    // A stop that reaches systemd's escalation is a SIGKILL of the whole
+    // control group — every orchestration child with it.
+    { name: 'http-server', run: async () => { await closeHttpServer(server, { timeoutMs: 5_000 }); } },
   ],
   onStepError: (name, err) => logger.errorObject(`Shutdown step '${name}' failed`, err),
   onForceExit: () => logger.error('Forced shutdown: teardown exceeded the deadline'),
@@ -292,8 +307,38 @@ function shutdown(): void {
   void shutdownCoordinator.shutdown();
 }
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+// ---- Stop-signal instrumentation (2026-09-15) -----------------------------
+//
+// The 2026-09-14/15 stops that ran to `TimeoutStopSec` could not be explained
+// because the journal recorded neither a stop job nor a receipt of the signal:
+// the app's only record lived inside `shutdown()`, behind an async logger. The
+// instrument is therefore in three parts, and they are deliberately ordered so
+// the cheapest and most durable happens first:
+//
+//   1. `handleStopSignal` writes the received signal to stderr synchronously,
+//      before any await, and arms a hard-exit deadline in the same handler.
+//   2. the same handler publishes the signal time into a SharedArrayBuffer.
+//   3. a worker thread (armed now, long before any stop) watches that buffer and
+//      force-exits the process if the main thread has not finished inside the
+//      grace window. A backstop on the loop it must survive is not a backstop —
+//      the same reasoning that moved the watchdog ping off the main loop.
+//
+// The worker is intentionally NOT terminated once teardown starts: a teardown
+// that takes longer than the window is exactly the case it exists for. A clean
+// teardown calls `process.exit(0)` well inside the window and the worker dies
+// with the process. The window is configurable via
+// `PI_WEB_UI_SHUTDOWN_ESCAPE_MS` (default 12s, against systemd's 30s).
+const signalReceived = createSignalReceivedBuffer();
+spawnShutdownEscapeWorker({
+  signalReceived,
+  escapeAfterMs: resolveEscapeAfterMs(),
+  pollIntervalMs: DEFAULT_ESCAPE_POLL_INTERVAL_MS,
+});
+
+installStopSignalHandlers({
+  signalReceived,
+  onShutdown: shutdown,
+});
 
 // Process-level fatal-error handlers: log message + stack + a context snapshot
 // (active session count, uptime) via the central logger, then for

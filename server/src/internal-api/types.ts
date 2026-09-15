@@ -891,7 +891,21 @@ export type RunReceiptStatus =
 /** Headline work-state: distinguishes "the turn ended" from "the dispatched work finished". Additive since 1.25.0. */
 export type RunWorkState = 'running' | 'completed' | 'turn_ended_unconfirmed' | 'failed' | 'cancelled' | 'interrupted';
 
-export type RunStallReason = 'idle' | 'absolute';
+/**
+ * Why the watchdog terminalised a run.
+ *
+ * `idle` — a turn was producing eligible activity and then stopped for longer
+ *          than the idle window.
+ * `absolute` — the run hit its hard ceiling regardless of activity.
+ * `no_activity` — the idle window elapsed and the run had never produced a
+ *          single eligible activity event or any output evidence. The run was
+ *          accepted (and may have been marked started) but nothing ever
+ *          executed under it, so "idle" would assert a turn that never ran.
+ *          For a watch wake this is a lost wake, not a stalled turn.
+ *
+ * Additive since 2026-09-15; see `run-stall-classification.test.ts`.
+ */
+export type RunStallReason = 'idle' | 'absolute' | 'no_activity';
 export type RunCessationState = 'confirmed' | 'unconfirmed' | 'unknown';
 export const RUN_TERMINAL_REASON_ALLOWLIST: ReadonlySet<string> = new Set(['api_error_grace']);
 

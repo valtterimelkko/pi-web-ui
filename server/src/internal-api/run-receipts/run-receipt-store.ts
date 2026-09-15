@@ -593,7 +593,7 @@ function validateLiveness(value: RunLivenessEvidence): void {
   }
   if (value.watchdog) {
     assertOnlyKeys(value.watchdog, WATCHDOG_KEYS, 'watchdog');
-    if (!['idle', 'absolute'].includes(value.watchdog.reason)) throw new Error('Invalid watchdog reason');
+    if (!['idle', 'absolute', 'no_activity'].includes(value.watchdog.reason)) throw new Error('Invalid watchdog reason');
     assertIsoTimestamp(value.watchdog.decidedAt, 'watchdog decidedAt');
     if (!Number.isFinite(value.watchdog.idleTimeoutMs) || value.watchdog.idleTimeoutMs <= 0) throw new Error('Invalid watchdog idle timeout');
     if (!Number.isFinite(value.watchdog.absoluteTimeoutMs) || value.watchdog.absoluteTimeoutMs <= 0) throw new Error('Invalid watchdog absolute timeout');

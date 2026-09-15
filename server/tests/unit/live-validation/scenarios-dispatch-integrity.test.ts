@@ -52,6 +52,19 @@ describe('dispatch-integrity live scenarios', () => {
             },
             cessation: { state: 'unknown', basis: 'watchdog', observedAt: '2026-08-01T12:00:02.000Z' },
           },
+          // The scenario drives a real tool call before the stall, so observable
+          // work exists and 'idle' is the honest reason. The scenario now asserts
+          // the reason PAIRS with the observed work (2026-09-15): a run with no
+          // tool calls must report 'no_activity' instead.
+          outputEvidence: {
+            policyVersion: 'run-output-v1',
+            source: 'normalized-events-v1',
+            assistantMessages: 1,
+            assistantTextBlocks: 0,
+            assistantTextChars: 0,
+            toolCalls: 1,
+            disposition: 'unknown',
+          },
         }),
         getCapacity: vi.fn().mockResolvedValue({ activeTurns: 0 }),
         getSessionInfo: vi.fn().mockResolvedValue({}),

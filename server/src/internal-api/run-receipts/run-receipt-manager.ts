@@ -582,8 +582,25 @@ export class RunReceiptManager {
       if (!idleExceeded && !maxExceeded) continue;
       const before = this.store.get(runId);
       if (!before || isTerminal(before.status)) continue;
-      logger.warn(`Run ${runId} stalled: ${maxExceeded ? 'absolute ceiling exceeded' : 'idle timeout exceeded'}`);
-      const stallReason: RunStallReason = maxExceeded ? 'absolute' : 'idle';
+      // A run that never produced a single eligible activity event was never
+      // executing anything, so "idle" would misdescribe it. This is the
+      // 2026-09-15 shape: a wake accepted onto a session that never ran it left
+      // a receipt claiming a stalled turn and an operator notice about a
+      // quarantined run, for work that never started.
+      const stallReason: RunStallReason = maxExceeded
+        ? 'absolute'
+        : neverProducedWork(active)
+          ? 'no_activity'
+          : 'idle';
+      logger.warn(
+        `Run ${runId} stalled: ${
+          stallReason === 'absolute'
+            ? 'absolute ceiling exceeded'
+            : stallReason === 'no_activity'
+              ? `idle timeout exceeded with no run activity ever observed in ${now - active.acceptedAtMs}ms (never executed)`
+              : 'idle timeout exceeded'
+        }`,
+      );
       const terminal = await this.finish(runId, {
         status: 'failed',
         errorCode: 'TURN_STALLED',
@@ -833,6 +850,24 @@ const ELIGIBLE_RUN_ACTIVITY_TYPES = new Set([
 
 function isEligibleRunActivity(eventType: string): boolean {
   return ELIGIBLE_RUN_ACTIVITY_TYPES.has(eventType);
+}
+
+/**
+ * Whether this run ever produced a single observable unit of work.
+ *
+ * Used to keep "a turn stalled" and "nothing ever ran under this run" apart in
+ * the receipt. `lastEligibleActivity` is only set by `observeEvent` for the
+ * eligible types above, and output evidence only accumulates from those same
+ * events, so both being empty means no turn ever emitted anything — not that a
+ * turn emitted something late.
+ */
+function neverProducedWork(active: ActiveRun): boolean {
+  if (active.lastEligibleActivity !== undefined) return false;
+  const output = active.outputEvidence;
+  return output.assistantMessages === 0
+    && output.assistantTextBlocks === 0
+    && output.assistantTextChars === 0
+    && output.toolCalls === 0;
 }
 
 function mutableOutputEvidence(value?: RunOutputEvidence): MutableRunOutputEvidence {

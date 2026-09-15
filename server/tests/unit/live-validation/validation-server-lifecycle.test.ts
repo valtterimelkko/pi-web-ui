@@ -77,7 +77,20 @@ function launchServer(dir: string | undefined, extraEnv: Record<string, string> 
       detached: true,
       cwd: REPO,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...childEnv, ...extraEnv } as NodeJS.ProcessEnv,
+      env: {
+        ...childEnv,
+        // Deliberate opt-in to the cgroup guard (2026-09-15). The launcher refuses
+        // to start inside /system.slice/pi-web-ui.service because a production
+        // stop SIGKILLs the whole control group — see
+        // docs/PRODUCTION-STOP-ROBUSTNESS.md. This harness needs that launcher
+        // chain to run, and it starts the server only to stop it inside this
+        // test, so it opts in explicitly rather than the guard being weakened for
+        // everyone. Without this the suite only passes when the test runner
+        // happens to sit outside the production cgroup — which is not true for
+        // any session dispatched through orchestration on this host.
+        PI_WEB_UI_VALIDATION_ALLOW_PRODUCTION_CGROUP: '1',
+        ...extraEnv,
+      } as NodeJS.ProcessEnv,
     },
   );
   let collected = '';

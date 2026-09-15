@@ -31,6 +31,7 @@ import { createEventTypesRoutes } from './routes/event-types.js';
 import { createNotificationsRoutes } from './routes/notifications.js';
 import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
+import { buildStallNotification } from './run-receipts/stall-notification.js';
 import { readPiRuntimeQuiescence } from './runtime-quiescence.js';
 import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
@@ -225,13 +226,25 @@ export class InternalApiServer {
       store: new RunReceiptStore(this.config.runReceiptDir || DEFAULT_RUN_RECEIPT_DIR),
       idempotencyTtlMs: this.config.runReceiptIdempotencyTtlMs ?? config.internalApiRunIdempotencyTtlMs,
       onStalled: (receipt) => {
-        // Quarantine signal: a run was terminalised TURN_STALLED without confirmed
-        // runtime cessation. Informational operator ping only — the admission slot
-        // is already released by terminalisation, so no action is required.
-        const runId = receipt.runId;
+        // Two genuinely different events share this hook (2026-09-15):
+        //
+        //  - a turn that really was executing and stopped responding, or hit the
+        //    ceiling -> runtime cessation is unconfirmed and the admission slot is
+        //    held (drained, then quarantined as capacity debt);
+        //  - a run that never produced a single unit of work -- typically a wake
+        //    accepted onto a session that never ran it. Nothing is in flight, the
+        //    drain releases the slot on its first poll, and the operator needs to
+        //    know the wake was LOST rather than being told a run was quarantined.
+        //
+        // The wording for both lives in stall-notification.ts so the claims it
+        // makes about capacity are reviewable. (It previously claimed the slot
+        // "is already released by terminalisation" here while the message sent to
+        // the operator said the opposite, and neither matched the drain/quarantine
+        // behaviour in run-receipt-manager.terminalize().)
+        const notice = buildStallNotification(receipt);
         void this.notificationManager?.emitExplicit({
-          title: `⚠️ Run quarantined (TURN_STALLED): ${runId}`,
-          body: `Run ${runId} was terminalised by the watchdog without confirmed runtime cessation. The admission slot is held until the runtime confirms cessation (or a 30s drain quarantine); no action required — informational, check for orphan processes only if you wish.`,
+          title: notice.title,
+          body: notice.body,
         }).catch(() => { /* best-effort; a failed ping must not affect terminalisation */ });
       },
       // §11 fence: on cancel/stall the admission slot is held (not reusable) until

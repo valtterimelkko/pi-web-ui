@@ -557,7 +557,7 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     expect(manager.get(run.receipt.runId)?.liveness?.terminalObservations?.[0]).not.toHaveProperty('reason');
   });
 
-  it('ignores synthetic stream_activity heartbeats and records an idle watchdog decision', async () => {
+  it('ignores synthetic stream_activity heartbeats and records an honest no_activity watchdog decision', async () => {
     await manager.shutdown();
     manager = new RunReceiptManager({
       store: new RunReceiptStore(dir, { now: () => now }),
@@ -586,7 +586,10 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       errorCode: 'TURN_STALLED',
       liveness: {
         watchdog: {
-          reason: 'idle',
+          // `no_activity`, not `idle`: the heartbeat is deliberately ineligible AND
+          // nothing else was ever observed, so no turn was executing. See
+          // run-stall-classification.test.ts (2026-09-15).
+          reason: 'no_activity',
           decidedAt: new Date(now).toISOString(),
           idleTimeoutMs: 1_000,
           absoluteTimeoutMs: 10_000,
@@ -656,7 +659,9 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       status: 'failed',
       errorCode: 'TURN_STALLED',
       liveness: {
-        watchdog: { reason: 'idle' },
+        // `no_activity`: the run produced nothing before the watchdog fired; the
+        // point of this test is the preserved cessation provenance below.
+        watchdog: { reason: 'no_activity' },
         terminalObservations: [{ late: true, origin: 'runtime_or_adapter' }],
         cessation: { state: 'unknown', basis: 'watchdog' },
       },

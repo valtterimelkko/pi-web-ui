@@ -593,6 +593,28 @@ Flags when the defaults don't match: `--base http://localhost:<port>`, `--passwo
 
 Run `node scripts/validation-server-stop.mjs --dir <dir>` and verify the owned port is free before removing the directory. `--timeout-ms` accepts whole numbers from 250 to 15000 (default 8000); invalid values are refused before signalling. Repeat stops require a valid tombstone and an empty recorded group, not merely a file saying the process exited. Uncertain exit/inspection or surviving members preserve recovery evidence; do not remove that directory. Process-group ownership is not daemon-proof cgroup containment, and a disposable data directory does not isolate resource usage from an inherited production cgroup. Use an independently owned bounded test unit when exercising resource pressure.
 
+#### The inherited production cgroup is refused, not warned about (2026-09-15)
+
+`scripts/validation-server.ts` checks `/proc/self/cgroup` **first**, before any directory, lock or port is taken, and refuses to start when the process is inside `/system.slice/pi-web-ui.service`:
+
+```
+[validation-server] Refusing to start a disposable validation server inside the production service cgroup
+(/system.slice/pi-web-ui.service).
+...
+systemd-run --scope --collect --unit=pi-web-ui-validate-<nonce> \
+  --setenv=PI_WEB_UI_VALIDATION_DIR=/tmp/pi-web-ui-validation \
+  npm run validate:server
+```
+
+This is not hypothetical. On 2026-09-15 08:30:26 systemd SIGKILLed the service with `KillMode=control-group` after `TimeoutStopSec=30`, and the kill list was one disposable validation server (`npm run validate:server`, `npm exec tsx`, three `esbuild` processes) plus four mid-turn orchestration children. Note also that **any session dispatched through orchestration runs inside that cgroup by default**, so a child that starts a validation server without a scope inherits the trap silently — which is why this is a hard refusal with an explicit override rather than a documentation note.
+
+Escape hatches, both deliberate:
+
+- `--allow-production-cgroup` or `PI_WEB_UI_VALIDATION_ALLOW_PRODUCTION_CGROUP=1` accepts the risk;
+- `PI_WEB_UI_VALIDATION_CGROUP_FILE=<path>` reads the cgroup from another file (diagnostic/test seam only).
+
+The decision itself is a pure function in `server/src/live-validation/validation-cgroup-guard.ts`, unit-tested in `server/tests/unit/validation-cgroup-guard.test.ts` and exercised end-to-end in `server/tests/integration/validation-server-cgroup-guard.test.ts` (exit code 78, `EX_CONFIG`).
+
 Disposable validation redirects Pi session storage and the session watcher to `<dir>/pi-sessions`; Pi's `PI_AGENT_DIR` remains the real agent directory for auth/models/resources, so do not copy or alter that directory and record any provider-side effects separately.
 
 ## Capability-driven behaviour
