@@ -123,8 +123,16 @@ describe('Contract 1.40.0: Session Adoption & Adopt-Native', () => {
   });
 
   describe('Contract version check', () => {
-    it('bumps contract version to 1.42.0 (antigravity desktop-root discovery)', () => {
-      expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.42.0');
+    it('records desktop-root discovery at 1.42.0 or later (a floor, not an equality pin)', () => {
+      // This asserts WHEN the feature was versioned, not what the current
+      // version is, so a later additive bump cannot rot it. It fails only if the
+      // contract ever moves BACKWARDS past the feature that introduced it.
+      const [major, minor] = INTERNAL_API_CONTRACT_VERSION.split('.').map(Number);
+      expect(major).toBe(1);
+      expect(
+        minor >= 42,
+        `desktop-root discovery was versioned at 1.42.0; got ${INTERNAL_API_CONTRACT_VERSION}`,
+      ).toBe(true);
     });
   });
 

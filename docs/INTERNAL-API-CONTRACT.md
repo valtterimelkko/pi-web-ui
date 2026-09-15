@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.42.0",
+  "contractVersion": "1.43.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -32,6 +32,14 @@ Current contract:
 **Policy default change (`2026-09-11`, no contract version change)** — the `INTERNAL_API_BLOCKED_PI_PROVIDERS` default became **empty** by operator decision: both previously blocked metered providers are now intentionally served through the Internal API — the direct `openai` provider (liberated 2026-09-11) and the OpenRouter gateway catalogue (surfaced in the Pi runtime by `PI_OPENROUTER_MODELS_ENABLED`, unblocked 2026-09-07). `/models` lists both and session creation/prompt/model-switch accept `openai/…` and `openrouter/…` selectors. Wire schema, routes, and error codes are unchanged (contract stays at its current version); `/capabilities.features.piProviderPolicy.blockedProviders` continues to expose the effective per-deployment list. Operators can re-block any exact provider id (e.g. `openai,openrouter`) via the env override.
 
 **Policy default change (`2026-09-07`, no contract version change)** — the `INTERNAL_API_BLOCKED_PI_PROVIDERS` default narrowed from `openai,openrouter` to `openai` by operator decision: the full OpenRouter gateway catalogue (surfaced in the Pi runtime by `PI_OPENROUTER_MODELS_ENABLED`) became intentionally served through the Internal API — `/models` lists it and session creation/prompt/model-switch accept `openrouter/…` selectors. Wire schema, routes, and error codes are unchanged (contract stays at its current version); `/capabilities.features.piProviderPolicy.blockedProviders` continues to expose the effective per-deployment list. Operators can re-block `openrouter` (or any exact provider id) via the env override.
+
+- **1.43.0** (minor, additive run-stall reason `no_activity`) — the watchdog evidence on a terminalised run receipt gains a third value on the wire: `liveness.watchdog.reason` is now `'idle' | 'absolute' | 'no_activity'` (`RunStallReason`, `server/src/internal-api/types.ts`). Everything else about the receipt is unchanged; this is an additive enum value, the same class of change as 1.41.0's `ChildCardKind` gaining `'background_shell'`.
+
+  `no_activity` means the idle window elapsed with **no eligible activity event and no output evidence ever observed**: the run was accepted (and may have been marked started) but nothing ever executed under it. It is deliberately distinct from `idle`, which asserts that a turn was producing activity and then stopped — for a watch wake, `no_activity` is a **lost wake**, not a stalled turn, and the operator-facing notice is worded and titled accordingly (`server/src/internal-api/run-receipts/stall-notification.ts` owns that wording).
+
+  Consumer guidance: switching exhaustively on `reason` and assuming two values will mis-report a lost wake as a stalled turn; handle all three and treat an unknown future value as before. Rollback is trivial — the field and its other values are unchanged, so a consumer that ignores `no_activity` behaves exactly as it did at 1.42.0.
+
+  Recorded 2026-09-15: the code merged and was deployed earlier the same day, and this version number records the wire change rather than preceding it. The field itself keeps its 1.14.0 `run-activity-v1` policy; only the value set grew.
 
 - **1.42.0** (minor, additive antigravity desktop-root discovery) — the antigravity runtime now covers BOTH of its native conversation stores in session discovery: the agy CLI root (`~/.gemini/antigravity-cli/conversations`) and the desktop-app root (`~/.gemini/antigravity/conversations`, no "-cli" suffix). The two stores are disjoint and share the identical layout (`conversations/<uuid>.db` + `brain/<uuid>/.system_generated/logs/transcript*.jsonl`), so a pasted desktop-app conversation id is now findable by the same bounded, read-only paths that already covered the CLI. Response shapes are unchanged — everything is additive coverage:
   - `GET /sessions/native` additionally scans the configured desktop conversations root; the `scannedRoots` array may now carry two `antigravity` entries (one per distinct root actually scanned), and desktop conversations appear as regular items with previews from their brain transcripts;
