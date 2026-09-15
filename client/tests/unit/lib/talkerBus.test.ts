@@ -3,6 +3,7 @@ import {
   emitTalkerTurnResult,
   getLastTalkerTurnResult,
   isTalkerTurnResultMessage,
+  noteTalkerRequestIssued,
   resetTalkerTurnBus,
   subscribeTalkerTurnResults,
 } from '../../../src/lib/talkerBus';
@@ -24,7 +25,13 @@ const makeResult = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('talkerBus', () => {
-  beforeEach(() => resetTalkerTurnBus());
+  beforeEach(() => {
+    resetTalkerTurnBus();
+    // The fixed result below carries requestId 'r1': the send-side equivalent
+    // (a talker turn issued with that correlation id) must exist for the bus
+    // to apply it — results are matched on requestId plus lane identity.
+    noteTalkerRequestIssued({ workerSessionId: '/pi/worker.jsonl', runtime: 'pi' }, 'r1');
+  });
 
   it('consumes only talker_turn_result messages', () => {
     expect(isTalkerTurnResultMessage(makeResult())).toBe(true);

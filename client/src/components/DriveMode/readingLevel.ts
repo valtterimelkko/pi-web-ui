@@ -120,6 +120,12 @@ export function isReadingLevel(value: unknown): value is ReadingLevel {
 interface ReadingLevelState {
   level: ReadingLevel;
   setLevel: (level: ReadingLevel) => void;
+  /** Per-lane overrides (multi-lane): a lane with no choice reads at the
+   *  shared default. Deliberately NOT persisted — lanes are a live tab's
+   *  arrangement, the persisted choice is the operator's default. */
+  levels: Record<string, ReadingLevel>;
+  levelFor: (sessionId: string) => ReadingLevel;
+  setLevelFor: (sessionId: string, level: ReadingLevel) => void;
 }
 
 /**
@@ -129,9 +135,17 @@ interface ReadingLevelState {
  */
 export const useReadingLevelStore = create<ReadingLevelState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       level: DEFAULT_READING_LEVEL,
       setLevel: (level) => set({ level: isReadingLevel(level) ? level : DEFAULT_READING_LEVEL }),
+      levels: {},
+      levelFor: (sessionId) => get().levels[sessionId] ?? get().level,
+      setLevelFor: (sessionId, level) =>
+        set((state) => ({
+          levels: isReadingLevel(level)
+            ? { ...state.levels, [sessionId]: level }
+            : state.levels,
+        })),
     }),
     {
       name: READING_LEVEL_STORAGE_KEY,

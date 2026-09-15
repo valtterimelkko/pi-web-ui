@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { DriveModeDictate } from '../../../../src/components/DriveMode/DriveModeDictate';
 import { emitTalkerTurnResult, resetTalkerTurnBus } from '../../../../src/lib/talkerBus';
+import { lastSentTalkerRequestId } from '../../helpers/talkerEcho';
 import { speechArbiter, type ArbiterPlayer } from '../../../../src/lib/speechArbiter';
 import { spokenLedger } from '../../../../src/lib/spokenLedger';
 import { resetReadingLevelStore } from '../../../../src/components/DriveMode/readingLevel';
@@ -137,6 +138,7 @@ function propose(over: Record<string, unknown>): void {
       phase: 'proposed',
       released: null,
       cancelled: false,
+      requestId: lastSentTalkerRequestId(sendMock),
       ...over,
     });
   });

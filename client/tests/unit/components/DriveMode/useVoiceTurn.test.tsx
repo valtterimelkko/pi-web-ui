@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useVoiceTurn, CONFIRM_UTTERANCE, CANCEL_UTTERANCE } from '../../../../src/components/DriveMode/useVoiceTurn';
 import { emitTalkerTurnResult, resetTalkerTurnBus } from '../../../../src/lib/talkerBus';
 import { speechArbiter, type ArbiterPlayer } from '../../../../src/lib/speechArbiter';
+import { lastSentTalkerRequestId } from '../../helpers/talkerEcho';
 
 // Mock useWebSocket: capture outgoing messages; send success by default.
 const sendMock = vi.fn();
@@ -49,6 +50,9 @@ function emit(over: Record<string, unknown>) {
     phase: 'answered',
     released: null,
     cancelled: false,
+    // The server echoes the correlation id the send carried; without one this
+    // is a result this surface never sent (and would rightly refuse).
+    requestId: lastSentTalkerRequestId(sendMock),
     ...over,
   });
 }
@@ -75,12 +79,16 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     act(() => {
       result.current.sendText('tell the worker to rebase on main');
     });
-    expect(sendMock).toHaveBeenCalledWith({
-      type: 'talker_turn',
-      workerSessionId: WORKER,
-      utterance: 'tell the worker to rebase on main',
-      runtime: 'pi',
-    });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'talker_turn',
+        workerSessionId: WORKER,
+        utterance: 'tell the worker to rebase on main',
+        runtime: 'pi',
+      })
+    );
+    // The send carries the client correlation id the server echoes back.
+    expect(typeof sendMock.mock.calls[0][0].requestId).toBe('string');
   });
 
   it('capture is unconditional: the send is never gated on the operator floor or playback', () => {
@@ -120,6 +128,11 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     });
     act(() => {
       emit({ reply: 'Noted', phase: 'proposed' });
+    });
+    // The release is the answer to the CONFIRM gesture — a second send, whose
+    // echo identifies its result (one requestId per turn).
+    act(() => {
+      result.current.confirmPending();
     });
     act(() => {
       emit({
@@ -228,6 +241,11 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
       emit({ reply: 'Holding both — which one?', phase: 'proposed' });
     });
     expect(result.current.pendingProposal).not.toBeNull();
+    // The cancellation is the answer to the CANCEL gesture — a second send,
+    // whose echo identifies its result.
+    act(() => {
+      result.current.cancelPending();
+    });
     act(() => {
       emit({ reply: 'Cancelled.', phase: 'answered', cancelled: true });
     });
@@ -375,13 +393,15 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     act(() => {
       expect(result.current.releaseOriginal()).toBe(true);
     });
-    expect(sendMock).toHaveBeenCalledWith({
-      type: 'talker_turn',
-      workerSessionId: WORKER,
-      utterance: CONFIRM_UTTERANCE,
-      runtime: 'pi',
-      releaseVariant: 'original',
-    });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'talker_turn',
+        workerSessionId: WORKER,
+        utterance: CONFIRM_UTTERANCE,
+        runtime: 'pi',
+        releaseVariant: 'original',
+      })
+    );
   });
 
   it('the default confirm gesture sends NO releaseVariant — the tidied path is unchanged', () => {
@@ -395,12 +415,14 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     act(() => {
       expect(result.current.confirmPending()).toBe(true);
     });
-    expect(sendMock).toHaveBeenCalledWith({
-      type: 'talker_turn',
-      workerSessionId: WORKER,
-      utterance: CONFIRM_UTTERANCE,
-      runtime: 'pi',
-    });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'talker_turn',
+        workerSessionId: WORKER,
+        utterance: CONFIRM_UTTERANCE,
+        runtime: 'pi',
+      })
+    );
   });
 
   it('junk shapes on the proposal field are ignored, not trusted', () => {
@@ -524,6 +546,12 @@ describe('useVoiceTurn — the ack producer consults the shared spoken ledger (P
       });
       act(() => {
         emit({ receiptAck: 'Noted — still holding that.' });
+      });
+      // A second TURN: one send, one echoed result. (Re-emitting the same
+      // requestId would be the same event — the bus rejects it as a
+      // duplicate, which is the correlation rule working.)
+      act(() => {
+        result.current.sendText('second held utterance');
       });
       act(() => {
         emit({ receiptAck: 'Noted — still holding that.' });

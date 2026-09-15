@@ -28,6 +28,13 @@ export interface DriveModeDictateProps {
   sessionDisplayName: string;
   onExit: () => void;
   onAbort?: () => void;
+  /** Multi-lane (one tab, several workers): this surface is one lane of the
+   *  in-page lane set. Per-lane transcript, reading level, focus and card;
+   *  the floor flows through the lane coordinator. */
+  laneEnabled?: boolean;
+  /** Multi-lane: the operator is addressing THIS lane. A non-addressed lane
+   *  stays mounted (its card, capture and focus live on) but hidden. */
+  addressed?: boolean;
 }
 
 /**
@@ -51,24 +58,38 @@ export function DriveModeDictate({
   sessionDisplayName,
   onExit,
   onAbort,
+  laneEnabled = false,
+  addressed = true,
 }: DriveModeDictateProps) {
   // P18/2 — the operator's focus/hold control. Session-local, pressed only by
   // the operator: while it is on, the worker's answers are transcript-only and
   // held; on exit what arrived is surfaced explicitly. The talker is TOLD (so
   // it can suggest leaving focus) but has no way to switch it.
   const focus = useFocusHold();
-  const voice = useVoiceTurn(sessionId, sdkType, focus.focused);
-  const readAloud = useReadAloud('drive-mode');
-  const phase = useDriveModeStore((s) => s.phase);
-  const setPhase = useDriveModeStore((s) => s.setPhase);
-  const isStreaming = useSessionStore((s) => s.isStreaming);
-  const messages = useSessionStore((s) => s.messages);
-  const readingLevel = useReadingLevelStore((s) => s.level);
-  const setReadingLevel = useReadingLevelStore((s) => s.setLevel);
+  const voice = useVoiceTurn(sessionId, sdkType, focus.focused, laneEnabled ? sessionId : undefined);
   // The layout mode is the operator's persisted preference; the surface only
   // offers the switch (the overlay decides whether a split is rendered, and a
   // narrow window degrades the desktop mode back to this layout).
   const voiceLayout = useVoiceLayout();
+  // Read-aloud and the answer reader are per-lane in multi-lane mode: the
+  // arbiter's intent ids carry the session so the strip can attribute speech.
+  const readAloud = useReadAloud(laneEnabled ? `drive-mode-${sessionId}` : 'drive-mode');
+  const phase = useDriveModeStore((s) => s.phase);
+  const setPhase = useDriveModeStore((s) => s.setPhase);
+  // Per-lane transcript: in lane mode the surface reads ITS session's
+  // messages and streaming state from the per-session projections (kept
+  // fresh for subscribed background sessions), never the global current
+  // session — lane A's answer must never become lane B's.
+  const globalIsStreaming = useSessionStore((s) => s.isStreaming);
+  const globalMessages = useSessionStore((s) => s.messages);
+  const laneStreaming = useSessionStore(
+    (s) => !!((s as { streamingSessions?: Record<string, boolean> }).streamingSessions?.[sessionId])
+  );
+  const laneMessages = useSessionStore(
+    (s) => (s as { sessionMessages?: Record<string, typeof s.messages> }).sessionMessages?.[sessionId]
+  );
+  const isStreaming = laneEnabled ? laneStreaming : globalIsStreaming;
+  const messages = laneEnabled ? (laneMessages ?? globalMessages) : globalMessages;
 
   // P19 — the answer is the whole turn, not the last message: read-aloud and
   // the answer controls operate on everything the worker has said since the
@@ -86,17 +107,27 @@ export function DriveModeDictate({
   // gate capture, and nothing here can condense the operator's words.
   const talkerRuntime = talkerRuntimeFor(sdkType ?? undefined);
   const { requestDigest } = useTurnDigest(sessionId, talkerRuntime);
+  // Per-lane reading level: each lane carries its own choice over the shared
+  // persisted default. Single-lane is exactly today's store field.
+  const storeLevel = useReadingLevelStore((s) => s.level);
+  const laneLevel = useReadingLevelStore(
+    (s) => ((s as { levels?: Record<string, typeof s.level> }).levels ?? {})[sessionId]
+  );
+  const readingLevel = laneEnabled ? (laneLevel ?? storeLevel) : storeLevel;
+  const setReadingLevel = useReadingLevelStore((s) => s.setLevel);
+  const setLevelFor = useReadingLevelStore((s) => s.setLevelFor);
+  const handleReadingLevel = useCallback(
+    (level: ReadingLevel) => (laneEnabled ? setLevelFor(sessionId, level) : setReadingLevel(level)),
+    [laneEnabled, sessionId, setLevelFor, setReadingLevel]
+  );
   const { spokenKind, fallbackNote, heldWhileFocused, exitRecap, dismissRecap } = useAnswerReader({
     isStreaming,
     messages,
     level: readingLevel,
     focused: focus.focused,
     requestDigest,
+    ...(laneEnabled ? { intentIdPrefix: sessionId } : {}),
   });
-  const handleReadingLevel = useCallback(
-    (level: ReadingLevel) => setReadingLevel(level),
-    [setReadingLevel]
-  );
 
   // Vibrate when recording starts
   useEffect(() => {
@@ -118,8 +149,13 @@ export function DriveModeDictate({
   // unbounded nested-update loop — React error #185, full-screen error
   // boundary. Precedence: capture (recording/processing) > worker streaming
   // > audio-playing handback; every write is conditional on a real change.
+  //
+  // Multi-lane: lane surfaces do not write the phase at all — with several
+  // lanes mounted there is no single phase to summarise, and cross-lane
+  // fights would reintroduce the ping-pong.
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    if (laneEnabled) return;
     if (isStarting || isRecording || voice.state === 'processing') {
       if (phase !== 'dictate') setPhase('dictate');
     } else if (isStreaming) {
@@ -129,7 +165,7 @@ export function DriveModeDictate({
     } else if (phase === 'audio-playing' && readAloud.state === 'idle') {
       setPhase('dictate');
     }
-  }, [voice.state, isStarting, isRecording, isStreaming, readAloud.state, phase, setPhase]);
+  }, [laneEnabled, voice.state, isStarting, isRecording, isStreaming, readAloud.state, phase, setPhase]);
 
   // ---------------------------------------------------------------------------
   // The four states, derived from what the surface receives (§4.1).
@@ -209,7 +245,11 @@ export function DriveModeDictate({
   const showAnswerControls = turnAssistantText != null || readAloud.state !== 'idle';
 
   return (
-    <div className="flex flex-col items-center h-full w-full px-4 py-6 relative overflow-y-auto">
+    <div
+      data-drive-session={laneEnabled ? sessionId : undefined}
+      hidden={laneEnabled && !addressed ? true : undefined}
+      className="flex flex-col items-center h-full w-full px-4 py-6 relative overflow-y-auto"
+    >
       {/* Exit button */}
       <button
         onClick={onExit}
