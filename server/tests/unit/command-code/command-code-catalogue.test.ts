@@ -7,6 +7,7 @@ import { CommandCodeService } from '../../../src/command-code/command-code-servi
 import {
   parseCommandCodeModelList,
 } from '../../../src/command-code/command-code-model-catalog.js';
+import { COMMAND_CODE_EFFORT_TABLE } from '../../../src/command-code/command-code-model-efforts.js';
 import { ADVERTISED_IDS, COMMAND_CODE_EXCLUDED_IDS } from './command-code-fixture.js';
 
 function listModelsFixture(ids: readonly string[]): string {
@@ -86,6 +87,13 @@ describe('Command Code catalogue — denylist, fails open', () => {
 });
 
 describe('Command Code effort table', () => {
+  it('keeps the current DeepSeek V4.1 Flash entry in the committed catalogue', () => {
+    expect(COMMAND_CODE_EFFORT_TABLE['deepseek/deepseek-v4.1-flash']).toEqual({
+      effortLevels: ['low', 'high', 'max'],
+      defaultEffort: 'low',
+    });
+  });
+
   it('serves a listed model with exactly its committed effort levels and default', async () => {
     const { service } = await buildService(ADVERTISED_IDS);
     const qwen = service.getModels().find((model) => model.id === 'qwen/qwen3.8-max')!;

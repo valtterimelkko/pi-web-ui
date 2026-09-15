@@ -20,6 +20,7 @@ const PI_MODELS = [
   { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'openai-codex' },
   { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'openai-codex' },
   { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai-codex' },
+  { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', provider: 'commandcode' },
 ];
 
 /** The 35 GOAT-eligible ids the server lists for Command Code (54 advertised minus 19 excluded). */
@@ -149,11 +150,25 @@ describe('NewSessionModal — Claude backend selector', () => {
     expect(screen.getByRole('option', { name: 'Codex / GPT-5.6 Terra' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Codex / GPT-5.6 Luna' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Codex / GPT-5.6 Sol' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'commandcode / DeepSeek V4.1 Flash' })).toBeInTheDocument();
 
     fireEvent.change(selector, { target: { value: 'openai-codex/gpt-5.6-luna' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
     expect(onCreateSession).toHaveBeenCalledWith('/root', 'pi', 'openai-codex/gpt-5.6-luna', undefined, undefined, expect.any(String));
+  });
+
+  it('emits the provider-qualified selector for the Command Code DeepSeek V4.1 model', async () => {
+    const onCreateSession = vi.fn();
+    render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={onCreateSession} />);
+
+    const selector = await screen.findByTestId('pi-model-select');
+    fireEvent.change(selector, { target: { value: 'commandcode/deepseek/deepseek-v4.1-flash' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      '/root', 'pi', 'commandcode/deepseek/deepseek-v4.1-flash', undefined, undefined, expect.any(String),
+    );
   });
 
   it('lists all 35 GOAT-eligible Command Code models and none of the excluded ids', async () => {

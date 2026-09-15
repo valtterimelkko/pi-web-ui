@@ -144,6 +144,51 @@ describe('createModelsRoutes — handleListModels', () => {
     });
   });
 
+  it('publishes the Command Code-backed DeepSeek V4.1 Flash with a provider-qualified selector', async () => {
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          {
+            id: 'deepseek/deepseek-v4.1-flash',
+            name: 'DeepSeek V4.1 Flash',
+            provider: 'commandcode',
+            reasoning: true,
+            input: ['text', 'image'],
+            contextWindow: 1000000,
+            maxTokens: 64000,
+            thinkingLevelMap: {
+              off: null,
+              minimal: null,
+              low: 'low',
+              medium: null,
+              high: 'high',
+              xhigh: null,
+              max: 'max',
+            },
+          },
+        ]),
+      } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=pi'),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).models.pi[0]).toMatchObject({
+      id: 'deepseek/deepseek-v4.1-flash',
+      selector: 'commandcode/deepseek/deepseek-v4.1-flash',
+      provider: 'commandcode',
+      displayName: 'DeepSeek V4.1 Flash',
+      thinkingLevels: ['low', 'high', 'max'],
+    });
+  });
+
   it('publishes zai/glm-5.3-flash with only its catalogued low/high/max levels', async () => {
     // Metadata shape mirrors the SDK dynamic model store entry exactly:
     // `null` in the map means "not supported" and must not surface as a
