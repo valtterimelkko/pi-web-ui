@@ -1,0 +1,12 @@
+Running as unit: child-S-wedge-1789463185.scope; invocation ID: 01db0d97a1e64b918484c1639435b588
+[Harness] ready pid=2232210 escape_after_ms=3000
+-- sending SIGTERM to harness pid 2232210 --
+[Shutdown] event=stop_signal signal=SIGTERM received_at=2026-09-15T09:06:28.159Z pid=2232210 ppid=2232208 uptime_s=3 note="recorded synchronously before any await"
+[Harness] onShutdown entered; blocking the event loop for 30s
+[Shutdown] event=shutdown_escape signal_recorded_ms_ago=3500 window_ms=3000 action=force_exit note="main thread did not exit inside the grace window; ending the process before systemd TimeoutStopSec"
+/tmp/child-S-live/runner.sh: line 15: 2232210 Killed                  node --import tsx /tmp/child-S-live/wedge-harness.ts 2>&1
+EXIT_CODE=137  (137 = SIGKILL, i.e. the escape worker ended it; 143 = SIGTERM)
+TOTAL_S=6.5
+RUNNER_EXIT=0
+[Shutdown] event=stop_signal signal=SIGTERM received_at=2026-09-15T09:15:08.268Z pid=2231206 ppid=2231194 uptime_s=562 note="recorded synchronously before any await"
+[Harness] onShutdown entered; blocking the event loop for 30s

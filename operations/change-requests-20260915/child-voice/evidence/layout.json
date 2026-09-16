@@ -1,0 +1,223 @@
+{
+  "steps": {
+    "session": {
+      "status": 201,
+      "id": "01a0a470-9c32-7699-bffd-cc35e96872a3"
+    },
+    "entered": {
+      "split": false,
+      "sessionPane": false,
+      "dictate": true,
+      "floorBanner": "Ready — tap to speak",
+      "micLabel": "Start recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "true",
+        "desktopPressed": "false",
+        "degraded": false
+      },
+      "sessionPaneMessages": 0,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": false
+      },
+      "stopTalker": false,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "mobileMode.desktopWidth": {
+      "split": false,
+      "sessionPane": false,
+      "dictate": true,
+      "floorBanner": "Ready — tap to speak",
+      "micLabel": "Start recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "true",
+        "desktopPressed": "false",
+        "degraded": false
+      },
+      "sessionPaneMessages": 0,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": false
+      },
+      "stopTalker": false,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "desktopMode.desktopWidth": {
+      "split": true,
+      "sessionPane": true,
+      "dictate": true,
+      "floorBanner": "Ready — tap to speak",
+      "micLabel": "Start recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "false",
+        "desktopPressed": "true",
+        "degraded": false
+      },
+      "sessionPaneMessages": 8,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": false
+      },
+      "stopTalker": false,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "desktopSplit.micRecording": {
+      "split": true,
+      "sessionPane": true,
+      "dictate": true,
+      "floorBanner": "You have the floor",
+      "micLabel": "Stop recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "false",
+        "desktopPressed": "true",
+        "degraded": false
+      },
+      "sessionPaneMessages": 8,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": false
+      },
+      "stopTalker": false,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "desktopSplit.afterStop": {
+      "split": true,
+      "sessionPane": true,
+      "dictate": true,
+      "floorBanner": "Ready — tap to speak",
+      "micLabel": "Start recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "false",
+        "desktopPressed": "true",
+        "degraded": false
+      },
+      "sessionPaneMessages": 8,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": false
+      },
+      "stopTalker": false,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "desktopSplit.paneFollowsSameStore": {
+      "paneContains": true,
+      "readAloud": {
+        "present": true,
+        "disabled": false
+      }
+    },
+    "desktopSplit.confirmationCard": {
+      "present": true,
+      "buttons": [
+        "Confirm",
+        "Cancel",
+        "Send reply"
+      ],
+      "text": "Ready to send — your words, exactly:context: ### Claude ###ConfirmCancelSend reply"
+    },
+    "desktopMode.narrowWidth": {
+      "split": false,
+      "sessionPane": false,
+      "dictate": true,
+      "floorBanner": "Talker speaking",
+      "micLabel": "Start recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "false",
+        "desktopPressed": "true",
+        "degraded": true
+      },
+      "sessionPaneMessages": 0,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": true,
+        "label": "🔊 Read Aloud",
+        "disabled": false
+      },
+      "stopTalker": true,
+      "viewport": {
+        "w": 430,
+        "h": 900
+      }
+    },
+    "mobileMode.narrowWidth": {
+      "split": false,
+      "sessionPane": false,
+      "dictate": true,
+      "floorBanner": "Talker speaking",
+      "micLabel": "Start recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "true",
+        "desktopPressed": "false",
+        "degraded": false
+      },
+      "sessionPaneMessages": 0,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": true,
+        "label": "🔊 Read Aloud",
+        "disabled": false
+      },
+      "stopTalker": true,
+      "viewport": {
+        "w": 430,
+        "h": 900
+      }
+    },
+    "desktopMode.afterReload": {
+      "split": true,
+      "sessionPane": true,
+      "dictate": true,
+      "floorBanner": "Ready — tap to speak",
+      "micLabel": "Start recording",
+      "layoutToggle": {
+        "present": true,
+        "mobilePressed": "false",
+        "desktopPressed": "true",
+        "degraded": false
+      },
+      "sessionPaneMessages": 8,
+      "confirmationCard": false,
+      "readAloudButton": {
+        "present": false
+      },
+      "stopTalker": false,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    }
+  },
+  "screenshots": [
+    "20-layout-mobile-mode-narrow-after-entry.png",
+    "21-mobile-mode-1440.png",
+    "22-desktop-mode-1440-split.png",
+    "23-desktop-mode-1440-recording.png",
+    "24-desktop-mode-1440-session-pane-store.png",
+    "25-desktop-mode-1440-confirmation-card.png",
+    "26-desktop-mode-430-degraded.png",
+    "27-mobile-mode-430.png",
+    "28-desktop-mode-after-reload.png"
+  ]
+}

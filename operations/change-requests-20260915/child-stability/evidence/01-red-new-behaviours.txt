@@ -1,0 +1,47 @@
+
+ RUN  v1.6.1 /root/pi-web-ui-wt-stability/server
+
+ ❯ tests/unit/http-server-close.test.ts  (0 test)
+ ❯ tests/unit/shutdown-signal.test.ts  (0 test)
+ ❯ tests/unit/validation-cgroup-guard.test.ts  (0 test)
+ ❯ tests/unit/shutdown-escape-policy.test.ts  (0 test)
+ ❯ tests/unit/shutdown-escape-worker.test.ts  (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/unit/http-server-close.test.ts [ tests/unit/http-server-close.test.ts ]
+Error: Failed to load url ../../src/http-server-close.js (resolved id: ../../src/http-server-close.js) in /root/pi-web-ui-wt-stability/server/tests/unit/http-server-close.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../pi-web-ui/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51969:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  tests/unit/shutdown-escape-policy.test.ts [ tests/unit/shutdown-escape-policy.test.ts ]
+Error: Failed to load url ../../src/shutdown-escape-policy.js (resolved id: ../../src/shutdown-escape-policy.js) in /root/pi-web-ui-wt-stability/server/tests/unit/shutdown-escape-policy.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../pi-web-ui/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51969:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  tests/unit/shutdown-escape-worker.test.ts [ tests/unit/shutdown-escape-worker.test.ts ]
+Error: Failed to load url ../../src/shutdown-escape-worker.js (resolved id: ../../src/shutdown-escape-worker.js) in /root/pi-web-ui-wt-stability/server/tests/unit/shutdown-escape-worker.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../pi-web-ui/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51969:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  tests/unit/shutdown-signal.test.ts [ tests/unit/shutdown-signal.test.ts ]
+Error: Failed to load url ../../src/shutdown-signal.js (resolved id: ../../src/shutdown-signal.js) in /root/pi-web-ui-wt-stability/server/tests/unit/shutdown-signal.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../pi-web-ui/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51969:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  tests/unit/validation-cgroup-guard.test.ts [ tests/unit/validation-cgroup-guard.test.ts ]
+Error: Failed to load url ../../src/live-validation/validation-cgroup-guard.js (resolved id: ../../src/live-validation/validation-cgroup-guard.js) in /root/pi-web-ui-wt-stability/server/tests/unit/validation-cgroup-guard.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../pi-web-ui/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51969:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+ Test Files  5 failed (5)
+      Tests  no tests
+   Start at  08:52:51
+   Duration  571ms (transform 100ms, setup 81ms, collect 0ms, tests 0ms, environment 1ms, prepare 509ms)
+
+JSON report written to /root/pi-web-ui-wt-stability/server/test-results.json

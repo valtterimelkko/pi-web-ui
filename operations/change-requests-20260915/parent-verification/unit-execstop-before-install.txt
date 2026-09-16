@@ -1,0 +1,1 @@
+ExecStopPost={ path=/bin/sh ; argv[]=/bin/sh -c echo "pi-web-ui STOP OBSERVED code=${EXIT_CODE:-none} signal=${EXIT_STATUS:-none} at $(date -Is)" ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }

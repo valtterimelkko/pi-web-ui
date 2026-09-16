@@ -1,0 +1,426 @@
+{
+  "steps": {
+    "sessions": {
+      "created": [
+        "01a0a5ec-2850-757f-bdcd-19b006753c30",
+        "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+        "01a0a5ec-2d7a-757f-bdcd-19b45f64f9fc",
+        "01a0a5ec-2fe3-757f-bdcd-19b65fb42a7a"
+      ]
+    },
+    "login": "ok (ONE page only — no second tab is ever opened)",
+    "voiceMode.A.entered": {
+      "strip": {
+        "collapsed": true,
+        "present": false,
+        "cap": null,
+        "rows": []
+      }
+    },
+    "lanes.two": {
+      "strip": {
+        "collapsed": false,
+        "present": true,
+        "cap": "2 of 3",
+        "rows": [
+          {
+            "session": "01a0a5ec-2850-757f-bdcd-19b006753c30",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+            "addressed": true,
+            "state": "Ready",
+            "floorMarker": null
+          }
+        ]
+      }
+    },
+    "lanes.mountedSurfaces": {
+      "surfaces": [
+        {
+          "session": "01a0a5ec-2850-757f-bdcd-19b006753c30",
+          "hidden": true
+        },
+        {
+          "session": "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+          "hidden": false
+        }
+      ]
+    },
+    "lanes.addressSwitched": {
+      "strip": {
+        "collapsed": false,
+        "present": true,
+        "cap": "2 of 3",
+        "rows": [
+          {
+            "session": "01a0a5ec-2850-757f-bdcd-19b006753c30",
+            "addressed": true,
+            "state": "Ready",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": null
+          }
+        ]
+      }
+    },
+    "floor.A.recording": {
+      "probe": {
+        "recordersRecording": 1,
+        "liveTracksNow": 1,
+        "dictationCalls": [
+          {
+            "at": 1789490116972,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490116974,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490117854,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490117855,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490117856,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490117856,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490120521,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490121554,
+            "url": "/api/dictation/bc0aeb45-0fd1-44fd-b932-d233118bff48/stream",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      },
+      "micState": "Stop recording"
+    },
+    "floor.stripDuringCapture": {
+      "strip": {
+        "collapsed": false,
+        "present": true,
+        "cap": "2 of 3",
+        "rows": [
+          {
+            "session": "01a0a5ec-2850-757f-bdcd-19b006753c30",
+            "addressed": true,
+            "state": "You have the floor",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": "(no messages) has the floor"
+          }
+        ]
+      }
+    },
+    "floor.speechWhileCapture": {
+      "submitOutcome": "queued",
+      "arb": {
+        "playing": false,
+        "ducked": false,
+        "operatorSpeaking": true,
+        "current": null,
+        "queued": [
+          "answer-01a0a5ec-2b23-757f-bdcd-19b35e8619be"
+        ],
+        "played": [],
+        "volumeChanges": []
+      }
+    },
+    "floor.playingAfterRelease": {
+      "arb": {
+        "playing": true,
+        "ducked": false,
+        "operatorSpeaking": false,
+        "current": "answer-01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+        "queued": [],
+        "played": [
+          {
+            "chunk": "Worker B answer sentence one.",
+            "volume": 1
+          }
+        ],
+        "volumeChanges": []
+      }
+    },
+    "floor.duckOnCapture": {
+      "ducked": true,
+      "current": "answer-01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+      "played": [
+        {
+          "chunk": "Worker B answer sentence one.",
+          "volume": 1
+        }
+      ],
+      "volumeChanges": [
+        {
+          "v": 0.15,
+          "at": 1789490126638
+        }
+      ],
+      "recordersRecording": 1
+    },
+    "floor.queueFairness": {
+      "arb": {
+        "current": "answer-01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+        "queued": [
+          "answer-01a0a5ec-2850-757f-bdcd-19b006753c30"
+        ],
+        "played": [
+          "Lane B asked first and speaks first."
+        ]
+      }
+    },
+    "lanes.three": {
+      "strip": {
+        "collapsed": false,
+        "present": true,
+        "cap": "3 of 3",
+        "rows": [
+          {
+            "session": "01a0a5ec-2850-757f-bdcd-19b006753c30",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2d7a-757f-bdcd-19b45f64f9fc",
+            "addressed": true,
+            "state": "Ready",
+            "floorMarker": null
+          }
+        ]
+      }
+    },
+    "cap.ask": {
+      "askText": "Voice Mode holds 3 of 3 lanes.Replace one of the lanes with the session you pick, or cancel. A fourth lane is never added silently.Replace (no messages)Replace ",
+      "buttons": [
+        "Replace (no messages)",
+        "Replace (no messages)",
+        "Replace (no messages)",
+        "Cancel"
+      ]
+    },
+    "cap.replace": {
+      "strip": {
+        "collapsed": false,
+        "present": true,
+        "cap": "3 of 3",
+        "rows": [
+          {
+            "session": "01a0a5ec-2fe3-757f-bdcd-19b65fb42a7a",
+            "addressed": true,
+            "state": "Ready",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2d7a-757f-bdcd-19b45f64f9fc",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": null
+          }
+        ]
+      }
+    },
+    "lanes.afterClose": {
+      "strip": {
+        "collapsed": false,
+        "present": true,
+        "cap": "2 of 3",
+        "rows": [
+          {
+            "session": "01a0a5ec-2fe3-757f-bdcd-19b65fb42a7a",
+            "addressed": true,
+            "state": "Ready",
+            "floorMarker": null
+          },
+          {
+            "session": "01a0a5ec-2b23-757f-bdcd-19b35e8619be",
+            "addressed": false,
+            "state": "Ready",
+            "floorMarker": null
+          }
+        ]
+      },
+      "probe": {
+        "recordersRecording": 0,
+        "liveTracksNow": 0,
+        "dictationCalls": [
+          {
+            "at": 1789490123594,
+            "url": "/api/dictation/bc0aeb45-0fd1-44fd-b932-d233118bff48/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490123654,
+            "url": "/api/dictation/bc0aeb45-0fd1-44fd-b932-d233118bff48/finish",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490126627,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490127470,
+            "url": "/api/dictation/07ecfbd3-35ac-4e52-b706-085d81e80211/finish",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490129286,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490129287,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490131666,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789490131666,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      }
+    }
+  },
+  "screenshots": [
+    "01-single-lane.png",
+    "02-two-lanes.png",
+    "03b-strip-floor-during-capture.png",
+    "03-capture-ducks-speech.png",
+    "04-three-lanes.png",
+    "05-cap-ask.png",
+    "05b-after-replace.png",
+    "06-after-close.png"
+  ],
+  "verdicts": {
+    "singleLane.collapse": {
+      "ok": true,
+      "detail": "one lane: no rows, no cap counter — the shipped surface with only the \"+\" affordance"
+    },
+    "lanes.two.inOneTab": {
+      "ok": true,
+      "detail": "two lane rows in ONE page, cap visible \"2 of 3\""
+    },
+    "lanes.perLane.surfacesMounted": {
+      "ok": true,
+      "detail": "both lanes stay mounted; exactly one (the addressed lane) is visible"
+    },
+    "lanes.addressSwitch": {
+      "ok": true,
+      "detail": "one tap on a lane row addresses that worker — without leaving Voice Mode"
+    },
+    "capture.unconditional": {
+      "ok": true,
+      "detail": "one capture live, one recorder, mic shows Stop — capture took the floor"
+    },
+    "strip.floorDuringCapture": {
+      "ok": true,
+      "detail": "strip during capture: capturing row reads \"You have the floor\" and the other 1 row(s) announce the floor holder"
+    },
+    "floor.noSpeechOverCapture": {
+      "ok": true,
+      "detail": "with capture live, lane B's answer queues and not a single chunk plays — nothing speaks over the operator (§4.4 rule 1)"
+    },
+    "floor.speaksWhenFloorFree": {
+      "ok": true,
+      "detail": "floor released: lane B's answer now plays at volume 1"
+    },
+    "floor.duckNeverStop": {
+      "ok": true,
+      "detail": "capture began mid-speech: the in-flight chunk ducks (0.15 observed) and stays current — never cut"
+    },
+    "floor.tierThenFifo": {
+      "ok": true,
+      "detail": "same tier, B submitted first: B plays, A queues — waiting-time fairness, never simultaneous"
+    },
+    "lanes.three.capVisible": {
+      "ok": true,
+      "detail": "three lane rows, cap reads \"3 of 3\""
+    },
+    "cap.fourthLaneAsks": {
+      "ok": true,
+      "detail": "at the cap the \"+\" asks replace-or-cancel; still exactly 3 lanes — never a silent fourth"
+    },
+    "cap.replace.inPlace": {
+      "ok": true,
+      "detail": "choosing replace swapped lane 1 for the picked session in place — still exactly 3 lanes, no silent fourth"
+    },
+    "lanes.close.noLeak": {
+      "ok": true,
+      "detail": "lane closed: two rows remain, no recorder or microphone track left live"
+    }
+  },
+  "notes": [],
+  "final": {
+    "allOk": true,
+    "failed": []
+  }
+}

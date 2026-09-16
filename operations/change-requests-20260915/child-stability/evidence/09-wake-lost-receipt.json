@@ -1,0 +1,43 @@
+{
+  "runId": "5a62bf6c-dbfd-45d5-9fa4-9d66bcd7600f",
+  "sessionId": "01a0a410-f683-7422-bc57-055af50db3f2",
+  "runtime": "pi",
+  "executionInstanceId": "pi-local-default",
+  "mode": "follow_up",
+  "dispatchMode": "prompt",
+  "status": "failed",
+  "acceptedAt": "2026-09-15T08:36:09.437Z",
+  "liveness": {
+    "activityPolicyVersion": "run-activity-v1",
+    "idleTimeoutMs": 900000,
+    "absoluteTimeoutMs": 21600000,
+    "cessation": {
+      "state": "unknown",
+      "basis": "watchdog",
+      "observedAt": "2026-09-15T08:51:10.383Z"
+    },
+    "watchdog": {
+      "reason": "idle",
+      "decidedAt": "2026-09-15T08:51:10.383Z",
+      "idleTimeoutMs": 900000,
+      "absoluteTimeoutMs": 21600000
+    }
+  },
+  "idempotencyExpiresAt": "2026-09-16T08:36:09.437Z",
+  "idempotencyKeyDigest": "986b9d97ab7bf179a26a9d0bd4fe343ed77b65d2b92d0b86e73f2284ecf9ba52",
+  "requestFingerprint": "ee6fe784276b98a10174d3e8a7c1796535bff27465712549fea4db6b3bcff0d3",
+  "startedAt": "2026-09-15T08:36:09.457Z",
+  "servedModel": "deepseek/deepseek-flash",
+  "modelRebound": false,
+  "errorCode": "TURN_STALLED",
+  "terminalAt": "2026-09-15T08:51:10.383Z",
+  "outputEvidence": {
+    "policyVersion": "run-output-v1",
+    "source": "normalized-events-v1",
+    "assistantMessages": 0,
+    "assistantTextBlocks": 0,
+    "assistantTextChars": 0,
+    "toolCalls": 0,
+    "disposition": "unknown"
+  }
+}

@@ -1,0 +1,471 @@
+diff --git a/docs/INTERNAL-API.md b/docs/INTERNAL-API.md
+index 77d78a4..def5bca 100644
+--- a/docs/INTERNAL-API.md
++++ b/docs/INTERNAL-API.md
+@@ -1090,7 +1090,7 @@ recovery when a process died or was restarted while a run was accepted or
+ started; its `errorCode` is `SERVER_RESTART` and it is not automatically
+ retried. Receipts contain identity, timestamps, status, stable error codes, bounded run-scoped token usage when a runtime terminal result measures it, additive payload-free output evidence, and payload-free liveness evidence — never prompt text, transcript bodies, event payloads, credentials, cookies, or cumulative session/context totals. `outputEvidence.disposition` distinguishes normalized text, observed terminal no-text, and unknown output evidence; it does not assess semantic answer quality. For Command Code, missing or malformed terminal usage is omitted.
+ 
+-Contract `1.14.0` records the `run-activity-v1` policy and timeouts on new receipts. Only run-correlated agent/message/tool/control event classes advance the inactivity clock; this includes Pi `extension_ui_request` interactions, while `stream_activity` and observer/polling/retention activity do not. Bounded activity snapshots are persisted at most once per second, except attribution-critical control requests, and the latest observation is persisted again at terminalisation. A `TURN_STALLED` receipt retains its stable error code and adds `liveness.watchdog.reason` (`idle` or `absolute`) plus the last eligible observation. Up to four `agent_end` observations may be retained, including observations that arrive after terminalisation. Terminal reasons are an explicit low-cardinality allowlist (`api_error_grace` currently); arbitrary runtime reason strings are omitted. Observations never reopen the receipt or reacquire capacity, and synthetic `agent_end` does not itself make either direct or queued Pi work successful. `cessation` is deliberately separate: a terminal signal may be `unconfirmed`, watchdog/restart boundaries remain `unknown`, and a synchronous Pi slash-handler return is `confirmed` only for that documented handler boundary; consumers must not infer arbitrary worker or external-side-effect quiescence.
++Contract `1.14.0` records the `run-activity-v1` policy and timeouts on new receipts. Only run-correlated agent/message/tool/control event classes advance the inactivity clock; this includes Pi `extension_ui_request` interactions, while `stream_activity` and observer/polling/retention activity do not. Bounded activity snapshots are persisted at most once per second, except attribution-critical control requests, and the latest observation is persisted again at terminalisation. A `TURN_STALLED` receipt retains its stable error code and adds `liveness.watchdog.reason` (`idle`, `absolute`, or `no_activity`) plus the last eligible observation. `no_activity` (additive, 2026-09-15) means the idle window elapsed with **no eligible activity event and no output evidence ever observed**: the run was accepted (and possibly marked started) but nothing ever executed under it. It is not a stalled turn, and for a watch wake it is a *lost wake* — the operator notice is worded and titled accordingly, and `stall-notification.ts` owns that wording. Consumers that switch on `reason` must handle all three values. Up to four `agent_end` observations may be retained, including observations that arrive after terminalisation. Terminal reasons are an explicit low-cardinality allowlist (`api_error_grace` currently); arbitrary runtime reason strings are omitted. Observations never reopen the receipt or reacquire capacity, and synthetic `agent_end` does not itself make either direct or queued Pi work successful. `cessation` is deliberately separate: a terminal signal may be `unconfirmed`, watchdog/restart boundaries remain `unknown`, and a synchronous Pi slash-handler return is `confirmed` only for that documented handler boundary; consumers must not infer arbitrary worker or external-side-effect quiescence.
+ 
+ For final-artifact certainty, read the matching receipt and then both transcript projections: `GET /sessions/:id/transcript?scope=visible_full` for the complete bounded runtime-agnostic output and `GET /sessions/:id/transcript?view=screen` for the UI-faithful projection. `scope=screen` is not a valid replacement for `view=screen`. Require terminal state, output evidence, and transcript/screen hashes or counts to remain unchanged across the caller's bounded quiescence readback window. `outputEvidence.disposition=text` only proves normalized assistant text was observed; `no-text` and `unknown` are non-conclusive and do not assess semantic answer quality. The default `session evidence.runChronology` carries only the compact disposition to stay within its response budget; use the full receipt or `expand=runs` for all output counts. Do not infer transport loss from an empty recent or screen projection without checking full transcript, history, diagnostics, and runtime-owned evidence.
+ 
+diff --git a/docs/LIVE-VALIDATION.md b/docs/LIVE-VALIDATION.md
+index ecae00c..76756ea 100644
+--- a/docs/LIVE-VALIDATION.md
++++ b/docs/LIVE-VALIDATION.md
+@@ -593,6 +593,28 @@ Flags when the defaults don't match: `--base http://localhost:<port>`, `--passwo
+ 
+ Run `node scripts/validation-server-stop.mjs --dir <dir>` and verify the owned port is free before removing the directory. `--timeout-ms` accepts whole numbers from 250 to 15000 (default 8000); invalid values are refused before signalling. Repeat stops require a valid tombstone and an empty recorded group, not merely a file saying the process exited. Uncertain exit/inspection or surviving members preserve recovery evidence; do not remove that directory. Process-group ownership is not daemon-proof cgroup containment, and a disposable data directory does not isolate resource usage from an inherited production cgroup. Use an independently owned bounded test unit when exercising resource pressure.
+ 
++#### The inherited production cgroup is refused, not warned about (2026-09-15)
++
++`scripts/validation-server.ts` checks `/proc/self/cgroup` **first**, before any directory, lock or port is taken, and refuses to start when the process is inside `/system.slice/pi-web-ui.service`:
++
++```
++[validation-server] Refusing to start a disposable validation server inside the production service cgroup
++(/system.slice/pi-web-ui.service).
++...
++systemd-run --scope --collect --unit=pi-web-ui-validate-<nonce> \
++  --setenv=PI_WEB_UI_VALIDATION_DIR=/tmp/pi-web-ui-validation \
++  npm run validate:server
++```
++
++This is not hypothetical. On 2026-09-15 08:30:26 systemd SIGKILLed the service with `KillMode=control-group` after `TimeoutStopSec=30`, and the kill list was one disposable validation server (`npm run validate:server`, `npm exec tsx`, three `esbuild` processes) plus four mid-turn orchestration children. Note also that **any session dispatched through orchestration runs inside that cgroup by default**, so a child that starts a validation server without a scope inherits the trap silently — which is why this is a hard refusal with an explicit override rather than a documentation note.
++
++Escape hatches, both deliberate:
++
++- `--allow-production-cgroup` or `PI_WEB_UI_VALIDATION_ALLOW_PRODUCTION_CGROUP=1` accepts the risk;
++- `PI_WEB_UI_VALIDATION_CGROUP_FILE=<path>` reads the cgroup from another file (diagnostic/test seam only).
++
++The decision itself is a pure function in `server/src/live-validation/validation-cgroup-guard.ts`, unit-tested in `server/tests/unit/validation-cgroup-guard.test.ts` and exercised end-to-end in `server/tests/integration/validation-server-cgroup-guard.test.ts` (exit code 78, `EX_CONFIG`).
++
+ Disposable validation redirects Pi session storage and the session watcher to `<dir>/pi-sessions`; Pi's `PI_AGENT_DIR` remains the real agent directory for auth/models/resources, so do not copy or alter that directory and record any provider-side effects separately.
+ 
+ ## Capability-driven behaviour
+diff --git a/docs/TROUBLESHOOTING.md b/docs/TROUBLESHOOTING.md
+index 4c95d20..7c74098 100644
+--- a/docs/TROUBLESHOOTING.md
++++ b/docs/TROUBLESHOOTING.md
+@@ -808,3 +808,22 @@ all. Capturing the caller needs `LogLevel=debug` in `/etc/systemd/system.conf`
+ plus `daemon-reexec`, or an audit rule (`auditd` is **not installed** on this
+ host) — both of which are heavier than a diagnostic should be without the
+ owner's agreement.
++
++### Update 2026-09-15 — narrowed, and now instrumented both ways
++
++A second event of the same class occurred on 2026-09-15 08:30:26 (SIGKILL after
++`TimeoutStopSec`, taking a disposable validation server, `npm exec tsx`, three
++`esbuild` processes and four mid-turn orchestration children with it). Counting
++every stop of this unit between 2026-09-14 and 2026-09-15 gives **seven** such
++SIGKILLs, and one property separates all seven from every clean stop: the
++`Stopping pi-web-ui.service...` line is **absent**. systemd only emits that line
++when `unit_stop()` returns > 0, so its absence proves the stop did not come from
++a stop job against a RUNNING unit.
++
++That does **not** yet identify the cause. What it does is make the next event
++classifiable: `ExecStopPre` now records that a stop was starting *before*
++SIGTERM, the app records the signal synchronously before any `await`, and a
++worker-thread backstop ends the process at 12s instead of letting systemd reach
++30s. See [`PRODUCTION-STOP-ROBUSTNESS.md`](./PRODUCTION-STOP-ROBUSTNESS.md) for
++the full correlation table, the ruled-out list, the timing ladder, and the
++install and verification steps.
+diff --git a/scripts/validation-server.ts b/scripts/validation-server.ts
+index be709ff..597d17e 100644
+--- a/scripts/validation-server.ts
++++ b/scripts/validation-server.ts
+@@ -25,6 +25,7 @@ import {
+   createDefaultValidationDirectory,
+   reserveValidationPorts,
+ } from '../server/src/live-validation/validation-server-options.js';
++import { checkValidationCgroup, readSelfCgroup } from '../server/src/live-validation/validation-cgroup-guard.js';
+ 
+ function getFlag(args: string[], flag: string): string | undefined {
+   const index = args.indexOf(flag);
+@@ -43,6 +44,28 @@ function explicitPort(args: string[], flag: string, envName: string): number | u
+ }
+ 
+ async function main(): Promise<void> {
++  // Cgroup hygiene, checked FIRST — before any directory, lock or port is taken.
++  //
++  // 2026-09-15 08:30: systemd SIGKILLed /system.slice/pi-web-ui.service with
++  // KillMode=control-group and the process list included a disposable
++  // validation server (`npm run validate:server`, `npm exec tsx`, three esbuild
++  // processes) alongside four mid-turn orchestration children. The docs already
++  // warn against running validation inside the production cgroup; this is the
++  // guard that makes the warning binding. `--allow-production-cgroup` exists for
++  // the rare deliberate case.
++  const cgroupVerdict = checkValidationCgroup({
++    // `PI_WEB_UI_VALIDATION_CGROUP_FILE` is a diagnostic/test seam only: it lets
++    // the refusal be exercised without actually being inside the production
++    // service cgroup (see validation-server-cgroup-guard.test.ts).
++    cgroupPath: readSelfCgroup(process.env.PI_WEB_UI_VALIDATION_CGROUP_FILE ?? '/proc/self/cgroup'),
++    overrideEnv: process.argv.includes('--allow-production-cgroup') ? '1' : undefined,
++  });
++  if (!cgroupVerdict.allowed) {
++    console.error(`[validation-server] ${cgroupVerdict.message}`);
++    process.exitCode = 78; // EX_CONFIG
++    return;
++  }
++
+   const validationArgs = process.argv.slice(2);
+   const validationEnvFile = resolveValidationEnvFile(validationArgs);
+   const validationEnvKeys = resolveValidationEnvKeys(validationArgs);
+diff --git a/server/src/index.ts b/server/src/index.ts
+index 8fd0fa9..136ed1e 100644
+--- a/server/src/index.ts
++++ b/server/src/index.ts
+@@ -19,6 +19,14 @@ import { ShutdownCoordinator } from './shutdown-coordinator.js';
+ import { CommandCodeService } from './command-code/command-code-service.js';
+ import { setCommandCodeService } from './command-code/command-code-instance.js';
+ import { startSystemdNotifier } from './systemd-notifier.js';
++import { closeHttpServer } from './http-server-close.js';
++import {
++  DEFAULT_ESCAPE_POLL_INTERVAL_MS,
++  installStopSignalHandlers,
++  resolveEscapeAfterMs,
++  spawnShutdownEscapeWorker,
++} from './shutdown-signal.js';
++import { createSignalReceivedBuffer } from './shutdown-signal.js';
+ 
+ // State used by createApp's lazy notification-router getters. Declared before
+ // createApp() (which runs at module load) so the getters close over initialized
+@@ -273,7 +281,14 @@ const shutdownCoordinator = new ShutdownCoordinator({
+     { name: 'websocket-clients', run: async () => { if (wsManager) await wsManager.close(); } },
+     { name: 'session-cleanup', run: () => { sessionCleanup?.stop(); } },
+     { name: 'internal-api', run: async () => { if (internalApiServer) await internalApiServer.stop(); } },
+-    { name: 'http-server', run: () => new Promise<void>((resolve) => { server.close(() => resolve()); }) },
++    // Bounded close (2026-09-15). `server.close()` alone only calls back once
++    // every connection has gone, and this process holds long-lived WebSocket
++    // clients by design: on 2026-09-14 18:04:17 and 21:15:56 this step never
++    // completed at all, so the coordinator's own deadline was the only thing
++    // that ended the stop, a few seconds inside systemd's TimeoutStopSec=30.
++    // A stop that reaches systemd's escalation is a SIGKILL of the whole
++    // control group — every orchestration child with it.
++    { name: 'http-server', run: async () => { await closeHttpServer(server, { timeoutMs: 5_000 }); } },
+   ],
+   onStepError: (name, err) => logger.errorObject(`Shutdown step '${name}' failed`, err),
+   onForceExit: () => logger.error('Forced shutdown: teardown exceeded the deadline'),
+@@ -292,8 +307,38 @@ function shutdown(): void {
+   void shutdownCoordinator.shutdown();
+ }
+ 
+-process.on('SIGTERM', shutdown);
+-process.on('SIGINT', shutdown);
++// ---- Stop-signal instrumentation (2026-09-15) -----------------------------
++//
++// The 2026-09-14/15 stops that ran to `TimeoutStopSec` could not be explained
++// because the journal recorded neither a stop job nor a receipt of the signal:
++// the app's only record lived inside `shutdown()`, behind an async logger. The
++// instrument is therefore in three parts, and they are deliberately ordered so
++// the cheapest and most durable happens first:
++//
++//   1. `handleStopSignal` writes the received signal to stderr synchronously,
++//      before any await, and arms a hard-exit deadline in the same handler.
++//   2. the same handler publishes the signal time into a SharedArrayBuffer.
++//   3. a worker thread (armed now, long before any stop) watches that buffer and
++//      force-exits the process if the main thread has not finished inside the
++//      grace window. A backstop on the loop it must survive is not a backstop —
++//      the same reasoning that moved the watchdog ping off the main loop.
++//
++// The worker is intentionally NOT terminated once teardown starts: a teardown
++// that takes longer than the window is exactly the case it exists for. A clean
++// teardown calls `process.exit(0)` well inside the window and the worker dies
++// with the process. The window is configurable via
++// `PI_WEB_UI_SHUTDOWN_ESCAPE_MS` (default 12s, against systemd's 30s).
++const signalReceived = createSignalReceivedBuffer();
++spawnShutdownEscapeWorker({
++  signalReceived,
++  escapeAfterMs: resolveEscapeAfterMs(),
++  pollIntervalMs: DEFAULT_ESCAPE_POLL_INTERVAL_MS,
++});
++
++installStopSignalHandlers({
++  signalReceived,
++  onShutdown: shutdown,
++});
+ 
+ // Process-level fatal-error handlers: log message + stack + a context snapshot
+ // (active session count, uptime) via the central logger, then for
+diff --git a/server/src/internal-api/run-receipts/run-receipt-manager.ts b/server/src/internal-api/run-receipts/run-receipt-manager.ts
+index a733b85..a7ec2ec 100644
+--- a/server/src/internal-api/run-receipts/run-receipt-manager.ts
++++ b/server/src/internal-api/run-receipts/run-receipt-manager.ts
+@@ -582,8 +582,25 @@ export class RunReceiptManager {
+       if (!idleExceeded && !maxExceeded) continue;
+       const before = this.store.get(runId);
+       if (!before || isTerminal(before.status)) continue;
+-      logger.warn(`Run ${runId} stalled: ${maxExceeded ? 'absolute ceiling exceeded' : 'idle timeout exceeded'}`);
+-      const stallReason: RunStallReason = maxExceeded ? 'absolute' : 'idle';
++      // A run that never produced a single eligible activity event was never
++      // executing anything, so "idle" would misdescribe it. This is the
++      // 2026-09-15 shape: a wake accepted onto a session that never ran it left
++      // a receipt claiming a stalled turn and an operator notice about a
++      // quarantined run, for work that never started.
++      const stallReason: RunStallReason = maxExceeded
++        ? 'absolute'
++        : neverProducedWork(active)
++          ? 'no_activity'
++          : 'idle';
++      logger.warn(
++        `Run ${runId} stalled: ${
++          stallReason === 'absolute'
++            ? 'absolute ceiling exceeded'
++            : stallReason === 'no_activity'
++              ? `idle timeout exceeded with no run activity ever observed in ${now - active.acceptedAtMs}ms (never executed)`
++              : 'idle timeout exceeded'
++        }`,
++      );
+       const terminal = await this.finish(runId, {
+         status: 'failed',
+         errorCode: 'TURN_STALLED',
+@@ -835,6 +852,24 @@ function isEligibleRunActivity(eventType: string): boolean {
+   return ELIGIBLE_RUN_ACTIVITY_TYPES.has(eventType);
+ }
+ 
++/**
++ * Whether this run ever produced a single observable unit of work.
++ *
++ * Used to keep "a turn stalled" and "nothing ever ran under this run" apart in
++ * the receipt. `lastEligibleActivity` is only set by `observeEvent` for the
++ * eligible types above, and output evidence only accumulates from those same
++ * events, so both being empty means no turn ever emitted anything — not that a
++ * turn emitted something late.
++ */
++function neverProducedWork(active: ActiveRun): boolean {
++  if (active.lastEligibleActivity !== undefined) return false;
++  const output = active.outputEvidence;
++  return output.assistantMessages === 0
++    && output.assistantTextBlocks === 0
++    && output.assistantTextChars === 0
++    && output.toolCalls === 0;
++}
++
+ function mutableOutputEvidence(value?: RunOutputEvidence): MutableRunOutputEvidence {
+   return {
+     assistantMessages: value?.assistantMessages ?? 0,
+diff --git a/server/src/internal-api/run-receipts/run-receipt-store.ts b/server/src/internal-api/run-receipts/run-receipt-store.ts
+index 24457df..d947cc8 100644
+--- a/server/src/internal-api/run-receipts/run-receipt-store.ts
++++ b/server/src/internal-api/run-receipts/run-receipt-store.ts
+@@ -593,7 +593,7 @@ function validateLiveness(value: RunLivenessEvidence): void {
+   }
+   if (value.watchdog) {
+     assertOnlyKeys(value.watchdog, WATCHDOG_KEYS, 'watchdog');
+-    if (!['idle', 'absolute'].includes(value.watchdog.reason)) throw new Error('Invalid watchdog reason');
++    if (!['idle', 'absolute', 'no_activity'].includes(value.watchdog.reason)) throw new Error('Invalid watchdog reason');
+     assertIsoTimestamp(value.watchdog.decidedAt, 'watchdog decidedAt');
+     if (!Number.isFinite(value.watchdog.idleTimeoutMs) || value.watchdog.idleTimeoutMs <= 0) throw new Error('Invalid watchdog idle timeout');
+     if (!Number.isFinite(value.watchdog.absoluteTimeoutMs) || value.watchdog.absoluteTimeoutMs <= 0) throw new Error('Invalid watchdog absolute timeout');
+diff --git a/server/src/internal-api/server.ts b/server/src/internal-api/server.ts
+index ec5fb06..4642df7 100644
+--- a/server/src/internal-api/server.ts
++++ b/server/src/internal-api/server.ts
+@@ -31,6 +31,7 @@ import { createEventTypesRoutes } from './routes/event-types.js';
+ import { createNotificationsRoutes } from './routes/notifications.js';
+ import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
+ import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
++import { buildStallNotification } from './run-receipts/stall-notification.js';
+ import { readPiRuntimeQuiescence } from './runtime-quiescence.js';
+ import { NotificationManager } from '../notifications/notification-manager.js';
+ import { NotificationStore } from '../notifications/notification-store.js';
+@@ -225,13 +226,25 @@ export class InternalApiServer {
+       store: new RunReceiptStore(this.config.runReceiptDir || DEFAULT_RUN_RECEIPT_DIR),
+       idempotencyTtlMs: this.config.runReceiptIdempotencyTtlMs ?? config.internalApiRunIdempotencyTtlMs,
+       onStalled: (receipt) => {
+-        // Quarantine signal: a run was terminalised TURN_STALLED without confirmed
+-        // runtime cessation. Informational operator ping only — the admission slot
+-        // is already released by terminalisation, so no action is required.
+-        const runId = receipt.runId;
++        // Two genuinely different events share this hook (2026-09-15):
++        //
++        //  - a turn that really was executing and stopped responding, or hit the
++        //    ceiling -> runtime cessation is unconfirmed and the admission slot is
++        //    held (drained, then quarantined as capacity debt);
++        //  - a run that never produced a single unit of work -- typically a wake
++        //    accepted onto a session that never ran it. Nothing is in flight, the
++        //    drain releases the slot on its first poll, and the operator needs to
++        //    know the wake was LOST rather than being told a run was quarantined.
++        //
++        // The wording for both lives in stall-notification.ts so the claims it
++        // makes about capacity are reviewable. (It previously claimed the slot
++        // "is already released by terminalisation" here while the message sent to
++        // the operator said the opposite, and neither matched the drain/quarantine
++        // behaviour in run-receipt-manager.terminalize().)
++        const notice = buildStallNotification(receipt);
+         void this.notificationManager?.emitExplicit({
+-          title: `⚠️ Run quarantined (TURN_STALLED): ${runId}`,
+-          body: `Run ${runId} was terminalised by the watchdog without confirmed runtime cessation. The admission slot is held until the runtime confirms cessation (or a 30s drain quarantine); no action required — informational, check for orphan processes only if you wish.`,
++          title: notice.title,
++          body: notice.body,
+         }).catch(() => { /* best-effort; a failed ping must not affect terminalisation */ });
+       },
+       // §11 fence: on cancel/stall the admission slot is held (not reusable) until
+diff --git a/server/src/internal-api/types.ts b/server/src/internal-api/types.ts
+index 3801f6b..83232ce 100644
+--- a/server/src/internal-api/types.ts
++++ b/server/src/internal-api/types.ts
+@@ -891,7 +891,21 @@ export type RunReceiptStatus =
+ /** Headline work-state: distinguishes "the turn ended" from "the dispatched work finished". Additive since 1.25.0. */
+ export type RunWorkState = 'running' | 'completed' | 'turn_ended_unconfirmed' | 'failed' | 'cancelled' | 'interrupted';
+ 
+-export type RunStallReason = 'idle' | 'absolute';
++/**
++ * Why the watchdog terminalised a run.
++ *
++ * `idle` — a turn was producing eligible activity and then stopped for longer
++ *          than the idle window.
++ * `absolute` — the run hit its hard ceiling regardless of activity.
++ * `no_activity` — the idle window elapsed and the run had never produced a
++ *          single eligible activity event or any output evidence. The run was
++ *          accepted (and may have been marked started) but nothing ever
++ *          executed under it, so "idle" would assert a turn that never ran.
++ *          For a watch wake this is a lost wake, not a stalled turn.
++ *
++ * Additive since 2026-09-15; see `run-stall-classification.test.ts`.
++ */
++export type RunStallReason = 'idle' | 'absolute' | 'no_activity';
+ export type RunCessationState = 'confirmed' | 'unconfirmed' | 'unknown';
+ export const RUN_TERMINAL_REASON_ALLOWLIST: ReadonlySet<string> = new Set(['api_error_grace']);
+ 
+diff --git a/server/src/live-validation/scenarios.ts b/server/src/live-validation/scenarios.ts
+index 7e957c5..2a8be1a 100644
+--- a/server/src/live-validation/scenarios.ts
++++ b/server/src/live-validation/scenarios.ts
+@@ -1387,7 +1387,16 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
+         const assertions = [
+           { name: 'admitted_prompt_dispatch', passed: receipt.dispatchMode === 'prompt', details: `dispatchMode=${receipt.dispatchMode ?? 'missing'}` },
+           { name: 'turn_stalled_terminal', passed: receipt.status === 'failed' && receipt.errorCode === 'TURN_STALLED', details: `status=${receipt.status} code=${receipt.errorCode ?? 'missing'}` },
+-          { name: 'idle_watchdog_evidence', passed: receipt.liveness?.watchdog?.reason === 'idle', details: `reason=${receipt.liveness?.watchdog?.reason ?? 'missing'}` },
++          {
++            // The reason must describe what actually happened (2026-09-15): a run
++            // that produced observable work and then went quiet is 'idle', while
++            // one that never produced anything is 'no_activity'. Asserting a bare
++            // 'idle' would either hide a never-executed run or fail on an honest
++            // classification; asserting the pairing keeps both claims checkable.
++            name: 'idle_watchdog_evidence',
++            passed: receipt.liveness?.watchdog?.reason === ((receipt.outputEvidence?.toolCalls ?? 0) > 0 ? 'idle' : 'no_activity'),
++            details: `reason=${receipt.liveness?.watchdog?.reason ?? 'missing'} toolCalls=${receipt.outputEvidence?.toolCalls ?? 'missing'}`,
++          },
+           {
+             name: 'cessation_not_overclaimed',
+             passed: receipt.liveness?.cessation?.state === 'unknown' && receipt.liveness.cessation.basis === 'watchdog',
+diff --git a/server/src/shutdown-coordinator.ts b/server/src/shutdown-coordinator.ts
+index ff9b0a7..c558ff6 100644
+--- a/server/src/shutdown-coordinator.ts
++++ b/server/src/shutdown-coordinator.ts
+@@ -23,7 +23,7 @@ export interface ShutdownStep {
+ 
+ export interface ShutdownCoordinatorOptions {
+   steps: ShutdownStep[];
+-  /** Hard exit(1) after this many ms if teardown hasn't completed. Default 25000 (below systemd 30s). */
++  /** Hard exit(1) after this many ms if teardown hasn't completed. Default 20000 (below systemd 30s). */
+   forceExitAfterMs?: number;
+   /** Injectable; default `process.exit`. */
+   exit?: (code: number) => void;
+@@ -50,8 +50,16 @@ export interface ShutdownCoordinatorOptions {
+   now?: () => number;
+ }
+ 
+-/** Default deadline: below systemd's `TimeoutStopSec=30`. */
+-export const DEFAULT_FORCE_EXIT_AFTER_MS = 25000;
++/**
++ * Default deadline: below systemd's `TimeoutStopSec=30`.
++ *
++ * Lowered from 25s on 2026-09-15. Twice on 2026-09-14 this deadline was the
++ * only thing that ended a stop (the `http-server` step never completed), which
++ * left the total stop a few seconds inside systemd's window — and systemd's
++ * escalation is a SIGKILL of the whole control group. 20s keeps a 10s margin,
++ * and the shutdown escape worker (see `shutdown-signal.ts`) bounds it further.
++ */
++export const DEFAULT_FORCE_EXIT_AFTER_MS = 20000;
+ 
+ export class ShutdownCoordinator {
+   private promise: Promise<void> | null = null;
+diff --git a/server/tests/unit/internal-api/run-receipt-manager.test.ts b/server/tests/unit/internal-api/run-receipt-manager.test.ts
+index 767c334..f417cf7 100644
+--- a/server/tests/unit/internal-api/run-receipt-manager.test.ts
++++ b/server/tests/unit/internal-api/run-receipt-manager.test.ts
+@@ -557,7 +557,7 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', ()
+     expect(manager.get(run.receipt.runId)?.liveness?.terminalObservations?.[0]).not.toHaveProperty('reason');
+   });
+ 
+-  it('ignores synthetic stream_activity heartbeats and records an idle watchdog decision', async () => {
++  it('ignores synthetic stream_activity heartbeats and records an honest no_activity watchdog decision', async () => {
+     await manager.shutdown();
+     manager = new RunReceiptManager({
+       store: new RunReceiptStore(dir, { now: () => now }),
+@@ -586,7 +586,10 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', ()
+       errorCode: 'TURN_STALLED',
+       liveness: {
+         watchdog: {
+-          reason: 'idle',
++          // `no_activity`, not `idle`: the heartbeat is deliberately ineligible AND
++          // nothing else was ever observed, so no turn was executing. See
++          // run-stall-classification.test.ts (2026-09-15).
++          reason: 'no_activity',
+           decidedAt: new Date(now).toISOString(),
+           idleTimeoutMs: 1_000,
+           absoluteTimeoutMs: 10_000,
+@@ -656,7 +659,9 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', ()
+       status: 'failed',
+       errorCode: 'TURN_STALLED',
+       liveness: {
+-        watchdog: { reason: 'idle' },
++        // `no_activity`: the run produced nothing before the watchdog fired; the
++        // point of this test is the preserved cessation provenance below.
++        watchdog: { reason: 'no_activity' },
+         terminalObservations: [{ late: true, origin: 'runtime_or_adapter' }],
+         cessation: { state: 'unknown', basis: 'watchdog' },
+       },
+diff --git a/server/tests/unit/live-validation/scenarios-dispatch-integrity.test.ts b/server/tests/unit/live-validation/scenarios-dispatch-integrity.test.ts
+index 79cfd9d..92a349d 100644
+--- a/server/tests/unit/live-validation/scenarios-dispatch-integrity.test.ts
++++ b/server/tests/unit/live-validation/scenarios-dispatch-integrity.test.ts
+@@ -52,6 +52,19 @@ describe('dispatch-integrity live scenarios', () => {
+             },
+             cessation: { state: 'unknown', basis: 'watchdog', observedAt: '2026-08-01T12:00:02.000Z' },
+           },
++          // The scenario drives a real tool call before the stall, so observable
++          // work exists and 'idle' is the honest reason. The scenario now asserts
++          // the reason PAIRS with the observed work (2026-09-15): a run with no
++          // tool calls must report 'no_activity' instead.
++          outputEvidence: {
++            policyVersion: 'run-output-v1',
++            source: 'normalized-events-v1',
++            assistantMessages: 1,
++            assistantTextBlocks: 0,
++            assistantTextChars: 0,
++            toolCalls: 1,
++            disposition: 'unknown',
++          },
+         }),
+         getCapacity: vi.fn().mockResolvedValue({ activeTurns: 0 }),
+         getSessionInfo: vi.fn().mockResolvedValue({}),
+diff --git a/server/tests/unit/live-validation/validation-server-lifecycle.test.ts b/server/tests/unit/live-validation/validation-server-lifecycle.test.ts
+index 963d456..d1f93ef 100644
+--- a/server/tests/unit/live-validation/validation-server-lifecycle.test.ts
++++ b/server/tests/unit/live-validation/validation-server-lifecycle.test.ts
+@@ -77,7 +77,20 @@ function launchServer(dir: string | undefined, extraEnv: Record<string, string>
+       detached: true,
+       cwd: REPO,
+       stdio: ['ignore', 'pipe', 'pipe'],
+-      env: { ...childEnv, ...extraEnv } as NodeJS.ProcessEnv,
++      env: {
++        ...childEnv,
++        // Deliberate opt-in to the cgroup guard (2026-09-15). The launcher refuses
++        // to start inside /system.slice/pi-web-ui.service because a production
++        // stop SIGKILLs the whole control group — see
++        // docs/PRODUCTION-STOP-ROBUSTNESS.md. This harness needs that launcher
++        // chain to run, and it starts the server only to stop it inside this
++        // test, so it opts in explicitly rather than the guard being weakened for
++        // everyone. Without this the suite only passes when the test runner
++        // happens to sit outside the production cgroup — which is not true for
++        // any session dispatched through orchestration on this host.
++        PI_WEB_UI_VALIDATION_ALLOW_PRODUCTION_CGROUP: '1',
++        ...extraEnv,
++      } as NodeJS.ProcessEnv,
+     },
+   );
+   let collected = '';

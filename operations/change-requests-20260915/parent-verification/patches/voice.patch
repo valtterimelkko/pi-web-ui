@@ -1,0 +1,880 @@
+diff --git a/client/src/components/Chat/DictationButton.tsx b/client/src/components/Chat/DictationButton.tsx
+index 799275c..2289367 100644
+--- a/client/src/components/Chat/DictationButton.tsx
++++ b/client/src/components/Chat/DictationButton.tsx
+@@ -1,6 +1,6 @@
+ import { Mic, MicOff, Loader2 } from 'lucide-react';
+ 
+-export type DictationButtonState = 'idle' | 'recording' | 'processing' | 'error';
++export type DictationButtonState = 'idle' | 'starting' | 'recording' | 'processing' | 'error';
+ 
+ interface DictationButtonProps {
+   state: DictationButtonState;
+@@ -9,7 +9,7 @@ interface DictationButtonProps {
+ }
+ 
+ export function DictationButton({ state, onToggle, errorMessage }: DictationButtonProps) {
+-  const isDisabled = state === 'processing';
++  const isDisabled = state === 'processing' || state === 'starting';
+ 
+   return (
+     <div className="flex flex-col items-center gap-1">
+@@ -25,12 +25,16 @@ export function DictationButton({ state, onToggle, errorMessage }: DictationButt
+             ? 'bg-red-100 hover:bg-red-200 text-red-600'
+             : state === 'processing'
+             ? 'bg-blue-50 text-blue-500'
++            : state === 'starting'
++            ? 'bg-blue-50 text-blue-500'
+             : 'bg-orange-100 hover:bg-orange-200 text-orange-600'
+         }`}
+         type="button"
+         title={
+           state === 'idle'
+             ? 'Start dictation'
++            : state === 'starting'
++            ? 'Starting microphone…'
+             : state === 'recording'
+             ? 'Stop dictation'
+             : state === 'processing'
+@@ -40,8 +44,11 @@ export function DictationButton({ state, onToggle, errorMessage }: DictationButt
+         aria-label={
+           state === 'recording'
+             ? 'Stop dictation'
++            : state === 'starting'
++            ? 'Starting microphone'
+             : 'Start dictation'
+         }
++        aria-busy={state === 'starting' || undefined}
+         aria-pressed={state === 'recording'}
+       >
+         {state === 'idle' && <Mic className="w-4 h-4" />}
+@@ -52,6 +59,7 @@ export function DictationButton({ state, onToggle, errorMessage }: DictationButt
+           </>
+         )}
+         {state === 'processing' && <Loader2 className="w-4 h-4 animate-spin" />}
++        {state === 'starting' && <Loader2 className="w-4 h-4 animate-spin" />}
+         {state === 'error' && <Mic className="w-4 h-4" />}
+       </button>
+       {state === 'error' && errorMessage && (
+diff --git a/client/src/components/DriveMode/DriveModeDictate.tsx b/client/src/components/DriveMode/DriveModeDictate.tsx
+index 81475ca..d3a7e51 100644
+--- a/client/src/components/DriveMode/DriveModeDictate.tsx
++++ b/client/src/components/DriveMode/DriveModeDictate.tsx
+@@ -15,6 +15,8 @@ import {
+   type ReadingLevel,
+ } from './readingLevel';
+ import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
++import { VoiceLayoutToggle } from './VoiceLayoutToggle';
++import { useVoiceLayout } from './useVoiceLayout';
+ import { speechArbiter } from '../../lib/speechArbiter';
+ import { getTurnAssistantText, useAnswerReader } from './useAnswerReader';
+ 
+@@ -63,6 +65,10 @@ export function DriveModeDictate({
+   const messages = useSessionStore((s) => s.messages);
+   const readingLevel = useReadingLevelStore((s) => s.level);
+   const setReadingLevel = useReadingLevelStore((s) => s.setLevel);
++  // The layout mode is the operator's persisted preference; the surface only
++  // offers the switch (the overlay decides whether a split is rendered, and a
++  // narrow window degrades the desktop mode back to this layout).
++  const voiceLayout = useVoiceLayout();
+ 
+   // P19 — the answer is the whole turn, not the last message: read-aloud and
+   // the answer controls operate on everything the worker has said since the
+@@ -70,6 +76,9 @@ export function DriveModeDictate({
+   // the conversation itself, so its accounted-turn boundary lives in one place.
+   const turnAssistantText = getTurnAssistantText(messages);
+   const isRecording = voice.state === 'recording';
++  // The acquisition window: the browser can already be capturing while the
++  // recorder is still being set up. Shown, never silently reported as idle.
++  const isStarting = voice.state === 'starting';
+ 
+   // The talker in the reading path (P17): how much of the worker's output is
+   // spoken is the operator's choice, applied at turn end and — when they change
+@@ -111,7 +120,7 @@ export function DriveModeDictate({
+   // > audio-playing handback; every write is conditional on a real change.
+   // ---------------------------------------------------------------------------
+   useEffect(() => {
+-    if (isRecording || voice.state === 'processing') {
++    if (isStarting || isRecording || voice.state === 'processing') {
+       if (phase !== 'dictate') setPhase('dictate');
+     } else if (isStreaming) {
+       if (phase !== 'agent-working') setPhase('agent-working');
+@@ -120,7 +129,7 @@ export function DriveModeDictate({
+     } else if (phase === 'audio-playing' && readAloud.state === 'idle') {
+       setPhase('dictate');
+     }
+-  }, [voice.state, isRecording, isStreaming, readAloud.state, phase, setPhase]);
++  }, [voice.state, isStarting, isRecording, isStreaming, readAloud.state, phase, setPhase]);
+ 
+   // ---------------------------------------------------------------------------
+   // The four states, derived from what the surface receives (§4.1).
+@@ -218,6 +227,16 @@ export function DriveModeDictate({
+         <div className="text-sm text-gray-500 dark:text-gray-400">{modelName}</div>
+       </div>
+ 
++      {/* The two modes: the existing voice-only surface, or the desktop split
++          that shows the live session beside it. Persisted — set once. */}
++      <div className="mb-4">
++        <VoiceLayoutToggle
++          mode={voiceLayout.mode}
++          onSelect={voiceLayout.setMode}
++          degraded={voiceLayout.mode === 'desktop' && voiceLayout.layout === 'mobile'}
++        />
++      </div>
++
+       {/* The reading level — how much of the worker's output is spoken, and
+           which level the answer in flight is being read at. Persisted as the
+           operator's default (P17). */}
+@@ -246,18 +265,24 @@ export function DriveModeDictate({
+         <FloorBanner view={floorView} />
+       </div>
+ 
+-      {/* Mic button — never disabled because the surface is speaking */}
++      {/* Mic button — never disabled because the surface is speaking. It IS
++          disabled while the device is being acquired: at that point the lane
++          already exists and a second tap must not open a second one. */}
+       <button
+         onClick={handleMicClick}
+-        disabled={voice.state === 'processing'}
++        disabled={voice.state === 'processing' || isStarting}
++        aria-busy={isStarting || undefined}
++        data-testid="drive-mic"
+         className={`w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation ${
+-          voice.state === 'processing' ? 'cursor-not-allowed' : 'active:scale-95'
++          voice.state === 'processing' || isStarting ? 'cursor-wait' : 'active:scale-95'
+         } ${
+           isRecording
+             ? 'bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse'
++            : isStarting
++            ? 'bg-amber-50 dark:bg-amber-950 border-4 border-amber-400'
+             : 'bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700'
+         }`}
+-        aria-label={isRecording ? 'Stop recording' : 'Start recording'}
++        aria-label={isStarting ? 'Starting microphone' : isRecording ? 'Stop recording' : 'Start recording'}
+         type="button"
+       >
+         {voice.state === 'error' ? (
+@@ -269,12 +294,25 @@ export function DriveModeDictate({
+         ) : (
+           <Mic
+             className={`w-10 h-10 ${
+-              isRecording ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'
++              isRecording
++                ? 'text-red-500'
++                : isStarting
++                ? 'text-amber-500 animate-pulse'
++                : 'text-gray-500 dark:text-gray-400'
+             }`}
+           />
+         )}
+       </button>
+ 
++      {/* The acquisition window, named. The browser's own recording indicator
++          can be on before the lane is ready; the surface says so instead of
++          looking untouched. */}
++      {isStarting && (
++        <p data-testid="mic-starting-hint" className="mt-2 text-sm text-amber-600 dark:text-amber-400">
++          Starting microphone…
++        </p>
++      )}
++
+       {/* The contract, taught where the operator speaks (P26). Display and
+           teaching only — it changes no behaviour: capture, the send path and
+           the confirm gate are exactly as before. The three facts it must
+diff --git a/client/src/components/DriveMode/DriveModeOverlay.tsx b/client/src/components/DriveMode/DriveModeOverlay.tsx
+index bf2e64b..cd22c6c 100644
+--- a/client/src/components/DriveMode/DriveModeOverlay.tsx
++++ b/client/src/components/DriveMode/DriveModeOverlay.tsx
+@@ -11,6 +11,8 @@ import { DriveModeModelPicker } from './DriveModeModelPicker';
+ import { DriveModeFolderPicker } from './DriveModeFolderPicker';
+ import { DriveModeSessionPicker } from './DriveModeSessionPicker';
+ import { DriveModeDictate } from './DriveModeDictate';
++import { DriveModeSessionPane } from './DriveModeSessionPane';
++import { useVoiceLayout } from './useVoiceLayout';
+ 
+ export function DriveModeOverlay() {
+   const isOpen = useUIStore((s) => s.driveModeOpen);
+@@ -22,6 +24,7 @@ export function DriveModeOverlay() {
+   const currentModel = useSessionStore((s) => s.currentModel);
+   const getSessionDisplayName = useSessionStore((s) => s.getSessionDisplayName);
+   const prevSessionIdRef = useRef<string | null>(null);
++  const layout = useVoiceLayout();
+ 
+   // Session creation flow: watch for new session after createNewSession
+   useEffect(() => {
+@@ -127,16 +130,37 @@ export function DriveModeOverlay() {
+           onSelectSession={handleSelectSession}
+         />
+       )}
+-      {(phase === 'dictate' || phase === 'agent-working' || phase === 'read-aloud-ready' || phase === 'audio-playing') && (
+-        <DriveModeDictate
+-          sessionId={activeSessionId || currentSessionId || ''}
+-          sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
+-          modelName={modelName}
+-          sessionDisplayName={sessionDisplayName}
+-          onExit={handleClose}
+-          onAbort={abortGeneration}
+-        />
+-      )}
++      {(phase === 'dictate' || phase === 'agent-working' || phase === 'read-aloud-ready' || phase === 'audio-playing') &&
++        (layout.layout === 'split' ? (
++          // Desktop mode: the voice surface and the live session share the
++          // screen. Both panes render the same components as before — the
++          // split only decides how the window is divided, so capture, the
++          // floor banner, the confirmation card and read-aloud are unchanged.
++          <div data-testid="drive-mode-split" className="flex flex-1 min-h-0 w-full overflow-hidden">
++            <div className="flex-1 min-w-0 h-full min-h-0 overflow-y-auto border-r border-gray-200 dark:border-gray-800">
++              <DriveModeDictate
++                sessionId={activeSessionId || currentSessionId || ''}
++                sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
++                modelName={modelName}
++                sessionDisplayName={sessionDisplayName}
++                onExit={handleClose}
++                onAbort={abortGeneration}
++              />
++            </div>
++            <div className="flex-1 min-w-0 h-full min-h-0">
++              <DriveModeSessionPane sessionDisplayName={sessionDisplayName} modelName={modelName} />
++            </div>
++          </div>
++        ) : (
++          <DriveModeDictate
++            sessionId={activeSessionId || currentSessionId || ''}
++            sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
++            modelName={modelName}
++            sessionDisplayName={sessionDisplayName}
++            onExit={handleClose}
++            onAbort={abortGeneration}
++          />
++        ))}
+     </div>
+   );
+ }
+diff --git a/client/src/components/DriveMode/useVoiceTurn.ts b/client/src/components/DriveMode/useVoiceTurn.ts
+index 04396ab..2403a1d 100644
+--- a/client/src/components/DriveMode/useVoiceTurn.ts
++++ b/client/src/components/DriveMode/useVoiceTurn.ts
+@@ -136,8 +136,10 @@ function proposalFromResult(
+ }
+ 
+ export interface UseVoiceTurnResult {
+-  /** Dictation pass-through. */
+-  state: 'idle' | 'recording' | 'processing' | 'error';
++  /** Dictation pass-through. `starting` is the acquisition window: the browser
++   *  may already be capturing while the recorder is still being set up, so the
++   *  surface must show it rather than read as idle. */
++  state: 'idle' | 'starting' | 'recording' | 'processing' | 'error';
+   errorMessage: string;
+   /** Takes the floor (starts/stops capture). Never disabled by playback. */
+   toggle: () => void;
+diff --git a/client/src/hooks/useDictation.ts b/client/src/hooks/useDictation.ts
+index ec8a85d..8eb1831 100644
+--- a/client/src/hooks/useDictation.ts
++++ b/client/src/hooks/useDictation.ts
+@@ -1,7 +1,7 @@
+ import { useState, useRef, useCallback, useEffect } from 'react';
+ import { reportClientError } from '../lib/clientDiagnosticsReporter.js';
+ 
+-type DictationState = 'idle' | 'recording' | 'processing' | 'error';
++type DictationState = 'idle' | 'starting' | 'recording' | 'processing' | 'error';
+ 
+ const CHUNK_INTERVAL_MS = 1000;
+ 
+@@ -38,13 +38,50 @@ export interface DictationErrorContext {
+   workerSessionId?: string;
+ }
+ 
++/**
++ * The microphone is a SINGLE-OWNER resource (Child V, 2026-09-15).
++ *
++ * A two-tab browser reproduction proved the earlier reference-per-field design
++ * could leak a hot microphone past the app's own knowledge:
++ *   - a second activation landing while the device was still being acquired
++ *     (second tab, cold device, permission prompt) started a SECOND
++ *     MediaRecorder and overwrote the refs, so one tap to stop released only
++ *     one of them — the app read "Start recording" while a recorder was still
++ *     recording and the microphone track was still live;
++ *   - unmounting the surface while recording (Exit Voice Mode) left the
++ *     recorder and the track running with no control left in the app.
++ *
++ * The fix is one owned capture object, a lock over the acquisition window, and
++ * a teardown that runs on unmount. Nothing here changes what is sent where:
++ * the transcript path, the verbatim relay and the confirm gate are untouched.
++ */
++interface Capture {
++  recordingId: string | null;
++  stream: MediaStream;
++  recorder: MediaRecorder;
++}
++
++function stopTracks(stream: MediaStream): void {
++  try {
++    stream.getTracks().forEach(t => t.stop());
++  } catch {
++    /* the stream is already gone; nothing to release */
++  }
++}
++
+ export function useDictation(onTranscript: (text: string) => void, errorContext?: DictationErrorContext) {
+   const [state, setState] = useState<DictationState>('idle');
+   const [errorMessage, setErrorMessage] = useState('');
+ 
+-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+-  const recordingIdRef = useRef<string | null>(null);
+-  const streamRef = useRef<MediaStream | null>(null);
++  /** The one capture this hook owns, if any. */
++  const captureRef = useRef<Capture | null>(null);
++  /** Acquisition lock: held from the tap until a capture exists or the attempt
++   *  has failed, so a tap inside that window cannot open a second lane. */
++  const startingRef = useRef(false);
++  /** True once the surface has gone away: an acquisition in flight must not
++   *  leave a live stream behind. Reset on mount so React StrictMode's
++   *  mount/unmount/mount cycle cannot latch it. */
++  const disposedRef = useRef(false);
+   const pendingChunksRef = useRef<Promise<void>>(Promise.resolve());
+   const onTranscriptRef = useRef(onTranscript);
+   onTranscriptRef.current = onTranscript;
+@@ -64,14 +101,64 @@ export function useDictation(onTranscript: (text: string) => void, errorContext?
+     });
+   }, []);
+ 
++  /** Best-effort: tell the server to drop an in-flight recording's buffered
++   *  audio. Never transcription, and never surfaces are sent. */
++  const abandonServerRecording = useCallback((recordingId: string) => {
++    void fetch(`${API_URL}/api/dictation/${recordingId}/abort`, {
++      method: 'POST',
++      credentials: 'include',
++      cache: 'no-store',
++    }).catch(() => {
++      /* the recording is abandoned locally either way; the server entry is
++         bounded and in-memory only */
++    });
++  }, []);
++
++  /** Release whatever this hook owns: stop the recorder, stop the microphone
++   *  tracks, and abandon the server-side recording. Idempotent. */
++  const releaseCapture = useCallback(
++    (opts: { abandon: boolean }) => {
++      const capture = captureRef.current;
++      captureRef.current = null;
++      startingRef.current = false;
++      if (!capture) return;
++      try {
++        if (capture.recorder.state !== 'inactive') capture.recorder.stop();
++      } catch {
++        /* already stopped */
++      }
++      stopTracks(capture.stream);
++      if (opts.abandon && capture.recordingId) abandonServerRecording(capture.recordingId);
++    },
++    [abandonServerRecording]
++  );
++
+   useEffect(() => {
+     apiPost('/api/dictation/warmup').catch(() => {});
+   }, []);
+ 
++  // The surface owns the microphone for exactly as long as it is mounted.
++  // React StrictMode runs this cleanup once on mount, which is harmless: with
++  // no capture there is nothing to release.
++  useEffect(() => {
++    disposedRef.current = false;
++    return () => {
++      disposedRef.current = true;
++      releaseCapture({ abandon: true });
++    };
++  }, [releaseCapture]);
++
+   const startRecording = useCallback(async () => {
++    // Single owner: an acquisition already in flight, or a live capture, is not
++    // replaced. A second tap here is absorbed, never a second lane.
++    if (startingRef.current || captureRef.current) return;
++
++    startingRef.current = true;
+     setErrorMessage('');
++    setState('starting');
+ 
+     if (!navigator.mediaDevices?.getUserMedia) {
++      startingRef.current = false;
+       setErrorMessage('Microphone not supported in this browser.');
+       setState('error');
+       reportDictationError('Microphone not supported in this browser.');
+@@ -82,6 +169,7 @@ export function useDictation(onTranscript: (text: string) => void, errorContext?
+     try {
+       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+     } catch (err: unknown) {
++      startingRef.current = false;
+       const msg = err instanceof Error ? err.message : String(err);
+       let reason: string;
+       if (msg.includes('Permission') || msg.includes('NotAllowed') || msg.includes('denied')) {
+@@ -97,15 +185,21 @@ export function useDictation(onTranscript: (text: string) => void, errorContext?
+       return;
+     }
+ 
+-    streamRef.current = stream;
++    // The surface went away while the device was being acquired: release it
++    // immediately rather than leaving a live track the app cannot reach.
++    if (disposedRef.current) {
++      startingRef.current = false;
++      stopTracks(stream);
++      return;
++    }
+ 
+     let id: string;
+     try {
+       const result = await apiPost('/api/dictation/start') as { id: string };
+       id = result.id;
+     } catch (err: unknown) {
+-      stream.getTracks().forEach(t => t.stop());
+-      streamRef.current = null;
++      startingRef.current = false;
++      stopTracks(stream);
+       const msg = err instanceof Error ? err.message : 'Failed to start recording';
+       setErrorMessage(msg);
+       setState('error');
+@@ -113,56 +207,70 @@ export function useDictation(onTranscript: (text: string) => void, errorContext?
+       return;
+     }
+ 
+-    recordingIdRef.current = id;
+-    pendingChunksRef.current = Promise.resolve();
++    if (disposedRef.current) {
++      startingRef.current = false;
++      stopTracks(stream);
++      abandonServerRecording(id);
++      return;
++    }
+ 
+     const mimeType = getMimeType();
+     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+-    mediaRecorderRef.current = recorder;
++    const capture: Capture = { recordingId: id, stream, recorder };
++    captureRef.current = capture;
++    pendingChunksRef.current = Promise.resolve();
+ 
+     recorder.ondataavailable = (e) => {
+-      if (e.data && e.data.size > 0 && recordingIdRef.current) {
+-        const currentId = recordingIdRef.current;
+-        pendingChunksRef.current = pendingChunksRef.current.then(async () => {
+-          const buf = await e.data.arrayBuffer();
+-          await fetch(`${API_URL}/api/dictation/${currentId}/stream`, {
+-            method: 'POST',
+-            credentials: 'include',
+-            headers: { 'Content-Type': 'application/octet-stream' },
+-            body: buf,
+-          }).catch(console.warn);
+-        });
+-      }
++      if (!e.data || e.data.size === 0) return;
++      // Only the current owner streams: a lane that has been released (or
++      // replaced) can never feed a recording session it no longer holds.
++      if (captureRef.current !== capture) return;
++      pendingChunksRef.current = pendingChunksRef.current.then(async () => {
++        if (captureRef.current !== capture) return;
++        const buf = await e.data.arrayBuffer();
++        await fetch(`${API_URL}/api/dictation/${id}/stream`, {
++          method: 'POST',
++          credentials: 'include',
++          headers: { 'Content-Type': 'application/octet-stream' },
++          body: buf,
++        }).catch(console.warn);
++      });
+     };
+ 
+     recorder.start(CHUNK_INTERVAL_MS);
++    startingRef.current = false;
+     setState('recording');
+-  }, []);
++  }, [abandonServerRecording, reportDictationError]);
+ 
+   const stopRecording = useCallback(async () => {
+-    const recorder = mediaRecorderRef.current;
+-    const id = recordingIdRef.current;
+-    if (!recorder || !id) return;
++    const capture = captureRef.current;
++    if (!capture) return; // nothing owned: a stop with no lane is a no-op
+ 
++    // Take ownership out of the ref BEFORE awaiting, so a concurrent stop (or a
++    // release) can never drive the same recorder twice.
++    captureRef.current = null;
++    startingRef.current = false;
+     setState('processing');
+ 
+     await new Promise<void>(resolve => {
+-      recorder.addEventListener('stop', () => resolve(), { once: true });
+-      recorder.stop();
++      if (capture.recorder.state === 'inactive') {
++        resolve();
++        return;
++      }
++      capture.recorder.addEventListener('stop', () => resolve(), { once: true });
++      capture.recorder.stop();
+     });
+ 
+-    if (streamRef.current) {
+-      streamRef.current.getTracks().forEach(t => t.stop());
+-      streamRef.current = null;
+-    }
+-
++    stopTracks(capture.stream);
+     await pendingChunksRef.current;
+ 
+-    mediaRecorderRef.current = null;
+-    recordingIdRef.current = null;
++    if (!capture.recordingId) {
++      setState('idle');
++      return;
++    }
+ 
+     try {
+-      const result = await apiPost(`/api/dictation/${id}/finish`) as { text: string; duration_ms: number };
++      const result = await apiPost(`/api/dictation/${capture.recordingId}/finish`) as { text: string; duration_ms: number };
+       onTranscriptRef.current(result.text);
+       setState('idle');
+     } catch (err: unknown) {
+@@ -171,7 +279,7 @@ export function useDictation(onTranscript: (text: string) => void, errorContext?
+       setState('error');
+       reportDictationError(msg);
+     }
+-  }, []);
++  }, [reportDictationError]);
+ 
+   const toggle = useCallback(() => {
+     if (state === 'idle' || state === 'error') {
+@@ -179,6 +287,8 @@ export function useDictation(onTranscript: (text: string) => void, errorContext?
+     } else if (state === 'recording') {
+       void stopRecording();
+     }
++    // 'starting' and 'processing' absorb the tap: there is exactly one lane,
++    // and it is already transitioning.
+   }, [state, startRecording, stopRecording]);
+ 
+   return { state, errorMessage, toggle, startRecording, stopRecording };
+diff --git a/client/tests/unit/components/DriveMode/DriveModeDictate.contract-hint.test.tsx b/client/tests/unit/components/DriveMode/DriveModeDictate.contract-hint.test.tsx
+index 0047c36..fda6022 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeDictate.contract-hint.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeDictate.contract-hint.test.tsx
+@@ -71,6 +71,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
+ 
+ vi.mock('lucide-react', () => ({
+   Mic: () => <span data-testid="icon-mic" />,
++  Smartphone: () => <span data-testid="icon-smartphone" />,
++  Monitor: () => <span data-testid="icon-monitor" />,
+   MicOff: () => <span data-testid="icon-micoff" />,
+   Square: () => <span data-testid="icon-square" />,
+   VolumeX: () => <span data-testid="icon-volumex" />,
+diff --git a/client/tests/unit/components/DriveMode/DriveModeDictate.focus.test.tsx b/client/tests/unit/components/DriveMode/DriveModeDictate.focus.test.tsx
+index 2251d6a..401729a 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeDictate.focus.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeDictate.focus.test.tsx
+@@ -86,6 +86,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
+ 
+ vi.mock('lucide-react', () => ({
+   Mic: () => <span data-testid="icon-mic" />,
++  Smartphone: () => <span data-testid="icon-smartphone" />,
++  Monitor: () => <span data-testid="icon-monitor" />,
+   MicOff: () => <span data-testid="icon-micoff" />,
+   Square: () => <span data-testid="icon-square" />,
+   VolumeX: () => <span data-testid="icon-volumex" />,
+diff --git a/client/tests/unit/components/DriveMode/DriveModeDictate.reading-levels.test.tsx b/client/tests/unit/components/DriveMode/DriveModeDictate.reading-levels.test.tsx
+index eb6e4bc..e90579a 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeDictate.reading-levels.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeDictate.reading-levels.test.tsx
+@@ -84,6 +84,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
+ 
+ vi.mock('lucide-react', () => ({
+   Mic: () => <span data-testid="icon-mic" />,
++  Smartphone: () => <span data-testid="icon-smartphone" />,
++  Monitor: () => <span data-testid="icon-monitor" />,
+   MicOff: () => <span data-testid="icon-micoff" />,
+   Square: () => <span data-testid="icon-square" />,
+   VolumeX: () => <span data-testid="icon-volumex" />,
+diff --git a/client/tests/unit/components/DriveMode/DriveModeDictate.speech-dedup.test.tsx b/client/tests/unit/components/DriveMode/DriveModeDictate.speech-dedup.test.tsx
+index af560fe..f2aa4a8 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeDictate.speech-dedup.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeDictate.speech-dedup.test.tsx
+@@ -75,6 +75,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
+ 
+ vi.mock('lucide-react', () => ({
+   Mic: () => <span data-testid="icon-mic" />,
++  Smartphone: () => <span data-testid="icon-smartphone" />,
++  Monitor: () => <span data-testid="icon-monitor" />,
+   MicOff: () => <span data-testid="icon-micoff" />,
+   Square: () => <span data-testid="icon-square" />,
+   VolumeX: () => <span data-testid="icon-volumex" />,
+diff --git a/client/tests/unit/components/DriveMode/DriveModeDictate.stop-talker.test.tsx b/client/tests/unit/components/DriveMode/DriveModeDictate.stop-talker.test.tsx
+index f4380ab..c6f3570 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeDictate.stop-talker.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeDictate.stop-talker.test.tsx
+@@ -81,6 +81,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
+ 
+ vi.mock('lucide-react', () => ({
+   Mic: () => <span data-testid="icon-mic" />,
++  Smartphone: () => <span data-testid="icon-smartphone" />,
++  Monitor: () => <span data-testid="icon-monitor" />,
+   MicOff: () => <span data-testid="icon-micoff" />,
+   Square: () => <span data-testid="icon-square" />,
+   VolumeX: () => <span data-testid="icon-volumex" />,
+diff --git a/client/tests/unit/components/DriveMode/DriveModeDictate.test.tsx b/client/tests/unit/components/DriveMode/DriveModeDictate.test.tsx
+index 3441fa9..0c6cf7b 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeDictate.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeDictate.test.tsx
+@@ -16,7 +16,7 @@ vi.mock('../../../../src/hooks/useWebSocket', () => ({
+ // The mock also exposes the transcript callback so tests can drive a finished
+ // utterance through the REAL pipeline (capture → talker send → bus → surface).
+ const capture: {
+-  state: 'idle' | 'recording' | 'processing' | 'error';
++  state: 'idle' | 'starting' | 'recording' | 'processing' | 'error';
+   errorMessage: string;
+   toggle: ReturnType<typeof vi.fn>;
+   transcript: ((text: string) => void) | null;
+@@ -62,6 +62,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
+ 
+ vi.mock('lucide-react', () => ({
+   Mic: () => <span data-testid="icon-mic" />,
++  Smartphone: () => <span data-testid="icon-smartphone" />,
++  Monitor: () => <span data-testid="icon-monitor" />,
+   MicOff: () => <span data-testid="icon-micoff" />,
+   Square: () => <span data-testid="icon-square" />,
+   VolumeX: () => <span data-testid="icon-volumex" />,
+@@ -508,4 +510,24 @@ describe('DriveModeDictate — the Voice Mode surface (talking while working)',
+     renderSurface();
+     expect(screen.getByText('Microphone permission denied.')).toBeInTheDocument();
+   });
++
++  // Child V (2026-09-15) — the operator's report: "the microphone button does
++  // not seem to activate, even if the browser tab activates the red
++  // 'recording' button". While the device is being acquired the microphone is
++  // already hot at the browser level, so the surface must name that window
++  // rather than render as though nothing is happening.
++  it('names the acquisition window instead of looking idle while the microphone is being acquired', () => {
++    capture.state = 'starting';
++    renderSurface();
++    const mic = screen.getByLabelText('Starting microphone');
++    expect(mic).toBeDisabled();
++    expect(mic).toHaveAttribute('aria-busy', 'true');
++    expect(screen.getByTestId('mic-starting-hint')).toHaveTextContent('Starting microphone…');
++  });
++
++  it('does not offer the idle mic control while the acquisition is in flight', () => {
++    capture.state = 'starting';
++    renderSurface();
++    expect(screen.queryByLabelText('Start recording')).toBeNull();
++  });
+ });
+diff --git a/client/tests/unit/components/DriveMode/DriveModeDictate.whole-turn.test.tsx b/client/tests/unit/components/DriveMode/DriveModeDictate.whole-turn.test.tsx
+index ea8ff5c..0f0bd37 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeDictate.whole-turn.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeDictate.whole-turn.test.tsx
+@@ -90,6 +90,8 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
+ 
+ vi.mock('lucide-react', () => ({
+   Mic: () => <span data-testid="icon-mic" />,
++  Smartphone: () => <span data-testid="icon-smartphone" />,
++  Monitor: () => <span data-testid="icon-monitor" />,
+   MicOff: () => <span data-testid="icon-micoff" />,
+   Square: () => <span data-testid="icon-square" />,
+   VolumeX: () => <span data-testid="icon-volumex" />,
+diff --git a/client/tests/unit/components/DriveMode/DriveModeOverlay.test.tsx b/client/tests/unit/components/DriveMode/DriveModeOverlay.test.tsx
+index bc94f9d..3e0605f 100644
+--- a/client/tests/unit/components/DriveMode/DriveModeOverlay.test.tsx
++++ b/client/tests/unit/components/DriveMode/DriveModeOverlay.test.tsx
+@@ -5,6 +5,7 @@ import { useUIStore } from '../../../../src/store/uiStore';
+ import { useDriveModeStore } from '../../../../src/store/driveModeStore';
+ import { useWebSocket } from '../../../../src/hooks/useWebSocket';
+ import { useSessionStore } from '../../../../src/store/sessionStore';
++import { useVoiceLayoutStore, VOICE_LAYOUT_STORAGE_KEY } from '../../../../src/components/DriveMode/voiceLayout';
+ 
+ const mockUIStoreState = {
+   driveModeOpen: true,
+@@ -89,6 +90,15 @@ vi.mock('../../../../src/components/DriveMode/DriveModeSessionPicker', () => ({
+   ),
+ }));
+ 
++vi.mock('../../../../src/components/DriveMode/DriveModeSessionPane', () => ({
++  DriveModeSessionPane: (props: { sessionDisplayName: string; modelName: string }) => (
++    <div data-testid="drive-session-pane">
++      <span>{props.sessionDisplayName}</span>
++      <span>{props.modelName}</span>
++    </div>
++  ),
++}));
++
+ vi.mock('../../../../src/components/DriveMode/DriveModeDictate', () => ({
+   DriveModeDictate: (props: { sessionId: string; modelName: string; sessionDisplayName: string; onExit: () => void }) => (
+     <div data-testid="drive-mode-dictate">
+@@ -283,3 +293,98 @@ describe('DriveModeOverlay', () => {
+     });
+   });
+ });
++
++/**
++ * Child V — the two layout modes (operator request, 2026-09-15).
++ *
++ * 'mobile' is the existing surface. 'desktop' puts the live session beside the
++ * voice surface — but only when the window can hold two readable halves, so a
++ * wide preference on a narrow window degrades instead of squashing both.
++ */
++describe('DriveModeOverlay — Voice Mode layout modes', () => {
++  // eslint-disable-next-line @typescript-eslint/no-explicit-any
++  let driveModeStoreState: any;
++  // eslint-disable-next-line @typescript-eslint/no-explicit-any
++  let sessionStoreState: any;
++
++  const setWidth = (width: number) => {
++    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });
++    window.dispatchEvent(new Event('resize'));
++  };
++
++  beforeEach(() => {
++    localStorage.clear();
++    useVoiceLayoutStore.setState({ mode: 'mobile' });
++    driveModeStoreState = {
++      phase: 'dictate',
++      selectedModelId: null,
++      activeSessionId: 's1',
++      close: vi.fn(),
++      setPhase: vi.fn(),
++      selectModel: vi.fn(),
++      setActiveSession: vi.fn(),
++      reset: vi.fn(),
++    };
++    sessionStoreState = {
++      sessions: [
++        { id: 's1', path: '/path/1.jsonl', name: 'Test Session', model: 'claude-3-opus', firstMessage: 'Hello', messageCount: 1, cwd: '/' },
++      ],
++      currentSessionId: 's1',
++      currentModel: 'claude-3-opus',
++      getSessionDisplayName: () => 'Test Session',
++    };
++    (useDriveModeStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
++      selector ? selector(driveModeStoreState) : driveModeStoreState
++    );
++    (useSessionStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
++      selector ? selector(sessionStoreState) : sessionStoreState
++    );
++  });
++
++  afterEach(() => {
++    localStorage.clear();
++    useVoiceLayoutStore.setState({ mode: 'mobile' });
++  });
++
++  it('renders the existing voice-only surface in mobile mode, even on a wide window', () => {
++    setWidth(1600);
++    render(<DriveModeOverlay />);
++    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
++    expect(screen.queryByTestId('drive-mode-split')).toBeNull();
++    expect(screen.queryByTestId('drive-session-pane')).toBeNull();
++  });
++
++  it('splits the screen — voice surface and live session — in desktop mode on a wide window', () => {
++    useVoiceLayoutStore.setState({ mode: 'desktop' });
++    setWidth(1600);
++    render(<DriveModeOverlay />);
++    expect(screen.getByTestId('drive-mode-split')).toBeInTheDocument();
++    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
++    expect(screen.getByTestId('drive-session-pane')).toBeInTheDocument();
++  });
++
++  it('degrades a desktop preference to the mobile layout when the window is narrow', () => {
++    useVoiceLayoutStore.setState({ mode: 'desktop' });
++    setWidth(420);
++    render(<DriveModeOverlay />);
++    expect(screen.queryByTestId('drive-mode-split')).toBeNull();
++    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
++  });
++
++  it('keeps the desktop mode across a remount (the choice is persisted)', () => {
++    useVoiceLayoutStore.setState({ mode: 'desktop' });
++    const stored = JSON.parse(localStorage.getItem(VOICE_LAYOUT_STORAGE_KEY) as string) as {
++      state?: { mode?: string };
++    };
++    expect(stored.state?.mode).toBe('desktop');
++
++    setWidth(1600);
++    const first = render(<DriveModeOverlay />);
++    expect(first.getByTestId('drive-mode-split')).toBeInTheDocument();
++    first.unmount();
++
++    // A later mount reads the same persisted preference.
++    render(<DriveModeOverlay />);
++    expect(screen.getByTestId('drive-mode-split')).toBeInTheDocument();
++  });
++});
+diff --git a/server/src/routes/dictation.ts b/server/src/routes/dictation.ts
+index 9291a2c..9334f51 100644
+--- a/server/src/routes/dictation.ts
++++ b/server/src/routes/dictation.ts
+@@ -61,6 +61,16 @@ router.post('/:id/stream', (req: Request, res: Response) => {
+   res.json({ ok: true });
+ });
+ 
++router.post('/:id/abort', (req: Request, res: Response) => {
++  // The surface released the microphone. Drop the buffered audio WITHOUT
++  // transcribing or cleaning it: these words were never submitted, no
++  // transcript was ever asked for, and the buffer must not outlive the capture
++  // that produced it. Idempotent — a teardown path must not have to care
++  // whether the recording still exists.
++  const aborted = activeRecordings.delete(req.params.id);
++  res.json({ ok: true, aborted });
++});
++
+ router.post('/:id/finish', async (req: Request, res: Response) => {
+   const recording = activeRecordings.get(req.params.id);
+   if (!recording) {
+diff --git a/server/tests/unit/routes/dictation.test.ts b/server/tests/unit/routes/dictation.test.ts
+index 10ddda2..3243ee9 100644
+--- a/server/tests/unit/routes/dictation.test.ts
++++ b/server/tests/unit/routes/dictation.test.ts
+@@ -114,6 +114,50 @@ describe('Dictation Routes', () => {
+     });
+   });
+ 
++  // Child V (2026-09-15): the Voice Mode surface releases the microphone when
++  // it goes away, and the server-side recording must not be left holding an
++  // entire utterance's buffered audio with no reader. Abort drops it WITHOUT
++  // transcribing and WITHOUT cleaning — nobody asked for those words.
++  describe('POST /api/dictation/:id/abort', () => {
++    it('drops the recording without transcribing or cleaning it', async () => {
++      const startRes = await request(app).post('/api/dictation/start');
++      const id = startRes.body.id;
++      await request(app)
++        .post(`/api/dictation/${id}/stream`)
++        .set('Content-Type', 'application/octet-stream')
++        .send(Buffer.from('abandoned-audio'));
++
++      const res = await request(app).post(`/api/dictation/${id}/abort`);
++
++      expect(res.status).toBe(200);
++      expect(res.body).toEqual({ ok: true, aborted: true });
++      expect(transcribeWithFallback).not.toHaveBeenCalled();
++      expect(cleanupTranscript).not.toHaveBeenCalled();
++    });
++
++    it('leaves nothing behind that a later finish could resurrect', async () => {
++      const startRes = await request(app).post('/api/dictation/start');
++      const id = startRes.body.id;
++
++      await request(app).post(`/api/dictation/${id}/abort`);
++      const finish = await request(app).post(`/api/dictation/${id}/finish`);
++
++      expect(finish.status).toBe(404);
++      expect(transcribeWithFallback).not.toHaveBeenCalled();
++    });
++
++    it('is idempotent for an already-abandoned recording id', async () => {
++      const startRes = await request(app).post('/api/dictation/start');
++      const id = startRes.body.id;
++
++      await request(app).post(`/api/dictation/${id}/abort`);
++      const second = await request(app).post(`/api/dictation/${id}/abort`);
++
++      expect(second.status).toBe(200);
++      expect(second.body).toEqual({ ok: true, aborted: false });
++    });
++  });
++
+   describe('POST /api/dictation/:id/finish', () => {
+     it('should transcribe and clean up audio', async () => {
+       const startRes = await request(app).post('/api/dictation/start');

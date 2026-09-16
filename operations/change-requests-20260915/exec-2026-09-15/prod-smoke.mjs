@@ -1,0 +1,15 @@
+import { chromium } from 'playwright';
+const errors = [];
+const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+const page = await ctx.newPage();
+page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });
+page.on('pageerror', e => errors.push('PAGEERROR: ' + String(e).slice(0, 200)));
+const resp = await page.goto('http://127.0.0.1:3456/', { waitUntil: 'networkidle', timeout: 45000 });
+await page.waitForTimeout(2500);
+const title = await page.title();
+const bodyText = (await page.locator('body').innerText().catch(() => '')).slice(0, 200).replace(/\n+/g, ' | ');
+const hasRoot = await page.locator('#root, #app').count();
+await page.screenshot({ path: '/root/pi-web-ui/operations/change-requests-20260915/exec-2026-09-15/prod-smoke.png' });
+console.log(JSON.stringify({ status: resp.status(), title, hasRoot, bodyText, errors }, null, 2));
+await browser.close();

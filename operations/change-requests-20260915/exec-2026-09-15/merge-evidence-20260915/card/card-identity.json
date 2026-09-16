@@ -1,0 +1,113 @@
+{
+  "steps": {
+    "session": {
+      "created": "f79e274e-c5c6-40ce-aa0c-055b64bb89f1"
+    },
+    "login": "ok",
+    "voiceMode": "entered on the worker session",
+    "bootstrap.proposed": {
+      "present": true,
+      "text": "water the plants on the balcony",
+      "version": "1",
+      "hash": "e98cf28ad20808e3891cd24981f403cf149e93bc041f37389100b8feca4dde73"
+    },
+    "bootstrap.typedAppend": {
+      "present": true,
+      "text": "water the plants on the balcony\nand also close the gate",
+      "version": "2",
+      "hash": "6f008c7b55e4f456307f61befa18bc4f05025ac1803cba5c6bf41da1a87f6bd6"
+    },
+    "bootstrap.cancelled": "card dismissed by the real Cancel gesture",
+    "A.card": {
+      "present": true,
+      "text": "hold phase 3 for review",
+      "version": "3",
+      "hash": "8fb3b2bb0947eb7de3d8ea59efbff21054abe5aea662d67fda9199df65531b99"
+    },
+    "B.card": {
+      "present": true,
+      "text": "deploy the fix to staging now",
+      "version": "4",
+      "hash": "e8eeb8d39ca1a1e53ad21ceb649df44e279dcf4fa828309fc9a5da61f4408409"
+    },
+    "C.card.stale": {
+      "present": true,
+      "text": "hold phase 3 for review",
+      "version": "5",
+      "hash": "8fb3b2bb0947eb7de3d8ea59efbff21054abe5aea662d67fda9199df65531b99"
+    },
+    "C.foreignTurn": {
+      "phase": "proposed",
+      "proposalText": "hold phase 3 for review\nand also update the changelog"
+    },
+    "C.refusal": {
+      "reply": "That card is out of date — the wording has changed since it was shown, so I sent nothing. Here is what I am holding now: \"hold phase 3 for review\" ... \"and also update the changelog\". Confirm this current version and I will send it.",
+      "released": null,
+      "freshProposal": "hold phase 3 for review\nand also update the changelog",
+      "cardAfter": {
+        "present": true,
+        "text": "hold phase 3 for review\nand also update the changelog",
+        "version": "6",
+        "hash": "15c084810736c452b27fb4fc972f00bd9e71d2fe90d0017aaf420d0be8d252d0"
+      }
+    },
+    "D.card": {
+      "tidied": "rerun the suite",
+      "originalShown": "Um, tell the worker to rerun the suite"
+    },
+    "wire.releasedTexts": [
+      "hold phase 3 for review",
+      "hold phase 3 for review\nand also update the changelog",
+      "Um, tell the worker to rerun the suite"
+    ]
+  },
+  "verdicts": {
+    "A.identityOnCardMatchesWire": {
+      "ok": true,
+      "detail": "wire proposal {v3, 8fb3b2bb09…} === card attrs"
+    },
+    "A.releasedBytesEqualDisplayed": {
+      "ok": true,
+      "detail": "released \"hold phase 3 for review\" === displayed \"hold phase 3 for review\""
+    },
+    "B.cancelReleasesNothing": {
+      "ok": true,
+      "detail": "card cancelled after displaying \"deploy the fix to staging now\"; releases before=1 after=1"
+    },
+    "C.staleConfirmReleasedNothing": {
+      "ok": true,
+      "detail": "stale confirm released null — nothing"
+    },
+    "C.cardReShowedCurrentText": {
+      "ok": true,
+      "detail": "card now shows \"hold phase 3 for review\nand also update the changelog\" under fresh identity v6 (wire v6)"
+    },
+    "C.staleCardWasGenuinelyStale": {
+      "ok": true,
+      "detail": "before the click the card still showed \"hold phase 3 for review\" (v5) — the foreign mutation never reached it"
+    },
+    "C.freshConfirmReleasedCurrentDisplayed": {
+      "ok": true,
+      "detail": "released \"hold phase 3 for review\nand also update the changelog\" === the re-shown card text"
+    },
+    "D.originalReleasedEqualsDisplayedOriginal": {
+      "ok": true,
+      "detail": "released \"Um, tell the worker to rerun the suite\" === displayed original \"Um, tell the worker to rerun the suite\""
+    },
+    "D.identityEchoRodeAlong": {
+      "ok": true,
+      "detail": "the tidied card carried identity v7 — the gesture echoed it with variant 'original'"
+    }
+  },
+  "screenshots": [
+    "01-A-card.png",
+    "02-A-released.png",
+    "03-B-cancelled.png",
+    "04-C-stale-card.png",
+    "05-C-reshown-current.png",
+    "06-C-released-current.png",
+    "07-D-original-disclosure.png",
+    "08-D-released-original.png"
+  ],
+  "notes": []
+}

@@ -1,0 +1,22 @@
+### CONDUCTOR FINDING — stability drop-in relies on a non-existent systemd directive (2026-09-15 10:15Z)
+
+$ systemd-analyze verify pi-web-ui.service
+/etc/systemd/system/pi-web-ui.service.d/10-stop-audit.conf:84: Unknown key name 'ExecStopPre' in section 'Service', ignoring.
+
+$ systemctl show pi-web-ui.service | grep ^Exec   # no ExecStopPre property exists
+ExecMainStartTimestamp=Tue 2026-09-15 08:30:36 UTC
+ExecMainStartTimestampMonotonic=383827737259
+ExecMainExitTimestampMonotonic=0
+ExecMainPID=2164396
+ExecMainCode=0
+ExecMainStatus=0
+ExecStart={ path=/usr/bin/node
+ExecStartEx={ path=/usr/bin/node
+ExecStopPost={ path=/bin/sh
+ExecStopPost={ path=/root/pi-web-ui/scripts/systemd-stop-audit.sh
+ExecStopPostEx={ path=/bin/sh
+ExecStopPostEx={ path=/root/pi-web-ui/scripts/systemd-stop-audit.sh
+
+Conclusion: ExecStopPre= is ignored by systemd, so the drop-in's 'phase=pre' hook NEVER runs during a real stop.
+What still works: ExecStopPost (post record), scripts/restart-pi-web-ui.sh (naming wrapper), and the app-side
+synchronous pre-await stop-signal log, which already answers 'did the signal arrive' independently of any hook.

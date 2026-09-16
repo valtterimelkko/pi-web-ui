@@ -1,0 +1,7 @@
+client/src/components/DriveMode/DriveModeSessionPane.tsx
+client/src/components/DriveMode/VoiceLayoutToggle.tsx
+client/src/components/DriveMode/useVoiceLayout.ts
+client/src/components/DriveMode/voiceLayout.ts
+client/tests/unit/components/DriveMode/voiceLayout.test.ts
+client/tests/unit/components/DriveMode/voiceLayoutComponents.test.tsx
+client/tests/unit/hooks/useDictation.test.ts

@@ -1,0 +1,4 @@
+Running as unit: child-S-close-1789463199.scope; invocation ID: 5b67c03aa04a4120a1ecd6e9a2d20c02
+CONTROL bare close() with a live client: STILL-PENDING after 5005ms
+FIX    closeHttpServer() with the same live client: closed after 2ms
+EXIT=0

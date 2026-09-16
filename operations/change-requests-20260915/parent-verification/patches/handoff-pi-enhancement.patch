@@ -1,0 +1,503 @@
+diff --git a/auto-compact-75/README.md b/auto-compact-75/README.md
+index 7b90e44..40458e5 100644
+--- a/auto-compact-75/README.md
++++ b/auto-compact-75/README.md
+@@ -15,6 +15,28 @@ embedded SDK.
+ 
+ ## What it does
+ 
++- **Handoff adopts host-induced append-only growth, source and target (v2.7.0)** — the
++  2026-09-15 report ("autocompact75 handoff not working when trying to handoff
++  from webui frontend", session 01a0a410). A Pi Web UI session runtime can sit
++  idle while its JSONL gains entries this runtime never loaded: an extension
++  instance whose `pi` binding survived a session rebind/rehydration persists its
++  snapshot through the OLDER `SessionManager`, so the entry reaches disk but not
++  the live runtime's view (the observed tail was `bg-shell-tasks` +
++  `background-tasks`, 157 on disk vs 155 in memory, and the extension's own
++  classifier reports `appendOnlyDiskAhead: true` / `canFastForward: true` for
++  it). Every other path already adopts that class of state (75% gate deferral,
++  `agent_settled` adoption, `/autocompact75 resync`), but `handoff` passed
++  `fenceOnAppendOnly: true`, so it refused **and fenced the live owner** — the
++  session then rejected every prompt until a resync. `handoff` now adopts the
++  append-only tail (the shared `adoptAppendOnlyDiskTail` path) and then applies
++  the unchanged strict gate, so the pinned handoff fingerprint still covers the
++  whole file the target verifies. Removal, reordering, rewritten or untrusted
++  contents, and a failed adoption still refuse and fence exactly as before, and
++  startup strictness is untouched. The same class of host append lands *after*
++  the offer — the target's own load persists its sibling snapshots too — so the
++  offer also pins the offered byte length and `claim` accepts a file that only
++  grew with whole appended lines (byte-identical pinned prefix), refusing every
++  other change.
+ - **Retry-echo resilience + settle-probe adoption (v2.6.0)** — two fixes from the
+   2026-09-07 incidents (sessions 01a07b8e, 01a07b50):
+   (1) The v2.5.0 manual-compact auto-retry is no longer disarmed by the
+@@ -113,9 +135,19 @@ embedded SDK.
+   live message objects, preventing Pi's legitimate in-memory message updates from
+   falsely fencing the owner; an intentional handoff still requires strict
+   memory-to-disk content equality and
+-  pins a stable whole-file SHA-256 fingerprint in the handoff lease. The target
+-  checks that fingerprint before and after disk refresh and again while promoting
+-  the lease; a changed JSONL is refused without granting ownership.
++  pins a stable whole-file SHA-256 fingerprint in the handoff lease, together
++  with the offered byte length. The target checks that pin before and after disk
++  refresh and again while promoting the lease; a changed JSONL is refused
++  without granting ownership — with one deliberate exception (v2.7.0): a JSONL
++  that only *grew* with whole appended lines is accepted, because both the idle
++  source and the freshly opened target run extensions that persist registry
++  snapshots into the session file (`bg-shell-tasks`, `background-tasks`), so a
++  whole-file pin would dead-end every handoff on a Pi Web UI host. Acceptance
++  requires the pinned byte prefix to still hash to the pinned fingerprint
++  (SHA-256 over exactly the offered length, file newline-terminated);
++  rewriting, reordering, truncation, partial writes, and offers written before
++  the byte length was pinned all still fail closed and preserve the offer for
++  diagnosis.
+   Pi extensions cannot prevent core from opening the file before `session_start`,
+   so run `handoff` before opening the target. If non-prefix JSONL freshness is
+   rejected, close and reopen the session runtime from disk; extension-only reload
+@@ -149,7 +181,12 @@ embedded SDK.
+   - `/autocompact75 handoff` — prepare an intentional transfer from the current
+     owner. It succeeds only when this runtime owns an idle, fresh session with
+     no queued messages or compaction in flight. The source is fenced immediately
+-    and cannot prompt, run tools, mutate Goal Engine state, or compact again.
++    and cannot prompt, run tools, mutate Goal Engine state, or compact again. An
++    append-only disk tail this runtime has not loaded (a sibling extension
++    persisting through a stale binding in the Pi Web UI host) is adopted before
++    the handoff, so the pinned fingerprint still covers the whole file; every
++    other mismatch — removal, reordering, rewritten or untrusted contents —
++    still fails closed and fences.
+   - `/autocompact75 claim` — claim a deliberate handoff on the target runtime.
+     It refuses a normal live owner and verifies the target's loaded JSONL before
+     changing the lease. An exact append-only disk suffix is loaded and synchronized
+diff --git a/auto-compact-75/diagnostics.mjs b/auto-compact-75/diagnostics.mjs
+index beec8e9..2973bb9 100644
+--- a/auto-compact-75/diagnostics.mjs
++++ b/auto-compact-75/diagnostics.mjs
+@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
+ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+ import { dirname, join } from "node:path";
+ 
+-export const AUTO_COMPACT_EXTENSION_VERSION = "2.6.0";
++export const AUTO_COMPACT_EXTENSION_VERSION = "2.7.0";
+ export const WEB_UI_IN_PLACE_RELOAD_CAPABILITY = Symbol.for("pi-web-ui:in-place-extension-reload");
+ 
+ export function canReloadExtensionsInPlace(sdkDirectory, host = globalThis, context = {}) {
+diff --git a/auto-compact-75/index.ts b/auto-compact-75/index.ts
+index 374ded5..355a6c4 100644
+--- a/auto-compact-75/index.ts
++++ b/auto-compact-75/index.ts
+@@ -19,6 +19,7 @@ import {
+ 	canonicalSessionPath,
+ 	claimSessionLease,
+ 	fingerprintSessionFile,
++	inspectHandoffPin,
+ 	inspectSessionFreshness,
+ 	isSessionLeaseStale,
+ 	readSessionLease,
+@@ -301,7 +302,7 @@ export default function (pi: ExtensionAPI) {
+ 		}
+ 	};
+ 
+-	const beginOwnershipHandoff = (ctx: ExtensionContext): { ok: boolean; reason: string } => {
++	const beginOwnershipHandoff = async (ctx: ExtensionContext): Promise<{ ok: boolean; reason: string }> => {
+ 		if (ownership.status !== "owned" || !ownership.handle || !ownershipLeaseOptions) {
+ 			return { ok: false, reason: ownership.reason };
+ 		}
+@@ -311,6 +312,27 @@ export default function (pi: ExtensionAPI) {
+ 		if (compactionInFlight || activeAttempt) {
+ 			return { ok: false, reason: "compaction is in progress" };
+ 		}
++		// A Pi Web UI host can leave an append-only disk tail that this runtime's
++		// SessionManager never loaded: an extension instance whose `pi` binding
++		// survived a session rebind/rehydration persists its snapshot through the
++		// OLDER SessionManager, so the entry reaches disk but not the live
++		// runtime's view (2026-09-15, session 01a0a410: `bg-shell-tasks` and
++		// `background-tasks` snapshots, 157 on disk vs 155 in memory, classified
++		// appendOnlyDiskAhead/canFastForward). That tail is not a competing writer,
++		// and every other path already adopts it (75% gate deferral, settled
++		// adoption, /autocompact75 resync). Handing off must do the same instead of
++		// fencing the live owner: adopt the tail, then apply the UNCHANGED strict
++		// handoff gate, so the pinned fingerprint is the whole file the target will
++		// verify. Every other mismatch — removal, reorder, rewritten or untrusted
++		// contents, or a failed adoption — still falls through to that gate, which
++		// refuses and fences exactly as before.
++		const handoffSessionFile = ctx.sessionManager.getSessionFile();
++		if (handoffSessionFile) {
++			const precheck = inspectSessionFreshness(handoffSessionFile, ctx.sessionManager, { requireMemoryContentMatch: true });
++			if (!precheck.fresh && precheck.appendOnlyDiskAhead === true) {
++				await adoptAppendOnlyDiskTail(ctx);
++			}
++		}
+ 		const safety = verifyCompactionSafety(ctx, { requireMemoryContentMatch: true, fenceOnAppendOnly: true });
+ 		if (!safety.ok || !ownership.handle || !ownershipLeaseOptions) return safety;
+ 		const previousHandle = ownership.handle;
+@@ -577,11 +599,9 @@ export default function (pi: ExtensionAPI) {
+ 		if (typeof lease.metadata.sessionFingerprint !== "string") {
+ 			return { ok: false, reason: "the handoff offer has no session fingerprint" };
+ 		}
+-		const beforeRefresh = fingerprintSessionFile(sessionFile);
+-		if (!beforeRefresh.ok || beforeRefresh.fingerprint !== lease.metadata.sessionFingerprint) {
+-			return { ok: false, reason: beforeRefresh.ok ? "the session changed after handoff was offered" : beforeRefresh.reason };
+-		}
+-		const refreshed = await synchronizeRuntimeToDiskTail(ctx, sessionFile, lease.metadata.sessionFingerprint);
++		const pin = inspectHandoffPin(sessionFile, lease.metadata.sessionFingerprint, lease.metadata.sessionBytes);
++		if (!pin.ok) return { ok: false, reason: pin.reason };
++		const refreshed = await synchronizeRuntimeToDiskTail(ctx, sessionFile, pin.fingerprint);
+ 		if (!refreshed.ok) return refreshed;
+ 		return { ok: true, reason: "fast-forwarded this target from the append-only handed-off JSONL" };
+ 	};
+@@ -1119,7 +1139,7 @@ export default function (pi: ExtensionAPI) {
+ 				return;
+ 			}
+ 			if (normalizedArgs === "handoff") {
+-				const result = beginOwnershipHandoff(ctx);
++				const result = await beginOwnershipHandoff(ctx);
+ 				announce(
+ 					ctx,
+ 					result.ok
+diff --git a/auto-compact-75/session-ownership.mjs b/auto-compact-75/session-ownership.mjs
+index d36fd2e..ae41fa2 100644
+--- a/auto-compact-75/session-ownership.mjs
++++ b/auto-compact-75/session-ownership.mjs
+@@ -293,6 +293,7 @@ export function beginSessionHandoff(handle, options = {}) {
+ 				state: "handing_off",
+ 				handedOffAt: resolved.now(),
+ 				sessionFingerprint: snapshot.fingerprint,
++				sessionBytes: snapshot.bytes,
+ 			};
+ 			replaceLeaseFile(handle.leaseFile, metadata);
+ 			return { status: "handing_off", handoff: leaseHandle(handle.leaseFile, metadata) };
+@@ -319,16 +320,13 @@ export function claimSessionLease(sessionFile, options = {}) {
+ 				if (typeof existing.metadata.sessionFingerprint !== "string") {
+ 					return { status: "uncertain", reason: "handoff offer has no session fingerprint; prepare the handoff again", owner: existing.metadata, leaseFile };
+ 				}
+-				const snapshot = fingerprintSessionFile(sessionFile);
+-				if (!snapshot.ok) return { status: "uncertain", reason: snapshot.reason, owner: existing.metadata, leaseFile };
+-				if (snapshot.fingerprint !== existing.metadata.sessionFingerprint) {
+-					return { status: "uncertain", reason: "session changed after the handoff was offered", owner: existing.metadata, leaseFile };
+-				}
++				const pin = inspectHandoffPin(sessionFile, existing.metadata.sessionFingerprint, existing.metadata.sessionBytes);
++				if (!pin.ok) return { status: "uncertain", reason: pin.reason, owner: existing.metadata, leaseFile };
+ 				options.beforeClaimPromotion?.();
+ 				rmSync(leaseFile, { force: true });
+ 				const handle = createLeaseFile(leaseFile, sessionFile, resolved);
+ 				const confirmed = fingerprintSessionFile(sessionFile);
+-				if (!confirmed.ok || confirmed.fingerprint !== existing.metadata.sessionFingerprint) {
++				if (!confirmed.ok || confirmed.fingerprint !== pin.fingerprint) {
+ 					rmSync(leaseFile, { force: true });
+ 					return {
+ 						status: "uncertain",
+@@ -337,7 +335,7 @@ export function claimSessionLease(sessionFile, options = {}) {
+ 						leaseFile,
+ 					};
+ 				}
+-				return { status: "owned", handle, recoveredStaleLease: false, claimedHandoff: true };
++				return { status: "owned", handle, recoveredStaleLease: false, claimedHandoff: true, appendOnlyGrowth: pin.appendOnlyGrowth };
+ 			}
+ 			if (leaseIsStale(existing, resolved)) {
+ 				rmSync(leaseFile, { force: true });
+@@ -409,12 +407,60 @@ export function fingerprintSessionFile(sessionFile) {
+ 		const after = statSync(sessionFile);
+ 		if (!stableStat(before, after)) return { ok: false, reason: "session file changed while fingerprinting" };
+ 		if (text.length > 0 && !text.endsWith("\n")) return { ok: false, reason: "session file is not newline-terminated" };
+-		return { ok: true, fingerprint: createHash("sha256").update(text).digest("hex") };
++		return { ok: true, fingerprint: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text, "utf8") };
+ 	} catch (error) {
+ 		return { ok: false, reason: `could not fingerprint session file: ${error instanceof Error ? error.message : String(error)}` };
+ 	}
+ }
+ 
++/**
++ * Verify a pinned handoff offer against the file on disk.
++ *
++ * The offer pins the offered file's SHA-256 together with its byte length. A
++ * whole-file equality check alone dead-ends every handoff in a Pi Web UI host:
++ * both the idle source and the freshly opened target carry extensions that
++ * persist a registry snapshot into the session JSONL (observed 2026-09-15:
++ * `bg-shell-tasks` and `background-tasks` entries appearing at session load),
++ * so the pinned bytes can legitimately gain whole appended entries between the
++ * offer and the claim.
++ *
++ * An offer therefore matches when EITHER the file is byte-identical, OR the
++ * pinned byte prefix is still byte-identical (SHA-256 over exactly the pinned
++ * length) and the file only grew with whole appended lines. Rewrites,
++ * reordering, truncation, partial writes, and a missing pinned length all fail
++ * closed, and the caller keeps the offer for diagnosis.
++ */
++export function inspectHandoffPin(sessionFile, pinnedFingerprint, pinnedBytes) {
++	try {
++		const before = statSync(sessionFile);
++		if (before.size > MAX_SESSION_FILE_BYTES) {
++			return { ok: false, reason: `session file exceeds ${MAX_SESSION_FILE_BYTES} bytes` };
++		}
++		const buffer = readFileSync(sessionFile);
++		const after = statSync(sessionFile);
++		if (!stableStat(before, after)) return { ok: false, reason: "session file changed while checking the handoff offer" };
++		if (buffer.length === 0 || buffer[buffer.length - 1] !== 0x0a) {
++			return { ok: false, reason: "session file is not newline-terminated" };
++		}
++		const fingerprint = createHash("sha256").update(buffer).digest("hex");
++		if (fingerprint === pinnedFingerprint) {
++			return { ok: true, fingerprint, bytes: buffer.length, appendOnlyGrowth: false };
++		}
++		// An offer written before the byte length was pinned cannot prove a
++		// prefix relationship; it keeps the original strictness.
++		if (!Number.isInteger(pinnedBytes) || pinnedBytes <= 0 || buffer.length < pinnedBytes) {
++			return { ok: false, reason: "session changed after the handoff was offered" };
++		}
++		const prefixFingerprint = createHash("sha256").update(buffer.subarray(0, pinnedBytes)).digest("hex");
++		if (prefixFingerprint !== pinnedFingerprint) {
++			return { ok: false, reason: "session changed after the handoff was offered" };
++		}
++		return { ok: true, fingerprint, bytes: buffer.length, appendOnlyGrowth: buffer.length > pinnedBytes };
++	} catch (error) {
++		return { ok: false, reason: `could not verify the handoff offer: ${error instanceof Error ? error.message : String(error)}` };
++	}
++}
++
+ export function inspectSessionFreshness(sessionFile, sessionManager, options = {}) {
+ 	const retries = Math.max(0, options.transientRetries ?? DEFAULT_TRANSIENT_FRESHNESS_RETRIES);
+ 	const io = options.io ?? { statSync, readFileSync };
+diff --git a/tests/auto-compact-75-ownership.test.mjs b/tests/auto-compact-75-ownership.test.mjs
+index 46122f2..a10d50d 100644
+--- a/tests/auto-compact-75-ownership.test.mjs
++++ b/tests/auto-compact-75-ownership.test.mjs
+@@ -84,10 +84,58 @@ const changedSource = ownership.acquireSessionLease(changedHandoffFile, { ...com
+ assert.equal(changedSource.status, "owned");
+ const changedOffer = ownership.beginSessionHandoff(changedSource.handle, common);
+ assert.equal(changedOffer.status, "handing_off");
+-await fsp.appendFile(changedHandoffFile, `${JSON.stringify({ type: "custom", id: "changed-after-offer", parentId: null })}\n`);
+-const changedClaim = ownership.claimSessionLease(changedHandoffFile, { ...common, pid: 304, mode: "target" });
+-assert.equal(changedClaim.status, "uncertain", "a handoff claim must reject JSONL changes made after the source offer");
+-assert.match(changedClaim.reason, /changed after.*handoff|fingerprint/iu);
++assert.equal(
++	typeof ownership.readSessionLease(changedHandoffFile, common).metadata.sessionBytes,
++	"number",
++	"the offer must pin the offered byte length so append-only growth can be proven",
++);
++await fsp.appendFile(changedHandoffFile, `${JSON.stringify({ type: "custom", id: "appended-after-offer", parentId: null })}\n`);
++const appendedClaim = ownership.claimSessionLease(changedHandoffFile, { ...common, pid: 304, mode: "target" });
++assert.equal(
++	appendedClaim.status,
++	"owned",
++	"an append-only growth after the offer must stay claimable: the host's own extensions persist snapshots into the idle session, so a whole-file pin would dead-end every handoff",
++);
++assert.equal(appendedClaim.claimedHandoff, true, "the append-only path is still a handoff claim, not a stale-lease recovery");
++assert.equal(ownership.releaseSessionLease(appendedClaim.handle, common), true);
++
++// Every non-append change after the offer must still refuse and keep the offer.
++const rewrittenHandoffFile = path.join(root, "rewritten-handoff.jsonl");
++const offeredEntry = { type: "custom", id: "offered-entry", parentId: null, data: { kept: true } };
++await fsp.writeFile(rewrittenHandoffFile, [
++	JSON.stringify({ type: "session", version: 3, id: "rewritten-handoff", cwd: root }),
++	JSON.stringify(offeredEntry),
++	"",
++].join("\n"));
++const rewrittenSource = ownership.acquireSessionLease(rewrittenHandoffFile, { ...common, pid: 313, mode: "source" });
++assert.equal(rewrittenSource.status, "owned");
++assert.equal(ownership.beginSessionHandoff(rewrittenSource.handle, common).status, "handing_off");
++await fsp.writeFile(rewrittenHandoffFile, [
++	JSON.stringify({ type: "session", version: 3, id: "rewritten-handoff", cwd: root }),
++	JSON.stringify({ ...offeredEntry, data: { kept: false } }),
++	"",
++].join("\n"));
++const rewrittenClaim = ownership.claimSessionLease(rewrittenHandoffFile, { ...common, pid: 314, mode: "target" });
++assert.equal(rewrittenClaim.status, "uncertain", "rewriting an offered entry must refuse the claim");
++assert.match(rewrittenClaim.reason, /changed after.*handoff|fingerprint/iu);
++assert.equal(
++	ownership.readSessionLease(rewrittenHandoffFile, common).metadata.state,
++	"handing_off",
++	"a refused claim must preserve the offer for diagnosis",
++);
++
++const truncatedHandoffFile = path.join(root, "truncated-handoff.jsonl");
++await fsp.writeFile(truncatedHandoffFile, [
++	JSON.stringify({ type: "session", version: 3, id: "truncated-handoff", cwd: root }),
++	JSON.stringify({ type: "custom", id: "truncated-entry", parentId: null }),
++	"",
++].join("\n"));
++const truncatedSource = ownership.acquireSessionLease(truncatedHandoffFile, { ...common, pid: 323, mode: "source" });
++assert.equal(truncatedSource.status, "owned");
++assert.equal(ownership.beginSessionHandoff(truncatedSource.handle, common).status, "handing_off");
++await fsp.writeFile(truncatedHandoffFile, `${JSON.stringify({ type: "session", version: 3, id: "truncated-handoff", cwd: root })}\n`);
++const truncatedClaim = ownership.claimSessionLease(truncatedHandoffFile, { ...common, pid: 324, mode: "target" });
++assert.equal(truncatedClaim.status, "uncertain", "removing offered content must refuse the claim");
+ 
+ const promotionRaceFile = path.join(root, "promotion-race.jsonl");
+ await fsp.writeFile(promotionRaceFile, `${JSON.stringify({ type: "session", version: 3, id: "promotion-race", cwd: root })}\n`);
+diff --git a/tests/extension-session-ownership-runtime.test.mjs b/tests/extension-session-ownership-runtime.test.mjs
+index b6c1aa9..21ba273 100644
+--- a/tests/extension-session-ownership-runtime.test.mjs
++++ b/tests/extension-session-ownership-runtime.test.mjs
+@@ -10,6 +10,7 @@ import {
+ } from "/root/pi-web-ui/node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js";
+ import { createEventBus } from "/root/pi-web-ui/node_modules/@earendil-works/pi-coding-agent/dist/core/event-bus.js";
+ import { resetDiagnosticSink, setDiagnosticSink } from "../auto-compact-75/diagnostics.mjs";
++import { fingerprintSessionFile, leasePathForSession } from "../auto-compact-75/session-ownership.mjs";
+ const wtPath = (rel) => fileURLToPath(new URL(rel, import.meta.url));
+ 
+ const root = await fs.mkdtemp(path.join(os.tmpdir(), "extension-session-ownership-"));
+@@ -573,6 +574,164 @@ try {
+ 	await resyncTarget.extension.commands.get("autocompact75").handler("resync", resyncTarget.ctx);
+ 	assert.equal(resyncTarget.entries.at(-1)?.id, resyncSuffixFollowUp.id, "an idle resync must adopt a new append-only suffix");
+ 	await resyncTarget.emit("session_shutdown", { reason: "quit" });
++
++	// A Pi Web UI host can leave an append-only disk tail that this runtime's
++	// SessionManager never loaded: an extension instance whose `pi` binding
++	// survived a session rebind/rehydration appends its snapshot through the
++	// OLDER SessionManager, so the entry reaches disk but not the live runtime's
++	// view. Observed 2026-09-15 on session 01a0a410 (`bg-shell-tasks` and
++	// `background-tasks` snapshots written at 08:18:52/53; 157 entries on disk vs
++	// 155 in memory at the 08:20:14 `/autocompact75 handoff`): the handoff gate
++	// treated that host-induced tail as a competing writer, refused, and fenced
++	// the live owner. An idle owner that still holds the lease must instead adopt
++	// the tail and hand off against the whole-file fingerprint.
++	const hostTailUser = { type: "message", id: "host-tail-user", parentId: null, message: { role: "user", content: "task" } };
++	const hostTailAssistant = {
++		type: "message",
++		id: "host-tail-assistant",
++		parentId: "host-tail-user",
++		message: { role: "assistant", content: [], stopReason: "stop" },
++	};
++	await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", version: 3, id: "host-tail-session", cwd: root })}\n`);
++	// Scenario boundary: the single harness session file is reused, so clear any
++	// offer the previous scenario deliberately left behind.
++	await fs.rm(leasePathForSession(sessionFile, leaseDir), { force: true });
++	const hostTailOwner = await createHarness("host-tail-owner");
++	hostTailOwner.setContextUsage({ tokens: 1_000, percent: 1, contextWindow: 100_000 });
++	// Owner and disk stay in lockstep while the session loads; the real sequence is
++	// that the runtime was loaded and idle and the sibling append landed afterwards.
++	for (const entry of [hostTailUser, hostTailAssistant]) {
++		await fs.appendFile(sessionFile, `${JSON.stringify(entry)}\n`);
++		hostTailOwner.appendLoadedEntry(entry);
++	}
++	// Sibling-runtime append: append-only, written to disk only (never loaded here).
++	const hostTailSiblingSnapshot = {
++		type: "custom",
++		id: "host-tail-bg-shell",
++		parentId: "host-tail-assistant",
++		customType: "bg-shell-tasks",
++		data: { tasks: [] },
++	};
++	await fs.appendFile(sessionFile, `${JSON.stringify(hostTailSiblingSnapshot)}\n`);
++	const preHandoffTool = await hostTailOwner.emit("tool_call", {
++		toolCallId: "host-tail-pre-tool",
++		toolName: "bash",
++		input: { command: "true" },
++	});
++	assert.notEqual(preHandoffTool?.block, true, "an append-only disk tail must not fence an idle lease-holding owner before handoff");
++	await hostTailOwner.extension.commands.get("autocompact75").handler("handoff", hostTailOwner.ctx);
++	assert.match(
++		hostTailOwner.notifications.at(-1)?.message ?? "",
++		/handoff ready/iu,
++		"handoff must adopt an append-only disk tail written by the hosting process instead of refusing it as external divergence",
++	);
++	assert.equal(
++		hostTailOwner.entries.at(-1)?.id,
++		hostTailSiblingSnapshot.id,
++		"the source must adopt the disk tail so the pinned handoff fingerprint covers the whole file",
++	);
++	const hostTailPinned = fingerprintSessionFile(sessionFile);
++	assert.equal(hostTailPinned.ok, true);
++	const hostTailLease = JSON.parse(await fs.readFile(leasePathForSession(sessionFile, leaseDir), "utf8"));
++	assert.equal(hostTailLease.state, "handing_off", "the offered handoff must be visible to a target runtime");
++	assert.equal(
++		hostTailLease.sessionFingerprint,
++		hostTailPinned.fingerprint,
++		"the handoff must pin the whole-file fingerprint that includes the adopted tail",
++	);
++	const hostTailPostInput = await hostTailOwner.emit("input", { text: "continue", source: "rpc" });
++	assert.equal(hostTailPostInput?.action, "handled", "the source must still fence itself after a successful handoff");
++	// Genuine divergence must keep refusing and fencing: removal is never adoptable.
++	const hostTailDivergentUser = { type: "message", id: "host-tail-divergent-user", parentId: null, message: { role: "user", content: "task" } };
++	const hostTailDivergentAssistant = {
++		type: "message",
++		id: "host-tail-divergent-assistant",
++		parentId: "host-tail-divergent-user",
++		message: { role: "assistant", content: [], stopReason: "stop" },
++	};
++	await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", version: 3, id: "host-tail-divergent-session", cwd: root })}\n`);
++	await fs.rm(leasePathForSession(sessionFile, leaseDir), { force: true });
++	const hostTailDivergentOwner = await createHarness("host-tail-divergent-owner");
++	hostTailDivergentOwner.setContextUsage({ tokens: 1_000, percent: 1, contextWindow: 100_000 });
++	for (const entry of [hostTailDivergentUser, hostTailDivergentAssistant]) {
++		await fs.appendFile(sessionFile, `${JSON.stringify(entry)}\n`);
++		hostTailDivergentOwner.appendLoadedEntry(entry);
++	}
++	// Rewrite the loaded tail entry instead of inserting a new one:
++	// a rewritten entry is never adoptable.
++	const rewrittenTail = { ...hostTailDivergentAssistant, message: { role: "assistant", content: [], stopReason: "aborted" } };
++	await fs.writeFile(sessionFile, [
++		JSON.stringify({ type: "session", version: 3, id: "host-tail-divergent-session", cwd: root }),
++		JSON.stringify(hostTailDivergentUser),
++		JSON.stringify(rewrittenTail),
++		"",
++	].join("\n"));
++	await hostTailDivergentOwner.extension.commands.get("autocompact75").handler("handoff", hostTailDivergentOwner.ctx);
++	assert.match(
++		hostTailDivergentOwner.notifications.at(-1)?.message ?? "",
++		/handoff refused/iu,
++		"a rewritten (non-append-only) disk state must still refuse the handoff",
++	);
++	const hostTailDivergentTool = await hostTailDivergentOwner.emit("tool_call", {
++		toolCallId: "host-tail-divergent-tool",
++		toolName: "bash",
++		input: { command: "true" },
++	});
++	assert.equal(hostTailDivergentTool?.block, true, "genuine divergence must still fence the live owner");
++	await hostTailDivergentOwner.emit("session_shutdown", { reason: "quit" });
++
++	// Target side of the same host behaviour: the runtime that opens a handed-off
++	// session persists its own sibling snapshots while loading, so the file has
++	// grown append-only by the time `/autocompact75 claim` runs. The claim must
++	// adopt that growth (the pinned prefix is byte-identical) instead of refusing.
++	const claimGrowthUser = { type: "message", id: "claim-growth-user", parentId: null, message: { role: "user", content: "task" } };
++	const claimGrowthAssistant = {
++		type: "message",
++		id: "claim-growth-assistant",
++		parentId: "claim-growth-user",
++		message: { role: "assistant", content: [], stopReason: "stop" },
++	};
++	await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", version: 3, id: "claim-growth-session", cwd: root })}\n`);
++	await fs.rm(leasePathForSession(sessionFile, leaseDir), { force: true });
++	const claimGrowthSource = await createHarness("claim-growth-source");
++	claimGrowthSource.setContextUsage({ tokens: 1_000, percent: 1, contextWindow: 100_000 });
++	for (const entry of [claimGrowthUser, claimGrowthAssistant]) {
++		await fs.appendFile(sessionFile, `${JSON.stringify(entry)}\n`);
++		claimGrowthSource.appendLoadedEntry(entry);
++	}
++	await claimGrowthSource.extension.commands.get("autocompact75").handler("handoff", claimGrowthSource.ctx);
++	assert.match(claimGrowthSource.notifications.at(-1)?.message ?? "", /handoff ready/iu, "the source offer must succeed before the target opens");
++	const claimGrowthTarget = await createHarness("claim-growth-target");
++	claimGrowthTarget.setContextUsage({ tokens: 1_000, percent: 1, contextWindow: 100_000 });
++	claimGrowthTarget.appendLoadedEntry(claimGrowthUser);
++	claimGrowthTarget.appendLoadedEntry(claimGrowthAssistant);
++	// The target's own load-time sibling persistence, landing after the offer.
++	const claimGrowthTargetSnapshot = {
++		type: "custom",
++		id: "claim-growth-target-snapshot",
++		parentId: "claim-growth-assistant",
++		customType: "bg-shell-tasks",
++		data: { tasks: [] },
++	};
++	await fs.appendFile(sessionFile, `${JSON.stringify(claimGrowthTargetSnapshot)}\n`);
++	await claimGrowthTarget.extension.commands.get("autocompact75").handler("claim", claimGrowthTarget.ctx);
++	assert.match(
++		claimGrowthTarget.notifications.at(-1)?.message ?? "",
++		/fast-forwarded.*ownership claim complete/iu,
++		"a target must claim a handoff whose pinned prefix only gained appended entries",
++	);
++	assert.equal(
++		claimGrowthTarget.entries.at(-1)?.id,
++		claimGrowthTargetSnapshot.id,
++		"the claiming target must adopt the appended entries it had not loaded",
++	);
++	const claimGrowthTool = await claimGrowthTarget.emit("tool_call", {
++		toolCallId: "claim-growth-tool",
++		toolName: "bash",
++		input: { command: "true" },
++	});
++	assert.notEqual(claimGrowthTool?.block, true, "a successful claim must leave the target unfenced and owned");
++	await claimGrowthTarget.emit("session_shutdown", { reason: "quit" });
+ } finally {
+ 	globalThis.setInterval = originalSetInterval;
+ 	globalThis.clearInterval = originalClearInterval;

@@ -1,0 +1,5 @@
+### LIVE 2: allow path inside an isolated systemd scope (unit=child-stability-guard-1789463035)
+Running as unit: child-stability-guard-1789463035.scope; invocation ID: 4657658e44d34b5a830845f026bc1bb8
+cgroup path = /system.slice/child-stability-guard-1789463035.scope
+verdict = {"allowed":true,"reason":"outside-production-cgroup"}
+EXIT=0

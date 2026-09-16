@@ -1,0 +1,14 @@
+### CONDUCTOR VERIFICATION — stability instruments, NO restart, NO install (2026-09-15 09:4xZ)
+
+--- 1. systemd-stop-audit.sh pre (simulated; writes one audit line, always exits 0)
+STOP-AUDIT phase=pre ts=2026-09-15T09:44:10Z invocation=conductor-verify service_result=unset exit_code=unset exit_status=unset mainpid=1 main_alive=yes active_state=active sub_state=running unit_result=success nrestarts=1 elapsed_s=unset main_started=Tue 2026-09-15 08:30:36 UTC cgroup_procs=1 procs=MainThread
+   exit=0
+
+--- 2. restart-pi-web-ui.sh --dry-run (must NOT restart)
+RESTART-REQUESTED ts=2026-09-15T09:44:10Z uid=0 user=root pid=2326810 ppid=2326781 tty=not a tty cwd=/root/pi-web-ui-wt-stability reason=conductor\ verification\ dry\ run argv=--reason\ conductor\ verification\ dry\ run\ --dry-run ancestors=2326810:bash>2326781:bash>2326779:bash>2244152:pi>2139127:bash>13108:tmux: server
+restart-pi-web-ui: dry run — would restart pi-web-ui.service
+   exit=0
+
+--- 3. audit file tail
+STOP-AUDIT phase=pre ts=2026-09-15T09:44:10Z invocation=conductor-verify service_result=unset exit_code=unset exit_status=unset mainpid=1 main_alive=yes active_state=active sub_state=running unit_result=success nrestarts=1 elapsed_s=unset main_started=Tue 2026-09-15 08:30:36 UTC cgroup_procs=1 procs=MainThread
+RESTART-REQUESTED ts=2026-09-15T09:44:10Z uid=0 user=root pid=2326810 ppid=2326781 tty=not a tty cwd=/root/pi-web-ui-wt-stability reason=conductor\ verification\ dry\ run argv=--reason\ conductor\ verification\ dry\ run\ --dry-run ancestors=2326810:bash>2326781:bash>2326779:bash>2244152:pi>2139127:bash>13108:tmux: server

@@ -1,0 +1,25 @@
+
+ RUN  v1.6.1 /root/pi-web-ui-wt-stability/server
+
+ ✓ tests/unit/shutdown-coordinator-timing.test.ts  (4 tests) 7ms
+ ✓ tests/unit/watchdog-policy.test.ts  (8 tests) 7ms
+ ✓ tests/unit/validation-cgroup-guard.test.ts  (10 tests) 7ms
+ ✓ tests/unit/shutdown-escape-policy.test.ts  (7 tests) 10ms
+ ✓ tests/unit/shutdown-coordinator.test.ts  (4 tests) 25ms
+ ✓ tests/unit/systemd-notifier-watchdog.test.ts  (6 tests) 22ms
+ ✓ tests/unit/systemd-notifier.test.ts  (3 tests) 29ms
+ ✓ tests/unit/sync-stderr.test.ts  (5 tests) 29ms
+ ✓ tests/unit/systemd-watchdog-worker.test.ts  (6 tests) 29ms
+ ✓ tests/unit/shutdown-signal.test.ts  (9 tests) 12ms
+ ✓ tests/unit/shutdown-escape-worker.test.ts  (6 tests) 26ms
+ ✓ tests/unit/http-server-close.test.ts  (6 tests) 134ms
+ ✓ tests/unit/fatal-error-handlers.test.ts  (4 tests) 16ms
+ ✓ tests/integration/validation-server-cgroup-guard.test.ts  (2 tests) 611ms
+ ✓ tests/integration/stop-audit-scripts.test.ts  (11 tests) 1047ms
+
+ Test Files  15 passed (15)
+      Tests  91 passed (91)
+   Start at  09:15:21
+   Duration  1.71s (transform 1.39s, setup 377ms, collect 2.19s, tests 2.01s, environment 8ms, prepare 1.75s)
+
+JSON report written to /root/pi-web-ui-wt-stability/server/test-results.json

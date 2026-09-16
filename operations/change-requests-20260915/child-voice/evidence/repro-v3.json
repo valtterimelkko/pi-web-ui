@@ -1,0 +1,1376 @@
+{
+  "tag": "v3",
+  "steps": {
+    "sessions.preexistingRemoved": 2,
+    "sessions": {
+      "a": {
+        "status": 201,
+        "id": "01a0a468-6549-75d2-b989-3aa2db75c236"
+      },
+      "b": {
+        "status": 201,
+        "id": "01a0a468-67ce-75d2-b989-3aa49d436101"
+      }
+    },
+    "login": "ok",
+    "voiceMode.A": {
+      "sessionId": "01a0a468-6549-75d2-b989-3aa2db75c236",
+      "verified": true,
+      "bound": {
+        "currentSessionId": "01a0a468-6549-75d2-b989-3aa2db75c236",
+        "sessionCount": 2,
+        "activeSessions": [
+          "01a0a468-67ce-75d2-b989-3aa49d436101",
+          "01a0a468-6549-75d2-b989-3aa2db75c236"
+        ]
+      }
+    },
+    "voiceMode.B": {
+      "sessionId": "01a0a468-67ce-75d2-b989-3aa49d436101",
+      "verified": true,
+      "bound": {
+        "currentSessionId": "01a0a468-67ce-75d2-b989-3aa49d436101",
+        "sessionCount": 2,
+        "activeSessions": [
+          "01a0a468-67ce-75d2-b989-3aa49d436101",
+          "01a0a468-6549-75d2-b989-3aa2db75c236"
+        ]
+      }
+    },
+    "mic.both.before": {
+      "A": {
+        "present": true,
+        "label": "Start recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700",
+        "outline": "inactive",
+        "floor": "Ready — tap to speak"
+      },
+      "B": {
+        "present": true,
+        "label": "Start recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700",
+        "outline": "inactive",
+        "floor": "Ready — tap to speak"
+      }
+    },
+    "lane.A.recording": {
+      "mic": {
+        "present": true,
+        "label": "Stop recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse",
+        "outline": "red-recording",
+        "floor": "You have the floor"
+      },
+      "probe": {
+        "gum": [
+          {
+            "seq": 0,
+            "at": 1789464703809,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464703864,
+            "trackIds": [
+              "6e08b12e-39f3-4454-a701-9a93b862fbcc"
+            ]
+          }
+        ],
+        "recorders": [
+          {
+            "seq": 0,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "recording",
+            "events": [
+              {
+                "at": 1789464703871,
+                "type": "start",
+                "arg": 1000
+              }
+            ],
+            "tracks": [
+              "audio:live"
+            ]
+          }
+        ],
+        "recordersRecording": 1,
+        "trackLiveness": [
+          {
+            "id": "6e08b12e",
+            "kind": "audio",
+            "live": true
+          }
+        ],
+        "liveTracksNow": 1,
+        "dictationCalls": [
+          {
+            "at": 1789464702243,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464702729,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464703864,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464704889,
+            "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      }
+    },
+    "lane.B.recording": {
+      "mic": {
+        "present": true,
+        "label": "Stop recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse",
+        "outline": "red-recording",
+        "floor": "You have the floor"
+      },
+      "probe": {
+        "gum": [
+          {
+            "seq": 0,
+            "at": 1789464705909,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464705924,
+            "trackIds": [
+              "f6352499-6a05-4724-bc7e-7b79d682669d"
+            ]
+          }
+        ],
+        "recorders": [
+          {
+            "seq": 0,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "recording",
+            "events": [
+              {
+                "at": 1789464705932,
+                "type": "start",
+                "arg": 1000
+              }
+            ],
+            "tracks": [
+              "audio:live"
+            ]
+          }
+        ],
+        "recordersRecording": 1,
+        "trackLiveness": [
+          {
+            "id": "f6352499",
+            "kind": "audio",
+            "live": true
+          }
+        ],
+        "liveTracksNow": 1,
+        "dictationCalls": [
+          {
+            "at": 1789464703186,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464703666,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464705924,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464706947,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      }
+    },
+    "lane.A.whileTabBHiddenThenShown": {
+      "mic": {
+        "present": true,
+        "label": "Stop recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse",
+        "outline": "red-recording",
+        "floor": "You have the floor"
+      },
+      "probe": {
+        "gum": [
+          {
+            "seq": 0,
+            "at": 1789464703809,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464703864,
+            "trackIds": [
+              "6e08b12e-39f3-4454-a701-9a93b862fbcc"
+            ]
+          }
+        ],
+        "recorders": [
+          {
+            "seq": 0,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "recording",
+            "events": [
+              {
+                "at": 1789464703871,
+                "type": "start",
+                "arg": 1000
+              }
+            ],
+            "tracks": [
+              "audio:live"
+            ]
+          }
+        ],
+        "recordersRecording": 1,
+        "trackLiveness": [
+          {
+            "id": "6e08b12e",
+            "kind": "audio",
+            "live": true
+          }
+        ],
+        "liveTracksNow": 1,
+        "dictationCalls": [
+          {
+            "at": 1789464702243,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464702729,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464703864,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464704889,
+            "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464705907,
+            "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464706927,
+            "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464707947,
+            "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      }
+    },
+    "capture.tabA.afterExitWhileRecording": {
+      "micButtonPresentAfterExit": {
+        "present": false,
+        "reason": "no mic button in this tab"
+      },
+      "recordersRecording": 1,
+      "liveTracksNow": 1,
+      "trackLiveness": [
+        {
+          "id": "6e08b12e",
+          "kind": "audio",
+          "live": true
+        }
+      ],
+      "recorders": [
+        {
+          "seq": 0,
+          "mimeType": "audio/webm;codecs=opus",
+          "liveState": "recording",
+          "events": [
+            {
+              "at": 1789464703871,
+              "type": "start",
+              "arg": 1000
+            }
+          ],
+          "tracks": [
+            "audio:live"
+          ]
+        }
+      ],
+      "dictationCalls": [
+        {
+          "at": 1789464702243,
+          "url": "/api/dictation/warmup",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464702729,
+          "url": "/api/dictation/warmup",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464703864,
+          "url": "/api/dictation/start",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464704889,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464705907,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464706927,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464707947,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464708967,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464709987,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        }
+      ]
+    },
+    "lane.B.afterStop": {
+      "mic": {
+        "present": true,
+        "label": "Start recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700",
+        "outline": "inactive",
+        "floor": "Ready — tap to speak"
+      },
+      "probe": {
+        "gum": [
+          {
+            "seq": 0,
+            "at": 1789464705909,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464705924,
+            "trackIds": [
+              "f6352499-6a05-4724-bc7e-7b79d682669d"
+            ]
+          }
+        ],
+        "recorders": [
+          {
+            "seq": 0,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "inactive",
+            "events": [
+              {
+                "at": 1789464705932,
+                "type": "start",
+                "arg": 1000
+              },
+              {
+                "at": 1789464710742,
+                "type": "stop"
+              }
+            ],
+            "tracks": [
+              "audio:ended"
+            ]
+          }
+        ],
+        "recordersRecording": 0,
+        "trackLiveness": [
+          {
+            "id": "f6352499",
+            "kind": "audio",
+            "live": true
+          }
+        ],
+        "liveTracksNow": 1,
+        "dictationCalls": [
+          {
+            "at": 1789464703186,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464703666,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464705924,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464706947,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464707968,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464708988,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710008,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710754,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710762,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/finish",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      }
+    },
+    "start.doubleClick.fastDevice": {
+      "mic": {
+        "present": true,
+        "label": "Start recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700",
+        "outline": "inactive",
+        "floor": "Ready — tap to speak"
+      },
+      "probe": {
+        "gum": [
+          {
+            "seq": 0,
+            "at": 1789464705909,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464705924,
+            "trackIds": [
+              "f6352499-6a05-4724-bc7e-7b79d682669d"
+            ]
+          },
+          {
+            "seq": 1,
+            "at": 1789464714763,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464714767,
+            "trackIds": [
+              "67c2d974-7a14-4a77-ab8e-930a8c71b244"
+            ]
+          }
+        ],
+        "recorders": [
+          {
+            "seq": 0,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "inactive",
+            "events": [
+              {
+                "at": 1789464705932,
+                "type": "start",
+                "arg": 1000
+              },
+              {
+                "at": 1789464710742,
+                "type": "stop"
+              }
+            ],
+            "tracks": [
+              "audio:ended"
+            ]
+          },
+          {
+            "seq": 1,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "inactive",
+            "events": [
+              {
+                "at": 1789464714772,
+                "type": "start",
+                "arg": 1000
+              },
+              {
+                "at": 1789464714844,
+                "type": "stop"
+              }
+            ],
+            "tracks": [
+              "audio:ended"
+            ]
+          }
+        ],
+        "recordersRecording": 0,
+        "trackLiveness": [
+          {
+            "id": "f6352499",
+            "kind": "audio",
+            "live": true
+          },
+          {
+            "id": "67c2d974",
+            "kind": "audio",
+            "live": true
+          }
+        ],
+        "liveTracksNow": 2,
+        "dictationCalls": [
+          {
+            "at": 1789464703186,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464703666,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464705924,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464706947,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464707968,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464708988,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710008,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710754,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710762,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/finish",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464714767,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464714848,
+            "url": "/api/dictation/4765a48e-3669-4988-876e-3552a9455c83/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464714855,
+            "url": "/api/dictation/4765a48e-3669-4988-876e-3552a9455c83/finish",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      }
+    },
+    "start.doubleClick.slowDevice": {
+      "mic": {
+        "present": true,
+        "label": "Stop recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse",
+        "outline": "red-recording",
+        "floor": "You have the floor"
+      },
+      "probe": {
+        "gum": [
+          {
+            "seq": 0,
+            "at": 1789464705909,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464705924,
+            "trackIds": [
+              "f6352499-6a05-4724-bc7e-7b79d682669d"
+            ]
+          },
+          {
+            "seq": 1,
+            "at": 1789464714763,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464714767,
+            "trackIds": [
+              "67c2d974-7a14-4a77-ab8e-930a8c71b244"
+            ]
+          },
+          {
+            "seq": 2,
+            "at": 1789464719759,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464719764,
+            "trackIds": [
+              "aba3cbc9-83ca-408f-8b03-a24e134ef826"
+            ]
+          },
+          {
+            "seq": 3,
+            "at": 1789464719879,
+            "constraints": {
+              "audio": true,
+              "video": false
+            },
+            "status": "resolved",
+            "atResolved": 1789464719882,
+            "trackIds": [
+              "5539327c-9b62-4bc9-821b-25b759dac546"
+            ]
+          }
+        ],
+        "recorders": [
+          {
+            "seq": 0,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "inactive",
+            "events": [
+              {
+                "at": 1789464705932,
+                "type": "start",
+                "arg": 1000
+              },
+              {
+                "at": 1789464710742,
+                "type": "stop"
+              }
+            ],
+            "tracks": [
+              "audio:ended"
+            ]
+          },
+          {
+            "seq": 1,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "inactive",
+            "events": [
+              {
+                "at": 1789464714772,
+                "type": "start",
+                "arg": 1000
+              },
+              {
+                "at": 1789464714844,
+                "type": "stop"
+              }
+            ],
+            "tracks": [
+              "audio:ended"
+            ]
+          },
+          {
+            "seq": 2,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "recording",
+            "events": [
+              {
+                "at": 1789464719773,
+                "type": "start",
+                "arg": 1000
+              }
+            ],
+            "tracks": [
+              "audio:live"
+            ]
+          },
+          {
+            "seq": 3,
+            "mimeType": "audio/webm;codecs=opus",
+            "liveState": "recording",
+            "events": [
+              {
+                "at": 1789464719889,
+                "type": "start",
+                "arg": 1000
+              }
+            ],
+            "tracks": [
+              "audio:live"
+            ]
+          }
+        ],
+        "recordersRecording": 2,
+        "trackLiveness": [
+          {
+            "id": "f6352499",
+            "kind": "audio",
+            "live": true
+          },
+          {
+            "id": "67c2d974",
+            "kind": "audio",
+            "live": true
+          },
+          {
+            "id": "aba3cbc9",
+            "kind": "audio",
+            "live": true
+          },
+          {
+            "id": "5539327c",
+            "kind": "audio",
+            "live": true
+          }
+        ],
+        "liveTracksNow": 4,
+        "dictationCalls": [
+          {
+            "at": 1789464703186,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464703666,
+            "url": "/api/dictation/warmup",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464705924,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464706947,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464707968,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464708988,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710008,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710754,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464710762,
+            "url": "/api/dictation/ac6e6fc9-7357-4c07-b25d-d4880bc121c7/finish",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464714767,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464714848,
+            "url": "/api/dictation/4765a48e-3669-4988-876e-3552a9455c83/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464714855,
+            "url": "/api/dictation/4765a48e-3669-4988-876e-3552a9455c83/finish",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464719764,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464719882,
+            "url": "/api/dictation/start",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464720787,
+            "url": "/api/dictation/e529da7e-1c27-479f-a596-d61e7d845f4a/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464720907,
+            "url": "/api/dictation/e529da7e-1c27-479f-a596-d61e7d845f4a/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464721807,
+            "url": "/api/dictation/e529da7e-1c27-479f-a596-d61e7d845f4a/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464721927,
+            "url": "/api/dictation/e529da7e-1c27-479f-a596-d61e7d845f4a/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464722827,
+            "url": "/api/dictation/e529da7e-1c27-479f-a596-d61e7d845f4a/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464722947,
+            "url": "/api/dictation/e529da7e-1c27-479f-a596-d61e7d845f4a/stream",
+            "method": "POST",
+            "status": 200
+          },
+          {
+            "at": 1789464723846,
+            "url": "/api/dictation/e529da7e-1c27-479f-a596-d61e7d845f4a/stream",
+            "method": "POST",
+            "status": 200
+          }
+        ],
+        "errors": [],
+        "unhandled": []
+      }
+    },
+    "start.doubleClick.thenOneTapStop": {
+      "mic": {
+        "present": true,
+        "label": "Start recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700",
+        "outline": "inactive",
+        "floor": "Ready — tap to speak"
+      },
+      "recordersRecording": 1,
+      "liveTracksNow": 4,
+      "recorders": [
+        {
+          "seq": 0,
+          "mimeType": "audio/webm;codecs=opus",
+          "liveState": "inactive",
+          "events": [
+            {
+              "at": 1789464705932,
+              "type": "start",
+              "arg": 1000
+            },
+            {
+              "at": 1789464710742,
+              "type": "stop"
+            }
+          ],
+          "tracks": [
+            "audio:ended"
+          ]
+        },
+        {
+          "seq": 1,
+          "mimeType": "audio/webm;codecs=opus",
+          "liveState": "inactive",
+          "events": [
+            {
+              "at": 1789464714772,
+              "type": "start",
+              "arg": 1000
+            },
+            {
+              "at": 1789464714844,
+              "type": "stop"
+            }
+          ],
+          "tracks": [
+            "audio:ended"
+          ]
+        },
+        {
+          "seq": 2,
+          "mimeType": "audio/webm;codecs=opus",
+          "liveState": "recording",
+          "events": [
+            {
+              "at": 1789464719773,
+              "type": "start",
+              "arg": 1000
+            }
+          ],
+          "tracks": [
+            "audio:live"
+          ]
+        },
+        {
+          "seq": 3,
+          "mimeType": "audio/webm;codecs=opus",
+          "liveState": "inactive",
+          "events": [
+            {
+              "at": 1789464719889,
+              "type": "start",
+              "arg": 1000
+            },
+            {
+              "at": 1789464723991,
+              "type": "stop"
+            }
+          ],
+          "tracks": [
+            "audio:ended"
+          ]
+        }
+      ],
+      "trackLiveness": [
+        {
+          "id": "f6352499",
+          "kind": "audio",
+          "live": true
+        },
+        {
+          "id": "67c2d974",
+          "kind": "audio",
+          "live": true
+        },
+        {
+          "id": "aba3cbc9",
+          "kind": "audio",
+          "live": true
+        },
+        {
+          "id": "5539327c",
+          "kind": "audio",
+          "live": true
+        }
+      ],
+      "verdict": "LEAK PROVEN: after one tap the app shows idle while a MediaRecorder is still recording and the microphone track is still live"
+    },
+    "crossTab.laneB.reset": {
+      "mic": {
+        "present": true,
+        "label": "Start recording",
+        "disabled": false,
+        "className": "w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation active:scale-95 bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700",
+        "outline": "inactive",
+        "floor": "Ready — tap to speak"
+      }
+    },
+    "crossTab.independentArbiters": {
+      "tabB": {
+        "submitted": "queued",
+        "playing": true,
+        "current": {
+          "id": "cross-tab-answer",
+          "tier": 3,
+          "chunkIndex": 0,
+          "totalChunks": 2
+        }
+      },
+      "tabA": {
+        "playing": false,
+        "current": null,
+        "queued": []
+      },
+      "verdict": "two independent per-tab arbiters: tab B is playing an intent tab A cannot see"
+    },
+    "crossTab.floorTakenInTabA": {
+      "tabAFloorHeld": true,
+      "tabBPlaying": true,
+      "tabBDucked": false,
+      "tabBVolumeEvents": [],
+      "verdict": "NO cross-tab coordination: tab B kept playing at full volume while tab A held the floor"
+    }
+  },
+  "screenshots": [
+    "10-v3-logged-in.png",
+    "11-v3-tabA-voice-mode.png",
+    "12-v3-tabB-voice-mode.png",
+    "13-v3-tabA-recording.png",
+    "14-v3-both-recording-tabB-foreground.png",
+    "15-v3-both-recording-tabA-foreground.png",
+    "16-v3-tabA-after-exit-while-recording.png",
+    "17-v3-tabB-after-double-click.png",
+    "18-v3-tabB-slowdevice-double-click.png",
+    "19-v3-tabB-one-tap-after-double-start.png"
+  ],
+  "notes": [
+    "Tab A still recording; now exiting Voice Mode in tab A without stopping the mic."
+  ],
+  "final": {
+    "A": {
+      "gum": [
+        {
+          "seq": 0,
+          "at": 1789464703809,
+          "constraints": {
+            "audio": true,
+            "video": false
+          },
+          "status": "resolved",
+          "atResolved": 1789464703864,
+          "trackIds": [
+            "6e08b12e-39f3-4454-a701-9a93b862fbcc"
+          ]
+        }
+      ],
+      "recorders": [
+        {
+          "seq": 0,
+          "mimeType": "audio/webm;codecs=opus",
+          "liveState": "recording",
+          "events": [
+            {
+              "at": 1789464703871,
+              "type": "start",
+              "arg": 1000
+            }
+          ],
+          "tracks": [
+            "audio:live"
+          ]
+        }
+      ],
+      "recordersRecording": 1,
+      "trackLiveness": [
+        {
+          "id": "6e08b12e",
+          "kind": "audio",
+          "live": true
+        }
+      ],
+      "liveTracksNow": 1,
+      "dictationCalls": [
+        {
+          "at": 1789464702243,
+          "url": "/api/dictation/warmup",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464702729,
+          "url": "/api/dictation/warmup",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464703864,
+          "url": "/api/dictation/start",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464704889,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464705907,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464706927,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464707947,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464708967,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464709987,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464711007,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464712028,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464713047,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464714067,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464715087,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464716107,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464717128,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464718147,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464719167,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464720187,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464721208,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464722227,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464723248,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464724267,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464725287,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464726307,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464727327,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464728346,
+          "url": "/api/dictation/c4cbc6c0-6fc8-4710-b0ce-be8c3175b137/stream",
+          "method": "POST",
+          "status": 200
+        }
+      ],
+      "errors": [],
+      "unhandled": []
+    },
+    "B": {
+      "gum": [],
+      "recorders": [],
+      "recordersRecording": 0,
+      "trackLiveness": [],
+      "liveTracksNow": 0,
+      "dictationCalls": [
+        {
+          "at": 1789464728251,
+          "url": "/api/dictation/warmup",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "at": 1789464728394,
+          "url": "/api/dictation/warmup",
+          "method": "POST",
+          "status": 200
+        }
+      ],
+      "errors": [],
+      "unhandled": []
+    }
+  }
+}

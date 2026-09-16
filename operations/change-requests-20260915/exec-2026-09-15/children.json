@@ -1,0 +1,46 @@
+{
+  "A": {
+    "sessionId": "01a0a4c7-fb25-7451-bac8-3c913c369475",
+    "runId": "438bf0fc-dff7-4868-afd8-4d028e722424",
+    "cwd": "/root/pi-web-ui-wt-restart",
+    "model": "zai/glm-5.3-flash",
+    "thinking": "high",
+    "leaseId": "2d13bd9e-881d-413d-bdbc-a766665a4699",
+    "objective": "The weekly Command Code catalogue refresh script restarts pi-web-ui safely and identifiably: it decides idleness from the live busy-session count (never the active-turn counter), it restarts only through scripts/restart-pi-web-ui.sh with an explicit reason, and when the service is busy, or the busy count cannot be determined, it does not restart at all. TDD tests cover the busy, idle, unreachable-API and unreachable-capacity cases, and the test suite, typecheck and lint all pass in the worktree. Invariants: no merge, no production restart, no path outside the owned list is touched.",
+    "resolvedModel": "zai/glm-5.3-flash",
+    "name": "restart-path"
+  },
+  "B": {
+    "sessionId": "01a0a4c8-0262-7451-bac8-3c92897b85ff",
+    "runId": "ff625b8d-c90d-4b47-8b6b-f13b5632db88",
+    "cwd": "/root/pi-web-ui-wt-lanes",
+    "model": "zai/glm-5.3-flash",
+    "thinking": "max",
+    "leaseId": "82c9ecab-fe7a-42d8-b162-220d188c45ee",
+    "objective": "Voice Mode holds multiple worker lanes in ONE tab: a lane strip makes every lane identifiable and shows which is audible and which has the operator's floor; the operator can switch the lane their voice is addressed to, live, without leaving the screen; a fourth lane asks instead of appearing; one floor-scheduling rule prevents any lane from speaking over the operator's capture; and talkerBus results are correlated to their request and lane so a stale or foreign result can never populate the active lane's card. TDD tests cover the lane behaviour and the correlation rules, a browser-level harness covers the multi-lane case, and single-lane behaviour is provably unchanged. Invariants: capture is never gated by the scheduler, the operator's floor is never interrupted, no merge, no production restart.",
+    "resolvedModel": "zai/glm-5.3-flash",
+    "name": "multi-lane"
+  },
+  "C": {
+    "sessionId": "01a0a4c8-09b0-7451-bac8-3c94032b227c",
+    "runId": "38b7234e-664b-4afb-94fe-66e091bc546d",
+    "cwd": "/tmp/wt-investigate",
+    "model": "zai/glm-5.3-flash",
+    "thinking": "high",
+    "leaseId": "0a25d629-b21e-4113-8942-dfe50de593a8",
+    "objective": "A written, evidence-backed finding explains which background extensions persist session snapshots into a session JSONL, through which SessionManager, at which moments, and which repository gates compare session-file state against in-memory state, with the specific mechanism of the auto-compact-75 handoff refusal described and the remaining risk assessed. Every claim cites a file path and line numbers. Invariants: read-only work \u2014 the only file created is the report itself.",
+    "resolvedModel": "zai/glm-5.3-flash",
+    "name": "investigate"
+  },
+  "D": {
+    "sessionId": "01a0a543-2fac-7451-bac8-3ca063b63bd8",
+    "runId": "f8d2a15b-aa66-4196-8d40-dd73e2475891",
+    "cwd": "/root/pi-web-ui-wt-card",
+    "model": "zai/glm-5.3-flash",
+    "thinking": "max",
+    "leaseId": "e5151f5f-8db1-4dd8-8b75-ce9068d4cfae",
+    "objective": "The confirmation card is bound to the exact bytes the operator authorised: the proposed payload carries an identity for the text the card displayed, the confirm echoes that identity, and a confirm whose identity no longer matches the current proposal is refused and surfaced honestly without releasing anything and without consuming the draft. The `original` release variant is served only when the current proposal actually advertised it, refusing mechanically otherwise. The Internal API contract is bumped with its changelog entry and an updated drift guard, and a browser-level harness proves for the real card that the bytes released equal the bytes displayed on every path. Invariants: the verified lane behaviour on this branch does not regress, no merge, no push, no production restart, and no writes to the agent-os repository.",
+    "resolvedModel": "zai/glm-5.3-flash",
+    "name": "card-identity"
+  }
+}

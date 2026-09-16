@@ -1,0 +1,31 @@
+
+ RUN  v1.6.1 /root/pi-web-ui-wt-stability/server
+
+ ✓ tests/unit/validation-cgroup-guard.test.ts  (9 tests) 5ms
+ ✓ tests/unit/shutdown-escape-policy.test.ts  (7 tests) 6ms
+ ✓ tests/unit/shutdown-escape-worker.test.ts  (6 tests) 16ms
+ ❯ tests/unit/shutdown-signal.test.ts  (9 tests | 1 failed) 19ms
+   ❯ tests/unit/shutdown-signal.test.ts > stop-signal recording > records the signal even when teardown is already wedged
+     → expected "spy" to be called 1 times, but got 2 times
+ ✓ tests/unit/http-server-close.test.ts  (6 tests) 134ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/unit/shutdown-signal.test.ts > stop-signal recording > records the signal even when teardown is already wedged
+AssertionError: expected "spy" to be called 1 times, but got 2 times
+ ❯ tests/unit/shutdown-signal.test.ts:74:21
+     72|     expect(() => handleStopSignal('SIGTERM', d)).not.toThrow();
+     73|     // The record is what matters; a throwing teardown must not erase …
+     74|     expect(d.write).toHaveBeenCalledTimes(1);
+       |                     ^
+     75|     expect(d.setTimeout).toHaveBeenCalledTimes(1);
+     76|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed | 4 passed (5)
+      Tests  1 failed | 36 passed (37)
+   Start at  08:52:53
+   Duration  775ms (transform 283ms, setup 93ms, collect 377ms, tests 180ms, environment 1ms, prepare 437ms)
+
+JSON report written to /root/pi-web-ui-wt-stability/server/test-results.json

@@ -1,0 +1,16 @@
+### LIVE 1: refusal in the real production cgroup (this shell is 0::/system.slice/pi-web-ui.service)
+
+> pi-web-ui@0.1.0 validate:server
+> npx tsx scripts/validation-server.ts
+
+[validation-server] Refusing to start a disposable validation server inside the production service cgroup (/system.slice/pi-web-ui.service).
+systemd stops this unit with KillMode=control-group, so a stop or restart SIGKILLs every
+process in it — including this validation server and any in-flight orchestration children.
+Run it in its own scope instead:
+
+systemd-run --scope --collect --unit=pi-web-ui-validate-<nonce> \
+  --setenv=PI_WEB_UI_VALIDATION_DIR=/tmp/pi-web-ui-validation \
+  npm run validate:server
+
+If you are certain this is what you want, set PI_WEB_UI_VALIDATION_ALLOW_PRODUCTION_CGROUP=1.
+EXIT=78

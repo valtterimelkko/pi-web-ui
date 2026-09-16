@@ -1,0 +1,2 @@
+client/tests/unit/store/parent-verify-create-and-pin.test.ts
+client/tests/unit/store/sessionStore-create-and-pin.test.ts
