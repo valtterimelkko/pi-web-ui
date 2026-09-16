@@ -16,6 +16,12 @@
 > records the announcement, Google's product facts, Artificial Analysis's
 > first measurements, and the official pricing (confirmed identical to
 > 3.1 Flash Live). §§1–7 stand except where §8 notes otherwise.
+>
+> **Gap analysis added 2026-09-16:** §9 is a different question against the
+> same evidence base — *what is Voice Mode missing compared with what people
+> generally look for in a voice agent?* It is verified against the shipped
+> implementation, and its §9.4 extends §8.6's standing swap decision with a
+> constraint §§1–8 did not name. §§1–8 stand unchanged.
 
 ---
 
@@ -444,3 +450,477 @@ single shared table** (verified 2026-09-15):
 - Model docs: <https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live> · <https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking>
 - DeepMind model card: <https://deepmind.google/models/model-cards/gemini-3-8-audio/>
 - SiliconANGLE (independent pricing/reasoning-token confirmation): <https://siliconangle.com/2026/09/15/googles-new-speech-model-gemini-3-8-live-supports-real-time-reasoning/>
+
+---
+
+## 9. Gap analysis (2026-09-16): what Voice Mode does, and what it is missing
+
+> **Why this section is in the pricing file.** It was written as a companion to
+> §8: the question *"is anything missing compared with what people generally
+> look for in a voice agent?"* cannot be answered without the §8 Gemini 3.8 Live
+> facts, and §9.4 below feeds directly back into §8.6's standing swap decision.
+> A standalone gap-analysis document or a home in
+> [`VOICE-MODE-INTENT-RESEARCH-2026-09.md`](./VOICE-MODE-INTENT-RESEARCH-2026-09.md)
+> would be the more conventional placement; it lives here by operator request.
+>
+> **Method.** Compiled 2026-09-16 by reading the four voice documents
+> (`VOICE-MODE.md`, `VOICE-MODE-INTENT-RESEARCH-2026-09.md`,
+> `VOICE-ORCHESTRATOR-FEASIBILITY.md`, this file) against the shipped
+> implementation. Every finding below is verified in code and cites the file it
+> was verified in; the Gemini 3.8 Live facts in §9.4 are verified against
+> Google's documentation and launch coverage (sources in §9.7). No code was
+> changed.
+>
+> **Operator decision recorded 2026-09-16:** Finnish is a **nice-to-have, not a
+> requirement**. Finding B below is retained because the code fact stands and it
+> becomes load-bearing if a 97-language S2S front end is ever adopted (§9.4), but
+> it is **not Tier 1 work** and is ranked accordingly in §9.5.
+
+### 9.1 What Voice Mode is, and how you actually use it
+
+**The mental model (two axes, not one).** The single most important thing in
+`VOICE-ORCHESTRATOR-FEASIBILITY.md` §0 is the correction made on 2026-09-12:
+
+- **Axis 1 — the relay:** is a talker carrying the operator's words, or is the
+  operator typing?
+- **Axis 2 — the worker's role:** is that session orchestrating children, or
+  just coding?
+
+They are independent. "Just talking to a coding session" is a first-class use
+case, not a degraded one. This matters for the gap analysis because several
+findings only show up in one quadrant (orchestrating by voice) and are invisible
+in the other.
+
+**The operating loop.**
+
+```
+you speak  →  STT  →  talker (Gemma 4 26B)  →  it talks back
+                          ↓
+                    holds your words as a DRAFT
+                          ↓
+you say "yes"  →  mechanical classifier  →  harness releases YOUR words
+                                              →  worker (steer / prompt / follow-up)
+```
+
+The load-bearing idea: **the talker model has no send path**.
+`server/src/talker/talker.ts` only calls the delivery adapter when (a) a draft
+exists and (b) `utterance-classifier.ts` mechanically classifies the next
+utterance as a confirmation. The model can *ask*; it can never *compose* what
+goes out. That is N1 + N7, and it is genuinely well built.
+
+**The controls that exist today.**
+
+| Control | Where | What it does |
+|---|---|---|
+| Mic button | `DriveModeDictate.tsx` | Tap to start, tap to stop — push-to-talk |
+| Confirmation card | `ConfirmationCard.tsx` | Shows what will be sent; can release the **original** wording (D2) |
+| Reading level | `ReadingLevelControl.tsx` | Verbatim / Summary / Headlines, flips mid-answer |
+| Focus / hold | `FocusControl.tsx` | Mutes worker answers; the operator hears only the talker |
+| Stop talker | `DriveModeDictate.tsx` | Playback-only: silences the chunk, discards the queue |
+| Stop worker | `DriveModeDictate.tsx:439` | Aborts the worker's run |
+| Lane strip | `LaneStrip.tsx` | Up to 3 lanes in one tab, worker switchable in place |
+
+**What has to be running.** Talker model via OpenRouter
+(`google/gemma-4-26b-a4b-it`), OpenAI keys for STT (`gpt-4o-mini-transcribe`)
+and TTS (`tts-1`), a worker session on Pi or Claude (Antigravity relays but
+cannot be observed — see finding E), and optionally
+`DICTATION_VOCABULARY_DB_PATH` for dictation biasing.
+
+### 9.2 The intent, stated sharply
+
+The four goal clauses are: talk fluently while tools run · very high intent
+fidelity · never act on an unfinished thought · use quota already held.
+
+Reading the whole corpus, **all four are met.** The two-week defect record
+(P1–P27, the card wave, the relay-robustness wave) is a disciplined programme.
+The honesty invariants in particular — "green never means delivered unless it
+was delivered", "an untrue safety claim is worse than none" (P26) — are stronger
+than what most commercial voice products ship.
+
+So the interesting question is not "is the intent achieved". It is: **is the
+intent complete?**
+
+The answer is no, and the missing part has a shape. Everything below clusters
+into a fifth clause that was never written down —
+
+> **"…and it must work when my hands and eyes are busy."**
+
+The system was built to be **safe** and **honest**. What people generally want
+from voice agents, on top of that, is **ambient**: it notices things, it
+interrupts *you* when it matters, and it works without looking at a screen. That
+is the gap, and it is a coherent one rather than a scatter of missing features.
+
+### 9.3 The findings
+
+Eleven findings, each verified in code, ranked roughly by value-per-effort.
+
+#### A. Turn-taking is a button, not a conversation — biggest
+
+`useDictation.ts:218–261` — `MediaRecorder` starts on tap, stops on tap, then a
+server round-trip for STT. There is no VAD, no endpointing, no wake word. A grep
+of the whole client voice path returns zero hits for any of them.
+
+The 2026 industry bar for voice agents is **semantic endpointing** (the agent
+decides the operator is done from *content*, not a timer), **sub-800 ms**
+last-user-audio → first-agent-audio, and **sub-150 ms barge-in**. A tap-stop
+plus cascade round-trip structurally cannot get there.
+
+And `DriveModeEntry.tsx:25` says, in the product: **"Voice-first, hands-free."**
+Every single turn needs a tap. In a car, walking, or with a laptop closed, that
+is the thing that breaks first.
+
+Note the subtlety: the speech arbiter's barge-in is real but **playback-side
+only** — it ducks audio when `dictation.state === 'recording'`. Since recording
+only starts on a tap, "barge-in" today means "tap while it is talking". That is
+not what the word means to anyone else in this market.
+
+#### B. The mechanical gate is monolingual — retained, deprioritised
+
+`TALKER-MODEL-REQUIREMENTS.md` states: *"Bilingual: fluent English primary,
+Finnish secondary — the operator switches mid-conversation."* The operator
+downgraded Finnish to a nice-to-have on 2026-09-16 (see the header note), so
+this is **not Tier 1 work**. The code fact and its failure shape are recorded
+because they become load-bearing under §9.4.
+
+`utterance-classifier.ts:22–52`:
+
+```
+CANCEL_PATTERNS   = /no/, /never mind/, /forget it/, /scratch that/, /don't send/, …
+CONFIRM_PATTERN   = /yes|yeah|yep|sure|ok|go ahead|send it|do it|confirmed/
+PUSHBACK_PATTERN  = /just do it|stop asking|every single time/
+QUESTION_LEADING  = /what|why|how|when|where|who|is|are|did|can|…/
+```
+
+All English. A grep for `kyllä|joo|lähetä|peruuta|fi-FI|locale|i18n` across
+`server/src/talker/`, `client/src/components/DriveMode/`, `speechArbiter.ts`,
+`tts.ts` and `dictation/` returns **zero hits**.
+
+The consequences are asymmetric and both bad:
+
+- **"joo, lähetä se"** → classifies as `statement` → does not release, *and
+  accumulates into the draft*. The draft now holds the instruction plus the
+  words "yes, send it" as content for the worker.
+- **"ei, älä lähetä"** → the cancel does not fire → the draft stays live → a
+  later English "yes" releases something the operator believed was killed.
+
+That second case is the failure mode N3 exists to prevent, reached by a
+different road. It is not a polish item; it is a hole in the one mechanism the
+design rests on — it is simply a hole the operator does not currently walk into,
+because they are speaking English.
+
+#### C. Nothing about the surface can be said out loud
+
+There is no spoken command for: *stop talking · louder · slower · say that again
+· switch to headlines · switch to lane two · stop the worker.*
+
+Worse — **"stop talking" classifies as `statement`**, so it is held as a pending
+instruction for the worker. Said twice, "stop talking. stop talking." sits in
+the draft.
+
+Meanwhile every one of those is a button. And `abort` already exists in the
+protocol (`shared/src/protocol-types.ts:35`) and is already wired
+(`useWebSocket.ts:147`) — the talker path simply never calls it. For hands-free
+operation, **"stop!" is the single most valuable utterance a human can make**,
+and it is currently the one thing that requires reaching for a screen.
+
+Fixing this is a small, bounded, mechanical allow-list — the same shape as the
+existing classifier, so it fits the architecture rather than fighting it.
+
+#### D. The worker's permission prompts never reach the voice lane — best value-per-effort
+
+The trace:
+
+```
+worker asks for permission
+  → connection.ts:1372  normalizedEvent.type === 'permission_request'
+  → wrapped as extension_ui_request  (timeout: 120000)
+  → sessionStore.ts:2407  set({ extensionUIRequest })
+  → rendered by  components/Extensions/ExtensionDialog.tsx
+```
+
+A grep of `client/src/components/DriveMode/` and `server/src/talker/` for
+`permission|approve|extension_ui_request` returns **zero hits in either**.
+
+So: the operator is driving, Claude asks *"Allow Bash?"*, and the voice lane is
+**completely silent**. The talker's state snapshot cannot see the pending
+request, so asked "what is it doing?" it will honestly answer that it cannot
+tell. Two minutes later the request times out and the turn is wasted.
+
+This is the programme's own principle — *the operator must never have to
+re-explain*, *nothing false is ever said or shown* — failing in a place nobody
+looked. And the plumbing is entirely in place: the event exists, the response
+path exists, the mechanical confirmation classifier exists. It is wiring, not
+architecture.
+
+#### E. The state view is much thinner than the intent promised
+
+`types.ts` defines a rich `WorkerStateSnapshot`: `recentEvents`, `children`,
+`pendingItems`, `activity`, `lastAssistantText`, `recentHistory`.
+`state-view.ts` carefully bounds every one of them.
+
+**No snapshot builder populates `recentEvents`, `children`, or `pendingItems`.**
+The fields are dead.
+
+What the talker actually receives:
+
+| Runtime | Snapshot |
+|---|---|
+| Pi (`session-registry.ts:607`) | `worker status: running, step 4` + last assistant text + history |
+| Claude (`:529`) | `worker status: running\|idle\|error` + last assistant text + history |
+| Antigravity (`:503`) | `honestUnavailableActivity()` — **nothing** |
+| OpenCode, Command Code | not in `TalkerRuntime` at all (`:55`) |
+
+Compare feasibility §3.2 rule 1: *"answered conversationally from a compact
+state view (task list, last N tool events, background-task statuses, last
+assistant text)."* Three of those four never arrived.
+
+So **"what is it doing right now?"** and **"how are the children doing?"** are
+unanswerable — and those are precisely the questions asked while orchestrating,
+which was the motivating scenario (the Antigravity run in the feasibility
+document's §6 that started this programme). The runtime that motivated the
+design is the one the talker is blind to.
+
+P20/P23 made *history* excellent. *Live state* stayed at "status: running".
+
+#### F. Nothing is proactive
+
+`useAnswerReader.ts:492–495` — auto-speak fires on the
+`isStreaming: true → false` transition. Turn end. That is the only trigger.
+
+There is no *"the worker has been idle for ten minutes"*, no *"it has been
+waiting on you for three minutes"*, no *"a child failed"*, no *"the build
+broke"*.
+
+`server/src/notifications/*` already sends Telegram on `agent_end`. Voice does
+not use it. And this repo explicitly cares about long-horizon work
+([`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md), durable watches),
+the whole point of which is that nobody is watching.
+
+For a long-running agent the most-wanted voice behaviour is **"tell me when
+something needs me"**, not "answer when I ask". The Headlines level —
+*"Done: X. Needs you: Y."* — is exactly the right output shape, described in the
+docs as *"designed to be left on permanently while wearing headphones."* But it
+only fires at turn end. The format for ambient operation exists; the trigger
+does not.
+
+#### G. No mobile or car session hygiene
+
+A grep for `mediaSession | wakeLock | setActionHandler` across the whole client
+returns **zero**.
+
+Meaning: the screen locks → audio and capture die. No lock-screen controls. No
+headset-button or steering-wheel-button to start talking. No Bluetooth media
+integration. No "now playing" metadata.
+
+For a feature *named Drive Mode* and used from a phone, this is the layer
+everyone expects and nobody writes down. The Media Session API is roughly a
+day's work and would make the headset button a mic trigger — which is also a
+partial answer to finding A.
+
+#### H. Dictation accuracy is not context-aware
+
+`dictation/vocabulary.ts` reads a single static `stt_vocabulary` row out of an
+external SQLite database belonging to a different project (`config.ts:434` →
+`/root/voicenotebot/streaming-dictation/backend/data/transcripts.db`).
+
+Nothing feeds the **current session's actual nouns** into the STT prompt — repo
+name, branch, recently-touched filenames, function names, model IDs, session
+IDs, the words the worker used in its own last message.
+
+Technical identifiers are exactly where dictation fails. Note what Google chose
+to headline for 3.8 Live: **"alphanumeric precision — confirmation codes, claim
+numbers and technical strings"** (§8.2). The market is naming this problem
+because it is the top complaint. The biasing hook already exists here; it is
+just pointed at a static list instead of live context. Cheapest quality win
+available.
+
+#### I. A draft can be extended but never corrected
+
+`pending-proposal.ts:354` — *"Append an operator utterance to the draft.
+Accumulates — never replaces."*
+
+That is right for interleaved composition (P3). But it means a mid-thought
+correction becomes *content*: *"rebase onto main… no wait, merge instead"* is
+preserved in full, because `relay-normalise.ts` strips filler but never content.
+A human reads through that fine. But it is the half-formed-thought problem
+reappearing one layer down, inside an authorised send.
+
+There is no *"replace that last bit"* affordance — the options are confirm,
+cancel-and-re-say the whole thing, or send the original. Worth a design decision
+rather than an accident.
+
+#### J. Voice output is not tunable
+
+`routes/tts.ts` — fixed voice allow-list, default `alloy`, **no speed control**.
+For a Headlines mode explicitly designed to be *left on permanently*, playback
+rate is the control people reach for first. Small, but it is free.
+
+#### K. Observability measures the machine, not the conversation
+
+The `voiceTurnId` vocabulary is genuinely excellent — phase, gate denial reason,
+delivery outcome, released SHA. The audio regression lab measuring real OS-level
+output is a level of rigour rarely seen.
+
+But nothing measures the metrics this industry actually optimises:
+
+- **end-to-end response latency** — last-user-audio → first-agent-audio.
+  `modelTtftMs` is the *model leg only*; STT, TTS and network legs are in no
+  budget.
+- **barge-in success rate**
+- **endpointing errors** (cut off early / waited too long)
+- **STT word-error rate**, inferable for free from how often the operator
+  cancels and re-says
+
+This matters concretely for the standing S2S decision: swapping to Gemini 3.8
+Live would leave **no before-number for the thing the swap is supposed to
+improve**.
+
+### 9.4 What Gemini 3.8 Live actually changes (extends §8.6)
+
+§8's pricing analysis holds — same $3/$12 audio rates, ≈$22–32/month stands.
+What follows is what §8 did not cover.
+
+**What it genuinely fixes.**
+
+| Finding | How |
+|---|---|
+| **A** (turn-taking) | Native VAD, endpointing and barge-in inside the Live session. 1.18 s TTFA, conversational dynamics 96.1% (vs 3.1's 74.3%). The *structural* fix, not a patch. |
+| **H** (accuracy) | "Alphanumeric precision" is a named launch feature |
+| **F** (proactive) | Async `NON_BLOCKING` function calling is now **the default** — the model can poll worker status in the background while continuing to speak |
+| **J** | Native voice control |
+
+**The architectural constraint not yet written down anywhere.**
+
+N2 is: *the relay text is always the operator's own words, referenced by id from
+the verbatim log.*
+
+In a native speech-to-speech session, *there is no text of what the operator
+said* — audio goes in, audio comes out. Therefore:
+
+> **A native S2S swap must keep an input-transcription lane running purely to
+> preserve the verbatim draft — even though transcription is the very cascade
+> stage the swap was meant to delete.**
+
+This does not kill the idea, but it changes the economics and the architecture
+diagram. STT is not deleted; it is demoted from *the interaction path* to *the
+evidence path*. That is still a large win (latency stops depending on it), but
+§3's framing of "one S2S model replaces three of the four stages" is optimistic
+by one stage. This should be written into §8.6 before anyone plans on it.
+
+Findings **B** and **C** get *harder*, not easier: 97 languages with automatic
+mid-conversation switching means a more fluent multilingual front end sitting on
+a **monolingual gate**. That widens the distance between what the operator
+believes was understood and what the mechanism actually did. If the swap
+happens, B stops being a nice-to-have and becomes a precondition.
+
+**Other migration facts worth pinning.**
+
+- **`interaction_status` replaces `turnComplete` as the idle signal.** Clients
+  must keep listening after `turnComplete: true` — background reasoning and tool
+  calls may still follow. The entire phase machine
+  (`DriveModeDictate.tsx`, `useAnswerReader.ts`) assumes turn end is terminal.
+- **Session limits:** audio-only sessions cap at **~15 minutes** without context
+  window compression (~25 audio tokens/sec); audio+video at **2 minutes**.
+  Resumption tokens are valid 2 h; the server periodically resets the socket.
+  The E1 mobile-durability work covers *this repo's* WebSocket — a Live session
+  adds a **second socket with different failure semantics**, and the existing
+  reconnect budget logic will not cover it.
+- **Proactive audio is permanently enabled** (disabling returns an error). The
+  model *will* speak unprompted. That collides head-on with the tier-4 rule
+  ("chatter is dropped, not queued") and with "routine housekeeping is not
+  news". The arbiter would be fighting the model's default behaviour.
+- **Video frames are billed by default** — turn coverage defaults to
+  `TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO`. Set it explicitly or pay for
+  frames nobody wanted.
+- **The ecosystem is still settling** — an open LiveKit issue
+  (livekit/agents#7302) reports that with 3.8 Live's async-by-default, per-tool
+  behaviour/scheduling cannot be set and tool results wait for playout. Relevant
+  if this ever builds on a framework rather than the raw API.
+
+**Standard vs Extended Thinking.** §8.6's conclusion — **standard, not ET** — is
+right, and this analysis reinforces it: ET's headline skill is background
+agentic tool execution, which *is the worker lane*. Paying ~93 Elo of
+conversational preference to duplicate something already held is a bad trade.
+
+But one idea is worth stealing from it. ET's **progress narration** — early
+verbal acknowledgements ("Let me check that…") and live commentary while
+background tasks run — is exactly the pattern that fixes finding F. That shape
+can be implemented in the current Gemma talker today, without ET, by giving the
+harness a periodic tick and a "needs you" trigger.
+
+### 9.5 Recommended ordering
+
+**Tier 1 — the intent's own promises, currently unkept. Small, bounded, uses
+existing plumbing.**
+
+1. **D — permission prompts into the voice lane.** Highest value-per-effort
+   here. Route `permission_request` into the talker snapshot as `pendingItems`
+   (the field already exists and is bounded), speak it at receipt-ack tier, and
+   accept the answer through the *existing* mechanical confirm/cancel
+   classifier. No new gate, no new authority.
+2. **C — a spoken command allow-list.** `stop talking` · `stop the worker` ·
+   `repeat that` · `louder/slower` · `headlines/summary/verbatim` · `lane two`.
+   Mechanical, same shape as the classifier, denied-by-default. Wire
+   `stop the worker` to the `abort` that already exists. This is the fix that
+   makes "hands-free" true.
+
+**Tier 2 — close the "what is it doing" hole.**
+
+3. **E — populate the dead fields.** `recentEvents`, `children`, `pendingItems`
+   for Pi and Claude; a real Antigravity snapshot; add OpenCode and Command Code
+   to `TalkerRuntime`.
+4. **F — proactive "needs you".** A harness tick plus the existing notification
+   triggers, spoken in Headlines shape. This is what turns Voice Mode from a
+   thing the operator operates into a thing that keeps them informed.
+5. **H — context-aware dictation vocabulary.** Feed session nouns into the STT
+   prompt alongside the static list.
+
+**Tier 3 — change the interaction class.**
+
+6. **K — conversation-latency telemetry first.** Do this *before* any S2S
+   evaluation, so the swap is measurable. Without it the argument about the one
+   thing the swap changes will be made from vibes.
+7. **A — endpointing.** Either client-side VAD on the current cascade (cheap,
+   partial) or the Gemini 3.8 Live swap (structural, and with the
+   transcription-lane constraint in §9.4 understood).
+8. **G — `mediaSession` + `wakeLock`.** About a day's work; makes the headset
+   button a mic trigger and stops the screen lock killing the session.
+
+**Nice-to-have, unranked.** **B** (bilingual gate — promoted to a precondition
+only if a 97-language S2S front end is adopted), **I** (draft correction
+affordance), **J** (TTS speed/voice control).
+
+### 9.6 The one-sentence version
+
+Voice Mode is an unusually principled **high-fidelity dictation gate with a
+conversational front end** — and on fidelity, honesty and recovery it is better
+than what is commercially shipping. What is missing is not a feature; it is a
+posture. It currently **answers when addressed**; what people expect from a
+voice agent in 2026 is one that **notices, interrupts, and works without a
+screen** — and the cheapest steps toward that (permission prompts by voice, a
+spoken stop, live worker state) are all wiring that already exists in this
+codebase.
+
+### 9.7 Sources for this section
+
+**In-repo (verified by reading):** `server/src/talker/*` (`talker.ts`,
+`utterance-classifier.ts`, `pending-proposal.ts`, `state-view.ts`, `types.ts`,
+`session-registry.ts`, `delivery.ts`, `prompt.ts`),
+`scripts/talker-prompts/v3-harness.txt`, `scripts/talker-prompts/digest.txt`,
+`client/src/components/DriveMode/*`, `client/src/hooks/useDictation.ts`,
+`client/src/hooks/useDriveModeDictation.ts`, `client/src/store/sessionStore.ts`,
+`server/src/websocket/connection.ts`, `server/src/routes/tts.ts`,
+`server/src/dictation/*`, `shared/src/protocol-types.ts`, `server/src/config.ts`.
+
+**External (fetched 2026-09-16):**
+
+- Google announcement: <https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-8-live-gemini-3-8-live-extended-thinking/>
+- Gemini Live API session management (resumption tokens, context window compression, session limits): <https://ai.google.dev/gemini-api/docs/live-session>
+- SiliconANGLE: <https://siliconangle.com/2026/09/15/googles-new-speech-model-gemini-3-8-live-supports-real-time-reasoning/>
+- Unite.AI: <https://www.unite.ai/google-launches-gemini-3-8-live-and-extended-thinking-voice-models/>
+- MarkTechPost: <https://www.marktechpost.com/2026/09/15/google-releases-gemini-3-8-live-and-3-8-live-extended-thinking-for-production-grade-voice-agents/>
+- 9to5Google: <https://9to5google.com/2026/09/15/gemini-3-8-live-announced/>
+- LiveKit agents issue 7302 (async-by-default caveats): <https://github.com/livekit/agents/issues/7302>
+- Cekura, endpointing and turn detection: <https://www.cekura.ai/blogs/endpointing-in-voice-ai-turn-detection>
+- SyncSoft, barge-in VAD tuning (sub-150 ms bar): <https://www.syncsoft.ai/en/blog/voice-agent-barge-in-vad-tuning-2026>
+- Telnyx, voice agent latency benchmarks (sub-800 ms bar): <https://telnyx.com/resources/voice-ai-agents-compared-latency>
