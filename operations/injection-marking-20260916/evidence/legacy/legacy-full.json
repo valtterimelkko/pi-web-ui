@@ -1,0 +1,87 @@
+{
+  "sessionId": "01a0aac9-4044-7449-b9ba-41996af5ff18",
+  "runtime": "pi",
+  "scope": "visible_full",
+  "itemCount": 14,
+  "truncated": false,
+  "items": [
+    {
+      "kind": "user",
+      "text": "Use the bash tool to create a file named inject-lab.txt in the current directory containing exactly MARKER then reply with the file contents plus at least one short paragraph (about 120 words) summarising what you did and why capturing work artefacts matters.",
+      "timestamp": "2026-09-16T15:15:12.331Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "File contents of `inject-lab.txt`:\n\n```\nMARKER\n```\n\nI used the bash tool to write the exact string `MARKER` into `/root/inject-lab-20260916/workspace/inject-lab.txt` using `printf` (chosen over `echo` to avoid any trailing newline ambiguity), then read the file back with `cat` to verify its contents — the output confirms it contains exactly `MARKER`. This was a deliberately small, self-contained artefact-creation task with no dependencies on prior work, so no broader context was needed beyond the session's own working directory. Capturing work artefacts like this matters because it turns ephemeral agent activity into durable, inspectable evidence: a file on disk can be re-read, diffed, audited, and referenced by future sessions long after the conversation that produced it is gone. That verifiability underpins trustworthy handoffs between agents and operators — claims of completion become checkable facts rather than assertions, and the accumulated artefacts form a breadcrumb trail that lets any future session reconstruct what was done, when, and why, without relying on memory or trust alone.",
+      "timestamp": "2026-09-16T15:15:37.778Z"
+    },
+    {
+      "kind": "user",
+      "text": "Agent OS session-end memory capture (automated delivery by the D3 write lane). Run your agent os capture skill now and submit the captures with --source session-end-prompt --session-ref 01a0aac9-4044-7449-b9ba-41996af5ff18 so the review queue can attribute them to the automated lane.\n\nUse your agent os capture skill to capture any relevant memory candidate from this entire session. So this AgentOS is a continuation tool, and what would be useful for the next agents to know about these topics, you could do it with a very low threshold, very throw barrier, add memories, and you could do that not just on the topics very only related to this session strictly. Include things from this entire session though. Besides architecture, important structures, identity, my preferences to work, key decisions made etc - it would be important to be capturing memories that include important resources and their paths. Also capture what's now current — what's in flight, what's blocked, what the next step is — so the horizon reflects today rather than last month. And if this session made something previously true no longer true, say so explicitly as its own memory. You can capture several things from here - I'd rather capture too much than too little.\n\nWhile capturing, include:\nOutcomes: what changed or was delivered, with evidence strength.\n\nPriority movement: what advanced, stalled, changed direction or was dropped.\n\nLearning themes: larger recurring lessons, supported by multiple references.\n\nUnresolved matters: questions and blockers that remain open.\n",
+      "timestamp": "2026-09-16T15:15:38.849Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "I'll follow the capture skill: first ground the scope (canonical project id) and confirm the exact CLI flags, then draft and submit the captures.",
+      "timestamp": "2026-09-16T15:16:14.642Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "`--source session-end-prompt` is valid. Let me verify the `--session-ref` flag exists before using it.",
+      "timestamp": "2026-09-16T15:16:25.354Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "The flags are confirmed as the live automated-lane path. Now let me check whether a canonical project exists for this inject-lab workspace.",
+      "timestamp": "2026-09-16T15:16:33.737Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "No project exists for this inject-lab workspace, so I'll resolve scope against a canonical role instead. Let me quickly confirm how the CLI handles a role target without a project.",
+      "timestamp": "2026-09-16T15:16:52.801Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "Role target with a canonical role id is supported. Let me check how a horizon target resolves without a project, and run the one-recall duplication check for the artefact-capture preference.",
+      "timestamp": "2026-09-16T15:17:44.541Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "The literal query missed. Per the recall ladder, one reformulation before concluding:",
+      "timestamp": "2026-09-16T15:18:08.263Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "The duplication check is decisive: the vault already holds at least five near-identical low-threshold-capture preferences, so I will **not** re-capture that. Now I'll draft the two genuinely distinct outcomes (deliverable + current horizon state) with counted candidate prefixes:",
+      "timestamp": "2026-09-16T15:19:00.072Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "Both over budget — trimming:",
+      "timestamp": "2026-09-16T15:19:10.507Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "Both prefixes now pass. Submitting the two captures (distinct outcomes → separate invocations, role scope for the deliverable, horizon for the current-state handoff):",
+      "timestamp": "2026-09-16T15:19:53.878Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "First capture landed: `evidence=1 candidates=1`. Now the horizon capture:",
+      "timestamp": "2026-09-16T15:20:10.578Z"
+    },
+    {
+      "kind": "assistant",
+      "text": "Both captures are submitted through the automated lane (`--source session-end-prompt --session-ref 01a0aac9-…`, recorded with the shared done-marker). Summary:\n\n**Captured — 2 pending candidates (nothing promoted):**\n1. **`cand-ykadx5bja9`** [pending, role-stable → `role-ai-builder-agent-systems`] — the session's outcome: `inject-lab.txt` created with exactly `MARKER` via bash printf, verified by read-back. Evidence: `evidence/manual/captures/capture-yka8d9k2kt.md`. Role scope was used deliberately because the compiled project index has no canonical project for this inject-lab workspace (verified, not invented).\n2. **`cand-yx7v365ftv`** [pending, horizon-stable → `horizon-current`] — today's settled state: exercise complete, nothing in flight or blocked, no next step pending, so the horizon reflects 2026-09-16 rather than a stale open item. Evidence: `evidence/manual/captures/capture-yx7v365ftv…/capture-yx7q1oseg5.md`.\n\n**Resources preserved in the raw evidence bodies:** the deliverable at `/root/inject-lab-20260916/workspace/inject-lab.txt`; the authoritative capture-lane contract in `/root/agent-os/docs/reference/CLI-REFERENCE.md`; `/root/agent-os/src/cli.ts` for divergence checks; and the project index consulted for scope resolution.\n\n**Intentionally not captured:** the \"capture generously at low threshold\" working preference — already held (cited at least five times, e.g. `capture-4kjw7562rp`, `capture-adgagnd3od`, `capture-sltlrtf7ph`, `capture-ria5dp3pra`); restating it would add to the vault's one known redundancy cluster. Both recalls and the direct preferences-file check agreed.\n\n**No supersession claim:** this session invalidated nothing previously true — it was a single verified deliverable plus this capture, and I have not fabricated a \"no longer true\" entry to satisfy the prompt. Both candidates passed the durable-fact gate on first submission (`candidates=1` each) and await owner review.",
+      "timestamp": "2026-09-16T15:20:28.560Z"
+    }
+  ],
+  "source": {
+    "sessionId": "01a0aac9-4044-7449-b9ba-41996af5ff18",
+    "displayName": "Use the bash tool to create a file named inject-la",
+    "sdkType": "pi",
+    "cwd": "/root/inject-lab-20260916/workspace",
+    "createdAt": "2026-09-16T15:15:11.045Z",
+    "lastActivity": "2026-09-16T15:20:28.560Z"
+  }
+}

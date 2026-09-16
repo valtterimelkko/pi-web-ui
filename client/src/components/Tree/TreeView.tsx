@@ -5,7 +5,9 @@ import { TreeNode } from './TreeNode';
 // Tree entry type based on Pi SDK session.tree structure
 export interface TreeEntry {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  // 'custom' entries (extension-injected messages) have always arrived here at
+  // runtime; the union names them so the type matches reality.
+  role: 'user' | 'assistant' | 'tool' | 'custom';
   content: string;
   timestamp: number;
   parentId?: string;

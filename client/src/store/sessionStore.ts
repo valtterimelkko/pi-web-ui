@@ -311,6 +311,11 @@ function foldHistoryEvents(
         const foldedMessage: Message = {
           id,
           role: (message.role as Message['role']) ?? 'assistant',
+          // Structural extension marker (customType) rides along for the
+          // talker's spoken-context scan; rendered projections ignore it.
+          ...(typeof (message as { customType?: unknown }).customType === 'string'
+            ? { customType: (message as { customType: string }).customType }
+            : {}),
           // User bubbles can arrive with a plain string content from the wire;
           // keep it verbatim (Message.content allows it and user rendering
           // expects a string).
@@ -642,7 +647,13 @@ function commitMeta(
 
 export interface Message {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  // 'custom' is an extension-injected message (pi sendMessage). It is carried
+  // so the talker's spoken-context scan can key on its structural marker
+  // (customType); rendered projections keep filtering it out by role.
+  role: 'user' | 'assistant' | 'tool' | 'custom';
+  /** The extension's structural marker for custom messages (e.g. the routine
+   *  Agent OS capture lane's 'agent-os-capture'). Absent for real messages. */
+  customType?: string;
   content: string | ContentPart[];
   timestamp: number;
   toolCall?: {
@@ -2161,10 +2172,11 @@ export const useSessionStore = create<SessionState>()(
             break;
 
           case 'message_start': {
-            const messageData = (msg.message as { id: string; role: string; content: unknown }) || {};
+            const messageData = (msg.message as { id: string; role: string; content: unknown; customType?: unknown }) || {};
             const newMessage: Message = {
               id: messageData.id || `msg_${Date.now()}`,
-              role: messageData.role as 'user' | 'assistant' | 'tool',
+              role: messageData.role as Message['role'],
+              ...(typeof messageData.customType === 'string' ? { customType: messageData.customType } : {}),
               content: (messageData.content as Message['content']) ?? [],
               timestamp: Date.now(),
             };
@@ -2885,14 +2897,15 @@ export const useSessionStore = create<SessionState>()(
                 break;
                 
               case 'message_start': {
-                const messageData = (event.message as { id: string; role: string; content: unknown }) || {};
+                const messageData = (event.message as { id: string; role: string; content: unknown; customType?: unknown }) || {};
                 const wireId = messageData.id || `msg_${Date.now()}`;
                 const storedId = allocateStoredMessageId(sessionId, wireId);
                 currentWireMessageIdBySession.set(sessionId, wireId);
                 currentStoredMessageIdBySession.set(sessionId, storedId);
                 const newMessage: Message = {
                   id: storedId,
-                  role: messageData.role as 'user' | 'assistant' | 'tool',
+                  role: messageData.role as Message['role'],
+                  ...(typeof messageData.customType === 'string' ? { customType: messageData.customType } : {}),
                   content: (messageData.content as Message['content']) ?? (messageData.role === 'user' ? '' : []),
                   timestamp: Date.now(),
                 };

@@ -63,7 +63,12 @@ export interface ToolCallState {
  */
 export interface LiveMessage {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  // 'custom' is an extension-injected message (e.g. the marked Agent OS capture
+  // lane). Rendered lists filter it out by role exactly as before; the field is
+  // widened so the store's marker can pass through type-honestly.
+  role: 'user' | 'assistant' | 'tool' | 'custom';
+  /** Structural extension marker (customType), carried additively. */
+  customType?: string;
   content: ContentPart[];
   toolCall?: {
     id: string;

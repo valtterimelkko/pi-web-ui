@@ -1,0 +1,14 @@
+{
+  "sessionId": "01a0aace-babf-76ee-ad4e-c8bda820164e",
+  "sessionPath": "/root/inject-lab-20260916/srv-marked/pi-sessions/2026-09-16T15-21-10-081Z_01a0aace-babf-76ee-ad4e-c8bda820164e.jsonl",
+  "runtime": "pi",
+  "model": "zai/glm-5.3-flash",
+  "resolvedModel": "zai/glm-5.3-flash",
+  "modelBinding": {
+    "requested": "zai/glm-5.3-flash",
+    "resolved": "zai/glm-5.3-flash",
+    "fallbackApplied": false
+  },
+  "cwd": "/root/inject-lab-20260916/workspace",
+  "createdAt": "2026-09-16T15:21:10.910Z"
+}

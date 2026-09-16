@@ -1,0 +1,4 @@
+[
+ "{\"type\":\"talker_digest_result\",\"requestId\":\"digest-mu4a1vtd-1\",\"workerSessionId\":\"01a0aae8-64ef-7416-83f3-d703a8ea024b\",\"runtime\":\"pi\",\"kind\":\"headlines\",\"digest\":\"Done: browser-lab.txt created with the exact 14-byte marker. Needs you: nothing.\"}",
+ "{\"type\":\"talker_digest_result\",\"requestId\":\"digest-mu4a83fi-2\",\"workerSessionId\":\"01a0aae8-64ef-7416-83f3-d703a8ea024b\",\"runtime\":\"pi\",\"kind\":\"headlines\",\"digest\":\"Done: Agent OS capture completed for the lab replica vault. Needs you: nothing.\"}"
+]

@@ -225,6 +225,26 @@ function assistantMessageText(message: Message): string {
   return '';
 }
 
+// ---------------------------------------------------------------------------
+// INJECTION MARKING (2026-09-16) — the structural marker of the routine Agent
+// OS capture lane. The emitter delivers the capture prompt as a custom message
+// carrying exactly this type; the spoken-turn scan below is the only consumer
+// that treats it as a turn boundary. The match is STRUCTURAL (entry role +
+// custom type) — never a text heuristic — so an operator prompt quoting the
+// injection wording verbatim is still a user message, still shown, still read.
+// ---------------------------------------------------------------------------
+
+/** The customType the agent-os-inject emitter stamps on the routine capture
+ *  prompt (a pi custom message that triggers its own follow-up turn). */
+export const AGENT_OS_CAPTURE_CUSTOM_TYPE = 'agent-os-capture';
+
+/** The one structural predicate: is this message a routine Agent OS capture
+ *  injection? Real operator/assistant messages are never injections, whatever
+ *  they quote; other extensions' custom types are not capture injections. */
+export function isAgentOsCaptureInjection(message: Message): boolean {
+  return message.role === 'custom' && message.customType === AGENT_OS_CAPTURE_CUSTOM_TYPE;
+}
+
 export interface TurnAssistantParts {
   /** The turn's assistant output (messages joined by a blank line); null when
    *  the tail of the conversation has no assistant words. */
@@ -239,13 +259,24 @@ export interface TurnAssistantParts {
 /**
  * The whole turn: every assistant message back to the operator's last message
  * — or back to already-accounted content, whichever comes first — interim
- * updates included.
+ * updates included. A turn PRODUCED BY a marked Agent OS capture injection is
+ * not the operator's work: assistant output more recent than the last marked
+ * injection (with no operator message after it) is housekeeping and is never
+ * part of the turn; the work between the operator's words and the injection
+ * still is (2026-09-16 injection marking).
  *
  * Scan rules, each load-bearing:
  *   - a USER message stops the scan: the operator's words bound the turn and
  *     are never part of it (one direction only);
- *   - TOOL messages are skipped WITHOUT stopping: the worker's activity is not
- *     its voice, but it is not a turn boundary either;
+ *   - a MARKED CAPTURE INJECTION (role 'custom', customType
+ *     'agent-os-capture') is an upper bound: assistant output after it — the
+ *     housekeeping turn it triggered — is excluded; the scan continues below
+ *     it, because the operator's work sits between their message and the
+ *     injection. The packet/workset lane's 'agent-os' type rides INSIDE the
+ *     operator's turn and is deliberately not a boundary;
+ *   - TOOL messages and any other custom messages are skipped WITHOUT
+ *     stopping: the worker's activity is not its voice, and another
+ *     extension's injection must never silence the operator's turn;
  *   - an ACCOUNTED message stops the scan: `accounted` maps message id to the
  *     exact words already taken on by a previous turn of this surface (spoken,
  *     or held for the focus recap). Same id and same words means that content
@@ -259,10 +290,27 @@ export function getTurnAssistantParts(
   messages: readonly Message[],
   accounted?: ReadonlyMap<string, string>
 ): TurnAssistantParts {
-  const collected: Array<{ id: string; text: string }> = [];
+  // The lower bound: the operator's last message (their words bound the turn).
+  let lastOperatorMessage = -1;
+  // The upper bound: the last marked capture injection, if any. Only bounds
+  // the turn when it is MORE RECENT than the operator's last message.
+  let lastCaptureInjection = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
-    if (message.role === 'user') break;
+    if (lastOperatorMessage === -1 && message.role === 'user') lastOperatorMessage = i;
+    if (lastCaptureInjection === -1 && isAgentOsCaptureInjection(message)) lastCaptureInjection = i;
+    if (lastOperatorMessage !== -1 && lastCaptureInjection !== -1) break;
+  }
+  const collected: Array<{ id: string; text: string }> = [];
+  // When the last marked injection is more recent than the operator's last
+  // message, everything above it is the housekeeping turn it produced and is
+  // excluded; the scan collects only the work between the operator's words and
+  // the injection. Otherwise the injection is older history and does not bind
+  // (the sentinel 'length' never excludes anything).
+  const housekeepingFrom = lastCaptureInjection > lastOperatorMessage ? lastCaptureInjection : messages.length;
+  for (let i = messages.length - 1; i > lastOperatorMessage; i -= 1) {
+    if (i >= housekeepingFrom) continue;
+    const message = messages[i];
     if (message.role !== 'assistant') continue;
     const text = assistantMessageText(message);
     if (!text) continue;

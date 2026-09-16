@@ -1,0 +1,44 @@
+{
+  "sessionId": "01a0aac9-4044-7449-b9ba-41996af5ff18",
+  "sessionPath": "/root/inject-lab-20260916/srv-legacy/pi-sessions/2026-09-16T15-15-11-045Z_01a0aac9-4044-7449-b9ba-41996af5ff18.jsonl",
+  "runtime": "pi",
+  "executionInstanceId": "pi-local-default",
+  "cwd": "/root/inject-lab-20260916/workspace",
+  "model": "zai/glm-5.3-flash",
+  "status": "idle",
+  "messageCount": 40,
+  "firstMessage": "Use the bash tool to create a file named inject-lab.txt in the current directory containing exactly ",
+  "createdAt": "2026-09-16T15:15:11.045Z",
+  "lastActivity": "2026-09-16T15:20:28.560Z",
+  "backendMode": "native",
+  "pinned": false,
+  "nativeSessionId": "01a0aac9-4044-7449-b9ba-41996af5ff18",
+  "sessionFile": "/root/inject-lab-20260916/srv-legacy/pi-sessions/2026-09-16T15-15-11-045Z_01a0aac9-4044-7449-b9ba-41996af5ff18.jsonl",
+  "tokens": {
+    "input": 109745,
+    "output": 8077,
+    "total": 1092478
+  },
+  "cost": 0.024869964999999997,
+  "stats": {
+    "userMessages": 2,
+    "assistantMessages": 19,
+    "toolCalls": 19,
+    "toolResults": 19,
+    "totalMessages": 40
+  },
+  "context": {
+    "contextWindow": 1000000,
+    "used": 66846,
+    "percent": 6.6846000000000005
+  },
+  "busy": false,
+  "retention": {
+    "protected": false,
+    "leases": []
+  },
+  "goal": {
+    "supported": true,
+    "status": "idle"
+  }
+}

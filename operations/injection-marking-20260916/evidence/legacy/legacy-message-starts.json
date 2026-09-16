@@ -1,0 +1,172 @@
+[
+  {
+    "role": "user",
+    "preview": "[{\"type\":\"text\",\"text\":\"Use the bash tool to create a file named inject-lab.txt in the current directory containing exac"
+  },
+  {
+    "role": "custom",
+    "customType": "agent-os",
+    "preview": "\"# Agent OS Context Packet\\n\\n## Task\\n\\ncontinue work\\n\\n## Memory access\\n\\n- This packet is a bounded summary, not th"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"MARKER\"}]"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "user",
+    "preview": "[{\"type\":\"text\",\"text\":\"Agent OS session-end memory capture (automated delivery by the D3 write lane). Run your agent os"
+  },
+  {
+    "role": "custom",
+    "customType": "agent-os",
+    "preview": "\"Agent OS memory is available but was not delivered here (no compiled project memory resolved for /root/inject-lab-20260"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"---\\nname: agent-os-capture\\ndescription: \\\"Capture durable outcomes from the current real worki"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"\\n> agent-os@0.1.0 agent-os\\n> node src/cli.ts capture --help\\n\\nusage: agent-os capture --note "
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"---\\nid: index-projects\\nkind: procedure\\ntitle: Project Index\\ndurability: project-stable\\nsumm"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"/root/agent-os/src/cli.ts:514:      const captureSessionRef = arg(args, '--session-ref');\\n/root"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Confirmed\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"---\\n56\\n\"}]"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"No\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"52:  targetContainerKind?: ContainerKind;\\n63:export function captureDictatedHorizon(input: Omit"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Line\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"    .replace(/\\\\bsk-[A-Za-z0-9]{20,}/g, '[REDACTED:openai-key]')\\n    .replace(/\\\\bgh[pousr]_[A-"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"\\n> agent-os@0.1.0 agent-os\\n> node src/cli.ts recall Is there already a held memory about agent"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"\\n> agent-os@0.1.0 agent-os\\n> node src/cli.ts recall capture policy preference: what should age"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Both\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"preferences.md\\nprofile.md\\nrules-of-engagement.md\\n/root/agent-os/memory-vault/compiled/identit"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"toolCall\",\"id\":\"call_1710574858084e5fab380181\",\"name\":\"bash\",\"arguments\":{},\"partialArgs\":\"{\\\"\",\"streamIndex\":"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"## Preferences & stance\\n\\n- I do not buy into the strongest AI hype narratives that say every n"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"A: 365\\nB: 319\\n\\n\\nCommand exited with code 1\"}]"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Both\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"A: 320\\nB: 257\\n\\n\\nCommand exited with code 1\"}]"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"toolCall\",\"id\":\"call_be66845946e04e2a867dcb56\",\"name\":\"bash\",\"arguments\":{},\"partialArgs\":\"{\\\"\",\"streamIndex\":"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"A: 298\\n\\n\\nCommand exited with code 1\"}]"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Still\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"A: 284\\n\\n\\nCommand exited with code 1\"}]"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"toolCall\",\"id\":\"call_30b41714c78e424d89a7e87f\",\"name\":\"bash\",\"arguments\":{},\"partialArgs\":\"{\\\"\",\"streamIndex\":"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"A: 265\\nA-OK\\n\"}]"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"A\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"\\n> agent-os@0.1.0 agent-os\\n> node src/cli.ts capture --note Outcome: The 2026-09-16 inject-lab"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Capture\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"Uncertainty: whether further inject-lab rounds are planned is unknown to this agent; none known "
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Both\",\"thinkingSignature\":\"reasoning_content\"}]"
+  }
+]
