@@ -253,7 +253,7 @@ export function DriveModeDictate({
       {/* Exit button */}
       <button
         onClick={onExit}
-        className="absolute top-4 right-4 text-sm text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+        className="absolute top-4 right-4 text-xs font-medium text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark transition-colors px-2.5 py-1 rounded-lg hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
         type="button"
       >
         ✕ Exit
@@ -261,10 +261,10 @@ export function DriveModeDictate({
 
       {/* Session info */}
       <div className="flex flex-col items-center mt-8 mb-4">
-        <div className="text-lg font-medium text-gray-900 dark:text-gray-100">
+        <div className="text-base font-semibold text-content-primary dark:text-content-primary-dark">
           {sessionDisplayName}
         </div>
-        <div className="text-sm text-gray-500 dark:text-gray-400">{modelName}</div>
+        <div className="text-xs text-content-muted dark:text-content-muted-dark font-mono mt-0.5">{modelName}</div>
       </div>
 
       {/* The two modes: the existing voice-only surface, or the desktop split
@@ -360,7 +360,7 @@ export function DriveModeDictate({
           tidied; the worker never knows this lane exists. */}
       <p
         data-testid="voice-contract-hint"
-        className="mt-3 max-w-md text-center text-xs leading-relaxed text-gray-500 dark:text-gray-400"
+        className="mt-3 max-w-md text-center text-xs leading-relaxed text-content-muted dark:text-content-muted-dark"
       >
         Say it however you like — your words are passed on as spoken, tidied
         only when they ramble, never rewritten. The worker never knows this
@@ -397,7 +397,7 @@ export function DriveModeDictate({
           {isStreaming && onAbort && (
             <button
               onClick={onAbort}
-              className="px-6 py-3 rounded-xl bg-red-600 text-white text-base font-medium hover:bg-red-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation"
+              className="px-6 py-3 rounded-xl bg-red-600 text-white text-base font-medium hover:bg-red-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation shadow-xs"
               type="button"
             >
               <Square className="w-4 h-4 fill-current" />
@@ -407,7 +407,7 @@ export function DriveModeDictate({
           {talkerBusy && (
             <button
               onClick={handleStopTalker}
-              className="px-6 py-3 rounded-xl bg-amber-600 text-white text-base font-medium hover:bg-amber-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation"
+              className="px-6 py-3 rounded-xl bg-amber-600 text-white text-base font-medium hover:bg-amber-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation shadow-xs"
               type="button"
               data-testid="stop-talker"
             >
@@ -489,10 +489,10 @@ export function DriveModeDictate({
           <button
             onClick={handleReadAloud}
             disabled={readAloud.state !== 'playing' && !turnAssistantText}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`px-4 py-2 rounded-xl text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
               readAloud.state === 'playing'
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
+                ? 'bg-pi-primary/15 text-pi-primary border border-pi-primary/30'
+                : 'bg-pi-primary text-white hover:bg-pi-hover shadow-xs'
             }`}
             type="button"
           >
@@ -500,7 +500,7 @@ export function DriveModeDictate({
           </button>
           <button
             onClick={handleToggleSpeed}
-            className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+            className="px-3 py-2 rounded-xl text-xs font-medium border border-outline-default dark:border-outline-default-dark bg-surface dark:bg-surface-dark text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors font-mono"
             type="button"
           >
             {readAloud.speedEnabled ? '1.25x' : '1x'}

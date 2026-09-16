@@ -160,38 +160,38 @@ export const TodoToolCard = memo(function TodoToolCard({
   const todoId = action === 'toggle' ? Number(argsRecord.id) : null;
 
   return (
-    <div className="w-full border border-gray-200 rounded-lg overflow-hidden bg-white">
+    <div className="w-full border border-outline-default dark:border-outline-default-dark rounded-xl overflow-hidden bg-surface dark:bg-surface-dark shadow-xs my-1.5">
       {/* Header - CLI-style todo header */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className={`flex items-center gap-2 w-full px-3 py-2 text-left transition-colors ${
-          isExpanded ? 'bg-gray-50 border-b border-gray-200' : 'hover:bg-gray-50'
+          isExpanded ? 'bg-surface-subtle dark:bg-surface-dark-subtle border-b border-outline-subtle dark:border-outline-subtle-dark' : 'hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle'
         }`}
         type="button"
       >
         {/* Expand indicator */}
-        <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
+        <ChevronRight strokeWidth={1.75} className={`w-4 h-4 text-content-muted dark:text-content-muted-dark transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
 
         {/* Todo icon */}
-        <div className={`p-1 rounded ${isError ? 'bg-red-50' : isPending ? 'bg-amber-50' : 'bg-emerald-50'}`}>
-          <ListTodo className={`w-4 h-4 ${isError ? 'text-red-500' : isPending ? 'text-amber-500' : 'text-emerald-500'}`} />
+        <div className={`p-1 rounded-md ${isError ? 'bg-red-50 dark:bg-red-950/30' : isPending ? 'bg-amber-50 dark:bg-amber-950/30' : 'bg-emerald-50 dark:bg-emerald-950/30'}`}>
+          <ListTodo strokeWidth={1.75} className={`w-4 h-4 ${isError ? 'text-red-500' : isPending ? 'text-amber-500' : 'text-emerald-500'}`} />
         </div>
 
         {/* Action description */}
         <div className="flex items-baseline gap-2">
-          <span className="font-mono text-sm font-medium text-gray-900">
+          <span className="font-mono text-sm font-medium text-content-primary dark:text-content-primary-dark">
             todo
           </span>
-          <span className="text-xs text-gray-500 font-mono">
+          <span className="text-xs text-content-muted dark:text-content-muted-dark font-mono">
             {action}
           </span>
           {action === 'add' && todoText && (
-            <span className="text-xs text-gray-400 truncate max-w-[200px]">
+            <span className="text-xs text-content-muted dark:text-content-muted-dark truncate max-w-[200px]">
               "{todoText}"
             </span>
           )}
           {action === 'toggle' && todoId !== null && (
-            <span className="text-xs text-emerald-600">
+            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">
               #{todoId}
             </span>
           )}
@@ -200,13 +200,13 @@ export const TodoToolCard = memo(function TodoToolCard({
         {/* Status */}
         <div className="ml-auto flex items-center gap-2">
           {!isExpanded && totalCount > 0 && (
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-content-muted dark:text-content-muted-dark">
               {completedCount}/{totalCount}
             </span>
           )}
           {isPending ? (
             <span className="text-xs text-amber-500 flex items-center gap-1">
-              <Clock className="w-3 h-3" />
+              <Clock strokeWidth={1.75} className="w-3 h-3" />
               Running
               {elapsedSeconds > 0 && (
                 <span className="font-mono">({formatElapsed(elapsedSeconds)})</span>
@@ -214,18 +214,18 @@ export const TodoToolCard = memo(function TodoToolCard({
               …
             </span>
           ) : isError ? (
-            <XCircle className="w-4 h-4 text-red-500" />
+            <XCircle strokeWidth={1.75} className="w-4 h-4 text-red-500" />
           ) : (
-            <CheckCircle className="w-4 h-4 text-emerald-500" />
+            <CheckCircle strokeWidth={1.75} className="w-4 h-4 text-emerald-500" />
           )}
         </div>
       </button>
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="px-3 py-2 space-y-2">
+        <div className="px-3 py-2 space-y-2 bg-surface-subtle/30 dark:bg-surface-dark-subtle/30">
           {/* Action indicator */}
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-content-muted dark:text-content-muted-dark">
             {getActionText(action)}
           </div>
 
@@ -235,22 +235,22 @@ export const TodoToolCard = memo(function TodoToolCard({
               {todos.map((todo) => (
                 <div 
                   key={todo.id}
-                  className={`flex items-center gap-2 py-1 px-2 rounded ${
-                    todo.done ? 'bg-gray-50' : 'bg-white'
+                  className={`flex items-center gap-2 py-1 px-2 rounded-lg border border-outline-subtle dark:border-outline-subtle-dark ${
+                    todo.done ? 'bg-surface-subtle/50 dark:bg-surface-dark-subtle/50' : 'bg-surface dark:bg-surface-dark'
                   }`}
                 >
                   {/* Checkbox */}
                   <span className="shrink-0">
                     {todo.done ? (
-                      <Check className="w-4 h-4 text-emerald-500" />
+                      <Check strokeWidth={1.75} className="w-4 h-4 text-emerald-500" />
                     ) : (
-                      <Circle className="w-4 h-4 text-gray-300" />
+                      <Circle strokeWidth={1.75} className="w-4 h-4 text-content-muted dark:text-content-muted-dark" />
                     )}
                   </span>
                   
                   {/* Todo ID */}
                   <span className={`text-xs font-mono shrink-0 ${
-                    todo.done ? 'text-gray-400' : 'text-emerald-600'
+                    todo.done ? 'text-content-muted dark:text-content-muted-dark' : 'text-emerald-600 dark:text-emerald-400'
                   }`}>
                     #{todo.id}
                   </span>

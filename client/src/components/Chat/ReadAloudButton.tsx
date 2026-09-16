@@ -26,8 +26,8 @@ export function ReadAloudButton({ state, speedEnabled, onClick, onToggleSpeed }:
             w-7 h-7 rounded-lg text-[10px] font-semibold transition-all duration-200 touch-manipulation
             flex items-center justify-center
             ${speedEnabled
-              ? 'bg-blue-100 text-blue-700 ring-1 ring-blue-300'
-              : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-600'
+              ? 'bg-pi-primary/10 text-pi-primary border border-pi-primary/30'
+              : 'bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark text-content-muted dark:text-content-muted-dark sm:opacity-0 sm:group-hover:opacity-100 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle hover:text-content-primary dark:hover:text-content-primary-dark'
             }
           `}
           title={speedEnabled ? 'Speed: 1.25× — tap for 1×' : 'Speed: 1× — tap for 1.25×'}
@@ -42,21 +42,21 @@ export function ReadAloudButton({ state, speedEnabled, onClick, onToggleSpeed }:
         onClick={onClick}
         disabled={isLoading}
         className={`
-          p-2 rounded-lg transition-all duration-200 touch-manipulation
+          p-1.5 rounded-lg transition-all duration-200 touch-manipulation
           ${isLoading
-            ? 'bg-blue-100 text-blue-600 cursor-wait'
+            ? 'bg-pi-primary/10 text-pi-primary cursor-wait'
             : isPlaying
-              ? 'bg-blue-100 text-blue-600'
-              : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700 cursor-pointer'
+              ? 'bg-pi-primary/15 text-pi-primary border border-pi-primary/30'
+              : 'bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark text-content-muted dark:text-content-muted-dark sm:opacity-0 sm:group-hover:opacity-100 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle hover:text-content-primary dark:hover:text-content-primary-dark cursor-pointer'
           }
         `}
         title={isLoading ? 'Loading…' : isPlaying ? 'Stop' : isPaused ? 'Stopped at a sentence boundary — tap to clear' : 'Read aloud'}
         aria-label={isLoading ? 'Loading audio' : isPlaying ? 'Stop reading aloud' : 'Read message aloud'}
         type="button"
       >
-        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" />
-          : isPlaying ? <Square className="w-4 h-4" />
-          : <Volume2 className="w-4 h-4" />}
+        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} />
+          : isPlaying ? <Square className="w-4 h-4" strokeWidth={1.75} />
+          : <Volume2 className="w-4 h-4" strokeWidth={1.75} />}
       </button>
     </>
   );

@@ -390,15 +390,15 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
         role="listitem"
         tabIndex={0}
         className={`
-          group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none select-none border-l-4
+          group relative py-2 px-3 rounded-lg cursor-pointer transition-all duration-150 outline-none select-none border-l-4
           ${showActiveHighlight
             ? 'session-item-active'
-            : 'border-transparent hover:bg-gray-100'
+            : 'border-transparent hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle'
           }
           ${isDeleting ? 'opacity-50 pointer-events-none' : ''}
-          ${isHighlighted ? 'ring-2 ring-blue-400 bg-blue-50' : ''}
+          ${isHighlighted ? 'ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-950/30' : ''}
           ${transferDragging && !isValidDropTarget && transferSource?.sessionId !== session.id ? 'opacity-60' : ''}
-          ${transferDragging && transferSource?.sessionId === session.id ? 'opacity-40 ring-2 ring-blue-300 bg-blue-50' : ''}
+          ${transferDragging && transferSource?.sessionId === session.id ? 'opacity-40 ring-2 ring-blue-300 bg-blue-50 dark:bg-blue-950/30' : ''}
         `}
       >
         {isEditing ? (
@@ -409,34 +409,34 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
               onChange={(e) => setEditName(e.target.value)}
               onKeyDown={handleKeyDown}
               onClick={(e) => e.stopPropagation()}
-              className="flex-1 px-2 py-1 text-sm bg-white border border-gray-300 rounded text-gray-900 focus:outline-none focus:border-blue-500 text-base"
+              className="flex-1 px-2 py-1 text-sm bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded text-content-primary dark:text-content-primary-dark focus:outline-none focus:border-pi-primary text-base"
               placeholder="Session name"
               autoFocus
             />
             <button
               onClick={handleSaveEdit}
-              className="p-1 hover:bg-gray-200 rounded transition-colors"
+              className="p-1 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded transition-colors"
               title="Save"
             >
-              <Check className="w-3.5 h-3.5 text-green-600" />
+              <Check className="w-3.5 h-3.5 text-green-600 dark:text-green-400" strokeWidth={1.75} />
             </button>
             <button
               onClick={handleCancelEdit}
-              className="p-1 hover:bg-gray-200 rounded transition-colors"
+              className="p-1 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded transition-colors"
               title="Cancel"
             >
-              <X className="w-3.5 h-3.5 text-red-500" />
+              <X className="w-3.5 h-3.5 text-red-500 dark:text-red-400" strokeWidth={1.75} />
             </button>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
-            <GripVertical className="w-3 h-3 text-gray-300 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab" />
-            <p className={`text-sm text-gray-900 truncate flex-1 ${showActiveHighlight ? 'font-semibold' : ''}`}>
+            <GripVertical className="w-3 h-3 text-content-muted dark:text-content-muted-dark flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab" strokeWidth={1.75} />
+            <p className={`text-sm text-content-primary dark:text-content-primary-dark truncate flex-1 ${showActiveHighlight ? 'font-semibold' : ''}`}>
               {displayName}
             </p>
             {session.sdkType === 'claude' && (
               <span 
-                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-500 dark:text-amber-400 border border-amber-500/20 cursor-help"
                 title="Claude Direct - uses Claude Code CLI with subscription quota"
               >
                 CC
@@ -444,7 +444,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
             )}
             {session.sdkType === 'opencode' && (
               <span
-                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-600 border border-emerald-500/20 cursor-help"
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 cursor-help"
                 title="OpenCode Direct - uses OpenCode runtime with Z.AI GLM"
               >
                 OC
@@ -452,7 +452,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
             )}
             {session.sdkType === 'antigravity' && (
               <span
-                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-600 border border-violet-500/20 cursor-help"
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-600 dark:text-violet-400 border border-violet-500/20 cursor-help"
                 title="Antigravity - uses Google Gemini via agy CLI"
               >
                 AG
@@ -460,7 +460,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
             )}
             {session.sdkType === 'commandcode' && (
               <span
-                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-500/15 text-slate-700 border border-slate-500/20 cursor-help"
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-500/15 text-slate-700 dark:text-slate-300 border border-slate-500/20 cursor-help"
                 title="Command Code - contained browser runtime"
               >
                 CMD
@@ -470,20 +470,20 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
             <div className="flex items-center gap-1 flex-shrink-0">
               {/* Pin indicator - always visible when pinned */}
               {isPinned && !((showActions || isActive) && !contextMenu.visible) && (
-                <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
+                <Pin className="w-3 h-3 text-amber-500 fill-amber-500" strokeWidth={1.75} />
               )}
               {/* Actions: hover on desktop; always visible for active session */}
               {(showActions || isActive) && !contextMenu.visible ? (
                 <>
                   <button
                     onClick={handleTogglePin}
-                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    className="p-1 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded transition-colors"
                     title={isPinned ? 'Unpin session (allow idle cleanup)' : 'Pin session (protect from cleanup)'}
                   >
                     {isPinned ? (
-                      <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
+                      <Pin className="w-3 h-3 text-amber-500 fill-amber-500" strokeWidth={1.75} />
                     ) : (
-                      <Pin className="w-3 h-3 text-gray-400" />
+                      <Pin className="w-3 h-3 text-content-muted dark:text-content-muted-dark hover:text-content-primary" strokeWidth={1.75} />
                     )}
                   </button>
                   <SessionNotifyToggle
@@ -495,10 +495,10 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
                   {!isArchived && (
                     <button
                       onClick={handleStartEdit}
-                      className="p-1 hover:bg-gray-200 rounded transition-colors"
+                      className="p-1 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded transition-colors"
                       title="Rename session"
                     >
-                      <Edit2 className="w-3 h-3 text-gray-400" />
+                      <Edit2 className="w-3 h-3 text-content-muted dark:text-content-muted-dark hover:text-content-primary" strokeWidth={1.75} />
                     </button>
                   )}
                   <div className="relative">
@@ -507,35 +507,35 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
                         e.stopPropagation();
                         setShowExportMenu(!showExportMenu);
                       }}
-                      className="p-1 hover:bg-gray-200 rounded transition-colors"
+                      className="p-1 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded transition-colors"
                       title="Export session"
                     >
-                      <Download className="w-3 h-3 text-gray-400" />
+                      <Download className="w-3 h-3 text-content-muted dark:text-content-muted-dark hover:text-content-primary" strokeWidth={1.75} />
                     </button>
                     {showExportMenu && (
                       <div 
-                        className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-[120px]"
+                        className="absolute right-0 top-full mt-1 bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded-xl shadow-lg py-1 z-50 min-w-[120px]"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
                           onClick={() => handleExport('markdown')}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
                         >
-                          <FileText className="w-3.5 h-3.5" />
+                          <FileText className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                           Markdown
                         </button>
                         <button
                           onClick={() => handleExport('json')}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
                         >
-                          <FileJson className="w-3.5 h-3.5" />
+                          <FileJson className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                           JSON
                         </button>
                         <button
                           onClick={() => handleExport('html')}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
                         >
-                          <Code className="w-3.5 h-3.5" />
+                          <Code className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                           HTML
                         </button>
                       </div>
@@ -550,34 +550,31 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
                         archiveSession(session.path);
                       }
                     }}
-                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    className="p-1 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded transition-colors"
                     title={isArchived ? 'Restore from archive' : 'Archive session'}
                   >
                     {isArchived ? (
-                      <ArchiveRestore className="w-3 h-3 text-blue-500" />
+                      <ArchiveRestore className="w-3 h-3 text-pi-primary" strokeWidth={1.75} />
                     ) : (
-                      <Archive className="w-3 h-3 text-gray-400" />
+                      <Archive className="w-3 h-3 text-content-muted dark:text-content-muted-dark hover:text-content-primary" strokeWidth={1.75} />
                     )}
                   </button>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete();
-                    }}
-                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    onClick={handleDelete}
+                    className="p-1 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded transition-colors"
                     title="Delete session"
                   >
-                    <Trash2 className="w-3 h-3 text-gray-400" />
+                    <Trash2 className="w-3 h-3 text-content-muted dark:text-content-muted-dark hover:text-red-500" strokeWidth={1.75} />
                   </button>
                 </>
               ) : isLoading ? (
-                <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                <Loader2 className="w-3.5 h-3.5 text-pi-primary animate-spin" strokeWidth={1.75} />
               ) : workerStatus ? (
                 <WorkerStatusIndicator sessionId={session.id} />
               ) : isActiveSession ? (
                 <SessionStatusIndicator sessionId={session.id} />
               ) : (
-                <span className="text-[11px] text-gray-400">
+                <span className="text-[11px] text-content-muted dark:text-content-muted-dark font-mono">
                   {getRelativeTime(session.lastActivity || session.createdAt || new Date())}
                 </span>
               )}
@@ -590,74 +587,74 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
       {contextMenu.visible && (
         <div
           ref={contextMenuRef}
-          className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-[160px]"
+          className="fixed bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded-xl shadow-xl py-1 z-50 min-w-[160px]"
           style={{
             left: contextMenu.x,
             top: contextMenu.y,
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-3 py-1.5 text-xs font-medium text-gray-400 border-b border-gray-100 mb-1">
+          <div className="px-3 py-1.5 text-xs font-medium text-content-muted dark:text-content-muted-dark border-b border-outline-subtle dark:border-outline-subtle-dark mb-1">
             {displayName.length > 25 ? displayName.slice(0, 25) + '...' : displayName}
           </div>
           
           {!isArchived && (
             <button
               onClick={() => handleStartEdit()}
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
             >
-              <Edit2 className="w-3.5 h-3.5" />
+              <Edit2 className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
               Rename
             </button>
           )}
           
           <div className="relative group/export">
             <button
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
               Export
-              <span className="ml-auto text-gray-400">›</span>
+              <span className="ml-auto text-content-muted dark:text-content-muted-dark">›</span>
             </button>
-            <div className="hidden group-hover/export:block absolute left-full top-0 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[120px] ml-0.5">
+            <div className="hidden group-hover/export:block absolute left-full top-0 bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded-xl shadow-xl py-1 min-w-[120px] ml-0.5">
               <button
                 onClick={() => handleExport('markdown')}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
               >
-                <FileText className="w-3.5 h-3.5" />
+                <FileText className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                 Markdown
               </button>
               <button
                 onClick={() => handleExport('json')}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
               >
-                <FileJson className="w-3.5 h-3.5" />
+                <FileJson className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                 JSON
               </button>
               <button
                 onClick={() => handleExport('html')}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
               >
-                <Code className="w-3.5 h-3.5" />
+                <Code className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                 HTML
               </button>
             </div>
           </div>
           
-          <div className="border-t border-gray-100 my-1" />
+          <div className="border-t border-outline-subtle dark:border-outline-subtle-dark my-1" />
           
           <button
             onClick={handleTogglePin}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
           >
             {isPinned ? (
               <>
-                <PinOff className="w-3.5 h-3.5 text-amber-500" />
-                <span className="text-amber-600">Unpin session</span>
+                <PinOff className="w-3.5 h-3.5 text-amber-500" strokeWidth={1.75} />
+                <span className="text-amber-600 dark:text-amber-400">Unpin session</span>
               </>
             ) : (
               <>
-                <Pin className="w-3.5 h-3.5" />
+                <Pin className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                 <span>Pin session</span>
               </>
             )}
@@ -665,16 +662,16 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
           
           <button
             onClick={handleArchive}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
           >
             {isArchived ? (
               <>
-                <ArchiveRestore className="w-3.5 h-3.5 text-blue-500" />
-                <span className="text-blue-600">Restore</span>
+                <ArchiveRestore className="w-3.5 h-3.5 text-pi-primary" strokeWidth={1.75} />
+                <span className="text-pi-primary">Restore</span>
               </>
             ) : (
               <>
-                <Archive className="w-3.5 h-3.5" />
+                <Archive className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                 Archive
               </>
             )}
@@ -682,10 +679,10 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
           
           <button
             onClick={handleDelete}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30"
             disabled={isDeleting}
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className="w-3.5 h-3.5" strokeWidth={1.75} />
             {isDeleting ? 'Deleting...' : 'Delete'}
           </button>
         </div>

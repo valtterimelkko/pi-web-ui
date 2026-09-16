@@ -46,7 +46,7 @@ export function CodeBlock({ children }: CodeBlockProps) {
   return (
     <pre
       ref={preRef}
-      className="relative bg-slate-100 border border-slate-200 rounded-md p-2 overflow-x-auto my-1.5 text-xs text-slate-800"
+      className="relative bg-surface-subtle dark:bg-surface-dark-subtle border border-outline-default dark:border-outline-default-dark rounded-xl p-3 overflow-x-auto my-2 text-xs text-content-primary dark:text-content-primary-dark font-mono"
     >
       <button
         type="button"
@@ -54,14 +54,14 @@ export function CodeBlock({ children }: CodeBlockProps) {
         title={copied ? 'Copied!' : 'Copy code'}
         aria-label={copied ? 'Copied code block to clipboard' : 'Copy code block to clipboard'}
         className={`
-          absolute top-1 right-1 p-1 rounded transition-all duration-200 touch-manipulation
+          absolute top-2 right-2 p-1.5 rounded-lg border border-outline-subtle dark:border-outline-subtle-dark transition-all duration-200 touch-manipulation
           ${copied
-            ? 'bg-green-100 text-green-600'
-            : 'bg-white/80 text-gray-500 hover:bg-white hover:text-gray-700 opacity-80 hover:opacity-100'
+            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+            : 'bg-surface dark:bg-surface-dark text-content-muted dark:text-content-muted-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle hover:text-content-primary dark:hover:text-content-primary-dark opacity-80 hover:opacity-100 shadow-2xs'
           }
         `}
       >
-        {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+        {copied ? <Check className="w-3.5 h-3.5" strokeWidth={1.75} /> : <Copy className="w-3.5 h-3.5" strokeWidth={1.75} />}
       </button>
       {children}
     </pre>

@@ -48,23 +48,23 @@ interface CollapsibleToolCardProps {
 
 // Map tool names to icons (following Kimi's approach)
 const TOOL_ICONS: Record<string, React.ReactNode> = {
-  bash: <Terminal className="w-3.5 h-3.5" />,
-  read: <FileText className="w-3.5 h-3.5" />,
-  write: <Edit3 className="w-3.5 h-3.5" />,
-  edit: <Edit3 className="w-3.5 h-3.5" />,
-  grep: <Search className="w-3.5 h-3.5" />,
-  glob: <FolderSearch className="w-3.5 h-3.5" />,
-  search: <Globe className="w-3.5 h-3.5" />,
-  fetch: <Link2 className="w-3.5 h-3.5" />,
-  web_search: <Globe className="w-3.5 h-3.5" />,
-  web_fetch: <Link2 className="w-3.5 h-3.5" />,
-  subagent: <Bot className="w-3.5 h-3.5" />,
-  think: <Brain className="w-3.5 h-3.5" />,
-  todo: <ListTodo className="w-3.5 h-3.5" />,
-  mail: <Mail className="w-3.5 h-3.5" />,
-  command_status: <Terminal className="w-3.5 h-3.5" />,
-  send_command_input: <Terminal className="w-3.5 h-3.5" />,
-  wait: <Clock className="w-3.5 h-3.5" />,
+  bash: <Terminal className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  read: <FileText className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  write: <Edit3 className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  edit: <Edit3 className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  grep: <Search className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  glob: <FolderSearch className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  search: <Globe className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  fetch: <Link2 className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  web_search: <Globe className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  web_fetch: <Link2 className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  subagent: <Bot className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  think: <Brain className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  todo: <ListTodo className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  mail: <Mail className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  command_status: <Terminal className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  send_command_input: <Terminal className="w-3.5 h-3.5" strokeWidth={1.75} />,
+  wait: <Clock className="w-3.5 h-3.5" strokeWidth={1.75} />,
 };
 
 // Map tool names to display names
@@ -228,7 +228,7 @@ const LongParam = memo(function LongParam({
         type="button"
       >
         <span className="text-content-muted dark:text-content-muted-dark shrink-0 select-none">{paramKey}</span>
-        <ChevronRight className={`w-3 h-3 text-content-muted dark:text-content-muted-dark transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`} />
+        <ChevronRight strokeWidth={1.75} className={`w-3 h-3 text-content-muted dark:text-content-muted-dark transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`} />
         {!expanded && (
           <span className="text-content-muted dark:text-content-muted-dark truncate group-hover:text-content-secondary dark:group-hover:text-content-secondary-dark">
             {preview}…
@@ -268,7 +268,7 @@ const ToolInputSection = memo(function ToolInputSection({ args }: { args: unknow
           className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark transition-colors"
           title="Copy arguments"
         >
-          {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+          {copied ? <Check className="w-3 h-3 text-emerald-500" strokeWidth={1.75} /> : <Copy className="w-3 h-3" strokeWidth={1.75} />}
         </button>
       </div>
       {entries.map(([key, value]) => {
@@ -505,7 +505,7 @@ const BriefStatus = memo(function BriefStatus({
   if (isPending) {
     return (
       <span className="text-xs text-amber-500 flex items-center gap-1">
-        <Clock className="w-3 h-3" />
+        <Clock className="w-3 h-3" strokeWidth={1.75} />
         Running
         {elapsedSeconds !== undefined && elapsedSeconds > 0 && (
           <span className="font-mono">({formatElapsed(elapsedSeconds)})</span>
@@ -677,7 +677,7 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
         )}
 
         {/* Chevron toggle – moved to RIGHT side */}
-        <ChevronRight className={`w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark transition-transform duration-200 shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
+        <ChevronRight strokeWidth={1.75} className={`w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark transition-transform duration-200 shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
       </button>
 
       {/* Expanded content */}
@@ -694,7 +694,7 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
                 className="flex items-center gap-1.5 text-xs text-content-muted dark:text-content-muted-dark font-mono hover:text-content-primary dark:hover:text-content-primary-dark py-0.5 w-full text-left"
                 type="button"
               >
-                <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${showInputs ? 'rotate-90' : ''}`} />
+                <ChevronRight strokeWidth={1.75} className={`w-3 h-3 transition-transform duration-200 ${showInputs ? 'rotate-90' : ''}`} />
                 Input parameters
               </button>
               {showInputs && (

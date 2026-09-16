@@ -129,10 +129,10 @@ export function Sidebar() {
     return (
       <button
         onClick={toggleSidebar}
-        className="fixed left-4 top-4 z-40 p-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+        className="fixed left-4 top-4 z-40 p-2 bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded-lg hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors shadow-xs"
         title="Open sidebar"
       >
-        <PanelRight className="w-5 h-5 text-gray-500" />
+        <PanelRight className="w-4 h-4 text-content-secondary dark:text-content-secondary-dark" strokeWidth={1.75} />
       </button>
     );
   }
@@ -147,51 +147,51 @@ export function Sidebar() {
 
       <aside
         data-testid="session-sidebar"
-        className="fixed inset-y-0 left-0 w-60 md:relative md:w-60 h-full bg-gray-50 border-r border-gray-200 flex flex-col z-50 animate-in slide-in-from-left duration-200"
+        className="fixed inset-y-0 left-0 w-60 md:relative md:w-60 h-full bg-[#fbfbfa] dark:bg-[#18181b] border-r border-outline-default dark:border-outline-default-dark flex flex-col z-50 animate-in slide-in-from-left duration-200"
       >
         {/* Header - Brand */}
         <div className="px-4 pt-4 pb-2">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <span className="text-base font-semibold text-gray-900">Pi Code</span>
-              <span className="text-[10px] font-medium text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded">v1.0</span>
+              <span className="text-base font-semibold text-content-primary dark:text-content-primary-dark">Pi Code</span>
+              <span className="text-[10px] font-medium text-content-muted dark:text-content-muted-dark bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark px-1.5 py-0.5 rounded">v1.0</span>
             </div>
           </div>
 
           {/* Sessions header with actions */}
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Sessions</span>
+            <span className="text-[11px] font-semibold text-content-muted dark:text-content-muted-dark uppercase tracking-wider">Sessions</span>
             <div className="flex items-center gap-1">
               {activeSessions.length > 0 && (
                 <button
                   onClick={handleArchiveAll}
                   disabled={archivingAll}
-                  className="p-1.5 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
+                  className="p-1.5 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark rounded-md transition-colors disabled:opacity-50"
                   title={`Archive all ${activeSessions.length} active sessions`}
                 >
-                  <Archive className={`w-3.5 h-3.5 text-gray-400 ${archivingAll ? 'animate-pulse' : ''}`} />
+                  <Archive className={`w-3.5 h-3.5 ${archivingAll ? 'animate-pulse' : ''}`} strokeWidth={1.75} />
                 </button>
               )}
               <button
                 onClick={() => getSessions?.()}
-                className="p-1.5 hover:bg-gray-200 rounded-md transition-colors"
+                className="p-1.5 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark rounded-md transition-colors"
                 title="Refresh sessions"
               >
-                <RefreshCw className="w-3.5 h-3.5 text-gray-400" />
+                <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.75} />
               </button>
               <button
                 onClick={() => setShowResumeNativeModal(true)}
-                className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-md transition-colors"
+                className="p-1.5 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark rounded-md transition-colors"
                 title="Resume CLI session (Claude, Antigravity, Command Code, OpenCode)"
               >
-                <Terminal className="w-3.5 h-3.5 text-gray-400" />
+                <Terminal className="w-3.5 h-3.5" strokeWidth={1.75} />
               </button>
               <button
                 onClick={() => setShowNewSessionModal(true)}
-                className="p-1.5 hover:bg-gray-200 rounded-md transition-colors"
+                className="p-1.5 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark rounded-md transition-colors"
                 title="New session"
               >
-                <Plus className="w-3.5 h-3.5 text-gray-400" />
+                <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
               </button>
             </div>
           </div>
@@ -238,21 +238,22 @@ export function Sidebar() {
 
           {/* Archive section */}
           {(archivedSessions.length > 0 || archiveExpanded) && (
-            <div className="border-t border-gray-200 flex-shrink-0">
+            <div className="border-t border-outline-default dark:border-outline-default-dark flex-shrink-0">
               <button
                 onClick={() => setArchiveExpanded(!archiveExpanded)}
-                className="w-full flex items-center justify-between px-4 py-2 hover:bg-gray-100 transition-colors"
+                className="w-full flex items-center justify-between px-4 py-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors"
               >
                 <div className="flex items-center gap-2">
                   <ChevronRight
-                    className={`w-3.5 h-3.5 text-gray-400 transition-transform ${archiveExpanded ? 'rotate-90' : ''}`}
+                    className={`w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark transition-transform ${archiveExpanded ? 'rotate-90' : ''}`}
+                    strokeWidth={1.75}
                   />
-                  <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                  <span className="text-[11px] font-semibold text-content-muted dark:text-content-muted-dark uppercase tracking-wider">
                     Archived
                   </span>
                 </div>
                 {archivedSessions.length > 0 && (
-                  <span className="text-[10px] font-medium text-gray-400 bg-gray-200 rounded-full px-1.5 py-0.5 min-w-[18px] text-center">
+                  <span className="text-[10px] font-medium text-content-muted dark:text-content-muted-dark bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark rounded-full px-1.5 py-0.5 min-w-[18px] text-center">
                     {archivedSessions.length}
                   </span>
                 )}
@@ -260,7 +261,7 @@ export function Sidebar() {
 
               {archiveExpanded && filteredArchivedSessions.length > 0 && (
                 <div
-                  className="overflow-y-auto px-2 py-1 space-y-0.5 bg-gray-50/50"
+                  className="overflow-y-auto px-2 py-1 space-y-0.5 bg-surface-subtle/40 dark:bg-surface-dark-subtle/40"
                   style={{ maxHeight: '200px', scrollbarWidth: 'thin', scrollbarColor: 'rgba(209,213,219,0.5) transparent' }}
                 >
                   {filteredArchivedSessions.map((session) => (
@@ -275,7 +276,7 @@ export function Sidebar() {
               )}
 
               {archiveExpanded && filteredArchivedSessions.length === 0 && (
-                <div className="px-4 py-2 text-[11px] text-gray-400 text-center">
+                <div className="px-4 py-2 text-[11px] text-content-muted dark:text-content-muted-dark text-center">
                   No archived sessions
                 </div>
               )}
@@ -284,33 +285,33 @@ export function Sidebar() {
         </div>
 
         {/* Bottom section */}
-        <div className="border-t border-gray-200 px-3 py-3 flex items-center justify-between">
+        <div className="border-t border-outline-default dark:border-outline-default-dark px-3 py-3 flex items-center justify-between">
           <div className="flex items-center gap-1">
             <button
               onClick={() => setShowUsageDashboard(true)}
-              className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+              className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark rounded-lg transition-colors"
               title="Token usage dashboard"
             >
-              <Coins className="w-4 h-4 text-gray-400" />
+              <Coins className="w-4 h-4" strokeWidth={1.75} />
             </button>
             <button
               onClick={toggleTheme}
-              className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+              className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark rounded-lg transition-colors"
               title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
             >
               {theme === 'light' ? (
-                <Moon className="w-4 h-4 text-gray-400" />
+                <Moon className="w-4 h-4" strokeWidth={1.75} />
               ) : (
-                <Sun className="w-4 h-4 text-gray-400" />
+                <Sun className="w-4 h-4" strokeWidth={1.75} />
               )}
             </button>
           </div>
           <button
             onClick={toggleSidebar}
-            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+            className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark rounded-lg transition-colors"
             title="Close sidebar"
           >
-            <PanelLeft className="w-4 h-4 text-gray-400" />
+            <PanelLeft className="w-4 h-4" strokeWidth={1.75} />
           </button>
         </div>
       </aside>

@@ -56,8 +56,8 @@ function ActivityIndicator({
   const sdkType = useSessionStore((s) => s.currentSessionSdkType);
 
   return (
-    <div className="flex items-center gap-2 text-sm text-gray-500 py-1">
-      <Bot className="w-4 h-4 text-gray-400 shrink-0" />
+    <div className="flex items-center gap-2 text-sm text-content-muted dark:text-content-muted-dark py-1">
+      <Bot className="w-4 h-4 text-content-muted dark:text-content-muted-dark shrink-0" strokeWidth={1.75} />
       <span className="truncate">{preview}</span>
       {isStreaming && sdkType !== 'claude' && (
         <span className="inline-flex items-center gap-1">
@@ -159,9 +159,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       aria-label={copied ? 'Copied to clipboard' : 'Copy message to clipboard'}
     >
       {copied ? (
-        <Check className="w-4 h-4" />
+        <Check className="w-4 h-4" strokeWidth={1.75} />
       ) : (
-        <Copy className="w-4 h-4" />
+        <Copy className="w-4 h-4" strokeWidth={1.75} />
       )}
     </button>
   );
@@ -262,12 +262,12 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
 
       {/* Error message rendering */}
       {isAssistant && message.error && (
-        <div className="api-error-message pl-3 pr-8 border-l-2 border-red-400 bg-red-50 rounded-r-lg py-2 px-3">
+        <div className="api-error-message pl-3 pr-8 border-l-2 border-red-400 bg-red-50 dark:bg-red-950/30 rounded-r-lg py-2 px-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" strokeWidth={1.75} />
             <div className="min-w-0">
-              <p className="text-sm text-red-700 font-medium">API Error</p>
-              <p className="text-sm text-red-600 mt-0.5">{message.error.message}</p>
+              <p className="text-sm text-red-700 dark:text-red-400 font-medium">API Error</p>
+              <p className="text-sm text-red-600 dark:text-red-300 mt-0.5">{message.error.message}</p>
               {(message.error.provider || message.error.model) && (
                 <p className="text-xs text-red-400 mt-1">
                   {[message.error.provider, message.error.model].filter(Boolean).join(' / ')}
@@ -326,7 +326,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                     const match = /language-(\w+)/.exec(className || '');
                     return (
                       <code
-                        className={`bg-slate-100 text-slate-800 px-1 py-0.5 rounded text-xs font-mono font-medium [pre_&]:bg-transparent [pre_&]:p-0 [pre_&]:rounded-none [pre_&]:text-inherit ${match ? `language-${match[1]}` : ''}`}
+                        className={`font-mono text-xs [pre_&]:bg-transparent [pre_&]:p-0 [pre_&]:rounded-none [pre_&]:text-inherit ${match ? `language-${match[1]}` : ''}`}
                         {...props}
                       >
                         {children}

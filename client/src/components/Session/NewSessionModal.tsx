@@ -389,39 +389,39 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50" data-testid="new-session-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-t-xl sm:rounded-xl border border-gray-200 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center z-50 animate-in fade-in" data-testid="new-session-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-surface dark:bg-surface-dark rounded-t-2xl sm:rounded-2xl border border-outline-default dark:border-outline-default-dark shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-content-primary dark:text-content-primary-dark animate-in zoom-in-95">
         {/* Header */}
-        <div className="flex items-center justify-between p-3 sm:p-4 border-b border-gray-200 flex-shrink-0">
+        <div className="flex items-center justify-between p-3 sm:p-4 border-b border-outline-default dark:border-outline-default-dark flex-shrink-0">
           <div>
-            <h2 className="text-base sm:text-lg font-semibold text-gray-900">Create New Session</h2>
-            <p className="text-xs sm:text-sm text-gray-500">Select a workspace folder</p>
+            <h2 className="text-base sm:text-lg font-semibold text-content-primary dark:text-content-primary-dark">Create New Session</h2>
+            <p className="text-xs sm:text-sm text-content-muted dark:text-content-muted-dark">Select a workspace folder</p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-1.5 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg text-content-muted dark:text-content-muted-dark hover:text-content-primary transition-colors"
           >
-            <X className="w-5 h-5 text-gray-400" />
+            <X className="w-5 h-5" strokeWidth={1.75} />
           </button>
         </div>
 
         {/* SDK Type Selector */}
-        <div className="px-3 sm:px-4 pt-2 pb-2 border-b border-gray-200 flex-shrink-0">
-          <p className="text-xs font-medium text-gray-500 mb-1.5">Session Type</p>
+        <div className="px-3 sm:px-4 pt-2.5 pb-2.5 border-b border-outline-default dark:border-outline-default-dark flex-shrink-0">
+          <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Session Type</p>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             {/* Pi SDK option */}
             <button
               onClick={() => setSdkType('pi')}
               aria-pressed={sdkType === 'pi'}
-              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+              className={`flex flex-col items-start p-2 sm:p-2.5 rounded-xl border text-left transition-all ${
                 sdkType === 'pi'
-                  ? 'border-blue-500 bg-blue-50 text-gray-900'
-                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                  ? 'border-violet-500 bg-violet-500/10 text-content-primary dark:text-content-primary-dark ring-1 ring-violet-500/30'
+                  : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
               }`}
             >
               <span className="text-sm font-medium">Pi SDK</span>
-              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">All providers • Extensions</span>
-              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">All providers</span>
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 hidden sm:inline">All providers • Extensions</span>
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 sm:hidden">All providers</span>
             </button>
 
             {/* Claude Direct option */}
@@ -430,19 +430,19 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               disabled={!claudeAvailable}
               aria-pressed={sdkType === 'claude'}
               title={claudeAuthError || undefined}
-              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+              className={`flex flex-col items-start p-2 sm:p-2.5 rounded-xl border text-left transition-all ${
                 !claudeAvailable
-                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  ? 'opacity-40 border-outline-subtle dark:border-outline-subtle-dark bg-surface-subtle/40 dark:bg-surface-dark-subtle/40 text-content-muted dark:text-content-muted-dark cursor-not-allowed'
                   : sdkType === 'claude'
-                  ? 'border-amber-500 bg-amber-50 text-gray-900'
-                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                  ? 'border-amber-500 bg-amber-500/10 text-content-primary dark:text-content-primary-dark ring-1 ring-amber-500/30'
+                  : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
               }`}
             >
               <span className="text-sm font-medium">Claude Direct</span>
-              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 hidden sm:inline">
                 {claudeAvailable ? 'Subscription quota • CC tools' : (claudeAuthError || 'Not available')}
               </span>
-              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 sm:hidden">
                 {claudeAvailable ? 'Subscription' : (claudeAuthError || 'Not available')}
               </span>
             </button>
@@ -453,19 +453,19 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               disabled={!opencodeAvailable}
               aria-pressed={sdkType === 'opencode'}
               title={opencodeAuthError || undefined}
-              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+              className={`flex flex-col items-start p-2 sm:p-2.5 rounded-xl border text-left transition-all ${
                 !opencodeAvailable
-                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  ? 'opacity-40 border-outline-subtle dark:border-outline-subtle-dark bg-surface-subtle/40 dark:bg-surface-dark-subtle/40 text-content-muted dark:text-content-muted-dark cursor-not-allowed'
                   : sdkType === 'opencode'
-                  ? 'border-emerald-500 bg-emerald-50 text-gray-900'
-                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                  ? 'border-emerald-500 bg-emerald-500/10 text-content-primary dark:text-content-primary-dark ring-1 ring-emerald-500/30'
+                  : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
               }`}
             >
               <span className="text-sm font-medium">OpenCode Direct</span>
-              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 hidden sm:inline">
                 {opencodeAvailable ? 'Z.AI GLM • OpenCode runtime' : (opencodeAuthError || 'Not available')}
               </span>
-              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 sm:hidden">
                 {opencodeAvailable ? 'Z.AI GLM' : (opencodeAuthError || 'Not available')}
               </span>
             </button>
@@ -476,43 +476,42 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               disabled={!antigravityAvailable}
               aria-pressed={sdkType === 'antigravity'}
               title={antigravityAuthError || undefined}
-              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+              className={`flex flex-col items-start p-2 sm:p-2.5 rounded-xl border text-left transition-all ${
                 !antigravityAvailable
-                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  ? 'opacity-40 border-outline-subtle dark:border-outline-subtle-dark bg-surface-subtle/40 dark:bg-surface-dark-subtle/40 text-content-muted dark:text-content-muted-dark cursor-not-allowed'
                   : sdkType === 'antigravity'
-                  ? 'border-violet-500 bg-violet-50 text-gray-900'
-                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                  ? 'border-sky-500 bg-sky-500/10 text-content-primary dark:text-content-primary-dark ring-1 ring-sky-500/30'
+                  : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
               }`}
             >
               <span className="text-sm font-medium">Antigravity</span>
-              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 hidden sm:inline">
                 {antigravityAvailable ? 'Gemini Flash • Google' : (antigravityAuthError || 'Not available')}
               </span>
-              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 sm:hidden">
                 {antigravityAvailable ? 'Gemini Flash' : (antigravityAuthError || 'Not available')}
               </span>
             </button>
 
-            {/* Command Code browser option. It is server-owned and separately
-                gated; the browser never receives raw permission flags. */}
+            {/* Command Code browser option */}
             <button
               onClick={() => commandCodeAvailable && commandCodeEnabled && setSdkType('commandcode')}
               disabled={!commandCodeAvailable || !commandCodeEnabled}
               aria-pressed={sdkType === 'commandcode'}
               title={!commandCodeEnabled ? 'Command Code browser runtime is disabled' : (!commandCodeAvailable ? 'Command Code is not currently available' : undefined)}
-              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+              className={`flex flex-col items-start p-2 sm:p-2.5 rounded-xl border text-left transition-all ${
                 !commandCodeAvailable || !commandCodeEnabled
-                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  ? 'opacity-40 border-outline-subtle dark:border-outline-subtle-dark bg-surface-subtle/40 dark:bg-surface-dark-subtle/40 text-content-muted dark:text-content-muted-dark cursor-not-allowed'
                   : sdkType === 'commandcode'
-                  ? 'border-slate-700 bg-slate-100 text-gray-900'
-                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                  ? 'border-slate-500 bg-slate-500/10 text-content-primary dark:text-content-primary-dark ring-1 ring-slate-500/30'
+                  : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
               }`}
             >
               <span className="text-sm font-medium">Command Code</span>
-              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 hidden sm:inline">
                 {commandCodeAvailable ? 'Model catalogue • Native effort' : 'Not available'}
               </span>
-              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 sm:hidden">
                 {commandCodeAvailable ? 'Model catalogue' : 'Unavailable'}
               </span>
             </button>
@@ -521,9 +520,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
           {/* Pi SDK model selector */}
           {sdkType === 'pi' && (
             <div className="mt-2" data-testid="pi-model-selector">
-              <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+              <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Model</p>
               {piModelsLoading ? (
-                <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                <div className="flex items-center gap-2 text-xs text-content-muted dark:text-content-muted-dark py-2">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading Pi SDK models…
                 </div>
               ) : (
@@ -531,7 +530,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   value={piModel}
                   onChange={(e) => setPiModel(e.target.value)}
                   data-testid="pi-model-select"
-                  className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
                 >
                   <option value="">Use Pi default model</option>
                   {piModels.map((model) => (
@@ -548,7 +547,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
           {sdkType === 'commandcode' && (
             <div className="mt-2 space-y-2" data-testid="commandcode-model-selector">
               <div>
-                <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+                <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Model</p>
                 <select
                   value={commandCodeModel}
                   onChange={(e) => {
@@ -557,7 +556,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                     setCommandCodeEffort(spec?.defaultEffort ?? '');
                   }}
                   data-testid="commandcode-model-select"
-                  className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                  className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500/30"
                 >
                   {commandCodeModels.map((model) => (
                     <option key={model.id} value={model.id}>
@@ -569,19 +568,19 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               {(() => {
                 const selected = commandCodeModels.find((model) => model.id === commandCodeModel);
                 if (!selected || selected.effortLevels.length === 0) {
-                  return <p className="text-xs text-gray-500">This model does not expose adjustable native effort.</p>;
+                  return <p className="text-xs text-content-muted dark:text-content-muted-dark">This model does not expose adjustable native effort.</p>;
                 }
                 const effortValue = selected.effortLevels.includes(commandCodeEffort as CommandCodeEffort)
                   ? (commandCodeEffort as CommandCodeEffort)
                   : selected.defaultEffort ?? selected.effortLevels[0];
                 return (
                   <div>
-                    <p className="text-xs font-medium text-gray-500 mb-1.5">Native effort</p>
+                    <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Native effort</p>
                     <select
                       value={effortValue}
                       onChange={(e) => setCommandCodeEffort(e.target.value as CommandCodeEffort)}
                       data-testid="commandcode-effort-select"
-                      className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                      className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500/30"
                     >
                       {selected.effortLevels.map((level) => <option key={level} value={level}>{level}</option>)}
                     </select>
@@ -595,18 +594,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
           {sdkType === 'claude' && (
             <div className="mt-2 space-y-2" data-testid="claude-model-selector">
               {claudeModelsLoading ? (
-                <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                <div className="flex items-center gap-2 text-xs text-content-muted dark:text-content-muted-dark py-2">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading profiles…
                 </div>
               ) : providerList.length === 0 ? (
                 // No profiles configured — fall back to a simple model dropdown.
                 <div>
-                  <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+                  <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Model</p>
                   <select
                     value={claudeModel}
                     onChange={(e) => setClaudeModel(e.target.value)}
                     data-testid="claude-model-select"
-                    className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                    className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30"
                   >
                     <option value="sonnet">Claude Sonnet</option>
                     <option value="opus">Claude Opus</option>
@@ -617,17 +616,17 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                 <>
                   {/* Provider */}
                   <div>
-                    <p className="text-xs font-medium text-gray-500 mb-1.5">Provider</p>
+                    <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Provider</p>
                     <div className="flex gap-2" data-testid="claude-provider-toggle">
                       {providerList.map((p) => (
                         <button
                           key={p}
                           onClick={() => selectProvider(p)}
                           data-testid={`claude-provider-${p}`}
-                          className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
+                          className={`px-3 py-1.5 rounded-xl border text-sm transition-all ${
                             claudeProvider === p
-                              ? 'border-amber-500 bg-amber-50 text-gray-900 font-medium'
-                              : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                              ? 'border-amber-500 bg-amber-500/10 text-content-primary dark:text-content-primary-dark font-medium ring-1 ring-amber-500/30'
+                              : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
                           }`}
                         >
                           {PROVIDER_LABEL[p]}
@@ -638,7 +637,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
 
                   {/* Backend */}
                   <div>
-                    <p className="text-xs font-medium text-gray-500 mb-1.5">Backend</p>
+                    <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Backend</p>
                     <div className="flex flex-wrap gap-2" data-testid="claude-backend-toggle">
                       {backendList.map((b) => {
                         const locked = isBackendLocked(b);
@@ -654,22 +653,22 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                                 ? 'Locked — an agent must activate this backend on the production server first.'
                                 : undefined
                             }
-                            className={`px-3 py-1.5 rounded-lg border text-sm transition-colors inline-flex items-center gap-1 ${
+                            className={`px-3 py-1.5 rounded-xl border text-sm transition-all inline-flex items-center gap-1.5 ${
                               locked
-                                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                                ? 'opacity-40 border-outline-subtle dark:border-outline-subtle-dark bg-surface-subtle/40 dark:bg-surface-dark-subtle/40 text-content-muted dark:text-content-muted-dark cursor-not-allowed'
                                 : claudeBackend === b
-                                  ? 'border-amber-500 bg-amber-50 text-gray-900 font-medium'
-                                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                                  ? 'border-amber-500 bg-amber-500/10 text-content-primary dark:text-content-primary-dark font-medium ring-1 ring-amber-500/30'
+                                  : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
                             }`}
                           >
                             {BACKEND_LABEL[b] || b}
-                            {locked && <Lock className="w-3 h-3" data-testid={`claude-backend-${b}-lock`} />}
+                            {locked && <Lock className="w-3 h-3" strokeWidth={1.75} data-testid={`claude-backend-${b}-lock`} />}
                           </button>
                         );
                       })}
                     </div>
                     {backendList.some(isBackendLocked) && (
-                      <p className="text-[11px] text-gray-400 mt-1" data-testid="claude-backend-locked-note">
+                      <p className="text-[11px] text-content-muted dark:text-content-muted-dark mt-1" data-testid="claude-backend-locked-note">
                         The Channel backend is locked — an agent must activate it on the production server first.
                       </p>
                     )}
@@ -678,12 +677,12 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   {/* Model (Claude only) */}
                   {claudeProvider === 'claude' && modelList.length > 0 && (
                     <div>
-                      <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+                      <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Model</p>
                       <select
                         value={claudeModel}
                         onChange={(e) => setClaudeModel(e.target.value)}
                         data-testid="claude-model-select"
-                        className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                        className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30"
                       >
                         {modelList.map((m) => (
                           <option key={m} value={m}>{MODEL_LABEL[m] || m}</option>
@@ -692,7 +691,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                     </div>
                   )}
 
-                  <p className="text-[11px] text-gray-400" data-testid="claude-resolved-profile">
+                  <p className="text-[11px] text-content-muted dark:text-content-muted-dark" data-testid="claude-resolved-profile">
                     {claudeProvider === 'glm'
                       ? 'GLM 5.3 · 1M context window, via the selected backend. Reasoning effort follows the Thinking Level in Settings.'
                       : 'Native Claude subscription via the selected backend.'}
@@ -707,22 +706,22 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
         <div className="flex-1 overflow-y-auto min-h-0">
           {/* Recent Folders Section */}
           {recentFolders.length > 0 && (
-            <div className="border-b border-gray-200" ref={recentDropdownRef}>
+            <div className="border-b border-outline-default dark:border-outline-default-dark" ref={recentDropdownRef}>
               <button
                 onClick={() => setShowRecentFolders(!showRecentFolders)}
-                className="w-full flex items-center justify-between px-3 sm:px-4 py-2 hover:bg-gray-50 transition-colors"
+                className="w-full flex items-center justify-between px-3 sm:px-4 py-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors"
               >
                 <div className="flex items-center gap-2">
-                  <History className="w-4 h-4 text-blue-600" />
-                  <span className="text-sm font-medium text-gray-700">Recent Projects</span>
-                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                  <History className="w-4 h-4 text-pi-primary" strokeWidth={1.75} />
+                  <span className="text-sm font-medium text-content-primary dark:text-content-primary-dark">Recent Projects</span>
+                  <span className="text-xs text-content-muted dark:text-content-muted-dark bg-surface-subtle dark:bg-surface-dark-subtle border border-outline-subtle dark:border-outline-subtle-dark px-2 py-0.5 rounded-full">
                     {recentFolders.length}
                   </span>
                 </div>
                 {showRecentFolders ? (
-                  <ChevronUp className="w-4 h-4 text-gray-400" />
+                  <ChevronUp className="w-4 h-4 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                 ) : (
-                  <ChevronDown className="w-4 h-4 text-gray-400" />
+                  <ChevronDown className="w-4 h-4 text-content-muted dark:text-content-muted-dark" strokeWidth={1.75} />
                 )}
               </button>
               
@@ -732,32 +731,32 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                     {topRecentFolders.map((folder, index) => (
                       <div
                         key={folder.path}
-                        className="group flex items-center gap-2 p-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg cursor-pointer transition-all"
+                        className="group flex items-center gap-2.5 p-2 bg-surface-subtle dark:bg-surface-dark-subtle hover:bg-surface dark:hover:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark rounded-xl cursor-pointer transition-all"
                         onClick={() => handleRecentFolderSelect(folder.path)}
                       >
-                        <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark rounded-lg flex items-center justify-center">
                           {index === 0 ? (
-                            <Star className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 fill-blue-600" />
+                            <Star className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-pi-primary fill-pi-primary" strokeWidth={1.75} />
                           ) : (
-                            <Folder className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600" />
+                            <Folder className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-content-secondary dark:text-content-secondary-dark" strokeWidth={1.75} />
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-700 truncate" title={folder.label}>
+                          <p className="text-sm font-medium text-content-primary dark:text-content-primary-dark truncate" title={folder.label}>
                             {folder.label}
                           </p>
-                          <p className="text-xs text-gray-400 truncate" title={folder.path}>
+                          <p className="text-xs text-content-muted dark:text-content-muted-dark truncate font-mono" title={folder.path}>
                             {folder.path}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                          <span className="text-xs text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded hidden sm:inline">
+                          <span className="text-xs text-content-muted dark:text-content-muted-dark bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark px-1.5 py-0.5 rounded hidden sm:inline">
                             {folder.count}
                           </span>
                           <button
                             onClick={(e) => handleCreateInRecentFolder(e, folder.path)}
                             disabled={isCreating}
-                            className="px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white text-xs rounded transition-colors"
+                            className="px-2.5 py-1 bg-pi-primary hover:bg-pi-hover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
                           >
                             {isCreating ? '...' : 'Create'}
                           </button>
@@ -771,18 +770,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
           )}
 
           {/* Path Input */}
-          <div className="px-3 sm:px-4 py-3 border-b border-gray-200">
+          <div className="px-3 sm:px-4 py-3 border-b border-outline-default dark:border-outline-default-dark">
             <form onSubmit={handlePathSubmit} className="flex gap-2">
               <input
                 type="text"
                 value={pathInput}
                 onChange={(e) => setPathInput(e.target.value)}
                 placeholder="Enter path..."
-                className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 placeholder-gray-400 border border-gray-200 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="flex-1 px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark placeholder:text-content-muted dark:placeholder:text-content-muted-dark border border-outline-default dark:border-outline-default-dark focus:border-pi-primary focus:outline-none focus:ring-1 focus:ring-pi-primary/30 font-mono"
               />
               <button
                 type="submit"
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 transition-colors border border-gray-200"
+                className="px-4 py-2 bg-surface dark:bg-surface-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-xl text-sm font-medium text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark transition-colors"
               >
                 Go
               </button>
@@ -792,39 +791,39 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
           {/* Directory Browser */}
           <div className="flex flex-col min-h-[100px] sm:min-h-[150px]">
             {/* Breadcrumb */}
-            <div className="px-3 sm:px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2 sticky top-0">
-              <Folder className="w-4 h-4 text-blue-600 flex-shrink-0" />
+            <div className="px-3 sm:px-4 py-2 bg-surface-subtle/80 dark:bg-surface-dark-subtle/80 border-b border-outline-default dark:border-outline-default-dark flex items-center gap-2 sticky top-0 backdrop-blur-xs">
+              <Folder className="w-4 h-4 text-pi-primary flex-shrink-0" strokeWidth={1.75} />
               {parentPath && (
                 <button
                   onClick={handleNavigateUp}
-                  className="p-1 hover:bg-gray-200 rounded transition-colors flex-shrink-0"
+                  className="p-1 hover:bg-surface dark:hover:bg-surface-dark rounded-md transition-colors flex-shrink-0 text-content-secondary dark:text-content-secondary-dark"
                   title="Go up"
                 >
-                  <ArrowUp className="w-4 h-4 text-gray-400" />
+                  <ArrowUp className="w-4 h-4" strokeWidth={1.75} />
                 </button>
               )}
-              <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
-              <span className="text-sm text-gray-700 truncate">{currentPath}</span>
+              <ChevronRight className="w-4 h-4 text-content-muted dark:text-content-muted-dark flex-shrink-0" strokeWidth={1.75} />
+              <span className="text-sm text-content-secondary dark:text-content-secondary-dark truncate font-mono">{currentPath}</span>
             </div>
 
             {/* Directory List */}
             <div className="p-2">
               {isLoading ? (
                 <div className="flex items-center justify-center py-6">
-                  <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+                  <Loader2 className="w-6 h-6 text-pi-primary animate-spin" />
                 </div>
               ) : error ? (
                 <div className="text-center py-6">
                   <p className="text-red-500 text-sm mb-3">{error}</p>
                   <button
                     onClick={() => fetchDirectories('/root')}
-                    className="text-blue-600 text-sm hover:underline"
+                    className="text-pi-primary text-sm hover:underline"
                   >
                     Reset to /root
                   </button>
                 </div>
               ) : directories.length === 0 ? (
-                <div className="text-center py-6 text-gray-400 text-sm">
+                <div className="text-center py-6 text-content-muted dark:text-content-muted-dark text-sm">
                   No subdirectories. Use this folder or enter a custom path.
                 </div>
               ) : (
@@ -836,11 +835,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                       tabIndex={0}
                       onClick={() => handleNavigate(dir)}
                       onKeyDown={(e) => e.key === 'Enter' && handleNavigate(dir)}
-                      className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition-colors cursor-pointer select-none"
+                      className="w-full flex items-center gap-3 px-3 py-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle active:bg-surface-subtle/70 rounded-xl transition-colors cursor-pointer select-none text-content-primary dark:text-content-primary-dark"
                     >
-                      <FolderOpen className="w-5 h-5 text-blue-600 flex-shrink-0" />
-                      <span className="text-sm text-gray-700 truncate flex-1">{dir.name}</span>
-                      <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                      <FolderOpen className="w-4 h-4 text-pi-primary flex-shrink-0" strokeWidth={1.75} />
+                      <span className="text-sm truncate flex-1">{dir.name}</span>
+                      <ChevronRight className="w-4 h-4 text-content-muted dark:text-content-muted-dark flex-shrink-0" strokeWidth={1.75} />
                     </div>
                   ))}
                 </div>
@@ -850,10 +849,10 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
         </div>
 
         {/* Footer - Always visible */}
-        <div className="flex items-center justify-between gap-3 p-3 sm:p-4 border-t border-gray-200 bg-white flex-shrink-0">
-          <p className="text-xs text-gray-400 truncate flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-3 p-3 sm:p-4 border-t border-outline-default dark:border-outline-default-dark bg-surface-subtle/50 dark:bg-surface-dark-subtle/50 flex-shrink-0">
+          <p className="text-xs text-content-muted dark:text-content-muted-dark truncate flex-1 min-w-0">
             <span className="hidden sm:inline">Selected: </span>
-            <span className="text-gray-600 font-mono">{currentPath}</span>
+            <span className="text-content-secondary dark:text-content-secondary-dark font-mono">{currentPath}</span>
           </p>
           <div className="flex gap-2 sm:gap-3 flex-shrink-0 items-center">
             {sessionCreation.status === 'error'
@@ -866,7 +865,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             <button
               onClick={onClose}
               disabled={isCreating}
-              className="px-3 sm:px-4 py-2 text-gray-500 hover:text-gray-700 disabled:opacity-50 transition-colors text-sm"
+              className="px-3 sm:px-4 py-2 text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark disabled:opacity-50 transition-colors text-sm font-medium"
             >
               Cancel
             </button>
@@ -877,16 +876,16 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   onOpenDriveMode();
                 }}
                 disabled={isCreating}
-                className="px-3 sm:px-4 py-2 border border-blue-500 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-1.5 text-sm"
+                className="px-3 sm:px-4 py-2 border border-outline-default dark:border-outline-default-dark text-content-primary dark:text-content-primary-dark hover:bg-surface dark:hover:bg-surface-dark disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors flex items-center gap-1.5 text-sm font-medium"
               >
-                <Mic className="w-3.5 h-3.5" />
+                <Mic className="w-3.5 h-3.5" strokeWidth={1.75} />
                 Voice Mode
               </button>
             )}
             <button
               onClick={handleSelectAndCreate}
               disabled={isCreating}
-              className="px-3 sm:px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed rounded-lg text-white transition-colors flex items-center gap-2 text-sm"
+              className="px-3.5 sm:px-4 py-2 bg-pi-primary hover:bg-pi-hover disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white font-medium transition-colors flex items-center gap-2 text-sm shadow-xs"
             >
               {isCreating && <Loader2 className="w-4 h-4 animate-spin" />}
               {isCreating ? 'Creating...' : 'Create'}

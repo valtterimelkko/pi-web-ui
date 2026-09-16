@@ -90,27 +90,27 @@ export function ConfirmationCard({
 
   return (
     <div
-      className="w-full max-w-md rounded-xl border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950 px-4 py-3"
+      className="w-full max-w-md rounded-2xl border border-outline-default dark:border-outline-default-dark bg-surface dark:bg-surface-dark shadow-xs px-4 py-3.5"
       role="region"
       aria-label="Pending proposal"
       data-testid="confirmation-card"
       {...(version !== undefined ? { 'data-proposal-version': String(version) } : {})}
       {...(hash !== undefined ? { 'data-proposal-hash': hash } : {})}
     >
-      <div className="text-sm font-medium text-blue-800 dark:text-blue-200">
+      <div className="text-xs font-semibold text-content-primary dark:text-content-primary-dark uppercase tracking-wider">
         {cleaned
           ? 'Ready to send — your words, tidied:'
           : 'Ready to send — your words, exactly:'}
       </div>
       <blockquote
-        className="mt-1 border-l-4 border-blue-400 dark:border-blue-600 pl-3 text-sm text-gray-800 dark:text-gray-100 break-words whitespace-pre-wrap"
+        className="mt-1.5 border-l-2 border-pi-primary pl-3 text-sm text-content-primary dark:text-content-primary-dark break-words whitespace-pre-wrap font-mono"
         data-testid="pending-proposal-text"
       >
         {proposalText}
       </blockquote>
       {cleaned && removed?.trim() && (
         <div
-          className="mt-2 text-xs text-gray-600 dark:text-gray-300"
+          className="mt-2 text-xs text-content-muted dark:text-content-muted-dark"
           data-testid="relay-tidied-note"
         >
           Taken out of your words:{' '}
@@ -124,24 +124,24 @@ export function ConfirmationCard({
       )}
       {offersOriginal && (
         <details
-          className="mt-2 text-xs text-gray-600 dark:text-gray-300"
+          className="mt-2 text-xs text-content-muted dark:text-content-muted-dark"
           data-testid="relay-original-disclosure"
         >
-          <summary className="cursor-pointer select-none hover:text-gray-800 dark:hover:text-gray-100">
+          <summary className="cursor-pointer select-none hover:text-content-primary dark:hover:text-content-primary-dark">
             Show your exact words
           </summary>
           <div
-            className="mt-1 border-l-4 border-gray-300 dark:border-gray-600 pl-3 text-sm text-gray-800 dark:text-gray-100 break-words whitespace-pre-wrap"
+            className="mt-1 border-l-2 border-outline-default dark:border-outline-default-dark pl-3 text-sm text-content-primary dark:text-content-primary-dark break-words whitespace-pre-wrap font-mono"
             data-testid="relay-original-text"
           >
             {original}
           </div>
           <button
             onClick={() => onSendOriginal?.()}
-            className="mt-2 px-3 py-1.5 rounded-lg border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-gray-200 font-medium hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-[0.98] transition-colors select-none touch-manipulation flex items-center gap-1.5"
+            className="mt-2 px-3 py-1.5 rounded-xl border border-outline-default dark:border-outline-default-dark text-content-secondary dark:text-content-secondary-dark font-medium hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle active:scale-[0.98] transition-colors select-none touch-manipulation flex items-center gap-1.5 text-xs"
             type="button"
           >
-            <Send className="w-3.5 h-3.5" />
+            <Send className="w-3.5 h-3.5" strokeWidth={1.75} />
             Send my exact words
           </button>
         </details>
@@ -149,18 +149,18 @@ export function ConfirmationCard({
       <div className="mt-3 flex items-center gap-2">
         <button
           onClick={onConfirm}
-          className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 active:scale-[0.98] transition-colors select-none touch-manipulation flex items-center gap-1.5"
+          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors flex items-center gap-1.5 shadow-xs select-none touch-manipulation"
           type="button"
         >
-          <Check className="w-4 h-4" />
+          <Check className="w-4 h-4" strokeWidth={1.75} />
           {offersOriginal ? 'Confirm — send tidied' : 'Confirm'}
         </button>
         <button
           onClick={onCancel}
-          className="px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-100 text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 active:scale-[0.98] transition-colors select-none touch-manipulation flex items-center gap-1.5"
+          className="px-4 py-2 rounded-xl bg-surface-subtle dark:bg-surface-dark-subtle hover:bg-surface dark:hover:bg-surface-dark border border-outline-default dark:border-outline-default-dark text-content-secondary dark:text-content-secondary-dark text-sm font-medium transition-colors flex items-center gap-1.5 select-none touch-manipulation"
           type="button"
         >
-          <X className="w-4 h-4" />
+          <X className="w-4 h-4" strokeWidth={1.75} />
           Cancel
         </button>
       </div>
@@ -173,15 +173,15 @@ export function ConfirmationCard({
           }}
           placeholder='Type instead — e.g. "yes" or a change of mind'
           aria-label="Type a reply instead of speaking"
-          className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-sm text-content-primary dark:text-content-primary-dark placeholder:text-content-muted dark:placeholder:text-content-muted-dark focus:outline-none focus:border-pi-primary focus:ring-1 focus:ring-pi-primary/30"
           type="text"
         />
         <button
           onClick={submitDraft}
-          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 active:scale-[0.98] transition-colors select-none touch-manipulation flex items-center gap-1"
+          className="px-3.5 py-2 rounded-xl bg-pi-primary hover:bg-pi-hover text-white text-sm font-medium transition-colors flex items-center gap-1.5 shadow-xs select-none touch-manipulation"
           type="button"
         >
-          <Send className="w-3.5 h-3.5" />
+          <Send className="w-3.5 h-3.5" strokeWidth={1.75} />
           Send reply
         </button>
       </div>

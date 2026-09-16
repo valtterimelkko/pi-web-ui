@@ -39,9 +39,9 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
   return (
     <>
       {/* Desktop Header */}
-      <div className="hidden md:flex items-center justify-between px-4 h-12 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 flex-shrink-0">
+      <div className="hidden md:flex items-center justify-between px-4 h-12 border-b border-outline-default dark:border-outline-default-dark bg-surface dark:bg-canvas-dark flex-shrink-0">
         {/* Left: session name */}
-        <div className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate max-w-xs">
+        <div className="text-sm font-medium text-content-primary dark:text-content-primary-dark truncate max-w-xs">
           {session?.name || session?.firstMessage?.slice(0, 40) || 'New Session'}
         </div>
         {/* Right: tab pills + session actions */}
@@ -54,14 +54,14 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors relative ${
                   activeTab === tab.id
-                    ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
+                    ? 'text-content-primary dark:text-content-primary-dark bg-surface-subtle dark:bg-surface-dark-subtle border border-outline-subtle dark:border-outline-subtle-dark'
+                    : 'text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle'
                 }`}
               >
-                <tab.icon size={14} />
+                <tab.icon size={14} strokeWidth={1.75} />
                 {tab.label}
                 {tab.id === 'tasks' && (
-                  <span className="text-[9px] font-bold bg-blue-100 dark:bg-blue-900 text-blue-500 dark:text-blue-400 px-1 rounded">
+                  <span className="text-[9px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-1 rounded">
                     Soon
                   </span>
                 )}
@@ -71,7 +71,7 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
 
           {/* Divider */}
           {currentSessionId && (
-            <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1" />
+            <div className="w-px h-6 bg-outline-default dark:border-outline-default-dark mx-1" />
           )}
 
           {/* Session action buttons - only when session active */}
@@ -79,28 +79,28 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
             <div className="flex items-center gap-1">
               <button
                 onClick={openSessionInfo}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg transition-colors text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark"
                 title="Session info"
               >
-                <Info className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                <Info className="w-4 h-4" strokeWidth={1.75} />
               </button>
               <button
                 onClick={openTreeView}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg transition-colors text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark"
                 title="View conversation tree"
               >
-                <ChevronsUpDown className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                <ChevronsUpDown className="w-4 h-4" strokeWidth={1.75} />
               </button>
               <button
                 onClick={handleCopySessionId}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg transition-colors text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark"
                 title={copied ? 'Copied Session ID!' : 'Copy Session ID'}
                 aria-label="Copy Session ID"
               >
                 {copied ? (
-                  <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+                  <Check className="w-4 h-4 text-green-600 dark:text-green-400" strokeWidth={1.75} />
                 ) : (
-                  <Copy className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  <Copy className="w-4 h-4" strokeWidth={1.75} />
                 )}
               </button>
             </div>
@@ -112,11 +112,11 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
           {/* Voice Mode button - always visible */}
           <button
             onClick={openDriveMode}
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg transition-colors text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark"
             title="Voice Mode"
             aria-label="Enter Voice Mode"
           >
-            <Car className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+            <Car className="w-4 h-4" strokeWidth={1.75} />
           </button>
         </div>
       </div>
@@ -174,11 +174,11 @@ function MobileHeader() {
   }
 
   return (
-    <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-white/95 dark:bg-gray-950/95 backdrop-blur-sm border-b border-gray-200 dark:border-gray-800 shadow-sm">
+    <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-surface/95 dark:bg-canvas-dark/95 backdrop-blur-sm border-b border-outline-default dark:border-outline-default-dark shadow-xs">
       <div className="flex items-center justify-between px-3 h-12">
         {/* Left: session name */}
         <div className="flex-1 min-w-0 pr-2">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">
+          <div className="text-sm font-medium text-content-primary dark:text-content-primary-dark truncate">
             {session?.name || session?.firstMessage?.slice(0, 40) || 'New Session'}
           </div>
         </div>
@@ -190,30 +190,30 @@ function MobileHeader() {
             <>
               <button
                 onClick={openSessionInfo}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg transition-colors text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark"
                 title="Session info"
                 aria-label="Session info"
               >
-                <Info className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                <Info className="w-4 h-4" strokeWidth={1.75} />
               </button>
               <button
                 onClick={openTreeView}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg transition-colors text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark"
                 title="View conversation tree"
                 aria-label="View conversation tree"
               >
-                <ChevronsUpDown className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                <ChevronsUpDown className="w-4 h-4" strokeWidth={1.75} />
               </button>
               <button
                 onClick={handleCopySessionId}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                className="p-2 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg transition-colors text-content-secondary dark:text-content-secondary-dark hover:text-content-primary dark:hover:text-content-primary-dark"
                 title={copied ? 'Copied Session ID!' : 'Copy Session ID'}
                 aria-label="Copy Session ID"
               >
                 {copied ? (
-                  <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+                  <Check className="w-4 h-4 text-green-600 dark:text-green-400" strokeWidth={1.75} />
                 ) : (
-                  <Copy className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  <Copy className="w-4 h-4" strokeWidth={1.75} />
                 )}
               </button>
             </>
@@ -226,11 +226,11 @@ function MobileHeader() {
           {/* Collapse toggle */}
           <button
             onClick={() => setIsCollapsed(true)}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            className="p-2 text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark transition-colors"
             title="Hide header"
             aria-label="Hide header"
           >
-            <ChevronUp size={18} />
+            <ChevronUp size={18} strokeWidth={1.75} />
           </button>
         </div>
       </div>

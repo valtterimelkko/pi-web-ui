@@ -107,10 +107,10 @@ export function GoalPanel({ sessionId, sdkType, isStreaming, statusText, onContr
   const canExpand = Boolean(detailRecord);
 
   const toneClass = finished
-    ? 'border-gray-200 bg-gray-50 text-gray-700'
+    ? 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark'
     : paused
-      ? 'border-amber-200 bg-amber-50 text-amber-800'
-      : 'border-emerald-200 bg-emerald-50 text-emerald-800';
+      ? 'border-amber-300 dark:border-amber-700/60 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+      : 'border-emerald-300 dark:border-emerald-700/60 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
   const dotClass = finished ? 'bg-gray-400' : paused ? 'bg-amber-500' : 'bg-emerald-500';
 
   return (
@@ -136,8 +136,8 @@ export function GoalPanel({ sessionId, sdkType, isStreaming, statusText, onContr
             </span>
           )}
           {canExpand && (expanded
-            ? <ChevronDown className="w-3 h-3 flex-shrink-0" />
-            : <ChevronRight className="w-3 h-3 flex-shrink-0" />)}
+            ? <ChevronDown className="w-3 h-3 flex-shrink-0" strokeWidth={1.75} />
+            : <ChevronRight className="w-3 h-3 flex-shrink-0" strokeWidth={1.75} />)}
         </button>
 
         {controlsEnabled && (
@@ -146,7 +146,7 @@ export function GoalPanel({ sessionId, sdkType, isStreaming, statusText, onContr
               <button
                 type="button"
                 onClick={() => onControl('resume')}
-                className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
                 title="Resume goal"
                 data-testid="goal-resume"
               >
@@ -156,7 +156,7 @@ export function GoalPanel({ sessionId, sdkType, isStreaming, statusText, onContr
               <button
                 type="button"
                 onClick={() => onControl('pause')}
-                className="rounded px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                className="rounded px-1.5 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
                 title="Pause goal (stops the current run and halts auto-continuation)"
                 data-testid="goal-pause"
               >
@@ -177,7 +177,7 @@ export function GoalPanel({ sessionId, sdkType, isStreaming, statusText, onContr
               <button
                 type="button"
                 onClick={() => setConfirmClear(true)}
-                className="rounded px-1.5 py-0.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
+                className="rounded px-1.5 py-0.5 text-xs font-medium text-content-muted dark:text-content-muted-dark hover:text-content-primary hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle"
                 title="Clear goal (removes it entirely)"
                 data-testid="goal-clear"
               >
@@ -190,17 +190,17 @@ export function GoalPanel({ sessionId, sdkType, isStreaming, statusText, onContr
 
       {expanded && detailRecord && (
         <div
-          className="mt-2 max-h-[40vh] overflow-y-auto overscroll-contain rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-950 shadow-sm"
+          className="mt-2 max-h-[40vh] overflow-y-auto overscroll-contain rounded-xl border border-outline-default dark:border-outline-default-dark bg-surface dark:bg-surface-dark px-3.5 py-2.5 text-xs text-content-primary dark:text-content-primary-dark shadow-xs"
           data-testid="goal-panel-body"
         >
           <GoalDetails record={detailRecord} finished={finished} />
           {finished && earlier.length > 0 && (
-            <div className="mt-3 border-t border-blue-100 pt-2" data-testid="goal-history">
+            <div className="mt-3 border-t border-outline-subtle dark:border-outline-subtle-dark pt-2" data-testid="goal-history">
               <div className="font-semibold mb-1">Earlier goals in this session</div>
               <ul className="space-y-1">
                 {earlier.map((record, index) => (
                   <li key={`${record.firstSeenAt}-${index}`} className="flex gap-2">
-                    <span className="opacity-70 flex-shrink-0">{outcomeLabel(record)} · {runsLabel(record)}</span>
+                    <span className="opacity-70 flex-shrink-0 text-content-secondary dark:text-content-secondary-dark">{outcomeLabel(record)} · {runsLabel(record)}</span>
                     <span className="truncate">{record.model.objective}</span>
                   </li>
                 ))}
@@ -231,7 +231,7 @@ function GoalDetails({ record, finished }: { record: GoalRecord; finished: boole
       <div className="font-semibold break-words">{model.objective || 'Goal'}</div>
 
       {model.question && (
-        <div className="rounded bg-amber-100 text-amber-900 px-2 py-1">
+        <div className="rounded-lg bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20 px-2.5 py-1.5">
           <span className="font-medium">Waiting on you: </span>{model.question}
         </div>
       )}

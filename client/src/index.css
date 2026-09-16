@@ -252,7 +252,35 @@ html {
 .dark .prose h1, .dark .prose h2, .dark .prose h3, .dark .prose h4 { color: #f1f5f9 !important; }
 .dark .prose a { color: #60a5fa !important; }
 .dark .prose strong { color: #f1f5f9 !important; }
-.dark .prose code { color: #e2e8f0 !important; background-color: #1e293b !important; }
+.dark .prose code { color: #f28b82 !important; }
+
+/* Claude Code signature terracotta inline entity badges */
+.prose :not(pre) > code,
+.prose-compact :not(pre) > code {
+  background-color: #fcedea !important;
+  color: #b93829 !important;
+  border: 1px solid rgba(185, 56, 41, 0.16) !important;
+  padding: 0.125rem 0.375rem !important;
+  border-radius: 0.375rem !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 0.85em !important;
+  font-weight: 500 !important;
+  white-space: break-spaces !important;
+}
+
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after,
+.prose-compact :not(pre) > code::before,
+.prose-compact :not(pre) > code::after {
+  content: "" !important;
+}
+
+.dark .prose :not(pre) > code,
+.dark .prose-compact :not(pre) > code {
+  background-color: rgba(239, 68, 68, 0.12) !important;
+  color: #f28b82 !important;
+  border: 1px solid rgba(242, 139, 130, 0.22) !important;
+}
 
 /* Table styles for dark mode */
 .dark .prose table { border-color: #334155 !important; }

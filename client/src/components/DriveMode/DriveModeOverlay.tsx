@@ -229,7 +229,7 @@ export function DriveModeOverlay() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-white dark:bg-gray-950 flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-canvas dark:bg-canvas-dark text-content-primary dark:text-content-primary-dark font-sans flex flex-col overflow-hidden">
       {phase === 'entry' && (
         <DriveModeEntry
           onNewSession={handleNewSession}
@@ -313,7 +313,7 @@ export function DriveModeOverlay() {
           // (Single-lane split: adding a lane happens from the voice-only
           // layout, where the collapsed add affordance lives.)
           <div data-testid="drive-mode-split" className="flex flex-1 min-h-0 w-full overflow-hidden">
-            <div className="flex-1 min-w-0 h-full min-h-0 overflow-y-auto border-r border-gray-200 dark:border-gray-800">
+            <div className="flex-1 min-w-0 h-full min-h-0 overflow-y-auto border-r border-outline-default dark:border-outline-default-dark">
               <DriveModeDictate
                 sessionId={activeSessionId || currentSessionId || ''}
                 sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
@@ -356,19 +356,19 @@ export function DriveModeOverlay() {
           and multi-lane — so the dictate surfaces never unmount (their capture,
           cards and focus live on). The phase never leaves dictate. */}
       {addingLane && !askReplace && (
-        <div className="absolute inset-0 z-20 bg-white dark:bg-gray-950 overflow-y-auto">
+        <div className="absolute inset-0 z-20 bg-canvas dark:bg-canvas-dark overflow-y-auto">
           <DriveModeSessionPicker onBack={closeAddFlow} onSelectSession={handleAddLaneSession} />
         </div>
       )}
       {askReplace && (
         <div
           data-testid="lane-cap-ask"
-          className="absolute inset-0 z-20 bg-white dark:bg-gray-950 flex flex-col items-center justify-center gap-4 px-6"
+          className="absolute inset-0 z-20 bg-canvas dark:bg-canvas-dark flex flex-col items-center justify-center gap-4 px-6"
         >
-          <p className="text-lg font-medium text-gray-900 dark:text-gray-100 text-center">
+          <p className="text-lg font-medium text-content-primary dark:text-content-primary-dark text-center">
             Voice Mode holds {lanes.length} of {MAX_VOICE_LANES} lanes.
           </p>
-          <p className="text-sm text-gray-500 dark:text-gray-400 text-center max-w-md">
+          <p className="text-sm text-content-muted dark:text-content-muted-dark text-center max-w-md">
             Replace one of the lanes with the session you pick, or cancel. A fourth lane is never added silently.
           </p>
           <div className="w-full max-w-md flex flex-col gap-2">

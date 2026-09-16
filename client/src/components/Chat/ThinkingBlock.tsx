@@ -47,7 +47,7 @@ export function ThinkingBlock({ content, isOpen = !THINKING_COLLAPSED_BY_DEFAULT
         type="button"
       >
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <Sparkles className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark shrink-0" />
+          <Sparkles className="w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark shrink-0" strokeWidth={1.75} />
           <span className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark shrink-0">Thinking</span>
           {/* Show preview when collapsed */}
           {!isExpanded && preview && (
@@ -63,6 +63,7 @@ export function ThinkingBlock({ content, isOpen = !THINKING_COLLAPSED_BY_DEFAULT
           )}
         </div>
         <ChevronDown
+          strokeWidth={1.75}
           className={`w-3.5 h-3.5 text-content-muted dark:text-content-muted-dark transition-transform duration-200 shrink-0 ${
             isExpanded ? '' : '-rotate-90'
           }`}

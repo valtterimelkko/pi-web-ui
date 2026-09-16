@@ -21,11 +21,11 @@ export const ChildrenStrip = memo(function ChildrenStrip({ sessionId }: { sessio
 
   return (
     <div
-      className="mb-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-950 shadow-sm"
+      className="mb-2 rounded-xl border border-amber-300/70 dark:border-amber-800/50 bg-amber-50/70 dark:bg-amber-950/20 px-3.5 py-2 text-xs text-amber-950 dark:text-amber-200 shadow-xs transition-colors"
       data-testid="children-strip"
     >
       <div className="flex items-center gap-1.5 font-medium">
-        <Bot className="w-3.5 h-3.5" />
+        <Bot className="w-3.5 h-3.5" strokeWidth={1.75} />
         {running.length} {noun} running
       </div>
       <div className="mt-1 space-y-0.5">
@@ -33,8 +33,8 @@ export const ChildrenStrip = memo(function ChildrenStrip({ sessionId }: { sessio
           <div key={c.id} className="flex items-center gap-2 truncate" title={c.task ?? c.id}>
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
             <span className="font-medium truncate">{c.label}</span>
-            {c.model && <span className="font-mono text-[10px] text-amber-700/70 truncate">{c.model}</span>}
-            <span className="text-[10px] text-amber-700/60 shrink-0">
+            {c.model && <span className="font-mono text-[10px] text-amber-700/80 dark:text-amber-300/80 truncate">{c.model}</span>}
+            <span className="text-[10px] text-amber-700/60 dark:text-amber-400/60 shrink-0">
               {c.kind === 'internal_api_child'
                 ? `dispatched via API${c.runtime ? ` · ${c.runtime}` : ''}`
                 : c.kind === 'antigravity_task'

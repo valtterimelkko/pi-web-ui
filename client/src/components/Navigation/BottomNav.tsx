@@ -55,37 +55,37 @@ export function BottomNav() {
         />
       )}
       {moreOpen && (
-        <div className="fixed bottom-20 right-4 z-50 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-2">
+        <div className="fixed bottom-20 right-4 z-50 bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded-xl shadow-xl p-1.5 min-w-[140px]">
           <button
             onClick={() => { setActiveTab('tasks'); setMoreOpen(false); }}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md w-full"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg w-full transition-colors"
           >
-            <ListTodo size={16} />
-            Tasks <span className="text-[10px] font-bold bg-blue-100 text-blue-500 px-1 rounded ml-1">Soon</span>
+            <ListTodo size={16} strokeWidth={1.75} />
+            Tasks <span className="text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-1 rounded ml-1">Soon</span>
           </button>
           <button
             onClick={() => { openDriveMode(); setMoreOpen(false); }}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md w-full"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle rounded-lg w-full transition-colors"
           >
-            <Car size={16} />
+            <Car size={16} strokeWidth={1.75} />
             Voice Mode
           </button>
         </div>
       )}
       <nav
         aria-label="Primary mobile navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white dark:bg-gray-950 border-t border-gray-200 dark:border-gray-800"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-surface/95 dark:bg-canvas-dark/95 backdrop-blur-sm border-t border-outline-default dark:border-outline-default-dark"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         {/* Collapse toggle bar */}
         <div className="flex justify-center pt-1">
           <button
             onClick={toggleBottomNav}
-            className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            className="p-1 text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark transition-colors"
             title="Hide navigation"
             aria-label="Hide navigation"
           >
-            <ChevronDown size={16} />
+            <ChevronDown size={16} strokeWidth={1.75} />
           </button>
         </div>
         {/* Main tabs */}
@@ -96,21 +96,21 @@ export function BottomNav() {
               onClick={() => setActiveTab(tab.id)}
               className={`flex flex-col items-center gap-0.5 px-3 py-2 transition-colors ${
                 activeTab === tab.id
-                  ? 'text-blue-600 dark:text-blue-400'
-                  : 'text-gray-400 dark:text-gray-500'
+                  ? 'text-blue-600 dark:text-blue-400 font-medium'
+                  : 'text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark'
               }`}
             >
-              <tab.icon size={20} />
+              <tab.icon size={20} strokeWidth={1.75} />
               <span className="text-[10px] font-medium">{tab.label}</span>
             </button>
           ))}
           <button
             onClick={() => setMoreOpen((o) => !o)}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 transition-colors ${
-              activeTab === 'tasks' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'
+              activeTab === 'tasks' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark'
             }`}
           >
-            <MoreHorizontal size={20} />
+            <MoreHorizontal size={20} strokeWidth={1.75} />
             <span className="text-[10px] font-medium">More</span>
           </button>
         </div>
