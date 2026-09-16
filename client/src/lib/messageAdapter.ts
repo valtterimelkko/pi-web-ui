@@ -95,6 +95,7 @@ export function messageToLiveMessage(msg: Message): LiveMessage {
   return {
     id: msg.id,
     role: msg.role,
+    ...(msg.customType !== undefined ? { customType: msg.customType } : {}),
     content,
     timestamp: msg.timestamp,
     isComplete: msg.isComplete ?? true, // Default to true for existing messages

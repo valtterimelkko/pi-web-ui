@@ -139,3 +139,160 @@ describe('getTurnAssistantParts — the whole-turn scan (P19)', () => {
     expect(getTurnAssistantText([msg('u1', 'user', 'hi')])).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// INJECTION MARKING (2026-09-16) — routine Agent OS capture injections are
+// structurally marked at the emitter (custom message, customType
+// 'agent-os-capture'). The scan must exclude ONLY what the injection produced:
+// assistant output more recent than the last marked injection — with no
+// operator message after it — is housekeeping and is never the turn; the work
+// below the injection still is. The match is structural (entry role + custom
+// type), never a text heuristic.
+// ---------------------------------------------------------------------------
+
+import { AGENT_OS_CAPTURE_CUSTOM_TYPE, isAgentOsCaptureInjection } from '../../../../src/components/DriveMode/useAnswerReader';
+
+function injection(id: string, customType: string = AGENT_OS_CAPTURE_CUSTOM_TYPE): Message {
+  return {
+    id,
+    role: 'custom',
+    customType,
+    content: 'Agent OS session-end memory capture (automated delivery). Run your capture flow now.',
+    timestamp: Date.now(),
+  };
+}
+
+describe('getTurnAssistantParts — marked capture injections bound the spoken turn (2026-09-16)', () => {
+  it('the housekeeping answer after a marked injection is never the turn; the work below it still is', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'ship the release'),
+      msg('a1', 'assistant', 'The release is tagged and deployed.'),
+      injection('c1'),
+      msg('a2', 'assistant', 'Two memory candidates were extracted and evidence written.'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a1'], 'the operator’s work, not the housekeeping');
+    expect(parts.text).toBe('The release is tagged and deployed.');
+    expect(parts.text).not.toContain('candidates were extracted');
+  });
+
+  it('a real operator message after the injection restores the ordinary turn — everything since their words', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'ship the release'),
+      msg('a1', 'assistant', 'work one'),
+      injection('c1'),
+      msg('a2', 'assistant', 'housekeeping'),
+      msg('u2', 'user', 'now update the changelog'),
+      msg('a3', 'assistant', 'Changelog updated.'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a3']);
+    expect(parts.text).toBe('Changelog updated.');
+  });
+
+  it('every assistant message of the housekeeping turn is excluded, tools included in the skip', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'go'),
+      msg('a1', 'assistant', 'real work'),
+      injection('c1'),
+      msg('a2', 'assistant', 'capture step one'),
+      msg('t1', 'tool', 'capture tool output'),
+      msg('a3', 'assistant', 'capture step two'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a1']);
+    expect(parts.text).toBe('real work');
+  });
+
+  it('the LAST marked injection wins — only output after it is housekeeping', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'go'),
+      msg('a1', 'assistant', 'work one'),
+      injection('c1'),
+      msg('a2', 'assistant', 'housekeeping one'),
+      msg('u2', 'user', 'more'),
+      msg('a3', 'assistant', 'work two'),
+      injection('c2'),
+      msg('a4', 'assistant', 'housekeeping two'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a3']);
+    expect(parts.text).toBe('work two');
+  });
+
+  it('other custom messages are not boundaries — another extension’s injection never silences the turn', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'go'),
+      msg('a1', 'assistant', 'real work'),
+      injection('c-other', 'bg-shell-tasks-reminder'),
+      msg('a2', 'assistant', 'still the operator’s turn'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a1', 'a2']);
+    expect(parts.text).toBe('real work\n\nstill the operator’s turn');
+  });
+
+  it('STRUCTURAL, not textual: an operator prompt quoting the injection wording verbatim is a user message and still bounds the turn', () => {
+    const injectionWords = 'Agent OS session-end memory capture (automated delivery). Run your capture flow now.';
+    const messages: Message[] = [
+      msg('u1', 'user', injectionWords),
+      msg('a1', 'assistant', 'the answer to the operator’s own words'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a1']);
+    expect(parts.text).toBe('the answer to the operator’s own words');
+    expect(isAgentOsCaptureInjection(messages[0])).toBe(false,
+      'a USER message is never an injection, whatever it quotes');
+  });
+
+  it('the packet lane type (agent-os) is not a capture boundary — it rides inside the operator’s turn', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'go'),
+      injection('c-pkt', 'agent-os'),
+      msg('a1', 'assistant', 'the first answer is real work'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a1']);
+    expect(parts.text).toBe('the first answer is real work');
+  });
+
+  it('an injection with no work below it yields no turn at all — housekeeping is never spoken alone', () => {
+    const messages: Message[] = [
+      injection('c1'),
+      msg('a2', 'assistant', 'housekeeping'),
+    ];
+    expect(getTurnAssistantParts(messages).text).toBeNull();
+  });
+
+  it('sessions with no injections behave exactly as before (regression guard)', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'go'),
+      msg('a1', 'assistant', 'interim'),
+      msg('t1', 'tool', 'out'),
+      msg('a2', 'assistant', 'final'),
+    ];
+    const parts = getTurnAssistantParts(messages);
+    expect(parts.ids).toEqual(['a1', 'a2']);
+    expect(parts.text).toBe('interim\n\nfinal');
+  });
+
+  it('accounted bookkeeping still applies below the injection boundary', () => {
+    const messages: Message[] = [
+      msg('u1', 'user', 'go'),
+      msg('a1', 'assistant', 'work'),
+      injection('c1'),
+      msg('a2', 'assistant', 'housekeeping'),
+    ];
+    const accounted = new Map([['a1', 'work']]);
+    const parts = getTurnAssistantParts(messages, accounted);
+    expect(parts.text).toBeNull(), 'accounted work is not re-collected';
+  });
+
+  it('the marker predicate is exported so every consumer shares one structural rule', () => {
+    expect(AGENT_OS_CAPTURE_CUSTOM_TYPE).toBe('agent-os-capture');
+    expect(isAgentOsCaptureInjection(injection('x'))).toBe(true);
+    expect(isAgentOsCaptureInjection(injection('x', 'agent-os'))).toBe(false);
+    expect(isAgentOsCaptureInjection(msg('x', 'user', 'anything'))).toBe(false);
+    expect(isAgentOsCaptureInjection(msg('x', 'assistant', 'anything'))).toBe(false);
+  });
+});
