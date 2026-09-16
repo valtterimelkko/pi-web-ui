@@ -275,7 +275,16 @@ export function primePlaybackQueue(chunks: string[], voice?: string) {
   ttsPlayer.primeQueue(chunks);
 }
 
-export function useReadAloud(messageId: string) {
+/**
+ * @param messageId the arbiter intent id for this surface ('drive-mode', or
+ *        'drive-mode-<sessionId>' for a lane).
+ * @param ledgerScope the scope this playback records its words under. Multi-lane
+ *        passes the LANE's scope so that one lane's explicit playback and its
+ *        auto-speak still share one record (never said twice), while another
+ *        lane saying the same words is a different event and still speaks.
+ *        Absent = the shared content scope.
+ */
+export function useReadAloud(messageId: string, ledgerScope?: string) {
   const [state, setState] = useState<ReadAloudState>('idle');
   const [speedEnabled, setSpeedEnabled] = useState(playbackRate > 1.0);
   const stateRef = useRef(state);
@@ -358,10 +367,10 @@ export function useReadAloud(messageId: string) {
       // talker (or an earlier read-aloud) already said these words. Mark the
       // text as spoken FIRST so no auto producer can repeat it (P16) — the
       // explicit path updates the shared record, it is never refused by it.
-      spokenLedger.mark(text);
+      spokenLedger.mark(text, ledgerScope);
       speechArbiter.submit({ id: messageId, tier: TIER_ANSWER, chunks });
     },
-    [messageId]
+    [messageId, ledgerScope]
   );
 
   const stop = useCallback(() => {

@@ -38,6 +38,24 @@ export const SPOKEN_LEDGER_CAPACITY = 64;
 /** Scope for spoken content — the worker's answer, read-aloud playback. */
 export const CONTENT_SCOPE = 'content';
 
+/**
+ * The content scope for one voice surface.
+ *
+ * A LANE is a worker session. Two lanes answering with the same words are two
+ * separate events, and the second must not be silenced as a "duplicate" of the
+ * first (operator, 2026-09-16: with two or three lanes open, does every lane
+ * still speak at its own turn?). Within ONE lane the scope is shared by every
+ * producer — auto-speak and read-aloud — so P16's never-say-it-twice still
+ * holds exactly where it was meant to.
+ *
+ * An absent lane key keeps the shared content scope: single-lane use is
+ * unchanged, byte for byte.
+ */
+export function contentScopeFor(laneKey?: string | null): string {
+  const key = laneKey?.trim();
+  return key ? `content:${key}` : CONTENT_SCOPE;
+}
+
 /** Trim and collapse internal whitespace so respaced text still matches. */
 export function normaliseSpokenText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();

@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useState } from 'react';
-import { Mic, MicOff, Square, VolumeX } from 'lucide-react';
+import { Mic, MicOff, RefreshCw, Square, VolumeX } from 'lucide-react';
 import { useDriveModeStore } from '../../store/driveModeStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useReadAloud } from '../../hooks/useReadAloud';
@@ -19,6 +19,7 @@ import { VoiceLayoutToggle } from './VoiceLayoutToggle';
 import { useVoiceLayout } from './useVoiceLayout';
 import { speechArbiter } from '../../lib/speechArbiter';
 import { getTurnAssistantText, useAnswerReader } from './useAnswerReader';
+import { contentScopeFor } from '../../lib/spokenLedger';
 
 export interface DriveModeDictateProps {
   sessionId: string;
@@ -82,7 +83,11 @@ export function DriveModeDictate({
   const voiceLayout = useVoiceLayout();
   // Read-aloud and the answer reader are per-lane in multi-lane mode: the
   // arbiter's intent ids carry the session so the strip can attribute speech.
-  const readAloud = useReadAloud(laneEnabled ? `drive-mode-${sessionId}` : 'drive-mode');
+  // One scope per LANE for spoken content: two lanes answering identically are
+  // two events (both speak), while this lane's auto path and its read-aloud
+  // still share a record so the same answer is never said twice.
+  const speechScope = contentScopeFor(laneEnabled ? sessionId : undefined);
+  const readAloud = useReadAloud(laneEnabled ? `drive-mode-${sessionId}` : 'drive-mode', speechScope);
   const phase = useDriveModeStore((s) => s.phase);
   const setPhase = useDriveModeStore((s) => s.setPhase);
   // Per-lane transcript: in lane mode the surface reads ITS session's
@@ -136,6 +141,7 @@ export function DriveModeDictate({
     focused: focus.focused,
     requestDigest,
     ...(laneEnabled ? { intentIdPrefix: sessionId } : {}),
+    ...(laneEnabled ? { contentScope: speechScope } : {}),
   });
 
   // Vibrate when recording starts
@@ -284,9 +290,11 @@ export function DriveModeDictate({
           <button
             onClick={onSwitchSession}
             data-testid="drive-switch-session"
-            className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium text-content-secondary dark:text-content-secondary-dark border border-outline-default dark:border-outline-default-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors select-none touch-manipulation"
+            title="Point voice mode at a different worker session"
+            className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors select-none touch-manipulation"
             type="button"
           >
+            <RefreshCw className="w-3.5 h-3.5" />
             Switch session
           </button>
         )}

@@ -102,6 +102,14 @@ export interface AnswerReaderOptions {
   /** Multi-lane: prefix for this surface's intent ids (the worker session id),
    *  so the shared arbiter's queue attributes speech to the right lane. */
   intentIdPrefix?: string;
+  /**
+   * The scope this surface's spoken content is recorded under. Multi-lane
+   * passes the lane's own scope (see `contentScopeFor`): two workers saying
+   * the same words are two events, while this lane's own producers — the auto
+   * path here and read-aloud — still share one record and never repeat it.
+   * Absent = the shared content scope (single-lane use, unchanged).
+   */
+  contentScope?: string;
 }
 
 export interface AnswerReaderView {
@@ -276,7 +284,7 @@ export function getTurnAssistantText(messages: readonly Message[]): string | nul
 }
 
 export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView {
-  const { isStreaming, messages, level, focused, requestDigest, intentIdPrefix } = options;
+  const { isStreaming, messages, level, focused, requestDigest, intentIdPrefix, contentScope } = options;
   const [spokenKind, setSpokenKind] = useState<ReadingLevel | null>(null);
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   /** P18/2 — the answers held while focus is on, and the recap they produce. */
@@ -307,9 +315,11 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
   const levelRef = useRef(level);
   const requestDigestRef = useRef(requestDigest);
   const intentPrefixRef = useRef(intentIdPrefix);
+  const contentScopeRef = useRef(contentScope);
   levelRef.current = level;
   requestDigestRef.current = requestDigest;
   intentPrefixRef.current = intentIdPrefix;
+  contentScopeRef.current = contentScope;
   const recapSeqRef = useRef(0);
 
   /** Lane-scoped intent id: `${prefix}answer-auto-N` (or the recap scope),
@@ -357,7 +367,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
       if (!spoken) return;
       const answer = answerRef.current;
       const ownedByThisAnswer = answer !== null && spoken === answer.text.trim();
-      if (!ownedByThisAnswer && !spokenLedger.claim(spoken)) return;
+      if (!ownedByThisAnswer && !spokenLedger.claim(spoken, contentScopeRef.current)) return;
       submitAnswerText(itemId, spoken, form);
     },
     [submitAnswerText]
@@ -409,7 +419,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
         // A held answer was never claimed (nothing was spoken while focused),
         // so the shared record still protects it: if the operator read it aloud
         // while focus was on, the recap does not say the same words twice.
-        if (!spokenLedger.claim(item.text)) return;
+        if (!spokenLedger.claim(item.text, contentScopeRef.current)) return;
         submitAnswerText(item.id, item.text, 'verbatim');
         return;
       }
@@ -425,7 +435,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
       if (generation !== generationRef.current) return; // a level flip superseded this item
       if (outcome.ok) {
         const spoken = digestSpokenText(plan.digestKind, outcome.digest);
-        if (spoken && spokenLedger.claim(spoken)) {
+        if (spoken && spokenLedger.claim(spoken, contentScopeRef.current)) {
           submitAnswerText(item.id, spoken, plan.digestKind);
           return;
         }
@@ -433,7 +443,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
       // The talker could not help: read the held answer rather than lose it.
       setFallbackNote(DIGEST_FALLBACK_NOTE);
       setSpokenKind('verbatim');
-      if (!spokenLedger.claim(item.text)) return;
+      if (!spokenLedger.claim(item.text, contentScopeRef.current)) return;
       submitAnswerText(item.id, item.text, 'verbatim');
     },
     [submitAnswerText]
@@ -505,10 +515,12 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
       return;
     }
 
-    // One answer speaks once, whichever producer got there first — the shared
-    // record (P16). Claimed at the decision, so a repeated turn-end cannot
-    // double-speak while a digest is still being fetched.
-    if (!spokenLedger.claim(turnText)) return;
+    // One answer speaks once, whichever producer got there first — the
+    // record for THIS surface (P16; a lane has its own, so another lane saying
+    // the same words is not a duplicate). Claimed at the decision, so a
+    // repeated turn-end cannot double-speak while a digest is still being
+    // fetched.
+    if (!spokenLedger.claim(turnText, contentScopeRef.current)) return;
 
     const generation = ++generationRef.current;
     const itemId = scopedItemId(`answer-auto-${autoSeqRef.current++}`);
@@ -548,7 +560,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
         return;
       }
       const spoken = digestSpokenText(plan.digestKind, outcome.digest);
-      if (!spoken || !spokenLedger.claim(spoken)) {
+      if (!spoken || !spokenLedger.claim(spoken, contentScopeRef.current)) {
         // An empty digest, or words already spoken: read the turn rather than
         // say nothing at all.
         setFallbackNote(DIGEST_FALLBACK_NOTE);
@@ -659,7 +671,7 @@ export function useAnswerReader(options: AnswerReaderOptions): AnswerReaderView 
       }
       if (outcome.ok) {
         const spoken = digestSpokenText(plan.digestKind, outcome.digest);
-        if (spoken && spokenLedger.claim(spoken)) {
+        if (spoken && spokenLedger.claim(spoken, contentScopeRef.current)) {
           submitAnswerText(answer.itemId, spoken, plan.digestKind);
           return;
         }
