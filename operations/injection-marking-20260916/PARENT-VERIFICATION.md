@@ -47,6 +47,9 @@ surface were found and fixed.
   new client bundle from disk: `/assets/index-G9gjuXgi.js` returned HTTP 200 with a sha256 identical
   to the freshly built file and contains the `agent-os-capture` marker. `prod-smoke` pass (200, React
   mounted, login screen, no page errors). Production uptime and `NRestarts=0` are unchanged.
+  Re-confirmed at finalisation (16:47Z): 0 busy across 5,000 sessions, but **two Voice Mode lanes were still
+  bound**, so a restart would have destroyed live Voice Mode state for no functional gain — none was taken.
+  A cold-start check remains available on request once the operator's voice mode is closed.
 - **Emitter activation proven on the host**, not just in a worktree: a fresh `pi` run driven by the
   parent wrote a session entry `custom_message { customType: "agent-os-capture", display: false }`
   carrying the identical capture wording, with **no** user-shaped capture message anywhere.
@@ -55,11 +58,10 @@ surface were found and fixed.
 
 ## Residual, intentional and honestly stated
 
-- **The one visible change:** the capture prompt no longer renders as a user bubble in the web UI
-  session view (every projection drops `role:'custom'` by construction). It still reaches the model,
-  still lives in the session file, and the assistant's answer about the capture still appears. Raised
-  with the operator as a yes/no (hide it vs. render a subtle housekeeping line); default if silent:
-  hide it. A request for a visible housekeeping line is a small follow-up, not a defect.
+- **The one visible change, now an explicit operator decision:** the capture prompt no longer renders as a user
+  bubble in the web UI session view (every projection drops `role:'custom'` by construction). It still reaches
+  the model, still lives in the session file, and the assistant's answer about the capture still appears. The
+  operator confirmed on 2026-09-16: **leave it invisible.** No follow-up is outstanding.
 - An already-open browser tab keeps its older bundle until reload; new page loads get the fix.
 - The DOM-level Voice Mode pane check in the child's evidence is weak evidence (virtualized list), and
   is labelled as such in its own README; the authoritative session-view proof is the projection

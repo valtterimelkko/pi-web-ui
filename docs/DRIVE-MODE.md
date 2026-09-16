@@ -84,7 +84,9 @@ the injection wording verbatim is still spoken. The packet lane's separate
 boundary, and no other extension's custom message can silence a turn (operator
 decision, 2026-09-16). Because every rendered projection drops `role: 'custom'`
 entries, the capture prompt no longer shows as a user bubble in the session view;
-the assistant's answer about the capture still does.
+the assistant's answer about the capture still does. The operator confirmed this on
+2026-09-16 as the intended behaviour — **leave it invisible**, rather than render a
+housekeeping line — so this is a decision, not an oversight.
 
 ## Key Files
 
