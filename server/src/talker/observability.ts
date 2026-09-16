@@ -108,6 +108,12 @@ export interface VoiceConversationTurn {
   replyChars?: number;
   released: boolean;
   deliveryOutcome?: string;
+  /**
+   * WHY a relay was refused (operator incident 2026-09-16). The outcome alone
+   * ("refused") cannot be acted on, and the ring is in-memory — it dies with
+   * the process — so the reason must be recorded here AND in the journal line.
+   */
+  deliveryError?: string;
   error?: string;
 }
 
@@ -385,6 +391,9 @@ export function createVoiceTurnRecorder(options: VoiceTurnRecorderOptions = {}):
           ...conversationReplyFields(result.reply),
           released: result.released != null,
           ...(result.released ? { deliveryOutcome: result.released.delivery.outcome } : {}),
+          ...(result.released && result.released.delivery.outcome === 'refused'
+            ? { deliveryError: String(safeLogValue(result.released.delivery.reason)) }
+            : {}),
           ...(result.error !== undefined ? { error: result.error } : {}),
         });
         metrics.recordVoiceTurn(phase);
@@ -402,7 +411,15 @@ export function createVoiceTurnRecorder(options: VoiceTurnRecorderOptions = {}):
             releasedSha256: voiceDigest(result.released.text),
             releasedExcerpt: voiceExcerpt(result.released.text),
             ...deliveryFields(delivery),
-          }).info(`voice release ${voiceTurnId(observation)}`);
+          }).info(
+            // The pretty renderer prints the message plus the correlation
+            // suffix only, so a reason kept in a bound field is INVISIBLE in
+            // production (measured: `deliveryError` never appeared once in the
+            // journal). The outcome — and, when refused, the reason — therefore
+            // go IN the line, scrubbed like every other logged value.
+            `voice release ${voiceTurnId(observation)} — ${delivery.outcome}`
+              + (delivery.outcome === 'refused' ? `: ${String(safeLogValue(delivery.reason))}` : '')
+          );
           const mechanism = 'mechanism' in delivery ? delivery.mechanism : 'none';
           metrics.recordVoiceRelease(mechanism, delivery.outcome);
         } else if (denial) {

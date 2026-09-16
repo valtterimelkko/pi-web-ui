@@ -1,0 +1,116 @@
+{
+  "phases": {
+    "seed": {
+      "sent_seed-1": {
+        "type": "new_session",
+        "requestId": "seed-1",
+        "model": "openrouter/anthropic/claude-haiku-4.5"
+      },
+      "sent_set_model": {
+        "type": "set_model",
+        "modelId": "openrouter/anthropic/claude-haiku-4.5"
+      },
+      "sent_seed_prompt": {
+        "type": "prompt",
+        "sessionPath": "/tmp/voice-relay-srv/pi-sessions/2026-09-16T11-07-26-173Z_01a0a9e6-6e5c-7678-beeb-c308ded13b30.jsonl",
+        "message": "Reply with the single word READY."
+      },
+      "seeded": {
+        "sessionId": "01a0a9e6-6e5c-7678-beeb-c308ded13b30",
+        "sessionPath": "/tmp/voice-relay-srv/pi-sessions/2026-09-16T11-07-26-173Z_01a0a9e6-6e5c-7678-beeb-c308ded13b30.jsonl",
+        "model": "openrouter/anthropic/claude-haiku-4.5"
+      },
+      "seededTranscript": {
+        "userTexts": 1
+      }
+    },
+    "relay": {
+      "workerBeforeRelay": {
+        "exists": true,
+        "userTexts": 1,
+        "assistantTexts": 1,
+        "mtimeIso": "2026-09-16T11:07:31.279Z"
+      },
+      "serverStateBeforeRelay": {
+        "lanes": [],
+        "loadStatus": "available"
+      },
+      "sent_r1": {
+        "type": "talker_turn",
+        "workerSessionId": "01a0a9e6-6e5c-7678-beeb-c308ded13b30",
+        "utterance": "Reply with exactly RELAY-PROBE-OK and nothing else.",
+        "runtime": "pi",
+        "requestId": "r1"
+      },
+      "proposalReply": {
+        "reply": "I understand you want me to tell the worker to reply with exactly RELAY-PROBE-OK and nothing else. Should I send that?",
+        "phase": "proposed",
+        "released": null
+      },
+      "sent_r2": {
+        "type": "talker_turn",
+        "workerSessionId": "01a0a9e6-6e5c-7678-beeb-c308ded13b30",
+        "utterance": "yes, send that",
+        "runtime": "pi",
+        "requestId": "r2"
+      },
+      "release": {
+        "phase": "released",
+        "reply": "sending that now",
+        "delivery": {
+          "outcome": "delivered",
+          "mechanism": "prompt",
+          "disclosure": "delivered as the worker was idle"
+        }
+      },
+      "workerAfterRelay": {
+        "userTexts": 2,
+        "assistantTexts": 2,
+        "mtimeIso": "2026-09-16T11:10:40.130Z",
+        "landedInstruction": [
+          "Reply with exactly RELAY-PROBE-OK and nothing else."
+        ]
+      },
+      "journalReleaseLines": [
+        "[VoiceMode] voice release pi:01a0a9e6-6e5c-7678-beeb-c308ded13b30:2 — delivered [rt=pi]"
+      ]
+    }
+  },
+  "startedAt": "2026-09-16T11:07:25.676Z",
+  "base": "http://127.0.0.1:3531",
+  "finishedAt": "2026-09-16T11:10:40.157Z",
+  "assertions": [
+    {
+      "name": "the talker proposes the dictated instruction for confirmation",
+      "ok": true,
+      "detail": "proposed"
+    },
+    {
+      "name": "the confirmed relay is DELIVERED to an idle, unloaded worker",
+      "ok": true,
+      "detail": {
+        "outcome": "delivered",
+        "mechanism": "prompt",
+        "disclosure": "delivered as the worker was idle"
+      }
+    },
+    {
+      "name": "the instruction is in the WORKER transcript (it really arrived)",
+      "ok": true,
+      "detail": {
+        "marker": "RELAY-PROBE-OK"
+      }
+    },
+    {
+      "name": "the worker answered the relayed instruction (a real turn ran)",
+      "ok": true
+    },
+    {
+      "name": "the journal states the delivery outcome (and the reason when refused)",
+      "ok": true,
+      "detail": [
+        "[VoiceMode] voice release pi:01a0a9e6-6e5c-7678-beeb-c308ded13b30:2 — delivered [rt=pi]"
+      ]
+    }
+  ]
+}

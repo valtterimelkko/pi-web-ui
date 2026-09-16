@@ -148,6 +148,9 @@ describe('useVoiceTurn — the talker lane of the Voice Mode surface', () => {
     expect(result.current.pendingProposal).toBeNull();
     expect(result.current.lastReleased).toEqual({
       text: 'ship it',
+      // The banner is decided by the SERVER's outcome, so the status is part of
+      // the recorded release (a refusal must never render as a success).
+      status: 'delivered',
       outcome: 'delivered (steer)',
     });
     // The receipt ack (tier 2) outranks the in-flight chatter but preempts

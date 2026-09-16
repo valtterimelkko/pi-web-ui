@@ -146,6 +146,14 @@ export interface TalkerDigestResult {
 export interface TalkerSessionRegistryDeps {
   /** The manager the server already owns — supplied by the owner, never created here. */
   multiSessionManager: MultiSessionManager;
+  /**
+   * Resolve a wire session id to its on-disk session, for the relay's
+   * load-on-demand step (the server's session registry). Sessions are loaded
+   * lazily, so a relay to an idle — or post-restart — worker has to be able to
+   * find and load it; without this the delivery refuses loudly instead of
+   * delivering (operator incident 2026-09-16).
+   */
+  resolveWorkerSession?: (sessionId: string) => Promise<{ path: string; cwd?: string } | undefined>;
   /** Injectable delivery set (tests). Default: createDefaultDeliveries({ multiSessionManager }). */
   deliveries?: DefaultDeliveries;
   /** Injectable model client, or a factory returning null when unconfigured. Default: OpenRouter from env. */
@@ -423,7 +431,10 @@ export class TalkerSessionRegistry {
     if (this.deps.deliveries) return this.deps.deliveries;
     // Lazily built once per registry from the supplied manager — the pi
     // adapter is real only because the owner handed us its manager instance.
-    this.deliveriesPromise ??= createDefaultDeliveries({ multiSessionManager: this.manager });
+    this.deliveriesPromise ??= createDefaultDeliveries({
+      multiSessionManager: this.manager,
+      ...(this.deps.resolveWorkerSession ? { resolveWorkerSession: this.deps.resolveWorkerSession } : {}),
+    });
     return this.deliveriesPromise;
   }
 

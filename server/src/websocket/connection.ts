@@ -468,7 +468,22 @@ export class WebSocketConnectionManager {
     // the sessions this server manages (never a second manager instance). Transport
     // binding (which message/route calls handleOperatorTurn) is a later phase; the
     // narrow accessor below is its seam.
-    this.talkerSessionRegistry = new TalkerSessionRegistry({ multiSessionManager: this.multiSessionManager });
+    this.talkerSessionRegistry = new TalkerSessionRegistry({
+      multiSessionManager: this.multiSessionManager,
+      // The relay's load-on-demand step: resolve a wire session id to its
+      // on-disk session through the SAME registry the Internal API uses, so a
+      // relayed instruction reaches a worker that is not currently loaded
+      // (idle, evicted, or after a restart). Best-effort: a registry outage
+      // leaves the loud "Session … does not exist" refusal in place.
+      resolveWorkerSession: async (sessionId: string) => {
+        try {
+          const entry = await getSessionRegistry(config.sessionRegistryPath).get(sessionId);
+          return entry ? { path: entry.path, cwd: entry.cwd } : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+    });
 
     // Set up session status change broadcasting
     this.setupSessionStatusBroadcasting();

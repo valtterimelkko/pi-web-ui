@@ -544,3 +544,74 @@ describe('DriveModeDictate — the Voice Mode surface (talking while working)', 
     expect(screen.queryByLabelText('Start recording')).toBeNull();
   });
 });
+
+describe('DriveModeDictate — the relay banner tells the truth about delivery', () => {
+  /**
+   * Operator incident, 2026-09-16: they pressed Confirm, the front-end showed a
+   * green "Sent to the worker:" box, and the talker then said it could not
+   * deliver. The box was green for EVERY outcome — a refusal looked like a
+   * success. A refused relay must never read as sent.
+   */
+  const release = (delivery: Record<string, unknown>) => {
+    act(() => {
+      emitTalkerTurnResult({
+        type: 'talker_turn_result',
+        workerSessionId: WORKER,
+        runtime: 'pi',
+        reply: 'ok',
+        phase: 'released',
+        released: { utteranceId: 9, text: 'deploy to staging', delivery },
+        cancelled: false,
+      });
+    });
+  };
+
+  it('says sent only for a delivered relay', () => {
+    renderSurface();
+    act(() => { dictate('deploy to staging'); });
+    release({ outcome: 'delivered', mechanism: 'prompt' });
+    const banner = screen.getByTestId('released-outcome');
+    expect(screen.getByTestId('released-outcome-heading').textContent).toMatch(/^Sent to the worker/i);
+    expect(banner.getAttribute('data-delivery')).toBe('delivered');
+    expect(banner.className).toContain('green');
+  });
+
+  it('says queued (not sent) when the worker will get it after its turn', () => {
+    renderSurface();
+    act(() => { dictate('deploy to staging'); });
+    release({ outcome: 'queued', mechanism: 'follow-up' });
+    const banner = screen.getByTestId('released-outcome');
+    expect(screen.getByTestId('released-outcome-heading').textContent).toMatch(/^Queued for the worker/i);
+    expect(banner.getAttribute('data-delivery')).toBe('queued');
+    expect(banner.className).not.toContain('green');
+  });
+
+  it('shouts NOT sent, with the reason, when the delivery was refused', () => {
+    renderSurface();
+    act(() => { dictate('deploy to staging'); });
+    release({ outcome: 'refused', reason: 'Session 01a0a942-… does not exist' });
+    const banner = screen.getByTestId('released-outcome');
+    expect(banner.getAttribute('data-delivery')).toBe('refused');
+    // The heading must LEAD with the refusal — never a success claim.
+    expect(screen.getByTestId('released-outcome-heading').textContent).toMatch(/^NOT sent/i);
+    expect(banner.className).not.toContain('green');
+    expect(banner.className).toContain('amber');
+    expect(banner.textContent).toContain('does not exist');
+    // The operator's words are kept for a retry rather than looking delivered.
+    expect(screen.getByTestId('released-outcome').textContent).toContain('deploy to staging');
+    expect(screen.getByTestId('send-failure').textContent).toContain('deploy to staging');
+  });
+
+  it('keeps a refused relay recoverable: the words stay and "Try again" re-sends them', () => {
+    renderSurface();
+    act(() => { dictate('deploy to staging'); });
+    release({ outcome: 'refused', reason: 'Session x does not exist' });
+
+    expect(screen.getByTestId('send-failure').textContent).toMatch(/your words are kept/i);
+    sendMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ utterance: 'deploy to staging' })
+    );
+  });
+});

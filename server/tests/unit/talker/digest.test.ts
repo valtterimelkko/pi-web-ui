@@ -53,6 +53,13 @@ describe('talker digest prompt (canonical file)', () => {
     expect(system.content).toBe(fromFile);
   });
 
+  it('rules routine housekeeping out of the spoken digest (operator, 2026-09-16)', () => {
+    const prompt = readFileSync(path.join(repoRoot, DIGEST_PROMPT_RELATIVE_PATH), 'utf8');
+    expect(prompt).toMatch(/housekeeping/i);
+    expect(prompt).toMatch(/never narrate/i);
+    expect(prompt).toMatch(/captured|recorded|promoted/i);
+  });
+
   it('tells the model the input may span the whole turn: interim updates plus a final message (P19)', () => {
     const prompt = readFileSync(path.join(repoRoot, DIGEST_PROMPT_RELATIVE_PATH), 'utf8');
     expect(prompt).toMatch(/whole turn/i);

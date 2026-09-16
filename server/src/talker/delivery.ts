@@ -21,9 +21,24 @@ import type { DeliveryOutcome, WorkerDelivery } from './types.js';
 // ── Pi ─────────────────────────────────────────────────────────────────────
 
 export interface PiDeliveryDeps {
-  isBusy(sessionId: string): boolean;
-  steer(sessionId: string, text: string): Promise<void>;
-  prompt(sessionId: string, text: string): Promise<void>;
+  isBusy(sessionPath: string): boolean;
+  steer(sessionPath: string, text: string): Promise<void>;
+  prompt(sessionPath: string, text: string): Promise<void>;
+  /**
+   * Make the worker reachable before the relay (operator incident
+   * 2026-09-16). Pi keys sessions by PATH and loads them LAZILY, so an idle
+   * worker — and every worker, right after a server restart — is not in
+   * memory: the relay could not resolve the wire id to a path, the prompt
+   * threw `Session <ref> does not exist`, and the operator's instruction was
+   * refused and lost. Resolving and loading are therefore the delivery's
+   * business, not the operator's luck.
+   *
+   * Resolves the wire reference to the session path to deliver to and reports
+   * whether THIS call loaded it (so the load can be handed back).
+   */
+  ensureReady?(ref: string): Promise<{ path: string; loadedHere: boolean }>;
+  /** Hand back a load this delivery made. Absent = nothing to release. */
+  release?(sessionPath: string): void;
 }
 
 export function createPiDelivery(deps: PiDeliveryDeps): WorkerDelivery {
@@ -31,16 +46,27 @@ export function createPiDelivery(deps: PiDeliveryDeps): WorkerDelivery {
     describe: () => 'pi (existing path; H2 input-event bridge not wired)',
     async deliver({ workerSessionId, text }): Promise<DeliveryOutcome> {
       try {
-        if (deps.isBusy(workerSessionId)) {
-          await deps.steer(workerSessionId, text);
-          return {
-            outcome: 'delivered',
-            mechanism: 'steer',
-            disclosure: 'delivered via the existing steer path; the extension input-event bridge (H2) is not wired yet',
-          };
+        // The readiness step runs FIRST, so the busy check sees the session it
+        // is actually about to talk to.
+        const ready = deps.ensureReady
+          ? await deps.ensureReady(workerSessionId)
+          : { path: workerSessionId, loadedHere: false };
+        try {
+          if (deps.isBusy(ready.path)) {
+            await deps.steer(ready.path, text);
+            return {
+              outcome: 'delivered',
+              mechanism: 'steer',
+              disclosure: 'delivered via the existing steer path; the extension input-event bridge (H2) is not wired yet',
+            };
+          }
+          await deps.prompt(ready.path, text);
+          return { outcome: 'delivered', mechanism: 'prompt', disclosure: 'delivered as the worker was idle' };
+        } finally {
+          // Only a load THIS delivery made is handed back; a session that was
+          // already in memory is left exactly as it was found.
+          if (ready.loadedHere) deps.release?.(ready.path);
         }
-        await deps.prompt(workerSessionId, text);
-        return { outcome: 'delivered', mechanism: 'prompt', disclosure: 'delivered as the worker was idle' };
       } catch (error) {
         return { outcome: 'refused', reason: error instanceof Error ? error.message : String(error) };
       }
@@ -161,7 +187,16 @@ export interface DefaultDeliveries {
  * wiring). Without it, the pi delivery refuses honestly rather than guessing.
  */
 export async function createDefaultDeliveries(
-  supplied?: { multiSessionManager?: import('../pi/multi-session-manager.js').MultiSessionManager }
+  supplied?: {
+    multiSessionManager?: import('../pi/multi-session-manager.js').MultiSessionManager;
+    /**
+     * Resolve a wire session id to its on-disk session (the server's session
+     * registry — the SAME index the Internal API uses). The manager's own
+     * resolver only knows sessions that are already loaded, which is exactly
+     * what a relay cannot rely on (operator incident 2026-09-16).
+     */
+    resolveWorkerSession?: (sessionId: string) => Promise<{ path: string; cwd?: string } | undefined>;
+  }
 ): Promise<DefaultDeliveries> {
   const [{ getClaudeService }, { getAntigravityService }] = await Promise.all([
     import('../claude/claude-service.js'),
@@ -172,14 +207,30 @@ export async function createDefaultDeliveries(
   const agy = getAntigravityService();
 
   const manager = supplied?.multiSessionManager;
+  /** One synthetic subscriber for relay-driven loads, so a load made on the
+   *  operator's behalf is attributable and can be handed back. */
+  const RELAY_CLIENT_ID = 'talker-relay';
   const pi: WorkerDelivery = manager
     ? createPiDelivery({
-        isBusy: (id) => {
-          const info = manager.getSessionStatus(id);
+        isBusy: (path) => {
+          const info = manager.getSessionStatus(path);
           return info?.status === 'busy' || info?.status === 'streaming';
         },
-        steer: (id, text) => manager.steer(id, text),
-        prompt: (id, text) => manager.prompt(id, text),
+        steer: (path, text) => manager.steer(path, text),
+        prompt: (path, text) => manager.prompt(path, text),
+        ensureReady: async (ref) => {
+          // Already loaded? By path, or by an id the manager can resolve itself.
+          const loaded = manager.resolveSessionRef?.(ref) ?? (manager.hasSession(ref) ? ref : undefined);
+          if (loaded) return { path: loaded, loadedHere: false };
+          const entry = await supplied?.resolveWorkerSession?.(ref);
+          const path = entry?.path ?? ref;
+          // Rehydrate from disk (the same lazy-load path every client uses).
+          // An unresolvable reference falls through to the path-or-id it was
+          // given, so the failure stays loud instead of guessing.
+          await manager.subscribeClient(RELAY_CLIENT_ID, path, entry?.cwd);
+          return { path, loadedHere: true };
+        },
+        release: (path) => manager.unsubscribeClient(RELAY_CLIENT_ID, path),
       })
     : {
         describe: () => 'pi (unwired)',

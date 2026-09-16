@@ -28,6 +28,9 @@ describe('talker system prompt (v3 harness variant)', () => {
     // remaining ~35 chars of growth are covered by this ceiling, not drift.
     // Parent review restored 'and do not act confused' (a designed guard on the
     // mandatory pushback path, no other test covers it): +~28 chars, ceiling +30.
+    // Operator round 2026-09-16 added ROUTINE HOUSEKEEPING IS NOT NEWS (~450
+    // chars) and PAID FOR IT by tightening existing prose, so the ceiling is
+    // unchanged: leanness is a budget, not a per-feature allowance.
     expect(prompt.length).toBeLessThanOrEqual(4680); // ~1170 tokens hard ceiling
   });
 
@@ -59,6 +62,17 @@ describe('talker system prompt (v3 harness variant)', () => {
     const prompt = loadTalkerSystemPrompt();
     expect(prompt).toMatch(/snapshot|state view/i);
     expect(prompt).toMatch(/can't tell|cannot tell|can’t tell/i);
+  });
+
+  // Operator, 2026-09-16: the talker narrated what the worker had CAPTURED
+  // (routine memory-housekeeping) instead of what it had been working on, and
+  // the substantive work took several turns to get out of it.
+  it('treats routine housekeeping as non-news and points at the real work', () => {
+    const prompt = loadTalkerSystemPrompt();
+    expect(prompt).toMatch(/housekeeping/i);
+    expect(prompt).toMatch(/not news|non-news/i);
+    expect(prompt).toMatch(/captured|recorded|promoted/i);
+    expect(prompt).toMatch(/actual work|real work|the work it/i);
   });
 
   it('matches the canonical file byte-for-byte (file stays authoritative)', () => {

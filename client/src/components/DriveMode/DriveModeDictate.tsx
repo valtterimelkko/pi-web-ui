@@ -473,13 +473,41 @@ export function DriveModeDictate({
         </div>
       )}
 
-      {/* Last released relay — the operator can see what actually went */}
+      {/* Last released relay — the operator can see what actually went.
+          The banner's colour and heading are decided by the SERVER's outcome:
+          a refused relay must never read as sent (operator incident
+          2026-09-16 — a green "Sent to the worker" box over a refusal). */}
       {voice.lastReleased && !voice.pendingProposal && (
         <div
-          className="mt-4 w-full max-w-md rounded-xl border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-950 px-4 py-3"
+          className={`mt-4 w-full max-w-md rounded-xl border px-4 py-3 ${
+            voice.lastReleased.status === 'delivered'
+              ? 'border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-950'
+              : voice.lastReleased.status === 'queued'
+                ? 'border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950'
+                : 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950'
+          }`}
           data-testid="released-outcome"
+          data-delivery={voice.lastReleased.status}
+          role={voice.lastReleased.status === 'refused' || voice.lastReleased.status === 'unknown' ? 'alert' : undefined}
         >
-          <div className="text-sm font-medium text-green-800 dark:text-green-200">Sent to the worker:</div>
+          <div
+            data-testid="released-outcome-heading"
+            className={`text-sm font-medium ${
+              voice.lastReleased.status === 'delivered'
+                ? 'text-green-800 dark:text-green-200'
+                : voice.lastReleased.status === 'queued'
+                  ? 'text-blue-800 dark:text-blue-200'
+                  : 'text-amber-800 dark:text-amber-200'
+            }`}
+          >
+            {voice.lastReleased.status === 'delivered'
+              ? 'Sent to the worker:'
+              : voice.lastReleased.status === 'queued'
+                ? 'Queued for the worker (it will get it after its current turn):'
+                : voice.lastReleased.status === 'refused'
+                  ? 'NOT sent to the worker — it did not reach it:'
+                  : 'Relay outcome not reported by the server — it may not have been sent:'}
+          </div>
           <div className="mt-1 text-sm text-gray-700 dark:text-gray-200 break-words">
             “{voice.lastReleased.text}” — {voice.lastReleased.outcome}
           </div>
@@ -489,11 +517,14 @@ export function DriveModeDictate({
       {/* Failed-send banner — a spoken instruction is never silently dropped */}
       {voice.pendingText != null && (
         <div
+          data-testid="send-failure"
           className="mt-4 w-full max-w-md rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-3"
           role="alert"
         >
           <div className="text-sm font-medium text-amber-800 dark:text-amber-200">
-            Message not sent — the connection was unavailable. Your words are kept:
+            {voice.pendingReason === 'refused'
+              ? 'Not sent — the worker did not accept the relay. Your words are kept:'
+              : 'Message not sent — the connection was unavailable. Your words are kept:'}
           </div>
           <div className="mt-1 text-sm text-gray-700 dark:text-gray-200 break-words">
             {voice.pendingText}

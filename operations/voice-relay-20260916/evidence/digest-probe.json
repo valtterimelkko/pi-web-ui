@@ -1,0 +1,111 @@
+{
+  "runs": {
+    "after": {
+      "at": "2026-09-16T11:18:01.365Z",
+      "results": {
+        "housekeeping-only": {
+          "kind": "summary",
+          "digest": "Just housekeeping that turn — nothing for you. The agent ran a memory capture and extracted two candidates for review.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d1-housekeeping-only",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "summary",
+            "digest": "Just housekeeping that turn — nothing for you. The agent ran a memory capture and extracted two candidates for review."
+          }
+        },
+        "headlines-housekeeping": {
+          "kind": "headlines",
+          "digest": "Done: nothing new — housekeeping. Needs you: nothing.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d2-headlines-housekeeping",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "headlines",
+            "digest": "Done: nothing new — housekeeping. Needs you: nothing."
+          }
+        },
+        "housekeeping-then-work": {
+          "kind": "summary",
+          "digest": "The worker fixed the relay so that a delivery now loads an idle worker before prompting, and they added four tests to the suite, which passed with 4500 successful runs. You need to decide if the reading level should apply to all lanes.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d3-housekeeping-then-work",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "summary",
+            "digest": "The worker fixed the relay so that a delivery now loads an idle worker before prompting, and they added four tests to the suite, which passed with 4500 successful runs. You need to decide if the reading level should apply to all lanes."
+          }
+        },
+        "plain-work": {
+          "kind": "summary",
+          "digest": "The worker ported the restart guard to the weekly catalogue script and integrated it into the wrapper. All four thousand five hundred tests in the server suite passed. There is nothing for you to do.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d4-plain-work",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "summary",
+            "digest": "The worker ported the restart guard to the weekly catalogue script and integrated it into the wrapper. All four thousand five hundred tests in the server suite passed. There is nothing for you to do."
+          }
+        }
+      }
+    },
+    "before-FATAL": "TypeError: fetch failed",
+    "before": {
+      "at": "2026-09-16T11:20:41.375Z",
+      "results": {
+        "housekeeping-only": {
+          "kind": "summary",
+          "digest": "The agent completed the session-end memory capture and ran the capture skill. Two candidates were extracted and saved as pending, specifically cand-3v2h6l8qnb and cand-3v2kditwcp. The evidence was written to a markdown file, but nothing has been promoted yet. You need to review both candidates.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d1-housekeeping-only",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "summary",
+            "digest": "The agent completed the session-end memory capture and ran the capture skill. Two candidates were extracted and saved as pending, specifically cand-3v2h6l8qnb and cand-3v2kditwcp. The evidence was written to a markdown file, but nothing has been promoted yet. You need to review both candidates."
+          }
+        },
+        "headlines-housekeeping": {
+          "kind": "headlines",
+          "digest": "Done: session-end memory capture and evidence saved. Needs you: nothing.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d2-headlines-housekeeping",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "headlines",
+            "digest": "Done: session-end memory capture and evidence saved. Needs you: nothing."
+          }
+        },
+        "housekeeping-then-work": {
+          "kind": "summary",
+          "digest": "The agent captured the session-end memory and saved the evidence, with one candidate still pending. The relay was fixed so that deliveries load an idle worker before prompting, and four new tests were added and passed. You need to decide if the reading level should apply to all lanes.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d3-housekeeping-then-work",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "summary",
+            "digest": "The agent captured the session-end memory and saved the evidence, with one candidate still pending. The relay was fixed so that deliveries load an idle worker before prompting, and four new tests were added and passed. You need to decide if the reading level should apply to all lanes."
+          }
+        },
+        "plain-work": {
+          "kind": "summary",
+          "digest": "The worker ported the restart guard to the weekly catalogue script and connected it to the wrapper. All four thousand five hundred tests in the server suite passed. There is nothing for you to do right now.",
+          "raw": {
+            "type": "talker_digest_result",
+            "requestId": "d4-plain-work",
+            "workerSessionId": "digest-probe",
+            "runtime": "pi",
+            "kind": "summary",
+            "digest": "The worker ported the restart guard to the weekly catalogue script and connected it to the wrapper. All four thousand five hundred tests in the server suite passed. There is nothing for you to do right now."
+          }
+        }
+      }
+    }
+  }
+}

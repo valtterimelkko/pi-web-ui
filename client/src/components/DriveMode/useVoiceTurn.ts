@@ -86,6 +86,15 @@ function turnScope(result: object): string {
 
 export interface ReleasedOutcome {
   text: string;
+  /**
+   * The SERVER's delivery outcome — the only thing that may decide whether the
+   * surface says "sent" (operator incident 2026-09-16: a refused relay was
+   * displayed in a green "Sent to the worker" box).
+   * 'unknown' = an older server that reported no outcome; never rendered as a
+   * success.
+   */
+  status: 'delivered' | 'queued' | 'refused' | 'unknown';
+  /** Detail for display: the mechanism, or the refusal reason. */
   outcome: string;
 }
 
@@ -184,6 +193,9 @@ export interface UseVoiceTurnResult {
 
   /** Failed-send retry (verbatim-keep). */
   pendingText: string | null;
+  /** Why the words are still here: the link was down, or the worker refused
+   *  the relay (the two need different words on screen). */
+  pendingReason: 'connection' | 'refused' | null;
   retryLastSend: () => boolean;
   discardPending: () => void;
 }
@@ -247,6 +259,7 @@ export function useVoiceTurn(
   const [lastReleased, setLastReleased] = useState<ReleasedOutcome | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
+  const [pendingReason, setPendingReason] = useState<'connection' | 'refused' | null>(null);
 
   // Verbatim record of the most recent utterance this surface sent — the
   // candidate a 'proposed' result refers to. Object reference, never
@@ -278,9 +291,11 @@ export function useVoiceTurn(
       });
       if (!accepted) {
         setPendingText(text);
+        setPendingReason('connection');
         return false;
       }
       setPendingText(null);
+      setPendingReason(null);
       lastSentRef.current = text;
       return true;
     },
@@ -337,8 +352,17 @@ export function useVoiceTurn(
       setPendingProposal(null);
       setLastReleased({
         text: lastResult.released.text,
+        status: lastResult.released.delivery.outcome,
         outcome: describeDelivery(lastResult.released.delivery),
       });
+      // A REFUSED relay is not a delivered one, and the operator's words must
+      // not vanish with it (operator incident 2026-09-16: the instruction was
+      // lost and the surface looked like it had been sent). Keeping them puts
+      // the retry path in reach.
+      if (lastResult.released.delivery.outcome === 'refused') {
+        setPendingText(lastResult.released.text);
+        setPendingReason('refused');
+      }
     }
 
     // Speak what the operator hears, at the ladder's tier (playback only —
@@ -482,6 +506,7 @@ export function useVoiceTurn(
     lastReleased,
     refusal,
     pendingText,
+    pendingReason,
     retryLastSend,
     discardPending,
   };

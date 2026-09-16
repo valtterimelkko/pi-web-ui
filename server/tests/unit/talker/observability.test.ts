@@ -8,7 +8,7 @@ import {
 } from '../../../src/internal-api/diagnostics-buffer.js';
 import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
 import { TalkerSession } from '../../../src/talker/talker.js';
-import { createVoiceTurnRecorder, VOICE_LOG_COMPONENT } from '../../../src/talker/observability.js';
+import { createVoiceTurnRecorder, getRecentVoiceTurns, VOICE_LOG_COMPONENT } from '../../../src/talker/observability.js';
 import { createNullDelivery } from '../../../src/talker/delivery.js';
 import { TalkerSessionRegistry } from '../../../src/talker/session-registry.js';
 import type { TalkerModelClient, ModelTurnResult, WorkerDelivery, WorkerStateSnapshot } from '../../../src/talker/types.js';
@@ -209,6 +209,54 @@ describe('D1 — one correlated voice turn record per operator turn', () => {
   });
 });
 
+describe('P27 — a refused relay must say WHY, in both record paths', () => {
+  /**
+   * Operator incident, 2026-09-16: the relay refused and every artefact said so
+   * without a reason. The conversation ring (in memory, lost with the process)
+   * recorded `deliveryOutcome: 'refused'` and no reason; the journal line went
+   * through the pretty renderer, which prints only the correlation fields, so
+   * the production journal for "voice release" carried no outcome and no
+   * reason either. Diagnosing the incident was impossible from the records that
+   * survived; it had to be reconstructed from code.
+   */
+  const refusingDelivery = (reason: string): WorkerDelivery => ({
+    describe: () => 'refusing test delivery',
+    deliver: async () => ({ outcome: 'refused', reason }),
+  });
+
+  it('carries the refusal reason in the release record and in the conversation ring', async () => {
+    const { turn } = makeSession({ delivery: refusingDelivery('Session w-id does not exist') });
+    await turn(INSTRUCTION);
+    await turn('yes, go ahead');
+
+    const rel = voiceRecords().find((r) => r.msg.startsWith('voice release ')) as LogRecord;
+    expect(rel).toBeDefined();
+    expect(rel.deliveryOutcome).toBe('refused');
+    expect(rel.deliveryError).toContain('does not exist');
+    // The journal is the record that survives a restart, so the reason has to
+    // be IN the line, not only in a bound field the pretty renderer drops.
+    expect(rel.msg).toContain('refused');
+    expect(rel.msg).toContain('does not exist');
+
+    // The ring (diagnostics route) answers the same question in one query.
+    // The ring is module-global across this file's sessions: take the MOST
+    // RECENT release, which is the turn this test just drove.
+    const released = getRecentVoiceTurns(50).filter((t) => t.phase === 'released').at(-1);
+    expect(released?.deliveryOutcome).toBe('refused');
+    expect(released?.deliveryError).toContain('does not exist');
+  });
+
+  it('keeps a delivered relay line free of a reason', async () => {
+    const { turn } = makeSession({ delivery: createNullDelivery({ outcome: 'delivered' } as never) });
+    await turn(INSTRUCTION);
+    await turn('yes, go ahead');
+    const rel = voiceRecords().find((r) => r.msg.startsWith('voice release ')) as LogRecord;
+    expect(rel.deliveryOutcome).toBe('delivered');
+    expect(rel.msg).toContain('delivered');
+    expect(rel.deliveryError).toBeUndefined();
+  });
+});
+
 describe('D2 — relay provenance: release and refusal signatures', () => {
   it('a release emits the turn record plus a release record with bytes, digest, excerpt and mechanism', async () => {
     const delivery = createNullDelivery();
@@ -240,6 +288,7 @@ describe('D2 — relay provenance: release and refusal signatures', () => {
     expect(rel.releasedExcerpt).toBe(RELAYED_INSTRUCTION);
     // The delivery adapter's own reported outcome/mechanism.
     expect(rel.deliveryOutcome).toBe('delivered');
+
     expect(rel.releaseMechanism).toBe('prompt');
   });
 
