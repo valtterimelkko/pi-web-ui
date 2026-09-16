@@ -7,6 +7,15 @@ import { useWebSocket } from '../../../../src/hooks/useWebSocket';
 import { useSessionStore } from '../../../../src/store/sessionStore';
 import { useVoiceLayoutStore, VOICE_LAYOUT_STORAGE_KEY } from '../../../../src/components/DriveMode/voiceLayout';
 
+const wsState = {
+  createNewSession: vi.fn(),
+  switchSession: vi.fn(),
+  setModel: vi.fn(),
+  abortGeneration: vi.fn(),
+  subscribeToSession: vi.fn(),
+  unsubscribeFromSession: vi.fn(),
+};
+
 const mockUIStoreState = {
   driveModeOpen: true,
   closeDriveMode: vi.fn(),
@@ -84,7 +93,7 @@ vi.mock('../../../../src/components/DriveMode/DriveModeFolderPicker', () => ({
 vi.mock('../../../../src/components/DriveMode/DriveModeSessionPicker', () => ({
   DriveModeSessionPicker: (props: { onSelectSession: (sessionId: string, sessionPath: string) => void; onBack: () => void }) => (
     <div data-testid="drive-mode-session-picker">
-      <button onClick={() => props.onSelectSession('s1', '/path/1.jsonl')}>Select Session</button>
+      <button onClick={() => props.onSelectSession('s2', '/path/2.jsonl')}>Select Session</button>
       <button onClick={props.onBack}>Back</button>
     </div>
   ),
@@ -100,12 +109,20 @@ vi.mock('../../../../src/components/DriveMode/DriveModeSessionPane', () => ({
 }));
 
 vi.mock('../../../../src/components/DriveMode/DriveModeDictate', () => ({
-  DriveModeDictate: (props: { sessionId: string; modelName: string; sessionDisplayName: string; onExit: () => void }) => (
-    <div data-testid="drive-mode-dictate">
+  DriveModeDictate: (props: {
+    sessionId: string;
+    modelName: string;
+    sessionDisplayName: string;
+    onExit: () => void;
+    onSwitchSession?: () => void;
+    compact?: boolean;
+  }) => (
+    <div data-testid="drive-mode-dictate" data-compact={String(props.compact ?? false)}>
       <span>{props.sessionId}</span>
       <span>{props.modelName}</span>
       <span data-testid="session-display-name">{props.sessionDisplayName}</span>
       <button onClick={props.onExit}>Exit Dictate</button>
+      {props.onSwitchSession && <button data-testid="switch-session" onClick={props.onSwitchSession}>Switch session</button>}
     </div>
   ),
 }));
@@ -166,11 +183,7 @@ describe('DriveModeOverlay', () => {
       return selector ? selector(sessionStoreState) : sessionStoreState;
     });
 
-    (useWebSocket as ReturnType<typeof vi.fn>).mockReturnValue({
-      createNewSession: vi.fn(),
-      switchSession: vi.fn(),
-      setModel: vi.fn(),
-    });
+    (useWebSocket as ReturnType<typeof vi.fn>).mockReturnValue(wsState);
   });
 
   afterEach(() => {
@@ -339,35 +352,68 @@ describe('DriveModeOverlay — Voice Mode layout modes', () => {
     (useSessionStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
       selector ? selector(sessionStoreState) : sessionStoreState
     );
+    (useWebSocket as ReturnType<typeof vi.fn>).mockReturnValue(wsState);
   });
 
   afterEach(() => {
     localStorage.clear();
     useVoiceLayoutStore.setState({ mode: 'mobile' });
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1024 });
   });
 
   it('renders the existing voice-only surface in mobile mode, even on a wide window', () => {
     setWidth(1600);
     render(<DriveModeOverlay />);
+    const column = screen.getByTestId('drive-mode-column');
     expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
-    expect(screen.queryByTestId('drive-mode-split')).toBeNull();
+    // Mobile: the voice surface keeps the whole column — no session pane.
+    expect(screen.queryByTestId('drive-session-panel')).toBeNull();
     expect(screen.queryByTestId('drive-session-pane')).toBeNull();
+    expect(column).toContainElement(screen.getByTestId('drive-mode-dictate'));
   });
 
-  it('splits the screen — voice surface and live session — in desktop mode on a wide window', () => {
+  it('desktop mode puts the voice block and the live session in ONE column, the pane below', () => {
     useVoiceLayoutStore.setState({ mode: 'desktop' });
     setWidth(1600);
     render(<DriveModeOverlay />);
-    expect(screen.getByTestId('drive-mode-split')).toBeInTheDocument();
-    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
-    expect(screen.getByTestId('drive-session-pane')).toBeInTheDocument();
+    const column = screen.getByTestId('drive-mode-column');
+    const dictate = screen.getByTestId('drive-mode-dictate');
+    const pane = screen.getByTestId('drive-session-pane');
+    expect(column).toContainElement(dictate);
+    expect(column).toContainElement(pane);
+    // Same column, session pane AFTER the voice tools (a bottom panel, not a
+    // side-by-side half).
+    expect(dictate.compareDocumentPosition(pane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(column.lastElementChild).toBe(screen.getByTestId('drive-session-panel'));
+  });
+
+  it('keeps the lane affordance reachable in desktop mode', () => {
+    // Operator: "I want to add the lanes to the desktop view" — the desk branch
+    // must not be a dead end for lanes.
+    useVoiceLayoutStore.setState({ mode: 'desktop' });
+    setWidth(1600);
+    render(<DriveModeOverlay />);
+    expect(screen.getByRole('button', { name: /add a lane/i })).toBeInTheDocument();
+  });
+
+  it('asks the voice controls to be compact when the pane shares the column', () => {
+    useVoiceLayoutStore.setState({ mode: 'desktop' });
+    setWidth(1600);
+    const wide = render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-dictate')).toHaveAttribute('data-compact', 'true');
+    wide.unmount();
+
+    setWidth(1600);
+    useVoiceLayoutStore.setState({ mode: 'mobile' });
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-dictate')).toHaveAttribute('data-compact', 'false');
   });
 
   it('degrades a desktop preference to the mobile layout when the window is narrow', () => {
     useVoiceLayoutStore.setState({ mode: 'desktop' });
     setWidth(420);
     render(<DriveModeOverlay />);
-    expect(screen.queryByTestId('drive-mode-split')).toBeNull();
+    expect(screen.queryByTestId('drive-session-panel')).toBeNull();
     expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
   });
 
@@ -380,11 +426,97 @@ describe('DriveModeOverlay — Voice Mode layout modes', () => {
 
     setWidth(1600);
     const first = render(<DriveModeOverlay />);
-    expect(first.getByTestId('drive-mode-split')).toBeInTheDocument();
+    expect(first.getByTestId('drive-session-panel')).toBeInTheDocument();
     first.unmount();
 
     // A later mount reads the same persisted preference.
     render(<DriveModeOverlay />);
-    expect(screen.getByTestId('drive-mode-split')).toBeInTheDocument();
+    expect(screen.getByTestId('drive-session-panel')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Switching the worker a lane is attached to (operator request, 2026-09-16):
+ * "I don't see an easy 'switch session' button … so I don't have to exit the
+ * voice mode entirely and then having to rebuild the 3 lanes view again".
+ *
+ * Single-lane: the picker opens OVER the mounted surface (the phase never
+ * changes) and the voice mode is re-pointed without creating a lane.
+ */
+describe('DriveModeOverlay — switching the worker without leaving voice mode', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let driveModeStoreState: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let sessionStoreState: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    mockUIStoreState.driveModeOpen = true;
+    mockUIStoreState.closeDriveMode = vi.fn();
+    mockUIStoreState.addToast = vi.fn();
+    (useUIStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
+      selector ? selector(mockUIStoreState) : mockUIStoreState
+    );
+    driveModeStoreState = {
+      phase: 'dictate',
+      selectedModelId: null,
+      activeSessionId: 's1',
+      lanes: [],
+      addingLane: false,
+      replacingLaneId: null,
+      close: vi.fn(),
+      setPhase: vi.fn(),
+      selectModel: vi.fn(),
+      setActiveSession: vi.fn(),
+      reset: vi.fn(),
+      openAddLane: vi.fn(),
+      cancelAddLane: vi.fn(),
+      beginLaneReplace: vi.fn(),
+      addVoiceLane: vi.fn(() => 'added'),
+      replaceVoiceLane: vi.fn(() => 'replaced'),
+      removeVoiceLane: vi.fn(),
+    };
+    sessionStoreState = {
+      sessions: [
+        { id: 's1', path: '/path/1.jsonl', name: 'Test Session', model: 'claude-3-opus', firstMessage: 'Hello', messageCount: 1, cwd: '/' },
+        { id: 's2', path: '/path/2.jsonl', name: 'Original Name', model: 'gpt-4', firstMessage: 'Hi there', messageCount: 1, cwd: '/' },
+      ],
+      currentSessionId: 's1',
+      currentModel: 'claude-3-opus',
+      getSessionDisplayName: () => null,
+    };
+    (useDriveModeStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
+      selector ? selector(driveModeStoreState) : driveModeStoreState
+    );
+    (useSessionStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) =>
+      selector ? selector(sessionStoreState) : sessionStoreState
+    );
+    (useWebSocket as ReturnType<typeof vi.fn>).mockReturnValue(wsState);
+  });
+
+  it('hands the voice mode to another session in place: same surface, no new lane', () => {
+    render(<DriveModeOverlay />);
+    fireEvent.click(screen.getByTestId('switch-session'));
+    expect(screen.getByTestId('drive-mode-session-picker')).toBeInTheDocument();
+    expect(driveModeStoreState.phase).toBe('dictate'); // never left the surface
+    expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument(); // stays mounted
+
+    fireEvent.click(screen.getByText('Select Session'));
+    expect(driveModeStoreState.setActiveSession).toHaveBeenCalledWith('s2');
+    expect(wsState.switchSession).toHaveBeenCalledWith('/path/2.jsonl');
+    // Switching is not adding: no lane was created and no lane set was touched.
+    expect(driveModeStoreState.addVoiceLane).not.toHaveBeenCalled();
+    expect(driveModeStoreState.replaceVoiceLane).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('drive-mode-session-picker')).toBeNull();
+  });
+
+  it('cancelling the switch leaves the voice mode exactly as it was', () => {
+    render(<DriveModeOverlay />);
+    fireEvent.click(screen.getByTestId('switch-session'));
+    fireEvent.click(screen.getByText('Back'));
+    expect(screen.queryByTestId('drive-mode-session-picker')).toBeNull();
+    expect(wsState.switchSession).not.toHaveBeenCalled();
+    expect(driveModeStoreState.setActiveSession).not.toHaveBeenCalled();
   });
 });

@@ -30,6 +30,7 @@ function makeBlockedPlayer(): ArbiterPlayer {
 const onAddress = vi.fn();
 const onAdd = vi.fn();
 const onRemove = vi.fn();
+const onSwitch = vi.fn();
 
 function renderStrip(over?: {
   lanes?: Array<{ sessionId: string }>;
@@ -45,6 +46,7 @@ function renderStrip(over?: {
       onAddress={onAddress}
       onAdd={onAdd}
       onRemove={onRemove}
+      onSwitch={onSwitch}
     />
   );
 }
@@ -158,5 +160,19 @@ describe('LaneStrip — switching, adding, closing', () => {
     renderStrip();
     fireEvent.click(screen.getByRole('button', { name: /close lane worker b/i }));
     expect(onRemove).toHaveBeenCalledWith(B);
+  });
+
+  it('every lane row can hand its session over to another one, in place', () => {
+    // Operator: "I want to adjust quickly (per lane) what session / worker the
+    // voice mode is attached to" — without rebuilding the lane set.
+    renderStrip();
+    const switches = screen.getAllByTestId('lane-switch');
+    expect(switches).toHaveLength(2);
+    expect(switches.map((button) => button.dataset.laneSession)).toEqual([A, B]);
+    fireEvent.click(screen.getByRole('button', { name: /switch session for worker b/i }));
+    expect(onSwitch).toHaveBeenCalledWith(B);
+    // Switching is NOT addressing and NOT removing — the lane keeps its place.
+    expect(onAddress).not.toHaveBeenCalled();
+    expect(onRemove).not.toHaveBeenCalled();
   });
 });

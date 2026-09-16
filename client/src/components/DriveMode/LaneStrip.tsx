@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Plus, RefreshCw, X } from 'lucide-react';
 import { laneFloor } from './voiceLanes';
 import { speechArbiter } from '../../lib/speechArbiter';
 import { useSessionStore } from '../../store/sessionStore';
@@ -13,6 +13,9 @@ export interface LaneStripProps {
   onAddress: (sessionId: string) => void;
   onAdd: () => void;
   onRemove: (sessionId: string) => void;
+  /** Hand this lane's voice surface to a different worker session, in place:
+   *  the lane keeps its slot and order, and voice mode never exits. */
+  onSwitch: (sessionId: string) => void;
 }
 
 type LaneRowState = 'floor' | 'speaking' | 'queued' | 'working' | 'ready';
@@ -46,7 +49,7 @@ const ROW_STATE_CLASS: Record<LaneRowState, string> = {
  * cross-lane §4.4 queue) and the lane floor coordinator (capture, §4.4
  * rules 1–2). No scheduling happens here; this is observation and switching.
  */
-export function LaneStrip({ lanes, addressedSessionId, labels, onAddress, onAdd, onRemove }: LaneStripProps) {
+export function LaneStrip({ lanes, addressedSessionId, labels, onAddress, onAdd, onRemove, onSwitch }: LaneStripProps) {
   const streaming = useSessionStore((s) => s.streamingSessions);
   const [, setTick] = useState(0);
 
@@ -166,6 +169,17 @@ export function LaneStrip({ lanes, addressedSessionId, labels, onAddress, onAdd,
                   </span>
                 )}
               </span>
+            </button>
+            <button
+              onClick={() => onSwitch(lane.sessionId)}
+              aria-label={`Switch session for ${labelOf(lane.sessionId)}`}
+              data-testid="lane-switch"
+              data-lane-session={lane.sessionId}
+              title="Switch this lane's session"
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              type="button"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => onRemove(lane.sessionId)}

@@ -1,44 +1,91 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { ArrowDown } from 'lucide-react';
 import { useSessionStore } from '../../store/sessionStore';
-import { MessageList } from '../Chat/MessageList';
+import { VirtualizedMessageList, type VirtualizedMessageListHandle } from '../Chat/VirtualizedMessageList';
+import { messagesToLiveMessages } from '../../lib/messageAdapter';
 
 export interface DriveModeSessionPaneProps {
   /** Display name of the session being driven by the voice surface. */
   sessionDisplayName: string;
   modelName: string;
+  /**
+   * The session this pane follows. Defaults to the tab's current session;
+   * with lanes it is the ADDRESSED lane's session, so the pane always shows
+   * the worker the voice mode is currently talking to.
+   */
+  sessionId?: string | null;
 }
 
 /**
- * The live session, beside the voice surface (Child V, desktop mode).
+ * The live session, in the desktop arrangement (Child V, desktop mode).
  *
- * This is the REAL session view: it reads the same `useSessionStore` the chat
- * screen uses and renders the same `MessageBubble` through `MessageList`, so
- * there is no second transcript, no second event pipeline and no fork to drift.
- * Nothing here is a control surface — reading and watching only; the voice
- * lane remains the only thing that sends.
+ * Operator, verbatim (2026-09-16):
+ *   "when the screen is split and displays the session, it's super raw content,
+ *    maybe directly from the SDK stream or so — not organised like in the
+ *    regular session view. fix this. it should look just like the outputs looks
+ *    when in regular session view without voice mode."
+ *
+ * So this is deliberately not a second transcript renderer. It reads the same
+ * `useSessionStore` the chat screen reads and renders the SAME list component —
+ * `VirtualizedMessageList` — through the SAME adapter, which is where tool-call
+ * runs collapse into `ToolGroupContainer`, skill payloads are transformed and
+ * per-tool verbosity lives. The flat legacy `MessageList` (one bare bubble per
+ * message, no grouping) is what made this pane look raw; it is not used here.
+ *
+ * With lanes, the pane follows the addressed lane's own projection
+ * (`sessionMessages` / `streamingSessions`, kept fresh for subscribed
+ * background sessions) rather than the tab-global current session, so taking a
+ * different lane's floor shows that lane's work.
+ *
+ * Nothing here is a control surface — reading and watching only; the voice lane
+ * remains the only thing that sends.
  */
-export function DriveModeSessionPane({ sessionDisplayName, modelName }: DriveModeSessionPaneProps) {
-  const messages = useSessionStore((s) => s.messages);
-  const isStreaming = useSessionStore((s) => s.isStreaming);
+export function DriveModeSessionPane({ sessionDisplayName, modelName, sessionId }: DriveModeSessionPaneProps) {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const shownSessionId = sessionId ?? currentSessionId;
+  const globalMessages = useSessionStore((s) => s.messages);
+  const projectedMessages = useSessionStore((s) =>
+    shownSessionId ? s.sessionMessages[shownSessionId] : undefined
+  );
+  const globalStreaming = useSessionStore((s) => s.isStreaming);
+  const projectedStreaming = useSessionStore((s) =>
+    shownSessionId ? s.streamingSessions[shownSessionId] : undefined
+  );
+  const getWorkerStatus = useSessionStore((s) => s.getWorkerStatus);
+  const transferReady = useSessionStore((s) =>
+    shownSessionId ? s.isTransferReady(shownSessionId) : false
+  );
+
+  // The addressed session's projection when we hold one (subscribed background
+  // lanes live there), the tab's current session otherwise.
+  const messages = projectedMessages ?? globalMessages;
+  const isStreaming = projectedStreaming ?? globalStreaming;
+  const workerStatus = shownSessionId ? getWorkerStatus(shownSessionId) : undefined;
+
+  const listRef = useRef<VirtualizedMessageListHandle>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const messageCount = messages.length;
 
-  // Follow the live end of the conversation: the point of the pane is watching
-  // the work happen while the voice lane stays usable.
-  useEffect(() => {
-    const node = scrollRef.current;
-    if (!node) return;
-    node.scrollTop = node.scrollHeight;
-  }, [messageCount, isStreaming]);
+  // Same memo as ChatView: a new array per render would defeat the list's own
+  // memoisation on every store tick.
+  const liveMessages = useMemo(() => messagesToLiveMessages(messages), [messages]);
+
+  const handleAtBottomChange = useCallback((atBottom: boolean) => {
+    setShowScrollButton(!atBottom && messageCount > 0);
+  }, [messageCount]);
+
+  const handleScrollToBottom = useCallback(() => {
+    listRef.current?.scrollToBottom();
+  }, []);
 
   return (
     <section
       data-testid="drive-session-pane"
+      data-drive-session={shownSessionId ?? ''}
       aria-label="Live session"
       className="flex flex-col h-full min-h-0 w-full bg-white dark:bg-gray-950"
     >
-      <header className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex-shrink-0">
+      <header className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-800 flex-shrink-0">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
             {sessionDisplayName}
@@ -63,8 +110,29 @@ export function DriveModeSessionPane({ sessionDisplayName, modelName }: DriveMod
           )}
         </div>
       </header>
-      <div ref={scrollRef} data-testid="drive-session-scroll" className="flex-1 min-h-0 overflow-y-auto">
-        <MessageList messages={messages} hasSession={!!currentSessionId} />
+      <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
+        <VirtualizedMessageList
+          ref={listRef}
+          messages={liveMessages}
+          isStreaming={isStreaming}
+          sessionId={shownSessionId ?? undefined}
+          onAtBottomChange={handleAtBottomChange}
+          hasSession={!!shownSessionId}
+          workerStatus={workerStatus}
+          transferReady={transferReady}
+        />
+        {showScrollButton && (
+          <button
+            onClick={handleScrollToBottom}
+            data-testid="drive-session-scroll-bottom"
+            title="Scroll to bottom"
+            aria-label="Scroll to bottom"
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 p-1.5 bg-surface dark:bg-surface-dark border border-outline-default dark:border-outline-default-dark rounded-full shadow-md hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors z-10"
+            type="button"
+          >
+            <ArrowDown className="w-4 h-4 text-content-secondary dark:text-content-secondary-dark" />
+          </button>
+        )}
       </div>
     </section>
   );

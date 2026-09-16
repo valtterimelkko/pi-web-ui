@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DriveModeOverlay } from '../../../../src/components/DriveMode/DriveModeOverlay';
 import { useUIStore } from '../../../../src/store/uiStore';
@@ -6,6 +6,7 @@ import { useDriveModeStore } from '../../../../src/store/driveModeStore';
 import { useWebSocket } from '../../../../src/hooks/useWebSocket';
 import { useSessionStore } from '../../../../src/store/sessionStore';
 import { laneFloor } from '../../../../src/components/DriveMode/voiceLanes';
+import { useVoiceLayoutStore } from '../../../../src/components/DriveMode/voiceLayout';
 
 /**
  * The overlay in multi-lane mode (lane work, 2026-09-15).
@@ -84,8 +85,9 @@ vi.mock('../../../../src/components/DriveMode/DriveModeSessionPicker', () => ({
   DriveModeSessionPicker: (props: {
     onSelectSession: (sessionId: string, sessionPath: string) => void;
     onBack: () => void;
+    title?: string;
   }) => (
-    <div data-testid="drive-mode-session-picker">
+    <div data-testid="drive-mode-session-picker" data-title={props.title ?? ''}>
       <button onClick={() => props.onSelectSession('s-new', '/path/new.jsonl')}>Select Session</button>
       <button onClick={props.onBack}>Back</button>
     </div>
@@ -99,6 +101,8 @@ vi.mock('../../../../src/components/DriveMode/DriveModeDictate', () => ({
     laneEnabled?: boolean;
     addressed?: boolean;
     sessionDisplayName: string;
+    onSwitchSession?: () => void;
+    compact?: boolean;
   }) => {
     dictatedLanes.push({
       sessionId: props.sessionId,
@@ -108,6 +112,13 @@ vi.mock('../../../../src/components/DriveMode/DriveModeDictate', () => ({
     return (
       <div data-testid="drive-mode-dictate" data-lane-session={props.sessionId}>
         <span>{props.sessionDisplayName}</span>
+        <button
+          data-testid="switch-session"
+          data-lane-session={props.sessionId}
+          onClick={props.onSwitchSession}
+        >
+          Switch session
+        </button>
       </div>
     );
   },
@@ -297,5 +308,116 @@ describe('DriveModeOverlay — one tab holds the lanes', () => {
     expect(stopSpy).toHaveBeenCalled(); // never drop the operator's words
     expect(driveModeStoreState.removeVoiceLane).toHaveBeenCalledWith('s2');
     expect(wsState.unsubscribeFromSession).toHaveBeenCalledWith('/path/2.jsonl');
+  });
+});
+
+/**
+ * Lanes in the DESKTOP layout (operator request, 2026-09-16): "I can only see
+ * the lanes within the mobile view, not in the desktop view … because we are
+ * having maximum three lanes, I want to add the lanes to the desktop view."
+ * The lane strip and the session pane must coexist: lanes in the voice block,
+ * the session as a bottom panel of the same column.
+ */
+describe('DriveModeOverlay — lanes in the desktop layout', () => {
+  const setWidth = (width: number) => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });
+    window.dispatchEvent(new Event('resize'));
+  };
+
+  afterEach(() => {
+    useVoiceLayoutStore.setState({ mode: 'mobile' });
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1024 });
+  });
+
+  it('desktop shows the lane rows AND the session pane, in one column', () => {
+    useVoiceLayoutStore.setState({ mode: 'desktop' });
+    setWidth(1600);
+    driveModeStoreState = baseStore({
+      lanes: [...LANES, { sessionId: 's3' }],
+      activeSessionId: 's1',
+    });
+    render(<DriveModeOverlay />);
+
+    expect(screen.getAllByTestId('lane-row')).toHaveLength(3);
+    expect(screen.getByTestId('lane-cap')).toHaveTextContent('3 of 3');
+    const column = screen.getByTestId('drive-mode-column');
+    expect(column).toContainElement(screen.getByTestId('lane-strip'));
+    expect(column).toContainElement(screen.getByTestId('drive-session-pane'));
+    expect(column.lastElementChild).toBe(screen.getByTestId('drive-session-panel'));
+    expect(screen.getAllByTestId('drive-mode-dictate')).toHaveLength(3); // every lane stays mounted
+  });
+
+  it('the lane "+" is offered in desktop mode too', () => {
+    useVoiceLayoutStore.setState({ mode: 'desktop' });
+    setWidth(1600);
+    driveModeStoreState = baseStore({ lanes: [], activeSessionId: 's1' });
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('lane-strip-collapsed')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /add a lane/i }));
+    expect(driveModeStoreState.openAddLane).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Switching ONE lane's worker (operator request, 2026-09-16): the lane keeps
+ * its place in the set; only its session changes. No exit, no rebuild.
+ */
+describe("DriveModeOverlay — switching a lane's worker in place", () => {
+  it('the addressed lane can be switched from its own surface', () => {
+    driveModeStoreState = baseStore({ lanes: LANES, activeSessionId: 's2' });
+    render(<DriveModeOverlay />);
+    // Every lane surface stays mounted, so the addressed one's control is
+    // picked by its lane identity.
+    const addressedSwitch = screen
+      .getAllByTestId('switch-session')
+      .find((button) => button.dataset.laneSession === 's2');
+    expect(addressedSwitch).toBeDefined();
+    fireEvent.click(addressedSwitch as HTMLElement);
+    expect(driveModeStoreState.beginLaneReplace).toHaveBeenCalledWith('s2');
+  });
+
+  it('any lane can be switched from its strip row', () => {
+    driveModeStoreState = baseStore({ lanes: LANES, activeSessionId: 's1' });
+    render(<DriveModeOverlay />);
+    fireEvent.click(screen.getByRole('button', { name: /switch session for worker two/i }));
+    expect(driveModeStoreState.beginLaneReplace).toHaveBeenCalledWith('s2');
+    // The lane set is untouched by the request itself — nothing is removed.
+    expect(driveModeStoreState.removeVoiceLane).not.toHaveBeenCalled();
+  });
+
+  it('the picker names the flow: adding a lane, or switching a lane', () => {
+    driveModeStoreState = baseStore({ lanes: LANES, activeSessionId: 's1', addingLane: true });
+    const adding = render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-session-picker')).toHaveAttribute('data-title', 'Add a lane');
+    adding.unmount();
+
+    driveModeStoreState = baseStore({
+      lanes: LANES,
+      activeSessionId: 's1',
+      addingLane: true,
+      replacingLaneId: 's2',
+    });
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-session-picker')).toHaveAttribute('data-title', 'Switch session');
+  });
+
+  it('the pick swaps only that lane, subscribes the new session and addresses it', () => {
+    driveModeStoreState = baseStore({
+      lanes: LANES,
+      activeSessionId: 's1',
+      addingLane: true,
+      replacingLaneId: 's2',
+    });
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-session-picker')).toBeInTheDocument();
+    // The other lane's surface stayed mounted while the picker was open.
+    expect(screen.getAllByTestId('drive-mode-dictate')).toHaveLength(2);
+
+    fireEvent.click(screen.getByText('Select Session'));
+    expect(driveModeStoreState.replaceVoiceLane).toHaveBeenCalledWith('s2', 's-new');
+    expect(wsState.unsubscribeFromSession).toHaveBeenCalledWith('/path/2.jsonl');
+    expect(wsState.subscribeToSession).toHaveBeenCalledWith('/path/new.jsonl');
+    expect(driveModeStoreState.setActiveSession).toHaveBeenCalledWith('s-new');
+    expect(driveModeStoreState.addVoiceLane).not.toHaveBeenCalled(); // a switch, not a new lane
   });
 });

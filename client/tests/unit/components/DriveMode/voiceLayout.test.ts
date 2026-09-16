@@ -9,16 +9,17 @@
  * The rules this pins:
  *   - the mode is an explicit, persisted operator preference (set once);
  *   - 'mobile' is the existing surface, unchanged at every width;
- *   - 'desktop' splits only when the window can actually hold two readable
- *     halves — a wide preference on a narrow window degrades to mobile rather
- *     than squashing both;
+ *   - 'desktop' renders the desktop arrangement (the voice block with its lane
+ *     strip, and the live-session pane at the bottom of the same column) only
+ *     when the window can actually hold it — a wide preference on a narrow
+ *     window degrades to mobile rather than squashing both;
  *   - nothing about the choice can break the surface (unreadable/corrupt
  *     storage falls back to mobile).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   DEFAULT_VOICE_LAYOUT_MODE,
-  SPLIT_MIN_WIDTH,
+  DESKTOP_MIN_WIDTH,
   VOICE_LAYOUT_STORAGE_KEY,
   isVoiceLayoutMode,
   nextVoiceLayoutMode,
@@ -29,13 +30,13 @@ import {
 } from '../../../../src/components/DriveMode/voiceLayout';
 
 describe('resolveVoiceLayout', () => {
-  it('splits a desktop preference on a window with room for two halves', () => {
-    expect(resolveVoiceLayout('desktop', 1440)).toBe('split');
-    expect(resolveVoiceLayout('desktop', SPLIT_MIN_WIDTH)).toBe('split');
+  it('puts a desktop preference into the desktop arrangement when the window is wide enough', () => {
+    expect(resolveVoiceLayout('desktop', 1440)).toBe('desktop');
+    expect(resolveVoiceLayout('desktop', DESKTOP_MIN_WIDTH)).toBe('desktop');
   });
 
   it('degrades a desktop preference to the mobile layout when the window is narrow', () => {
-    expect(resolveVoiceLayout('desktop', SPLIT_MIN_WIDTH - 1)).toBe('mobile');
+    expect(resolveVoiceLayout('desktop', DESKTOP_MIN_WIDTH - 1)).toBe('mobile');
     expect(resolveVoiceLayout('desktop', 390)).toBe('mobile');
   });
 
@@ -45,8 +46,8 @@ describe('resolveVoiceLayout', () => {
     expect(resolveVoiceLayout('mobile', 2560)).toBe('mobile');
   });
 
-  it('never splits without a usable viewport width', () => {
-    // jsdom and prerender both report 0; a split decision must not be taken on
+  it('never takes the desktop arrangement without a usable viewport width', () => {
+    // jsdom and prerender both report 0; a layout decision must not be taken on
     // an unknown width.
     expect(resolveVoiceLayout('desktop', 0)).toBe('mobile');
     expect(resolveVoiceLayout('desktop', Number.NaN)).toBe('mobile');

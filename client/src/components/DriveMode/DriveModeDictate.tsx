@@ -35,6 +35,13 @@ export interface DriveModeDictateProps {
   /** Multi-lane: the operator is addressing THIS lane. A non-addressed lane
    *  stays mounted (its card, capture and focus live on) but hidden. */
   addressed?: boolean;
+  /** Hand this surface to a different worker session, in place. The control
+   *  is offered only when the overlay can honour it (no dead buttons), and
+   *  the overlay owns what switching means. */
+  onSwitchSession?: () => void;
+  /** The desktop arrangement shares the column with the session pane, so the
+   *  controls tighten up rather than pushing the pane or a lane out of view. */
+  compact?: boolean;
 }
 
 /**
@@ -58,6 +65,8 @@ export function DriveModeDictate({
   sessionDisplayName,
   onExit,
   onAbort,
+  onSwitchSession,
+  compact = false,
   laneEnabled = false,
   addressed = true,
 }: DriveModeDictateProps) {
@@ -246,9 +255,13 @@ export function DriveModeDictate({
 
   return (
     <div
+      data-testid="drive-mode-surface"
+      data-compact={compact ? 'true' : undefined}
       data-drive-session={laneEnabled ? sessionId : undefined}
       hidden={laneEnabled && !addressed ? true : undefined}
-      className="flex flex-col items-center h-full w-full px-4 py-6 relative overflow-y-auto"
+      className={`flex flex-col items-center h-full w-full px-4 relative overflow-y-auto ${
+        compact ? 'py-3' : 'py-6'
+      }`}
     >
       {/* Exit button */}
       <button
@@ -259,17 +272,29 @@ export function DriveModeDictate({
         ✕ Exit
       </button>
 
-      {/* Session info */}
-      <div className="flex flex-col items-center mt-8 mb-4">
+      {/* Session info — the worker this surface is attached to, and the
+          in-place switch control (operator, 2026-09-16): change which worker
+          voice mode talks to without exiting and rebuilding the lanes. */}
+      <div className={`flex flex-col items-center ${compact ? 'mt-2 mb-2' : 'mt-8 mb-4'}`}>
         <div className="text-base font-semibold text-content-primary dark:text-content-primary-dark">
           {sessionDisplayName}
         </div>
         <div className="text-xs text-content-muted dark:text-content-muted-dark font-mono mt-0.5">{modelName}</div>
+        {onSwitchSession && (
+          <button
+            onClick={onSwitchSession}
+            data-testid="drive-switch-session"
+            className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium text-content-secondary dark:text-content-secondary-dark border border-outline-default dark:border-outline-default-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors select-none touch-manipulation"
+            type="button"
+          >
+            Switch session
+          </button>
+        )}
       </div>
 
-      {/* The two modes: the existing voice-only surface, or the desktop split
-          that shows the live session beside it. Persisted — set once. */}
-      <div className="mb-4">
+      {/* The two modes: the existing voice-only surface, or the desktop
+          arrangement that shows the live session under it. Persisted — set once. */}
+      <div className={compact ? 'mb-2' : 'mb-4'}>
         <VoiceLayoutToggle
           mode={voiceLayout.mode}
           onSelect={voiceLayout.setMode}
@@ -280,7 +305,7 @@ export function DriveModeDictate({
       {/* The reading level — how much of the worker's output is spoken, and
           which level the answer in flight is being read at. Persisted as the
           operator's default (P17). */}
-      <div className="mb-4">
+      <div className={compact ? 'mb-2' : 'mb-4'}>
         <ReadingLevelControl
           level={readingLevel}
           onSelect={handleReadingLevel}
@@ -292,7 +317,7 @@ export function DriveModeDictate({
       {/* Focus/hold (P18): concentrate on the conversation, keep the worker's
           answers in the transcript, and have everything that arrived surfaced
           on exit. Playback only — the mic is never gated. */}
-      <div className="mb-4">
+      <div className={compact ? 'mb-2' : 'mb-4'}>
         <FocusControl
           focused={focus.focused}
           onToggle={focus.toggle}
@@ -301,7 +326,7 @@ export function DriveModeDictate({
       </div>
 
       {/* The four states — who has the floor, at a glance */}
-      <div className="mb-6">
+      <div className={compact ? 'mb-3' : 'mb-6'}>
         <FloorBanner view={floorView} />
       </div>
 
@@ -313,7 +338,9 @@ export function DriveModeDictate({
         disabled={voice.state === 'processing' || isStarting}
         aria-busy={isStarting || undefined}
         data-testid="drive-mic"
-        className={`w-28 h-28 rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation ${
+        className={`rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation ${
+          compact ? 'w-20 h-20' : 'w-28 h-28'
+        } ${
           voice.state === 'processing' || isStarting ? 'cursor-wait' : 'active:scale-95'
         } ${
           isRecording
@@ -327,13 +354,13 @@ export function DriveModeDictate({
       >
         {voice.state === 'error' ? (
           <MicOff
-            className={`w-10 h-10 ${
+            className={`${compact ? 'w-7 h-7' : 'w-10 h-10'} ${
               isRecording ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'
             }`}
           />
         ) : (
           <Mic
-            className={`w-10 h-10 ${
+            className={`${compact ? 'w-7 h-7' : 'w-10 h-10'} ${
               isRecording
                 ? 'text-red-500'
                 : isStarting

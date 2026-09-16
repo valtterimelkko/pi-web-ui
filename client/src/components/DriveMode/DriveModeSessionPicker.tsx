@@ -3,9 +3,12 @@ import { useSessionStore } from '../../store/sessionStore';
 export interface DriveModeSessionPickerProps {
   onBack: () => void;
   onSelectSession: (sessionId: string, sessionPath: string) => void;
+  /** Heading — the same picker serves the add/continue flow and the in-place
+   *  switch flow, and says which one it is. */
+  title?: string;
 }
 
-export function DriveModeSessionPicker({ onBack, onSelectSession }: DriveModeSessionPickerProps) {
+export function DriveModeSessionPicker({ onBack, onSelectSession, title = 'Continue a Session' }: DriveModeSessionPickerProps) {
   const sessions = useSessionStore((s) => s.sessions);
   const archivedSessionPaths = useSessionStore((s) => s.archivedSessionPaths);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
@@ -18,7 +21,7 @@ export function DriveModeSessionPicker({ onBack, onSelectSession }: DriveModeSes
   return (
     <div className="flex flex-col items-center h-full w-full px-4 py-6">
       <h2 className="text-xl font-semibold text-center text-gray-900 dark:text-gray-100 mb-6">
-        Continue a Session
+        {title}
       </h2>
 
       {activeSessions.length === 0 ? (

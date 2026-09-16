@@ -52,9 +52,15 @@ export function DriveModeOverlay() {
   const getSessionDisplayName = useSessionStore((s) => s.getSessionDisplayName);
   const prevSessionIdRef = useRef<string | null>(null);
   const layout = useVoiceLayout();
+  /** The desktop arrangement: voice block + lane strip, with the live session
+   *  as a bottom panel of the SAME column (operator, 2026-09-16). */
+  const desktop = layout.layout === 'desktop';
   /** The cap-ask (replace-or-cancel) is overlay-local: it shows instead of
    *  the picker when "+" is pressed at the cap — never a silent fourth lane. */
   const [askReplace, setAskReplace] = useState(false);
+  /** Single-lane switch: the picker opens OVER the surface with the phase
+   *  untouched. Lane switches reuse the store's replace flow instead. */
+  const [switchSingleLane, setSwitchSingleLane] = useState(false);
 
   // Session creation flow: watch for new session after createNewSession
   useEffect(() => {
@@ -128,6 +134,8 @@ export function DriveModeOverlay() {
   // capture, card or focus is lost). Switching the addressed lane re-pins the
   // other lanes' subscriptions: the server's switch_session unsubscribes the
   // previous current session, so every other lane is re-subscribed after it.
+  // The desktop arrangement (see voiceLayout) is the SAME block with the live
+  // session as a bottom panel of the column — never a second voice surface.
   // ---------------------------------------------------------------------------
   const sessionById = (sessionId: string | null) => sessions.find((s) => s.id === sessionId);
 
@@ -206,6 +214,38 @@ export function DriveModeOverlay() {
     reset();
   };
 
+  // ---------------------------------------------------------------------------
+  // Switching the worker a voice surface is attached to, in place (operator,
+  // 2026-09-16): "a 'switch session' button that would allow me to adjust
+  // quickly (per lane) what session / worker the voice mode is attached to …
+  // without having to exit the voice mode entirely and then rebuild the 3 lanes
+  // view again from scratch".
+  //
+  // Lane mode reuses the replace flow: the picker opens over the mounted lanes
+  // (phase untouched, nothing unmounts) and only that lane's session is
+  // swapped — its order and slot stay. The switching lane's capture is
+  // finalised into its own talker FIRST, exactly as add/remove already do, so
+  // the operator's words are never dropped.
+  //
+  // Single-lane mode has no lane to replace: the picker opens over the surface
+  // and re-points the addressed session — it never creates a lane.
+  // ---------------------------------------------------------------------------
+  const handleSwitchLane = (sessionId: string) => {
+    laneFloor.finaliseCapture(sessionId);
+    beginLaneReplace(sessionId);
+  };
+
+  const handleSwitchSingleLane = () => {
+    setSwitchSingleLane(true);
+  };
+
+  const handleSwitchSinglePick = (sessionId: string, sessionPath: string) => {
+    setSwitchSingleLane(false);
+    if (sessionId === activeSessionId) return;
+    setActiveSession(sessionId);
+    switchSession(sessionPath);
+  };
+
   if (!isOpen) return null;
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
@@ -255,23 +295,28 @@ export function DriveModeOverlay() {
           onSelectSession={handleSelectSession}
         />
       )}
-      {(phase === 'dictate' || phase === 'agent-working' || phase === 'read-aloud-ready' || phase === 'audio-playing') &&
-        (multiLane ? (
-          // Multi-lane: ONE tab holds the lanes. The strip is the primary
-          // control; every lane's surface stays mounted (hidden when not
-          // addressed) so capture, cards and focus live on per lane. The
-          // add-lane picker and the cap-ask open OVER the mounted lanes.
-          <div className="flex flex-col flex-1 min-h-0 w-full">
-            <LaneStrip
-              lanes={lanes}
-              addressedSessionId={activeSessionId}
-              labels={laneLabels}
-              onAddress={handleAddressLane}
-              onAdd={handleAddLaneClick}
-              onRemove={handleRemoveLane}
-            />
-            <div className="relative flex-1 min-h-0 w-full overflow-hidden">
-              {lanes.map((lane) => {
+      {(phase === 'dictate' || phase === 'agent-working' || phase === 'read-aloud-ready' || phase === 'audio-playing') && (
+        // ONE column in both modes: the lane strip, then the addressed lane's
+        // voice surface. In the desktop arrangement the live session is a
+        // BOTTOM PANEL of this same column (operator, 2026-09-16) — that is
+        // what leaves room for the maximum of three lanes while the session
+        // stays visible. Mobile mode is unchanged: no pane, full height.
+        <div data-testid="drive-mode-column" className="flex flex-col flex-1 min-h-0 w-full">
+          <LaneStrip
+            lanes={lanes}
+            addressedSessionId={activeSessionId}
+            labels={laneLabels}
+            onAddress={handleAddressLane}
+            onAdd={handleAddLaneClick}
+            onRemove={handleRemoveLane}
+            onSwitch={handleSwitchLane}
+          />
+          <div className="relative flex-1 min-h-0 w-full overflow-hidden">
+            {multiLane ? (
+              // Multi-lane: ONE tab holds the lanes. Every lane's surface stays
+              // mounted (hidden when not addressed) so capture, cards and focus
+              // live on per lane.
+              lanes.map((lane) => {
                 const laneSession = sessionById(lane.sessionId);
                 const laneDisplayName =
                   (laneSession && getSessionDisplayName(laneSession.path)) ||
@@ -297,23 +342,17 @@ export function DriveModeOverlay() {
                       sessionDisplayName={laneDisplayName}
                       onExit={handleClose}
                       onAbort={abortGeneration}
+                      onSwitchSession={() => handleSwitchLane(lane.sessionId)}
+                      compact={desktop}
                       laneEnabled
                       addressed={lane.sessionId === activeSessionId}
                     />
                   </div>
                 );
-              })}
-            </div>
-          </div>
-        ) : layout.layout === 'split' ? (
-          // Desktop mode: the voice surface and the live session share the
-          // screen. Both panes render the same components as before — the
-          // split only decides how the window is divided, so capture, the
-          // floor banner, the confirmation card and read-aloud are unchanged.
-          // (Single-lane split: adding a lane happens from the voice-only
-          // layout, where the collapsed add affordance lives.)
-          <div data-testid="drive-mode-split" className="flex flex-1 min-h-0 w-full overflow-hidden">
-            <div className="flex-1 min-w-0 h-full min-h-0 overflow-y-auto border-r border-outline-default dark:border-outline-default-dark">
+              })
+            ) : (
+              // Single-lane: today's surface, plus the in-place switch control
+              // and (in desktop) the compact variant.
               <DriveModeDictate
                 sessionId={activeSessionId || currentSessionId || ''}
                 sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
@@ -321,43 +360,50 @@ export function DriveModeOverlay() {
                 sessionDisplayName={sessionDisplayName}
                 onExit={handleClose}
                 onAbort={abortGeneration}
+                onSwitchSession={handleSwitchSingleLane}
+                compact={desktop}
               />
-            </div>
-            <div className="flex-1 min-w-0 h-full min-h-0">
-              <DriveModeSessionPane sessionDisplayName={sessionDisplayName} modelName={modelName} />
-            </div>
+            )}
           </div>
-        ) : (
-          // Single-lane voice-only: today's surface, with the strip collapsed
-          // to the "+" affordance above it.
-          <div className="flex flex-col flex-1 min-h-0 w-full">
-            <LaneStrip
-              lanes={[]}
-              addressedSessionId={activeSessionId}
-              labels={{}}
-              onAddress={handleAddressLane}
-              onAdd={handleAddLaneClick}
-              onRemove={handleRemoveLane}
-            />
-            <div className="relative flex-1 min-h-0 w-full overflow-hidden">
-              <DriveModeDictate
-                sessionId={activeSessionId || currentSessionId || ''}
-                sdkType={activeSession?.sdkType ?? selectedModel?.sdkType ?? null}
-                modelName={modelName}
+          {desktop && (
+            // The live session, a quarter of the window at the bottom of this
+            // column. The REAL session view: same store, same shared list as
+            // the chat screen — never a raw event dump.
+            <div
+              data-testid="drive-session-panel"
+              className="flex-shrink-0 basis-1/4 grow-0 shrink-0 min-h-[150px] max-h-[45%] border-t border-outline-default dark:border-outline-default-dark overflow-hidden"
+            >
+              <DriveModeSessionPane
                 sessionDisplayName={sessionDisplayName}
-                onExit={handleClose}
-                onAbort={abortGeneration}
+                modelName={modelName}
+                sessionId={activeSessionId || currentSessionId}
               />
             </div>
-          </div>
-        ))}
+          )}
+        </div>
+      )}
 
       {/* The add-lane flow renders OVER the whole overlay — in BOTH single-lane
           and multi-lane — so the dictate surfaces never unmount (their capture,
           cards and focus live on). The phase never leaves dictate. */}
       {addingLane && !askReplace && (
         <div className="absolute inset-0 z-20 bg-canvas dark:bg-canvas-dark overflow-y-auto">
-          <DriveModeSessionPicker onBack={closeAddFlow} onSelectSession={handleAddLaneSession} />
+          <DriveModeSessionPicker
+            // The same picker serves two flows and says which one it is: adding
+            // a new lane, or handing an existing lane to another worker.
+            title={replacingLaneId ? 'Switch session' : 'Add a lane'}
+            onBack={closeAddFlow}
+            onSelectSession={handleAddLaneSession}
+          />
+        </div>
+      )}
+      {switchSingleLane && (
+        <div className="absolute inset-0 z-20 bg-canvas dark:bg-canvas-dark overflow-y-auto">
+          <DriveModeSessionPicker
+            title="Switch session"
+            onBack={() => setSwitchSingleLane(false)}
+            onSelectSession={handleSwitchSinglePick}
+          />
         </div>
       )}
       {askReplace && (

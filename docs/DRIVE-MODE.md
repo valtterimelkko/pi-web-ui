@@ -23,14 +23,42 @@ When you dictate, your words go to a helper agent (the *talker*) — never strai
 - the worker never knows the talker or your voice exists — it just receives an instruction;
 - before anything reaches the worker, a confirmation card shows the exact text that will be sent. When the tidying changed your words, the card says so, shows the fragments it took out, and offers **Send my exact words** — your original wording instead of the tidied relay. When nothing visible changed it makes no tidy claim at all. **Confirm** sends the tidied text, **Cancel** drops it, and typed text replies to the talker instead.
 
+## Layout modes, lanes and switching workers
+
+Voice Mode has two layout modes, chosen by the operator and remembered per browser
+(`pi-voice-mode-layout`):
+
+- **Mobile** — the original voice-only surface. Full height, no session pane.
+- **Desktop** — the same voice block (lane strip plus the addressed worker's
+  controls), with the **live session as a bottom panel of the same column**
+  (about a quarter of the window, minimum 150px). The pane is the *real* session
+  view: it renders the shared `VirtualizedMessageList` from the same session
+  store as the chat screen, so tool calls group, skills collapse and verbosity
+  matches the normal session view exactly.
+  A desktop preference on a window narrower than 1024px degrades to the mobile
+  surface rather than squeezing both.
+
+Up to **three lanes** may be held in one tab. A lane is another worker session; the
+lane strip shows each lane's floor state, switches which worker you are addressing
+with one tap, and the cap is always visible ("2 of 3"). At the cap the "+" asks
+rather than silently adding a fourth lane.
+
+**Switch session** re-points a voice surface at a different worker *in place*: from
+the addressed surface, or from any lane's row. The picker opens over the mounted
+lanes (the phase never changes, so capture, cards and focus survive), only that
+lane's session is swapped, and the lane keeps its order and slot.
+
 ## Key Files
 
 ### UI
-- `client/src/components/DriveMode/DriveModeOverlay.tsx` — full-screen overlay and phase routing
+- `client/src/components/DriveMode/DriveModeOverlay.tsx` — full-screen overlay, phase routing, the one-column layout and the lane set
+- `client/src/components/DriveMode/LaneStrip.tsx` — lane rows, addressing, switching, closing, the cap
+- `client/src/components/DriveMode/DriveModeSessionPane.tsx` — the live session pane (shared session list)
+- `client/src/components/DriveMode/voiceLayout.ts` / `useVoiceLayout.ts` — the persisted layout mode and the resolved arrangement
 - `client/src/components/DriveMode/DriveModeEntry.tsx` — entry chooser
 - `client/src/components/DriveMode/DriveModeModelPicker.tsx` — model selection
 - `client/src/components/DriveMode/DriveModeFolderPicker.tsx` — folder selection for new sessions
-- `client/src/components/DriveMode/DriveModeSessionPicker.tsx` — continue-session picker
+- `client/src/components/DriveMode/DriveModeSessionPicker.tsx` — continue/switch-session picker
 - `client/src/components/DriveMode/DriveModeDictate.tsx` — dictation / read-aloud control surface
 - `client/src/components/DriveMode/driveModeModels.ts` — curated model list
 

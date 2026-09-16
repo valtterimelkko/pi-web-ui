@@ -6,29 +6,39 @@
  *    session itself on one half of the screen - the current version could stay
  *    as 'mobile mode' as mobile screen can't really handle more information."
  *
- * The mode is the operator's explicit, persisted choice. The LAYOUT is derived:
- * 'desktop' splits only when the window can hold two readable halves, so a wide
+ * Operator, verbatim (2026-09-16), on the desktop arrangement:
+ *   "I want to add the lanes to the desktop view … I wonder if the session view
+ *    … could be much smaller … like just one fourth of the screen height … on
+ *    the bottom of it … in the same block, in the same column, if you will,
+ *    together with the kind of like the voice mode tools just below them. So
+ *    that would then fit maximum three lanes together."
+ *
+ * The mode is the operator's explicit, persisted choice. The ARRANGEMENT is
+ * derived: 'desktop' renders the desktop layout — the voice block (lane strip
+ * plus the addressed lane's controls) with the live-session pane as a bottom
+ * panel of the SAME column — and only when the window is wide enough. A wide
  * preference on a narrow window degrades to the existing mobile surface rather
- * than compressing both panes into slivers. Pure selection lives here (testable
- * without a browser); the components only render what `resolveVoiceLayout`
- * decided.
+ * than compressing the surface into slivers. Pure selection lives here
+ * (testable without a browser); the components only render what
+ * `resolveVoiceLayout` decided.
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export type VoiceLayoutMode = 'mobile' | 'desktop';
 /** What the surface actually renders, given the mode AND the window. */
-export type VoiceLayout = 'mobile' | 'split';
+export type VoiceLayout = 'mobile' | 'desktop';
 
 export const VOICE_LAYOUT_STORAGE_KEY = 'pi-voice-mode-layout';
 export const DEFAULT_VOICE_LAYOUT_MODE: VoiceLayoutMode = 'mobile';
 
 /**
- * Below this width a split would leave neither pane usable: the voice controls
- * are large touch targets and the transcript needs a readable measure, so the
- * narrow window keeps the mobile surface.
+ * Below this width the desktop arrangement would leave neither the voice
+ * controls nor the session pane usable: the controls are large touch targets
+ * and the transcript needs a readable measure, so a narrow window keeps the
+ * mobile surface.
  */
-export const SPLIT_MIN_WIDTH = 1024;
+export const DESKTOP_MIN_WIDTH = 1024;
 
 export function isVoiceLayoutMode(value: unknown): value is VoiceLayoutMode {
   return value === 'mobile' || value === 'desktop';
@@ -39,13 +49,13 @@ export function nextVoiceLayoutMode(mode: VoiceLayoutMode): VoiceLayoutMode {
 }
 
 /**
- * The layout the surface renders. An unknown width (0/NaN — jsdom, prerender)
- * can never produce a split: a layout decision is not made on a missing
- * measurement.
+ * The arrangement the surface renders. An unknown width (0/NaN — jsdom,
+ * prerender) can never produce the desktop layout: a layout decision is not
+ * made on a missing measurement.
  */
 export function resolveVoiceLayout(mode: VoiceLayoutMode, viewportWidth: number): VoiceLayout {
   const width = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : 0;
-  return mode === 'desktop' && width >= SPLIT_MIN_WIDTH ? 'split' : 'mobile';
+  return mode === 'desktop' && width >= DESKTOP_MIN_WIDTH ? 'desktop' : 'mobile';
 }
 
 /** Read a usable viewport width, or 0 when there is not one. */

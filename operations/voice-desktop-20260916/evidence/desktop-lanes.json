@@ -1,0 +1,771 @@
+{
+  "startedAt": "2026-09-16T09:40:14.323Z",
+  "steps": {
+    "cleaned": {
+      "removed": 4
+    },
+    "sessions": {
+      "worker": {
+        "label": "Alpha",
+        "sessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-15-448Z_01a0a996-9dd8-7695-9ba3-96b78fc8b942.jsonl"
+      },
+      "extra": [
+        {
+          "label": "Bravo",
+          "sessionId": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-14-369Z_01a0a996-99a1-7695-9ba3-96b0262a7512.jsonl"
+        },
+        {
+          "label": "Charlie",
+          "sessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-14-760Z_01a0a996-9b28-7695-9ba3-96b2f8f267a3.jsonl"
+        },
+        {
+          "label": "Delta",
+          "sessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-15-069Z_01a0a996-9c5d-7695-9ba3-96b437ad5b94.jsonl"
+        }
+      ]
+    },
+    "selectedWorker": {
+      "index": 0,
+      "sessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942"
+    },
+    "chatView": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "voiceModeOpen": false,
+      "chatToolGroups": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ],
+      "chatToolGroupSummaries": [
+        "Ran 3 commands(3 tools)"
+      ],
+      "paneVisible": false,
+      "paneSession": null,
+      "paneToolGroups": [],
+      "paneToolGroupSummaries": [],
+      "paneText": null,
+      "panelVisible": false,
+      "sameColumn": false,
+      "panelAfterVoiceBlock": false,
+      "layout": {
+        "desktopPressed": null,
+        "mobilePressed": null
+      },
+      "compact": null,
+      "laneRowCount": 0,
+      "laneCap": null,
+      "laneRows": [],
+      "laneSwitches": [],
+      "surfaceSwitch": false,
+      "sessionPaneName": null,
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "isStreaming": true,
+        "messageCount": 13,
+        "sessionMessages": {
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 13
+        },
+        "lanes": [],
+        "activeSessionId": null,
+        "phase": "entry",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    "voiceMobile": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "voiceModeOpen": true,
+      "chatToolGroups": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ],
+      "chatToolGroupSummaries": [
+        "Ran 3 commands(3 tools)"
+      ],
+      "paneVisible": false,
+      "paneSession": null,
+      "paneToolGroups": [],
+      "paneToolGroupSummaries": [],
+      "paneText": null,
+      "panelVisible": false,
+      "sameColumn": false,
+      "panelAfterVoiceBlock": false,
+      "layout": {
+        "desktopPressed": "false",
+        "mobilePressed": "true"
+      },
+      "compact": null,
+      "laneRowCount": 0,
+      "laneCap": null,
+      "laneRows": [],
+      "laneSwitches": [],
+      "surfaceSwitch": true,
+      "sessionPaneName": null,
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "isStreaming": true,
+        "messageCount": 7,
+        "sessionMessages": {
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 7
+        },
+        "lanes": [],
+        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    "voiceDesktop": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "voiceModeOpen": true,
+      "chatToolGroups": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ],
+      "chatToolGroupSummaries": [
+        "Ran 3 commands(3 tools)"
+      ],
+      "paneVisible": true,
+      "paneSession": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+      "paneToolGroups": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ],
+      "paneToolGroupSummaries": [
+        "Ran 3 commands(3 tools)"
+      ],
+      "paneText": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5WorkingMake three bash tool calls IN PARALLEL in a single response: echo alpha, echo beta, echo gamma. Do not write any text before or between them. After they return, reply with the single word DONE.09:40 AMThinkingThe user is asking me to make three",
+      "panelVisible": true,
+      "sameColumn": true,
+      "panelAfterVoiceBlock": true,
+      "layout": {
+        "desktopPressed": "true",
+        "mobilePressed": "false"
+      },
+      "compact": "true",
+      "laneRowCount": 0,
+      "laneCap": null,
+      "laneRows": [],
+      "laneSwitches": [],
+      "surfaceSwitch": true,
+      "sessionPaneName": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5Working",
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "isStreaming": true,
+        "messageCount": 14,
+        "sessionMessages": {
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 14
+        },
+        "lanes": [],
+        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    "threeLanes": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "voiceModeOpen": true,
+      "chatToolGroups": [],
+      "chatToolGroupSummaries": [],
+      "paneVisible": true,
+      "paneSession": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+      "paneToolGroups": [],
+      "paneToolGroupSummaries": [],
+      "paneText": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5IdleReady to helpStart a conversation by typing a message below. I can help you with coding, analysis, and more.",
+      "panelVisible": true,
+      "sameColumn": true,
+      "panelAfterVoiceBlock": true,
+      "layout": {
+        "desktopPressed": "true",
+        "mobilePressed": "false"
+      },
+      "compact": "true",
+      "laneRowCount": 3,
+      "laneCap": "3 of 3",
+      "laneRows": [
+        {
+          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "label": "Worker AlphaWorking silently",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "label": "Worker BravoReady",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "label": "Worker CharlieReady",
+          "addressed": true
+        }
+      ],
+      "laneSwitches": [
+        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "01a0a996-99a1-7695-9ba3-96b0262a7512",
+        "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+      ],
+      "surfaceSwitch": true,
+      "sessionPaneName": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5Idle",
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "isStreaming": false,
+        "messageCount": 0,
+        "sessionMessages": {
+          "01a0a996-99a1-7695-9ba3-96b0262a7512": 0,
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3": 0,
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 16
+        },
+        "lanes": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+        ],
+        "activeSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    "threeLanesTall": {
+      "viewport": {
+        "w": 1440,
+        "h": 1140
+      },
+      "voiceModeOpen": true,
+      "chatToolGroups": [],
+      "chatToolGroupSummaries": [],
+      "paneVisible": true,
+      "paneSession": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+      "paneToolGroups": [],
+      "paneToolGroupSummaries": [],
+      "paneText": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5IdleReady to helpStart a conversation by typing a message below. I can help you with coding, analysis, and more.",
+      "panelVisible": true,
+      "sameColumn": true,
+      "panelAfterVoiceBlock": true,
+      "layout": {
+        "desktopPressed": "true",
+        "mobilePressed": "false"
+      },
+      "compact": "true",
+      "laneRowCount": 3,
+      "laneCap": "3 of 3",
+      "laneRows": [
+        {
+          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "label": "Worker AlphaWorking silently",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "label": "Worker BravoReady",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "label": "Worker CharlieReady",
+          "addressed": true
+        }
+      ],
+      "laneSwitches": [
+        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "01a0a996-99a1-7695-9ba3-96b0262a7512",
+        "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+      ],
+      "surfaceSwitch": true,
+      "sessionPaneName": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5Idle",
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "isStreaming": false,
+        "messageCount": 0,
+        "sessionMessages": {
+          "01a0a996-99a1-7695-9ba3-96b0262a7512": 0,
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3": 0,
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 17
+        },
+        "lanes": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+        ],
+        "activeSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    "afterLaneSwitch": {
+      "viewport": {
+        "w": 1440,
+        "h": 1140
+      },
+      "voiceModeOpen": true,
+      "chatToolGroups": [],
+      "chatToolGroupSummaries": [],
+      "paneVisible": true,
+      "paneSession": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+      "paneToolGroups": [],
+      "paneToolGroupSummaries": [],
+      "paneText": "Worker Deltaopenrouter/anthropic/claude-haiku-4.5IdleReady to helpStart a conversation by typing a message below. I can help you with coding, analysis, and more.",
+      "panelVisible": true,
+      "sameColumn": true,
+      "panelAfterVoiceBlock": true,
+      "layout": {
+        "desktopPressed": "true",
+        "mobilePressed": "false"
+      },
+      "compact": "true",
+      "laneRowCount": 3,
+      "laneCap": "3 of 3",
+      "laneRows": [
+        {
+          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "label": "Worker AlphaWorking silently",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "label": "Worker BravoReady",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "label": "Worker DeltaReady",
+          "addressed": true
+        }
+      ],
+      "laneSwitches": [
+        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "01a0a996-99a1-7695-9ba3-96b0262a7512",
+        "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+      ],
+      "surfaceSwitch": true,
+      "sessionPaneName": "Worker Deltaopenrouter/anthropic/claude-haiku-4.5Idle",
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "isStreaming": false,
+        "messageCount": 0,
+        "sessionMessages": {
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 19,
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+        },
+        "lanes": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        ],
+        "activeSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    "paneFollowsBack": {
+      "viewport": {
+        "w": 1440,
+        "h": 1140
+      },
+      "voiceModeOpen": true,
+      "chatToolGroups": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ],
+      "chatToolGroupSummaries": [
+        "Ran 3 commands(3 tools)"
+      ],
+      "paneVisible": true,
+      "paneSession": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+      "paneToolGroups": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ],
+      "paneToolGroupSummaries": [
+        "Ran 3 commands(3 tools)"
+      ],
+      "paneText": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5WorkingThinkingThe user is asking me to make three bash tool calls IN PARAL…09:40 AMRan 3 commands(3 tools)1DONE109:40 AMAgent OS session-end memory capture (automated delivery by the D3 write lane). Run your agent os capture skill now and submit the ",
+      "panelVisible": true,
+      "sameColumn": true,
+      "panelAfterVoiceBlock": true,
+      "layout": {
+        "desktopPressed": "true",
+        "mobilePressed": "false"
+      },
+      "compact": "true",
+      "laneRowCount": 3,
+      "laneCap": "3 of 3",
+      "laneRows": [
+        {
+          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "label": "Worker AlphaWorking silently",
+          "addressed": true
+        },
+        {
+          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "label": "Worker BravoReady",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "label": "Worker DeltaReady",
+          "addressed": false
+        }
+      ],
+      "laneSwitches": [
+        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "01a0a996-99a1-7695-9ba3-96b0262a7512",
+        "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+      ],
+      "surfaceSwitch": true,
+      "sessionPaneName": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5Working",
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "isStreaming": true,
+        "messageCount": 20,
+        "sessionMessages": {
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 20,
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+        },
+        "lanes": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        ],
+        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    "addressedSurfaceSwitch": {
+      "present": true,
+      "pickerClosed": true
+    },
+    "mobileAfter": {
+      "viewport": {
+        "w": 430,
+        "h": 900
+      },
+      "voiceModeOpen": true,
+      "chatToolGroups": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ],
+      "chatToolGroupSummaries": [
+        "Ran 3 commands(3 tools)"
+      ],
+      "paneVisible": false,
+      "paneSession": null,
+      "paneToolGroups": [],
+      "paneToolGroupSummaries": [],
+      "paneText": null,
+      "panelVisible": false,
+      "sameColumn": false,
+      "panelAfterVoiceBlock": false,
+      "layout": {
+        "desktopPressed": "false",
+        "mobilePressed": "true"
+      },
+      "compact": null,
+      "laneRowCount": 3,
+      "laneCap": "3 of 3",
+      "laneRows": [
+        {
+          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "label": "Worker AlphaReady",
+          "addressed": true
+        },
+        {
+          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "label": "Worker BravoReady",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "label": "Worker DeltaReady",
+          "addressed": false
+        }
+      ],
+      "laneSwitches": [
+        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "01a0a996-99a1-7695-9ba3-96b0262a7512",
+        "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+      ],
+      "surfaceSwitch": true,
+      "sessionPaneName": null,
+      "store": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "isStreaming": false,
+        "messageCount": 20,
+        "sessionMessages": {
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 20,
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+        },
+        "lanes": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        ],
+        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    }
+  },
+  "screenshots": [
+    "01-regular-session-view-1440.png",
+    "02-voice-mobile-1440.png",
+    "03-voice-desktop-pane-1440.png",
+    "04-voice-desktop-three-lanes-1440.png",
+    "05-voice-desktop-three-lanes-1440x1140.png",
+    "06-switch-session-picker.png",
+    "07-after-lane-switch-1440.png",
+    "08-pane-follows-readdressed-worker.png",
+    "09-mobile-three-lanes-430.png"
+  ],
+  "assertions": [
+    {
+      "name": "regular chat view groups the tool run into a tool group",
+      "ok": true,
+      "detail": [
+        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+      ]
+    },
+    {
+      "name": "mobile layout shows no session pane",
+      "ok": true
+    },
+    {
+      "name": "desktop layout renders the session pane",
+      "ok": true
+    },
+    {
+      "name": "the pane is a bottom panel of the same column as the voice block",
+      "ok": true
+    },
+    {
+      "name": "the pane shows the SAME organised tool-group structure as the regular chat view",
+      "ok": true,
+      "detail": {
+        "pane": [
+          "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        ],
+        "chat": [
+          "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        ]
+      }
+    },
+    {
+      "name": "the pane shows the same tool-group summary text as the regular chat view",
+      "ok": true,
+      "detail": {
+        "pane": [
+          "Ran 3 commands(3 tools)"
+        ],
+        "chat": [
+          "Ran 3 commands(3 tools)"
+        ]
+      }
+    },
+    {
+      "name": "the desktop voice controls are the compact variant",
+      "ok": true,
+      "detail": "true"
+    },
+    {
+      "name": "desktop holds three lane rows",
+      "ok": true,
+      "detail": 3
+    },
+    {
+      "name": "the cap reads 3 of 3",
+      "ok": true,
+      "detail": "3 of 3"
+    },
+    {
+      "name": "the session pane is still rendered alongside three lanes",
+      "ok": true
+    },
+    {
+      "name": "every lane row offers an in-place switch",
+      "ok": true,
+      "detail": [
+        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "01a0a996-99a1-7695-9ba3-96b0262a7512",
+        "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+      ]
+    },
+    {
+      "name": "three lanes + pane still held at a taller laptop window",
+      "ok": true
+    },
+    {
+      "name": "switching a lane keeps the lane count at three (no rebuild, no exit)",
+      "ok": true,
+      "detail": 3
+    },
+    {
+      "name": "the switched lane holds the new session and the others are untouched",
+      "ok": true,
+      "detail": [
+        {
+          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "label": "Worker AlphaWorking silently",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "label": "Worker BravoReady",
+          "addressed": false
+        },
+        {
+          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "label": "Worker DeltaReady",
+          "addressed": true
+        }
+      ]
+    },
+    {
+      "name": "the switched lane is now the addressed one",
+      "ok": true,
+      "detail": {
+        "sessionIds": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+        ],
+        "currentSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "isStreaming": false,
+        "messageCount": 0,
+        "sessionMessages": {
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 19,
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+        },
+        "lanes": [
+          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        ],
+        "activeSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "phase": "agent-working",
+        "addingLane": false,
+        "replacingLaneId": null
+      }
+    },
+    {
+      "name": "the pane follows the addressed lane",
+      "ok": true,
+      "detail": {
+        "pane": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "addressed": "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+      }
+    },
+    {
+      "name": "the pane names the addressed lane's worker",
+      "ok": true,
+      "detail": "Worker Deltaopenrouter/anthropic/claude-haiku-4.5Idle"
+    },
+    {
+      "name": "the pane stops showing the previous worker's work",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "voice mode never left the surface",
+      "ok": true,
+      "detail": {
+        "phase": "agent-working",
+        "lanes": 3
+      }
+    },
+    {
+      "name": "the lane set before the switch held three lanes",
+      "ok": true
+    },
+    {
+      "name": "re-addressing the tool-run worker brings its tool group back into the pane",
+      "ok": true,
+      "detail": {
+        "paneSession": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "groups": [
+          "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        ]
+      }
+    },
+    {
+      "name": "the addressed lane offers a switch control that opens and closes in place",
+      "ok": true,
+      "detail": {
+        "present": true,
+        "pickerClosed": true
+      }
+    },
+    {
+      "name": "mobile layout keeps the lanes and shows no pane",
+      "ok": true
+    }
+  ],
+  "finishedAt": "2026-09-16T09:40:41.255Z",
+  "summary": {
+    "total": 23,
+    "passed": 23,
+    "failed": []
+  }
+}
