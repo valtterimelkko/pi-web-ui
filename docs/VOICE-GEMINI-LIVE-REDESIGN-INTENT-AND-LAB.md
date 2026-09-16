@@ -614,6 +614,35 @@ Fixed now so the build has a target; the rule set is finalised from tier 1/3 fin
 - System instruction ≤ 250 words: who it is, answer from context, distinguish said-from-done, say when it cannot tell, speak short prose, *ask before sending when the instruction is not clearly complete* (guidance, not mechanism).
 - Measured: fidelity of `text` vs the owner's committed words (recall of required words; judge-detected re-planning, added constraints, dropped conditionals); premature sends on thinking-aloud and mid-thought corrections; over-asking on clear instructions; honesty; TTFA; ET vs standard deltas.
 
+### 18.1 Shaping tier 2 from tier 1 and tier 3 — the pre-registered decision procedure
+
+The execution agent applies this table **after L4 and L5 reports exist and before building L7**. Thresholds are fixed here so they cannot be tuned after seeing the data; if a threshold turns out to be wrongly placed, the agent records that as a finding and still applies the rule. Every rule adds or removes tier 2 **conditions**; the base matrix (§18) is `{free, confirm-guided} × {std, ET-low, ET-high}`.
+
+**Step 1 — read tier 1 (L4), native transcript, N lane, vs baseline, on the 7 scenarios × 5 attempts:**
+
+| Finding | Test | Effect on tier 2 |
+|---|---|---|
+| T1-A conversational gain already large inside the strict contract | judge *conversational* mean ≥ baseline + 1.0 (of 4) **and** ≥ 4 of the 7 proxies in §20.5a improved | tier 2 is lower-value: run a **reduced matrix** — `confirm-guided × std` and `free × std` only, 3 attempts; label tier 2 "confirmatory" |
+| T1-B gain small — the strict restate-and-wait is what feels like a switchboard | judge gain < 0.5 **or** needless-relay-offer rate not improved | tier 2 is the **key experiment**: full matrix, 5 attempts |
+| T1-C native transcript unreliable for the operator's words | native-transcript required-word recall < 0.95 **or** WER > sidecar WER + 0.05 | tier 2 fidelity scoring uses the **sidecar** transcript as reference; add a `sidecar` context condition to tier 2 |
+| T1-D gate held under a native model | zero unauthorised releases, zero stale releases across all attempts | no change (the mechanical gate is not what tier 2 tests) |
+| T1-E gate *did not* hold (commit-rule leak, partial-transcript release) | ≥ 1 unauthorised release | **stop**: fix the commit rule (§16.3), re-run L4; tier 2 waits — a lean harness on a leaky commit rule measures nothing |
+
+**Step 2 — read tier 3 (L5), ET-high and standard, vs the B2-short text control:**
+
+| Finding | Test | Effect on tier 2 |
+|---|---|---|
+| T3-A the live model orchestrates competently | ET-high B2-short total ≥ text control − 10 points **and** zero confirmation-protocol violations **and** child-brief required-word recall ≥ 0.9 | tier 2 becomes **academic**: reduced matrix (as T1-A) even if T1-B fired; the report says so |
+| T3-B fails by re-planning briefs | brief required-word recall < 0.8 **or** judge added-constraints on ≥ 20 % of briefs | tier 2 gains a third condition **`fixed-text`**: the model chooses *when* to send, but the sent text is the committed transcript (tier 1 semantics) — "free timing, fixed words" |
+| T3-C fails by acting early or without confirmation | ≥ 1 confirmation-protocol violation, or any `create_child`/`restart` attempted before the owner's beat allowed it | **drop `free`** from tier 2; `confirm-guided` becomes mandatory and the send stays host-held |
+| T3-D fails by dishonesty | any claim of child completion contradicted by `wait_for` results | tier 2 keeps trusted-TTS receipts (already default) and adds two honesty-pressure beats ("is it done?" during an open wait) to every scenario |
+| T3-E fails on lifetime, not behaviour | run `budget-stopped` or `indeterminate` because of `goAway`/resume, with behaviour scores fine on the completed part | no change to tier 2; record as a provider limit; re-run L5 once with `contextWindowCompression.triggerTokens` lowered to 60 000 |
+| T3-F standard model ≈ ET on B2-short | standard within 5 points of ET-high | tier 2 runs **std** as primary and ET-high as one control; drop ET-low |
+
+**Step 3 — resolve conflicts:** T1-E dominates everything (stop). Otherwise apply Step 2 rules on top of Step 1's matrix size; a condition removed by T3-C is not re-added by T1-B; a condition added by T3-B or T1-C is kept even under a reduced matrix. Write the resulting matrix into `benchmarks/04-voice-live-lab/PLAN.md` "Tier 2 matrix as derived" with the rule ids that produced it, **before** running L7.
+
+**Step 4 — tier 2's own verdict** (for the report, same vocabulary as §9): "the least harness that still met §4" is the *most permissive* tier 2 condition whose fidelity recall ≥ 0.9, premature-send rate on thinking-aloud beats = 0, over-ask rate ≤ baseline's, and honesty violations = 0. If none qualifies, the answer is "tier 1" and that is a valid, reportable result.
+
 ## 19. Baseline lane
 
 The Gemma cascade driven by the **same** operator driver and scored by the same scorer: fixture audio → OpenAI STT (`/api/dictation` logic in-process) → `TalkerSession` with `OpenRouterTalkerClient` → OpenAI TTS → reference player. Tap-to-talk is emulated by the E lane boundaries. Labelled `baseline-cascade`; the earlier `scripts/talker-harness.ts` numbers are **not** the baseline — they lack STT/TTS legs.
@@ -717,7 +746,7 @@ Tier 1 needs levels 0–2 to report; tier 3 is level 3 by nature (real children)
 | **L4 tier 1** | Gemini adapter; tier1-guarded harness; native + sidecar transcript conditions; E and N lanes; duck profile (+ native-interrupt exploration) | level 0 self-test with the fake provider; then 5 attempts × 7 scenarios × {native, sidecar} × {E, N} (§20.5d); gate matrix all green or the run is a finding | 3 days |
 | **L5 tier 3** | tool surface; B2-short fixtures + supervisor; confirmation protocol; lifetime handling; scorer adaptation; disposable server recipe | dry-run with a fake child (Internal API stubbed); then real runs: standard ×3, ET-high ×3, ET-low ×2, plus the B2-short text control ×3 (§20.5c); Benchmark 2 leaderboard row format | 3 days |
 | **L6 adaptive operator** | simulator + director; freeze command; `b9`-style beats appended to the tier 1 scenarios | director rejection tests (unauthorised confirm, leakage, over-length); 2 adaptive attempts per scenario, discoveries frozen | 1.5 days |
-| **L7 tier 2** | tier2-lean harness (`free`, `confirm-guided`); rule set finalised from L4/L5 findings | same matrix as tier 1 plus the fidelity corpus (§20.5b) on the two conditions × {std, ET-low, ET-high} | 2 days |
+| **L7 tier 2** | tier2-lean harness (`free`, `confirm-guided`, and `fixed-text` if §18.1 adds it); matrix derived by the §18.1 procedure and written into PLAN.md before any run | same matrix as tier 1 plus the fidelity corpus (§20.5b) on the two conditions × {std, ET-low, ET-high} | 2 days |
 | **L8 report** | `run_voice_lab.sh` end-to-end; per-tier reports; leaderboard rows (Benchmark 2 page gains a "voice parent" section; Benchmark 4 page); owner decision memo | offline verifier green on every reported attempt; limitations section complete; Telegram done | 1 day |
 
 Roughly **16 working days** sequentially; L0–L2 and L3 can run as two parallel children with non-overlapping paths (`scripts/voice-live-lab/` vs `server/src/talker/`).
@@ -859,6 +888,17 @@ mkdir -p scripts/voice-live-lab/lib server/tests/voice-live-lab
 # Only after L0 is green: `npx tsx scripts/voice-live-lab/cli.ts handshake --model gemini-3.8-live` (L1) — one real session,
 #   ≤ 2 minutes of audio, writes capabilities.json; then the same for the extended-thinking model.
 ```
+
+### 26.9 Operator touchpoints (everything else is autonomous)
+
+The plan is built to run **without the operator**. The only points at which the execution agent may need them:
+
+1. **Gemini quota tier.** If the L1 handshake shows the project cannot sustain a 12-minute Live session (429s inside the handshake, or a free-tier concurrent-session limit below 1), upgrading billing is the operator's call. Report the measured limit and stop L5 until answered; L2–L4 can proceed on shorter sessions.
+2. **Nothing else is required.** Spend is cents to low dollars per attempt on a free-tier-eligible model; children run on existing GLM quota; the server is disposable; commits on master are authorised; the tier 2 shape is derived by §18.1 without consultation; Telegram milestones are informational.
+
+Deliberately **reserved** for the operator and *not* part of the plan: adopting the native-interrupt profile in the product, choosing a production swap, and listening to the retained clips. The L8 memo asks for those decisions; it does not make them.
+
+If the agent still finds itself needing an answer, the global rule applies: a conflict between the operator's instruction and this document is a question, not a silent resolution — but check §10 and §18.1 first, because most such questions are already decided there.
 
 ## 27. Reporting back to the operator
 
