@@ -9,7 +9,11 @@
  *  2. the desktop layout holds the lane strip AND the session pane at once, and
  *     all three lanes are reachable there — the operator's second complaint;
  *  3. any lane's worker can be switched in place (three lanes held, no exit, no
- *     rebuild) and the pane follows the addressed lane — the third complaint.
+ *     rebuild) and the pane follows the addressed lane — the third complaint;
+ *  4. EVERY lane speaks at its own turn, whichever lane is addressed — two
+ *     lanes asked the same question answer with the SAME words, and both are
+ *     submitted to the shared voice (the shared "already spoken" record used
+ *     to be keyed on the words, not the lane, so the second lane was silent).
  *
  * Every assertion is read back from the live DOM / live store after the
  * interaction; the screenshots illustrate the evidence, they are not the
@@ -142,6 +146,9 @@ const PROBE = () => {
       addressed: row.getAttribute('aria-current') === 'true',
     })),
     laneSwitches: all('[data-testid="lane-switch"]').map((b) => b.getAttribute('data-lane-session')),
+    laneSwitchLabels: all('[data-testid="lane-switch"]').map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
+    // The word, actually rendered on screen (not merely present in the DOM).
+    laneSwitchLabelsShown: all('[data-testid="lane-switch"] span').filter(visible).length,
     surfaceSwitch: visible(byTestId('drive-switch-session')),
     sessionPaneName: pane?.querySelector('header')?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 80) ?? null,
     store,
@@ -204,6 +211,7 @@ async function main() {
         isStreaming: s.isStreaming,
         messageCount: s.messages.length,
         sessionMessages: Object.fromEntries(Object.entries(s.sessionMessages).map(([k, v]) => [k, v.length])),
+        streamingSessions: { ...s.streamingSessions },
         lanes: d.lanes.map((l) => l.sessionId),
         activeSessionId: d.activeSessionId,
         phase: d.phase,
@@ -347,6 +355,13 @@ async function main() {
   check('the cap reads 3 of 3', threeLaneProbe.laneCap === '3 of 3', threeLaneProbe.laneCap);
   check('the session pane is still rendered alongside three lanes', threeLaneProbe.paneVisible && threeLaneProbe.panelVisible);
   check('every lane row offers an in-place switch', threeLaneProbe.laneSwitches.length === 3, threeLaneProbe.laneSwitches);
+  check(
+    'every lane switch control is LABELLED on screen, not a glyph to guess at',
+    threeLaneProbe.laneSwitchLabels.length === 3 &&
+      threeLaneProbe.laneSwitchLabels.every((t) => t.includes('Switch')) &&
+      threeLaneProbe.laneSwitchLabelsShown === 3,
+    { labels: threeLaneProbe.laneSwitchLabels, shown: threeLaneProbe.laneSwitchLabelsShown }
+  );
   await shot('04-voice-desktop-three-lanes-1440.png');
 
   await page.setViewportSize({ width: 1440, height: 1140 });
@@ -437,6 +452,102 @@ async function main() {
   step('addressedSurfaceSwitch', surfaceSwitch);
   check('the addressed lane offers a switch control that opens and closes in place', surfaceSwitch.present && surfaceSwitch.pickerClosed, surfaceSwitch);
 
+  // ------------------------- EVERY lane speaks at its own turn (§4.4 / P16)
+  // Operator, 2026-09-16: "regardless of what lane I have selected, will every
+  // lane give its headlines when it is its turn?" Two lanes are asked the SAME
+  // question, so their answers have the SAME words — the exact case the shared
+  // spoken record used to collapse into one speaker.
+  await page.evaluate(async () => {
+    const arbMod = await import('/src/lib/speechArbiter.ts');
+    const arb = arbMod.speechArbiter;
+    globalThis.__PI_SPOKEN__ = [];
+    globalThis.__PI_TIER_ANSWER__ = arbMod.TIER_ANSWER;
+    if (!arb.__piRecording) {
+      const original = arb.submit.bind(arb);
+      arb.submit = (input) => {
+        globalThis.__PI_SPOKEN__.push({ id: input.id, tier: input.tier, text: String(input.text ?? '') });
+        return original(input);
+      };
+      arb.__piRecording = true;
+    }
+  });
+
+  const speakingLane = extra[0];             // Bravo — deliberately NOT addressed
+  const SPEECH_MARKER = 'LANE-ACK';
+  // Both lanes are asked the SAME question. The turn lasts long enough to
+  // produce a visible streaming → idle transition per lane (that transition is
+  // what speaks). The ANSWER TEXT is deliberately not asserted (see the note
+  // after the checks): this host's pi sessions carry the operator's global Agent
+  // OS hooks, so a real turn carries that work as well.
+  const SAME_QUESTION = 'Reply with exactly this text and nothing else: LANE-ACK';
+  const addressedAtStart = (await page.evaluate(PROBE)).store?.activeSessionId;
+  step('speechScenario', { addressed: addressedAtStart, speakingLane: speakingLane.sessionId, worker: worker.sessionId });
+
+  await internalApi('POST', `/api/v1/sessions/${worker.sessionId}/prompt`, { message: SAME_QUESTION, detach: true });
+  await internalApi('POST', `/api/v1/sessions/${speakingLane.sessionId}/prompt`, { message: SAME_QUESTION, detach: true });
+
+  // Both lanes run, and both come back to idle — the transition that speaks.
+  await page.waitForFunction(
+    ({ a, b }) => {
+      const p = globalThis.__PI_VOICE_PROBE__?.() ?? {};
+      const streaming = p.streamingSessions ?? {};
+      const counts = p.sessionMessages ?? {};
+      return streaming[a] === false && streaming[b] === false && (counts[a] ?? 0) > 0 && (counts[b] ?? 0) > 0;
+    },
+    { a: worker.sessionId, b: speakingLane.sessionId },
+    { timeout: 300000 }
+  );
+  await sleep(4000);
+
+  const spoken = await page.evaluate(() => ({
+    all: globalThis.__PI_SPOKEN__ ?? [],
+    tierAnswer: globalThis.__PI_TIER_ANSWER__,
+  }));
+  const answers = spoken.all.filter((s) => s.tier === spoken.tierAnswer);
+  const byLane = (id) => answers.filter((s) => String(s.id).startsWith(id));
+  step('spokenByTurn', {
+    addressed: addressedAtStart,
+    workerAnswers: byLane(worker.sessionId).map((s) => s.text),
+    otherLaneAnswers: byLane(speakingLane.sessionId).map((s) => s.text),
+    allTiers: spoken.all.map((s) => ({ id: s.id, tier: s.tier })),
+  });
+
+  check(
+    'the addressed lane speaks its answer',
+    byLane(worker.sessionId).length >= 1,
+    byLane(worker.sessionId).map((s) => s.text)
+  );
+  check(
+    'the OTHER lane speaks too, while a different lane is selected',
+    byLane(speakingLane.sessionId).length >= 1,
+    { addressed: addressedAtStart, otherLane: speakingLane.sessionId, got: byLane(speakingLane.sessionId).map((s) => s.text) }
+  );
+  check(
+    'both finishing lanes were read out — no lane suppressed as another lane\'s duplicate',
+    answers.length >= 2 && new Set([worker.sessionId, speakingLane.sessionId]).size === 2,
+    { answers: answers.length, lanes: [worker.sessionId, speakingLane.sessionId] }
+  );
+  // NOT asserted here, deliberately: byte-identical answers from two real pi
+  // turns. This host's pi sessions carry the operator's global Agent OS
+  // recall/capture hooks, which put that work into the same turn, so two real
+  // turns cannot be made word-for-word identical here (the observed text is
+  // recorded below). The strict collision case — two lanes with the SAME words,
+  // the second previously silenced — is pinned by unit tests that fail without
+  // the per-lane scope:
+  // client/tests/unit/components/DriveMode/DriveModeDictate.lanes-speech.test.tsx
+  step('speechEnvironment', {
+    note: 'global Agent OS hooks put their own work into real pi turns; identical text cannot be forced here',
+    requestedMarker: SPEECH_MARKER,
+    workerSpoken: byLane(worker.sessionId).map((s) => s.text.slice(0, 160)),
+    otherSpoken: byLane(speakingLane.sessionId).map((s) => s.text.slice(0, 160)),
+  });
+  check(
+    'each lane\'s speech is attributed to its own lane, not the selected one',
+    answers.every((s) => String(s.id).startsWith(worker.sessionId) || String(s.id).startsWith(speakingLane.sessionId)),
+    answers.map((s) => s.id)
+  );
+  await shot('10-every-lane-speaks.png');
+
   // ------------------------------------------------------------ mobile again
   await page.click('[data-testid="voice-layout-mobile"]');
   await sleep(800);
@@ -445,6 +556,11 @@ async function main() {
   const mobileAfter = await page.evaluate(PROBE);
   step('mobileAfter', mobileAfter);
   check('mobile layout keeps the lanes and shows no pane', mobileAfter.laneRowCount === 3 && mobileAfter.paneVisible === false);
+  check(
+    'on a phone the switch stays reachable as the labelled-icon control in every lane row',
+    mobileAfter.laneSwitches.length === 3,
+    { switches: mobileAfter.laneSwitches, labelsShown: mobileAfter.laneSwitchLabelsShown }
+  );
   await shot('09-mobile-three-lanes-430.png');
 
   report.finishedAt = new Date().toISOString();

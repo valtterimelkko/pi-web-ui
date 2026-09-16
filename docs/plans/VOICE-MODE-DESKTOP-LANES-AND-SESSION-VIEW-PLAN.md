@@ -2,6 +2,10 @@
 
 **Date:** 2026-09-16
 **Status:** implemented, unit + real-browser validated 2026-09-16 (see `operations/voice-desktop-20260916/complete.md`); production deploy via the audited restart path.
+**Follow-up (same day, operator):** 4. *"regardless of what lane I have selected,
+will every lane give its headlines when it is its turn?"* and 5. *"make sure we
+have quick switching of talker to a different worker session available — I don't
+see that yet."* → §Follow-up below.
 **Scope:** client Voice Mode (`client/src/components/DriveMode/*`), plus its unit
 tests. No server, protocol or contract change.
 
@@ -51,6 +55,26 @@ tests. No server, protocol or contract change.
   addressed session without creating a lane. Capture in the switched lane is
   finalised into its own talker first, exactly as add/remove already do, so the
   operator's words are never dropped.
+
+## Follow-up (operator, 2026-09-16 — same day, after the deploy)
+
+- **F1 — every lane speaks at its own turn.** Answered by inspection and pinned by
+  tests: each lane is a mounted surface with its own answer reader, so a lane
+  speaks when ITS session finishes a turn, whichever lane is addressed. This
+  exposed a real defect: the shared "already spoken" record was keyed on the
+  words alone, so two lanes answering with the SAME words collapsed into one
+  speaker — the second lane was silent. The record is now **scoped per lane**
+  (`contentScopeFor`), which keeps P16's never-twice rule intact *within* a lane
+  (auto path and read-aloud share the scope) while two lanes get two events.
+  4 client tests, all red before the change.
+- **F2 — the switch control must be findable.** The per-lane switch existed but
+  was an icon-only refresh glyph; the operator did not find it. Every lane row now
+  carries a labelled **"Switch"** control (word shown from `sm` up, icon on
+  phones) and the addressed surface's **"Switch session"** button is a named
+  action next to the worker's name.
+- **F3 — reading level is per lane.** Reported honestly, not changed: setting
+  Headlines while addressing one lane sets that lane's level only; other lanes
+  keep their own level or the shared default.
 
 ## Non-goals
 

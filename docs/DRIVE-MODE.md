@@ -46,7 +46,25 @@ rather than silently adding a fourth lane.
 **Switch session** re-points a voice surface at a different worker *in place*: from
 the addressed surface, or from any lane's row. The picker opens over the mounted
 lanes (the phase never changes, so capture, cards and focus survive), only that
-lane's session is swapped, and the lane keeps its order and slot.
+lane's session is swapped, and the lane keeps its order and slot. Both controls
+are **named** — the lane row carries a labelled “Switch”, the surface a
+“Switch session” button next to the worker's name — because an icon-only glyph
+was not findable (operator, 2026-09-16).
+
+### Which lane speaks, and when
+
+Every lane is a mounted voice surface, so **every lane speaks at its own turn
+end, whichever lane is selected** — the spoken answers queue through the one
+shared voice and are played one at a time. Non-addressed lanes are visually
+hidden (`invisible pointer-events-none`) but stay mounted, and their session's
+streaming state is tracked, so their readers still fire.
+
+The reading level is **per session**: setting Headlines while addressing one lane
+sets *that lane's* level, not a global one (a lane with no choice reads at the
+shared default). The “already spoken” record (`client/src/lib/spokenLedger.ts`) is scoped **per lane**
+via `contentScopeFor`: two workers answering with the same words are two events and
+both speak, while within one lane the auto path and read-aloud still share a record
+and never say the same answer twice.
 
 ## Key Files
 

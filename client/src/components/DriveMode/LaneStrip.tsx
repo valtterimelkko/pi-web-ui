@@ -122,7 +122,7 @@ export function LaneStrip({ lanes, addressedSessionId, labels, onAddress, onAdd,
         const state = rowStateOf(lane.sessionId);
         const addressed = lane.sessionId === addressedSessionId;
         return (
-          <div key={lane.sessionId} className="w-full max-w-md flex items-center gap-2">
+          <div key={lane.sessionId} className="w-full max-w-lg flex items-center gap-2">
             <button
               data-testid="lane-row"
               data-lane-session={lane.sessionId}
@@ -170,16 +170,21 @@ export function LaneStrip({ lanes, addressedSessionId, labels, onAddress, onAdd,
                 )}
               </span>
             </button>
+            {/* The switch control is LABELLED, not a bare glyph: the operator
+                asked for quick in-place switching and did not find an icon-only
+                refresh in this row (2026-09-16). The word is hidden on phones,
+                where the row is already tight, and the icon stays. */}
             <button
               onClick={() => onSwitch(lane.sessionId)}
               aria-label={`Switch session for ${labelOf(lane.sessionId)}`}
               data-testid="lane-switch"
               data-lane-session={lane.sessionId}
               title="Switch this lane's session"
-              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              className="shrink-0 flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900 hover:bg-blue-50 dark:hover:bg-blue-950 transition-colors"
               type="button"
             >
               <RefreshCw className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Switch</span>
             </button>
             <button
               onClick={() => onRemove(lane.sessionId)}

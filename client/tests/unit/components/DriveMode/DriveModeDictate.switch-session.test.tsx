@@ -114,6 +114,14 @@ describe('DriveModeDictate — switch the worker in place', () => {
     renderSurface({ onSwitchSession: vi.fn(), laneEnabled: true });
     expect(screen.getByTestId('drive-switch-session')).toBeInTheDocument();
   });
+
+  it('names what it does, as a visible action next to the worker it changes', () => {
+    // Operator, 2026-09-16: the switcher must be findable, not inferred.
+    renderSurface({ onSwitchSession: vi.fn() });
+    const control = screen.getByTestId('drive-switch-session');
+    expect(control.textContent?.trim()).toBe('Switch session');
+    expect(control.getAttribute('title')).toMatch(/different worker session/i);
+  });
 });
 
 describe('DriveModeDictate — the compact desktop variant', () => {

@@ -175,4 +175,14 @@ describe('LaneStrip — switching, adding, closing', () => {
     expect(onAddress).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
   });
+
+  it('the switch control is labelled, not a bare glyph the operator must guess', () => {
+    // Operator, 2026-09-16: "make sure we have quick switching of talker to a
+    // different worker session available - I don't see that yet." The control
+    // existed as an icon-only refresh glyph; it must SAY what it does.
+    renderStrip();
+    for (const button of screen.getAllByTestId('lane-switch')) {
+      expect(button.textContent?.trim()).toContain('Switch');
+    }
+  });
 });

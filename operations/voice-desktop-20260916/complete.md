@@ -102,3 +102,59 @@ Deploy verification (all three independent):
 Production was `:3456` (`node server/dist/index.js`), so a deploy is
 `npm run build` + the audited restart. The restart recorded its requester
 (`RESTART-REQUESTED … reason=deploy Voice Mode desktop session pane …`).
+
+## Follow-up round (operator, same day: "will every lane give its headlines?" + "quick switching … I don't see that yet")
+
+### F1 — a real defect in multi-lane speech, fixed
+
+**Question asked:** with two or three lanes open and only Headlines on, does every
+lane read its headlines at its own turn, regardless of the selected lane?
+
+**Answer, from the code:** yes for speaking — every lane is a mounted voice
+surface with its own answer reader, so each lane speaks when ITS session finishes
+a turn, whichever lane is addressed; the answers queue through the one shared
+voice. **But** the shared "already spoken" record was keyed on the words only
+(`spokenLedger.claim(text)` in the default content scope), so two lanes answering
+with the SAME words collapsed into one speaker: the second lane was silent.
+
+**Fix:** the content scope is now per lane — `contentScopeFor(laneKey)` in
+`client/src/lib/spokenLedger.ts`, passed by `DriveModeDictate` to the answer
+reader (`contentScope`) and to read-aloud (`useReadAloud(id, ledgerScope)`).
+Within one lane the auto path and read-aloud still share a scope, so P16's
+never-say-it-twice rule is unchanged; two lanes are now two events.
+
+**Evidence:** `client/tests/unit/components/DriveMode/DriveModeDictate.lanes-speech.test.tsx`
+— 4 tests (identical short answers in two lanes; different answers in two lanes;
+identical Headlines digests in two lanes; one lane's read-aloud vs its own
+auto path). All 4 fail with the scope removed (verified by neutering
+`contentScopeRef.current`) and pass with it. Client suite 128 files / 1372 tests.
+
+Browser evidence (`evidence/desktop-lanes.json`, `shots/10-every-lane-speaks.png`):
+with Worker Alpha selected, both Alpha and Bravo were asked the same question over
+the Internal API; the recorder on the real `speechArbiter` shows an answer-tier
+submission from EACH lane (`<laneSessionId>answer-auto-0`), i.e. a lane that was
+not selected spoke at its own turn. Byte-identical answers from two real pi turns
+are NOT asserted in the browser: this host's global Agent OS hooks inject
+recall/capture text into a pi turn, so two real turns cannot be made
+word-for-word identical here (the step records the observed text). The strict
+collision case is pinned by the unit tests above.
+
+**Found and reported, not changed (F3):** the reading level is per session.
+Setting Headlines while addressing one lane sets *that* lane's level; other lanes
+keep their own level, or the shared default (Summary) if they never had one. A
+lane added later starts from the shared default.
+
+### F2 — the switch was there but unfindable
+
+The per-lane switch existed (icon-only `RefreshCw`) and the surface had a small
+grey "Switch session" pill. Operator: "I don't see that yet."
+
+- every lane row now shows a labelled **"Switch"** control (word from `sm` up,
+  icon on phones so the 430px row still fits) — `data-testid="lane-switch"`;
+- the addressed surface's **"Switch session"** is a named blue action under the
+  worker's name with a tooltip — `data-testid="drive-switch-session"`.
+
+Pinned by `LaneStrip.test.tsx` ("the switch control is labelled…") and
+`DriveModeDictate.switch-session.test.tsx`, and asserted in the real browser:
+`laneSwitchLabels: ["Switch","Switch","Switch"]` with all three labels actually
+rendered at 1440, and all three rows still carrying the control at 430.

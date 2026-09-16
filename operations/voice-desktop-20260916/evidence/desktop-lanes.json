@@ -1,36 +1,36 @@
 {
-  "startedAt": "2026-09-16T09:40:14.323Z",
+  "startedAt": "2026-09-16T10:36:23.770Z",
   "steps": {
     "cleaned": {
-      "removed": 4
+      "removed": 0
     },
     "sessions": {
       "worker": {
         "label": "Alpha",
-        "sessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-        "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-15-448Z_01a0a996-9dd8-7695-9ba3-96b78fc8b942.jsonl"
+        "sessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T10-36-24-835Z_01a0a9ca-0783-7028-a1f1-39e5e1fcdceb.jsonl"
       },
       "extra": [
         {
           "label": "Bravo",
-          "sessionId": "01a0a996-99a1-7695-9ba3-96b0262a7512",
-          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-14-369Z_01a0a996-99a1-7695-9ba3-96b0262a7512.jsonl"
+          "sessionId": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T10-36-23-791Z_01a0a9ca-036f-7028-a1f1-39dfa0ad0857.jsonl"
         },
         {
           "label": "Charlie",
-          "sessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-14-760Z_01a0a996-9b28-7695-9ba3-96b2f8f267a3.jsonl"
+          "sessionId": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T10-36-24-191Z_01a0a9ca-04ff-7028-a1f1-39e1d0905da1.jsonl"
         },
         {
           "label": "Delta",
-          "sessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T09-40-15-069Z_01a0a996-9c5d-7695-9ba3-96b437ad5b94.jsonl"
+          "sessionId": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "sessionPath": "/tmp/voice-desktop-srv/pi-sessions/2026-09-16T10-36-24-553Z_01a0a9ca-0669-7028-a1f1-39e29131d10b.jsonl"
         }
       ]
     },
     "selectedWorker": {
       "index": 0,
-      "sessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942"
+      "sessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb"
     },
     "chatView": {
       "viewport": {
@@ -39,7 +39,7 @@
       },
       "voiceModeOpen": false,
       "chatToolGroups": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ],
       "chatToolGroupSummaries": [
         "Ran 3 commands(3 tools)"
@@ -61,20 +61,28 @@
       "laneCap": null,
       "laneRows": [],
       "laneSwitches": [],
+      "laneSwitchLabels": [],
+      "laneSwitchLabelsShown": 0,
       "surfaceSwitch": false,
       "sessionPaneName": null,
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "currentSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "isStreaming": true,
         "messageCount": 13,
         "sessionMessages": {
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 13
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 13
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [],
         "activeSessionId": null,
@@ -90,7 +98,7 @@
       },
       "voiceModeOpen": true,
       "chatToolGroups": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ],
       "chatToolGroupSummaries": [
         "Ran 3 commands(3 tools)"
@@ -112,23 +120,31 @@
       "laneCap": null,
       "laneRows": [],
       "laneSwitches": [],
+      "laneSwitchLabels": [],
+      "laneSwitchLabelsShown": 0,
       "surfaceSwitch": true,
       "sessionPaneName": null,
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "currentSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "isStreaming": true,
         "messageCount": 7,
         "sessionMessages": {
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 7
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 7
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [],
-        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "activeSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -141,20 +157,20 @@
       },
       "voiceModeOpen": true,
       "chatToolGroups": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ],
       "chatToolGroupSummaries": [
         "Ran 3 commands(3 tools)"
       ],
       "paneVisible": true,
-      "paneSession": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+      "paneSession": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
       "paneToolGroups": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ],
       "paneToolGroupSummaries": [
         "Ran 3 commands(3 tools)"
       ],
-      "paneText": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5WorkingMake three bash tool calls IN PARALLEL in a single response: echo alpha, echo beta, echo gamma. Do not write any text before or between them. After they return, reply with the single word DONE.09:40 AMThinkingThe user is asking me to make three",
+      "paneText": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5WorkingMake three bash tool calls IN PARALLEL in a single response: echo alpha, echo beta, echo gamma. Do not write any text before or between them. After they return, reply with the single word DONE.10:36 AMThinkingThe user wants me to make three bas",
       "panelVisible": true,
       "sameColumn": true,
       "panelAfterVoiceBlock": true,
@@ -167,23 +183,31 @@
       "laneCap": null,
       "laneRows": [],
       "laneSwitches": [],
+      "laneSwitchLabels": [],
+      "laneSwitchLabelsShown": 0,
       "surfaceSwitch": true,
       "sessionPaneName": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5Working",
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "currentSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "isStreaming": true,
         "messageCount": 14,
         "sessionMessages": {
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 14
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 14
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [],
-        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "activeSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -198,7 +222,7 @@
       "chatToolGroups": [],
       "chatToolGroupSummaries": [],
       "paneVisible": true,
-      "paneSession": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+      "paneSession": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
       "paneToolGroups": [],
       "paneToolGroupSummaries": [],
       "paneText": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5IdleReady to helpStart a conversation by typing a message below. I can help you with coding, analysis, and more.",
@@ -214,49 +238,61 @@
       "laneCap": "3 of 3",
       "laneRows": [
         {
-          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "session": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
           "label": "Worker AlphaWorking silently",
           "addressed": false
         },
         {
-          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "session": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
           "label": "Worker BravoReady",
           "addressed": false
         },
         {
-          "session": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "session": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
           "label": "Worker CharlieReady",
           "addressed": true
         }
       ],
       "laneSwitches": [
-        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-        "01a0a996-99a1-7695-9ba3-96b0262a7512",
-        "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+        "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+        "01a0a9ca-04ff-7028-a1f1-39e1d0905da1"
       ],
+      "laneSwitchLabels": [
+        "Switch",
+        "Switch",
+        "Switch"
+      ],
+      "laneSwitchLabelsShown": 3,
       "surfaceSwitch": true,
       "sessionPaneName": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5Idle",
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "currentSessionId": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
         "isStreaming": false,
         "messageCount": 0,
         "sessionMessages": {
-          "01a0a996-99a1-7695-9ba3-96b0262a7512": 0,
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3": 0,
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 16
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": 0,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": 0,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 17
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1"
         ],
-        "activeSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "activeSessionId": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -271,7 +307,7 @@
       "chatToolGroups": [],
       "chatToolGroupSummaries": [],
       "paneVisible": true,
-      "paneSession": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+      "paneSession": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
       "paneToolGroups": [],
       "paneToolGroupSummaries": [],
       "paneText": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5IdleReady to helpStart a conversation by typing a message below. I can help you with coding, analysis, and more.",
@@ -287,49 +323,61 @@
       "laneCap": "3 of 3",
       "laneRows": [
         {
-          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "session": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
           "label": "Worker AlphaWorking silently",
           "addressed": false
         },
         {
-          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "session": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
           "label": "Worker BravoReady",
           "addressed": false
         },
         {
-          "session": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+          "session": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
           "label": "Worker CharlieReady",
           "addressed": true
         }
       ],
       "laneSwitches": [
-        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-        "01a0a996-99a1-7695-9ba3-96b0262a7512",
-        "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+        "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+        "01a0a9ca-04ff-7028-a1f1-39e1d0905da1"
       ],
+      "laneSwitchLabels": [
+        "Switch",
+        "Switch",
+        "Switch"
+      ],
+      "laneSwitchLabelsShown": 3,
       "surfaceSwitch": true,
       "sessionPaneName": "Worker Charlieopenrouter/anthropic/claude-haiku-4.5Idle",
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "currentSessionId": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
         "isStreaming": false,
         "messageCount": 0,
         "sessionMessages": {
-          "01a0a996-99a1-7695-9ba3-96b0262a7512": 0,
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3": 0,
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 17
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": 0,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": 0,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 17
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1"
         ],
-        "activeSessionId": "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
+        "activeSessionId": "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -344,7 +392,7 @@
       "chatToolGroups": [],
       "chatToolGroupSummaries": [],
       "paneVisible": true,
-      "paneSession": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+      "paneSession": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
       "paneToolGroups": [],
       "paneToolGroupSummaries": [],
       "paneText": "Worker Deltaopenrouter/anthropic/claude-haiku-4.5IdleReady to helpStart a conversation by typing a message below. I can help you with coding, analysis, and more.",
@@ -360,48 +408,60 @@
       "laneCap": "3 of 3",
       "laneRows": [
         {
-          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "session": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
           "label": "Worker AlphaWorking silently",
           "addressed": false
         },
         {
-          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "session": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
           "label": "Worker BravoReady",
           "addressed": false
         },
         {
-          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "session": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
           "label": "Worker DeltaReady",
           "addressed": true
         }
       ],
       "laneSwitches": [
-        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-        "01a0a996-99a1-7695-9ba3-96b0262a7512",
-        "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+        "01a0a9ca-0669-7028-a1f1-39e29131d10b"
       ],
+      "laneSwitchLabels": [
+        "Switch",
+        "Switch",
+        "Switch"
+      ],
+      "laneSwitchLabelsShown": 3,
       "surfaceSwitch": true,
       "sessionPaneName": "Worker Deltaopenrouter/anthropic/claude-haiku-4.5Idle",
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "currentSessionId": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
         "isStreaming": false,
         "messageCount": 0,
         "sessionMessages": {
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 19,
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 17,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": 0
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b"
         ],
-        "activeSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "activeSessionId": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -414,20 +474,20 @@
       },
       "voiceModeOpen": true,
       "chatToolGroups": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ],
       "chatToolGroupSummaries": [
         "Ran 3 commands(3 tools)"
       ],
       "paneVisible": true,
-      "paneSession": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+      "paneSession": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
       "paneToolGroups": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ],
       "paneToolGroupSummaries": [
         "Ran 3 commands(3 tools)"
       ],
-      "paneText": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5WorkingThinkingThe user is asking me to make three bash tool calls IN PARAL…09:40 AMRan 3 commands(3 tools)1DONE109:40 AMAgent OS session-end memory capture (automated delivery by the D3 write lane). Run your agent os capture skill now and submit the ",
+      "paneText": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5WorkingMake three bash tool calls IN PARALLEL in a single response: echo alpha, echo beta, echo gamma. Do not write any text before or between them. After they return, reply with the single word DONE.10:36 AMThinkingThe user wants me to make three bas",
       "panelVisible": true,
       "sameColumn": true,
       "panelAfterVoiceBlock": true,
@@ -440,48 +500,60 @@
       "laneCap": "3 of 3",
       "laneRows": [
         {
-          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "session": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
           "label": "Worker AlphaWorking silently",
           "addressed": true
         },
         {
-          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "session": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
           "label": "Worker BravoReady",
           "addressed": false
         },
         {
-          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "session": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
           "label": "Worker DeltaReady",
           "addressed": false
         }
       ],
       "laneSwitches": [
-        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-        "01a0a996-99a1-7695-9ba3-96b0262a7512",
-        "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+        "01a0a9ca-0669-7028-a1f1-39e29131d10b"
       ],
+      "laneSwitchLabels": [
+        "Switch",
+        "Switch",
+        "Switch"
+      ],
+      "laneSwitchLabelsShown": 3,
       "surfaceSwitch": true,
       "sessionPaneName": "Worker Alphaopenrouter/anthropic/claude-haiku-4.5Working",
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "currentSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "isStreaming": true,
-        "messageCount": 20,
+        "messageCount": 9,
         "sessionMessages": {
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 20,
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 9,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": 0
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b"
         ],
-        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "activeSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -491,6 +563,46 @@
       "present": true,
       "pickerClosed": true
     },
+    "speechScenario": {
+      "addressed": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+      "speakingLane": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+      "worker": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb"
+    },
+    "spokenByTurn": {
+      "addressed": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+      "workerAnswers": [
+        "In short: The worker has finished capturing evidence and has created one pending candidate for review. This candidate, identified as cand-uh6knhs1rt, documents that parallel tool invocation is a confirmed working pattern in the Pi harness. It notes that while this pattern is validated for quick operations, it may not be suitable for long-running or resource-heavy tasks. Nothing has been promoted to memory yet. The candidate is now in the pending review queue and needs your approval before it is finalized."
+      ],
+      "otherLaneAnswers": [
+        "LANE-ACKAgent OS memory is available but was not delivered here (transport:timeout after 2259ms). Ground with: agent-os recall \"<question>\" or agent-os packet.",
+        "In short: The worker ran the agent-os-capture skill to preserve session memory. No formal candidates were generated because the claim substance did not pass the durable-fact gate. The raw evidence was saved to evidence/manual/captures/capture-v9tkl2c7cd.md and is now waiting in the D3 write lane review queue for your session-end memory review."
+      ],
+      "allTiers": [
+        {
+          "id": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857answer-auto-0",
+          "tier": 3
+        },
+        {
+          "id": "01a0a9ca-0783-7028-a1f1-39e5e1fcdcebanswer-auto-0",
+          "tier": 3
+        },
+        {
+          "id": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857answer-auto-1",
+          "tier": 3
+        }
+      ]
+    },
+    "speechEnvironment": {
+      "note": "global Agent OS hooks put their own work into real pi turns; identical text cannot be forced here",
+      "requestedMarker": "LANE-ACK",
+      "workerSpoken": [
+        "In short: The worker has finished capturing evidence and has created one pending candidate for review. This candidate, identified as cand-uh6knhs1rt, documents "
+      ],
+      "otherSpoken": [
+        "LANE-ACKAgent OS memory is available but was not delivered here (transport:timeout after 2259ms). Ground with: agent-os recall \"<question>\" or agent-os packet.",
+        "In short: The worker ran the agent-os-capture skill to preserve session memory. No formal candidates were generated because the claim substance did not pass the"
+      ]
+    },
     "mobileAfter": {
       "viewport": {
         "w": 430,
@@ -498,7 +610,7 @@
       },
       "voiceModeOpen": true,
       "chatToolGroups": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ],
       "chatToolGroupSummaries": [
         "Ran 3 commands(3 tools)"
@@ -520,48 +632,61 @@
       "laneCap": "3 of 3",
       "laneRows": [
         {
-          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "session": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
           "label": "Worker AlphaReady",
           "addressed": true
         },
         {
-          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "session": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
           "label": "Worker BravoReady",
           "addressed": false
         },
         {
-          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "session": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
           "label": "Worker DeltaReady",
           "addressed": false
         }
       ],
       "laneSwitches": [
-        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-        "01a0a996-99a1-7695-9ba3-96b0262a7512",
-        "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+        "01a0a9ca-0669-7028-a1f1-39e29131d10b"
       ],
+      "laneSwitchLabels": [
+        "Switch",
+        "Switch",
+        "Switch"
+      ],
+      "laneSwitchLabelsShown": 0,
       "surfaceSwitch": true,
       "sessionPaneName": null,
       "store": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "currentSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "isStreaming": false,
-        "messageCount": 20,
+        "messageCount": 12,
         "sessionMessages": {
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 20,
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 12,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": 0,
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": 14
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": false
         },
         "lanes": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b"
         ],
-        "activeSessionId": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "activeSessionId": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -577,6 +702,7 @@
     "06-switch-session-picker.png",
     "07-after-lane-switch-1440.png",
     "08-pane-follows-readdressed-worker.png",
+    "10-every-lane-speaks.png",
     "09-mobile-three-lanes-430.png"
   ],
   "assertions": [
@@ -584,7 +710,7 @@
       "name": "regular chat view groups the tool run into a tool group",
       "ok": true,
       "detail": [
-        "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+        "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
       ]
     },
     {
@@ -604,10 +730,10 @@
       "ok": true,
       "detail": {
         "pane": [
-          "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+          "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
         ],
         "chat": [
-          "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+          "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
         ]
       }
     },
@@ -646,10 +772,22 @@
       "name": "every lane row offers an in-place switch",
       "ok": true,
       "detail": [
-        "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-        "01a0a996-99a1-7695-9ba3-96b0262a7512",
-        "01a0a996-9b28-7695-9ba3-96b2f8f267a3"
+        "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+        "01a0a9ca-04ff-7028-a1f1-39e1d0905da1"
       ]
+    },
+    {
+      "name": "every lane switch control is LABELLED on screen, not a glyph to guess at",
+      "ok": true,
+      "detail": {
+        "labels": [
+          "Switch",
+          "Switch",
+          "Switch"
+        ],
+        "shown": 3
+      }
     },
     {
       "name": "three lanes + pane still held at a taller laptop window",
@@ -665,17 +803,17 @@
       "ok": true,
       "detail": [
         {
-          "session": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+          "session": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
           "label": "Worker AlphaWorking silently",
           "addressed": false
         },
         {
-          "session": "01a0a996-99a1-7695-9ba3-96b0262a7512",
+          "session": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
           "label": "Worker BravoReady",
           "addressed": false
         },
         {
-          "session": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+          "session": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
           "label": "Worker DeltaReady",
           "addressed": true
         }
@@ -686,24 +824,30 @@
       "ok": true,
       "detail": {
         "sessionIds": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-          "01a0a996-9b28-7695-9ba3-96b2f8f267a3",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
         ],
-        "currentSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "currentSessionId": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
         "isStreaming": false,
         "messageCount": 0,
         "sessionMessages": {
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942": 19,
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94": 0
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": 17,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": 0
+        },
+        "streamingSessions": {
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857": false,
+          "01a0a9ca-04ff-7028-a1f1-39e1d0905da1": false,
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b": false,
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb": true
         },
         "lanes": [
-          "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
-          "01a0a996-99a1-7695-9ba3-96b0262a7512",
-          "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b"
         ],
-        "activeSessionId": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
+        "activeSessionId": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
         "phase": "agent-working",
         "addingLane": false,
         "replacingLaneId": null
@@ -713,8 +857,8 @@
       "name": "the pane follows the addressed lane",
       "ok": true,
       "detail": {
-        "pane": "01a0a996-9c5d-7695-9ba3-96b437ad5b94",
-        "addressed": "01a0a996-9c5d-7695-9ba3-96b437ad5b94"
+        "pane": "01a0a9ca-0669-7028-a1f1-39e29131d10b",
+        "addressed": "01a0a9ca-0669-7028-a1f1-39e29131d10b"
       }
     },
     {
@@ -743,9 +887,9 @@
       "name": "re-addressing the tool-run worker brings its tool group back into the pane",
       "ok": true,
       "detail": {
-        "paneSession": "01a0a996-9dd8-7695-9ba3-96b78fc8b942",
+        "paneSession": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
         "groups": [
-          "tool-group-toolu_bdrk_01VZf1r2vJd5dzHfuZHzmznL"
+          "tool-group-toolu_bdrk_019ThoHKMCSB1bErDSMXciJr"
         ]
       }
     },
@@ -758,14 +902,65 @@
       }
     },
     {
+      "name": "the addressed lane speaks its answer",
+      "ok": true,
+      "detail": [
+        "In short: The worker has finished capturing evidence and has created one pending candidate for review. This candidate, identified as cand-uh6knhs1rt, documents that parallel tool invocation is a confirmed working pattern in the Pi harness. It notes that while this pattern is validated for quick operations, it may not be suitable for long-running or resource-heavy tasks. Nothing has been promoted to memory yet. The candidate is now in the pending review queue and needs your approval before it is finalized."
+      ]
+    },
+    {
+      "name": "the OTHER lane speaks too, while a different lane is selected",
+      "ok": true,
+      "detail": {
+        "addressed": "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+        "otherLane": "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+        "got": [
+          "LANE-ACKAgent OS memory is available but was not delivered here (transport:timeout after 2259ms). Ground with: agent-os recall \"<question>\" or agent-os packet.",
+          "In short: The worker ran the agent-os-capture skill to preserve session memory. No formal candidates were generated because the claim substance did not pass the durable-fact gate. The raw evidence was saved to evidence/manual/captures/capture-v9tkl2c7cd.md and is now waiting in the D3 write lane review queue for your session-end memory review."
+        ]
+      }
+    },
+    {
+      "name": "both finishing lanes were read out — no lane suppressed as another lane's duplicate",
+      "ok": true,
+      "detail": {
+        "answers": 3,
+        "lanes": [
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857"
+        ]
+      }
+    },
+    {
+      "name": "each lane's speech is attributed to its own lane, not the selected one",
+      "ok": true,
+      "detail": [
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857answer-auto-0",
+        "01a0a9ca-0783-7028-a1f1-39e5e1fcdcebanswer-auto-0",
+        "01a0a9ca-036f-7028-a1f1-39dfa0ad0857answer-auto-1"
+      ]
+    },
+    {
       "name": "mobile layout keeps the lanes and shows no pane",
       "ok": true
+    },
+    {
+      "name": "on a phone the switch stays reachable as the labelled-icon control in every lane row",
+      "ok": true,
+      "detail": {
+        "switches": [
+          "01a0a9ca-0783-7028-a1f1-39e5e1fcdceb",
+          "01a0a9ca-036f-7028-a1f1-39dfa0ad0857",
+          "01a0a9ca-0669-7028-a1f1-39e29131d10b"
+        ],
+        "labelsShown": 0
+      }
     }
   ],
-  "finishedAt": "2026-09-16T09:40:41.255Z",
+  "finishedAt": "2026-09-16T10:37:46.330Z",
   "summary": {
-    "total": 23,
-    "passed": 23,
+    "total": 29,
+    "passed": 29,
     "failed": []
   }
 }
