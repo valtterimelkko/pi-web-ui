@@ -128,9 +128,8 @@ const PROBE = () => {
         return res;
       } catch {
         call.status = 'network-error';
-        throw err_forward();
+        throw new Error('network-error');
       }
-      function err_forward() { return new Error('network-error'); }
     }
     return realFetch(input, init);
   };
