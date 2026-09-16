@@ -1,6 +1,6 @@
 # Voice Mode on a native live model — intent record and benchmark lab
 
-> **Class:** intent record (Part I) + lab design and execution brief (Part II).
+> **Class:** intent record (Part I) + lab design (Part II) + execution runbook (Part III).
 > **Status:** Part I written 2026-09-16 from a design session between the operator and Claude (Fable 5.1); Part II written the same day after the operator accepted the tier ordering and delegated the remaining decisions (§10). Nothing here is built; the lab is designed and ready to be built by an execution agent. It is not a production decision.
 > **Audience:** a future agent asked to *build* the lab, or to *redesign* Voice Mode around Gemini 3.8 Live. Read this file first; it is meant to carry the operator's intent so that agent does not have to re-derive it from the corpus below.
 > **Code grounding:** `8f63163` (master, 2026-09-16). `server/src/talker/*`, `scripts/talker-harness.ts`, `/root/agent-benchmarks/benchmarks/02-orchestrator-governance/`, `/root/agent-benchmarks/benchmarks/03-voice-relay/` were read for this record.
@@ -712,3 +712,124 @@ House rules for the execution agent: disposable server only (`npm run validate:s
 ## 25. Definition of done for the lab
 
 The lab is done when, for each tier, a run can be started by one command in the background, finishes without a person present, produces an immutable record the offline verifier accepts, and yields a report that answers each sentence in §9 with a number, a pass/fail, or an explicit "not exercised" — and when the Gemma baseline has been through exactly the same path so every candidate number has a paired counterpart.
+
+---
+
+# Part III — Execution runbook (start here if you are building it)
+
+> Everything in this Part was verified on this host on 2026-09-16. Re-check anything marked *(re-verify)* before relying on it; report drift in `capabilities.json` and in your first commit message rather than silently adapting.
+
+## 26. Before you write code
+
+### 26.1 Read, in this order (≈ 40 minutes)
+
+1. This file, Parts I–II. Part I tells you what must not change; Part II is the design; §10 lists the decisions you are **not** re-opening.
+2. [`VOICE-MODE.md`](./VOICE-MODE.md) and the header comment of `server/src/talker/talker.ts` (the ten invariants).
+3. `server/src/talker/types.ts`, `pending-proposal.ts`, `utterance-classifier.ts`, `relay-normalise.ts`, `ack.ts`, `state-view.ts` — the mechanical core you will extract in L3.
+4. `scripts/talker-harness.ts` (direct-model turn loop) and `scripts/audio-lab/lib/{fixtures,capsule,manifest,verify-record,proc}.ts` (isolation, fixtures, immutable records, teardown-by-pid — reuse, do not reinvent).
+5. `/root/agent-benchmarks/AGENTS.md`, then `benchmarks/02-orchestrator-governance/{PLAN.md,run_orchestrator_benchmark.sh,simulator/*.py,score_orchestrator.py,setup_fixtures.sh}` and `benchmarks/03-voice-relay/{README.md,scenario_lib.py,talker_runner.py,score_talker.py}`.
+6. [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) §"disposable server" and [`docs/INTERNAL-API.md`](./INTERNAL-API.md) (sessions, prompt, watch, transcript `view=screen`).
+7. The two skills the tier 3 system instruction must summarise: `/root/.skills-global/skills-global/pi-web-ui-internal-api-orchestration/SKILL.md` and `/root/.skills-global/skills-global/long-horizon-waiting-strategies/SKILL.md`.
+8. Google docs for the Live API (capabilities, session management, `gemini-3.8-live`, `gemini-3.8-live-extended-thinking`, live thinking) — links in the pricing research §8 and the lab architecture §15.
+
+### 26.2 Prerequisites and where things are
+
+| Need | Where / how | Status on 2026-09-16 |
+|---|---|---|
+| Gemini key | `GEMINI_API_KEY` exported from `~/.bashrc` (`source ~/.bashrc`); never print it | present *(re-verify quota tier in L1)* |
+| Gemini SDK | `@google/genai` 1.52.0 in `/root/pi-web-ui/node_modules` | installed; pin in `package.json` if you add it as a dep |
+| Independent ASR | Whisper ASR webservice, Docker container `whisper`, `http://127.0.0.1:9000` — `POST /asr` (multipart `audio_file`, `?output=json&task=transcribe&language=en&word_timestamps=true`), `POST /detect-language`; source `/root/whisper/docker-compose.yml` | running *(re-verify with `docker ps`)* |
+| Fallback ASR | OpenAI `gpt-4o-mini-transcribe` via `DICTATION_OPENAI_API_KEY`/`OPENAI_API_KEY` (`server/src/dictation/stt.ts`) | key in `.env` |
+| Operator TTS | `python3 scripts/audio-lab/tools/supertonic-batch.py <job.json>` — job: `{"outDir": "...", "model": "supertonic-3", "voice": "M1", "steps": 8, "speed": 1.05, "silence": 0.05, "lang": "en", "texts": [{"id": "...", "text": "..."}]}` → `<outDir>/<id>.wav` at the model's native rate; `scripts/audio-lab/lib/fixtures.ts` shows the wrapper and MP3 derivation | works via the audio lab |
+| Trusted-ack TTS | same Supertonic path (pre-synthesise the fixed strings in `server/src/talker/ack.ts` once per run) | — |
+| Baseline talker | `TALKER_API_KEY` or `OPENROUTER_API_KEY`; `TALKER_MODEL` (default `google/gemma-4-26b-a4b-it`), `TALKER_BASE_URL`, `TALKER_PROVIDER_ORDER`, `TALKER_TIMEOUT_MS` (`server/src/talker/model-client.ts`) | keys in `.env` |
+| Baseline TTS | `TTS_OPENAI_API_KEY`, `TTS_MODEL=tts-1` (`server/src/routes/tts.ts`) | keys in `.env` |
+| Simulator / judge | zai (GLM) and OpenRouter keys already in `.env` / `~/.bashrc`; check headroom with `npm --prefix /root/agent-os run agent-os -- provider-usage` | — |
+| Disposable Pi Web UI | see §26.3 | — |
+| Children (tier 3) | `zai/glm-5.3-flash`, thinking `high`, on the disposable server; Mon–Fri 07:00–11:00 London is the GLM peak window — do not batch then | — |
+| Telegram | `bash /root/pi-web-ui/scripts/notify.sh milestone|done "<text>"` (prod Internal API socket) | — |
+
+### 26.3 Disposable server recipe (tier 3 and the real-worker lanes)
+
+```bash
+# Terminal A (run in the background; keep the log)
+VALIDATION_DIR="$(mktemp -d /tmp/voice-lab-XXXXXX)"
+PI_CODING_AGENT_DIR="$VALIDATION_DIR/pi-agent" \
+npm run validate:server -- --dir "$VALIDATION_DIR" --port 0 >"$VALIDATION_DIR/server.log" 2>&1 &
+
+# Terminal B
+PI_WEB_UI_WAIT_SOCKET="$VALIDATION_DIR/internal-api.sock" npm run internal-api:wait
+export PI_WEB_UI_SOCKET="$VALIDATION_DIR/internal-api.sock"
+export PI_WEB_UI_TOKEN_PATH="$VALIDATION_DIR/internal-api-token"
+# stop: node scripts/validation-server-stop.mjs --dir "$VALIDATION_DIR"
+```
+
+- `--dir` isolates the registry, socket, token, watches, run-receipts and pins. **`PI_CODING_AGENT_DIR` is the Pi SDK's variable** — set it, or real Pi sessions land in `~/.pi/agent/sessions` (memory: `webui-live-validation-mechanics`, `shared-env-server-isolation`). Never set `SESSION_DIR`.
+- Notifications are **not** isolated (`~/.pi-web-ui/notifications` is read from prod even here; a capture channel replaces Telegram, so nothing sends) — do not opt sessions in.
+- Workspace paths given to sessions must be under `/root` (the files API cannot browse `/tmp`): create B2-short run dirs under `/root/agent-benchmarks/benchmarks/04-voice-live-lab/runs/` (gitignored).
+- The audio lab's `doctor` reports the private PulseAudio lane as failing on this host; the voice lab's reference player is in-process PCM and does not need it. OS-rendered proof stays `indeterminate` here.
+
+### 26.4 Benchmark 4 packaging skeleton (create in `/root/agent-benchmarks`)
+
+```
+benchmarks/04-voice-live-lab/
+  README.md                 what it measures, tiers, how to run, honest limitations (mirror Benchmark 3's README shape)
+  PLAN.md                   pointer to this file + the per-tier condition matrix actually run
+  candidate_models.json     { "gemini-3.8-live": {...}, "gemini-3.8-live-extended-thinking": {"thinking": ["low","medium","high"]},
+                              "baseline-cascade": {"talker": "google/gemma-4-26b-a4b-it", "stt": "gpt-4o-mini-transcribe", "tts": "tts-1"} }
+  run_voice_lab.sh          --tier 1|2|3 --candidate <id> [--variant std|et-low|et-medium|et-high] [--scenario <id>|all]
+                            [--lane E|N] [--transcript native|sidecar] [--playback duck|native-interrupt] [--attempts N] [--dry-run]
+                            → shells out to: npx tsx /root/pi-web-ui/scripts/voice-live-lab/cli.ts run ...
+                            → appends to runs-manifest.json (lock-serialised, like Benchmark 3)
+  scenarios/tier1/*.json  scenarios/tier2/*.json  scenarios/tier3/*.json     (§14.2 schema)
+  worlds/*.json             (§15.2 schema)
+  personas/operator-default.md
+  b2-short/                 setup_fixtures.sh (derived from ../02-.../setup_fixtures.sh), supervisor.py, scorer_adapter.py
+  score_voice.py            §20 mechanical + tier 3 transcript mapping; invokes ../02-.../score_orchestrator.py for repo state
+  tests/test_scorer_parity.py   proves the scorer enforces its own rubric (hard-fail cases, damaged traces)
+  runs-manifest.json
+```
+
+Scenario set to ship first (port from Benchmark 3, then extend): tier 1 — `t1-s1-orchestration-voice`, `t1-s2-clarification`, `t1-s3-plain-worker`, `t1-s4-permission-gate`, `t1-s5-sparse-state`, plus `t1-s6-worker-permission` (finding D) and `t1-s7-reading-levels`; tier 3 — `t3-b2-short` with the frozen owner beats and one branching beat; tier 2 — the tier 1 set re-labelled with fidelity expectations on the relay text.
+
+### 26.5 Condition naming (used in paths, manifest rows and the report)
+
+`<tier>/<candidate>[-<variant>]/<lane>-<transcript>-<playback>/<world>` — e.g. `t1/gemini-3.8-live/E-native-duck/orchestrating-two-children`, `t3/gemini-3.8-live-extended-thinking-high/N-native-duck/b2-short`, `t1/baseline-cascade/E-sidecar-duck/…`. Prompt and fixture hashes live in `manifest.json`, not in the name.
+
+### 26.6 Dispatch shape (if orchestrated over the Internal API)
+
+Two children, non-overlapping ownership, per the global orchestration rules (read `pi-web-ui-internal-api-orchestration` and `long-horizon-waiting-strategies` first; zero-token watches; provider quota checked):
+
+- **Child A — equipment and providers:** owns `scripts/voice-live-lab/**`, `server/tests/voice-live-lab/**`, `benchmarks/04-voice-live-lab/**`. Phases L0 → L1 → L2, then L4 after Child B lands L3.
+- **Child B — policy core:** owns `server/src/talker/policy-core.ts`, the `TalkerSession` refactor and `server/tests/talker*`. Phase L3 only; must leave every existing talker test green and add the differential replay.
+- **Parent:** verifies each phase's artefact independently (run the verifier, open the report, replay a damaged trace), signs off, then dispatches L5–L8 sequentially (L5 and L6 may run in parallel once L4 is green).
+
+Each child: TDD, `npm run lint && npm run typecheck && npm run build && npm test` before every commit; commit and push on master; Telegram milestone at each phase end; no production validation; no touching the operator's live sessions.
+
+### 26.7 Do not
+
+- Do not re-open §10 decisions in code; propose changes in a short note to the operator with evidence.
+- Do not give the candidate text of the operator's scripted utterances, the world's hidden truth, or any `expect` block — only audio and the exposed context.
+- Do not let a judge decide a gate, fidelity-by-bytes, delivery or timing question that the trace can answer.
+- Do not run two Live sessions at once; do not retry into a 429 storm; do not score a 429 as quality.
+- Do not use the production server, the operator's `~/.pi/agent`, real transcripts, or the operator's voice.
+- Do not paste the two skills into the tier 3 system instruction; summarise to ≤ 600 words and hash it.
+- Do not commit audio, run directories, keys, tokens, resumption handles or `.sock` files.
+
+### 26.8 First hour, concretely
+
+```bash
+cd /root/pi-web-ui && git pull && source ~/.bashrc
+docker ps | grep whisper && curl -s http://127.0.0.1:9000/openapi.json | head -c 200      # ASR up
+node -e "require('@google/genai'); console.log('genai ok')"                             # SDK present
+mkdir -p scripts/voice-live-lab/lib server/tests/voice-live-lab
+# L0 first test: a scheduler/event-log test that fails, then the smallest implementation.
+# Then: fixtures — synthesise one utterance with Supertonic, transcribe it with Whisper, assert WER ≤ 0.08.
+# Then: the fake provider — replay a hand-written serverContent sequence through the driver and assert the event log.
+# Only after L0 is green: `npx tsx scripts/voice-live-lab/cli.ts handshake --model gemini-3.8-live` (L1) — one real session,
+#   ≤ 2 minutes of audio, writes capabilities.json; then the same for the extended-thinking model.
+```
+
+## 27. Reporting back to the operator
+
+At the end of each phase, one Telegram milestone and a short note in `benchmarks/04-voice-live-lab/PLAN.md` "Progress" section: what was built, the verifier result, the one number that matters (e.g. baseline TTFA median), what surprised you (provider drift, quota), and the next phase. At the end of L8: the report links, the per-tier one-sentence conclusions in the §9 vocabulary, cost per tier, and the list of things still unproven. Then run the Agent OS capture skill.
