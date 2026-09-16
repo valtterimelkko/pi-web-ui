@@ -351,7 +351,10 @@ function foldHistoryEvents(
         break;
       }
       case 'tool_execution_start': {
-        const { toolCallId, toolName, args } = event as { toolCallId?: string; toolName?: string; args?: unknown };
+        const raw = event as Record<string, unknown>;
+        const toolCallId = (raw.toolCallId ?? raw.id) as string | undefined;
+        const toolName = (raw.toolName ?? raw.name) as string | undefined;
+        const args = raw.args ?? raw.input;
         const id = toolCallId || `tool_${Date.now()}_${messages.length}`;
         const toolMessage: Message = {
           id,
@@ -368,7 +371,11 @@ function foldHistoryEvents(
         break;
       }
       case 'tool_execution_end': {
-        const { toolCallId, args, result, isError } = event as { toolCallId?: string; args?: unknown; result?: unknown; isError?: boolean };
+        const raw = event as Record<string, unknown>;
+        const toolCallId = (raw.toolCallId ?? raw.id) as string | undefined;
+        const args = raw.args ?? raw.input;
+        const result = raw.result;
+        const isError = raw.isError;
         const target = findTarget(toolCallId);
         if (!target || target.role !== 'tool') break;
         const content = extractToolResultText(result);
@@ -2249,11 +2256,10 @@ export const useSessionStore = create<SessionState>()(
 
           case 'tool_execution_start': {
             set({ lastStreamEventAt: Date.now() });
-            const { toolCallId, toolName, args } = msg as unknown as {
-              toolCallId: string;
-              toolName: string;
-              args: unknown;
-            };
+            const raw = msg as Record<string, unknown>;
+            const toolCallId = (raw.toolCallId ?? raw.id ?? `tool_${Date.now()}`) as string;
+            const toolName = (raw.toolName ?? raw.name ?? '') as string;
+            const args = raw.args ?? raw.input;
             if (toolName) {
               set({ currentToolName: toolName });
             }
@@ -2270,10 +2276,9 @@ export const useSessionStore = create<SessionState>()(
 
           case 'tool_execution_update': {
             set({ lastStreamEventAt: Date.now() });
-            const { toolCallId, partialResult } = msg as unknown as {
-              toolCallId: string;
-              partialResult?: { content: Array<{ type: string; text?: string }> };
-            };
+            const raw = msg as Record<string, unknown>;
+            const toolCallId = (raw.toolCallId ?? raw.id) as string;
+            const partialResult = raw.partialResult as { content: Array<{ type: string; text?: string }> } | undefined;
             const content = partialResult?.content?.[0]?.text || '';
             get().updateMessage(toolCallId, { 
               content,
@@ -2284,15 +2289,12 @@ export const useSessionStore = create<SessionState>()(
 
           case 'tool_execution_end': {
             set({ lastStreamEventAt: Date.now() });
-            const { toolCallId, args, result, isError, resultSummary } = msg as unknown as {
-              toolCallId: string;
-              // Antigravity live parity: agy carries parameters only on the
-              // DONE step, so the server re-sends them here (additive).
-              args?: unknown;
-              result?: unknown;
-              isError: boolean;
-              resultSummary?: SubagentToolSummary;
-            };
+            const raw = msg as Record<string, unknown>;
+            const toolCallId = (raw.toolCallId ?? raw.id) as string;
+            const args = raw.args ?? raw.input;
+            const result = raw.result;
+            const isError = raw.isError === true;
+            const resultSummary = raw.resultSummary as SubagentToolSummary | undefined;
             const content = extractToolResultText(result);
             // Contract 1.34.0 child surfacing: keep the bounded background
             // identity so the card can name/link the dispatched child.
@@ -2966,11 +2968,10 @@ export const useSessionStore = create<SessionState>()(
               }
               
               case 'tool_execution_start': {
-                const { toolCallId, toolName, args } = event as unknown as {
-                  toolCallId: string;
-                  toolName: string;
-                  args: unknown;
-                };
+                const raw = event as Record<string, unknown>;
+                const toolCallId = (raw.toolCallId ?? raw.id ?? `tool_${Date.now()}`) as string;
+                const toolName = (raw.toolName ?? raw.name ?? '') as string;
+                const args = raw.args ?? raw.input;
                 const toolMessage: Message = {
                   id: toolCallId,
                   role: 'tool',
@@ -2983,10 +2984,9 @@ export const useSessionStore = create<SessionState>()(
               }
               
               case 'tool_execution_update': {
-                const { toolCallId, partialResult } = event as unknown as {
-                  toolCallId: string;
-                  partialResult?: { content: Array<{ type: string; text?: string }> };
-                };
+                const raw = event as Record<string, unknown>;
+                const toolCallId = (raw.toolCallId ?? raw.id) as string;
+                const partialResult = raw.partialResult as { content: Array<{ type: string; text?: string }> } | undefined;
                 const content = partialResult?.content?.[0]?.text || '';
                 get().updateMessageInSession(sessionId, toolCallId, {
                   content,
@@ -2996,18 +2996,18 @@ export const useSessionStore = create<SessionState>()(
               }
               
               case 'tool_execution_end': {
-                const { toolCallId, args, result, isError, resultSummary } = event as unknown as {
-                  toolCallId: string;
-                  args?: unknown;
-                  result?: unknown;
-                  isError: boolean;
-                  resultSummary?: SubagentToolSummary;
-                };
+                const raw = event as Record<string, unknown>;
+                const toolCallId = (raw.toolCallId ?? raw.id) as string;
+                const args = raw.args ?? raw.input;
+                const result = raw.result;
+                const isError = raw.isError === true;
+                const resultSummary = raw.resultSummary as SubagentToolSummary | undefined;
                 const content = extractToolResultText(result);
+                const background = extractBackgroundIdentity(result);
                 get().updateMessageInSession(sessionId, toolCallId, {
                   ...(args !== undefined ? { toolCallArgs: args } : {}),
                   content,
-                  toolResult: { output: content, isError, summary: resultSummary },
+                  toolResult: { output: content, isError, summary: resultSummary, ...(background ? { background } : {}) },
                 });
                 break;
               }

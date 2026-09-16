@@ -91,19 +91,24 @@ export function normEventToPiFormat(event: NormalizedEvent): Record<string, unkn
     case 'message_end':
       return { type: 'message_end', message: { id: data.id } };
     case 'tool_execution_start':
-      return { type: 'tool_execution_start', toolCallId: data.toolCallId, toolName: data.toolName, args: data.args };
+      return {
+        type: 'tool_execution_start',
+        toolCallId: data.toolCallId ?? data.id,
+        toolName: data.toolName ?? data.name,
+        args: data.args ?? data.input,
+      };
     case 'tool_execution_end':
       // args: antigravity live parity — agy carries parameters only on the DONE
       // step, so the normalizer re-surfaces them here (additive, may be absent).
       return {
         type: 'tool_execution_end',
-        toolCallId: data.toolCallId,
+        toolCallId: data.toolCallId ?? data.id,
         result: data.result,
         isError: data.isError,
-        ...(data.args !== undefined ? { args: data.args } : {}),
+        ...((data.args ?? data.input) !== undefined ? { args: data.args ?? data.input } : {}),
       };
     case 'tool_execution_update':
-      return { type: 'tool_execution_update', toolCallId: data.toolCallId, partialResult: data.partialResult };
+      return { type: 'tool_execution_update', toolCallId: data.toolCallId ?? data.id, partialResult: data.partialResult };
     case 'agent_start':
       return { type: 'agent_start' };
     case 'agent_end':

@@ -21,8 +21,10 @@ export interface ToolGroupContainerProps {
 export function generateGroupSummary(messages: LiveMessage[]): string {
   let commandsCount = 0;
   const readPaths: string[] = [];
+  const editPaths: string[] = [];
   let searchesCount = 0;
   let skillsCount = 0;
+  let subagentsCount = 0;
   let otherCount = 0;
 
   for (const m of messages) {
@@ -37,8 +39,15 @@ export function generateGroupSummary(messages: LiveMessage[]): string {
       const basename = p.split('/').filter(Boolean).pop() || p;
       if (basename) readPaths.push(basename);
       else readPaths.push('file');
-    } else if (norm === 'grep' || norm === 'glob' || norm === 'grep_search' || norm === 'find_by_name') {
+    } else if (norm === 'edit' || norm === 'write' || norm === 'replace_file_content' || norm === 'write_to_file' || norm === 'sed_file') {
+      const p = (args.path || args.AbsolutePath || args.file_path || args.TargetFile || '') as string;
+      const basename = p.split('/').filter(Boolean).pop() || p;
+      if (basename) editPaths.push(basename);
+      else editPaths.push('file');
+    } else if (norm === 'grep' || norm === 'glob' || norm === 'grep_search' || norm === 'find_by_name' || norm === 'find' || norm === 'list_dir') {
       searchesCount++;
+    } else if (norm === 'subagent' || norm === 'agent' || norm === 'invoke_subagent') {
+      subagentsCount++;
     } else if (norm.includes('skill')) {
       skillsCount++;
     } else {
@@ -57,8 +66,18 @@ export function generateGroupSummary(messages: LiveMessage[]): string {
       parts.push(`read ${readPaths.length} files`);
     }
   }
+  if (editPaths.length > 0) {
+    if (editPaths.length === 1) {
+      parts.push(`updated ${editPaths[0]}`);
+    } else {
+      parts.push(`updated ${editPaths.length} files`);
+    }
+  }
   if (searchesCount > 0) {
     parts.push(`searched codebase`);
+  }
+  if (subagentsCount > 0) {
+    parts.push(`used ${subagentsCount === 1 ? 'a subagent' : `${subagentsCount} subagents`}`);
   }
   if (skillsCount > 0) {
     parts.push(`used ${skillsCount === 1 ? 'a skill' : `${skillsCount} skills`}`);

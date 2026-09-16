@@ -131,4 +131,73 @@ describe('parsePiSessionHistory', () => {
     }]);
     expect(history[1]?.toolResult).toBeUndefined();
   });
+
+  it('replays standard tools (bash, read, write, edit) with their results so consecutive tools can be grouped', () => {
+    const history = parsePiSessionHistory([
+      {
+        type: 'message',
+        id: 'user-1',
+        message: { role: 'user', timestamp: 100, content: [{ type: 'text', text: 'Run audit' }] },
+      },
+      {
+        type: 'message',
+        id: 'assistant-1',
+        message: {
+          role: 'assistant',
+          timestamp: 200,
+          content: [
+            { type: 'text', text: 'Auditing now.' },
+            { type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'uptime' } },
+            { type: 'toolCall', id: 'call-2', name: 'read', arguments: { path: 'package.json' } },
+          ],
+        },
+      },
+      {
+        type: 'message',
+        id: 'result-1',
+        message: {
+          role: 'toolResult',
+          timestamp: 300,
+          toolCallId: 'call-1',
+          toolName: 'bash',
+          content: [{ type: 'text', text: 'up 5 days' }],
+        },
+      },
+      {
+        type: 'message',
+        id: 'result-2',
+        message: {
+          role: 'toolResult',
+          timestamp: 400,
+          toolCallId: 'call-2',
+          toolName: 'read',
+          content: [{ type: 'text', text: '{\n  "name": "pi-web-ui"\n}' }],
+        },
+      },
+      {
+        type: 'message',
+        id: 'assistant-2',
+        message: {
+          role: 'assistant',
+          timestamp: 500,
+          content: [{ type: 'text', text: 'Audit complete.' }],
+        },
+      },
+    ]);
+
+    expect(history.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'assistant']);
+    expect(history[2]).toMatchObject({
+      id: 'call-1',
+      role: 'tool',
+      toolCall: { id: 'call-1', name: 'bash', args: { command: 'uptime' } },
+      toolResult: { output: 'up 5 days', isError: false },
+    });
+    expect(history[3]).toMatchObject({
+      id: 'call-2',
+      role: 'tool',
+      toolCall: { id: 'call-2', name: 'read', args: { path: 'package.json' } },
+      toolResult: { output: '{\n  "name": "pi-web-ui"\n}', isError: false },
+    });
+  });
 });
+
