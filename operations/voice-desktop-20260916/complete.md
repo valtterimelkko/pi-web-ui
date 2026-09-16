@@ -88,4 +88,17 @@ The decisive ones:
 
 Deployed with `scripts/restart-pi-web-ui.sh --reason …` after verifying a
 genuinely drained production (busy sessions counted from `/sessions`, never
-`activeTurns`, which read 0 while a pinned session was mid-turn).
+`activeTurns`, which read 0 while a pinned session was mid-turn — measured again
+today: `activeTurns 0` beside one running pinned session in `/root/si`).
+
+Deploy verification (all three independent):
+
+| Check | Result |
+|---|---|
+| Service + health | `pi-web-ui.service` active, `/api/health` 200, Internal API contract 1.44.0 |
+| Bundle identity | production serves `assets/index-C18SauY2.js`, byte-identical to the freshly built `client/dist/assets/index-C18SauY2.js`, and that bundle contains the new markers (`drive-session-panel`, `drive-mode-column`, `drive-switch-session`, "Switch session", "Add a lane") |
+| Real browser | `harness/prod-smoke.mjs`: HTTP 200, React mounted, login screen rendered, zero page errors (only the expected pre-auth 401) |
+
+Production was `:3456` (`node server/dist/index.js`), so a deploy is
+`npm run build` + the audited restart. The restart recorded its requester
+(`RESTART-REQUESTED … reason=deploy Voice Mode desktop session pane …`).
