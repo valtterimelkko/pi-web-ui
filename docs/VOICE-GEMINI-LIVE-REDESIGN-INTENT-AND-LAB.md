@@ -713,6 +713,8 @@ House rules for the execution agent: disposable server only (`npm run validate:s
 
 The lab is done when, for each tier, a run can be started by one command in the background, finishes without a person present, produces an immutable record the offline verifier accepts, and yields a report that answers each sentence in §9 with a number, a pass/fail, or an explicit "not exercised" — and when the Gemma baseline has been through exactly the same path so every candidate number has a paired counterpart.
 
+**"Done" includes the runs, not only the machinery.** The deliverable of executing this plan end-to-end is the machinery **and** the scored results: the L2 baseline matrix, the L4 tier 1 matrix, the L5 tier 3 runs, the L6 adaptive attempts, the L7 tier 2 matrix (all as sized in §23), and the L8 reports, leaderboard rows and owner decision memo. An agent that stops after building the harness has delivered a phase, not the lab.
+
 ---
 
 # Part III — Execution runbook (start here if you are building it)
