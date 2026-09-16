@@ -66,6 +66,26 @@ via `contentScopeFor`: two workers answering with the same words are two events 
 both speak, while within one lane the auto path and read-aloud still share a record
 and never say the same answer twice.
 
+### What is never spoken
+
+Routine Agent OS injections — the automated session-end memory capture — are
+**structurally marked at their source**: the capture prompt arrives as a pi custom
+message carrying `customType: 'agent-os-capture'` (emitter
+`agent-os-inject` in the `pi-enhancement` repo; kill switch
+`AGENT_OS_INJECT_CAPTURE_MARKING=0`), not as a user message. The spoken-turn scan
+in `client/src/components/DriveMode/useAnswerReader.ts` treats a marked injection
+as an **upper bound**: the housekeeping turn it triggers is never read aloud,
+while the operator's own work between their words and the injection still is.
+
+The match is **structural** — `role === 'custom' && customType ===
+'agent-os-capture'`, never a text heuristic — so an operator prompt that quotes
+the injection wording verbatim is still spoken. The packet lane's separate
+`agent-os` type rides *inside* the operator's turn and is deliberately **not** a
+boundary, and no other extension's custom message can silence a turn (operator
+decision, 2026-09-16). Because every rendered projection drops `role: 'custom'`
+entries, the capture prompt no longer shows as a user bubble in the session view;
+the assistant's answer about the capture still does.
+
 ## Key Files
 
 ### UI
