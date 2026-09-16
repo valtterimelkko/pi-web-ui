@@ -285,7 +285,7 @@ describe('getTurnAssistantParts — marked capture injections bound the spoken t
     ];
     const accounted = new Map([['a1', 'work']]);
     const parts = getTurnAssistantParts(messages, accounted);
-    expect(parts.text).toBeNull(), 'accounted work is not re-collected';
+    expect(parts.text, 'accounted work is not re-collected').toBeNull();
   });
 
   it('the marker predicate is exported so every consumer shares one structural rule', () => {
