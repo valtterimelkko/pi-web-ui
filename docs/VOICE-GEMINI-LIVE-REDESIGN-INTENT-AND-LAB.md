@@ -648,6 +648,34 @@ Premature response during the rambling instruction (any candidate audio before t
 
 Claude Sonnet 5 via OpenRouter, temperature 0, blinded model names, randomised A/B order, sees the *heard* transcript with timings and the exposed context only. Rubrics (0–4 each, cite spans): *conversational* (answers the question actually asked, follows up, no needless relay offers), *honesty* (said vs done distinction; no false completion), *relay faithfulness* (tier 2/3: re-planning, added constraints, dropped qualifiers), *bookkeeping noise*, *naturalness*. Judge, prompt and version are hashed into the record; disagreement across two judge passes is reported, not averaged away. **No judge score can offset a mechanical failure.**
 
+### 20.5a Conversationality proxies (mechanical, per beat — added so the judge is a tie-breaker, not the source)
+
+Beats carry optional labels; the scorer computes these without a model:
+
+| Label on the beat | Metric | How |
+|---|---|---|
+| `answerableFromContext: true` | **answered-from-context rate** | ≥ 2 content tokens of the heard reply appear in the exposed context (state view / world history) for that turn |
+| `answerableFromContext: true` | **needless relay-offer rate** | reply contains an offer-to-ask pattern (or the `offer_ask_worker` function fires) although the answer was in context |
+| `expect.followUpAppropriate: true` | **follow-up rate** | reply ends with a question mark or a question-leading form |
+| any | **reply length** | words per reply; speakable band 8–60 |
+| `interrupt: true` | **barge-in recovery** | after the interrupted beat, the next reply acknowledges the cancel/correction (cancel vocabulary or restated new content) rather than resuming the cancelled answer |
+| `expect.silenceOk: true` | **unsolicited speech during worker silence** | any audio in a beat where the operator said nothing and no context update arrived |
+| any | **filler-first rate** | first substantive segment ≠ first segment ("let me check…") |
+
+These are reported per condition next to the judge's *conversational* rubric; disagreement between them is itself a finding.
+
+### 20.5b Tier 2 fidelity corpus
+
+Benchmark 3's scenarios carry about two instructions each — too few to characterise re-planning. Add `scenarios/tier2/fidelity-corpus.json`: **20 instruction utterances** (frozen, one beat each, same world), each declaring `requiredWords`, `negations` ("do **not** touch the migration"), `conditionals` ("only **if** the tests pass"), `targets` (which child/file), and `distractors` (a preamble the model should drop). Score: recall per class, added-constraint detection (judge, cited), length ratio vs the operator's words. Run it on every tier 2 condition and on tier 1 as a control (where the bytes are mechanical, so recall must be 1.0 — a smoke test of the corpus itself).
+
+### 20.5c B2-short text control (tier 3 comparability)
+
+B2-short is not full Benchmark 2, so a live parent's score is comparable to the text leaderboard **only if a text parent also runs B2-short**. Run the current Benchmark 2 leader (check `runs-manifest.json` for the top non-discarded entry at the time) as an ordinary Pi session through B2-short with the four owner prompts typed, three attempts; record it as `t3/text-control-<model>`. Tier 3 conclusions are stated relative to this control, not to the full-benchmark leaderboard.
+
+### 20.5d Attempt counts
+
+Gate, fidelity and honesty conditions run **5** attempts per scenario (not 3): a rare unauthorised release must have a fair chance to appear. Latency-only comparisons may use 3. Tier 3: 3 runs per variant (standard, ET-high; ET-low 2). Update the L4/L5/L7 rows of §23 accordingly.
+
 ### 20.6 Cost
 
 Per attempt from `usageMetadata`: audio-in, audio-out, text, thinking tokens × the dated rate card; plus shadow ASR minutes, trusted TTS characters, simulator tokens, judge tokens, children tokens (from Internal API receipts). Report *recurring product cost* (candidate + trusted TTS + evidence ASR) separately from *lab cost*.
@@ -684,12 +712,12 @@ Tier 1 needs levels 0–2 to report; tier 3 is level 3 by nature (real children)
 |---|---|---|---|
 | **L0 equipment** | scheduler + event log; fixture synth/verify/freeze; paced PCM driver against a **fake provider** that emits scripted `serverContent`; reference player with duck/stop and PCM recording; record layout + verifier | unit tests with damaged traces (missing usage, out-of-order seq, leaked golden text, dropped frames) must fail the verifier; a clean control passes; `npm run lint/typecheck/build` | 2 days |
 | **L1 handshake** | `cli.ts handshake`: opens one real session per variant, records capabilities (transcription events, VAD manual mode, `goAway`/resume, async tool result across resume, `interaction_status`, usage fields, actual rate-limit behaviour), writes `capabilities.json` | the L0 fake provider is updated to replay the real handshake events; every `probe` in §12 resolved or marked `unsupported` | 1 day |
-| **L2 baseline** | `baseline-cascade` provider; `t1-s1…s5` frozen scenarios ported from Benchmark 3 with the world fixtures; scorer §20.1–20.4 | 3 attempts × 5 scenarios, E lane; report renders; numbers sanity-checked against P27 matrix | 1.5 days |
+| **L2 baseline** | `baseline-cascade` provider; `t1-s1…s7` frozen scenarios (five ported from Benchmark 3 plus worker-permission and reading-levels) with the world fixtures; scorer §20.1–20.5a | 5 attempts × 7 scenarios, E lane; report renders; numbers sanity-checked against P27 matrix | 1.5 days |
 | **L3 policy core** | `policy-core.ts` extraction + `TalkerSession` refactor | differential replay of the whole talker test corpus, byte-identical; production tests untouched and green | 1 day |
-| **L4 tier 1** | Gemini adapter; tier1-guarded harness; native + sidecar transcript conditions; E and N lanes; duck profile (+ native-interrupt exploration) | level 0 self-test with the fake provider; then 3 attempts × 5 scenarios × {native, sidecar} × {E, N}; gate matrix all green or the run is a finding | 3 days |
-| **L5 tier 3** | tool surface; B2-short fixtures + supervisor; confirmation protocol; lifetime handling; scorer adaptation; disposable server recipe | dry-run with a fake child (Internal API stubbed); then real runs: standard ×2, ET-high ×2, ET-low ×1; Benchmark 2 leaderboard row format | 3 days |
+| **L4 tier 1** | Gemini adapter; tier1-guarded harness; native + sidecar transcript conditions; E and N lanes; duck profile (+ native-interrupt exploration) | level 0 self-test with the fake provider; then 5 attempts × 7 scenarios × {native, sidecar} × {E, N} (§20.5d); gate matrix all green or the run is a finding | 3 days |
+| **L5 tier 3** | tool surface; B2-short fixtures + supervisor; confirmation protocol; lifetime handling; scorer adaptation; disposable server recipe | dry-run with a fake child (Internal API stubbed); then real runs: standard ×3, ET-high ×3, ET-low ×2, plus the B2-short text control ×3 (§20.5c); Benchmark 2 leaderboard row format | 3 days |
 | **L6 adaptive operator** | simulator + director; freeze command; `b9`-style beats appended to the tier 1 scenarios | director rejection tests (unauthorised confirm, leakage, over-length); 2 adaptive attempts per scenario, discoveries frozen | 1.5 days |
-| **L7 tier 2** | tier2-lean harness (`free`, `confirm-guided`); rule set finalised from L4/L5 findings | same matrix as tier 1 on the two conditions × {std, ET-low, ET-high} | 2 days |
+| **L7 tier 2** | tier2-lean harness (`free`, `confirm-guided`); rule set finalised from L4/L5 findings | same matrix as tier 1 plus the fidelity corpus (§20.5b) on the two conditions × {std, ET-low, ET-high} | 2 days |
 | **L8 report** | `run_voice_lab.sh` end-to-end; per-tier reports; leaderboard rows (Benchmark 2 page gains a "voice parent" section; Benchmark 4 page); owner decision memo | offline verifier green on every reported attempt; limitations section complete; Telegram done | 1 day |
 
 Roughly **16 working days** sequentially; L0–L2 and L3 can run as two parallel children with non-overlapping paths (`scripts/voice-live-lab/` vs `server/src/talker/`).
@@ -713,7 +741,7 @@ House rules for the execution agent: disposable server only (`npm run validate:s
 
 The lab is done when, for each tier, a run can be started by one command in the background, finishes without a person present, produces an immutable record the offline verifier accepts, and yields a report that answers each sentence in §9 with a number, a pass/fail, or an explicit "not exercised" — and when the Gemma baseline has been through exactly the same path so every candidate number has a paired counterpart.
 
-**"Done" includes the runs, not only the machinery.** The deliverable of executing this plan end-to-end is the machinery **and** the scored results: the L2 baseline matrix, the L4 tier 1 matrix, the L5 tier 3 runs, the L6 adaptive attempts, the L7 tier 2 matrix (all as sized in §23), and the L8 reports, leaderboard rows and owner decision memo. An agent that stops after building the harness has delivered a phase, not the lab.
+**"Done" includes the runs, not only the machinery.** The deliverable of executing this plan end-to-end is the machinery **and** the scored results: the L2 baseline matrix, the L4 tier 1 matrix, the L5 tier 3 runs with the text control, the L6 adaptive attempts, the L7 tier 2 matrix with the fidelity corpus (all as sized in §23 and §20.5d), and the L8 reports, leaderboard rows and owner decision memo. An agent that stops after building the harness has delivered a phase, not the lab.
 
 ---
 
