@@ -1,0 +1,96 @@
+[
+  {
+    "role": "user",
+    "preview": "[{\"type\":\"text\",\"text\":\"Use the bash tool to create a file named inject-lab.txt in the current directory containing exac"
+  },
+  {
+    "role": "custom",
+    "customType": "agent-os",
+    "preview": "\"# Agent OS Context Packet\\n\\n## Task\\n\\ncontinue work\\n\\n## Memory access\\n\\n- This packet is a bounded summary, not th"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Let\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"MARKER\\n6 inject-lab.txt\\n\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"found: false\\ndurability: unknown\\ntarget support: 0.00\\nunaddressed anchors: inject, workspace,"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "custom",
+    "customType": "agent-os-capture",
+    "preview": "\"Agent OS session-end memory capture (automated delivery by the D3 write lane). Run your agent os capture skill now and "
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"---\\nname: agent-os-capture\\ndescription: \\\"Capture durable outcomes from the current real worki"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Now\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"---\\nid: index-projects\\nkind: procedure\\ntitle: Project Index\\ndurability: project-stable\\nsumm"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"\\n> agent-os@0.1.0 agent-os\\n> node src/cli.ts capture --help\\n\\nusage: agent-os capture --note "
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"The\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"/root/agent-os/docs/reference/CLI-REFERENCE.md:116:Step 4C: session captures (manual-note / dict"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"| project-cli-anything | CLI-Anything | active-beingused | infrastructure | internal | role-ai-b"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"found: false\\ndurability: unknown\\ntarget support: 0.00\\nunaddressed anchors: automated, session"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Good\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"=====\\n\\n\\nCommand exited with code 1\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"/root/inject-lab-20260916/vault:\\nderived\\nevidence\\nreview\\n\\n/root/inject-lab-20260916/vault/d"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Very\",\"thinkingSignature\":\"reasoning_content\"}]"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"---\\nid: capture-yka8d9k2kt\\nsourceKind: session-end-prompt\\ncapturedAt: \\\"2026-09-16T15:19:54.4"
+  },
+  {
+    "role": "toolResult",
+    "preview": "[{\"type\":\"text\",\"text\":\"/root/.npm-global/bin/agent-os\\n---\\n#!/bin/bash\\n# Bare agent-os shim: replicates `npm --prefix"
+  },
+  {
+    "role": "assistant",
+    "preview": "[{\"type\":\"thinking\",\"thinking\":\"Now\",\"thinkingSignature\":\"reasoning_content\"}]"
+  }
+]
