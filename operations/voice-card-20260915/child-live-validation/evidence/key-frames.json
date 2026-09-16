@@ -1,0 +1,482 @@
+{
+  "at": "2026-09-15T08:45:02.601Z",
+  "base": "http://localhost:39815",
+  "origin": "https://pi.letsautomate.work",
+  "rows": [
+    {
+      "row": "L1",
+      "verdict": "PASS",
+      "drove": "talker_turn {utterance: \"Proceed.\\n\"} on a fresh pi worker session",
+      "expected": "phase=proposed; proposal.text=\"Proceed.\"; cleaned=false; NO removed key; NO original key",
+      "observed": "phase=\"proposed\" proposal={\"text\":\"Proceed.\",\"cleaned\":false} resultKeys=[\"type\",\"requestId\",\"workerSessionId\",\"runtime\",\"reply\",\"phase\",\"utteranceClass\",\"released\",\"cancelled\",\"proposal\",\"receiptAck\"]",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-649Z_01a0a43d-b151-74e6-91cb-f54b16fe0947.jsonl",
+          "utterance": "Proceed.\n",
+          "runtime": "pi",
+          "requestId": "r1"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r1",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-649Z_01a0a43d-b151-74e6-91cb-f54b16fe0947.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "Proceed.",
+            "cleaned": false
+          },
+          "receiptAck": "Noted — still holding that."
+        }
+      ],
+      "errors": []
+    },
+    {
+      "row": "L2",
+      "verdict": "PASS",
+      "drove": "talker_turn {utterance: \"Um, tell the worker to rerun the suite\"} on a fresh pi worker session",
+      "expected": "phase=proposed; cleaned=true; removed = fragments only (never the whole utterance); original = the raw utterance",
+      "observed": "proposal={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} (removed is a fragment subset: true)",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-775Z_01a0a43d-b1cf-74e6-91cb-f54d2e272ea1.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r2"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r2",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-775Z_01a0a43d-b1cf-74e6-91cb-f54d2e272ea1.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        }
+      ],
+      "errors": []
+    },
+    {
+      "row": "L3",
+      "verdict": "PASS",
+      "drove": "talker_turn {utterance: \"yes, go ahead\"} (default confirm) after L2",
+      "expected": "phase=released; released.text byte-identical to L2 proposal.text; the delivery adapter reports the same bytes and the worker transcript holds exactly those bytes",
+      "observed": "phase=\"released\" released.text=\"rerun the suite\" proposal.text=\"rerun the suite\" delivery={\"outcome\":\"delivered\",\"mechanism\":\"prompt\",\"disclosure\":\"delivered as the worker was idle\"} transcript={\"found\":true,\"detail\":\"user messages=1\",\"userTexts\":[\"rerun the suite\"]}",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-775Z_01a0a43d-b1cf-74e6-91cb-f54d2e272ea1.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r3"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r3",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-775Z_01a0a43d-b1cf-74e6-91cb-f54d2e272ea1.jsonl",
+          "runtime": "pi",
+          "reply": "sending that now",
+          "phase": "released",
+          "utteranceClass": "confirm",
+          "released": {
+            "utteranceId": 1,
+            "text": "rerun the suite",
+            "delivery": {
+              "outcome": "delivered",
+              "mechanism": "prompt",
+              "disclosure": "delivered as the worker was idle"
+            }
+          },
+          "cancelled": false
+        }
+      ],
+      "errors": []
+    },
+    {
+      "row": "L4",
+      "verdict": "PASS",
+      "drove": "talker_turn {utterance: \"Um, tell the worker to rerun the suite\"} then talker_turn {utterance: \"yes, go ahead\", releaseVariant: \"original\"}",
+      "expected": "phase=released; released.text byte-identical to that turn's proposal.original (and NOT proposal.text); the transcript holds those bytes",
+      "observed": "proposal.original=\"Um, tell the worker to rerun the suite\" proposal.text=\"rerun the suite\" released.text=\"Um, tell the worker to rerun the suite\" delivery={\"outcome\":\"delivered\",\"mechanism\":\"prompt\",\"disclosure\":\"delivered as the worker was idle\"} transcript={\"found\":true,\"detail\":\"user messages=1\",\"userTexts\":[\"Um, tell the worker to rerun the suite\"]}",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-916Z_01a0a43d-b25c-74e6-91cb-f54e4e443b98.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r4"
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-916Z_01a0a43d-b25c-74e6-91cb-f54e4e443b98.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r5",
+          "releaseVariant": "original"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r4",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-916Z_01a0a43d-b25c-74e6-91cb-f54e4e443b98.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r5",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-01-916Z_01a0a43d-b25c-74e6-91cb-f54e4e443b98.jsonl",
+          "runtime": "pi",
+          "reply": "sending that now",
+          "phase": "released",
+          "utteranceClass": "confirm",
+          "released": {
+            "utteranceId": 1,
+            "text": "Um, tell the worker to rerun the suite",
+            "delivery": {
+              "outcome": "delivered",
+              "mechanism": "prompt",
+              "disclosure": "delivered as the worker was idle"
+            }
+          },
+          "cancelled": false
+        }
+      ],
+      "errors": []
+    },
+    {
+      "row": "L5a",
+      "verdict": "PASS",
+      "drove": "statement \"Um, tell the worker to rerun the suite\" WITH releaseVariant \"original\" on a fresh session; control: the same utterance WITHOUT the variant on another fresh session",
+      "expected": "phase=proposed (never released); released null; the draft payload is unchanged by the variant (identical to the control)",
+      "observed": "variantTurn phase=\"proposed\" released=null proposal(A)={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"}; control phase=\"proposed\" proposal(B)={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} identical=true",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-016Z_01a0a43d-b2c0-74e6-91cb-f550b7d3609c.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r6",
+          "releaseVariant": "original"
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-124Z_01a0a43d-b32c-74e6-91cb-f552fc0efd80.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r7"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r6",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-016Z_01a0a43d-b2c0-74e6-91cb-f550b7d3609c.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r7",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-124Z_01a0a43d-b32c-74e6-91cb-f552fc0efd80.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        }
+      ],
+      "errors": []
+    },
+    {
+      "row": "L5b",
+      "verdict": "PASS",
+      "drove": "draft held, then \"did you send it?\" WITH releaseVariant \"original\", then a plain default confirm",
+      "expected": "the variant-carrying non-confirm turn releases nothing and leaves the draft byte-identical; the later default confirm still releases the draft",
+      "observed": "midTurn phase=\"proposed\" released=null draftBefore={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} draftAfter={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} identical=true; laterConfirm phase=\"released\" released.text=\"rerun the suite\"",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-198Z_01a0a43d-b376-74e6-91cb-f555e92c59e7.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r8"
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-198Z_01a0a43d-b376-74e6-91cb-f555e92c59e7.jsonl",
+          "utterance": "did you send it?",
+          "runtime": "pi",
+          "requestId": "r9",
+          "releaseVariant": "original"
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-198Z_01a0a43d-b376-74e6-91cb-f555e92c59e7.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r10"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r8",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-198Z_01a0a43d-b376-74e6-91cb-f555e92c59e7.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r9",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-198Z_01a0a43d-b376-74e6-91cb-f555e92c59e7.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "question",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          }
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r10",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-198Z_01a0a43d-b376-74e6-91cb-f555e92c59e7.jsonl",
+          "runtime": "pi",
+          "reply": "sending that now",
+          "phase": "released",
+          "utteranceClass": "confirm",
+          "released": {
+            "utteranceId": 1,
+            "text": "rerun the suite",
+            "delivery": {
+              "outcome": "delivered",
+              "mechanism": "prompt",
+              "disclosure": "delivered as the worker was idle"
+            }
+          },
+          "cancelled": false
+        }
+      ],
+      "errors": []
+    },
+    {
+      "row": "L6",
+      "verdict": "PASS",
+      "drove": "talker_turn {utterance: \"Um, tell the worker to rerun the suite\", releaseVariant: \"raw\"} (invalid enum)",
+      "expected": "an error frame with code INVALID_MESSAGE; NO talker_turn_result for that requestId",
+      "observed": "error={\"type\":\"error\",\"message\":\"Invalid talker_turn message format\",\"code\":\"INVALID_MESSAGE\",\"requestId\":\"r11\"} talker_turn_result seen=false",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-309Z_01a0a43d-b3e5-74e6-91cb-f557b74fb84f.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r11",
+          "releaseVariant": "raw"
+        }
+      ],
+      "talker_turn_results": [],
+      "errors": [
+        {
+          "type": "error",
+          "message": "Invalid talker_turn message format",
+          "code": "INVALID_MESSAGE",
+          "requestId": "r11"
+        }
+      ]
+    },
+    {
+      "row": "L6-control",
+      "verdict": "PASS",
+      "drove": "talker_turn {utterance: \"Um, tell the worker to rerun the suite\", releaseVariant: \"tidied\"} (valid enum, same field)",
+      "expected": "accepted on the wire (proposed), proving the field itself is valid",
+      "observed": "phase=\"proposed\" error=null",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-309Z_01a0a43d-b3e5-74e6-91cb-f557b74fb84f.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r12",
+          "releaseVariant": "tidied"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r12",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-309Z_01a0a43d-b3e5-74e6-91cb-f557b74fb84f.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        }
+      ],
+      "errors": []
+    },
+    {
+      "row": "L7",
+      "verdict": "PASS",
+      "drove": "6 non-draft-touching turns after the draft, then a confirm WITH releaseVariant \"original\"; control: the same lapse with the default variant",
+      "expected": "the existing re-confirmation refusal (release refused, draft intact, reply quotes the held draft) — identical with and without the variant",
+      "observed": "variant: phase=\"proposed\" released=null reply=\"You were composing something — still want that sent? Here is what I am holding: \\\"rerun the\"; control: phase=\"proposed\" released=null sameReply=true",
+      "sent": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-407Z_01a0a43d-b446-74e6-91cb-f5599994d3b3.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r13"
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-407Z_01a0a43d-b446-74e6-91cb-f5599994d3b3.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r20",
+          "releaseVariant": "original"
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-517Z_01a0a43d-b4b5-74e6-91cb-f55adfc739aa.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r28"
+        }
+      ],
+      "talker_turn_results": [
+        {
+          "type": "talker_turn_result",
+          "requestId": "r13",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-407Z_01a0a43d-b446-74e6-91cb-f5599994d3b3.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r20",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-407Z_01a0a43d-b446-74e6-91cb-f5599994d3b3.jsonl",
+          "runtime": "pi",
+          "reply": "You were composing something — still want that sent? Here is what I am holding: \"rerun the suite\". Say yes and I will send it.",
+          "phase": "proposed",
+          "utteranceClass": "confirm",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          }
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r28",
+          "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-02-517Z_01a0a43d-b4b5-74e6-91cb-f55adfc739aa.jsonl",
+          "runtime": "pi",
+          "reply": "You were composing something — still want that sent? Here is what I am holding: \"rerun the suite\". Say yes and I will send it.",
+          "phase": "proposed",
+          "utteranceClass": "confirm",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          }
+        }
+      ],
+      "errors": []
+    }
+  ]
+}

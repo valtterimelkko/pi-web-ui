@@ -1,0 +1,184 @@
+{
+  "at": "2026-09-15T08:35:58.093Z",
+  "base": "http://localhost:41413",
+  "origin": "https://pi.letsautomate.work",
+  "workerModel": "(server default)",
+  "workerModelReported": [],
+  "rows": [
+    {
+      "row": "L7",
+      "drove": "6 non-draft-touching turns after the draft, then a confirm WITH releaseVariant \"original\"; control: the same lapse with the default variant",
+      "expected": "the existing re-confirmation refusal (release refused, draft intact, reply quotes the held draft) — identical with and without the variant",
+      "observed": "variant: phase=\"proposed\" released=null reply=\"You were composing something — still want that sent? Here is what I am holding: \\\"rerun the\"; control: phase=\"proposed\" released=null sameReply=true",
+      "verdict": "PASS",
+      "frames": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r1"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r1",
+          "workerSessionId": "/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r8",
+          "releaseVariant": "original"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r8",
+          "workerSessionId": "/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl",
+          "runtime": "pi",
+          "reply": "You were composing something — still want that sent? Here is what I am holding: \"rerun the suite\". Say yes and I will send it.",
+          "phase": "proposed",
+          "utteranceClass": "confirm",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          }
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r16"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r16",
+          "workerSessionId": "/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl",
+          "runtime": "pi",
+          "reply": "You were composing something — still want that sent? Here is what I am holding: \"rerun the suite\". Say yes and I will send it.",
+          "phase": "proposed",
+          "utteranceClass": "confirm",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          }
+        }
+      ]
+    }
+  ],
+  "frames": [
+    {
+      "tag": "ns-L7-variant",
+      "dir": "sent",
+      "frame": "{\"type\":\"new_session\",\"requestId\":\"ns-L7-variant\"}"
+    },
+    {
+      "tag": "L7-draft",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"Um, tell the worker to rerun the suite\",\"runtime\":\"pi\",\"requestId\":\"r1\"}"
+    },
+    {
+      "tag": "L7-age-1",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r2\"}"
+    },
+    {
+      "tag": "L7-age-2",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r3\"}"
+    },
+    {
+      "tag": "L7-age-3",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r4\"}"
+    },
+    {
+      "tag": "L7-age-4",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r5\"}"
+    },
+    {
+      "tag": "L7-age-5",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r6\"}"
+    },
+    {
+      "tag": "L7-age-6",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r7\"}"
+    },
+    {
+      "tag": "L7-confirm-original",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-335Z_01a0a435-6316-73d6-956c-e82fc431e652.jsonl\",\"utterance\":\"yes, go ahead\",\"runtime\":\"pi\",\"requestId\":\"r8\",\"releaseVariant\":\"original\"}"
+    },
+    {
+      "tag": "ns-L7-control",
+      "dir": "sent",
+      "frame": "{\"type\":\"new_session\",\"requestId\":\"ns-L7-control\"}"
+    },
+    {
+      "tag": "L7-control-draft",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"Um, tell the worker to rerun the suite\",\"runtime\":\"pi\",\"requestId\":\"r9\"}"
+    },
+    {
+      "tag": "L7-control-age-1",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r10\"}"
+    },
+    {
+      "tag": "L7-control-age-2",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r11\"}"
+    },
+    {
+      "tag": "L7-control-age-3",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r12\"}"
+    },
+    {
+      "tag": "L7-control-age-4",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r13\"}"
+    },
+    {
+      "tag": "L7-control-age-5",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r14\"}"
+    },
+    {
+      "tag": "L7-control-age-6",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r15\"}"
+    },
+    {
+      "tag": "L7-control-confirm",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-b/pi-sessions/2026-09-15T08-35-57-715Z_01a0a435-6493-73d6-956c-e8314f1c9fbe.jsonl\",\"utterance\":\"yes, go ahead\",\"runtime\":\"pi\",\"requestId\":\"r16\"}"
+    }
+  ]
+}

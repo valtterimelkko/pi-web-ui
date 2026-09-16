@@ -1,0 +1,95 @@
+{
+  "workerSessionId": "/tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-18-422Z_01a0a43d-f2d6-74e6-91cb-f55d46b4735e.jsonl",
+  "rows": [
+    {
+      "row": "18a-wire",
+      "verdict": "PASS",
+      "drove": "\"yes, go ahead\" with nothing held",
+      "observed": "reply=\"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead.\" phase=answered"
+    },
+    {
+      "row": "14-wire",
+      "verdict": "PASS",
+      "drove": "\"Um okay, could you ask the worker to reply with exactly P27-WS-RELAY\" (opens the batch)",
+      "observed": "phase=proposed receiptAck=\"Noted — still holding that.\""
+    },
+    {
+      "row": "17-wire-REPRO",
+      "verdict": "FAIL",
+      "drove": "inspect the proposed result for the P26 card contract",
+      "observed": "wire result keys=[\"type\",\"requestId\",\"workerSessionId\",\"runtime\",\"reply\",\"phase\",\"utteranceClass\",\"released\",\"cancelled\",\"proposal\",\"receiptAck\"] — has proposal object: true"
+    },
+    {
+      "row": "18b-wire",
+      "verdict": "PASS",
+      "drove": "CANCEL_UTTERANCE \"no, cancel that\"",
+      "observed": "phase=answered cancelled=true reply=\"Noted — I am holding that for your go-ahead.\""
+    },
+    {
+      "row": "18c-wire",
+      "verdict": "PASS",
+      "drove": "\"yes\" right after the cancel (P25 card-regression shape)",
+      "observed": "reply=\"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold \""
+    },
+    {
+      "row": "18d-wire",
+      "verdict": "PASS",
+      "drove": "\"tell the worker to reply with exactly P27-WS-RELAY once it finishes\"",
+      "observed": "phase=proposed"
+    },
+    {
+      "row": "18e-wire",
+      "verdict": "PASS",
+      "drove": "CONFIRM_UTTERANCE \"yes, send that\"",
+      "observed": "phase=released ack=\"sending that now\" released=\"reply with exactly P27-WS-RELAY once it finishes\" delivery={\"outcome\":\"delivered\",\"mechanism\":\"prompt\",\"disclosure\":\"delivered as the worker was idle\"}"
+    },
+    {
+      "row": "9-wire",
+      "verdict": "PASS",
+      "drove": "byte-compare released.text against the worker transcript",
+      "observed": "released=\"reply with exactly P27-WS-RELAY once it finishes\"; /tmp/w2b-live-f/pi-sessions/2026-09-15T08-45-18-422Z_01a0a43d-f2d6-74e6-91cb-f55d46b4735e.jsonl: 2 user messages, exact-byte match=true"
+    },
+    {
+      "row": "18f-wire",
+      "verdict": "PASS",
+      "drove": "malformed talker_turn (missing fields)",
+      "observed": "error code=INVALID_MESSAGE message=\"Invalid talker_turn message format\""
+    },
+    {
+      "row": "19a-wire",
+      "verdict": "PASS",
+      "drove": "talker_digest summary with spokenPrefix",
+      "observed": "digest=\"Noted — I am holding that for your go-ahead.\" refused=no repeatsPrefix=false"
+    },
+    {
+      "row": "19b-wire",
+      "verdict": "PASS",
+      "drove": "talker_digest headlines",
+      "observed": "digest=\"Noted — I am holding that for your go-ahead.\" length=44"
+    },
+    {
+      "row": "16b-route",
+      "verdict": "PASS",
+      "drove": "GET /api/v1/diagnostics (no opt-in)",
+      "observed": "voice.lanes=[{\"runtime\":\"pi\",\"workerSessionId\":\"/tmp/w2b-live-f/pi-sessions/2026-09-15T08-44-57-459Z_01a0a43d-a0f1-74e6-91cb-f54936011fdc.jsonl\",\"boundAt\":\"2026-09-15T08:44 recentTurns key present: false"
+    },
+    {
+      "row": "16c-route",
+      "verdict": "PASS",
+      "drove": "GET /api/v1/diagnostics?voiceConversation=2",
+      "observed": "recentTurns=2 excerpts bounded=true last utterance=\"yes, send that\""
+    },
+    {
+      "row": "16d-route",
+      "verdict": "PASS",
+      "drove": "GET /api/v1/diagnostics?voiceConversation=99999 (clamp)",
+      "observed": "recentTurns=35 (ring cap 50)"
+    },
+    {
+      "row": "16e-log",
+      "verdict": "PASS",
+      "drove": "grep validation-server.log for \"voice turn pi:<worker>\"",
+      "observed": "turn line present + release line present: true"
+    }
+  ]
+}

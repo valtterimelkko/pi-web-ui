@@ -1,0 +1,236 @@
+{
+  "rows": [
+    {
+      "row": "4a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"yes\" with nothing held",
+      "observed": "reply=\"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead.\" modelCalled=false released=true"
+    },
+    {
+      "row": "14a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"hold the deploy until I review the diff\" (opens the batch)",
+      "observed": "receiptAck=\"Noted — still holding that.\" draft=\"hold the deploy until I review the diff\""
+    },
+    {
+      "row": "14b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"then rerun the full test suite\" (same batch)",
+      "observed": "second receipt=null (must be absent)"
+    },
+    {
+      "row": "1a+9a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"ok\" (bare confirm, 2-part draft)",
+      "observed": "reply=\"sending that now\" released=\"hold the deploy until I review the diff\\nthen rerun the full test suite\" deliveryBytes=[\"hold the deploy until I review the diff\\nthen rerun the full test suite\"]"
+    },
+    {
+      "row": "4b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"yes\" again (authorisation consumed)",
+      "observed": "reply=\"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead.\" released=null? true"
+    },
+    {
+      "row": "1b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"go ahead\" with nothing held",
+      "observed": "mechanical dead end: \"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead.\""
+    },
+    {
+      "row": "1c+9b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "pushback with live draft",
+      "observed": "class=confirm released=\"rerun the suite after phase 3 lands\" card had=\"rerun the suite after phase 3 lands\""
+    },
+    {
+      "row": "6a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "2-part draft then \"just the second one\"",
+      "observed": "released=\"then rerun the full test suite\" remaining draft=\"hold the deploy until I review the diff\" (both parts were \"hold the deploy until I review the diff\\nthen rerun the full test suite\")"
+    },
+    {
+      "row": "6b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"confirmed\" releases the held remainder",
+      "observed": "released=\"hold the deploy until I review the diff\" draft now=null"
+    },
+    {
+      "row": "2a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"no\" with nothing held",
+      "observed": "reply=\"Nothing is held right now — there was nothing to cancel.\" modelCalled=false"
+    },
+    {
+      "row": "2b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"never mind\" clears a held draft (held=\"deploy the staging build\")",
+      "observed": "cancelled=see prior turn; follow-up \"yes\" → \"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead.\"; total releases=4"
+    },
+    {
+      "row": "2b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"cancel it\" clears a held draft (held=\"deploy the staging build\")",
+      "observed": "cancelled=see prior turn; follow-up \"yes\" → \"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead.\"; total releases=4"
+    },
+    {
+      "row": "2b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"don't send that\" clears a held draft (held=\"deploy the staging build\")",
+      "observed": "cancelled=see prior turn; follow-up \"yes\" → \"Nothing is held right now, so there is nothing to send. Say the instruction and I'll hold it for your go-ahead.\"; total releases=4"
+    },
+    {
+      "row": "2c",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "one breath: cancel + new instruction",
+      "observed": "old draft=\"ship the release candidate\" → new draft part=\"rebase instead.\" original=\"Tell the worker to rebase instead.\""
+    },
+    {
+      "row": "2d+9c",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "confirm releases the residue in RELAY form",
+      "observed": "released=\"rebase instead.\" (NOT the raw residue)"
+    },
+    {
+      "row": "3a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "status question",
+      "observed": "class=question draft=null"
+    },
+    {
+      "row": "3b+7a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "worker-directed question",
+      "observed": "class=question draft part=\"rebase?\" original=\"could you ask the worker to rebase?\""
+    },
+    {
+      "row": "3c",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "meta-send question with live draft",
+      "observed": "class=question draft unchanged=true released=true"
+    },
+    {
+      "row": "4c+9d",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "6 filler turns then \"yes\" (stale), then \"yes\" again",
+      "observed": "refusal quoted draft verbatim=\"You were composing something — still want that sent? Here is what I am holding: \\\"hold the release for my review\\\". Say yes and I will send it.\"; draft kept=\"hold the release for my review\"; model calls during refusal=0; re-confirm released=\"hold the release for my review\""
+    },
+    {
+      "row": "7b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"Um, okay, could you ask the worker to rerun the suite\"",
+      "observed": "relay=\"rerun the suite\" original kept=true"
+    },
+    {
+      "row": "10a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "\"rebase the branch after phase 3 lands\" (clean instruction)",
+      "observed": "relay=\"rebase the branch after phase 3 lands\" originalText present=false changed=false? true"
+    },
+    {
+      "row": "8",
+      "verdict": "PASS",
+      "driver": "pure normaliseRelayText",
+      "drove": "\"when you get a chance, ask the worker to stop the run\" (mid-sentence frame stays)",
+      "observed": "text=\"when you get a chance, ask the worker to stop the run\" changed=false removals=[]"
+    },
+    {
+      "row": "8",
+      "verdict": "PASS",
+      "driver": "pure normaliseRelayText",
+      "drove": "\"ask the worker if it has enough materials\" (\"if\" interrogative force KEPT (only the frame is stripped))",
+      "observed": "text=\"if it has enough materials\" changed=true removals=[\"ask the worker \"]"
+    },
+    {
+      "row": "8",
+      "verdict": "PASS",
+      "driver": "pure normaliseRelayText",
+      "drove": "\"the build is very very slow today\" (\"very very\" intensifier kept)",
+      "observed": "text=\"the build is very very slow today\" changed=false removals=[]"
+    },
+    {
+      "row": "8",
+      "verdict": "PASS",
+      "driver": "pure normaliseRelayText",
+      "drove": "\"tell the worker\" (frame-only utterance untouched (never emptied))",
+      "observed": "text=\"tell the worker\" changed=false removals=[]"
+    },
+    {
+      "row": "8",
+      "verdict": "PASS",
+      "driver": "pure normaliseRelayText",
+      "drove": "\"ship it, if possible\" (meaning-bearing trailing conditional kept)",
+      "observed": "text=\"ship it, if possible\" changed=false removals=[]"
+    },
+    {
+      "row": "12a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "statement + end-anchored [[to-talker]]",
+      "observed": "addressedToTalker=true draft=null tag in reply? false"
+    },
+    {
+      "row": "12b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "BURIED tag (not end-anchored) — must be ignored for drafting",
+      "observed": "addressedToTalker=unset draft part=\"also deploy the staging build\" tag stripped from speech? true"
+    },
+    {
+      "row": "13a+11a",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "unanswerable question + end-anchored [[ask-worker]]",
+      "observed": "offer=true held text=\"What did the worker find about the retry bug?\" (operator's OWN words) tag spoken? false"
+    },
+    {
+      "row": "13b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "STATEMENT + [[ask-worker]] tag — offer must NOT fire",
+      "observed": "offer=unset draft part=\"also check the queue depth\" original=\"tell the worker to also check the queue depth\""
+    },
+    {
+      "row": "11b+8b",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "worker-directed \"if\" question drafts in relay form",
+      "observed": "draft part=\"if the suite is green\" original=\"Um, could you ask the worker if the suite is green\""
+    },
+    {
+      "row": "14c",
+      "verdict": "PASS",
+      "driver": "stub registry",
+      "drove": "nothing-pending + nothing-to-cancel in a row",
+      "observed": "model calls consumed=0 (must be 0)"
+    },
+    {
+      "row": "5",
+      "verdict": "PASS",
+      "driver": "inspection + existing gate pins",
+      "drove": "read-only structure check of the release path",
+      "observed": "private decl=true; call sites in talker.ts=1 (confirm branch only); .release( hits elsewhere in server/src/talker=0; structural-bypass pins present=true"
+    }
+  ],
+  "validationDir": "/tmp/p27-matrix-zueGlc"
+}

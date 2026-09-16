@@ -1,0 +1,298 @@
+{
+  "at": "2026-09-15T08:41:45.190Z",
+  "base": "http://localhost:40903",
+  "origin": "https://pi.letsautomate.work",
+  "workerModel": "localstub/deterministic",
+  "workerModelReported": [
+    {
+      "row": "L4",
+      "session": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-786Z_01a0a43a-b052-72a1-94f8-764a83f4aa73.jsonl",
+      "model": null
+    }
+  ],
+  "rows": [
+    {
+      "row": "L4",
+      "drove": "talker_turn {utterance: \"Um, tell the worker to rerun the suite\"} then talker_turn {utterance: \"yes, go ahead\", releaseVariant: \"original\"}",
+      "expected": "phase=released; released.text byte-identical to that turn's proposal.original (and NOT proposal.text); the transcript holds those bytes",
+      "observed": "proposal.original=\"Um, tell the worker to rerun the suite\" proposal.text=\"rerun the suite\" released.text=\"Um, tell the worker to rerun the suite\" delivery={\"outcome\":\"delivered\",\"mechanism\":\"prompt\",\"disclosure\":\"delivered as the worker was idle\"} transcript={\"found\":true,\"detail\":\"user messages=1\",\"userTexts\":[\"Um, tell the worker to rerun the suite\"]}",
+      "verdict": "PASS",
+      "frames": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-786Z_01a0a43a-b052-72a1-94f8-764a83f4aa73.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r1"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r1",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-786Z_01a0a43a-b052-72a1-94f8-764a83f4aa73.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-786Z_01a0a43a-b052-72a1-94f8-764a83f4aa73.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r2",
+          "releaseVariant": "original"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r2",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-786Z_01a0a43a-b052-72a1-94f8-764a83f4aa73.jsonl",
+          "runtime": "pi",
+          "reply": "sending that now",
+          "phase": "released",
+          "utteranceClass": "confirm",
+          "released": {
+            "utteranceId": 1,
+            "text": "Um, tell the worker to rerun the suite",
+            "delivery": {
+              "outcome": "delivered",
+              "mechanism": "prompt",
+              "disclosure": "delivered as the worker was idle"
+            }
+          },
+          "cancelled": false
+        }
+      ]
+    },
+    {
+      "row": "L5a",
+      "drove": "statement \"Um, tell the worker to rerun the suite\" WITH releaseVariant \"original\" on a fresh session; control: the same utterance WITHOUT the variant on another fresh session",
+      "expected": "phase=proposed (never released); released null; the draft payload is unchanged by the variant (identical to the control)",
+      "observed": "variantTurn phase=\"proposed\" released=null proposal(A)={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"}; control phase=\"proposed\" proposal(B)={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} identical=true",
+      "verdict": "PASS",
+      "frames": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-908Z_01a0a43a-b0cc-72a1-94f8-764d9e36d7c2.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r3",
+          "releaseVariant": "original"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r3",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-908Z_01a0a43a-b0cc-72a1-94f8-764d9e36d7c2.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-003Z_01a0a43a-b12a-72a1-94f8-764e6fe1a885.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r4"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r4",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-003Z_01a0a43a-b12a-72a1-94f8-764e6fe1a885.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        }
+      ]
+    },
+    {
+      "row": "L5b",
+      "drove": "draft held, then \"did you send it?\" WITH releaseVariant \"original\", then a plain default confirm",
+      "expected": "the variant-carrying non-confirm turn releases nothing and leaves the draft byte-identical; the later default confirm still releases the draft",
+      "observed": "midTurn phase=\"proposed\" released=null draftBefore={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} draftAfter={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} identical=true; laterConfirm phase=\"released\" released.text=\"rerun the suite\"",
+      "verdict": "PASS",
+      "frames": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r5"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r5",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl",
+          "utterance": "did you send it?",
+          "runtime": "pi",
+          "requestId": "r6",
+          "releaseVariant": "original"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r6",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "question",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          }
+        },
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r7"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r7",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl",
+          "runtime": "pi",
+          "reply": "sending that now",
+          "phase": "released",
+          "utteranceClass": "confirm",
+          "released": {
+            "utteranceId": 1,
+            "text": "rerun the suite",
+            "delivery": {
+              "outcome": "delivered",
+              "mechanism": "prompt",
+              "disclosure": "delivered as the worker was idle"
+            }
+          },
+          "cancelled": false
+        }
+      ]
+    }
+  ],
+  "frames": [
+    {
+      "tag": "ns-L4",
+      "dir": "sent",
+      "frame": "{\"type\":\"new_session\",\"requestId\":\"ns-L4\",\"model\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "set_model-L4",
+      "dir": "sent",
+      "frame": "{\"type\":\"set_model\",\"modelId\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "L4-proposal",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-786Z_01a0a43a-b052-72a1-94f8-764a83f4aa73.jsonl\",\"utterance\":\"Um, tell the worker to rerun the suite\",\"runtime\":\"pi\",\"requestId\":\"r1\"}"
+    },
+    {
+      "tag": "L4-confirm",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-786Z_01a0a43a-b052-72a1-94f8-764a83f4aa73.jsonl\",\"utterance\":\"yes, go ahead\",\"runtime\":\"pi\",\"requestId\":\"r2\",\"releaseVariant\":\"original\"}"
+    },
+    {
+      "tag": "ns-L5a",
+      "dir": "sent",
+      "frame": "{\"type\":\"new_session\",\"requestId\":\"ns-L5a\",\"model\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "set_model-L5a",
+      "dir": "sent",
+      "frame": "{\"type\":\"set_model\",\"modelId\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "L5a",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-44-908Z_01a0a43a-b0cc-72a1-94f8-764d9e36d7c2.jsonl\",\"utterance\":\"Um, tell the worker to rerun the suite\",\"runtime\":\"pi\",\"requestId\":\"r3\",\"releaseVariant\":\"original\"}"
+    },
+    {
+      "tag": "ns-L5a-control",
+      "dir": "sent",
+      "frame": "{\"type\":\"new_session\",\"requestId\":\"ns-L5a-control\",\"model\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "set_model-L5a-control",
+      "dir": "sent",
+      "frame": "{\"type\":\"set_model\",\"modelId\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "L5a-control",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-003Z_01a0a43a-b12a-72a1-94f8-764e6fe1a885.jsonl\",\"utterance\":\"Um, tell the worker to rerun the suite\",\"runtime\":\"pi\",\"requestId\":\"r4\"}"
+    },
+    {
+      "tag": "ns-L5b",
+      "dir": "sent",
+      "frame": "{\"type\":\"new_session\",\"requestId\":\"ns-L5b\",\"model\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "set_model-L5b",
+      "dir": "sent",
+      "frame": "{\"type\":\"set_model\",\"modelId\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "L5b-draft",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl\",\"utterance\":\"Um, tell the worker to rerun the suite\",\"runtime\":\"pi\",\"requestId\":\"r5\"}"
+    },
+    {
+      "tag": "L5b-mid",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl\",\"utterance\":\"did you send it?\",\"runtime\":\"pi\",\"requestId\":\"r6\",\"releaseVariant\":\"original\"}"
+    },
+    {
+      "tag": "L5b-late-confirm",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-45-076Z_01a0a43a-b174-72a1-94f8-765130c6853a.jsonl\",\"utterance\":\"yes, go ahead\",\"runtime\":\"pi\",\"requestId\":\"r7\"}"
+    }
+  ]
+}

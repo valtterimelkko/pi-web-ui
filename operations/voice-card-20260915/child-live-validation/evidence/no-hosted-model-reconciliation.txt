@@ -1,0 +1,10 @@
+=== no-hosted-model reconciliation (W2b, 2026-09-15T08:45:46Z) ===
+
+All talker requests AND all worker-model requests were served by the local stub on 127.0.0.1:3918.
+Stub request log: logs/talker-stub.jsonl (every entry carries 'Bearer stub-local-key').
+Isolated pi agent dir: /tmp/w2b-agent (models.json overrides BOTH 'localstub' and 'openai' baseUrl to the stub;
+the disposable server was launched with OPENAI_API_KEY/OPENROUTER_API_KEY/DEEPSEEK_API_KEY/ZAI_API_KEY/
+ANTHROPIC_API_KEY/GOOGLE_API_KEY/GEMINI_API_KEY/NVIDIA_API_KEY removed from its environment).
+
+Invariant checked: every assistant TEXT block in every session on the disposable server equals the stub reply.
+  sessions=11 assistantTextBlocks=6 equalToStubReply=6 others=0

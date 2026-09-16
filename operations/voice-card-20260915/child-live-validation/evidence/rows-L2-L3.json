@@ -1,0 +1,106 @@
+{
+  "at": "2026-09-15T08:41:40.664Z",
+  "base": "http://localhost:40903",
+  "origin": "https://pi.letsautomate.work",
+  "workerModel": "localstub/deterministic",
+  "workerModelReported": [
+    {
+      "row": "L2/L3",
+      "session": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-40-397Z_01a0a43a-9f2b-72a1-94f8-7649178af87d.jsonl",
+      "model": null
+    }
+  ],
+  "rows": [
+    {
+      "row": "L2",
+      "drove": "talker_turn {utterance: \"Um, tell the worker to rerun the suite\"} on a fresh pi worker session",
+      "expected": "phase=proposed; cleaned=true; removed = fragments only (never the whole utterance); original = the raw utterance",
+      "observed": "proposal={\"text\":\"rerun the suite\",\"cleaned\":true,\"original\":\"Um, tell the worker to rerun the suite\",\"removed\":\"Um, tell the worker to\"} (removed is a fragment subset: true)",
+      "verdict": "PASS",
+      "frames": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-40-397Z_01a0a43a-9f2b-72a1-94f8-7649178af87d.jsonl",
+          "utterance": "Um, tell the worker to rerun the suite",
+          "runtime": "pi",
+          "requestId": "r1"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r1",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-40-397Z_01a0a43a-9f2b-72a1-94f8-7649178af87d.jsonl",
+          "runtime": "pi",
+          "reply": "Noted — I am holding that for your go-ahead.",
+          "phase": "proposed",
+          "utteranceClass": "statement",
+          "released": null,
+          "cancelled": false,
+          "proposal": {
+            "text": "rerun the suite",
+            "cleaned": true,
+            "original": "Um, tell the worker to rerun the suite",
+            "removed": "Um, tell the worker to"
+          },
+          "receiptAck": "Noted — still holding that."
+        }
+      ]
+    },
+    {
+      "row": "L3",
+      "drove": "talker_turn {utterance: \"yes, go ahead\"} (default confirm) after L2",
+      "expected": "phase=released; released.text byte-identical to L2 proposal.text; the delivery adapter reports the same bytes and the worker transcript holds exactly those bytes",
+      "observed": "phase=\"released\" released.text=\"rerun the suite\" proposal.text=\"rerun the suite\" delivery={\"outcome\":\"delivered\",\"mechanism\":\"prompt\",\"disclosure\":\"delivered as the worker was idle\"} transcript={\"found\":true,\"detail\":\"user messages=1\",\"userTexts\":[\"rerun the suite\"]}",
+      "verdict": "PASS",
+      "frames": [
+        {
+          "type": "talker_turn",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-40-397Z_01a0a43a-9f2b-72a1-94f8-7649178af87d.jsonl",
+          "utterance": "yes, go ahead",
+          "runtime": "pi",
+          "requestId": "r2"
+        },
+        {
+          "type": "talker_turn_result",
+          "requestId": "r2",
+          "workerSessionId": "/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-40-397Z_01a0a43a-9f2b-72a1-94f8-7649178af87d.jsonl",
+          "runtime": "pi",
+          "reply": "sending that now",
+          "phase": "released",
+          "utteranceClass": "confirm",
+          "released": {
+            "utteranceId": 1,
+            "text": "rerun the suite",
+            "delivery": {
+              "outcome": "delivered",
+              "mechanism": "prompt",
+              "disclosure": "delivered as the worker was idle"
+            }
+          },
+          "cancelled": false
+        }
+      ]
+    }
+  ],
+  "frames": [
+    {
+      "tag": "ns-L2L3",
+      "dir": "sent",
+      "frame": "{\"type\":\"new_session\",\"requestId\":\"ns-L2L3\",\"model\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "set_model-L2L3",
+      "dir": "sent",
+      "frame": "{\"type\":\"set_model\",\"modelId\":\"localstub/deterministic\"}"
+    },
+    {
+      "tag": "L2",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-40-397Z_01a0a43a-9f2b-72a1-94f8-7649178af87d.jsonl\",\"utterance\":\"Um, tell the worker to rerun the suite\",\"runtime\":\"pi\",\"requestId\":\"r1\"}"
+    },
+    {
+      "tag": "L3",
+      "dir": "sent",
+      "frame": "{\"type\":\"talker_turn\",\"workerSessionId\":\"/tmp/w2b-live-d/pi-sessions/2026-09-15T08-41-40-397Z_01a0a43a-9f2b-72a1-94f8-7649178af87d.jsonl\",\"utterance\":\"yes, go ahead\",\"runtime\":\"pi\",\"requestId\":\"r2\"}"
+    }
+  ]
+}

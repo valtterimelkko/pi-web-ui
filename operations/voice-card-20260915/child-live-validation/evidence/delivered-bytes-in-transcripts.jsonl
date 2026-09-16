@@ -1,0 +1,6 @@
+{"sessionFile":"2026-09-15T08-44-57-459Z_01a0a43d-a0f1-74e6-91cb-f54936011fdc.jsonl","boundProvider":"openai","boundModel":"gpt-5.5","userBytes":[{"type":"text","text":"rerun the suite"}]}
+{"sessionFile":"2026-09-15T08-45-01-775Z_01a0a43d-b1cf-74e6-91cb-f54d2e272ea1.jsonl","boundProvider":"openai","boundModel":"gpt-5.5","userBytes":[{"type":"text","text":"rerun the suite"}]}
+{"sessionFile":"2026-09-15T08-45-01-916Z_01a0a43d-b25c-74e6-91cb-f54e4e443b98.jsonl","boundProvider":"openai","boundModel":"gpt-5.5","userBytes":[{"type":"text","text":"Um, tell the worker to rerun the suite"}]}
+{"sessionFile":"2026-09-15T08-45-02-198Z_01a0a43d-b376-74e6-91cb-f555e92c59e7.jsonl","boundProvider":"openai","boundModel":"gpt-5.5","userBytes":[{"type":"text","text":"rerun the suite"}]}
+{"sessionFile":"2026-09-15T08-45-18-422Z_01a0a43d-f2d6-74e6-91cb-f55d46b4735e.jsonl","boundProvider":"openai","boundModel":"gpt-5.5","userBytes":[{"type":"text","text":"Run exactly 4 Bash calls strictly one at a time (never batch them), each running: sleep 12. Only after all four have finished, reply with exactly: P27-WS-SLOW-DONE"}]}
+{"sessionFile":"2026-09-15T08-45-18-422Z_01a0a43d-f2d6-74e6-91cb-f55d46b4735e.jsonl","boundProvider":"openai","boundModel":"gpt-5.5","userBytes":[{"type":"text","text":"reply with exactly P27-WS-RELAY once it finishes"}]}
