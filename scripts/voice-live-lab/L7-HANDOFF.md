@@ -15,7 +15,7 @@ and signs off.
 | Pre-registered matrix + rule table | `…/04-voice-live-lab/PLAN.md` | updated (`### Tier 2 (L7)`) |
 | CLI `tier2-dryrun` / `tier2-run` | `scripts/voice-live-lab/cli.ts` | additive (new commands only) |
 | README (tier-2 usage, record rules, corpus, derivation) | `scripts/voice-live-lab/README.md` | updated |
-| Harness + policy + matrix + CLI tests | `server/tests/voice-live-lab/tier2-lean.test.ts` | NEW (45) |
+| Harness + policy + matrix + CLI tests | `server/tests/voice-live-lab/tier2-lean.test.ts` | NEW (47) |
 | Corpus + fidelity-scoring tests | `server/tests/voice-live-lab/fidelity-corpus.test.ts` | NEW (23) |
 
 Nothing in `server/src/**`, any production service, or any existing scenario
@@ -111,10 +111,14 @@ Scoring is mechanical and documented: required-word recall (multi-word terms are
 phrases); a negation or conditional survives only when its content words AND its
 OWN qualifier words survive, so a dropped "not" or "only" is caught; target
 survival; distractor leakage; length ratio; and `unexplainedAdditions` as the
-candidate list for the §20.5 judge's added-constraints rubric. Fidelity is
-measured on the text the MODEL composed — in every condition, including a held
-or refused send — and separately on the bytes DELIVERED (1.0 by construction
-under `fixed-text`, which is the point of the comparison).
+candidate list for the §20.5 judge's added-constraints rubric. The shadow ASR is
+load-bearing rather than decorative: every turn records the deciding transcript
+against the shadow leg and the score reports their token-F1 agreement (§20.4 F1)
+— in the hermetic runs both legs serve the same authored utterance, so 1.0 is an
+equipment check. Fidelity is measured on the text the MODEL composed — in every
+condition, including a held or refused send — and separately on the bytes
+DELIVERED (1.0 by construction under `fixed-text`, which is the point of the
+comparison).
 
 **The smoke test that makes the corpus trustworthy** (in both suites, and in
 the phase's own dry runs): the tier-1 mechanical relay is the control, so
@@ -154,7 +158,7 @@ asserts this against `PLAN.md`, so the file and the function cannot drift.
 
 | Gate | Command | Result |
 |---|---|---|
-| Lab unit tests | `cd server && npx vitest run tests/voice-live-lab/` | **443/443 pass** (375 existing + 68 new; 0 modified) |
+| Lab unit tests | `cd server && npx vitest run tests/voice-live-lab/` | **445/445 pass** (375 existing + 70 new; 0 modified) |
 | Typecheck | `npm run typecheck` | **exit 0** |
 | Build | `npm run build` | **exit 0** |
 | Lint | `npm run lint` | **0 errors** |
