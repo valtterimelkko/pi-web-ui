@@ -371,6 +371,24 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 0 — D accepted and merged).** Child D fired `goal_end` (achieved)
+and was reconciled: handback read, then **independently verified by the conductor**
+— Gate 0 command re-run (exit 0, verdict `not measured`), the bench repo's own
+suite re-run (10/10, 0 skipped), regression suite re-run by the conductor
+(13/13, 0 skipped), corpus file deep-equal to the frozen source (20 items) with
+provenance. Merged `--no-ff` as `5e7566d` and pushed; regression suite re-run on
+merged master (13/13). D's supervision cleaned up: watch `ww_3` cancelled
+(remote generation deletion confirmed), board entry left, retention lease
+released. Two D findings recorded: (a) the plan's lab-scoped `site/` never
+existed — the repo-root site page is retained and corrected per D1 (no deletion;
+conductor ruling D-06); (b) the automated session-end memory-capture lane wrote
+into child D **after** its goal was achieved (goal protected the task itself; no
+repo impact — noted for future children). Also observed: E spawned a read-only
+review subagent (board entry `pi-01a0b113`, session already gone) — within its
+session tree, no action needed. **E** still running (contract drafted in worktree,
+not yet committed). **A** still running (Phase 1 committed: `0bb5aa8`
+"whole-utterance confirmation shapes — doubt and conditions never release").
+
 **2026-09-17 (Wave 0 dispatched — strategy amendment).** Execution started on the
 owner's goal-engine activation. Wave 0 was amended to pull **A (kernel) and D
 (audit) forward** alongside **E (contract)**: dependency analysis showed neither
@@ -394,6 +412,12 @@ Wave 0 contract child E (§6).
 ---
 
 ## 13. Decisions log (append-only)
+
+- **D-06 (conductor, 2026-09-17).** Ruling on D's flagged wording mismatch: the
+execution plan's lab-scoped `site/` path never existed, and the repo-root
+`site/index.html` is deliberately retained with the withdrawn-figures notice
+(owner decision D1 — annotate, not erase). Nothing is deleted; the plan's wording
+is read as applying to the corrected publication, which is satisfied. §12.
 
 - **D-05 (conductor, 2026-09-17).** Strategy amendment: Wave 0 = E + A + D in
   parallel (A/D pulled forward; no contract dependency), B/C held for Wave 1.
