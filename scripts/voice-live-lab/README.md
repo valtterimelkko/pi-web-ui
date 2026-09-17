@@ -1,9 +1,12 @@
-# Voice Live Lab — Phase L0 Equipment + L2 Baseline Lane + L4 Tier 1 Guarded Harness
+# Voice Live Lab — Phase L0 Equipment + L2 Baseline Lane + L4 Tier 1 Guarded Harness + L5 Tier 3 Orchestrator
 
 > **Scope:** L0 (measuring equipment), L2 (baseline lane: Gemma cascade
-> provider, tier-1 scenarios, scorer) and L4 (tier 1 guarded native harness:
+> provider, tier-1 scenarios, scorer), L4 (tier 1 guarded native harness:
 > Gemini Live adapter, policy-core-driven gating, commit rule, dry-run
-> runner). The lab itself is specified in
+> runner) and L5 (tier 3: the live model as orchestrator over the shortened
+> Benchmark 2, with the Internal API tool surface, the host-enforced
+> confirmation protocol and session-lifetime handling). The lab itself is
+> specified in
 > [`docs/VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md`](../../docs/VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md)
 > (Parts II–III) and sequenced in
 > [`docs/VOICE-GEMINI-LIVE-IMPLEMENTATION-PLAN.md`](../../docs/VOICE-GEMINI-LIVE-IMPLEMENTATION-PLAN.md).
@@ -39,7 +42,10 @@ defect must fail for the intended reason.
 | `lib/providers/gemini-live.ts` | **L4.** The injectable seam to `@google/genai` 1.52.0 `ai.live.connect`: tier-1 connect config (audio modalities, both transcriptions, session resumption, E/N activity detection), the two declared functions (`mark_addressed_to_talker`, `offer_ask_worker` — NON_BLOCKING, acknowledged SILENT), `provider_content`/`provider_usage`/lifecycle events, state-view context updates coalesced ≥ 2 s apart and never mid-speech. Tests and dry runs inject a mock session factory; the real `@google/genai` factory is built only for a measured `tier1-run`. |
 | `lib/harness/tier1-guarded.ts` | **L4.** The guarded native harness: `TranscriptCommitTracker` (the §16.3 400 ms stabilisation commit rule as a pure state machine), `Tier1GuardedHarness` executing the L3 policy core exactly as `TalkerSession` does — `release` → recorded `WorkerDelivery`; mechanical decisions → trusted mechanical voice at receipt tier + context update, with native audio queued before the decision discarded under honest player accounting; conversational decisions → the model's own native reply, with the tool calls interpreted through the same `decideAfterModelReply` semantics. `native` and `sidecar` transcript conditions; `buildTier1SystemInstruction` (v3 prompt minus the text-marker lines, plus the function contract and "you never send; the host sends"). |
 | `lib/tier1-dryrun.ts` | **L4.** `runTier1DryAttempt`: hermetic guarded-native attempts (scripted live client + scripted shadow ASR + silence mechanical voice + null delivery) across all shipped tier-1 scenarios in both transcript conditions and both lanes. `runTier1MeasuredAttempt` + `createWhisperShadowAsr` + `encodeWav`: the guarded real-run entry for `tier1-run` (refuses without `GEMINI_API_KEY`). |
-| `cli.ts` | `verify <attemptDir>` — the offline trust boundary; `handshake` — the L1 probes; `baseline-dryrun` — hermetic L2 attempts; `tier1-dryrun` — hermetic L4 attempts; `tier1-run` — measured L4 attempts (needs `GEMINI_API_KEY`). |
+| `lib/tier3-tools.ts` | **L5.** The tier-3 tool surface (§17.2): the seven declared functions (`create_child`, `prompt_child`, `child_status`, `read_child`, `wait_for`, `run_checked`, `notify_owner`), all `NON_BLOCKING` with `WHEN_IDLE`-scheduled responses; Zod-validated arguments; the `run_checked` allow-list as a pure grammar (no shell metacharacters at all, `git -C` inside the run dir with `log|status|diff` only, `python3 -m unittest` with the run dir as cwd, `bash … ctl.sh restart|health|status`, `cat`/`ls` inside the run dir); the 30 s polling rule; the host-enforced confirmation protocol (a committed `confirm` within 60 s, never the model's claim); the tool ledger; and both the real Unix-socket Internal API client and full hermetic doubles. |
+| `lib/harness/tier3-orchestrator.ts` | **L5.** The tier-3 orchestrator: the connect config (`sessionResumption: {}` and `contextWindowCompression` at 100k tokens on EVERY connection), the versioned/hashed ≤600-word system instruction, the operator path (PCM + E-lane markers + the 400 ms commit rule), tool-call dispatch with `WHEN_IDLE` responses, and `goAway` handling — finish in-flight responses, close, reconnect with the last `newHandle`, increment the generation, restore host state from its own ledger, and re-issue (tagged with the original call id) any result that could not go out while the socket was down. |
+| `lib/b2-short-driver.ts` | **L5.** The B2-short driver (§17.3): builds the fixture testbed, evaluates the declarative triggers, supplies the scripted children and scripted live model for the hermetic dry run, walks `B2_SHORT_DRY_SCRIPT`, derives a parent transcript from the event log and scores the run with the UNCHANGED Benchmark 2 `score_orchestrator.py`. `runB2ShortMeasuredAttempt` is the real-run entry. |
+| `cli.ts` | `verify <attemptDir>` — the offline trust boundary; `handshake` — the L1 probes; `baseline-dryrun` — hermetic L2 attempts; `tier1-dryrun` — hermetic L4 attempts; `tier1-run` — measured L4 attempts (needs `GEMINI_API_KEY`); `tier3-dryrun` — hermetic L5 tier-3 attempts over B2-short; `tier3-run` — measured L5 attempts (needs `GEMINI_API_KEY`, a named socket and operator audio fixtures). |
 | `boot-disposable-server.sh` | `systemd-run --scope --collect` boot of an isolated validation server, outside the production cgroup. |
 
 ## The L0 verification gate
@@ -88,6 +94,47 @@ GEMINI_API_KEY=... npx tsx scripts/voice-live-lab/cli.ts tier1-run \
 # Score attempts (benchmark side)
 python3 /root/agent-benchmarks/benchmarks/04-voice-live-lab/score_voice.py /path/to/runs/<runId>
 ```
+
+## Tier 3 — the live model as orchestrator (L5)
+
+Tier 3 has no talker and no relay gate: the live model orchestrates B2-short
+itself, and its authority is the **tool allow-list** plus a **confirmation
+protocol** the host enforces. See §17 of the intent document, and
+`/root/agent-benchmarks/benchmarks/04-voice-live-lab/b2-short/README.md` for the
+fixture.
+
+```bash
+# Hermetic tier-3 dry run: scripted children + scripted live model, but REAL
+# repositories, git history, mock service and run_checked commands.
+# Writes an immutable attempt record, verifies it offline, derives a parent
+# transcript from the event log and scores it with the unchanged
+# score_orchestrator.py.
+npx tsx scripts/voice-live-lab/cli.ts tier3-dryrun \
+  --runs-root /root/agent-benchmarks/benchmarks/04-voice-live-lab \
+  --run-id my-run --attempts 1
+
+# Verify / re-verify the record offline
+npx tsx scripts/voice-live-lab/cli.ts verify \
+  /root/agent-benchmarks/benchmarks/04-voice-live-lab/runs/my-run/t3/<candidate>/E-orchestrator/<variant>/attempt-01
+
+# MEASURED tier-3 attempt: real Internal API, real Live session, real children.
+# Refuses without GEMINI_API_KEY, without an explicit --socket/--token-path
+# (never an implicit production socket), and without operator audio fixtures
+# (<beats-audio-dir>/<beatId>.pcm) unless --probe-tone labels an equipment
+# smoke run. Budget, quota and the GLM peak window stay with the caller (§21).
+GEMINI_API_KEY=... npx tsx scripts/voice-live-lab/cli.ts tier3-run \
+  --socket <disposable.sock> --token-path <token> \
+  --beats-audio-dir /path/to/beats --model gemini-3.8-live
+```
+
+What a green `tier3-dryrun` proves: the tool surface, the allow-list, the
+polling rule, the confirmation protocol, the orchestrator's `goAway` handling
+and host-state restoration, the B2-short fixture and its triggers, the
+derived transcript, the immutable record, the offline verifier and the
+unchanged Benchmark 2 scorer all agree with each other on real files and real
+exit codes. What it does NOT prove: anything about any live model — the record
+carries `usage.mode: "dry-run"`, `realProviderCalls: 0` and
+`realServices.liveModel: false`.
 
 # Boot / stop an isolated disposable validation server (never production)
 VOICE_LAB_DIR=$(mktemp -d /tmp/voice-lab-XXXXXX) \
