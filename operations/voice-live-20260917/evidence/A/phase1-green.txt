@@ -10,10 +10,26 @@ RED (phase1-red.txt): 9 failing / 73 passing across
   (doubt, conditional agreement and post-affirmation instruction cases failing).
 
 GREEN (phase1-green-gate1.txt): the two gate files pass, EXIT=0
-  tests/unit/talker/utterance-classifier.test.ts  (54 tests)
+  tests/unit/talker/utterance-classifier.test.ts  (55 tests)
   tests/unit/talker/talker-gate.test.ts           (30 tests)
-  Test Files 2 passed | Tests 84 passed -> exit 0
-  (>= 25 distinct classifier cases; 3 new gate-level tests fail closed)
+  Test Files 2 passed | Tests 85 passed -> exit 0
+  (>= 25 distinct classifier cases; 4 new gate-level tests fail closed)
 
 FULL SUITE (phase1-green-full-talker-suite.txt): EXIT=0
-  Test Files 35 passed (35) | Tests 589 passed | 2 skipped (591)
+  Test Files 35 passed (35) | Tests 590 passed | 2 skipped (592)
+
+REPAIR SHAPE: whole-utterance validation against the closed confirmation
+vocabulary (no blanket wildcard regexes), explicit negation/uncertainty
+disqualifiers (not / never / hardly / doubt / …), post-affirmation instruction
+material => statement, and the mandatory pushback turn kept as an authorisation
+only when it carries one and does not negate it.
+
+REACHABILITY CHECK (phase1-lab-impact.txt): every one of the 65 operator
+utterances in the shipped voice-live-lab scenario corpus was classified with
+the pre-change and repaired classifiers. Zero utterances were widened from
+non-confirm to confirm; exactly one was narrowed: "Ok, stop reading." — an
+instruction to the talker, not an authorisation. Three lab tests outside Track
+A ownership still depend on the old accidental classification of that
+utterance (and of the b2-short permission fixture "Yes, restart it."); they are
+documented in phase1-lab-impact.txt, not edited, because the paths are not
+Track A's to touch.

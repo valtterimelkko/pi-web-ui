@@ -1,16 +1,12 @@
-== Phase 1 + 2 regression: FULL talker suite (final committed-code run) ==
-2026-09-17T20:38:19Z
+== Phase 1 + 2 regression: FULL talker suite — FINAL run ==
+2026-09-17T20:43:59Z
 $ npm --prefix server test -- tests/unit/talker/
- ✓ tests/unit/talker/history.test.ts  (6 tests) 4ms
- ✓ tests/unit/talker/focus-projection.test.ts  (5 tests) 17ms
- ✓ tests/unit/talker/cancel-residue.test.ts  (5 tests) 12ms
- ✓ tests/unit/talker/dead-end.test.ts  (6 tests) 50ms
- ✓ tests/unit/talker/session-registry.test.ts  (14 tests) 95ms
+ ✓ tests/unit/talker/session-registry.test.ts  (14 tests) 123ms
 
  Test Files  35 passed (35)
-      Tests  589 passed | 2 skipped (591)
-   Start at  20:38:20
-   Duration  2.93s (transform 5.40s, setup 1.65s, collect 13.58s, tests 3.06s, environment 9ms, prepare 5.27s)
+      Tests  590 passed | 2 skipped (592)
+   Start at  20:44:00
+   Duration  2.89s (transform 4.92s, setup 1.91s, collect 14.01s, tests 3.15s, environment 13ms, prepare 5.06s)
 
 JSON report written to /root/pi-web-ui-track-a/server/test-results.json
 EXIT=0

@@ -47,6 +47,7 @@ const CONFIRM_ATOMS = [
   "that's right",
   'send it over',
   'send it',
+  'send that over',
   'send that',
   'do it',
   'do that',

@@ -143,6 +143,12 @@ describe('confirmation-gate repair: pure confirmations stay confirmations (keep-
     }
   );
 
+  it('keeps the shipped send variants confirmations (t1-s6 regression guard)', () => {
+    expect(classifyOperatorUtterance('Yes, send that over.')).toBe('confirm');
+    expect(classifyOperatorUtterance('send that over')).toBe('confirm');
+    expect(classifyOperatorUtterance('send it over')).toBe('confirm');
+  });
+
   it('keeps the mandatory pushback turn a confirmation (with or without a live proposal)', () => {
     expect(classifyOperatorUtterance("just do it, don't ask me every single time, it's a simple thing")).toBe('confirm');
     expect(classifyOperatorUtterance("just do it, don't ask me every single time")).toBe('confirm');

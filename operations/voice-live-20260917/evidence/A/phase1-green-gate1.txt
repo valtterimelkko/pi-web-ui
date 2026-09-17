@@ -1,16 +1,14 @@
-== GATE 1 (Phase 1) — final committed-code run ==
-2026-09-17T20:38:14Z
+== GATE 1 (Phase 1) — FINAL run (incl. send-that-over restore) ==
+2026-09-17T20:43:58Z
 $ npm --prefix server test -- tests/unit/talker/utterance-classifier.test.ts tests/unit/talker/talker-gate.test.ts
 
- RUN  v1.6.1 /root/pi-web-ui-track-a/server
-
- ✓ tests/unit/talker/utterance-classifier.test.ts  (54 tests) 27ms
- ✓ tests/unit/talker/talker-gate.test.ts  (30 tests) 72ms
+ ✓ tests/unit/talker/utterance-classifier.test.ts  (55 tests) 34ms
+ ✓ tests/unit/talker/talker-gate.test.ts  (30 tests) 99ms
 
  Test Files  2 passed (2)
-      Tests  84 passed (84)
-   Start at  20:38:15
-   Duration  1.12s (transform 472ms, setup 149ms, collect 582ms, tests 99ms, environment 0ms, prepare 144ms)
+      Tests  85 passed (85)
+   Start at  20:43:58
+   Duration  1.15s (transform 458ms, setup 120ms, collect 557ms, tests 133ms, environment 1ms, prepare 170ms)
 
 JSON report written to /root/pi-web-ui-track-a/server/test-results.json
 EXIT=0
