@@ -2,7 +2,7 @@
 
 **Date:** 17 September 2026 (revised — options replaced by decisions)
 
-**Status:** **Direction approved by the owner on 2026-09-17** (§8, D1–D6; D7 open). This is the architecture of record. It is **not** production approval: each step in §7 still carries its own gate, and deployment or restart is separate.
+**Status:** **Direction approved by the owner on 2026-09-17** (§8, D1–D7). This is the architecture of record. It is **not** production approval: each step in §7 still carries its own gate, and deployment or restart is separate.
 
 **Inspection baseline:** Pi Web UI `1212bec`; agent-benchmarks `c147519`. No production validation, new paid model runs, or runtime changes were performed.
 
@@ -25,7 +25,7 @@ The target is one architecture, not a menu:
 | Authority | A **host-owned authority kernel** owning transcripts, the four objects (§4.2), proposal identity, confirmation, delivery and receipts. |
 | Audio | **One application-owned speech scheduler** across native conversation, trusted receipts and worker reading. |
 | Prompt | **~15 lines**, down from 50. Everything mechanical moves to code or typed context. |
-| Capture | **Open mic by default**; push-to-talk retained as mode and fallback; an ambient seat built into the state machine from day one. |
+| Capture | **Open mic by default**; push-to-talk retained as mode and fallback. Ambient operation **deferred to a mobile client** (§4.9a), with a client-neutral kernel as the price of keeping it open. |
 | Fallback | The existing Gemma cascade stays working throughout the migration. |
 
 Three things this is **not**, stated because each was a live possibility and each is now closed:
@@ -340,9 +340,30 @@ A pause is not consent. **400 ms is a parameter, not a safety theorem.** Commitm
 |---|---|---|
 | **Open mic** | default, lane active and foregrounded | native VAD, full duplex, barge-in with ducking |
 | **Push-to-talk** | operator choice; automatic fallback when the native socket is down | hard boundary — noisy rooms, precision dictation, privacy |
-| **Ambient** | goal clause 5; later phase | mic open, talker silent until addressed |
+| **Ambient** | goal clause 5; **deferred — see §4.9a** | mic open, talker silent until addressed, free to speak first |
 
-**Ambient is not built first, but the state machine carries a seat for it from day one.** Goal clause 5 — *works when hands and eyes are busy* — is the operator's largest stated gap and the intent file calls it "the biggest thing the current surface lacks". A design with no path to it would optimise the relay and leave the gap intact. Never claim continuous listening while the OS has suspended capture; show and speak suspension and reconnection; keep push-to-talk and typed fallback always reachable.
+Never claim continuous listening while the OS has suspended capture; show and speak suspension and reconnection; keep push-to-talk and typed fallback always reachable.
+
+### 4.9a Ambient operation: deferred, and honestly not a browser feature
+
+**Decision (owner, 2026-09-17): ambient operation is deferred, and it stays a live goal rather than a cancelled one.** Goal clause 5 — *works when hands and eyes are busy* — remains the largest gap in the surface, and the intent file still calls it "the biggest thing the current surface lacks". Nothing here retires it.
+
+But the follow-up must be described truthfully, because the tempting version of it does not exist:
+
+> **Ambient is not a feature that gets added to the web UI later. Mobile browsers are a different playing field, and the honest vehicle for it is a phone — most likely a native mobile app.**
+
+The reasons are platform facts, not implementation effort:
+
+- **Background tabs get suspended.** iOS and Android reclaim backgrounded web pages; the microphone is released and timers stop. A tab in your pocket is not listening, whatever the UI says.
+- **Speaking first requires being alive.** Proactive speech — *"the tests went red"* — needs the client running when you are not looking at it. In a browser that means either the tab is foregrounded, or it is not happening.
+- **Autoplay and audio-session rules** restrict when a page may make sound without a fresh user gesture, which is precisely the situation ambient describes.
+- **Wake handling belongs on-device.** Deciding "were they talking to me?" without streaming a continuously open microphone to a paid provider wants local detection, battery management and an explicit privacy posture — all native concerns.
+
+So the follow-up is **a mobile client**, not a phase of the web work. That carries its own scope: background-audio entitlements, push for proactive speech, on-device wake handling, app-store review for a persistently open microphone, and the running cost of an open mic.
+
+**Why deferring is nonetheless cheap — and the design rule that keeps it cheap.** Everything that makes ambient *safe* is already server-side and client-neutral: the authority kernel, the four objects, proposal identity and confirmation, delivery adapters and receipts, provenance, parked items and reading levels. The web UI is one consumer of that kernel; a future mobile client would be another. So:
+
+**Standing instruction to implementing agents:** keep the kernel's interface **client-neutral**. Do not let browser-specific assumptions — tab visibility, page lifecycle, DOM-bound state, a single shared audio floor per tab — leak into `server/src/talker/` or the shared event contracts. Ambient-mode state belongs in the capture state machine's existing seat, not in new branches scattered through the client. Getting that boundary right is the whole cost of keeping this option open, and it is worth paying now.
 
 **Confirmation acceptance must be narrowed before migration:** replace broad substring matching with explicit whole-utterance forms, negation and quotation refusal, rejection of confirmations carrying new content, and binding to the presented proposal. A casual "yes" to a conversational question must never send an unrelated pending draft. Preserve explicit per-instruction approval; never invent a global "stop asking forever" mode.
 
@@ -561,7 +582,7 @@ These are settled. An implementing agent follows them; it does not re-open them.
 | **D4** | **Keep the measured campaign in full**, rather than reordering it behind the product slice. | **Approved** — *reversing this document's earlier proposal* | §7.1. Owner rationale: **the build is fast, so there is time for both.** Schedule pressure was the reordering's only argument and it does not apply. |
 | **D5** | **Accept the honesty mitigations** M1–M3: host-rendered quotes, host-owned completion claims, unmarked statements default to lowest trust. | **Approved** | §4.7. These are the structural price of letting the talker reason, and they are not optional extras. |
 | **D6** | **Build on the standard model with no escalation machinery.** The five-rung ladder proposed in an earlier draft is **removed entirely**. | **Approved as amended** — *rejecting this document's earlier proposal* | §4.7a. See below. |
-| **D7** | **Ambient / hands-and-eyes-busy operation.** | **Open** | §4.9. The state-machine seat is built regardless; whether clause 5 is in the first slice is undecided. |
+| **D7** | **Defer ambient operation**, keeping it a live goal with an honest follow-up path: a **phone, most likely a native mobile app** — not a later phase of the web UI. | **Approved** | §4.9a. Clause 5 is not cancelled. The price of keeping the option open is a **client-neutral kernel**, which is a standing constraint on Steps 2–4. |
 
 ### 8.1 On D6, because it generalises
 
@@ -571,9 +592,16 @@ This is a standing instruction to implementing agents, not a one-off preference.
 
 Concretely for the voice work: no host-side analysis call, no second reasoning model, no depth-routing layer, no "escalate when hard" heuristic. The talker reasons directly; it retrieves read-only material; it parks or offers to relay. Those exist for their own reasons and are **not** rungs — do not describe them as a ladder or add steps between them.
 
-### 8.2 What remains open
+### 8.2 On D7, and what it commits us to
 
-- **D7, ambient operation** — the only owner decision still outstanding. Cheap to defer *if deferred deliberately*; the risk is that it is forgotten rather than decided.
+Deferring ambient operation is **not** a decision to stop wanting it. Clause 5 is still the biggest gap in the surface, and §4.9a records the follow-up path rather than leaving it as a vague "later".
+
+The honest part of that record is the vehicle: **a phone, and most likely a native mobile app.** Mobile browsers suspend background tabs, release the microphone, restrict unprompted audio, and give no good home for on-device wake handling. An ambient assistant that lives in a browser tab would have to either lie about listening or only work while you are looking at it — and the second is the thing clause 5 exists to escape.
+
+What this commits an implementing agent to **now**, while building the web slice: keeping the authority kernel and the shared event contracts **client-neutral**, so the web UI is one consumer rather than the shape of the system. Browser lifecycle assumptions must not reach `server/src/talker/`. That constraint costs very little today and is the entire reason this deferral is cheap; skip it and ambient stops being a deferral and becomes a rewrite.
+
+### 8.3 What remains open
+
 - **Arm D of the campaign** (extended thinking, ~15 attempts) is information rather than machinery and may be cut without affecting acceptance. It is included so a future capability conversation has data; D6 means the product ships standard either way.
 - **Tier 3 / Live-as-conductor** remains a separate experiment against its own question (§5.1), not part of this programme.
 - **Sizing** — this document does not estimate effort. The owner's stated expectation is that the build is fast; an implementing agent should size Steps 2–4 before dispatch and raise it if that expectation looks wrong.

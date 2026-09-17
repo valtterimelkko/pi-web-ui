@@ -658,16 +658,45 @@ Three capture modes, with one state machine:
 |---|---|---|
 | **Open mic** | default when Voice Mode is foregrounded and the lane is active | native voice activity detection, full duplex, barge-in with ducking |
 | **Push-to-talk** | operator choice; automatic fallback when the native socket is down | hard boundary; noisy rooms, precision dictation, privacy |
-| **Ambient** | goal clause 5; a later phase | mic open, talker silent until addressed |
+| **Ambient** | goal clause 5; **deferred — see §20.1** | mic open, talker silent until addressed, free to speak first |
 
-Ambient is not built first, but **the state machine must have a seat for it from
-the start**, so it is not a retrofit later. Goal clause 5 is the operator's
-largest stated gap; a design with no path to it would optimise the relay and leave
-the gap intact.
-
-Honesty requirements that ride with all of this: never claim continuous listening
+Honesty requirements that ride with all three: never claim continuous listening
 while the operating system has suspended capture; show and say suspension and
 reconnection; always keep push-to-talk and typed fallback reachable.
+
+### 20.1 Ambient operation is deferred, and it belongs on a phone
+
+**Operator decision, 2026-09-17: defer ambient operation — and keep it a live
+goal, not a cancelled one.** Clause 5 remains the largest gap in this surface.
+
+What changes is the honesty of the follow-up. Ambient is **not a feature that
+gets added to the web UI later**:
+
+> Mobile browsers are a different playing field. The realistic vehicle for
+> hands-and-eyes-busy operation is a phone, and most likely a native mobile app.
+
+The obstacles are platform facts rather than effort. Mobile operating systems
+suspend backgrounded tabs and release the microphone, so a tab in your pocket is
+not listening whatever the interface claims. Speaking *first* — the half of
+ambient that makes it useful — requires the client to be alive when you are not
+looking at it. Unprompted audio is restricted without a recent user gesture.
+And deciding *"were they talking to me?"* without streaming an always-open
+microphone to a paid provider wants on-device wake handling, with the battery and
+privacy posture that implies. An ambient assistant in a browser tab would have to
+either lie about listening or work only while you watch it — and the second is
+precisely what clause 5 exists to escape.
+
+**Why deferring is cheap, and what keeps it cheap.** Everything that makes
+ambient *safe* already lives on the server and is client-neutral: the authority
+kernel, the four objects, proposal identity and confirmation, delivery and
+receipts, provenance, parked items, reading levels. The web UI is one consumer of
+that kernel; a mobile client would be another.
+
+So the intent carries one standing constraint into the web work: **keep the
+kernel client-neutral.** Browser lifecycle assumptions — tab visibility, page
+lifecycle, DOM-bound state, one audio floor per tab — must not reach
+`server/src/talker/` or the shared event contracts. Honour that and ambient stays
+a deferral; ignore it and ambient becomes a rewrite.
 
 ## 21. The fluency and recovery behaviours that must survive
 
@@ -847,8 +876,17 @@ brief. The intent-relevant core:
    floor owner proposed.
 6. The audio lab `capture:chain` lane fails on this host (environment, not
    product), leaving the rendered-audio oracle indeterminate here.
-7. **The confirmation-gate defect in §8** — scheduled, not yet fixed.
-8. The native-transport migration itself — see the recommendation's decision list.
+7. **The confirmation-gate defect in §8** — authorised for immediate fix
+   (recommendation D2), not yet fixed.
+
+**Settled on 2026-09-17, recorded here so they are not reopened as questions.**
+The native-transport migration is approved in principle (recommendation D3), and
+with it: the measured campaign runs in full rather than being deferred (D4); the
+honesty mitigations are accepted (D5); the conversational seat is the standard
+model with no escalation machinery (D6); and ambient operation is deferred to a
+mobile client with a client-neutral kernel as the standing price of keeping it
+open (D7, §20.1). The recommendation's §8 is the decision record; each step of its
+§7 still carries its own gate, and production deployment remains separate.
 
 ## 26. Source map
 
