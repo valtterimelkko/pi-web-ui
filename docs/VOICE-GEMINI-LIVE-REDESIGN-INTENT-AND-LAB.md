@@ -344,7 +344,7 @@ type DriverAction =
 |---|---|---|
 | **frozen** | Returns the beat's fixed utterance when its trigger fires; audio bytes are the frozen fixture. | Regression, A/B parity, latency distributions. **The comparison backbone.** |
 | **branching** | A table `{ observedPattern → fixed utterance }` over `heard`; falls back to the beat's default. Patterns are regexes over shadow-ASR text with a confidence floor. | Contingent confirmation ("did it ask me?" → "yes"), repair ("did it mishear X?" → restate), clarification answers. No generative model. |
-| **adaptive** | Asks the simulator model (§14.5) for the next line given persona + goal + `heard`; the director validates; Supertonic synthesises; the line is added to the record as a *new* fixture. | Open-ended exploration; finding failures the script did not anticipate. Supplement, never sole judge. Discoveries get frozen into new frozen/branching beats. |
+| **adaptive** | Asks the simulator model (§14.5) for the next line given persona + goal + `heard`; the director validates; Supertonic synthesises; the line is added to the record as a *new* fixture tagged `provenance: synthetic` (§14.5). | Open-ended exploration; finding failures the script did not anticipate. **Supplement, never sole judge — now a scorer rule rather than an intention: no headline conclusion may rest on adaptive beats alone (§20.1).** Discoveries get frozen into new frozen/branching beats, which keep their `synthetic` provenance. |
 
 ### 14.2 Scenario schema
 
@@ -433,7 +433,7 @@ Rules the schema encodes:
 2. **Verify before use:** the shadow ASR transcribes the fixture; word error rate against the script must be ≤ 0.08 and every `requiredWords` entry must be present, else the fixture is `invalid` and the scenario will not run. Forced alignment (optional) localises words for timing; it does not prove them.
 3. **Pace at wall-clock speed:** 20 ms frames (640 bytes at 16 kHz s16le), sent on a monotonic timer; jitter recorded. Never dump a file into the socket.
 4. **Silence is part of the fixture:** each utterance carries `leadInMs` and `trailSilenceMs` (default 300 / 900) so natural-endpointing runs actually end the turn; the E lane ignores trailing silence and sends `activityEnd` at the true speech end.
-5. Adaptive lines are synthesised at run time with the same pipeline and become fixtures of that attempt (hash, duration, ASR check all recorded); a failed check rejects the line and asks the simulator again (max 2).
+5. Adaptive lines are synthesised at run time with the same pipeline and become fixtures of that attempt (hash, duration, ASR check all recorded); a failed check rejects the line and asks the simulator again (max 2). **Every fixture derived from an adaptive line carries `provenance: synthetic` together with the simulator route, the persona hash and the `why` field from the model's own JSON.** That tag is the only thing standing between an invented line and a future reader mistaking it for representative operator behaviour, so it lives in the fixture record and the freeze command never strips it.
 6. Variants (later): a second voice, a slower rate, a Finnish fixture set, injected noise — each a separate condition.
 
 ### 14.4 Endpointing lanes
@@ -453,7 +453,7 @@ One consequence to keep honest: with `high`, a zai-pool draw is larger than `low
 
 **What it sees:** its persona, the beat goal, its own previous lines, and `heard` — the shadow-ASR text of audio that actually *played* (with timestamps and a `[interrupted]` marker where the driver barged in). It does **not** see: the world truth, the candidate's output transcript, unplayed or muted audio, the tool log, any `expect` block, or the golden text of frozen beats other than as lines it "said".
 
-**Persona file** `personas/operator-default.md` (draft — tune from real session logs, never paste real transcripts):
+**Persona file** `personas/operator-default.md` (draft). **Operator-approved 2026-09-17: calibrate it against the operator's own data** — bounded, redacted, and never pasted as real transcripts. The calibration reads the operator's own voice and talker history to extract *style* only: typical turn length, how often an instruction circles before landing, how impatience and refusal are phrased, and the vocabulary used to confirm. It records which sources were used and a hash of the resulting persona, and it must not copy a real utterance into a scenario or let a real transcript enter a run record or the repository. **A derived persona is a versioned artefact:** changing it changes the operator's behaviour in every adaptive beat, so a persona change invalidates comparability with earlier adaptive attempts and is recorded in the manifest exactly like a prompt change.
 
 ```
 You are the owner of a software workstation, speaking aloud to a voice assistant that sits beside
@@ -486,7 +486,15 @@ Decide your next move. Reply ONLY with JSON:
 
 **Reaction latency** of the simulator (model + TTS) is measured and **excluded** from all candidate latency metrics; the scheduler timestamps the candidate's silence and the operator's first audio frame separately.
 
-**Freezing discoveries:** after an adaptive run, `cli.ts freeze --attempt <id> --beat b9` writes the actually-spoken lines and their fixtures as a new frozen scenario variant, so a discovered failure becomes a regression case.
+**Freezing discoveries:** after an adaptive run, `cli.ts freeze --attempt <id> --beat b9` writes the actually-spoken lines and their fixtures as a new frozen scenario variant, so a discovered failure becomes a regression case. Frozen-from-adaptive variants **keep their `synthetic` provenance and may not enter the frozen backbone** (the hand-authored beats used for scored conditions) without an explicit note in the manifest saying a synthetic input was promoted — otherwise a future reader cannot tell ground truth from the simulator's imagination.
+
+**Can the instrument be trusted? (added 2026-09-17.)** The adaptive simulator is the only measurement component in the lab with **no oracle**: there is no ground truth for what the operator would have said next. Every other measurement has one — byte equality for the relay gate, WER for transcription, repo state for tier 3 — so this one is handled explicitly rather than left to intent.
+
+1. **An entry gate before L6 runs.** The simulator is first driven against the **frozen and branching** beats, where the correct next line *is* known, and scored on agreement with that known line plus the director-rejection rate. If it cannot reproduce known-good owner behaviour on beats with fixed answers, adaptive mode produces noise and L6 does not start; that is a reportable result, not a delay.
+2. **Rejection rate is a first-class number, with a pre-registered refusal threshold.** Rejections are aggregated by reason (JSON shape, over-length, permissions violation, golden-truth leakage, disallowed interrupt, turn budget) and reported per condition. **Pre-registered here so it cannot be tuned after seeing the data: if more than 20 % of adaptive lines are rejected for a condition, that condition's adaptive beats are reported `insufficient-evidence` rather than scored.** Sampling is only two attempts per scenario, so a bad simulator would otherwise shrink the sample silently.
+3. **Failures are attributed to the instrument, never to the candidate.** A beat that dies as `simulator-failure` is recorded under a **simulator** failure in the report taxonomy and is excluded from every candidate quality denominator, because the candidate was never given a valid input.
+
+Why this is substance rather than pedantry: the simulator's likeliest failure *is* the behaviour under test. A weak simulator authorises something that was never proposed — precisely the rule the candidate is scored against — so its failures would remove data exactly on the beats that carry the signal (pushback under pressure, mid-thought correction, thinking aloud) rather than spreading evenly across the run.
 
 ### 14.6 UI gestures without a browser
 
@@ -690,7 +698,7 @@ The Gemma cascade driven by the **same** operator driver and scored by the same 
 
 ### 20.1 Mechanical (code) — always first
 
-Per attempt: gate obeyed (no `delivered` without an eligible committed `confirm`; no stale/duplicate release); released bytes SHA equal to the committed draft; delivery outcome ↔ ack wording; draft survives interleaved world events; no golden-text leakage; fixture validity; every expectation in `expect`; poll counts; confirmation protocol (tier 3); budget/teardown status; usage totals present.
+Per attempt: gate obeyed (no `delivered` without an eligible committed `confirm`; no stale/duplicate release); released bytes SHA equal to the committed draft; delivery outcome ↔ ack wording; draft survives interleaved world events; no golden-text leakage; fixture validity; every expectation in `expect`; poll counts; confirmation protocol (tier 3); budget/teardown status; usage totals present. **Two containment rules are mechanical rather than advisory:** (a) every attempt records whether it ran on a frozen, branching or adaptive beat, and a scored headline dimension **must not rest on adaptive beats alone** — an adaptive-only result is reported as exploration, whatever its numbers; (b) a beat that ends `simulator-failure` contributes to **no** candidate quality denominator, because the candidate never received a valid input.
 
 ### 20.2 Latency (exact points)
 
@@ -765,7 +773,7 @@ Per attempt from `usageMetadata`: audio-in, audio-out, text, thinking tokens × 
 
 ### 20.7 Report
 
-`report.json` + `report.html` per run: condition table, mechanical pass/fail matrix, latency distributions, fidelity, judge scores with cited spans, cost, limitations (what was not exercised, `indeterminate` items, environment failures), and links to clips (received and rendered) for optional listening. The conclusions vocabulary is fixed (§9): observed improvement / contract passed-failed-untested / attribution / cost within envelope / worth a guarded experiment — never "better for the operator".
+`report.json` + `report.html` per run: condition table, mechanical pass/fail matrix, latency distributions, fidelity, judge scores with cited spans, cost, limitations (what was not exercised, `indeterminate` items, environment failures), and links to clips (received and rendered) for optional listening. Two additions on the failure side: a **failure taxonomy that keeps candidate, simulator, provider and environment failures separate** (a `simulator-failure` beat is never charged to the candidate), and the **adaptive-line rejection rate by reason**, with any condition reported `insufficient-evidence` named as such. The conclusions vocabulary is fixed (§9): observed improvement / contract passed-failed-untested / attribution / cost within envelope / worth a guarded experiment — never "better for the operator".
 
 ## 21. Run records, budgets, unattended operation
 
@@ -803,11 +811,11 @@ Tier 1 needs levels 0–2 to report; tier 3 is level 3 by nature (real children)
 | **L3 policy core** | `policy-core.ts` extraction + `TalkerSession` refactor | differential replay of the whole talker test corpus, byte-identical; production tests untouched and green | 1 day |
 | **L4 tier 1** | Gemini adapter; tier1-guarded harness; native + sidecar transcript conditions; E and N lanes; duck profile (+ native-interrupt exploration) | level 0 self-test with the fake provider; then 5 attempts × 7 scenarios × {native, sidecar} × {E, N} (§20.5d); gate matrix all green or the run is a finding | 3 days |
 | **L5 tier 3** | tool surface; B2-short fixtures + supervisor; confirmation protocol; lifetime handling; scorer adaptation; disposable server recipe | dry-run with a fake child (Internal API stubbed); then real runs: standard ×3, ET-high ×3, ET-low ×2, plus the B2-short text control ×3 (§20.5c); Benchmark 2 leaderboard row format | 3 days |
-| **L6 adaptive operator** | simulator + director; freeze command; `b9`-style beats appended to the tier 1 scenarios | director rejection tests (unauthorised confirm, leakage, over-length); 2 adaptive attempts per scenario, discoveries frozen | 1.5 days |
+| **L6 adaptive operator** | simulator + director; freeze command; `b9`-style beats appended to the tier 1 scenarios; **instrument entry gate — drive the simulator against frozen and branching beats whose correct next line is known** | director rejection tests (unauthorised confirm, leakage, over-length); **the entry gate passes (agreement with known-good lines recorded, rejection rate inside the pre-registered 20 %) or L6 does not run**; rejection rate reported by reason; 2 adaptive attempts per scenario, discoveries frozen and tagged `provenance: synthetic` | 1.5 days + the entry gate |
 | **L7 tier 2** | tier2-lean harness (`free`, `confirm-guided`, and `fixed-text` if §18.1 adds it); matrix derived by the §18.1 procedure and written into PLAN.md before any run | same matrix as tier 1 plus the fidelity corpus (§20.5b) on the two conditions × {std, ET-low, ET-high} | 2 days |
 | **L8 report** | `run_voice_lab.sh` end-to-end; per-tier reports; leaderboard rows (Benchmark 2 page gains a "voice parent" section; Benchmark 4 page); owner decision memo | offline verifier green on every reported attempt; limitations section complete; Telegram done | 1 day |
 
-Roughly **16 working days** sequentially; L0–L2 and L3 can run as two parallel children with non-overlapping paths (`scripts/voice-live-lab/` vs `server/src/talker/`).
+Roughly **16 working days** sequentially, plus the L6 instrument entry gate (§14.5) which can add up to a day and may legitimately stop L6 rather than delay it; L0–L2 and L3 can run as two parallel children with non-overlapping paths (`scripts/voice-live-lab/` vs `server/src/talker/`).
 
 House rules for the execution agent: disposable server only (`npm run validate:server`, isolated `PI_CODING_AGENT_DIR` and prefs — and see the launcher note in §26.3, because the documented recipe is refused from inside the production systemd slice on this host); never the operator's sessions; no production validation; respect the 07:00–11:00 UK window and the GLM peak window; **re-run live discovery and the quota read immediately before dispatch and refuse on a zero-match selector rather than substituting a similar model**; commit and push on master per phase; `AGENTS.md`/`CLAUDE.md` byte-identical if touched; record every provider surprise in `capabilities.json`, not in prose only.
 
@@ -823,6 +831,8 @@ House rules for the execution agent: disposable server only (`npm run validate:s
 | Async tool results do not survive a resume | host re-issues results as context updates; measured in L1 |
 | Proactive audio floods the floor | tier-4 classification and drop; unsolicited-speech metric |
 | Simulator and judge share biases with each other | different vendors; frozen backbone; mechanical checks first; clips retained |
+| The adaptive simulator is an **unmeasured instrument with no oracle**, and its likeliest failure is the behaviour under test — so its failures would remove data exactly where the signal is | Entry gate against beats with known next lines before L6 runs; pre-registered 20 % rejection ceiling above which adaptive beats are `insufficient-evidence`; failures attributed to the simulator rather than the candidate; adaptive-derived fixtures tagged `synthetic` and barred from the frozen backbone; no headline conclusion may rest on adaptive beats alone (§14.5, §20.1) |
+| A calibrated persona is derived from real operator data, which is both an opportunity and a leak risk | Style-only extraction, sources recorded, persona hashed and versioned in the manifest like a prompt; no real utterance copied into a scenario, no transcript in a run record or the repository (§14.5) |
 | B2-short makes orchestration too easy | keep the gating trap, the misroutable defect, and the restart ordering — the three governance behaviours Benchmark 2 was built around; children stay real |
 | Supertonic voice quality biases the candidate's hearing | fixture WER gate; a second voice as a condition; OpenAI TTS voice as a control condition if WER differs |
 | The Pi-runtime `commandcode/*` judge route was assumed to need `--command-code-real` on a disposable server | **Disproved 2026-09-16:** a disposable server reports `commandcode : disabled` and zero entries for the `commandcode` *runtime*, yet still lists 47 `pi`-runtime `commandcode/*` provider entries including the judge route at `low, high, max`. The provider comes from the Pi `commandcode-provider` extension, not from `COMMAND_CODE_ENABLED`, which gates only the separate server-local runtime. Preflight still asserts it (§21) |
