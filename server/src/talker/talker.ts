@@ -6,13 +6,16 @@
  * after explicit confirmation. One instance serves one worker session.
  *
  * THE GATE IS MECHANICAL (plan §10.9 — the non-negotiables):
- *   1. The talker (model) has no send path. The ONLY code that can hand text
+ *   1. The talker (model) has no send path. The only code that can hand text
  *      to the worker is the release branch inside handleOperatorTurn, and it
  *      runs only when (a) a pending proposal exists — harness state, holding
  *      the operator's verbatim utterance — and (b) the operator's new
  *      utterance mechanically classifies as a confirmation. Model output is
  *      never an input to this decision, so no model behaviour — compliant or
- *      not — can move the gate.
+ *      not — can move the gate. (Phase L3: every branch decision itself —
+ *      release, refusal, cancel, draft/offer candidates, receipts — is made
+ *      by the pure policy-core.ts; this file builds the state view, executes
+ *      the decision and owns all I/O.)
  *   2. The relay text is the draft's stored text: the operator's own words
  *      (P25 semi-verbatim: minus the channel and the disfluency — normalised
  *      mechanically at draft time by relay-normalise.ts, removal only, never
@@ -63,15 +66,15 @@
  *   draft (parts, age, needs-re-confirmation) and the last release.
  */
 
-import { classifyOperatorUtterance, extractPostCancelInstruction, isMetaSendQuestion, isWorkerDirectedQuestion, resolveDraftSelection } from './utterance-classifier.js';
-import { isAskWorkerOffer, stripAskWorkerMarker } from './ask-worker.js';
-import { PendingProposalStore, UtteranceLog, describeProposal } from './pending-proposal.js';
-import type { DraftSelection, DraftSnapshot, ReleaseVariant } from './pending-proposal.js';
+import { resolveDraftSelection } from './utterance-classifier.js';
+import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
+import type { DraftSelection, ReleaseVariant } from './pending-proposal.js';
 import { createVoiceTurnRecorder, type VoiceTurnObservation, type VoiceTurnRecorder, type VoiceRuntime } from './observability.js';
 import { renderStateView } from './state-view.js';
 import { TalkerHistory } from './history.js';
 import { loadTalkerSystemPrompt } from './prompt.js';
-import { ackForOutcome, describeOutcome, MODEL_FAILURE_REPLY, NOTHING_PENDING_ACK, NOTHING_TO_CANCEL_ACK, receiptAckFor } from './ack.js';
+import { ackForOutcome, describeOutcome, MODEL_FAILURE_REPLY, receiptAckFor } from './ack.js';
+import { decideAfterModelReply, decideOperatorTurn, plainConversationalDecision, policyStateView, type SpokenDecision } from './policy-core.js';
 import type {
   ChatMessage,
   TalkerModelClient,
@@ -120,89 +123,6 @@ export interface TalkerSessionDeps {
    * Default: the global VoiceMode recorder bound to the shared registries.
    */
   observability?: VoiceTurnRecorder;
-}
-
-/**
- * Mechanical surfacing replies (plan §4.2). Like the release acks (ack.ts),
- * these are produced by the harness from harness state — the only
- * operator-facing words in them are the draft's own verbatim text — so the
- * model can never compose, soften or suppress the safety-critical
- * transitions: refusing a stale confirmation and asking for
- * re-confirmation, and clarifying an ambiguous selection. (ack.ts itself is
- * frozen for this package, so these live here.)
- */
-function reconfirmAskReply(snapshot: DraftSnapshot): string {
-  const quoted = snapshot.utterances.map(u => `"${u.text}"`).join(' ... ');
-  return `You were composing something — still want that sent? Here is what I am holding: ${quoted}. Say yes and I will send it.`;
-}
-
-function selectionClarifyReply(snapshot: DraftSnapshot): string {
-  const parts = snapshot.utterances.map((u, i) => `${i + 1}. "${u.text}"`).join(' ');
-  return `I am holding ${snapshot.utterances.length} things — ${parts}. Which one?`;
-}
-
-/**
- * D-card — the stale-card refusal. The confirming gesture echoed the identity
- * of bytes that are no longer what is held (the draft moved underneath the
- * card: append-after-render, another lane or tab, a replace). Mechanical:
- * nothing is released, the draft is untouched, and the reply quotes the
- * CURRENT text so the operator can confirm against what is really held.
- */
-function staleProposalReply(snapshot: DraftSnapshot): string {
-  const quoted = snapshot.utterances.map(u => `"${u.text}"`).join(' ... ');
-  return `That card is out of date — the wording has changed since it was shown, so I sent nothing. Here is what I am holding now: ${quoted}. Confirm this current version and I will send it.`;
-}
-
-/**
- * D-card — the original-variant gate refusal. The current proposal advertised
- * no original (no visible removal happened), so the operator's raw words are
- * not a separate offer; a stale or buggy client cannot release raw bytes the
- * card never showed as a choice. Mechanical: nothing released, draft intact.
- */
-function originalNotOfferedReply(snapshot: DraftSnapshot): string {
-  const quoted = snapshot.utterances.map(u => `"${u.text}"`).join(' ... ');
-  return `Your exact raw words are not on offer here — nothing visible was taken out of what I am holding: ${quoted}. Say yes and I will send it as shown.`;
-}
-
-/**
- * P22 — the to-talker marker (the [[ask-worker]] mould, narrowed to drafting).
- *
- * The draft gate had a hole on the talker's own side of the relay: an
- * imperative addressed to the TALKER — "summarise what's been done", "read
- * that back" — is not a question, so it classified as `statement` and was
- * held, verbatim, as a pending WORKER instruction. The model then offered to
- * send the operator's own words back at them, and a stray "yes" could
- * release them.
- *
- * The repair is narrowing, in the [[ask-worker]] mould: the model may end a
- * reply with an end-anchored [[to-talker]] tag when it judged the utterance
- * was addressed to it and it answered from what it holds; the harness then
- * does not draft the utterance. The consequences are mechanical and one-way:
- *   - suppression only: the tag can keep words OUT of the draft, never put
- *     anything in and never release anything — a wrong guess reduces what a
- *     later "yes" can reach, so it is always the safe direction (the
- *     mis-marked instruction meets the mechanical nothing-pending reply);
- *   - honoured only on statement-classified turns — the harness passes a
- *     draft candidate nowhere else, so worker-directed questions and
- *     ask-the-worker offers keep their own classification-based paths and
- *     model behaviour cannot widen the gate;
- *   - the tag is stripped wherever it appears: a protocol marker is never
- *     spoken aloud, honoured or not.
- * A marked utterance joins no draft, so it opens no composition batch and
- * earns no receipt: the operator asked the talker, and the talker answered.
- */
-
-const ADDRESSED_TAG_AT_END = /\[\[\s*to-talker\s*\]\]\s*$/i;
-const ADDRESSED_TAG_ANYWHERE = /\[\[\s*to-talker\s*\]\]/gi;
-
-/** True when the reply ENDS with the tag (trailing whitespace tolerated). */
-function isAddressedToTalkerMark(reply: string): boolean {
-  return ADDRESSED_TAG_AT_END.test(reply);
-}
-
-/** The reply as the operator should hear it: the tag removed. */
-function stripTalkerAddressedMarker(reply: string): string {
-  return reply.replace(ADDRESSED_TAG_ANYWHERE, '').trim();
 }
 
 export class TalkerSession {
@@ -306,8 +226,10 @@ export class TalkerSession {
   }
 
   /**
-   * The turn body exactly as before (P10 only moved it behind the observation
-   * wrapper above — no behaviour change; the gate suites pin every branch).
+   * The turn body: build the state view, ask the pure policy core what the
+   * turn does, then execute that decision (P10 only moved it behind the
+   * observation wrapper above; L3 only replaced its branch logic with the
+   * core's decision — the gate suites pin every branch).
    */
   private async handleOperatorTurnBody(
     utterance: string,
@@ -326,161 +248,61 @@ export class TalkerSession {
     // Marks needs-re-confirmation; never drops the draft (plan §4.2).
     this.proposals.tickTurn(turn);
 
+    // Every operator utterance is recorded before anything reads state; the
+    // residual/duplicate records a decision may need are the executor's job.
     const record = this.utteranceLog.record(utterance, turn);
-    const classified = classifyOperatorUtterance(utterance);
-    const selection = resolveDraftSelection(utterance);
-    // A selection shape ("just the second one") is mechanically a
-    // confirmation of part of the draft. It is harness classification — the
-    // same nature as the confirm patterns — never model output, so the gate
-    // is not widened: a release still requires a live, fresh draft.
-    const utteranceClass: TalkerTurnResult['utteranceClass'] =
-      selection !== null && classified === 'statement' ? 'confirm' : classified;
 
-    if (utteranceClass === 'confirm') {
-      const draftSnap = this.proposals.snapshotDraft();
-      if (draftSnap && this.proposals.isLapsed(turn)) {
-        // Stale confirmation (plan §4.2): refuse, quote the draft verbatim,
-        // re-arm the window. Mechanical — the model never owns this
-        // transition and never interprets the stale yes.
-        this.proposals.markResurfaced(turn);
-        const reply = reconfirmAskReply(draftSnap);
-        this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
-        this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
-        this.history.maybeTrim(this.proposals.pending !== null);
-        return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
+    // THE GATE lives in policy-core (pure, model-free): given the harness
+    // state — draft, confirmation window, D-card identity — and the turn's
+    // input, it returns what this turn must do. Nothing below re-decides it;
+    // this method only executes the decision (state mutations, model call,
+    // delivery, history, receipts).
+    const decision = decideOperatorTurn(
+      policyStateView(this.proposals, turn),
+      {
+        utterance,
+        ...(opts.releaseVariant !== undefined ? { releaseVariant: opts.releaseVariant } : {}),
+        ...(opts.proposalRef !== undefined ? { proposalRef: opts.proposalRef } : {}),
       }
-      if (draftSnap) {
-        // D-card identity gate: the card gestures echo the identity of the
-        // exact bytes they displayed. A mismatch means the draft moved under
-        // the card (append-after-render, another lane or tab, a replace) —
-        // refuse the send, keep the draft, quote the current text. The same
-        // mechanical refusal class as the lapsed check above: model-free,
-        // fixed vocabulary, nothing released, nothing consumed. A bare
-        // spoken "yes" carries no echo and keeps today's semantics.
-        if (opts.proposalRef && !this.proposals.identityMatches(opts.proposalRef)) {
-          const reply = staleProposalReply(draftSnap);
-          this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
-          this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
-          this.history.maybeTrim(this.proposals.pending !== null);
-          return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
-        }
-        // D-card variant gate: 'original' exists only where the CURRENT
-        // proposal advertised one — a visible removal happened. A stale or
-        // buggy client cannot release raw bytes the card never offered.
-        if (opts.releaseVariant === 'original' && !describeProposal(draftSnap.utterances).original) {
-          const reply = originalNotOfferedReply(draftSnap);
-          this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
-          this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
-          this.history.maybeTrim(this.proposals.pending !== null);
-          return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
-        }
-        if (selection && !this.proposals.canResolveSelection(selection)) {
-          // Ambiguous selection: never acts (invariant 6). Mechanical
-          // clarification; the draft is untouched.
-          const reply = selectionClarifyReply(draftSnap);
-          this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
-          this.history.append({ role: 'assistant', content: reply, kind: 'mechanical', turn });
-          this.history.maybeTrim(this.proposals.pending !== null);
-          return { reply, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
-        }
-        return this.release(utterance, turn, selection ?? undefined, opts.releaseVariant ?? 'tidied');
-      }
-      // A confirmation with nothing pending is a DEAD END, and the harness
-      // owns it (finding F2, P7): the model's conversational answer promised
-      // a send that could not happen — "OK. I'll send that instruction to
-      // the worker." Nothing could be sent: the gate held. The answer is now
-      // the fixed mechanical string — the truth, the way out, no promise —
-      // with no model call, exactly like the release acks and the lapsed
-      // refusal. The "yes" itself is never recorded as a candidate.
-      this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
-      this.history.append({ role: 'assistant', content: NOTHING_PENDING_ACK, kind: 'mechanical', turn });
-      this.history.maybeTrim(this.proposals.pending !== null);
-      return { reply: NOTHING_PENDING_ACK, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
+    );
+
+    if (decision.kind === 'release') {
+      return this.release(utterance, turn, decision.selection ?? undefined, decision.variant);
     }
 
-    if (utteranceClass === 'cancel') {
-      // Finding F1 (P7): the cancel boundary ends the OLD draft, but an
-      // instruction spoken AFTER the boundary in the same breath is captured
-      // — the residue composes fresh instead of vanishing from the harness.
-      // The residue is the operator's verbatim words; it joins the draft and
-      // still needs its own confirmation to release. The gate is untouched.
-      const residue = extractPostCancelInstruction(utterance);
-      const cancelled = this.proposals.cancel('operator cancelled', turn);
-      if (residue) {
-        const residueClass = classifyOperatorUtterance(residue);
-        const residueIsDraftable =
-          residueClass === 'statement' ||
-          (residueClass === 'question' && !isMetaSendQuestion(residue) && isWorkerDirectedQuestion(residue));
-        if (residueIsDraftable) {
-          // The residue opens a fresh composition batch (the cancel cleared
-          // any held draft), so its answer-ready moment owes one receipt —
-          // unless the model marks the residue addressed to the talker
-          // ([[to-talker]], P22): then nothing is held and nothing opened.
-          // The append happens in conversationalTurn, after the model turn.
-          const residueRecord = this.utteranceLog.record(residue, turn);
-          return this.conversationalTurn(utterance, utteranceClass, turn, {
-            cancelled,
-            draftCandidate: { utteranceId: residueRecord.id, text: residue },
-            opensBatch: true,
-            ...focusFlag,
-          });
+    if (decision.kind === 'cancel' || decision.kind === 'conversational') {
+      // Spoken turn. First its PRE-model state effects, exactly as the
+      // decision ordered them: a cancel clears the old draft and a draftable
+      // residue composes fresh (recorded verbatim before the model sees it);
+      // a worker-directed question joins the draft BEFORE the model turn, so
+      // the projection the model answers includes it.
+      const plan = decision.plan;
+      let draftRecordId = record.id;
+      if (decision.kind === 'cancel') {
+        this.proposals.cancel('operator cancelled', turn);
+        if (plan.cancelResidue?.draftable) {
+          draftRecordId = this.utteranceLog.record(plan.cancelResidue.text, turn).id;
         }
-      }
-      if (!cancelled && !residue) {
-        // The F2 neighbouring dead-end (checked and closed in the same
-        // package): a cancel with nothing held reached the model, which could
-        // claim a cancellation that never happened. Mechanical honesty —
-        // there was nothing to cancel. A cancel that DID clear a draft stays
-        // conversational: the model may truthfully acknowledge it.
-        this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
-        this.history.append({ role: 'assistant', content: NOTHING_TO_CANCEL_ACK, kind: 'mechanical', turn });
-        this.history.maybeTrim(this.proposals.pending !== null);
-        return { reply: NOTHING_TO_CANCEL_ACK, utteranceClass, released: null, cancelled: false, modelCalled: false, latency: null };
-      }
-      return this.conversationalTurn(utterance, utteranceClass, turn, { cancelled, ...focusFlag });
-    }
-
-    // A meta question about the send in flight ("did you send it?") keeps the
-    // draft untouched; a worker-directed question ("could you ask the worker
-    // to rebase?") and every statement ACCUMULATE into the draft — the
-    // operator's composing thread (plan §4.2). Nothing is ever replaced:
-    // supersession holds both, and the state view tells the talker.
-    if (utteranceClass === 'question') {
-      const metaSend = isMetaSendQuestion(utterance);
-      const workerDirected = isWorkerDirectedQuestion(utterance);
-      if (!metaSend && workerDirected) {
-        // A draft-opening question is a receipt moment like any append
-        // (§4.1 rule 2) — the ack travels on this turn's result.
-        const opensBatch = this.proposals.snapshotDraft() === null;
+      } else if (plan.path === 'worker-directed') {
         this.proposals.appendToDraft(record.id, utterance, turn);
-        return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false, opensBatch, ...focusFlag });
       }
-      // P18/1: a question the talker was asked to ANSWER may be offered for
-      // relay if the talker cannot answer it. The candidate is the operator's
-      // own utterance, by id — the harness stays the only source of relay
-      // text. Whether the offer actually fires is decided after the model
-      // turn (the marker), and it only ever creates a candidate: a delivery
-      // still needs the operator's own confirmation.
-      const offerCandidate =
-        !metaSend && !workerDirected
-          ? { utteranceId: record.id, text: utterance }
-          : undefined;
-      return this.conversationalTurn(utterance, utteranceClass, turn, { recordedCandidate: false, offerCandidate, ...focusFlag });
+      return this.conversationalTurn(decision, turn, { ...focusFlag, draftRecordId });
     }
-    // P22: the statement still ACCUMULATES into the draft — but the append
-    // now happens after the model turn (in conversationalTurn), so the model
-    // can first judge whether the utterance was addressed to the talker
-    // itself. Unmarked, the behaviour is exactly as before: the operator's
-    // verbatim words join the draft, and the batch this utterance opened
-    // (opensBatch, taken pre-turn) still owes its one receipt. Marked
-    // [[to-talker]], nothing is held and no batch opened — no receipt either.
-    const opensBatch = this.proposals.snapshotDraft() === null;
-    return this.conversationalTurn(utterance, utteranceClass, turn, {
-      recordedCandidate: true,
-      draftCandidate: { utteranceId: record.id, text: utterance },
-      opensBatch,
-      ...focusFlag,
-    });
+
+    // Gate-owned dead ends and refusals: fixed vocabulary, no model call.
+    // The lapsed-confirmation refusal re-arms the window as it surfaces.
+    if (decision.kind === 'refuse-lapsed') this.proposals.markResurfaced(turn);
+    this.history.append({ role: 'user', content: utterance, kind: 'operator', turn });
+    this.history.append({ role: 'assistant', content: decision.reply, kind: 'mechanical', turn });
+    this.history.maybeTrim(this.proposals.pending !== null);
+    return {
+      reply: decision.reply,
+      utteranceClass: decision.utteranceClass,
+      released: null,
+      cancelled: false,
+      modelCalled: false,
+      latency: null,
+    };
   }
 
   /**
@@ -503,9 +325,13 @@ export class TalkerSession {
   ): Promise<TalkerTurnResult> {
     const taken = this.proposals.takeForRelease(turn, selection, variant);
     if (!taken) {
-      // Defensive: cannot happen from handleOperatorTurn (it checks pending
-      // first), and cannot relay anything either way.
-      return this.conversationalTurn(confirmingUtterance, 'confirm', turn, { recordedCandidate: false });
+      // Defensive: cannot happen from handleOperatorTurn (it checks the same
+      // state first), and cannot relay anything either way. The fallback is a
+      // plain conversational turn — no draft effect and no offer — so a
+      // forced direct call behaves exactly as it did before the extraction.
+      return this.conversationalTurn(plainConversationalDecision(confirmingUtterance, 'confirm', turn), turn, {
+        draftRecordId: 0,
+      });
     }
     const delivery = await this.delivery.deliver({ workerSessionId: this.workerSessionId, text: taken.text });
     this.proposals.recordReleased({
@@ -530,21 +356,22 @@ export class TalkerSession {
   }
 
   private async conversationalTurn(
-    utterance: string,
-    utteranceClass: TalkerTurnResult['utteranceClass'],
+    decision: SpokenDecision,
     turn: number,
     flags: {
-      recordedCandidate?: boolean;
-      cancelled?: boolean;
-      opensBatch?: boolean;
-      /** P18/1: the operator's unanswered question, held verbatim if the model offers. */
-      offerCandidate?: { utteranceId: number; text: string };
-      /** P22: a statement/residue that joins the draft unless the model marks it addressed to the talker. */
-      draftCandidate?: { utteranceId: number; text: string };
+      /** The verbatim-log record this turn's draft candidate (or offer) references. */
+      draftRecordId: number;
       /** P18/2: the operator's focus control, projection input only. */
       operatorFocus?: boolean;
     }
   ): Promise<TalkerTurnResult> {
+    if (decision.kind !== 'conversational' && decision.kind !== 'cancel') {
+      // By construction: callers pass a spoken decision.
+      throw new Error('conversationalTurn requires a spoken decision');
+    }
+    const plan = decision.plan;
+    const utterance = decision.utterance;
+
     const snapshot = await this.snapshotProvider();
     const draftSnap = this.proposals.snapshotDraft();
     const lastReleased = this.proposals.lastReleased;
@@ -585,40 +412,17 @@ export class TalkerSession {
       reply = MODEL_FAILURE_REPLY;
     }
 
-    // P18/1 — the offer. The model PROPOSES (the end-anchored marker); the
-    // harness converts that proposal into a relay candidate holding the
-    // operator's own question, verbatim, by utterance id. This is the only
-    // effect model text can have on the draft, and it is deliberately narrow:
-    // it creates a candidate that still needs the operator's own confirmation,
-    // it can never deliver anything, and it fires only on a turn that was an
-    // answerable question in the first place (callers pass no candidate
-    // otherwise). The marker is stripped in every case — a protocol tag must
-    // never be spoken aloud, whether or not it was honoured.
-    const offered = flags.offerCandidate !== undefined && isAskWorkerOffer(reply);
-    // P22 — the narrowed draft decision. A statement (or cancel residue)
-    // joins the draft unless the model marked the utterance as addressed to
-    // the talker itself; the tag is honoured only here, only end-anchored,
-    // and it can only SUPPRESS a draft — never create or release one.
-    const addressedToTalker = flags.draftCandidate !== undefined && isAddressedToTalkerMark(reply);
-    let opensBatch = flags.opensBatch ?? false;
-    if (addressedToTalker) {
-      // A marked utterance joins nothing: no batch opens, so no receipt —
-      // the operator asked the talker, and the talker answered it.
-      opensBatch = false;
-    } else if (flags.draftCandidate) {
-      // Unmarked: the exact pre-P22 behaviour — the operator's verbatim
-      // words join the draft and still need their own confirmation.
-      opensBatch = opensBatch || this.proposals.snapshotDraft() === null;
-      this.proposals.appendToDraft(flags.draftCandidate.utteranceId, flags.draftCandidate.text, turn);
+    // The post-model plan is policy-core's: the ONLY effects model text can
+    // have on the draft. [[to-talker]] (end-anchored, statement/residue paths
+    // only) suppresses the append; [[ask-worker]] (end-anchored, offer path
+    // only) creates a candidate holding the OPERATOR'S OWN question — which
+    // still needs the operator's own confirmation. Neither can release
+    // anything, and both markers are stripped from what the operator hears.
+    const post = decideAfterModelReply(decision, reply);
+    if (post.append) {
+      this.proposals.appendToDraft(flags.draftRecordId, post.append.text, turn);
     }
-    if (offered && flags.offerCandidate) {
-      // A question that opens a composition batch is a receipt moment like any
-      // append (§4.1 rule 2) — computed here because the batch exists only if
-      // the model actually offered.
-      opensBatch = opensBatch || this.proposals.snapshotDraft() === null;
-      this.proposals.appendToDraft(flags.offerCandidate.utteranceId, flags.offerCandidate.text, turn);
-    }
-    reply = stripTalkerAddressedMarker(stripAskWorkerMarker(reply));
+    reply = post.reply;
 
     this.history.append({ role: 'assistant', content: reply, kind: 'talker', turn });
     this.history.maybeTrim(this.proposals.pending !== null);
@@ -628,21 +432,21 @@ export class TalkerSession {
     // chosen purely by how many recorded utterances are outstanding. The
     // model's reply is never an input; a model failure cannot suppress it.
     let receiptAck: string | undefined;
-    if (opensBatch) {
+    if (post.opensBatch) {
       const ack = receiptAckFor(this.utteranceLog.takeReceipt() ?? 0);
       if (ack) receiptAck = ack;
     }
 
     return {
       reply,
-      utteranceClass,
+      utteranceClass: decision.utteranceClass,
       released: null,
-      cancelled: flags.cancelled ?? false,
+      cancelled: plan.cancelled,
       modelCalled: error === undefined,
       latency,
       ...(receiptAck !== undefined ? { receiptAck } : {}),
-      ...(offered ? { askWorkerOffer: true } : {}),
-      ...(addressedToTalker ? { addressedToTalker: true } : {}),
+      ...(post.askWorkerOffer ? { askWorkerOffer: true } : {}),
+      ...(post.addressedToTalker ? { addressedToTalker: true } : {}),
       ...(error !== undefined ? { error } : {}),
     };
   }
