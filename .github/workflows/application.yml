@@ -21,6 +21,9 @@ on:
       - '!docs/OPENCODE-DIRECT-INTEGRATION.md'
       - '!docs/PRODUCTION-STOP-ROBUSTNESS.md'
       - '!docs/TROUBLESHOOTING.md'
+      # Named by shared/src/types/voice-messages.ts (the frozen native-voice wire
+      # contract module), so a change touching only it must still run the suite.
+      - '!docs/plans/VOICE-LIVE-WIRE-CONTRACT.md'
   pull_request:
     paths-ignore: *docs-only-changes
 
