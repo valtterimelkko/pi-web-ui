@@ -46,6 +46,12 @@ Exit 0 for both; paste the handshake's key output lines (transcription delta obs
 - Preserve cookie/origin/CSRF protections where you touch transport-adjacent code (you should not need to); input validation on every client message (shape + size limits).
 - N1–N9 unchanged; the bridge may never provide a send path to the worker.
 
+## Contract decisions you must honour (from the frozen v1 contract and its independent review)
+
+- The service boundary is **`VoiceBridgeService`** (+ `VoiceBridgeEmittedEvent`, `VoiceBridgeCallbacks`) per contract §6.1; the thin handler Phase 5 registers is **`VoiceRouter.handle`** (§6.4). Implement to those names.
+- Client→server frames are **schema-exact**: reuse the shared module's runtime guards (`checkVoiceEnvelope` and the per-message validators) — do not hand-roll a second validator. Unnamed fields refuse with the contract's error codes.
+- `stop`/`dispose` release nothing (the kernel owns releases); `feedAudio` never throws and never buffers past the decoded-byte ceiling (§5.3, §6.1 invariants).
+
 ## Stop protocol
 
 Blocked or a contract conflict → `/root/voice-exec-20260917/coordination/B/01-questions.md`, print `PARENT-INPUT-NEEDED`, end turn.

@@ -39,6 +39,13 @@ Both exit 0; Playwright ducking spec passes with evidence (screenshot/log lines 
 - No change may give the client a send path or the arbiter capture authority (N5, N1).
 - No secrets; no model-generated audio; no silent behaviour widening of the gate.
 
+## Contract decisions you must honour (from the frozen v1 contract and its independent review)
+
+- **The chime fires on `receipt_event` with `outcome: "delivered"` and nothing else** (contract §8.1 — this supersedes the plan's Phase 4 wording that named `proposal_resolved`; Phase 3's message list and N6 agree with the contract).
+- Use the shared module's runtime guards for envelope/message validation; do not hand-roll validators. Client→server frames are schema-exact (unwritten fields refused).
+- `proposal_created` nests its payload under `proposal`; `receipt_event` nests under `receipt`; the catalogue also carries `proposal_presentation`, `parking_list`, `voice_state`, `voice_error` beyond the plan's minimum.
+- You add the `voice-messages` re-export to `shared/src/index.ts` (deliberately left to Track C by the contract) — an additive edit only, and the one shared/ change you own.
+
 ## Stop protocol
 
 Blocked or a contract conflict → `/root/voice-exec-20260917/coordination/C/01-questions.md`, print `PARENT-INPUT-NEEDED`, end turn.
