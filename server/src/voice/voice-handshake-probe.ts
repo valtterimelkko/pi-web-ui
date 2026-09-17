@@ -28,6 +28,7 @@ import dotenv from 'dotenv';
 
 import { VoiceSessionService } from './voice-session.js';
 import { GeminiLiveBridge } from './gemini-live-bridge.js';
+import { HANDSHAKE_EXPECTED_PHRASE, evaluateHandshakeTranscript } from './handshake-verdict.js';
 import type { VoiceBridgeEmittedEvent } from './contract.js';
 import type { GeminiLiveBridgeUsage } from './types.js';
 
@@ -46,10 +47,19 @@ interface ProbeOutcome {
   sentBytes: number;
   sentFrames: number;
   sentDurationMs: number;
-  transcriptSpeaker: 'operator' | 'talker' | null;
-  transcriptSource: 'native' | 'shadow-asr' | null;
-  transcriptText: string;
-  transcriptPreview: string;
+  /** Accumulated operator input transcript (final deltas replace partials). */
+  operatorText: string;
+  /** Latest normalised observation, for honest failure output. */
+  observedNormalised: string;
+  /** Verdict reason for the latest observation. */
+  verdictReason: string;
+  /** Expected-token overlap of the latest observation (0..1). */
+  overlapRatio: number;
+  /** The normalised text that actually matched, when one did. */
+  matchedNormalised: string;
+  matchedText: string;
+  matchedPreview: string;
+  otherTranscriptDeltas: number;
   audioOutBytes: number;
   resumable: boolean;
 }
@@ -95,10 +105,14 @@ async function main(): Promise<number> {
     sentBytes: 0,
     sentFrames: 0,
     sentDurationMs: 0,
-    transcriptSpeaker: null,
-    transcriptSource: null,
-    transcriptText: '',
-    transcriptPreview: '',
+    operatorText: '',
+    observedNormalised: '',
+    verdictReason: 'empty',
+    overlapRatio: 0,
+    matchedNormalised: '',
+    matchedText: '',
+    matchedPreview: '',
+    otherTranscriptDeltas: 0,
     audioOutBytes: 0,
     resumable: false,
   };
@@ -127,15 +141,28 @@ async function main(): Promise<number> {
       case 'audio_out':
         outcome.audioOutBytes += Buffer.from(event.data, 'base64').byteLength;
         break;
-      case 'transcript':
-        if (event.text !== '' && outcome.transcriptText === '') {
-          outcome.transcriptSpeaker = event.speaker;
-          outcome.transcriptSource = event.source;
-          outcome.transcriptText = event.text;
-          outcome.transcriptPreview = preview(event.text);
+      case 'transcript': {
+        // The pass condition is the OPERATOR INPUT transcript, not any delta:
+        // a silenced or garbage audio path can make the provider hallucinate a
+        // short delta (negative control: "¿Qué?" from digital silence).
+        if (event.speaker !== 'operator' || event.source !== 'native') {
+          outcome.otherTranscriptDeltas += 1;
+          break;
+        }
+        // A final delta carries the finalised turn text; partials accumulate.
+        outcome.operatorText = event.final ? event.text : outcome.operatorText + event.text;
+        const verdict = evaluateHandshakeTranscript(outcome.operatorText);
+        outcome.observedNormalised = verdict.normalised;
+        outcome.verdictReason = verdict.reason;
+        outcome.overlapRatio = verdict.overlapRatio;
+        if (verdict.ok && outcome.matchedNormalised === '') {
+          outcome.matchedNormalised = verdict.normalised;
+          outcome.matchedText = outcome.operatorText;
+          outcome.matchedPreview = preview(outcome.operatorText);
           resolveTranscript();
         }
         break;
+      }
       default:
         break;
     }
@@ -199,19 +226,33 @@ async function main(): Promise<number> {
       wait(TRANSCRIPT_TIMEOUT_MS).then(() => 'timeout' as const),
     ]);
     if (transcriptResult === 'timeout') {
-      log(`FAIL: no transcription delta arrived within ${TRANSCRIPT_TIMEOUT_MS} ms of speech end.`);
+      const observed = outcome.observedNormalised === '' ? '(none observed)' : `"${outcome.observedNormalised}"`;
+      log(
+        `FAIL: no matching operator input transcript within ${TRANSCRIPT_TIMEOUT_MS} ms of speech end.`
+      );
+      log(
+        `observed operator input transcript: ${observed} ` +
+          `(verdict: ${outcome.verdictReason}, expected-token overlap ${(outcome.overlapRatio * 100).toFixed(0)}%; ` +
+          `expected a transcript related to "${HANDSHAKE_EXPECTED_PHRASE}")`
+      );
+      log(`other transcript deltas (talker/shadow): ${outcome.otherTranscriptDeltas}`);
       return 1;
     }
     log(
-      `transcription delta: speaker=${outcome.transcriptSpeaker} source=${outcome.transcriptSource} text="${outcome.transcriptPreview}"`
+      `operator input transcript: normalised="${outcome.matchedNormalised}" ` +
+        `(matched via ${outcome.verdictReason}, expected-token overlap ${(outcome.overlapRatio * 100).toFixed(0)}%)`
     );
+    log(`operator input transcript (raw preview): "${outcome.matchedPreview}"`);
     log(`audio returned by the model: ${outcome.audioOutBytes} bytes`);
     log(`resumption: handle captured=${outcome.resumable ? 'resumable' : 'not yet marked resumable'}`);
 
     const usage: Readonly<GeminiLiveBridgeUsage> | null = bridges[0]?.usage ?? null;
     log('provider usage counters (real session, no fixture):');
     log(`  ${JSON.stringify(usage)}`);
-    log('RESULT: PASS — real setupComplete, real audio delivery, real transcription delta.');
+    log(
+      `RESULT: PASS — real setupComplete, real audio delivery, and an operator input transcript ` +
+        `matching the expected phrase "${HANDSHAKE_EXPECTED_PHRASE}".`
+    );
     return 0;
   } catch (error) {
     log(`FAIL: ${error instanceof Error ? error.message : String(error)}`);
