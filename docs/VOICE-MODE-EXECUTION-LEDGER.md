@@ -192,8 +192,8 @@ before the next wave's dispatches.
 
 | Wave | Children (parallel) | Depends on | Gate(s) closed by the wave |
 |---|---|---|---|
-| **0** | E (contract) | owner start signal | Review of contract by conductor; merge E to master |
-| **1** | A, B, C, D | E merged | Gate 1 → 2 (A), Gate 3 (B), Gate 4 (C), Gate 0 re-verified + Phase 6 assets (D) |
+| **0** | E (contract) **+ A (kernel: plan Phases 1–2, pulled forward) + D (audit + Phase 6 assets, pulled forward)** | owner start signal; A and D verified to have no dependency on the contract | Contract conduction review; Gate 1 → 2 (A); Gate 0 + Phase 6 assets (D); merge accepted branches |
+| **1** | B (bridge), C (client) | E merged (contract frozen) | Gate 3 (B), Gate 4 (C) |
 | **2** | F (integration), G (regression) | Wave-1 merges: A+B+C in master (D's assets too) | Gate 5 (F), Gate 6 (G) |
 | **3** | H (rollout implementation), R (read-only review), conductor final checks | Wave-2 merges | Gate 8 implementation + plan §2 anti-cheat review |
 | **4** | Operator handover | all merged, checks green | Gate 7 preparation (disposable slice + runbook); Gate 7 itself = operator; Phase 8 activation = owner decision |
@@ -202,6 +202,12 @@ before the next wave's dispatches.
 capacity is tight at dispatch time, split a wave into two dispatches rather than
 substituting routes silently. Heavy validation (disposable servers) is
 serialised: one at a time.
+
+**Operational note (observed 2026-09-17):** children created with the goal armed
+at creation **auto-start** their first goal turn immediately — dispatching a
+prompt at them returns `SESSION_BUSY` and is unnecessary. Dispatch = create
+(with `goal`) → read back the goal → watch. Child session ids, leases, board
+entries and wake ids are recorded in the wave log (§12).
 
 **Inter-wave un-gating is conductor-autonomous** (never an owner question): when
 a wave's gates pass and master is clean, the next wave is dispatched immediately.
@@ -365,6 +371,20 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 0 dispatched — strategy amendment).** Execution started on the
+owner's goal-engine activation. Wave 0 was amended to pull **A (kernel) and D
+(audit) forward** alongside **E (contract)**: dependency analysis showed neither
+consumes the wire contract, so the critical path starts immediately; B and C move
+to Wave 1 once the contract merges. Preflight snapshot captured
+(`operations/voice-live-20260917/preflight/wave0-*`: contract 1.44.0, healthy
+capacity, three DeepSeek pools live). Briefs committed (`26c3c26`). Worktrees:
+`/root/pi-web-ui-wt-contract` (`feat/voice-contract`),
+`/root/pi-web-ui-track-a` (`feat/voice-kernel`),
+`/root/pi-web-ui-track-d` (`feat/voice-audit`). Children created with goals armed
+(auto-start observed) and durable leases; board entries `voice-live-e-contract`,
+`voice-live-a-kernel`, `voice-live-d-audit`; local wakes `ww_1`/`ww_2`/`ww_3`;
+wave backstop armed. Next: reconcile on wake, verify gates, merge.
+
 **2026-09-17 (planning close).** Ledger written, checked and pushed (`5b893a7`);
 baseline verified (§3). Owner resolved OQ-1…OQ-4 and added three operating
 instructions (§11); recorded here. Status remains **READY, NOT STARTED** —
@@ -374,6 +394,10 @@ Wave 0 contract child E (§6).
 ---
 
 ## 13. Decisions log (append-only)
+
+- **D-05 (conductor, 2026-09-17).** Strategy amendment: Wave 0 = E + A + D in
+  parallel (A/D pulled forward; no contract dependency), B/C held for Wave 1.
+  Rationale and dependency check recorded in §6/§12.
 
 - **D-01 (owner, 2026-09-17).** DeepSeek v4.1 Flash confirmed as primary child
   model; provider rotation approved across `commandcode`, `opencode-go`,
