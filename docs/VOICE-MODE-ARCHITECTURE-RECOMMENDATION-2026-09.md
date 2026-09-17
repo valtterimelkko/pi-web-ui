@@ -18,7 +18,9 @@ The target is one architecture, not a menu:
 
 | Element | Decision |
 |---|---|
-| Conversational seat | **Gemini 3.8 Live standard**, direct Google, native audio in and out. No extended thinking. |
+| Conversational seat | **Gemini 3.8 Live standard**, direct Google, native audio in and out. Extended thinking **instrumented, not adopted** (§4.7a). |
+| Reasoning depth | A five-rung **escalation ladder** (§4.7a), whose new middle rung is a cheap **host-side text analysis call** returning `Derived` — deeper thinking without an audio-model upgrade, a reconnect, or interrupting the worker. |
+| Honesty | Quotes and completion claims are **host-rendered, not model-generated**; unmarked statements default to lowest trust (§4.7 M1–M3). |
 | Worker seat | **Unchanged** — the operator's existing session and model. When orchestrating, `commandcode/google/gemini-3.8-flash` at `high`. |
 | Authority | A **host-owned authority kernel** owning transcripts, the four objects (§4.2), proposal identity, confirmation, delivery and receipts. |
 | Audio | **One application-owned speech scheduler** across native conversation, trusted receipts and worker reading. |
@@ -244,9 +246,24 @@ Maintain three separate artefacts throughout: **audio received**, **words recogn
 - If the authorisation transcript is missing, contradictory or uncertain on a critical detail, **hold and clarify**. Never quietly swap transcript sources after the operator approved one version.
 - *"Send my original words"* selects the retained original recognised transcript — **not** a claim of perfect acoustic truth. Keep it reachable by voice as well as on the card.
 
-### 4.7 Provenance — the price of freeing the talker to think
+### 4.7 Provenance — and the risk that freeing the talker actually creates
 
-Lifting *"answer only from the state snapshot"* is what makes thinking-together possible. The replacement is a labelling discipline in three bands:
+Lifting *"answer only from the state snapshot"* is what makes thinking-together possible. It is also the single riskiest change in this document, so the mitigation needs stating carefully rather than assumed.
+
+**The four-object model does not cover this risk.** It is worth being explicit, because it is easy to assume it does. The four objects solve the **authority** problem completely: nothing the talker thinks can become a send, because thinking lives in the thread and the thread is structurally unsendable. They do **nothing** for the **epistemic** problem: you believing something false that the talker said with confidence. Those are different failure classes and they need different defences.
+
+The risks, named:
+
+| # | Risk | Severity |
+|---|---|---|
+| R1 | **Confabulated progress** — *"it fixed the parser"* when the worker only planned to | highest; indistinguishable from fact in audio |
+| R2 | **Confident wrong reasoning** about code it half-sees, which you then act on | high; entirely new, the snapshot rule prevented it absolutely |
+| R3 | **Provenance collapse** — the model simply omits the band | high; provenance is a *prompt* rule, exactly the kind this document argues you cannot lean on |
+| R4 | **Divergent world model** — the talker's picture drifts from the worker's, and you brief the worker from the talker's picture | medium |
+| R5 | **Second planner** — it reasons its way to a plan, which colours the question it drafts | medium; a softer form of the original ChatGPT Voice failure |
+| R6 | **Retrieval as an injection vector** — read-only retrieval pulls untrusted file and worker text into the talker's context | medium |
+
+The three bands remain the vocabulary:
 
 | Band | Meaning |
 |---|---|
@@ -254,7 +271,47 @@ Lifting *"answer only from the state snapshot"* is what makes thinking-together 
 | **Derived** | computed by the host from worker output or session state |
 | **Mine** | the talker's own reasoning, inference or opinion |
 
+But the bands must be **enforced structurally wherever they can be**, not merely requested. Six mitigations, ordered by how much they do not depend on the model behaving:
+
+**M1 — The talker does not produce quotes; the host does.** "Reported" is a *typed read operation* returning host-rendered text, spoken through host-controlled synthesis or explicitly marked as a quotation. The talker can ask for a quote and can talk about it, but it cannot manufacture one, because it is not the thing that renders quotes. This makes the highest-trust band the one the model has least ability to fake. *(Addresses R1, R4.)*
+
+**M2 — Completion claims are host-owned, like receipts.** Any assertion that work is finished, a test passed, a file changed or a step completed is rendered by the host from worker state, never freely generated. This is a narrow carve-out on **one grammatical class of claim** — it does not restrict reasoning at all. It is the same logic as N6: *"sent it"* is too dangerous to let a model say freely, and *"it's done"* is dangerous for exactly the same reason. Consistency here is deliberate. *(Addresses R1.)*
+
+**M3 — Unmarked defaults to "Mine".** If the talker does not mark a band, the host treats the statement as lowest-trust and the surface displays it that way. This inverts the failure mode: forgetting to label degrades to **caution**, never to false authority. A prompt rule that fails safe is worth far more than one that fails silent. *(Addresses R3.)*
+
+**M4 — The state view carries coverage metadata.** Source, time, and *what is missing*: "you hold turns 14–32 of 32; turns 1–13 are outside the window." Then *"I can't tell from what I hold"* becomes **derivable from state** rather than something the model has to remember to say — and the offer conditions in §4.4 get a mechanical input instead of a judgement call. *(Addresses R2, R4.)*
+
+**M5 — Retrieved text is tagged at ingest** with source and timestamp, passes prompt-injection detection like any other untrusted input, and is **data, never instruction**. Retrieval never expands what the talker may *do*. *(Addresses R6.)*
+
+**M6 — *"Where did you get that?"* is always answerable.** Every Reported or Derived statement carries a locator — turn N, file X, worker event Y — reachable by voice. If the talker cannot produce a locator, the statement was inference, and saying so is the correct answer. This gives you a cheap, in-conversation audit that costs one question. *(Addresses R1, R2, R3.)*
+
+M1, M2, M3 and M4 are structural and hold regardless of model behaviour. M5 is an existing security control extended to a new input. Only M6 partly depends on the model, and its failure mode is visible rather than silent.
+
+**What remains, honestly:** R2 and R5 are not fully solvable. A model that reasons can reason wrongly, and a model that reasons about your problem will have opinions that colour how it phrases a question. The read-back rule in §4.6 is the backstop for R5 — you hear the actual bytes before authorising them — and for R2 the backstop is M3 plus M6 plus your own judgement. **This is a deliberate trade**: the current design has no R2 risk because the talker cannot think, and that is precisely the limitation being removed. It should be measured (§7 Step 5), not assumed away.
+
 Two lines carry over unchanged and matter more, not less: the absolute distinction between what the worker **said it would do** and what it has **done**; and never claiming an action it did not take.
+
+### 4.7a Reasoning depth: standard first, and answer the question with evidence
+
+Thinking together plausibly wants more reasoning than relaying did. The Live model has an extended-thinking variant. The decision is **standard first**, for reasons that are structural rather than frugal.
+
+**Start from what is already attached.** There is a strong reasoning model in this architecture: the worker. If a question needs deep thinking about the code, that is what the worker is *for*. Buying a second deep reasoner for the voice seat partly re-creates the two-competing-orchestrators problem §4.1 exists to prevent, and there is no reason to pay extended-thinking latency on every *"what's it doing?"* merely because some questions are hard.
+
+**But there is a real gap**, and naming it precisely is what makes this decidable: *"I want to think hard about this, and I do not want to interrupt the worker to do it."* Today that gap is filled by nothing. The escalation ladder fills it in cost order:
+
+| Rung | Mechanism | Cost | Use when |
+|---|---|---|---|
+| 1 | Talker reasons directly, marked **Mine** | free | most analytical conversation |
+| 2 | Read-only retrieval, then reason on what it pulled | negligible | the answer is in material it can fetch |
+| 3 | **Host-side analysis call** — the host asks a *text* model and returns the result as **Derived** | cheap (text tokens, no audio, no reconnect, no interruption) | genuinely hard analysis while the worker is busy |
+| 4 | Park it, raise at the worker's next boundary | free, delayed | not urgent |
+| 5 | Relay now as a steer | interrupts the worker | urgent and the worker must act |
+
+**Rung 3 is the answer to the extended-thinking question.** It gets deeper reasoning without an audio-model upgrade, without a reconnect, without interrupting the worker, and it lands in the provenance system cleanly as Derived rather than as a voice-model opinion. Extended thinking in the *voice* seat buys reasoning in the one place where latency is most expensive and provenance is weakest.
+
+**Extended thinking is therefore not adopted, not rejected, and not guessed at — it is instrumented.** Ship standard. Log every turn where the talker declines an analytical question, where you escalate to rung 3 or 5 for analysis, and where the conversation stalls for reasoning reasons. That log is the evidence for whether a deficit exists and how often. Only a measured, frequent gap justifies testing extended thinking, and then it is tested properly (§7 Step 5) as a **three-arm** comparison — standard, standard-plus-rung-3, extended-thinking — because a two-arm test would attribute rung 3's gains to the model variant.
+
+That comparison is a genuinely good use of the hands-off benchmark technique, and a much better one than the tier question it would replace: *"is this model deep enough for co-analysis?"* is a narrow capability question with a measurable answer, whereas *"which harness shape?"* was an architecture question where the operator's judgement outranks any score. See §7 Step 5 for what must be repaired in the runners first.
 
 ### 4.8 The rules: three layers, only one shrinks
 
@@ -390,7 +447,18 @@ Run existing tests plus disposable real-worker delivery and browser tests. Asser
 
 **Step 4 — owner acceptance.** Human judgement establishes whether this feels like a colleague rather than a switchboard. Short paired recordings and a disposable hands-busy trial — not a new benchmark participation burden.
 
-**Step 5 — measure only what the trial left uncertain,** with the repaired runners: real frozen speech, audible trusted replies, replayed world events and interruptions rather than sequential utterances, and the documented dispatch implemented. Report per-condition counts, failures, p50/p90 first **played** and **substantive** audio, transcript-commit and delivery latency, critical-token fidelity, over-asking, cost and environment limits. Missing or invalid attempts stay visible. **Safety violations are vetoes, never averaged away by conversational scores.** Zero failures in a finite sample is evidence, not proof.
+**Step 5 — measure only what the trial left uncertain.** By this point the Step 2–4 instrumentation has named the real open questions; measure those, not the full matrix that was planned before any of this was known.
+
+*Runner repairs required first, or the results answer nothing:* real frozen speech instead of `utterancePcm()`'s sine wave, audible trusted replies instead of `silence-mock`, replayed world events, gestures and interruptions rather than sequential utterances, the documented `live` dispatch implemented, and proof that damaged records fail verification. **Flipping `mode` to `measured` must never qualify a tone run as conversation evidence.**
+
+*The two questions most likely to survive the trial:*
+
+- **Reasoning depth (§4.7a)** — a **three-arm** comparison: standard, standard-plus-host-analysis, extended-thinking. Two arms would misattribute rung 3's gains to the model variant. Run it only if the Step 2–4 logs show a real, repeated analytical deficit; "it felt a bit shallow once" is not an input.
+- **Honesty under pressure** — scored adversarially against M1–M3: attempts to claim completion, to quote without a locator, and to answer confidently past the coverage boundary. This is the direct test of the R1–R3 risks §4.7 accepts, and it is exactly what a hands-off harness with a synthetic operator is good at.
+
+Report per-condition counts, failures, p50/p90 first **played** and **substantive** audio, transcript-commit and delivery latency, critical-token fidelity, over-asking, cost and environment limits. Missing or invalid attempts stay visible. **Safety and honesty violations are vetoes, never averaged away by conversational scores.** Zero failures in a finite sample is evidence, not proof.
+
+Reuse the lab's genuinely good assets — the L0 offline verifier, the scenario and world fixtures, the 20-utterance fidelity corpus — and **replace the reporting layer entirely** with manifest-derived aggregation per Step 0.
 
 **Step 6 — reversible rollout.** Opt-in feature flag, known fallback, observable budget, rollback. Production deployment and restart is a separate gate. Native-interrupt, composed questions and Live-as-conductor each need their own decision; a transport approval is not approval for all three.
 
@@ -398,11 +466,15 @@ Run existing tests plus disposable real-worker delivery and browser tests. Asser
 
 ## 8. Decisions for the owner
 
-1. **Evidence.** May the lab sign-off, decision memo and published leaderboard be corrected to distinguish delivered equipment from unperformed measured runs? *(Highest urgency — the site is public and carries figures with no source.)*
-2. **The gate fix.** Authorise Step 1 now, on the current cascade, independent of everything else?
-3. **Direction.** Adopt §1 as the target, with the transport swap as the first migration checkpoint and Live-as-conductor kept as an experiment?
-4. **Sequence.** Accept the reordering in §7 — product slice before the full measured matrix?
-5. **Ambient.** Is goal clause 5 in scope for the first native slice, or explicitly deferred with a named follow-up? *(The state-machine seat is built either way.)*
+Ordered by urgency, not by size. Each names what happens if it is deferred.
+
+1. **Evidence.** May the lab sign-off, decision memo and published leaderboard be corrected to distinguish delivered equipment from unperformed measured runs? *(Highest urgency — the site is public and carries figures with no source. Deferring means the false numbers stay quotable.)*
+2. **The gate fix.** Authorise Step 1 now, on the current cascade, independent of everything else? *(Deferring leaves `"not sure"` dispatching held instructions in production.)*
+3. **Direction.** Adopt §1 as the target — two lanes kept, cascade replaced, authority moved from prompt to code — with the transport swap as the first migration checkpoint and Live-as-conductor kept as an experiment? *(Deferring blocks Steps 2–6; nothing else in this list depends on it except 4.)*
+4. **Sequence.** Accept the reordering in §7 — product slice before the measured matrix? *(Deferring means days of synthetic measurement before you hear anything.)*
+5. **Honesty mitigations.** Accept M1–M3 in §4.7 — host-rendered quotes, host-owned completion claims, unmarked-defaults-to-lowest-trust — as the structural price of letting the talker reason? *(These cost implementation work and remove a little conversational flexibility. Declining them means R1 is mitigated by prompt alone, which this document argues is insufficient.)*
+6. **Reasoning depth.** Accept **standard now, extended thinking instrumented rather than guessed** (§4.7a), including building rung 3 — the cheap host-side analysis call? *(Declining rung 3 leaves the "think hard without interrupting the worker" gap unfilled and makes extended thinking the only answer to it.)*
+7. **Ambient.** Is goal clause 5 in scope for the first native slice, or explicitly deferred with a named follow-up? *(The state-machine seat is built either way, so deferring is cheap — but only if it is decided rather than forgotten.)*
 
 **The bottom line:** the two-lane design is not the mistake. Coupling it to a rigid, turn-by-turn switchboard is. The target is **a fluent native-audio colleague in front of an independently capable reasoning worker, with a small, explicit, auditable authority kernel between them** — and the way to get fewer rules is to move the load-bearing ones out of the prompt and into code, not to relax them.
 

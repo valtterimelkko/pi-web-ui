@@ -446,6 +446,35 @@ Two hard rules carry over unchanged and are now more important, not less:
 This is what "understanding the limitations of the talker" means concretely: not
 a talker that refuses to think, but one whose thinking is always labelled.
 
+**The labelling must not rest on the model remembering to label.** Freeing the
+talker to reason creates a genuinely new risk — you believing something false,
+said confidently — which the four-object model does *not* address, because that
+model solves authority rather than truthfulness. The intent is therefore that
+**quotes and completion claims are produced by the host, not the model**, and
+that an unlabelled statement is treated as the talker's own guess rather than as
+fact. The construction detail, the full risk list and what remains unmitigated
+are in the recommendation's §4.7.
+
+### 17.1 Thinking hard without interrupting the worker
+
+One gap follows directly from thinking together: *"I want to think hard about
+this, and I do not want to interrupt the worker to do it."* Today nothing fills
+it — the only options are a shallow answer or a steer that breaks the worker's
+run.
+
+The intent is an **escalation ladder in cost order**: the talker reasons itself;
+it retrieves and reasons on what it pulled; the host makes a cheap analysis call
+on its behalf and returns the result as *Derived*; the item is parked for the
+worker's next boundary; or it is relayed now as a steer. The operator should feel
+this as the talker offering the cheapest sufficient option first, rather than
+either guessing or interrupting.
+
+**Deeper reasoning in the voice seat itself is deliberately not assumed.** The
+worker is already a strong reasoning model, and buying a second one for the voice
+seat costs latency on every ordinary turn. Whether the conversational model needs
+extended thinking is treated as a question to **measure**, not to settle by
+preference — see the recommendation's §4.7a and §7 Step 5.
+
 ## 18. When to relay, and when not
 
 ### 18.1 Promotion is explicit, and there are exactly three routes
