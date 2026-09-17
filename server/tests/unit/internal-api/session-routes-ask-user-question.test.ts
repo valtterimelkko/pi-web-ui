@@ -95,12 +95,17 @@ describe('createSessionRoutes — AskUserQuestion approval responses', () => {
     piService = {};
   });
 
+  // The route factory starts pin-store initialisation eagerly against `dir`
+  // (mkdir `<dir>/pins`); settle it before each per-test temp dir is removed.
+  const pendingReadiness: Array<Promise<unknown>> = [];
+
   afterEach(async () => {
+    await Promise.all(pendingReadiness.splice(0));
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
   function makeRoutes() {
-    return createSessionRoutes({
+    const routes = createSessionRoutes({
       claudeService,
       opencodeService,
       antigravityService,
@@ -112,6 +117,8 @@ describe('createSessionRoutes — AskUserQuestion approval responses', () => {
       pinDir: path.join(dir, 'pins'),
       pinExpiryIntervalMs: 60_000,
     });
+    pendingReadiness.push(routes.ready.catch(() => undefined));
+    return routes;
   }
 
   it('routes a pending AskUserQuestion answer to claudeService.respondToAskUserQuestion', async () => {

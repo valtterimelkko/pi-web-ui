@@ -133,12 +133,17 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
     commandCodeService = undefined;
   });
 
+  // The route factory starts pin-store initialisation eagerly against `dir`
+  // (mkdir `<dir>/pins`); settle it before each per-test temp dir is removed.
+  const pendingReadiness: Array<Promise<unknown>> = [];
+
   afterEach(async () => {
+    await Promise.all(pendingReadiness.splice(0));
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
   function makeRoutes() {
-    return createSessionRoutes({
+    const routes = createSessionRoutes({
       claudeService,
       opencodeService,
       antigravityService,
@@ -150,6 +155,8 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
       pinDir: path.join(dir, 'pins'),
       pinExpiryIntervalMs: 60_000,
     });
+    pendingReadiness.push(routes.ready.catch(() => undefined));
+    return routes;
   }
 
   // ── §1: model binding must never silently fall back ──────────────────────

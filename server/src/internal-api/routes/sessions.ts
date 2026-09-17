@@ -1013,6 +1013,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const ready = pinExpiry
     ? pinExpiry.init().then(() => pinExpiry.start())
     : Promise.resolve();
+  // `ready` is a startup contract: production awaits it before serving, and
+  // shutdown() awaits it too. Attaching an observer here keeps that contract
+  // intact (the promise still rejects for awaiters) while making sure a
+  // consumer that never awaits readiness cannot turn an initialisation failure
+  // into an unhandled rejection that takes down its host process — or fails an
+  // entire Vitest run, which is how a test harness that deleted its temp dir
+  // mid-initialisation turned this into a red CI pipeline.
+  void ready.catch(() => { /* surfaced at whichever boundary awaits `ready` */ });
 
   async function shutdown(): Promise<void> {
     await ready.catch(() => { /* startup surfaces the original initialization error */ });

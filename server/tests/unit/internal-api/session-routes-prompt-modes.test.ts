@@ -128,6 +128,9 @@ describe('Internal API prompt mode dispatch semantics', () => {
 
   afterEach(async () => {
     intervals.splice(0).forEach(clearInterval);
+    // Route construction starts async initialisation against `dir` (the pin
+    // store mkdirs `<dir>/pins`). Settle it before the temp dir is removed.
+    await routes?.shutdown();
     await manager?.shutdown();
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });

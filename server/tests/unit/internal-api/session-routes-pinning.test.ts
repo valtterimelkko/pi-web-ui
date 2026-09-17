@@ -120,12 +120,17 @@ describe('createSessionRoutes — API pinning + detach', () => {
     piService = { setModel: vi.fn().mockResolvedValue(undefined) };
   });
 
+  // The route factory starts pin-store initialisation eagerly against `dir`
+  // (mkdir `<dir>/pins`); settle it before each per-test temp dir is removed.
+  const pendingReadiness: Array<Promise<unknown>> = [];
+
   afterEach(async () => {
+    await Promise.all(pendingReadiness.splice(0));
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
   function makeRoutes(admissionController?: AdmissionController, controlLane?: BoundedControlLane, runReceiptManager?: RunReceiptManager) {
-    return createSessionRoutes({
+    const routes = createSessionRoutes({
       claudeService,
       opencodeService,
       antigravityService,
@@ -142,6 +147,8 @@ describe('createSessionRoutes — API pinning + detach', () => {
       controlLane,
       runReceiptManager,
     });
+    pendingReadiness.push(routes.ready.catch(() => undefined));
+    return routes;
   }
 
   it('pins at creation when pin:true and returns pinned + pinnedUntil', async () => {

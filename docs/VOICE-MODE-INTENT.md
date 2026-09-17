@@ -455,25 +455,29 @@ that an unlabelled statement is treated as the talker's own guess rather than as
 fact. The construction detail, the full risk list and what remains unmitigated
 are in the recommendation's §4.7.
 
-### 17.1 Thinking hard without interrupting the worker
+### 17.1 Reasoning depth — and nothing built in advance
 
-One gap follows directly from thinking together: *"I want to think hard about
-this, and I do not want to interrupt the worker to do it."* Today nothing fills
-it — the only options are a shallow answer or a steer that breaks the worker's
-run.
+**Operator decision, 2026-09-17: build on the standard model, add no escalation
+machinery, and let real use decide the rest.**
 
-The intent is an **escalation ladder in cost order**: the talker reasons itself;
-it retrieves and reasons on what it pulled; the host makes a cheap analysis call
-on its behalf and returns the result as *Derived*; the item is parked for the
-worker's next boundary; or it is relayed now as a steer. The operator should feel
-this as the talker offering the cheapest sufficient option first, rather than
-either guessing or interrupting.
+The worker is already a strong reasoning model. If a question needs deep thinking
+about the code, that is what the worker is for; putting a second deep reasoner in
+the voice seat would charge thinking latency on every ordinary turn and partly
+re-create the two-orchestrators problem the two-lane design exists to prevent.
 
-**Deeper reasoning in the voice seat itself is deliberately not assumed.** The
-worker is already a strong reasoning model, and buying a second one for the voice
-seat costs latency on every ordinary turn. Whether the conversational model needs
-extended thinking is treated as a question to **measure**, not to settle by
-preference — see the recommendation's §4.7a and §7 Step 5.
+An earlier draft proposed a graduated ladder of fallbacks for the case where the
+talker's own reasoning proves too shallow. The operator rejected it, and the
+reasoning is intent rather than implementation detail:
+
+> A set of steps to climb, designed before the thing has been built, is
+> unnecessary complication. Real usage will show how it works, and if it does
+> not, a solution will be found then and there.
+
+So: the talker reasons directly, marked *Mine*; it retrieves read-only material
+when it needs to; it parks items or offers to relay. Those exist for their own
+reasons and are **not** a ladder. **Do not build graduated fallbacks for a deficit
+nobody has experienced yet** — see the recommendation's §8.1, where this is
+recorded as a standing instruction to implementing agents.
 
 ## 18. When to relay, and when not
 

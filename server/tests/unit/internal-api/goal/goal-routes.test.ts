@@ -176,6 +176,12 @@ describe('goal function (contract 1.27.0)', () => {
   });
 
   afterEach(async () => {
+    // Route construction starts asynchronous initialisation against `dir` —
+    // notably PinExpiryStore.init(), which mkdirs `<dir>/pins`. Shutting the
+    // routes down first settles that work (and stops the expiry timer) before
+    // the temp directory is removed, so no detached initialisation can outlive
+    // the directory it was created against.
+    await routes?.shutdown();
     await manager?.shutdown();
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
