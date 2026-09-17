@@ -59,14 +59,18 @@ The server side of Voice Mode is the talker harness under `server/src/talker/` �
 - `websocket/handlers.ts` — Legacy WebSocket message handlers.
 
 ### Voice Mode / talker harness (`server/src/talker/`)
-Canonical feature doc: [`docs/VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md). One talker serves one worker session; the relay gate is mechanical (never widen its reachability).
+Canonical feature doc: [`docs/VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md); **for orientation across the whole voice corpus (intent, target architecture, lab status, reading order) start at [`docs/VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md)**. One talker serves one worker session; the relay gate is mechanical (never widen its reachability).
 - `talker/talker.ts` — per-turn loop: classify → release / refuse / converse; header comment documents the ten harness invariants.
-- `talker/utterance-classifier.ts` — mechanical confirmation/cancel/ordinal classification (model output is never an input to the gate).
+- `talker/policy-core.ts` — **the pure, synchronous decision core** (extracted in L3): same state + same input → byte-identical decision; the shipped per-turn loop delegates to it.
+- `talker/utterance-classifier.ts` — mechanical confirmation/cancel/ordinal classification (model output is never an input to the gate). **Known live defect:** `CONFIRM_PATTERN` matches confirmation words anywhere in the utterance, so `"not sure"` classifies as *confirm* and can release a pending draft; authorised for repair (decision D2).
+- `talker/relay-normalise.ts` — the semi-verbatim normaliser: strips carriage/filler, never content; retains the original wording and the removals for the card.
 - `talker/pending-proposal.ts` — accumulating verbatim draft + confirmation window (ageing expires the confirmation, never the draft).
 - `talker/session-registry.ts` — one talker per worker session; the single server-side entry point.
 - `talker/delivery.ts` — per-runtime relay adapters: Pi steer/prompt, Claude SDK steer/follow-up (non-SDK refuses), Antigravity follow-up queueing; honest outcomes.
 - `talker/digest.ts` — reading-level digests (summary / headlines) for the talker's reading path.
 - `talker/ask-worker.ts` — ask-the-worker offer handling.
+- `talker/model-client.ts` — talker model client (provider preference and bounded retry).
+- `talker/history.ts` / `talker/ack.ts` / `talker/prompt.ts` — worker-history window, fixed receipt acknowledgements, and prompt assembly.
 - `talker/observability.ts` + `talker/state-view.ts` + `talker/types.ts` — `voiceTurnId`-correlated records, per-turn state projection, and harness types (see [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md) §Voice Mode).
 - `websocket/connection.ts` (talker messages) — `talker_turn` / `talker_turn_result` / `talker_digest` transport binding between browser and talker registry.
 
@@ -208,6 +212,8 @@ Canonical feature doc: [`docs/VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md). On
 - `index.ts` — Server entry point.
 
 ### Operational Helpers
+- `scripts/voice-live-lab/` — **native-voice lab harness** (phases L0–L8): monotonic scheduler, frozen speech fixtures, paced PCM speech driver, reference playback, immutable attempt records with offline verification, baseline-cascade and native-live providers, the tier harnesses, the adaptive operator instrument, and the 20-utterance fidelity corpus. Tests live in `server/tests/voice-live-lab/`. **Delivered equipment only — no scored runs were performed**; status, evidence caveats and reading order are in [`docs/VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) §2 and [`docs/VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md) §2. Its own index: `scripts/voice-live-lab/README.md`.
+- `scripts/audio-lab/` — **rendered-audio regression lab**: drives the real product player and speech arbiter in a real headless Chrome, records the OS output of a private PulseAudio null sink with an independent monitor, and scores against frozen tolerances with offline re-verification. Canonical doc: [`docs/AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md) — note its host caveat (the capture lane cannot start on this machine, leaving the OS-output oracle indeterminate).
 - `scripts/debug-where.mjs` — Fast session locator: maps a session id, runtime-native id (Claude/OpenCode/Command Code), path, or Antigravity conversation id to the relevant logs, registry entry, and runtime-owned files; `--json` emits offline bounded locator evidence.
 - `scripts/validate-claude-profiles.ts` — Profile-specific validation runner. Validates SDK backend, direct CLI backend, tool visibility, skills, follow-up, and concurrency through a disposable server. Run via `npm run validate:claude-profiles`.
 - `scripts/concurrency-test.ts` — Tests simultaneous Claude + provider-profile sessions for cross-contamination. Run directly with `npx tsx scripts/concurrency-test.ts`.

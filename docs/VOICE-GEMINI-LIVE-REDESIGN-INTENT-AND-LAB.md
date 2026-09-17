@@ -1,7 +1,35 @@
 # Voice Mode on a native live model — intent record and benchmark lab
 
+> ## ⚠️ Status — corrected 2026-09-17: partly built, partly superseded
+>
+> **“Nothing here is built” is no longer true.** The lab was built — phases L0–L8
+> exist as `scripts/voice-live-lab/` with tests in `server/tests/voice-live-lab/`.
+> But **the scored runs were never performed**: the only committed manifest is a
+> dry run with `realProviderCalls: 0`. See the evidence-status banners on the
+> [decision memo](./VOICE-GEMINI-LIVE-DECISION-MEMO.md) and
+> [status ledger](./VOICE-GEMINI-LIVE-STATUS-LEDGER.md), and the audit in
+> [`VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md) §2.
+>
+> - **Part I is now intent history.** Canonical intent is
+>   [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md). Keep Part I for the
+>   operator's own framing and quotations, which were consolidated rather than
+>   discarded.
+> - **The tier question this file exists to decide is closed** (decision D3): the
+>   target architecture is settled, and the 210-attempt synthetic campaign was
+>   later replaced by a lean deterministic regression suite plus real-ear
+>   dogfooding (D4, revised 2026-09-17).
+> - **Still current and citable:** §16–§20 tier definitions and scoring families,
+>   and **§20.2 latency definitions** — which keep apart speech-end → first
+>   *received* audio, → first *played* audio (the only number that may be called
+>   TTFA, because it is the operator-facing one), → first *substantive* audio, and
+>   commit/release latency. Both the architecture doc and
+>   [`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md) cite it for exactly
+>   that reason. **Read §20.2 before quoting any latency figure from the lab.**
+>
+> **Map:** [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md).
+
 > **Class:** intent record (Part I) + lab design (Part II) + execution runbook (Part III).
-> **Status:** Part I written 2026-09-16 from a design session between the operator and Claude (Fable 5.1); Part II written the same day after the operator accepted the tier ordering and delegated the remaining decisions (§10). Nothing here is built; the lab is designed and ready to be built by an execution agent. It is not a production decision.
+> **Status:** **partly superseded, 2026-09-17.** Part I is intent history (canonical intent is [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md)); Parts II–III were built as the lab harness, but the scored runs were never performed and the tier question is closed. §16–§20 and §20.2 remain citable. See the banner above.
 >
 > **Amended 2026-09-16 (same day, model routing):** the operator resolved the remaining seat decisions. The judge leaves OpenRouter for a subscription-pool route, the simulated operator moves to the policy-default thinking level, and every routable seat is now declared as a full route tuple in §10 rows **f**, **j** and **k** plus the confirmed table in [§10.1](#101-confirmed-route-declarations-2026-09-16). Build against §10.1, not against model names recalled from prose.
 > **Audience:** a future agent asked to *build* the lab, or to *redesign* Voice Mode around Gemini 3.8 Live. Read this file first; it is meant to carry the operator's intent so that agent does not have to re-derive it from the corpus below.

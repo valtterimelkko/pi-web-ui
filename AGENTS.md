@@ -89,6 +89,7 @@ Core architectural themes:
 | Pi runtime: OpenRouter model automation | `server/src/pi/pi-openrouter-refresh.ts`, `server/src/pi/pi-service.ts`, [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md) |
 | Antigravity integration | `server/src/antigravity/*`, [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md) |
 | Session transfer | `server/src/session-transfer/*`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
+| Voice Mode (talker harness, voice surface, and its document corpus) | `server/src/talker/*`, `client/src/components/DriveMode/*`, [`docs/VOICE-MODE-INDEX.md`](./docs/VOICE-MODE-INDEX.md) (start here), [`docs/VOICE-MODE-INTENT.md`](./docs/VOICE-MODE-INTENT.md) |
 | Drive Mode | `client/src/components/DriveMode/*`, `client/src/store/driveModeStore.ts`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
 | Internal API / orchestration / live validation | `server/src/internal-api/*`, `scripts/live-validate.ts`, [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md), [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md), [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) |
 | Long-horizon validation / durable watches | `server/src/internal-api/watch/*`, `server/src/live-validation/long-horizon-runner.ts`, `scripts/long-horizon-validate.ts`, [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md) |
@@ -115,6 +116,7 @@ Core architectural themes:
 - `server/src/antigravity/antigravity-service.ts` — Antigravity lifecycle, stream-json turn execution, follow-up queue, model/thinking-level changes
 - `server/src/antigravity/agy-stream-process.ts` + `agy-event-normalizer.ts` + `agy-models.ts` — persistent agy child, NDJSON→NormalizedEvent translation, model catalogue/thinking levels
 - `server/src/session-transfer/*` — cross-runtime transcript transfer
+- `server/src/talker/*` — Voice Mode talker harness (mechanical confirm-gated relay; **never widen the gate's reachability**); start at `talker/policy-core.ts`, and orient with [`docs/VOICE-MODE-INDEX.md`](./docs/VOICE-MODE-INDEX.md)
 - For broader discovery, use [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
 
 ## Required workflow
@@ -124,6 +126,8 @@ Core architectural themes:
 3. **Prefer canonical docs over duplicating repo knowledge here.**
 4. **Run relevant validation before finishing:**
    - `npm run docs:check-agent-guides`
+   - `npm run docs:check-links`
+   - `npm run docs:check-status` (after touching any Voice Mode document)
    - `npm run lint`
    - `npm run typecheck`
    - `npm run build`

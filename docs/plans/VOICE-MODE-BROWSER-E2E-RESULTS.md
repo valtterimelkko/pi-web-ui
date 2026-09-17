@@ -1,5 +1,7 @@
 # Voice Mode Browser E2E — Results (P9)
 
+> **Class:** validation evidence (history). **Status:** complete. The integration defect it reports — the UI sending a session id where delivery resolves session **paths** — was **fixed afterwards** in `ed3ea2f`. **Corpus:** Voice Mode — see [`VOICE-MODE-INDEX.md`](../VOICE-MODE-INDEX.md).
+
 **Date:** 2026-09-13 · **Driver:** P9 brief (`docs/plans/briefs/P9-browser-e2e.md`)
 **Environment:** disposable validation server (`/tmp/p9-e2e`, port 3777) + vite dev client
 (`VITE_API_TARGET=http://localhost:3777`, port 5173) + real Chromium (Playwright) + real pi

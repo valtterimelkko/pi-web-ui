@@ -1,5 +1,7 @@
 # Voice Mode — Phase 5 live validation results (P6)
 
+> **Class:** validation evidence (history). **Status:** complete; describes the harness as of 2026-09-13 and is not current behaviour. **Corpus:** Voice Mode — see [`VOICE-MODE-INDEX.md`](../VOICE-MODE-INDEX.md).
+
 > **What this is.** The acceptance evidence for the Voice Mode harness
 > (Drive Mode Two-Lane plan §5): the five Benchmark-3 voice-relay scenarios run
 > end-to-end against **real, busy Pi workers** on a disposable validation

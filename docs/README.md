@@ -39,6 +39,8 @@ Then use the resolved internal id with `GET /api/v1/sessions/<id>/evidence`. Fol
 ### Day-to-day features
 
 - [`FILES-TAB.md`](./FILES-TAB.md) — file browsing, Markdown editing, truncation and save safety
+- [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) — **Voice Mode: start here.** Reading order for the voice corpus (intent, target architecture, lab status), what is superseded, and what the lab did and did not establish
+- [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) — canonical intent and shipped Voice Mode behaviour: the two lanes, the mechanical confirm gate, speech policy, reading levels
 - [`DRIVE-MODE.md`](./DRIVE-MODE.md) — distraction-reduced, voice-first overlay for quick session creation/continuation
 - [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) — automatic per-session Telegram notifications
 - [`SELF-NOTIFICATIONS.md`](./SELF-NOTIFICATIONS.md) — explicit terminal-agent/script notifications
@@ -90,6 +92,7 @@ If you are changing code, debugging a runtime, or operating this repo as a live 
 - [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - [`PROTOCOL.md`](./PROTOCOL.md)
 - [`OBSERVABILITY.md`](./OBSERVABILITY.md)
+- [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) — orientation and reading order for every Voice Mode document (intent, target architecture, lab specification, lab evidence, plans, archive)
 - [`SESSION-METADATA.md`](./SESSION-METADATA.md) — unified v2 archived/pinned/display-name metadata model
 - [`HEADROOM-TYPE-CONTEXT-LAYER.md`](./HEADROOM-TYPE-CONTEXT-LAYER.md) — context-compression design note (researched, not yet implemented)
 - [`SHARP-EDGES.md`](./SHARP-EDGES.md)
