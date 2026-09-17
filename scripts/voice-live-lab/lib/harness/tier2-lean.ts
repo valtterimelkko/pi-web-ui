@@ -1103,6 +1103,11 @@ export interface Tier2TurnRecord {
   sttMs: number;
   modelMs: number | null;
   ttsMs: number;
+  /** The trusted voice that spoke the receipt, when one was spoken. */
+  ttsProvider?: string;
+  ttsModel?: string;
+  ttsVoice?: string;
+  ttsChars?: number;
   audioBytes: number;
   commitLatencyMs: number;
   toolCallNames: string[];
@@ -1208,6 +1213,7 @@ export class Tier2LeanHarness implements ProviderInputSink {
   private lastCommittedOperatorText: string | null = null;
   /** Trusted-voice time spent inside the turn currently being executed. */
   private currentTurnTtsMs = 0;
+  private currentTurnVoice: { provider: string; model: string; voice: string; chars: number } | null = null;
 
   constructor(options: Tier2HarnessOptions) {
     if ((options.transcriptCondition ?? 'native') === 'sidecar' && !options.shadowAsr) {
@@ -1423,6 +1429,13 @@ export class Tier2LeanHarness implements ProviderInputSink {
     return this.hold?.text ?? null;
   }
 
+  /** The trusted voice that spoke this turn's receipt, if any. Read through a
+   *  method so the record build sees the value `deliver()` set during the turn
+   *  rather than the `null` executeTurn initialised it with. */
+  private voiceForTurn(): { provider: string; model: string; voice: string; chars: number } | null {
+    return this.currentTurnVoice;
+  }
+
   // ── Turn execution ─────────────────────────────────────────────────────────
 
   private async executeTurn(outcome: CommitOutcome): Promise<void> {
@@ -1431,6 +1444,7 @@ export class Tier2LeanHarness implements ProviderInputSink {
     this.turnPcm.length = 0;
     const window = this.window;
     this.currentTurnTtsMs = 0;
+    this.currentTurnVoice = null;
 
     let shadow: ShadowAsrOutcome | null = null;
     let shadowMs = 0;
@@ -1465,6 +1479,7 @@ export class Tier2LeanHarness implements ProviderInputSink {
     const sends = await this.processToolCalls(window.toolCalls, turn);
 
     const receiptAcks = sends.map((send) => send.ack).filter((ack): ack is string => ack !== null);
+    const voice = this.voiceForTurn();
     const record: Tier2TurnRecord = {
       turn,
       condition: this.condition,
@@ -1500,6 +1515,14 @@ export class Tier2LeanHarness implements ProviderInputSink {
       toolCallNames: window.toolCalls.map((call) => call.name),
       // Trusted-voice time (the delivery receipt ack) belongs to THIS turn.
       ...(this.currentTurnTtsMs > 0 ? { ttsMs: this.currentTurnTtsMs } : {}),
+      ...(voice
+        ? {
+            ttsProvider: voice.provider,
+            ttsModel: voice.model,
+            ttsVoice: voice.voice,
+            ttsChars: voice.chars,
+          }
+        : {}),
     };
     this.turnRecords.push(record);
 
@@ -1570,6 +1593,9 @@ export class Tier2LeanHarness implements ProviderInputSink {
               },
             }
           : {}),
+        ...(this.transcriptCondition === 'sidecar'
+          ? { nativeShadow: { provider: 'gemini-live', role: 'fidelity-reference' } }
+          : {}),
         model: {
           modelCalled: true,
           totalMs: record.modelMs,
@@ -1577,6 +1603,18 @@ export class Tier2LeanHarness implements ProviderInputSink {
           toolCalls: record.toolCallNames,
           modelTurnComplete: record.modelTurnComplete,
         },
+        ...(record.ttsProvider
+          ? {
+              tts: {
+                provider: record.ttsProvider,
+                model: record.ttsModel,
+                voice: record.ttsVoice,
+                ms: record.ttsMs,
+                chars: record.ttsChars ?? 0,
+                role: 'trusted-receipt',
+              },
+            }
+          : {}),
         audioMs: (audioBytes / 2 / 16000) * 1000,
       },
     });
@@ -1902,6 +1940,12 @@ export class Tier2LeanHarness implements ProviderInputSink {
       const ttsStartedMs = this.clock.nowMs();
       const spoken = await this.mechanicalVoice.synthesise(record.ack);
       this.currentTurnTtsMs += this.clock.nowMs() - ttsStartedMs;
+      this.currentTurnVoice = {
+        provider: spoken.provider,
+        model: spoken.model,
+        voice: spoken.voice,
+        chars: record.ack.length,
+      };
       this.player.receive(spoken.pcm);
       this.log.append({
         source: 'harness',

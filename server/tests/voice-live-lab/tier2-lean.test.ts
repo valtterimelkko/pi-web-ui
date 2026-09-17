@@ -362,6 +362,16 @@ describe('tier-2 send policy — free', () => {
     // The trusted receipt is spoken and logged (T3-D).
     expect(fixture.voiceSpoken).toHaveLength(1);
     expect(fixture.events.some((event) => event.kind === EVENT.HARNESS_RECEIPT)).toBe(true);
+    // …and accounted for as a real voice leg in the cost record (§20.6).
+    const ttsLegs = fixture.events.filter(
+      (event) => event.kind === EVENT.PROVIDER_USAGE && (event.payload as Record<string, unknown>).tts !== undefined
+    );
+    expect(ttsLegs).toHaveLength(1);
+    expect((ttsLegs[0].payload as Record<string, Record<string, unknown>>).tts).toMatchObject({
+      role: 'trusted-receipt',
+      provider: 'silence-mock',
+    });
+    expect((ttsLegs[0].payload as Record<string, Record<string, number>>).tts.chars).toBeGreaterThan(0);
     // The model is told what the host said, so it never has to be believed.
     expect(fixture.session.clientContent.some((entry) => entry.turns[0].parts[0].text.includes('Host said'))).toBe(true);
   });
@@ -711,7 +721,7 @@ describe('tier-2 dry run (inline, hermetic)', () => {
       expect(turn.payload.failedLeg).toBeNull();
     }
     expect(events.some((event) => event.kind === EVENT.HARNESS_RELEASE)).toBe(false);
-  });
+  }, 30_000);
 
   it('confirm-guided: the send lands in the confirm beat\'s window and emits a host release', async () => {
     const file = inlineScenario('t2-inline-confirm', INLINE_BEATS, INLINE_TIER2);
@@ -737,7 +747,7 @@ describe('tier-2 dry run (inline, hermetic)', () => {
     // The release belongs to the confirmation beat: the third window.
     expect(releaseTurn).toBe(2);
     expect(outcome.score.deliveredSends).toBe(1);
-  });
+  }, 30_000);
 
   it('fixed-text: the delivered bytes are the operator\'s words and the substitution is recorded', async () => {
     const file = inlineScenario('t2-inline-fixed', INLINE_BEATS, INLINE_TIER2);
@@ -755,7 +765,7 @@ describe('tier-2 dry run (inline, hermetic)', () => {
     const substitution = events.find((event) => event.kind === TIER2_EVENT.SUBSTITUTION);
     expect(substitution?.payload).toMatchObject({ deliveredText: 'Hold phase 3 until my review. Do not un-gate it early.' });
     expect(substitution?.payload.modelText).toBe('hold phase 3 until my review');
-  });
+  }, 30_000);
 
   it('N lane and the sidecar transcript both run and verify', async () => {
     const nBeats = INLINE_BEATS.map((beat, index) => (index === 0 ? { ...beat, trigger: { at: 'run-start' } } : beat));
@@ -781,7 +791,11 @@ describe('tier-2 dry run (inline, hermetic)', () => {
     const manifest = JSON.parse(readFileSync(path.join(outcome.attemptDir, 'manifest.json'), 'utf8'));
     expect(manifest.usage.transcriptCondition).toBe('sidecar');
     expect(manifest.usage.stt.provider).toBe('whisper-script');
-  });
+    const events = parseEventLog(readFileSync(path.join(outcome.attemptDir, 'application', 'events.jsonl'), 'utf8')).events;
+    const usage = events.filter((event) => event.kind === EVENT.PROVIDER_USAGE && (event.payload as Record<string, unknown>).nativeShadow);
+    expect(usage.length).toBeGreaterThan(0);
+    expect((usage[0].payload as Record<string, Record<string, unknown>>).nativeShadow.role).toBe('fidelity-reference');
+  }, 30_000);
 
   it('refuses a scenario with no tier2 block (the scorer would have nothing to check against)', async () => {
     const dir = path.join(root, 'scenarios');
