@@ -49,7 +49,7 @@ export interface WorkerHistoryEntry {
 
 /**
  * Harness state injected into every projection. Built by the TalkerSession
- * from the pending-proposal store — never from model memory or history.
+ * from the proposal store — never from model memory or history.
  */
 export interface HarnessView {
   /**

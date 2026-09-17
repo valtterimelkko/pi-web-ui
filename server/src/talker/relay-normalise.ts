@@ -29,7 +29,7 @@
  * Hard boundary (P25 outcome 2): the model NEVER produces the relayed text —
  * not one token. This module is harness-owned, in the same family as the
  * confirm/cancel patterns and the [[ask-worker]] / [[to-talker]] marker
- * handling. It is applied by the pending-proposal store at draft time
+ * handling. It is applied by the proposal store at draft time
  * (appendToDraft — the single choke point for everything that can later be
  * released), so the confirmation card, the mechanical re-confirmation quote
  * and the release are byte-identical BY CONSTRUCTION: the transform happens

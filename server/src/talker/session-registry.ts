@@ -31,7 +31,7 @@
  */
 
 import { TalkerSession } from './talker.js';
-import type { ReleaseVariant } from './pending-proposal.js';
+import type { ReleaseVariant } from './proposal-store.js';
 import { digestTurn, type DigestKind } from './digest.js';
 import { createDefaultDeliveries, type DefaultDeliveries } from './delivery.js';
 import { createObservedDelivery, createVoiceTurnRecorder, noteVoiceLaneBound, noteVoiceLaneDisposed, type VoiceTurnRecorder } from './observability.js';

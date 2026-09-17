@@ -67,8 +67,8 @@
  */
 
 import { resolveDraftSelection } from './utterance-classifier.js';
-import { PendingProposalStore, UtteranceLog } from './pending-proposal.js';
-import type { DraftSelection, ReleaseVariant } from './pending-proposal.js';
+import { PendingProposalStore, UtteranceLog } from './proposal-store.js';
+import type { DraftSelection, ReleaseVariant } from './proposal-store.js';
 import { createVoiceTurnRecorder, type VoiceTurnObservation, type VoiceTurnRecorder, type VoiceRuntime } from './observability.js';
 import { renderStateView } from './state-view.js';
 import { TalkerHistory } from './history.js';
@@ -308,7 +308,7 @@ export class TalkerSession {
   /**
    * The single release path. Private by construction: reachable only from the
    * confirm branch above. It takes NO relay text — the text comes from the
-   * pending-proposal store via takeForRelease(), which is null-safe, so even
+   * proposal store via takeForRelease(), which is null-safe, so even
    * a forced direct call cannot relay anything that was not a recorded,
    * unexpired, live draft part.
    *

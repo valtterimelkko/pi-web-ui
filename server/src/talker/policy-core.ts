@@ -52,15 +52,28 @@ import {
   isWorkerDirectedQuestion,
   resolveDraftSelection,
 } from './utterance-classifier.js';
-import { describeProposal } from './pending-proposal.js';
+import { describeProposal } from './proposal-store.js';
+import { ProposalNotFoundError, ProposalStore, UnknownPromotionRouteError } from './proposal-store.js';
 import type {
   DraftSelection,
   DraftSnapshot,
   DraftUtteranceEntry,
   OrdinalPosition,
+  Proposal,
   ProposalIdentity,
   ReleaseVariant,
-} from './pending-proposal.js';
+} from './proposal-store.js';
+import { ThreadStore } from './thread-store.js';
+import { ParkingLot } from './parking-lot.js';
+import {
+  AskWorkerOffers,
+  createReadOnlyKernelOperations,
+  type FileContextReader,
+  type KernelReadOnlyOperations,
+  type WorkerHistoryReader,
+} from './kernel-operations.js';
+import { ReleaseStore } from './release-store.js';
+import type { ReleaseOutcome, ReleaseRecord } from './release-store.js';
 import { NOTHING_PENDING_ACK, NOTHING_TO_CANCEL_ACK } from './ack.js';
 import { isAskWorkerOffer, stripAskWorkerMarker } from './ask-worker.js';
 import type { UtteranceClass } from './types.js';
@@ -324,7 +337,7 @@ export function stripTalkerAddressedMarker(reply: string): string {
   return reply.replace(ADDRESSED_TAG_ANYWHERE, '').trim();
 }
 
-// ── Selection arithmetic (pure; mirrors pending-proposal.ts) ───────────────
+// ── Selection arithmetic (pure; mirrors proposal-store.ts) ───────────────
 
 const ORDINAL_ORDER: OrdinalPosition[] = ['first', 'second', 'third', 'fourth', 'fifth'];
 
@@ -669,4 +682,251 @@ export function policyStateView(source: PolicyDraftSource, turn: number): Policy
       lapsed: source.isLapsed(turn),
     },
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE HOST AUTHORITY KERNEL (Voice Mode execution plan, Phase 2 / Track A)
+//
+// The four objects — Thread, Parking Lot, Proposal, Release — live here
+// together for the first time, orchestrated by this module. The kernel owns
+// no transport and no prompt authority: authority is the mechanical path
+// below, and everything a caller can do is one of:
+//
+//   threads.append(...)          conversation (unsendable; no route out)
+//   ops.parkItem/...             parking and read-only retrieval
+//   promote(...)                 one of the three explicit promotion routes,
+//                                which creates the lane's one live Proposal
+//   confirm(...)                 a card-identity-checked, idempotent Release
+//   recordDelivery/reconcile     the receipt, including first-class 'unknown'
+//
+// `confirm` is the only method that can authorise a delivery, and it can only
+// authorise a Proposal that a promotion route created. There is deliberately
+// no method that accepts a ThreadTurn, and no route from a thread turn to a
+// release (N1, N8) — pinned by four-objects.test.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Read sources the read-only operations may draw on (empty by default). */
+export interface HostAuthorityKernelOptions {
+  history?: WorkerHistoryReader;
+  files?: FileContextReader;
+  now?: () => number;
+}
+
+const EMPTY_HISTORY: WorkerHistoryReader = { recent: () => [], total: () => 0 };
+const EMPTY_FILES: FileContextReader = { read: () => null };
+
+/**
+ * A proposal is created only by one of these three shapes (intent §18.1).
+ * `direct_address` carries the operator's own bytes; `accepted_offer` and
+ * `parked_item_promotion` take their bytes from the offer/parked item — never
+ * from the caller, and never from the model.
+ */
+export type KernelPromotionInput =
+  | {
+      route: 'direct_address';
+      laneId: string;
+      tidied: string;
+      original?: string;
+      sourceUtteranceId: number;
+      createdTurn: number;
+    }
+  | {
+      route: 'accepted_offer';
+      laneId: string;
+      offerId: string;
+      sourceUtteranceId: number;
+      createdTurn: number;
+    }
+  | {
+      route: 'parked_item_promotion';
+      laneId: string;
+      parkedItemId: string;
+      sourceUtteranceId: number;
+      createdTurn: number;
+    };
+
+export interface KernelConfirmationInput {
+  proposalId: string;
+  /** The identity the confirming card displayed, echoed back. */
+  identity: { version: number; sha256: string };
+  /** One release per proposal and per key; a repeat is a duplicate refusal. */
+  idempotencyKey: string;
+  variant?: ReleaseVariant;
+}
+
+export type KernelConfirmationResult =
+  | { kind: 'authorised'; proposal: Proposal; idempotencyKey: string; targetLane: string }
+  | { kind: 'duplicate_refusal'; proposalId: string; idempotencyKey: string; prior: ReleaseRecord | null }
+  | {
+      kind: 'refused';
+      reason: 'not_found' | 'not_live' | 'stale' | 'original_not_offered';
+      proposal: Proposal | null;
+    };
+
+export interface KernelDeliveryInput {
+  proposalId: string;
+  idempotencyKey: string;
+  outcome: ReleaseOutcome;
+  receiptTimestamp?: number;
+}
+
+export class HostAuthorityKernel {
+  readonly threads: ThreadStore;
+  readonly parkingLot: ParkingLot;
+  readonly proposals: ProposalStore;
+  readonly releases: ReleaseStore;
+  readonly ops: KernelReadOnlyOperations;
+
+  private readonly offers: AskWorkerOffers;
+  private readonly now: () => number;
+
+  constructor(opts?: HostAuthorityKernelOptions) {
+    this.now = opts?.now ?? Date.now;
+    this.threads = new ThreadStore({ now: this.now });
+    this.parkingLot = new ParkingLot({ now: this.now });
+    this.proposals = new ProposalStore({ now: this.now });
+    this.releases = new ReleaseStore();
+    this.offers = new AskWorkerOffers({ now: this.now });
+    this.ops = createReadOnlyKernelOperations({
+      history: opts?.history ?? EMPTY_HISTORY,
+      files: opts?.files ?? EMPTY_FILES,
+      parkingLot: this.parkingLot,
+      offers: this.offers,
+    });
+  }
+
+  /**
+   * The only path that creates a Proposal. The route is re-checked at runtime,
+   * so an object smuggled in under another name (a thread turn, a raw string)
+   * cannot become one. Accepted offers are consumed by the accept (a declined
+   * offer can never be promoted); parked items are taken out of the lot.
+   */
+  promote(input: KernelPromotionInput): Proposal {
+    switch (input.route) {
+      case 'direct_address':
+        return this.proposals.create({
+          laneId: input.laneId,
+          route: input.route,
+          sourceUtteranceId: input.sourceUtteranceId,
+          tidied: input.tidied,
+          ...(input.original !== undefined ? { original: input.original } : {}),
+          createdTurn: input.createdTurn,
+        });
+      case 'accepted_offer': {
+        const offer = this.offers.accept(input.offerId);
+        return this.proposals.create({
+          laneId: input.laneId,
+          route: input.route,
+          sourceUtteranceId: input.sourceUtteranceId,
+          tidied: offer.question,
+          createdTurn: input.createdTurn,
+        });
+      }
+      case 'parked_item_promotion': {
+        const item = this.parkingLot.promote(input.parkedItemId);
+        return this.proposals.create({
+          laneId: input.laneId,
+          route: input.route,
+          sourceUtteranceId: input.sourceUtteranceId,
+          tidied: item.text,
+          createdTurn: input.createdTurn,
+        });
+      }
+      default:
+        throw new UnknownPromotionRouteError(String((input as { route?: unknown }).route));
+    }
+  }
+
+  /**
+   * The one confirmation path. Order is the safety order:
+   *   1. an already-released proposal answers `duplicate_refusal` (never a
+   *      second delivery);
+   *   2. an unknown proposal refuses;
+   *   3. an already-used idempotency key answers `duplicate_refusal` WITHOUT
+   *      consuming the proposal;
+   *   4. the ProposalStore gate validates live → version+sha256 → original
+   *      variant and consumes atomically on success.
+   * A refusal consumes nothing.
+   */
+  confirm(input: KernelConfirmationInput): KernelConfirmationResult {
+    const proposal = this.proposals.get(input.proposalId);
+    const prior = this.releases.findByProposal(input.proposalId);
+    // Released already — whether or not its receipt has been recorded yet.
+    // Either way the proposal was consumed by exactly one confirmation, so a
+    // repeat is a duplicate refusal, never a second delivery.
+    if (prior || proposal?.status === 'released') {
+      return {
+        kind: 'duplicate_refusal',
+        proposalId: input.proposalId,
+        idempotencyKey: input.idempotencyKey,
+        prior,
+      };
+    }
+    if (!proposal) return { kind: 'refused', reason: 'not_found', proposal: null };
+    if (this.releases.hasIdempotencyKey(input.idempotencyKey)) {
+      const priorForKey = this.releases.latest(input.idempotencyKey);
+      if (priorForKey) {
+        return {
+          kind: 'duplicate_refusal',
+          proposalId: input.proposalId,
+          idempotencyKey: input.idempotencyKey,
+          prior: priorForKey,
+        };
+      }
+    }
+    const take = this.proposals.takeForConfirmation({
+      proposalId: input.proposalId,
+      ...(input.variant !== undefined ? { variant: input.variant } : {}),
+      identity: input.identity,
+    });
+    if (take.kind !== 'taken') {
+      return {
+        kind: 'refused',
+        reason: take.kind,
+        proposal: 'proposal' in take ? take.proposal : null,
+      };
+    }
+    return {
+      kind: 'authorised',
+      proposal: take.proposal,
+      idempotencyKey: input.idempotencyKey,
+      targetLane: take.proposal.laneId,
+    };
+  }
+
+  /**
+   * Append the delivery receipt for an authorised release. The outcome may be
+   * `unknown` — a timeout after submission is not a refusal — which makes the
+   * release a reconciliation obligation rather than a blind retry.
+   */
+  recordDelivery(input: KernelDeliveryInput): ReleaseRecord {
+    const proposal = this.proposals.get(input.proposalId);
+    if (!proposal) throw new ProposalNotFoundError(input.proposalId);
+    return this.releases.record({
+      proposalId: proposal.id,
+      sha256: proposal.sha256,
+      idempotencyKey: input.idempotencyKey,
+      targetLane: proposal.laneId,
+      deliveryOutcome: input.outcome,
+      receiptTimestamp: input.receiptTimestamp ?? this.now(),
+    });
+  }
+
+  /** Resolve an unknown outcome; see ReleaseStore.reconcile. */
+  reconcile(input: {
+    idempotencyKey: string;
+    outcome: Exclude<ReleaseOutcome, { status: 'unknown' }>;
+    receiptTimestamp?: number;
+  }): ReleaseRecord {
+    return this.releases.reconcile({
+      idempotencyKey: input.idempotencyKey,
+      deliveryOutcome: input.outcome,
+      receiptTimestamp: input.receiptTimestamp ?? this.now(),
+    });
+  }
+
+  /** Releases whose latest outcome is `unknown` (reconciliation obligations). */
+  pendingReconciliations(): ReleaseRecord[] {
+    return this.releases.needsReconciliation();
+  }
 }

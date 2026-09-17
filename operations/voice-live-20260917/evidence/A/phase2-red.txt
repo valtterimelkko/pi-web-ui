@@ -1,0 +1,27 @@
+== Gate 2 RED (four-objects.test.ts written, kernel not yet implemented) ==
+2026-09-17T20:33:20Z
+$ npm --prefix server test -- tests/unit/talker/four-objects.test.ts
+
+> @pi-web-ui/server@0.1.0 test
+> vitest run tests/unit/talker/four-objects.test.ts
+
+
+ RUN  v1.6.1 /root/pi-web-ui-track-a/server
+
+ ❯ tests/unit/talker/four-objects.test.ts  (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/unit/talker/four-objects.test.ts [ tests/unit/talker/four-objects.test.ts ]
+Error: Failed to load url ../../../src/talker/thread-store.js (resolved id: ../../../src/talker/thread-store.js) in /root/pi-web-ui-track-a/server/tests/unit/talker/four-objects.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../pi-web-ui/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51969:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  no tests
+   Start at  20:33:21
+   Duration  590ms (transform 103ms, setup 55ms, collect 0ms, tests 0ms, environment 0ms, prepare 81ms)
+
+JSON report written to /root/pi-web-ui-track-a/server/test-results.json
+EXIT=1
