@@ -33,9 +33,12 @@ export interface FakeServerContent {
 export interface FakeScriptStep {
   /** Wall-clock offset from the start of `run()`, in milliseconds. */
   atMs: number;
+  setupComplete?: boolean;
+  sessionResumptionUpdate?: { newHandle: string; resumable: boolean };
+  goAway?: { timeLeft: string };
   serverContent?: FakeServerContent;
-  usageMetadata?: Record<string, number>;
-  toolCall?: { name: string; args: Record<string, unknown> };
+  usageMetadata?: Record<string, unknown>;
+  toolCall?: { name: string; args: Record<string, unknown>; id?: string };
 }
 
 export interface FakeLiveProviderOptions {
@@ -112,12 +115,39 @@ export class FakeLiveProvider implements ProviderInputSink {
       if (wait > 0) await this.sleep(wait);
       elapsed = Math.max(elapsed, step.atMs);
 
+      if (step.setupComplete) {
+        this.log.append({
+          source: 'provider',
+          kind: EVENT.LIFECYCLE,
+          id: `provider:setupComplete:${index}`,
+          payload: { event: 'setupComplete' },
+        });
+      }
+
+      if (step.sessionResumptionUpdate) {
+        this.log.append({
+          source: 'provider',
+          kind: EVENT.LIFECYCLE,
+          id: `provider:resumption:${index}`,
+          payload: { event: 'sessionResumptionUpdate', ...step.sessionResumptionUpdate },
+        });
+      }
+
+      if (step.goAway) {
+        this.log.append({
+          source: 'provider',
+          kind: EVENT.LIFECYCLE,
+          id: `provider:goAway:${index}`,
+          payload: { event: 'goAway', ...step.goAway },
+        });
+      }
+
       if (step.toolCall) {
         this.log.append({
           source: 'provider',
           kind: EVENT.PROVIDER_CONTENT,
           id: `provider:toolCall:${index}`,
-          payload: { toolCall: { name: step.toolCall.name, args: step.toolCall.args } },
+          payload: { toolCall: { name: step.toolCall.name, args: step.toolCall.args, id: step.toolCall.id } },
         });
       }
 

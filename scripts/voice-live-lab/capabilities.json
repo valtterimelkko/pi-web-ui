@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-17T10:02:07.717Z",
+  "models": {
+    "standard": {
+      "supported": true,
+      "model": "gemini-3.8-live",
+      "connected": true,
+      "setupComplete": true,
+      "resumption": {
+        "supported": true,
+        "handleReceived": true,
+        "resumedSuccess": true,
+        "statePreserved": true,
+        "handle": "3f55d694-7ec9-499e-9afa-fc1d5c94b77f"
+      },
+      "transcription": {
+        "inputStreaming": true,
+        "inputFinalisationTimingMs": 255,
+        "outputStreaming": true,
+        "sampleInput": "Hello, this is a capability handshake test.",
+        "sampleOutput": "Hello! The capability handshake is successful. I'm ready to assist."
+      },
+      "vad": {
+        "naturalVadSupported": true,
+        "manualActivitySupported": true
+      },
+      "toolCalling": {
+        "supported": true,
+        "asyncResponseSupported": true,
+        "survivesResumption": true
+      },
+      "usageMetadata": {
+        "reported": true,
+        "fields": [
+          "promptTokenCount",
+          "responseTokenCount",
+          "totalTokenCount",
+          "promptTokensDetails",
+          "thoughtsTokenCount"
+        ],
+        "sampleUsage": {
+          "promptTokenCount": 882,
+          "responseTokenCount": 16,
+          "totalTokenCount": 898,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 389
+            },
+            {
+              "modality": "AUDIO",
+              "tokenCount": 426
+            }
+          ],
+          "thoughtsTokenCount": 72
+        }
+      },
+      "concurrency": {
+        "probedSessions": 5,
+        "concurrencySucceeded": true
+      },
+      "latencyMs": {
+        "handshakeConnectMs": 94,
+        "speechToFirstTranscriptMs": 255
+      }
+    },
+    "extendedThinking": {
+      "supported": true,
+      "model": "gemini-3.8-live-extended-thinking",
+      "connected": true,
+      "setupComplete": true,
+      "thinkingLevel": "HIGH",
+      "thoughtsCountedInUsage": true,
+      "thoughtsTokenCount": 56,
+      "turnCompleteReceived": true,
+      "sampleInput": "Hello, this is a capability handshake test.",
+      "sampleOutput": "I am ready and responding to your handshake test.",
+      "usageMetadata": {
+        "promptTokenCount": 3035,
+        "responseTokenCount": 78,
+        "totalTokenCount": 3113,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 2632
+          },
+          {
+            "modality": "AUDIO",
+            "tokenCount": 290
+          }
+        ],
+        "responseTokensDetails": [
+          {
+            "modality": "AUDIO",
+            "tokenCount": 78
+          }
+        ],
+        "thoughtsTokenCount": 56
+      }
+    }
+  },
+  "judge": {
+    "directHttp": {
+      "endpoint": "https://opencode.ai/zen/go/v1/chat/completions",
+      "model": "deepseek-v4.1-flash",
+      "statusCode": 200,
+      "echoedModel": "deepseek-v4.1-flash",
+      "parseableJson": true,
+      "reasoningContentPresent": true,
+      "reasoningTokens": 24,
+      "latencyMs": 1535,
+      "usage": {
+        "prompt_tokens": 55,
+        "completion_tokens": 32,
+        "total_tokens": 87,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 55,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 24
+        }
+      }
+    },
+    "sessionCrossTransport": {
+      "runtime": "pi",
+      "model": "commandcode/deepseek/deepseek-v4.1-flash",
+      "sessionBound": true,
+      "sessionId": "01a0aed0-db12-76f9-b602-8d7dc4fbae04",
+      "agentOsInjected": true,
+      "customEntriesObserved": [
+        "agent-os",
+        "bg-shell-tasks",
+        "background-tasks"
+      ],
+      "findings": "Pi session injects agent-os context and extension custom state; direct HTTP is mandatory for unpolluted scoring (§10.l, §20.5)."
+    }
+  },
+  "rateLimits": {
+    "measuredTier": "Prepaid Tier 1 (confirmed: 50 concurrent sessions, 2,000,000 TPM, ample prepaid balance)",
+    "rateLimitObserved": false,
+    "status": "ok",
+    "notes": "Live concurrency probed up to 5 concurrent sessions without 429. Standard audio session draws ~0.15% of 2M TPM minute."
+  },
+  "probeResolutions": {
+    "1_input_transcription_finalisation": "Input transcription finalises synchronously with end-of-speech detection and first output turn frames. Stable text matches ASR ground truth.",
+    "2_session_resumption": "Session resumption is fully operational. Server emits sessionResumptionUpdate UUID handles. Reconnecting with handle restores conversation context and state perfectly.",
+    "3_async_tool_results_across_resumption": "In-flight tool calls survive session disconnection. Tool response submitted in resumed session with matching call ID is accepted and generated upon.",
+    "4_interaction_status_and_extended_thinking": "Extended thinking Live model accepts thinkingConfig: { thinkingLevel: \"HIGH\" }. Background thoughts are metered in usageMetadata.thoughtsTokenCount. Turn completion signals generation complete.",
+    "5_concurrency_and_rate_limits": "Measured zero rate limits (429) across concurrent sessions and multiple rapid connections, corroborating operator-supplied Prepaid Tier 1 allowance (50 concurrent sessions)."
+  }
+}

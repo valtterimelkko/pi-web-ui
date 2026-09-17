@@ -1,36 +1,43 @@
 #!/usr/bin/env node
 /**
- * Voice Live Lab CLI (L0).
+ * Voice Live Lab CLI (L0 + L1).
  *
  *   npx tsx scripts/voice-live-lab/cli.ts verify <attemptDir> [--json]
+ *   npx tsx scripts/voice-live-lab/cli.ts handshake [--output <path>] [--json]
  *
  * `verify` is the offline trust boundary: it re-derives the mechanical facts
  * from an attempt record without a browser, a provider or the network, and
  * exits non-zero if the record is damaged, unfinalised or internally
- * inconsistent. Later phases add `handshake`, `run`, `freeze` and `report`; the
- * argument surface is deliberately small until they exist.
+ * inconsistent.
+ *
+ * `handshake` executes the Phase L1 capability and quota probes against
+ * real Live models and judge endpoints, writing capabilities.json.
  */
 
 import { verifyAttempt } from './lib/record.js';
+import { runHandshake, type CapabilitiesReport } from './lib/handshake.js';
 
-export type CliCommand = 'verify' | 'help';
+export type CliCommand = 'verify' | 'handshake' | 'help';
 
 export interface CliOptions {
   command: CliCommand;
   attemptDir?: string;
+  outputPath?: string;
   json?: boolean;
   requireFinalised?: boolean;
 }
 
 export const USAGE = [
-  'Voice Live Lab (Phase L0)',
+  'Voice Live Lab (Phase L0/L1)',
   '',
   'Usage:',
   '  voice-live-lab verify <attemptDir> [--json] [--allow-unfinalised]',
+  '  voice-live-lab handshake [--output <path>] [--json]',
   '  voice-live-lab help',
   '',
   'Commands:',
   '  verify <attemptDir>   Re-check an attempt record offline; exit 1 on damage.',
+  '  handshake             Probe Gemini Live models & judge endpoints; writes capabilities.json.',
   '  help                  Show this message.',
 ].join('\n');
 
@@ -47,6 +54,15 @@ export function parseArgs(argv: string[]): CliOptions {
       attemptDir,
       json: rest.includes('--json'),
       requireFinalised: !rest.includes('--allow-unfinalised'),
+    };
+  }
+  if (command === 'handshake') {
+    const outIdx = rest.indexOf('--output');
+    const outputPath = outIdx !== -1 && rest[outIdx + 1] ? rest[outIdx + 1] : undefined;
+    return {
+      command: 'handshake',
+      outputPath,
+      json: rest.includes('--json'),
     };
   }
   throw new Error(`Unknown command: ${command}`);
@@ -79,12 +95,14 @@ export interface CliDependencies {
   writeOut?: (line: string) => void;
   writeErr?: (line: string) => void;
   verify?: (attemptDir: string, options: { json?: boolean; requireFinalised?: boolean }) => CliResult;
+  handshake?: (options: { outputPath?: string; log?: (line: string) => void }) => Promise<CapabilitiesReport>;
 }
 
 export async function main(argv: string[], deps: CliDependencies = {}): Promise<number> {
   const writeOut = deps.writeOut ?? ((line: string) => process.stdout.write(`${line}\n`));
   const writeErr = deps.writeErr ?? ((line: string) => process.stderr.write(`${line}\n`));
   const verify = deps.verify ?? runVerify;
+  const handshake = deps.handshake ?? runHandshake;
 
   let options: CliOptions;
   try {
@@ -100,13 +118,35 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
     return 0;
   }
 
-  const result = verify(options.attemptDir as string, {
-    json: options.json,
-    requireFinalised: options.requireFinalised,
-  });
-  for (const line of result.stdout) writeOut(line);
-  for (const line of result.stderr) writeErr(line);
-  return result.code;
+  if (options.command === 'verify') {
+    const result = verify(options.attemptDir as string, {
+      json: options.json,
+      requireFinalised: options.requireFinalised,
+    });
+    for (const line of result.stdout) writeOut(line);
+    for (const line of result.stderr) writeErr(line);
+    return result.code;
+  }
+
+  if (options.command === 'handshake') {
+    try {
+      const report = await handshake({
+        outputPath: options.outputPath,
+        log: options.json ? undefined : writeOut,
+      });
+      if (options.json) {
+        writeOut(JSON.stringify(report, null, 2));
+      } else {
+        writeOut(`Handshake completed successfully. Status: ${report.rateLimits.status}`);
+      }
+      return report.rateLimits.status === 'ok' ? 0 : 1;
+    } catch (error) {
+      writeErr(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
+  }
+
+  return 0;
 }
 
 const invokedDirectly =
