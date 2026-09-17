@@ -7,6 +7,15 @@ on:
 permissions:
   contents: read
 
+# Supersede in-flight runs for the same workflow and ref. This repository takes
+# rapid successive pushes (frequently docs-only), and without this every push
+# ran the whole ~11-minute suite to completion even after a newer commit had
+# made it stale. A superseded run reports `cancelled`, never `success`, so no
+# consumer may read a cancelled run as a passing gate.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   application:
     runs-on: ubuntu-latest
