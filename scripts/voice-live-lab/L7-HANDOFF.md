@@ -245,6 +245,12 @@ Each was found by a failing assertion or a dry-run score, not by review:
     net warnings (one unused local was removed before committing) and
     `lint:ratchet` reports `violations: []`, but the thin headroom means the
     next phase's first stray warning trips the ceiling. Flagged for the parent.
+11. **Session lifetime is tier 1's, by design.** Tier 2 has no `goAway`
+    reconnection or context-window compression: §18 wires tier 2 to tier 1
+    "minus the draft store and classifier", and §17.4 assigns lifetime handling
+    to tier 3. A measured tier-2 run that hits `goAway` records it in the event
+    log (the adapter logs and dispatches it) and reports it as a provider limit
+    — it is not retried, and no attempt claims a resumed session it did not use.
 
 ## 7. For the parent
 

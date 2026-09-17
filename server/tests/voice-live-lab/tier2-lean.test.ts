@@ -43,7 +43,9 @@ import {
   emptyTier3Findings,
   runTier2DryAttempt,
   runTier2MeasuredAttempt,
+  scoreTier2Attempt,
   tier2InstructionManifest,
+  tokenF1,
   type Tier2Condition,
 } from '../../../scripts/voice-live-lab/lib/harness/tier2-lean.js';
 import type { LiveConnectRequest, LiveServerMessageShape, LiveSessionLike } from '../../../scripts/voice-live-lab/lib/providers/gemini-live.js';
@@ -132,6 +134,8 @@ function makeFixture(options: {
   transcript?: 'native' | 'sidecar';
   stabilityMs?: number;
   responseScheduling?: string;
+  /** When set, a scripted shadow ASR serves these texts (one per turn). */
+  shadowTexts?: string[];
 }): Fixture {
   const clock = createMonotonicClock();
   const events: LabEvent[] = [];
@@ -170,6 +174,15 @@ function makeFixture(options: {
     stateViewCoalesceMs: 0,
   });
   const delivery = createNullDelivery();
+  const shadowQueue = [...(options.shadowTexts ?? [])];
+  const shadowAsr = options.shadowTexts
+    ? {
+        async transcribe(_pcm: Buffer) {
+          const text = shadowQueue.length > 1 ? (shadowQueue.shift() as string) : (shadowQueue[0] ?? '');
+          return { text, provider: 'whisper-mock', model: 'large-v3', ms: 1 };
+        },
+      }
+    : undefined;
   const harness = new Tier2LeanHarness({
     log,
     clock,
@@ -180,6 +193,7 @@ function makeFixture(options: {
     delivery,
     workerSessionId: 'tier2-test-worker',
     snapshotProvider: () => ({ activity: 'running the test suite', lastAssistantText: 'Fixing the flaky parser test.' }),
+    ...(shadowAsr ? { shadowAsr } : {}),
     mechanicalVoice: {
       async synthesise(text: string) {
         voiceSpoken.push(text);
@@ -600,6 +614,40 @@ describe('tier-2 commit rule', () => {
   });
 });
 
+// ── 4b. Speech → recognised: the shadow ASR is the fidelity reference ──────
+
+describe('tier-2 transcript agreement (F1)', () => {
+  it('token F1 is 1 for identical text and falls with divergence', () => {
+    expect(tokenF1('hold phase three until my review', 'hold phase three until my review')).toBe(1);
+    expect(tokenF1('hold phase three until my review', 'hold phase 3 review')).toBeLessThan(1);
+    expect(tokenF1('hold phase three', 'something else entirely')).toBe(0);
+  });
+
+  it('scores the deciding transcript against the shadow leg per turn', async () => {
+    const fixture = makeFixture({ condition: 'free', shadowTexts: ['hold phase three until my review'] });
+    await fixture.harness.start();
+    await speak(fixture, 'hold phase 3 until my review', (session) => {
+      session.emitReply('Holding phase three.');
+      session.emitTurnComplete();
+    });
+    await fixture.harness.stop();
+
+    const score = scoreTier2Attempt({
+      scenarioId: 't2-inline-agreement',
+      condition: 'free',
+      beats: [{ id: 'b1', utterance: 'hold phase 3 until my review' }],
+      block: { sendPlan: [] },
+      corpus: null,
+      turns: fixture.harness.turnRecordsList,
+    });
+    expect(score.transcriptAgreement?.comparedTurns).toBe(1);
+    expect(score.transcriptAgreement?.meanTokenF1).toBeGreaterThan(0.5);
+    expect(score.transcriptAgreement?.meanTokenF1).toBeLessThan(1);
+    expect(score.transcriptAgreement?.perTurn[0].native).toContain('hold phase 3');
+    expect(score.transcriptAgreement?.perTurn[0].shadow).toContain('hold phase three');
+  });
+});
+
 // ── 5. Hermetic end-to-end ──────────────────────────────────────────────────
 
 function inlineScenario(id: string, beats: Array<Record<string, unknown>>, tier2: Record<string, unknown>): string {
@@ -791,6 +839,10 @@ describe('tier-2 dry run (inline, hermetic)', () => {
     const manifest = JSON.parse(readFileSync(path.join(outcome.attemptDir, 'manifest.json'), 'utf8'));
     expect(manifest.usage.transcriptCondition).toBe('sidecar');
     expect(manifest.usage.stt.provider).toBe('whisper-script');
+    // Speech → recognised: in the dry run both legs serve the authored
+    // utterance, so the equipment check is agreement 1.0.
+    expect(outcome.score.transcriptAgreement?.comparedTurns).toBe(outcome.turns);
+    expect(outcome.score.transcriptAgreement?.meanTokenF1).toBe(1);
     const events = parseEventLog(readFileSync(path.join(outcome.attemptDir, 'application', 'events.jsonl'), 'utf8')).events;
     const usage = events.filter((event) => event.kind === EVENT.PROVIDER_USAGE && (event.payload as Record<string, unknown>).nativeShadow);
     expect(usage.length).toBeGreaterThan(0);

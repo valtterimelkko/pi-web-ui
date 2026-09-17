@@ -1747,6 +1747,10 @@ export class Tier2LeanHarness implements ProviderInputSink {
 
     if (this.condition === 'fixed-text') {
       // "Free timing, fixed words": the model owns WHEN, never the bytes.
+      // Defensive (unreachable through the commit rule): a turn always commits
+      // non-empty normalised text before its tool calls are processed, so the
+      // refusal below can only fire on a damaged internal state — and it
+      // refuses rather than delivering empty bytes.
       const committed = this.lastCommittedOperatorText;
       if (committed === null || committed.trim() === '') {
         return this.recordRefused(
@@ -2658,6 +2662,8 @@ export interface Tier2AttemptScore {
   composedFidelity: FidelityAggregate | null;
   /** Fidelity on the bytes actually delivered (fixed-text is 1.0 by design). */
   deliveredFidelity: FidelityAggregate | null;
+  /** Speech → recognised: the deciding transcript against the shadow ASR. */
+  transcriptAgreement: TranscriptAgreement | null;
   /** Sends that reached the sink without a trusted ack (T3-D receipts). */
   receiptsMissing: string[];
   totals: {
@@ -2675,6 +2681,32 @@ export interface Tier2AttemptScore {
 
 /** Words a question-shaped reply uses when it asks instead of sending. */
 const OVER_ASK_PATTERN = /[?]|\b(shall i|should i|want me to|do you want me to|would you like me to|just to confirm|confirm that)\b/i;
+
+/** Token F1 between two transcripts (content tokens, order-free). */
+export function tokenF1(left: string, right: string): number {
+  const a = new Set(contentTokens(left));
+  const b = new Set(contentTokens(right));
+  if (a.size === 0 && b.size === 0) return 1;
+  if (a.size === 0 || b.size === 0) return 0;
+  const hits = [...a].filter((token) => b.has(token)).length;
+  if (hits === 0) return 0;
+  const precision = hits / a.size;
+  const recall = hits / b.size;
+  return (2 * precision * recall) / (precision + recall);
+}
+
+/**
+ * F1 (speech → recognised), the fidelity reference the shadow ASR exists for
+ * (§20.4): the deciding transcript against the shadow, per turn. In the dry
+ * run both legs serve the same authored utterance, so 1.0 is an equipment
+ * check; in a measured run this is the native-vs-whisper agreement, which is
+ * what makes a native transcript trustworthy as the fidelity reference.
+ */
+export interface TranscriptAgreement {
+  comparedTurns: number;
+  meanTokenF1: number;
+  perTurn: Array<{ turn: number; native: string; shadow: string; tokenF1: number }>;
+}
 
 export interface Tier2ScoreInput {
   scenarioId: string;
@@ -2839,6 +2871,27 @@ export function scoreTier2Attempt(input: Tier2ScoreInput): Tier2AttemptScore {
     honestyViolations,
     composedFidelity: composedScores.length > 0 ? aggregateFidelity(composedScores) : null,
     deliveredFidelity: deliveredScores.length > 0 ? aggregateFidelity(deliveredScores) : null,
+    transcriptAgreement: (() => {
+      const rows = turns
+        .filter(
+          (turn) =>
+            turn.nativeTranscript.trim() !== '' &&
+            turn.shadowTranscript !== null &&
+            turn.shadowTranscript.trim() !== ''
+        )
+        .map((turn) => ({
+          turn: turn.turn,
+          native: turn.nativeTranscript,
+          shadow: turn.shadowTranscript as string,
+          tokenF1: tokenF1(turn.nativeTranscript, turn.shadowTranscript as string),
+        }));
+      if (rows.length === 0) return null;
+      return {
+        comparedTurns: rows.length,
+        meanTokenF1: rows.reduce((sum, row) => sum + row.tokenF1, 0) / rows.length,
+        perTurn: rows,
+      };
+    })(),
     receiptsMissing: turns
       .flatMap((turn) => turn.sends)
       .filter((send) => send.status === 'delivered' && (send.ack === null || send.ack === ''))
