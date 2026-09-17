@@ -371,6 +371,24 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 1 DISPATCHED — B bridge + C client in parallel from post-E master `e56128b`).**
+Children created with goals armed (create-with-goal, atomic) and durable leases,
+each with an objective-side `verifyCommand` keyed to its handback file:
+**B** `01a0b148-0090-711b-bb08-c2bf16703ac6` — `opencode-go/deepseek-v4.1-flash`
+(max), worktree `/root/pi-web-ui-track-b`, branch `feat/voice-bridge`, lease
+`55596222-bdea-43e3-9d8c-6ecd0f0140ff` (owner `voice-exec-20260917-b`); **C**
+`01a0b148-03dd-711b-bb08-c2c038ec0770` — `commandcode/deepseek/deepseek-v4.1-flash`
+(high), worktree `/root/pi-web-ui-track-c`, branch `feat/voice-client`, lease
+`6499e894-0ebb-4c67-8638-665726eff1d6` (owner `voice-exec-20260917-c`). Both
+started on dispatch (goal running, session busy). Watches `ww_4`/`ww_5`
+(goal_end + goal_state(paused) + `PARENT-INPUT-NEEDED`, 6 wakes each); backstop
+`deadline-ffe20f8b` until 22:31Z. Preflight at dispatch: capacity 0/16 turns;
+quota opencode-go monthly 82 %, commandcode monthly 37 %, clinepass 43 %,
+zai-glm 99 % (off-peak). E's cleanup completed: retention released (owner
+`voice-exec-20260917-e`), worktree and `feat/voice-contract` removed; its local
+watch had already exhausted its 3-wake budget (status `done`), so there was
+nothing to cancel — noted rather than silently ignored.
+
 **2026-09-17 (Wave 0 COMPLETE — E accepted and merged; contract frozen v1 on master).**
 E's independent review returned PARTIALLY CONSISTENT with six material findings;
 E reproduced each before acting, corrected five in `59975d2` (schema-exact
