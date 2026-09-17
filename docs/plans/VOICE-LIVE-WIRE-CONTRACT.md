@@ -1,8 +1,9 @@
 # Voice Mode — native-voice wire contract, version 1 (FROZEN)
 
 > **Class:** frozen execution artefact — Wave 0 child E of the Voice Mode multi-agent execution.
-> **Status:** **FROZEN at v1.** Committed on `feat/voice-contract`. No further edits to the
-> semantics of v1 until the conductor reassigns this path; see §1.3 for the change protocol.
+> **Status:** **FROZEN at v1**, corrected after independent review (see §8.2). Committed on
+> `feat/voice-contract`. No further edits to the semantics of v1 until the conductor reassigns this
+> path; see §1.3 for the change protocol.
 > **Date:** 17 September 2026.
 >
 > **Anchors.** [`VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md) (the *what* and *why*, N1–N9),
@@ -44,12 +45,14 @@ intent disagree, the intent governs intent and the contract is wrong.
 ### 1.3 The freeze rule
 
 1. `VOICE_WIRE_VERSION = 1` is frozen. v1 semantics are not edited in place.
-2. **Purely additive optional fields stay within v1**: a consumer that does not know a field ignores it.
-   No message may gain a *required* field without a version bump.
+2. **Purely additive optional fields stay within v1**, with one deliberate asymmetry: a server→client
+   consumer ignores fields it does not know, but a **client→server frame carrying any field the
+   catalogue does not name is refused** (§3.4). Extending the client→server surface therefore means
+   adding the field to the catalogue in the same change, and a *required* addition needs v2.
 3. A breaking change (removed field, changed meaning, new required field) is **v2**, added alongside —
    v1 stays readable. `VOICE_WIRE_VERSION` identifies which one a frame is.
 4. `docs/plans/VOICE-LIVE-WIRE-CONTRACT.md` and `shared/src/types/voice-messages.ts` change **together**;
-   the test in §9 fails otherwise, and `tsc` fails if the confirm's shape is weakened (§4.3).
+   the test in §9 fails otherwise, and `tsc` fails if the confirm's shape is weakened (§4.2).
 5. Only the conductor reassigns this path. A track that needs a change raises it as a question rather
    than editing the seam.
 
@@ -59,9 +62,9 @@ These are the reason the contract exists as code and not as a wiki page:
 
 | Property | Mechanism |
 |---|---|
-| **A client cannot post instruction bytes** (N1, N2) | No client→server voice message may carry `text`, `utterance`, `instruction`, `relayText`, `message` or `prompt`; `checkVoiceEnvelope` refuses such a frame. The operator's words travel as audio; the transcript is produced server-side; typed input stays on the separate `prompt` path. |
-| **A confirmation needs a proposal identity** (§4.3, N1) | `proposal_confirm` carries `proposalId` + `variant` + `idempotencyKey` and has no text field. The compile-time assertion in `voice-messages.ts` fails `tsc` if anyone adds one, and the runtime guard refuses the frame. |
-| **The kernel stays client-neutral** (D7, §20.1 of the intent) | The contract module contains no browser lifecycle global; the test inspects the source and fails if one appears. Lane and generation identity replace tab, page and audio-DOM assumptions. |
+| **A client cannot get instruction bytes onto the validated path** (N1, N2) | Client→server frames are **schema-exact**: the envelope fields plus the fields that message declares, and nothing else. An instruction-bearing key (six named ones) is refused with `voice_client_text_forbidden`; **any other unnamed key** — `note: "do X"` — is refused with `voice_message_unknown_field`. The operator's words travel as audio; the transcript is produced server-side; typed input stays on the separate `prompt` path. |
+| **A confirmation needs a proposal identity** (§4.2, N1) | `proposal_confirm` carries `proposalId` + `variant` + `idempotencyKey` and has no text field. Compile-time assertions in `voice-messages.ts` fail `tsc` if any of the three is made optional or if an instruction-text field is added (each verified to fail by probe, §9), and the runtime guard refuses the frame. |
+| **The kernel stays client-neutral** (D7, §20.1 of the intent) | The contract module contains no browser lifecycle global, and the lane id is opaque — the type file names no tab, page or DOM concept and a source-inspection test enforces it. Lane and generation identity replace them. |
 
 ---
 
@@ -135,13 +138,13 @@ confirmation incapable of being re-pointed at another worker.
 |---|---|---|---|
 | `type` | yes | catalogue name | The message type (§4). |
 | `version` | yes | `1` | The **wire** version. Always `VOICE_WIRE_VERSION`. |
-| `laneId` | yes | non-empty string, ≤200 chars | Opaque lane identity, minted by the client at `voice_session_start`. Recommended shape `${workerSessionId}:${tabNonce}` so two tabs cannot collide. |
+| `laneId` | yes | non-empty string, ≤200 chars | Opaque lane identity, minted by the client at `voice_session_start`. Recommended shape `${workerSessionId}:${clientNonce}`, where the nonce is any per-surface instance value the client chooses — the server reads no browser concept out of it (D7). |
 | `attachmentGeneration` | yes | non-negative integer | Bumped by the client when the worker attached to the lane changes; adopted by the server at start. |
 | `requestId` | no | string | Request/response correlation. The server echoes it on every message answering a request. |
 | `sentAtMs` | no | number | Client-stamped send time. Informational; never trusted, never authority. |
 
-`proposal_created` carries the proposal's **own** version counter as `proposalVersion`, not
-`version` — see §8.4.
+A `proposal_created` message nests its payload under `proposal`, so the proposal's own `version` cannot
+collide with the envelope's wire `version` — see §8, decision 4.
 
 ### 3.2 Attachment generation
 
@@ -175,13 +178,19 @@ become a confirmation for a different worker.
 | Not an object / array / null, or `type` missing-or-not-a-string | `voice_message_malformed` |
 | `type` unknown, or known but belonging to the other direction | `voice_message_unknown` |
 | `version` missing, not a number, or ≠ `1` | `voice_version_unsupported` |
-| `laneId` missing, empty, not a string, or over the length bound | `voice_message_malformed` |
+| `laneId` missing, empty, not a string, or over the 200-character bound | `voice_message_malformed` |
 | `attachmentGeneration` not a non-negative integer | `voice_message_malformed` |
-| Client→server frame carrying any instruction-bearing key | `voice_client_text_forbidden` |
+| Client→server frame carrying a named instruction-bearing key | `voice_client_text_forbidden` |
+| Client→server frame carrying **any** other field the catalogue does not name | `voice_message_unknown_field` |
 | `type === 'proposal_confirm'` that is not a valid confirmation | `voice_confirm_requires_proposal` |
+| A named field of the message is missing or null | `voice_message_missing_field` |
 
-Unknown **fields** are ignored — except that the confirmation is read only through its allow-listed
-identity fields, so an unknown field can never supply consent or bytes.
+**Field strictness is deliberately asymmetric.** A client→server frame is schema-exact: the envelope
+fields plus the fields that message declares, and nothing else — which is what makes §1.4's first
+property structural rather than a blacklist. A server→client frame is the host's own words, so an unknown
+field is ignored, keeping additive v1 evolution safe for an older client. The same function validates the
+host's frames when the client calls it with `'server-to-client'`, refusing a malformed one instead of
+rendering a half-built state.
 
 Client-side symmetry: a server→client frame whose `version` the client does not support must be refused
 and surfaced (`voice_version_unsupported`), never parsed on the assumption that it is v1.
@@ -233,7 +242,7 @@ and surfaced (`voice_version_unsupported`), never parsed on the assumption that 
 ```json
 { "type": "voice_session_start", "version": 1, "laneId": "session-abc:tab7",
   "attachmentGeneration": 3, "requestId": "req-1", "workerSessionId": "session-abc",
-  "runtime": "pi", "captureMode": "open-mic", "readingLevel": "summary" }
+  "runtime": "pi", "captureMode": "open-mic", "readingLevel": "summary", "resume": true }
 ```
 
 The start ack is `voice_state { state: "live" }`, emitted once the provider reports setup complete.
@@ -244,6 +253,11 @@ A refusal is a `voice_error` — never silence (N9).
 `reason` ∈ `operator_stop | lane_switch | worker_switch | client_disconnect | provider_error | provider_go_away | dispose`.
 Stopping never releases a proposal; a live proposal survives its lane's stop as kernel state and is
 reported through `proposal_resolved` (`replaced`) only when the kernel actually drops it.
+
+```json
+{ "type": "voice_session_stop", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "requestId": "req-2", "reason": "operator_stop" }
+```
 
 #### `voice_audio_chunk`
 
@@ -268,6 +282,11 @@ reported through `proposal_resolved` (`replaced`) only when the kernel actually 
 may send.** The server must not treat `speech_end`, a pause, or a transcript-stability interval as
 consent (N3).
 
+```json
+{ "type": "voice_activity_state", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "state": "speech_start", "atMs": 1758100000000 }
+```
+
 #### `proposal_confirm`
 
 | Field | Req | Notes |
@@ -278,21 +297,28 @@ consent (N3).
 | `proposalRef` | no | Additive echo of the displayed identity `{ version, sha256 }`; when present the gate requires it to still describe the current proposal (the shipped D-card behaviour). |
 
 **This message carries no instruction text of any kind, and it must be structurally impossible to confirm
-without a proposal identity.** The type has no text field, the compile-time assertion in
-`voice-messages.ts` fails the build if one is added, and `isProposalConfirmMessage` refuses the frame at
-runtime. A confirmation names *which* proposal; it never supplies *what* is sent — the released bytes come
-from the kernel's retained proposal (§4.6, §16.3 of the intent).
+without a proposal identity.** The type has no text field, the compile-time assertions in
+`voice-messages.ts` fail the build if one is added or any of the three identity fields is made optional
+(each verified by probe, §9), and `isProposalConfirmMessage` refuses the frame at runtime. A confirmation
+names *which* proposal; it never supplies *what* is sent — the released bytes come from the kernel's
+retained proposal (§4.6, §16.3 of the intent).
 
 ```json
 { "type": "proposal_confirm", "version": 1, "laneId": "session-abc:tab7",
   "attachmentGeneration": 3, "requestId": "req-9", "proposalId": "prop-17",
-  "variant": "tidied", "idempotencyKey": "idem-9f2c" }
+  "variant": "tidied", "idempotencyKey": "idem-9f2c",
+  "proposalRef": { "version": 4, "sha256": "9f2c…" } }
 ```
 
 #### `proposal_cancel`
 
 `proposalId` + `reason` ∈ `operator_cancel | replaced | lane_stopped`. Cancellation wins immediately
 (§7.1.2 of the recommendation) and can never release.
+
+```json
+{ "type": "proposal_cancel", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "proposalId": "prop-17", "reason": "operator_cancel" }
+```
 
 #### `proposal_presentation`
 
@@ -305,6 +331,12 @@ narrows**: `completed: true` authorises nothing at all; `completed: false`, or a
 that is no longer current, makes a later confirmation refuse with `voice_presentation_incomplete`. It can
 never create, release or replace a proposal (N8).
 
+```json
+{ "type": "proposal_presentation", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "proposalId": "prop-17", "presentedVariant": "tidied",
+  "completed": false, "stoppedAtChar": 42 }
+```
+
 #### `parking_promote`
 
 `itemId` of exactly one parked item. Creates the proposal — **never a delivery**. The item's text is the
@@ -316,9 +348,19 @@ Whether the *same* spoken utterance that named the item also serves as that prop
 **kernel decision** (Track A classifies the utterance); the wire contract supports both readings and
 mandates neither.
 
+```json
+{ "type": "parking_promote", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "itemId": "item-2" }
+```
+
 #### `parking_list`
 
 No fields beyond the envelope. Answers with `parking_updated { operation: "listed" }`.
+
+```json
+{ "type": "parking_list", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "requestId": "req-4" }
+```
 
 #### `voice_reading_level`
 
@@ -326,6 +368,11 @@ No fields beyond the envelope. Answers with `parking_updated { operation: "liste
 names a level, never content. It takes effect at the next safe boundary (§10 of the intent: a stopped read
 stays stopped, what was already heard never replays, and the change is announced). The server confirms by
 emitting `voice_state` carrying the new `readingLevel`.
+
+```json
+{ "type": "voice_reading_level", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "level": "headlines" }
+```
 
 ### 4.3 The confirm rule, restated
 
@@ -349,6 +396,13 @@ and whenever the worker's busy state changes in a way the surface should show. `
 start ack. Honesty requirements ride with it: never claim continuous listening while capture is suspended
 by the platform — show and say the suspension.
 
+```json
+{ "type": "voice_state", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "state": "live", "workerActivity": "busy",
+  "readingLevel": "summary", "captureMode": "open-mic",
+  "resumption": { "resumable": true } }
+```
+
 #### `voice_audio_chunk` (server → client)
 
 | Field | Req | Notes |
@@ -362,6 +416,12 @@ by the platform — show and say the suspension.
 Playback is scheduled by the client's shared speech floor, never by arrival order alone (§4.10 of the
 recommendation). The model never generates the delivery chime.
 
+```json
+{ "type": "voice_audio_chunk", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "seq": 12, "mimeType": "audio/pcm;rate=24000",
+  "data": "…base64…", "durationMs": 20, "atMs": 1758100000500 }
+```
+
 #### `transcript_delta`
 
 `speaker` ∈ `operator | talker`; `source` ∈ `native | shadow-asr`; `text`; `final`; optional
@@ -372,27 +432,40 @@ recognised**, **bytes delivered**. Only **final** operator deltas may source a d
 after a final delta is a new delta and can never silently rewrite an authorised one. Shadow ASR is
 labelled and asynchronous; it never gates or delays the gate.
 
+```json
+{ "type": "transcript_delta", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "speaker": "operator", "source": "native",
+  "text": "tell it to check the tests", "final": true, "utteranceId": 9,
+  "turnId": "pi:session-abc:14", "atMs": 1758100000000 }
+```
+
 #### `proposal_created`
+
+The message carries one field, `proposal`, holding the retained payload:
 
 | Field | Req | Notes |
 |---|---|---|
-| `proposalId` | yes | Stable identity; what a confirmation names. |
-| `proposalVersion` | yes | The proposal's own version counter (not the envelope's wire `version`). |
-| `sha256` | yes | Digest over the exact release bytes of the presented variant. |
-| `promotionRoute` | yes | `directed` \| `accepted_offer` \| `parked_item`. Nothing else creates a proposal. |
-| `sourceItemId` | no | Present for `parked_item`. |
-| `sourceUtteranceId` | no | The operator utterance the proposal came from. |
-| `original` | yes | The operator's semi-verbatim words, retained in full. |
-| `tidied` | yes | The bytes a default (`tidied`) confirm releases. |
-| `presentedVariant` | yes | Which variant the surface is presenting now. |
-| `presentation` | yes | `{ completed: boolean, stoppedAtChar?: number }`. |
+| `proposal.proposalId` | yes | Stable identity; what a confirmation names. |
+| `proposal.version` | yes | The proposal's own version counter (distinct from the envelope's wire `version` — see §8, decision 4). |
+| `proposal.sha256` | yes | Digest over the exact release bytes of the presented variant. |
+| `proposal.promotionRoute` | yes | `directed` \| `accepted_offer` \| `parked_item`. Nothing else creates a proposal. |
+| `proposal.sourceItemId` | no | Present for `parked_item`. |
+| `proposal.sourceUtteranceId` | no | The operator utterance the proposal came from. |
+| `proposal.original` | yes | The operator's semi-verbatim words, retained in full. |
+| `proposal.tidied` | yes | The bytes a default (`tidied`) confirm releases. |
+| `proposal.presentedVariant` | yes | Which variant the surface is presenting now. |
+| `proposal.presentation` | yes | `{ completed: boolean, stoppedAtChar?: number }`. |
 
 ```json
 { "type": "proposal_created", "version": 1, "laneId": "session-abc:tab7",
-  "attachmentGeneration": 3, "proposalId": "prop-17", "proposalVersion": 4,
-  "sha256": "9f2c…", "promotionRoute": "parked_item", "sourceItemId": "item-2",
-  "original": "ask it whether the retry handler drops the token", "tidied": "ask it whether the retry handler drops the token",
-  "presentedVariant": "tidied", "presentation": { "completed": false, "stoppedAtChar": 42 } }
+  "attachmentGeneration": 3,
+  "proposal": {
+    "proposalId": "prop-17", "version": 4, "sha256": "9f2c…",
+    "promotionRoute": "parked_item", "sourceItemId": "item-2", "sourceUtteranceId": 9,
+    "original": "ask it whether the retry handler drops the token",
+    "tidied": "ask it whether the retry handler drops the token",
+    "presentedVariant": "tidied",
+    "presentation": { "completed": false, "stoppedAtChar": 42 } } }
 ```
 
 `original` and `tidied` are shown so the operator approves what will actually go, and `presentedVariant`
@@ -406,24 +479,39 @@ records what they were shown — a card may not claim "your words, exactly" when
 **This is not a delivery verdict.** `released` means the release path was authorised and handed to
 delivery, and nothing more. The only evidence of delivery is `receipt_event` (§7.3, N6).
 
+```json
+{ "type": "proposal_resolved", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "proposalId": "prop-17", "outcome": "released",
+  "releaseId": "rel-1" }
+```
+
 #### `receipt_event`
+
+The message carries one field, `receipt`, holding the delivery receipt:
 
 | Field | Req | Notes |
 |---|---|---|
-| `releaseId` | yes | The release this receipt belongs to. |
-| `proposalId` | yes | The proposal that was released. |
-| `idempotencyKey` | yes | The key from the confirmation, so an `unknown` outcome can be reconciled. |
-| `outcome` | yes | `delivered` \| `queued` \| `refused` \| `unknown`. |
-| `mechanism` | no | `steer` \| `prompt` \| `follow_up`. |
-| `disclosure` | no | Per-runtime honest disclosure (e.g. an Antigravity follow-up queue). |
-| `reason` | no | Present when refused. |
-| `unknownCause` | no | `timeout` \| `disconnect` \| `transport_error` — the `unknown*` family. |
-| `reconcile` | no | True when an `unknown` outcome must be reconciled by `idempotencyKey` rather than retried. |
-| `atMs` | yes | Server clock stamp. |
+| `receipt.releaseId` | yes | The release this receipt belongs to. |
+| `receipt.proposalId` | yes | The proposal that was released. |
+| `receipt.idempotencyKey` | yes | The key from the confirmation, so an `unknown` outcome can be reconciled. |
+| `receipt.outcome` | yes | `delivered` \| `queued` \| `refused` \| `unknown`. |
+| `receipt.mechanism` | no | `steer` \| `prompt` \| `follow_up`. |
+| `receipt.disclosure` | no | Per-runtime honest disclosure (e.g. an Antigravity follow-up queue). |
+| `receipt.reason` | no | Present when refused. |
+| `receipt.unknownCause` | no | `timeout` \| `disconnect` \| `transport_error` — the `unknown*` family. |
+| `receipt.reconcile` | no | True when an `unknown` outcome must be reconciled by `idempotencyKey` rather than retried. |
+| `receipt.atMs` | yes | Server clock stamp. |
 
-**The trusted chime fires on `receipt_event` with `outcome: "delivered"` and on nothing else.** The
-model never produces the confirmation sound (§4.5 of the recommendation); the surface plays a locally
-owned asset.
+**The trusted chime fires on a receipt with `outcome: "delivered"` and on nothing else.** The model never
+produces the confirmation sound (§4.5 of the recommendation); the surface plays a locally owned asset.
+
+```json
+{ "type": "receipt_event", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3,
+  "receipt": { "releaseId": "rel-1", "proposalId": "prop-17",
+               "idempotencyKey": "idem-9f2c", "outcome": "delivered",
+               "mechanism": "steer", "atMs": 1758100000500 } }
+```
 
 #### `parking_updated`
 
@@ -434,13 +522,20 @@ The full snapshot rather than a delta means a reconnecting client needs no delta
 items are the operator's own words, held for later promotion; they are **never sent as a batch**, and a
 promotion is still only a proposal.
 
+```json
+{ "type": "parking_updated", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "operation": "listed",
+  "items": [ { "itemId": "item-2", "text": "ask about the retry logic",
+               "createdAtMs": 1758100000000, "sourceUtteranceId": 9 } ] }
+```
+
 #### `voice_error`
 
 `code` (from §3.4 plus the service codes), `message`, `fatal`.
 
 | Code | Meaning |
 |---|---|
-| `voice_message_malformed` / `voice_message_unknown` / `voice_version_unsupported` | Envelope/version refusal (§3.4). |
+| `voice_message_malformed` / `voice_message_unknown` / `voice_message_unknown_field` / `voice_message_missing_field` / `voice_version_unsupported` | Envelope/schema refusal (§3.4). |
 | `voice_lane_unknown` / `voice_generation_stale` / `voice_not_started` | No such lane/generation, or audio before a successful start. |
 | `voice_client_text_forbidden` | A client frame tried to carry instruction text. Nothing acted on. |
 | `voice_confirm_requires_proposal` | A confirmation without a usable proposal identity. |
@@ -452,11 +547,18 @@ promotion is still only a proposal.
 Refusals are **healthy outcomes**, not errors in the product sense (§12 of the intent). Surfacing them is
 N9 in the voice path.
 
+```json
+{ "type": "voice_error", "version": 1, "laneId": "session-abc:tab7",
+  "attachmentGeneration": 3, "code": "voice_audio_chunk_too_large",
+  "message": "audio chunk exceeds the 100 ms ceiling", "fatal": false }
+```
+
 ### 4.5 Direction-level guarantee
 
-Every client→server message in §4.1 is **text-free** by construction. There is no client→server voice
-message that carries the operator's words. Typed operator input remains the existing `prompt` message on
-the session socket, outside this contract, where it already is.
+Every client→server message in §4.1 is **schema-exact and text-free**: the envelope fields plus the fields
+listed for that message, and nothing else. There is no client→server voice message that carries the
+operator's words. Typed operator input remains the existing `prompt` message on the session socket,
+outside this contract, where it already is.
 
 ---
 
@@ -472,11 +574,13 @@ the session socket, outside this contract, where it already is.
 | MIME type | `audio/pcm;rate=16000` | `audio/pcm;rate=24000` |
 | Suggested chunk | 20 ms = 640 bytes | 20 ms = 960 bytes |
 | Hard maximum | 100 ms = 3 200 bytes | 100 ms = 4 800 bytes |
-| Base64 ceiling | 4 268 chars | 6 400 chars |
+| Base64 ceiling | 4 268 chars (the encoding of exactly 3 200 bytes) | 6 400 chars (exactly 4 800 bytes) |
 | Container | base64 in the JSON frame | base64 in the JSON frame |
 
-The client does not resample: capture is configured for 16 kHz and playback is fed at 24 kHz. The 24 kHz
-figure matches the provider's output; the provider-wire conversion lives entirely in Track B's service
+The ceiling is enforced on the **decoded byte length**, not the character count: the maximum encoded
+length with no padding decodes to one byte over the ceiling and is refused (§5.3). The client does not
+resample: capture is configured for 16 kHz and playback is fed at 24 kHz. The 24 kHz figure matches the
+provider's output; the provider-wire conversion lives entirely in Track B's service
 (`server/src/voice/audio-transcoder.ts` in the plan), so neither side of this contract sees the provider's
 own framing.
 
@@ -496,8 +600,8 @@ own framing.
 
 | Condition | Behaviour |
 |---|---|
-| `data` longer than the format's base64 ceiling | **Drop + surface** `voice_error { code: "voice_audio_chunk_too_large", fatal: false }`. |
-| `data` not base64 (bad length, non-base64 character) | **Drop + surface** `voice_error { code: "voice_audio_chunk_corrupt", fatal: false }`. |
+| Payload decodes to more than the format's byte ceiling (including the unpadded max-length case) | **Drop + surface** `voice_error { code: "voice_audio_chunk_too_large", fatal: false }`. |
+| `data` not well-formed base64 (bad length, bad character, bad padding) | **Drop + surface** `voice_error { code: "voice_audio_chunk_corrupt", fatal: false }`. |
 | `mimeType` not the expected literal | Refuse the frame as `voice_message_malformed`; never transcode on a guess. |
 | `seq` gap | Surface once (`voice_internal_error` with a bounded detail) and continue; never reorder silently. |
 | Any of the above, repeatedly | **Bounded surfacing**: at most one such `voice_error` per lane per second, with a suppressed count carried on the next one. A fault storm must not become a socket storm. |
@@ -544,8 +648,9 @@ Implementation invariants:
 ### 6.2 Emitted events and lifecycle callbacks
 
 `VoiceBridgeEmittedEvent` is the productised shape of the lab adapter's `GeminiLiveCallbacks`
-(`scripts/voice-live-lab/lib/providers/gemini-live.ts`), which Track B productises per the plan's Phase 3.
-The mapping is mechanical, and one row is deliberately not a wire message:
+(`scripts/voice-live-lab/lib/providers/gemini-live.ts`), which
+Track B productises per the plan's Phase 3. The mapping is mechanical, and one row is deliberately not a
+wire message:
 
 | Lab callback | Emitted event | Wire message |
 |---|---|---|
@@ -561,7 +666,10 @@ The mapping is mechanical, and one row is deliberately not a wire message:
 (suppress a draft candidate) and `offer_ask_worker` (create a candidate that still needs the operator's
 own confirmation). **Neither can release, and neither can supply consent or bytes** — they are the
 non-blocking replacements for the fragile `[[to-talker]]` / `[[ask-worker]]` text marks (§19.2 of the
-intent), and the harness interprets them exactly as it interpreted the marks.
+intent), and the harness interprets them exactly as it interpreted the marks. Both are **parameterless**
+in the provider's declaration, so `args` is typed as an empty record and the bridge validates the raw
+value with `hasNoToolArguments` before emitting — a tool call can never smuggle an arbitrary payload into
+the kernel.
 
 ### 6.3 Session lifecycle, resumption and context injection
 
@@ -596,6 +704,14 @@ this handler with `{ send(message) }` bound to the originating client. The handl
 4. **adds no capability of its own.** It never releases, never composes text, and never widens the gate
    (N8). If a wire change appears to require a new authority, the design is wrong, not the transport.
 
+**The release predicate the handler must enforce** (the kernel owns the state, the handler owns the
+refusal): a `proposal_confirm` is handed to the kernel only when the kernel resolves its `proposalId` to a
+live proposal **for this frame's lane and attachment generation**, with a matching variant and content
+digest and no prior successful release for that identity. Anything else is refused —
+`voice_proposal_stale`, `voice_confirm_requires_proposal` or `voice_presentation_incomplete` — and
+nothing is delivered. The contract cannot itself prove a proposal exists; it makes the *shape* of the
+request unforgeable and names the refusal the handler must produce.
+
 Until Phase 5 wires it, a `voice_*` frame is answered by the router's existing `default` branch with
 `INVALID_MESSAGE` — fail closed, no capability.
 
@@ -607,13 +723,13 @@ Until Phase 5 wires it, a `voice_*` frame is answered by the router's existing `
 
 | Rule | Mechanism in this contract |
 |---|---|
-| **N1** the relay is gated by code | The contract has no client send path at all. There is no wire message that delivers an instruction; the only release trigger is a confirmation naming a kernel-held proposal. Model output (`tool_call` events) can suppress or create a candidate and nothing else. |
-| **N2** the relay text is the operator's own words, semi-verbatim | Client→server voice messages are text-free (§1.4). The released bytes come from the kernel's retained `original`/`tidied`, never from a wire field supplied by the client. |
+| **N1** the relay is gated by code | The contract adds no client path that can deliver instruction bytes. There is no wire message that carries an instruction; the only client message that can lead to a release is a confirmation naming a kernel-held proposal, and it carries identity and consent, never text. Model output (`tool_call` events) can suppress or create a candidate and nothing else. |
+| **N2** the relay text is the operator's own words, semi-verbatim | Client→server voice frames are schema-exact and text-free (§1.4, §4.5). The released bytes come from the kernel's retained `original`/`tidied`, never from a wire field supplied by the client. |
 | **N3** never act on an unfinished thought | `voice_activity_state` is a scheduling signal, never a send trigger. A gap, a pause or a stable transcript releases nothing; only a confirmation bound to a proposal does. |
 | **N4** conversation first | The catalogue separates conversation (`transcript_delta`, `voice_audio_chunk`) from authority messages. Nothing in the thread creates a proposal. |
 | **N5** you speaking is never interrupted | Capture is unconditional; only playback is scheduled. Activity state changes ducking, not capture, and never hard-stops. |
 | **N6** honest delivery | `receipt_event` is the single source of the delivery verdict; `proposal_resolved` is explicitly not one, and the chime fires on `delivered` only. |
-| **N7** allow-list, not model judgement | The declared Live functions are the whole typed operation surface; `tool_call` cannot release. |
+| **N7** allow-list, not model judgement | The declared Live functions are the whole typed operation surface; `tool_call` cannot release, and its arguments are structurally empty. |
 | **N8** never widen the gate | The contract adds no message that can authorise anything. `proposal_presentation` narrows; a breaking change needs v2 and the conductor. |
 | **N9** failures are visible | Every refusal has a named code, a `voice_error` frame and a documented bounded-surfacing rule for storms. |
 
@@ -641,7 +757,8 @@ submission is not a refusal, and it is reconciled by `idempotencyKey` rather tha
 - **No provider interrupt semantics.** Native interrupt is a separately labelled option requiring owner
   approval and a comparative listening test; v1 exposes ducking plus scheduling.
 - **No offers as typed messages.** In v1 the offer to relay is conversational. If a surface needs to
-  render an offer as a card, that is an additive v1 extension and a conductor decision.
+  render an offer as a card, that is an additive v1 extension and a conductor decision — and, because
+  client→server frames are schema-exact, adding it means editing the map and this table together.
 - **No cross-tab floor coordination.** Out of scope (§4.11 of the recommendation).
 
 ---
@@ -655,16 +772,21 @@ Recorded because they resolve ambiguity, and so a later reader does not re-litig
    separate `receipt_event`. Keeping a proposal's lifecycle and a delivery's verdict in one message would
    create two sources of truth for honest delivery (N6), so the contract keeps them separate:
    `proposal_resolved` reports that the proposal left its slot; `receipt_event` reports what delivery
-   actually did. Track C chimes on `receipt_event.outcome === "delivered"`.
+   actually did. Track C chimes on a receipt whose `outcome` is `delivered`.
 2. **Promotion never auto-releases.** `parking_promote` creates a proposal; a release still needs a
    confirmation. Whether the promoting utterance doubles as that confirmation is a kernel classification
    decision, not a transport one.
-3. **Client→server is text-free.** Not merely the confirmation: no client voice message carries the
-   operator's words. This is what makes N1/N2 structural at the transport layer.
-4. **`proposalVersion`, not `version`, on `proposal_created`.** The envelope already uses `version` for the
-   wire version; a proposal's own version counter must not share that name. The confirmation's optional
-   echo keeps the shipped card shape `proposalRef: { version, sha256 }`, where the nested object makes the
-   meaning unambiguous.
+3. **Client→server is schema-exact and text-free.** Not merely the confirmation: no client voice message
+   carries the operator's words, and no unnamed field is accepted. This is what makes N1/N2 structural at
+   the transport layer rather than a promise.
+4. **`proposal_created` nests its payload under `proposal`.** The envelope already uses `version` for the
+   wire version, so the proposal's own version counter lives inside the nested object, where its meaning
+   is unambiguous and the brief's field name `version` survives intact. This also matches the shipped card
+   convention (`talker_turn_result.proposal` in `server/src/websocket/protocol.ts`). A compile-time
+   assertion fails the build if anyone flattens it.
+5. **`proposal_confirm` stays flat.** It carries `proposalId`, `variant` and `idempotencyKey` at the top
+   level as the brief requires; its optional `proposalRef: { version, sha256 }` echo keeps the shipped
+   card shape, where the nested object makes the meaning unambiguous.
 
 ### 8.1 Two messages beyond the plan's minimum
 
@@ -673,6 +795,30 @@ are the contract's additions beyond the execution plan's Phase 4 minimum list. `
 are required for fail-closed surfacing. `parking_list` is the read-back control the intent requires.
 `proposal_presentation` exists so that the §4.6 read-back rule is enforceable rather than assumed; it is
 release-inhibiting only.
+
+### 8.2 Corrections made after independent review
+
+An independent read-only review returned **PARTIALLY CONSISTENT** with six material findings. Each was
+reproduced before being acted on, and the corrections below are in the frozen v1 rather than deferred to a
+v2, because the contract had not yet been accepted by the conductor:
+
+| Finding | Correction |
+|---|---|
+| The brief names `version` for the created proposal; the code used `proposalVersion`, which is an unadjudicated deviation | The payload is now nested under `proposal` (§8, decision 4), so the brief's field name exists verbatim, the collision with the envelope's wire `version` is gone, and a compile-time assertion prevents re-flattening. |
+| The `receipt_event` document table listed the receipt's fields as message fields while the code nests them under `receipt` | The document now documents the single `receipt` field and its members, with an example; a required-field map enforces the payload. |
+| "Text-free" was only a six-name blacklist, so `note: "do X"` was accepted and ignored | Client→server frames are now **schema-exact**: any unnamed field is refused with `voice_message_unknown_field`. Server→client frames still ignore unknown fields so additive v1 stays safe. |
+| `tool_call` arguments were `Record<string, unknown>`, so model output could carry an arbitrary payload | `args` is now an empty record (both declared functions are parameterless in the provider's own declaration), and the bridge validates the raw value with `hasNoToolArguments`. |
+| The audio ceiling was checked on encoded length, so an unpadded maximum-length payload decoded to one byte over the limit — and the test asserted that payload was valid | The check computes the **decoded** byte length, counts padding and validates the encoding; the test now asserts the exact-limit payload passes, the one-byte-over payload fails, and the unpadded maximum fails. |
+| Message-body validation was absent and several assertions were vacuous | Per-message required-field maps plus per-message allowed-field maps are enforced in `checkVoiceEnvelope`, and each example is validated against its schema at runtime. The type-level per-message sweeps that probes proved vacuous were removed; the remaining compile-time assertions use the direct `T['k'] extends E` form and each was verified to fail by probe (§9). |
+
+Also corrected: the module header's `voice_proposal_confirm` typo, the catalogue-parser's silent skipping
+of unreadable rows, and the lane-id doc wording that named a browser concept (`tabNonce`) — the lane id is
+now described as an opaque client-minted nonce, and the neutrality test rejects the old name as well.
+
+One review finding was **not** accepted: the claim that the router handler is missing. The brief requires
+the contract to *state where voice messages dispatch* and to be compatible with Track B exporting the
+handler; implementing the handler would edit `server/**`, which this child's ownership boundary forbids.
+The contract defines the seam (`VoiceRouter`), the validation order and the refusals, and §6.4 records it.
 
 ---
 
@@ -690,19 +836,22 @@ What the executable half proves:
 
 | Check | Where |
 |---|---|
-| The document's catalogue and the code catalogue are the same set, both directions | `voice-messages.test.ts` "catalogue completeness" |
-| Every message has an example, and the example survives JSON transport | the fixtures + envelope test |
-| Missing/mismatched version, unknown type, cross-direction type, missing lane, bad generation all fail closed with a named code | the "fail closed" tests |
+| The document's catalogue and the code catalogue are the same set, both directions, and every catalogue row is readable | `voice-messages.test.ts` "catalogue completeness" |
+| Every message has a valid example; every client example aligns with its declared schema; every server example carries its required fields | the fixtures + the schema-alignment tests |
+| Missing/mismatched version, unknown type, cross-direction type, missing lane, bad generation, lane over the bound, unknown client field, missing required field all fail closed with a named code | the "fail closed" tests |
 | A confirmation cannot exist without a proposal identity, and cannot carry instruction text | `isProposalConfirmMessage` + `checkVoiceEnvelope` tests |
-| No client→server message can carry instruction text | the text-free tests |
+| No client→server message can carry instruction text, **and no unnamed field can either** | the schema-exact tests |
 | Receipts distinguish delivered / queued / refused / unknown | compile-time assertion in `voice-messages.ts` |
-| The module stays free of browser lifecycle globals (D7) | the source-inspection test |
-| Audio framing constants and ceilings are internally consistent | the audio tests |
-| The confirm shape cannot be weakened without failing the build | `AssertTrue`/`InstructionKeysOf` assertions in `voice-messages.ts`, verified by a negative control during development |
+| The module stays free of browser lifecycle globals, including a browser-shaped lane-id name (D7) | the source-inspection test |
+| Audio framing constants are internally consistent, and the ceiling is enforced on **decoded bytes** (exact limit passes; one byte over, and the unpadded maximum, fail) | the audio tests |
+| The confirm's identity fields cannot be made optional, a created proposal cannot be flattened, and no client message can gain an instruction field — each assertion **verified live by probe** (it was made to fail) | the compile-time assertions in `voice-messages.ts` |
 
-Not covered here (and deliberately so): the bridge's live handshake, the transcoder's sample correctness,
-AudioWorklet behaviour and rendered audio. Those belong to Track B's Phase 3 gate, Track C's Phase 4 gate
-and the audio lab respectively. A green gate here proves the **seam**, never the product.
+Two honest notes about this gate. First, a compile-time assertion that cannot be made to fail is worse
+than none: during the review round, three derived type-level sweeps were found to be vacuous (`tsc` stayed
+green with a field deleted) and were replaced — the surviving assertions are all in the direct
+`T['k'] extends E` form and each was probe-verified. Second, the gate proves the **seam**, never the
+product: the bridge's live handshake, the transcoder's sample correctness, AudioWorklet behaviour and
+rendered audio belong to Track B's Phase 3 gate, Track C's Phase 4 gate and the audio lab respectively.
 
 ---
 
@@ -715,20 +864,23 @@ and the audio lab respectively. A green gate here proves the **seam**, never the
 - Register nothing in the router yourself if Phase 5 has not landed; export the handler through
   `VoiceRouter` and let the conductor wire the `case` branches.
 - Keep `GEMINI_API_KEY` server-side; prove it with the phase's own inspection test.
-- Honour the audio ceilings and the drop-and-surface rule; honour the 2 s context coalescing and the
-  speak-suppression rule.
+- Honour the audio ceilings (decoded bytes, not characters) and the drop-and-surface rule; honour the 2 s
+  context coalescing and the speak-suppression rule; validate tool-call arguments with
+  `hasNoToolArguments`.
 - Do not edit `shared/src/types/voice-messages.ts`.
 
 ### 10.2 Track C (`client/src/lib/voiceWorklet/`, `client/src/components/DriveMode/`)
 
 - AudioWorklet capture at 16 kHz and playback at 24 kHz, paced to the suggested chunk size with bounded
   buffers.
-- Play the trusted delivery chime locally on `receipt_event.outcome === "delivered"`; never let the model
-  generate it.
-- Render `proposal_created` with `original` and `tidied` and the presented variant; send
-  `proposal_presentation` when a read-back completes or is interrupted.
+- Play the trusted delivery chime locally on a `receipt_event` whose `receipt.outcome` is `delivered`;
+  never let the model generate it.
+- Render `proposal_created` from `proposal.original`, `proposal.tidied` and
+  `proposal.presentedVariant`; send `proposal_presentation` when a read-back completes or is interrupted.
 - Mint a fresh `idempotencyKey` per confirmation gesture and reuse it verbatim on retry after a reconnect.
 - Send `parking_promote` for one item; render `parking_updated`; never batch.
+- Keep every client→server frame schema-exact: envelope fields plus the fields this catalogue names, and
+  nothing else. An extra field is refused, not ignored.
 - Keep the duck-and-continue contract (N5) and never disable capture.
 - Do not edit `shared/src/types/voice-messages.ts`.
 - The contract module is not re-exported from `shared/src/index.ts` yet: that one-line export is Track C's

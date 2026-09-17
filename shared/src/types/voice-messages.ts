@@ -21,7 +21,7 @@
  *      produced server-side. Typed operator input remains the existing `prompt`
  *      message on the session socket and is deliberately outside this contract.
  *      So a buggy or hostile client cannot post instruction bytes (N1, N2).
- *   2. A CONFIRMATION NEEDS A PROPOSAL IDENTITY. `voice_proposal_confirm` carries
+ *   2. A CONFIRMATION NEEDS A PROPOSAL IDENTITY. `proposal_confirm` carries
  *      `proposalId` + `variant` + `idempotencyKey` and nothing else; it cannot be
  *      constructed (type level) or accepted (runtime guard) without a proposal
  *      identity, and the compile-time assertions below fail the build if an
@@ -76,8 +76,10 @@ export type VoiceWorkerActivity = 'idle' | 'busy' | 'unknown';
 
 /**
  * Stable identity of one attached lane, minted by the client on
- * `voice_session_start` (recommended shape `${workerSessionId}:${tabNonce}`).
- * Opaque to the server and to the kernel.
+ * `voice_session_start`. The server and the kernel treat it as an opaque string:
+ * no browser lifecycle concept may be read out of it (D7), so the recommended
+ * shape is `${workerSessionId}:${clientNonce}` where the nonce is any per-surface
+ * instance value the client chooses.
  */
 export type VoiceLaneId = string;
 
@@ -137,9 +139,11 @@ export type VoiceSpeaker = 'operator' | 'talker';
  * outcomes (intent §12): they are surfaced, never silent (N9).
  */
 export type VoiceErrorCode =
-  // envelope / version
+  // envelope / version / shape
   | 'voice_message_malformed'
   | 'voice_message_unknown'
+  | 'voice_message_unknown_field'
+  | 'voice_message_missing_field'
   | 'voice_version_unsupported'
   // lane / attachment identity
   | 'voice_lane_unknown'
@@ -217,17 +221,39 @@ export function voicePcm16ByteLength(sampleRateHz: number, durationMs: number): 
 }
 
 /**
- * Whether one base64 audio payload is inside the format's ceiling. An empty
- * payload is refused: silence is not a chunk, and a client that has nothing to
- * send should send nothing. Corrupt payloads (a base64 length that cannot be a
- * multiple of four, or a non-base64 character) are refused so the caller drops
- * and surfaces them (N9) rather than feeding garbage to the transcoder.
+ * Bytes of PCM16 audio a base64 payload decodes to, or null when the payload is
+ * not well-formed base64 (bad length, bad character, or bad padding). Padding is
+ * counted, so the ceiling cannot be gamed with an unpadded string of the
+ * maximum encoded length.
  */
-export function isVoiceAudioPayloadWithinLimit(format: VoicePcmFormat, payloadBase64: string): boolean {
+export function voiceBase64DecodedByteLength(payloadBase64: unknown): number | null {
+  if (typeof payloadBase64 !== 'string' || payloadBase64.length === 0) return null;
+  if (payloadBase64.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(payloadBase64)) return null;
+  const padding = payloadBase64.endsWith('==') ? 2 : payloadBase64.endsWith('=') ? 1 : 0;
+  const dataChars = payloadBase64.length - padding;
+  if (padding > 0 && !/^[A-Za-z0-9+/]$/.test(payloadBase64[dataChars - 1] ?? '')) return null;
+  const bytes = (payloadBase64.length / 4) * 3 - padding;
+  return bytes > 0 ? bytes : null;
+}
+
+/**
+ * Whether one base64 audio payload is inside the format's decoded-byte ceiling.
+ *
+ * The check is on the DECODED byte length, not the encoded character count: a
+ * 4 268-character payload with no padding is 3 201 bytes and is refused, while
+ * the exactly-3 200-byte payload (4 268 characters including its padding)
+ * passes. An empty payload is refused — silence is not a chunk, and a client
+ * with nothing to send should send nothing. Malformed base64 is refused too, so
+ * the caller drops and surfaces it (N9) rather than feeding garbage to the
+ * transcoder.
+ */
+export function isVoiceAudioPayloadWithinLimit(format: VoicePcmFormat, payloadBase64: unknown): boolean {
   if (typeof payloadBase64 !== 'string') return false;
-  if (payloadBase64.length === 0) return false;
   if (payloadBase64.length > format.maxBase64Chars) return false;
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(payloadBase64) && payloadBase64.length % 4 === 0;
+  const bytes = voiceBase64DecodedByteLength(payloadBase64);
+  if (bytes === null) return false;
+  return bytes <= format.maxChunkBytes;
 }
 
 // ── Envelope ────────────────────────────────────────────────────────────────
@@ -418,21 +444,21 @@ export interface VoiceTranscriptDeltaMessage extends VoiceEnvelope {
 }
 
 /**
- * A live proposal. The envelope's laneId + attachmentGeneration ARE its target;
- * `presentedVariant` records what the operator is being shown, and
- * `presentation.completed` whether that read-back finished.
+ * The retained payload a `proposal_created` message carries.
  *
- * NAMING: the envelope's `version` is the WIRE version (always 1). The
- * proposal's own version counter is `proposalVersion`, and its content digest is
- * `sha256` — two different numbers must never share one name. The confirm's
- * optional echo keeps the shipped card shape `proposalRef: { version, sha256 }`,
- * where the nested object makes the meaning unambiguous.
+ * NESTING IS DELIBERATE: the envelope already uses `version` for the WIRE
+ * version (always 1), so the proposal's own version counter lives inside this
+ * object, where its meaning is unambiguous and the brief's field name `version`
+ * survives intact. This also matches the shipped card convention
+ * (`talker_turn_result.proposal` in server/src/websocket/protocol.ts). Do not
+ * flatten these fields onto the message: the compile-time assertion below fails
+ * the build if anyone tries.
  */
-export interface VoiceProposalCreatedMessage extends VoiceEnvelope {
-  type: 'proposal_created';
+export interface VoiceCreatedProposal {
+  /** Stable identity; what a confirmation names. */
   proposalId: string;
-  /** The proposal's own version counter (NOT the envelope's wire version). */
-  proposalVersion: number;
+  /** The proposal's own version counter (distinct from the envelope's wire version). */
+  version: number;
   /** SHA-256 over the exact release bytes of the presented variant. */
   sha256: string;
   promotionRoute: VoicePromotionRoute;
@@ -446,6 +472,16 @@ export interface VoiceProposalCreatedMessage extends VoiceEnvelope {
   tidied: string;
   presentedVariant: VoiceProposalVariant;
   presentation: { completed: boolean; stoppedAtChar?: number };
+}
+
+/**
+ * A live proposal. The envelope's laneId + attachmentGeneration ARE its target;
+ * `proposal.presentedVariant` records what the operator is being shown, and
+ * `proposal.presentation.completed` whether that read-back finished.
+ */
+export interface VoiceProposalCreatedMessage extends VoiceEnvelope {
+  type: 'proposal_created';
+  proposal: VoiceCreatedProposal;
 }
 
 /**
@@ -580,6 +616,84 @@ export type VoiceServerMessage =
 
 export type VoiceMessage = VoiceClientMessage | VoiceServerMessage;
 
+// ── Per-message field maps (the schema half of the envelope check) ───────────
+
+/** Fields every voice message carries, in both directions. */
+export const VOICE_ENVELOPE_FIELDS = [
+  'type',
+  'version',
+  'laneId',
+  'attachmentGeneration',
+  'requestId',
+  'sentAtMs',
+] as const;
+
+export type VoiceEnvelopeField = (typeof VOICE_ENVELOPE_FIELDS)[number];
+
+/** A message's own declared fields, excluding the inherited envelope fields. */
+type OwnFields<T, K> = Exclude<keyof Extract<T, { type: K }>, keyof VoiceEnvelope>;
+
+/**
+ * EVERY key a client→server message may carry (the message's own fields only;
+ * the envelope fields are added by the check). The value type forces each entry
+ * to be a real declared field of that exact message, and the assertion below the
+ * maps forces every declared field to appear — so the map cannot drift.
+ *
+ * THIS MAP IS ENFORCED, NOT ADVISORY. A client→server frame carrying any other
+ * key is refused with `voice_message_unknown_field`. That is what makes the
+ * text-free guarantee structural rather than a six-name blacklist: instruction
+ * bytes cannot ride in under an unlisted key such as `note`. Server→client frames
+ * are the host's own words and ignore unknown fields, per the additive rule.
+ */
+export const VOICE_CLIENT_MESSAGE_FIELDS: {
+  [K in VoiceClientMessageType]: readonly OwnFields<VoiceClientMessage, K>[];
+} = {
+  voice_session_start: ['workerSessionId', 'runtime', 'captureMode', 'readingLevel', 'resume'],
+  voice_session_stop: ['reason'],
+  voice_audio_chunk: ['seq', 'mimeType', 'data', 'durationMs', 'capturedAtMs'],
+  voice_activity_state: ['state', 'atMs'],
+  proposal_confirm: ['proposalId', 'variant', 'idempotencyKey', 'proposalRef'],
+  proposal_cancel: ['proposalId', 'reason'],
+  proposal_presentation: ['proposalId', 'presentedVariant', 'completed', 'stoppedAtChar'],
+  parking_promote: ['itemId'],
+  parking_list: [],
+  voice_reading_level: ['level'],
+};
+
+/** The subset of {@link VOICE_CLIENT_MESSAGE_FIELDS} that must be present. */
+export const VOICE_CLIENT_REQUIRED_FIELDS: {
+  [K in VoiceClientMessageType]: readonly OwnFields<VoiceClientMessage, K>[];
+} = {
+  voice_session_start: ['workerSessionId'],
+  voice_session_stop: ['reason'],
+  voice_audio_chunk: ['seq', 'mimeType', 'data', 'durationMs', 'capturedAtMs'],
+  voice_activity_state: ['state', 'atMs'],
+  proposal_confirm: ['proposalId', 'variant', 'idempotencyKey'],
+  proposal_cancel: ['proposalId', 'reason'],
+  proposal_presentation: ['proposalId', 'presentedVariant', 'completed'],
+  parking_promote: ['itemId'],
+  parking_list: [],
+  voice_reading_level: ['level'],
+};
+
+/**
+ * The subset of the server→client schema that must be present. The client uses
+ * this with `checkVoiceEnvelope(..., 'server-to-client')` to refuse a malformed
+ * host frame instead of rendering a half-built state.
+ */
+export const VOICE_SERVER_REQUIRED_FIELDS: {
+  [K in VoiceServerMessageType]: readonly OwnFields<VoiceServerMessage, K>[];
+} = {
+  voice_state: ['state'],
+  voice_audio_chunk: ['seq', 'mimeType', 'data', 'durationMs', 'atMs'],
+  transcript_delta: ['speaker', 'source', 'text', 'final', 'atMs'],
+  proposal_created: ['proposal'],
+  proposal_resolved: ['proposalId', 'outcome'],
+  receipt_event: ['receipt'],
+  parking_updated: ['operation', 'items'],
+  voice_error: ['code', 'message', 'fatal'],
+};
+
 // ── Guards and fail-closed checks ───────────────────────────────────────────
 
 /**
@@ -623,6 +737,21 @@ function isAttachmentGeneration(value: unknown): value is AttachmentGeneration {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
+function requiredFieldMissing(record: Record<string, unknown>, required: readonly string[]): string | null {
+  for (const key of required) {
+    if (record[key] === undefined || record[key] === null) return key;
+  }
+  return null;
+}
+
+function firstUnknownClientField(record: Record<string, unknown>, type: VoiceClientMessageType): string | null {
+  const allowed = new Set<string>([
+    ...VOICE_ENVELOPE_FIELDS,
+    ...(VOICE_CLIENT_MESSAGE_FIELDS[type] as readonly string[]),
+  ]);
+  return Object.keys(record).find((key) => !allowed.has(key)) ?? null;
+}
+
 function isProposalRef(value: unknown): value is { version: number; sha256: string } {
   if (typeof value !== 'object' || value === null) return false;
   const ref = value as Record<string, unknown>;
@@ -659,9 +788,14 @@ function refuse(code: VoiceErrorCode): VoiceEnvelopeCheck {
 
 /**
  * The one fail-closed entry check for every inbound voice frame. Order matters
- * and is part of the contract: shape → type → direction → version → lane
- * identity → text-free → confirm identity. A refusal means nothing was acted
- * on; the caller surfaces it (N9) and never coerces the frame into shape.
+ * and is part of the contract:
+ *
+ *   shape → type/direction → version → lane identity → instruction text →
+ *   unknown field (client→server) → confirm identity → required fields
+ *
+ * A refusal means nothing was acted on; the caller surfaces it (N9) and never
+ * coerces the frame into shape. The client uses the same function with
+ * `'server-to-client'` to refuse a malformed host frame.
  */
 export function checkVoiceEnvelope(value: unknown, direction: VoiceDirection): VoiceEnvelopeCheck {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -690,18 +824,36 @@ export function checkVoiceEnvelope(value: unknown, direction: VoiceDirection): V
 
   if (!isAttachmentGeneration(record.attachmentGeneration)) return refuse('voice_message_malformed');
 
-  if (direction === 'client-to-server' && carriesInstructionText(record)) {
-    return refuse('voice_client_text_forbidden');
+  if (direction === 'client-to-server') {
+    const clientType = type as VoiceClientMessageType;
+    if (carriesInstructionText(record)) return refuse('voice_client_text_forbidden');
+    if (firstUnknownClientField(record, clientType) !== null) {
+      return refuse('voice_message_unknown_field');
+    }
+    if (type === 'proposal_confirm' && !isProposalConfirmMessage(record)) {
+      return refuse('voice_confirm_requires_proposal');
+    }
+    if (requiredFieldMissing(record, VOICE_CLIENT_REQUIRED_FIELDS[clientType]) !== null) {
+      return refuse('voice_message_missing_field');
+    }
+    return { ok: true };
   }
 
-  if (type === 'proposal_confirm' && !isProposalConfirmMessage(record)) {
-    return refuse('voice_confirm_requires_proposal');
+  if (requiredFieldMissing(record, VOICE_SERVER_REQUIRED_FIELDS[type as VoiceServerMessageType]) !== null) {
+    return refuse('voice_message_missing_field');
   }
 
   return { ok: true };
 }
 
 // ── Compile-time invariants (checked by `tsc`; erased at runtime) ───────────
+//
+// Every assertion below uses the DIRECT indexed-type form (`T['k'] extends E`),
+// because that is the form demonstrated to fail the build when the property is
+// made optional or removed. Derived forms (mapped-type sweeps, `Pick`/`Required`
+// comparisons) were tried and PROVED VACUOUS by probe — `tsc` stayed green with
+// the field optional — so they are deliberately absent; the completeness of the
+// field maps is asserted at runtime by the test instead.
 
 /** Fails the build when its argument is not exactly `true`. */
 type AssertTrue<T extends true> = T;
@@ -709,17 +861,21 @@ type AssertTrue<T extends true> = T;
 /** Distributes over a union type and collects the instruction-bearing keys. */
 type InstructionKeysOf<T> = T extends unknown ? Extract<keyof T, VoiceInstructionBearingKey> : never;
 
-/** The confirm names a proposal — `proposalId` is required, not optional. */
+/** The confirm names a proposal identity; each field is required. */
 type _ConfirmProposalIdIsRequired = AssertTrue<
   VoiceProposalConfirmMessage['proposalId'] extends string ? true : false
 >;
+type _ConfirmVariantIsRequired = AssertTrue<
+  VoiceProposalConfirmMessage['variant'] extends VoiceProposalVariant ? true : false
+>;
+type _ConfirmIdempotencyKeyIsRequired = AssertTrue<
+  VoiceProposalConfirmMessage['idempotencyKey'] extends string ? true : false
+>;
 
-/** The confirm cannot carry instruction text — assertion 2 of the header. */
+/** The confirm, and every client→server message, carries no instruction text. */
 type _ConfirmCarriesNoInstructionText = AssertTrue<
   InstructionKeysOf<VoiceProposalConfirmMessage> extends never ? true : false
 >;
-
-/** No client→server message may ever gain an instruction-bearing field. */
 type _ClientMessagesCarryNoInstructionText = AssertTrue<
   InstructionKeysOf<VoiceClientMessage> extends never ? true : false
 >;
@@ -742,6 +898,28 @@ type _ClientCatalogueIsExhaustive = AssertTrue<
 >;
 type _ServerCatalogueIsExhaustive = AssertTrue<
   Exclude<VoiceServerMessage['type'], VoiceServerMessageType> extends never ? true : false
+>;
+
+/** Payloads and verdicts that must be present for authority to exist at all. */
+type _CreatedProposalPayloadIsRequired = AssertTrue<
+  VoiceProposalCreatedMessage['proposal'] extends VoiceCreatedProposal ? true : false
+>;
+type _ReceiptPayloadIsRequired = AssertTrue<
+  VoiceReceiptEventMessage['receipt'] extends VoiceReceipt ? true : false
+>;
+type _ErrorMessageIsRequired = AssertTrue<VoiceErrorMessage['message'] extends string ? true : false>;
+type _ProposalResolvedOutcomeIsRequired = AssertTrue<
+  VoiceProposalResolvedMessage['outcome'] extends VoiceProposalResolution ? true : false
+>;
+
+/** The created proposal keeps its own `version` INSIDE `proposal`, never flattened. */
+type _CreatedProposalVersionIsRequired = AssertTrue<
+  VoiceCreatedProposal['version'] extends number ? true : false
+>;
+type _CreatedProposalIsNotFlattened = AssertTrue<
+  Extract<keyof VoiceProposalCreatedMessage, 'proposalId' | 'sha256' | 'presentedVariant'> extends never
+    ? true
+    : false
 >;
 
 // ── Server service boundary (the interface Track B implements) ──────────────
@@ -799,7 +977,10 @@ export interface VoiceBridgeTranscriptEvent extends VoiceBridgeEventBase {
   source: VoiceTranscriptSource;
   text: string;
   final: boolean;
+  /** Kernel utterance id, present once the turn is committed. */
   utteranceId?: number;
+  /** Voice turn id (`runtime:workerSessionId:turnIndex`) when available. */
+  turnId?: string;
   atMs: number;
 }
 
@@ -817,8 +998,25 @@ export interface VoiceBridgeToolCallEvent extends VoiceBridgeEventBase {
   kind: 'tool_call';
   callId: string;
   name: VoiceBridgeToolName;
-  args: Record<string, unknown>;
+  /**
+   * Both declared functions are PARAMETERLESS (the lab declares an empty
+   * parameter object for each), so this is typed as an empty record on purpose:
+   * a tool call can never carry an arbitrary payload into the kernel. The bridge
+   * validates the provider's raw value with `hasNoToolArguments` before emitting,
+   * and surfaces a violation instead of forwarding it.
+   */
+  args: Record<string, never>;
   atMs: number;
+}
+
+/** Runtime half of the parameterless-tool rule above. */
+export function hasNoToolArguments(value: unknown): value is Record<string, never> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>).length === 0
+  );
 }
 
 export interface VoiceBridgeResumptionEvent extends VoiceBridgeEventBase {

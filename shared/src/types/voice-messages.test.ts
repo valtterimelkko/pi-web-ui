@@ -32,15 +32,20 @@ import {
   VOICE_AUDIO_INPUT_MIME,
   VOICE_AUDIO_OUTPUT_FORMAT,
   VOICE_AUDIO_OUTPUT_MIME,
+  VOICE_CLIENT_MESSAGE_FIELDS,
   VOICE_CLIENT_MESSAGE_TYPES,
+  VOICE_CLIENT_REQUIRED_FIELDS,
+  VOICE_ENVELOPE_FIELDS,
   VOICE_INSTRUCTION_BEARING_KEYS,
   VOICE_MESSAGE_TYPES,
   VOICE_SERVER_MESSAGE_TYPES,
+  VOICE_SERVER_REQUIRED_FIELDS,
   VOICE_WIRE_VERSION,
   checkVoiceEnvelope,
   isProposalConfirmMessage,
   isVoiceAudioPayloadWithinLimit,
   isVoiceMessageType,
+  voiceBase64DecodedByteLength,
   voicePcm16ByteLength,
   type VoiceClientMessage,
   type VoiceServerMessage,
@@ -64,7 +69,11 @@ const ENVELOPE = {
   attachmentGeneration: ATTACHMENT_GENERATION,
 } as const;
 
-/** One valid example of every client→server message (the catalogue's shape). */
+/**
+ * One valid example of every message. `checkVoiceEnvelope` also validates the
+ * message's required fields, so these fixtures are asserted for completeness —
+ * they are not decoration.
+ */
 const CLIENT_EXAMPLES: Record<VoiceClientMessage['type'], VoiceClientMessage> = {
   voice_session_start: {
     ...ENVELOPE,
@@ -73,6 +82,7 @@ const CLIENT_EXAMPLES: Record<VoiceClientMessage['type'], VoiceClientMessage> = 
     runtime: 'pi',
     captureMode: 'open-mic',
     readingLevel: 'summary',
+    resume: true,
     requestId: 'req-1',
   },
   voice_session_stop: {
@@ -169,16 +179,18 @@ const SERVER_EXAMPLES: Record<VoiceServerMessage['type'], VoiceServerMessage> = 
   proposal_created: {
     ...ENVELOPE,
     type: 'proposal_created',
-    proposalId: 'prop-1',
-    proposalVersion: 4,
-    sha256: 'a'.repeat(64),
-    promotionRoute: 'parked_item',
-    sourceItemId: 'item-1',
-    sourceUtteranceId: 9,
-    original: 'tell it to check the tests',
-    tidied: 'tell it to check the tests',
-    presentedVariant: 'tidied',
-    presentation: { completed: true },
+    proposal: {
+      proposalId: 'prop-1',
+      version: 4,
+      sha256: 'a'.repeat(64),
+      promotionRoute: 'parked_item',
+      sourceItemId: 'item-1',
+      sourceUtteranceId: 9,
+      original: 'tell it to check the tests',
+      tidied: 'tell it to check the tests',
+      presentedVariant: 'tidied',
+      presentation: { completed: true },
+    },
   },
   proposal_resolved: {
     ...ENVELOPE,
@@ -232,11 +244,24 @@ function parseCatalogue(markdown: string): Array<{ type: string; direction: stri
   expect(end, 'the contract document has a `catalogue:end` marker').toBeGreaterThan(begin);
   const block = markdown.slice(begin, end);
   const rows: Array<{ type: string; direction: string }> = [];
-  let match: RegExpExecArray | null;
-  CATALOGUE_ROW_RE.lastIndex = 0;
-  while ((match = CATALOGUE_ROW_RE.exec(block)) !== null) {
+  const unmatched: string[] = [];
+  for (const line of block.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    if (trimmed.startsWith('<!--')) continue; // the markers themselves
+    if (/^\|\s*Type\s*\|/.test(trimmed)) continue; // header row
+    if (/^\|[\s\-|]+\|$/.test(trimmed)) continue; // separator row
+    const match = trimmed.match(/^\|\s*`([a-z0-9_]+)`\s*\|\s*(client → server|server → client)\s*\|/);
+    if (!match) {
+      // A row missing its type or its direction must fail loudly rather than
+      // being skipped: a catalogue line the test cannot read is a catalogue
+      // entry nothing verifies.
+      unmatched.push(trimmed);
+      continue;
+    }
     rows.push({ type: match[1], direction: match[2] });
   }
+  expect(unmatched, 'every catalogue row names a type and a direction').toEqual([]);
   return rows;
 }
 
@@ -254,11 +279,16 @@ describe('voice wire v1 — catalogue completeness', () => {
     expect([...documented.map(key)].sort()).toEqual([...inCode.map(key)].sort());
   });
 
-  it('declares every documented type in the flat catalogue union', () => {
-    for (const type of [...VOICE_CLIENT_MESSAGE_TYPES, ...VOICE_SERVER_MESSAGE_TYPES]) {
-      expect(VOICE_MESSAGE_TYPES).toContain(type);
-      expect(isVoiceMessageType(type)).toBe(true);
-    }
+  it('keeps the flat list and the two directional lists consistent', () => {
+    expect([...VOICE_MESSAGE_TYPES]).toEqual([
+      ...VOICE_CLIENT_MESSAGE_TYPES,
+      ...VOICE_SERVER_MESSAGE_TYPES,
+    ]);
+    expect(new Set(VOICE_CLIENT_MESSAGE_TYPES).size).toBe(VOICE_CLIENT_MESSAGE_TYPES.length);
+    expect(new Set(VOICE_SERVER_MESSAGE_TYPES).size).toBe(VOICE_SERVER_MESSAGE_TYPES.length);
+    expect(isVoiceMessageType('voice_teleport')).toBe(false);
+    expect(isVoiceMessageType('voice_session_start ')).toBe(false);
+    expect(isVoiceMessageType(undefined)).toBe(false);
   });
 
   it('carries voice_audio_chunk in both directions', () => {
@@ -278,7 +308,36 @@ describe('voice wire v1 — catalogue completeness', () => {
       expect(checkVoiceEnvelope(message, 'server-to-client')).toEqual({ ok: true });
     }
     expect(isVoiceMessageType('voice_teleport')).toBe(false);
-    expect(isVoiceMessageType(undefined)).toBe(false);
+  });
+
+  it('keeps every client example aligned with the declared schema', () => {
+    // Both directions of drift fail here: a field added to the map without the
+    // example, and a field added to the example without the map (which the
+    // envelope check would refuse). This is the runtime replacement for the
+    // type-level sweep that probes proved vacuous. Envelope fields other than
+    // the ones every frame needs may be omitted from a fixture.
+    for (const type of VOICE_CLIENT_MESSAGE_TYPES) {
+      const allowed = new Set<string>([
+        ...VOICE_ENVELOPE_FIELDS,
+        ...VOICE_CLIENT_MESSAGE_FIELDS[type],
+      ]);
+      const exampleKeys = Object.keys(CLIENT_EXAMPLES[type]);
+      for (const key of exampleKeys) {
+        expect(allowed.has(key), `${type} example carries undeclared field ${key}`).toBe(true);
+      }
+      for (const field of VOICE_CLIENT_MESSAGE_FIELDS[type]) {
+        expect(exampleKeys, `${type} example must show declared field ${field}`).toContain(field);
+      }
+    }
+  });
+
+  it('keeps every server example complete against the required-field map', () => {
+    for (const type of VOICE_SERVER_MESSAGE_TYPES) {
+      const exampleKeys = new Set(Object.keys(SERVER_EXAMPLES[type]));
+      for (const field of VOICE_SERVER_REQUIRED_FIELDS[type]) {
+        expect(exampleKeys.has(field), `${type} example is missing required field ${field}`).toBe(true);
+      }
+    }
   });
 
   it('covers every message with an example (no untested message type)', () => {
@@ -448,12 +507,87 @@ describe('voice wire v1 — audio framing', () => {
     expect(VOICE_AUDIO_OUTPUT_FORMAT.maxBase64Chars).toBe(6_400);
   });
 
-  it('bounds audio payloads and drops oversized or corrupt chunks', () => {
-    const within = 'A'.repeat(VOICE_AUDIO_INPUT_FORMAT.maxBase64Chars);
-    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, within)).toBe(true);
-    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, `${within}A`)).toBe(false);
-    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, '!!!not base64!!!')).toBe(false);
+  it('refuses an unknown field on a client frame instead of ignoring it', () => {
+    // The structural half of the text-free guarantee: a key the catalogue does
+    // not name cannot ride in unnoticed, whatever it is called.
+    expect(
+      checkVoiceEnvelope({ ...CLIENT_EXAMPLES.parking_promote, note: 'do X' }, 'client-to-server')
+    ).toEqual({ ok: false, code: 'voice_message_unknown_field' });
+    expect(
+      checkVoiceEnvelope({ ...CLIENT_EXAMPLES.parking_list, extra: 1 }, 'client-to-server')
+    ).toEqual({ ok: false, code: 'voice_message_unknown_field' });
+    // Server→client frames are the host's own words: unknown fields are ignored
+    // so an additive v1 field cannot break an older client.
+    expect(
+      checkVoiceEnvelope({ ...SERVER_EXAMPLES.voice_state, futureField: true }, 'server-to-client')
+    ).toEqual({ ok: true });
+  });
+
+  it('refuses a client frame that is missing a required field', () => {
+    const { reason: _drop, ...noReason } = CLIENT_EXAMPLES.voice_session_stop;
+    expect(checkVoiceEnvelope(noReason, 'client-to-server')).toEqual({
+      ok: false,
+      code: 'voice_message_missing_field',
+    });
+    const { itemId: _dropItem, ...noItem } = CLIENT_EXAMPLES.parking_promote;
+    expect(checkVoiceEnvelope(noItem, 'client-to-server')).toEqual({
+      ok: false,
+      code: 'voice_message_missing_field',
+    });
+    // A client frame may legitimately omit its OPTIONAL fields.
+    const { proposalRef: _dropRef, ...minimalConfirm } = CLIENT_EXAMPLES.proposal_confirm;
+    expect(checkVoiceEnvelope(minimalConfirm, 'client-to-server')).toEqual({ ok: true });
+  });
+
+  it('refuses a server frame that is missing a required field', () => {
+    const { receipt: _drop, ...noReceipt } = SERVER_EXAMPLES.receipt_event;
+    expect(checkVoiceEnvelope(noReceipt, 'server-to-client')).toEqual({
+      ok: false,
+      code: 'voice_message_missing_field',
+    });
+    const { outcome: _dropOutcome, ...noOutcome } = SERVER_EXAMPLES.proposal_resolved;
+    expect(checkVoiceEnvelope(noOutcome, 'server-to-client')).toEqual({
+      ok: false,
+      code: 'voice_message_missing_field',
+    });
+  });
+
+  it('refuses a lane id beyond the bound', () => {
+    expect(
+      checkVoiceEnvelope(
+        { ...CLIENT_EXAMPLES.parking_list, laneId: 'l'.repeat(201) },
+        'client-to-server'
+      )
+    ).toEqual({ ok: false, code: 'voice_message_malformed' });
+    expect(
+      checkVoiceEnvelope({ ...CLIENT_EXAMPLES.parking_list, laneId: 'l'.repeat(200) }, 'client-to-server')
+    ).toEqual({ ok: true });
+  });
+
+  it('bounds audio payloads by DECODED bytes, not encoded characters', () => {
+    const exact = Buffer.alloc(VOICE_AUDIO_INPUT_FORMAT.maxChunkBytes, 0).toString('base64');
+    const oneOver = Buffer.alloc(VOICE_AUDIO_INPUT_FORMAT.maxChunkBytes + 1, 0).toString('base64');
+    expect(voiceBase64DecodedByteLength(exact)).toBe(VOICE_AUDIO_INPUT_FORMAT.maxChunkBytes);
+    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, exact)).toBe(true);
+    // The payload that a character-count-only check wrongly accepted: the maximum
+    // encoded length with no padding decodes to one byte over the ceiling.
+    const unpaddedMax = 'A'.repeat(VOICE_AUDIO_INPUT_FORMAT.maxBase64Chars);
+    expect(unpaddedMax.length).toBe(VOICE_AUDIO_INPUT_FORMAT.maxBase64Chars);
+    expect(voiceBase64DecodedByteLength(unpaddedMax)).toBe(VOICE_AUDIO_INPUT_FORMAT.maxChunkBytes + 1);
+    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, unpaddedMax)).toBe(false);
+    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, oneOver)).toBe(false);
     expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, '')).toBe(false);
+    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, '!!!not base64!!!')).toBe(false);
+    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_INPUT_FORMAT, 'AAAA=')).toBe(false);
+    // The same rule on the 24 kHz output side.
+    const outExact = Buffer.alloc(VOICE_AUDIO_OUTPUT_FORMAT.maxChunkBytes, 0).toString('base64');
+    expect(isVoiceAudioPayloadWithinLimit(VOICE_AUDIO_OUTPUT_FORMAT, outExact)).toBe(true);
+    expect(
+      isVoiceAudioPayloadWithinLimit(
+        VOICE_AUDIO_OUTPUT_FORMAT,
+        Buffer.alloc(VOICE_AUDIO_OUTPUT_FORMAT.maxChunkBytes + 1, 0).toString('base64')
+      )
+    ).toBe(false);
   });
 });
 
@@ -471,6 +605,7 @@ describe('voice wire v1 — client-neutral (D7)', () => {
       /\bAudioContext\b/,
       /\bAudioWorklet\b/,
       /\brequestAnimationFrame\b/,
+      /\btabNonce\b/,
     ];
     for (const pattern of forbidden) {
       expect(pattern.test(source), `voice-messages.ts must not reference ${String(pattern)}`).toBe(false);
