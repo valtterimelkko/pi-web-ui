@@ -371,6 +371,49 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 1 COMPLETE — B and C verified, merged `--no-ff`, pushed, cleaned up; Wave 2 is next).**
+Master `15cf5d0` (plus `8089dac` declaring `@google/genai`). Both tracks were
+verified by me **on their frozen commits and again on the merged tree**, never on
+their reports:
+
+- **C (client)** — Gate 4 re-run: shared+client builds clean; the brief's exact
+  arbiter command 23/23; **full client suite 140 files / 1550 tests**; the
+  **Playwright ducking spec re-run by me: 3/3 in a real browser** (ducked gain
+  0.15, 21 capture chunks *during* the duck, capture lifecycle `live`), and C's
+evidence screenshot (masterGain 0.15, capture live, live chunk stream) matches.
+  Frozen seam untouched; `speechArbiter.ts` byte-identical; the one
+  `shared/src/index.ts` re-export is one additive line; the surface is correctly
+  **absent from the shipped bundle** (0 hits for every marker) — Phase 5 wires it.
+- **B (bridge)** — Gate 3a 7 files / 133 tests; **Gate 3b re-run by me: a real
+  provider session** (setup 396 ms, transcript "voicebridge handshake check",
+  100 % expected-token overlap, resumption handle captured). My anti-cheat probes:
+  bogus key → FAIL as designed; **but a silenced fixture initially PASSED** (the
+  provider hallucinated `"¿Qué?"`), which is a real false-green hole. B closed it
+  in `ffa7e76` (phrase-related transcript predicate + unit tests incl. the exact
+hallucination) and I **re-proved it myself**: silenced fixture → FAIL exit 1 with
+  an honest observed-text message; real fixture → PASS; fixture restored
+  byte-identical (sha256 `89d23516…`).
+- **Conductor-owned defect B surfaced (mine, from the E merge):**
+  `tests/unit/ci-workflow-paths.test.ts` was RED at base because the contract
+  module's header names `docs/plans/VOICE-LIVE-WIRE-CONTRACT.md` while CI still
+  ignored `docs/**`. Fixed in `36b5d88` by re-including the document
+  (`!` entry); test 5/5 green. Honest note: my E-merge verification was scoped to
+  shared build/typecheck/tests and did not run the full server suite — B's
+  regression run caught what my gate missed.
+- **Merged-tree gates:** typecheck + full build clean; **server suite 422 files /
+  5268 tests green**; client suite 1550 green; voice suites 133 green;
+  `ci-workflow-paths` 5/5.
+- **Cleanup:** both leases released (`voice-exec-20260917-b/-c`), both worktrees
+  removed, both branches deleted (fully merged), both watches cancelled (remote
+  deletion generation-confirmed). Children's board entries had already expired
+  (`leave` reported no such entry — noted, not forced).
+- **Follow-through:** `@google/genai` 1.52.0 declared in `server/package.json` +
+  lockfile (`8089dac`) now that the bridge is on master.
+
+**NEXT — Wave 2:** F/G (Phase 5 vertical-slice wiring + Phase 6 orchestration)
+per the plan's roster, then H + independent reviewer (Phase 8 implementation),
+then the Phase 7 handover to the operator. Production unaffected throughout.
+
 **2026-09-17 (Wave 1 in flight — B's environment blocker answered; worktree `shared` isolation fixed).**
 B raised a correctly reproduced blocker: my Wave 1 worktree setup symlinked
 `node_modules` into production's, so `@pi-web-ui/shared` resolved to production's
