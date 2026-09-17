@@ -17,6 +17,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { EVENT, parseEventLog } from '../../../scripts/voice-live-lab/lib/scheduler.js';
 import {
@@ -33,6 +34,14 @@ import { main as cliMain } from '../../../scripts/voice-live-lab/cli.js';
 
 const BENCH_SCENARIOS = '/root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier1';
 const benchExists = existsSync(BENCH_SCENARIOS);
+
+/** Test-only fixture scenario (not one of the seven shipped tier-1 scenarios): a
+ *  single bare "Yes." with nothing held — the full-path dead-end probe. */
+const DEAD_END_SCENARIO = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'fixtures',
+  'dead-end-bare-yes.scenario.json'
+);
 
 let root: string;
 beforeEach(() => {
@@ -93,7 +102,6 @@ describe.skipIf(!benchExists)('hermetic dry run of every shipped tier-1 scenario
     { file: 't1-s5-sparse-state.json', releases: 1 },
     { file: 't1-s6-worker-permission.json', releases: 2 },
     { file: 't1-s7-reading-levels.json', releases: 0 },
-    { file: 't1-s8-bare-yes-dead-end.json', releases: 0 },
   ];
 
   for (const { file, releases } of scenarios) {
@@ -149,14 +157,15 @@ describe.skipIf(!benchExists)('hermetic dry run of every shipped tier-1 scenario
   }
 
   it('gate regression through the full path: a bare yes with nothing held is a mechanical dead end', async () => {
-    // s8 is a single bare "Yes." with nothing held: no release, and the fixed
-    // nothing-pending ack is what reaches TTS. (The s7 stop-reading beat is a
-    // gesture/playback control; after the 2026-09-17 gate repair its utterance
-    // classifies as a talker-directed statement, so the full-path dead end is
-    // probed here with a genuine bare confirmation.)
-    const outcome = await runDryAttempt(path.join(BENCH_SCENARIOS, 't1-s8-bare-yes-dead-end.json'), {
+    // The fixture is a test-only scenario with one bare "Yes." and nothing held:
+    // no release, and the fixed nothing-pending ack is what reaches TTS. (The s7
+    // stop-reading beat is a gesture/playback control; after the 2026-09-17 gate
+    // repair its utterance classifies as a talker-directed statement, so the
+    // full-path dead end is probed here with a genuine bare confirmation while
+    // the shipped tier-1 set stays exactly the seven planned scenarios.)
+    const outcome = await runDryAttempt(DEAD_END_SCENARIO, {
       runsRoot: root,
-      runId: 'dryrun-s8-deadend',
+      runId: 'dryrun-deadend-bare-yes',
       attemptId: 'attempt-01',
       frameIntervalMs: 1,
       quiet: true,

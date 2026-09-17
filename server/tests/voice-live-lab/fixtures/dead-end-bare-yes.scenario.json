@@ -1,0 +1,40 @@
+{
+  "schema": "voice-lab.scenario/1",
+  "id": "t1-dead-end-bare-yes",
+  "tier": 1,
+  "world": "/root/agent-benchmarks/benchmarks/04-voice-live-lab/worlds/worker-reading-levels.json",
+  "persona": "/root/agent-benchmarks/benchmarks/04-voice-live-lab/personas/operator-default.md",
+  "language": "en-GB",
+  "voice": {
+    "engine": "supertonic-3",
+    "voice": "M1",
+    "rate": 1.05
+  },
+  "endpointing": "E",
+  "budgets": {
+    "maxRunMs": 120000,
+    "maxOperatorTurns": 4,
+    "maxCandidateSpeechMs": 60000,
+    "maxSpendUsd": 0.5
+  },
+  "description": "Fixture scenario (test-only, not a shipped benchmark scenario): the full-path dead-end probe for N3. A bare confirmation with nothing held must never release anything and must reach TTS as the fixed nothing-pending acknowledgement. Introduced 2026-09-17 when the confirmation-gate repair (execution plan Phase 1) turned the s7 stop-reading gesture utterance into a talker-directed statement, so the dead end is probed here with a genuine bare yes while the shipped tier-1 set stays exactly the seven planned scenarios.",
+  "beats": [
+    {
+      "id": "b1-bare-yes-dead-end",
+      "mode": "frozen",
+      "utterance": "Yes.",
+      "permissions": [],
+      "trigger": {
+        "at": "run-start",
+        "delayMs": 800
+      },
+      "expect": {
+        "relay": false
+      },
+      "labels": {
+        "kind": "dead_end_probe"
+      },
+      "notes": "A confirm-classified utterance with nothing held is a mechanical dead end: no release, fixed nothing-pending ack."
+    }
+  ]
+}
