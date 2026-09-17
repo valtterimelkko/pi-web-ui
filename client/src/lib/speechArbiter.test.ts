@@ -8,7 +8,7 @@ import {
   NORMAL_VOLUME,
   DUCKED_VOLUME,
   type ArbiterPlayer,
-} from '../../../src/lib/speechArbiter';
+} from './speechArbiter';
 
 /**
  * Spec: docs/plans/DRIVE-MODE-TWO-LANE-PLAN.md §4.1 (decided 2026-09-13).
@@ -406,5 +406,42 @@ describe('speechArbiter — §4.1 the speech priority ladder', () => {
     expect(onError).toHaveBeenCalledWith(expect.any(Error));
     expect(failing.playCalls().map((c) => c.chunk)).toEqual(['ack.']);
     expect(arbiter).toBeDefined();
+  });
+});
+
+/**
+ * Voice Mode native-voice surface (Track C) — the two properties the brief
+ * makes non-negotiable about this module:
+ *
+ *   1. ducking is to ≈15%, never a stop (N5), and
+ *   2. the arbiter has NO capture authority (N5/N1) — there is no method on the
+ *      public surface that could gate, delay or suppress microphone capture.
+ */
+describe('voice-live requirement — ducking level and no capture authority', () => {
+  it('ducks to ≈15% volume', () => {
+    expect(DUCKED_VOLUME).toBeGreaterThanOrEqual(0.13);
+    expect(DUCKED_VOLUME).toBeLessThanOrEqual(0.17);
+    expect(NORMAL_VOLUME).toBe(1);
+    expect(DUCKED_VOLUME).toBeLessThan(NORMAL_VOLUME);
+  });
+
+  it('exposes no capture-authority method of any kind', () => {
+    const arbiter = createSpeechArbiter();
+    const surface = arbiter as unknown as Record<string, unknown>;
+    for (const forbidden of [
+      'setCaptureEnabled',
+      'setCaptureMode',
+      'pauseCapture',
+      'resumeCapture',
+      'stopCapture',
+      'suppressCapture',
+      'muteCapture',
+      'setMicrophoneEnabled',
+    ]) {
+      expect(surface[forbidden]).toBeUndefined();
+    }
+    // And the direction of the one floor signal is INTO the arbiter only.
+    expect(typeof arbiter.setOperatorSpeaking).toBe('function');
+    expect(typeof arbiter.isOperatorSpeaking).toBe('function');
   });
 });

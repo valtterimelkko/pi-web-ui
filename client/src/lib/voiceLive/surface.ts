@@ -1,0 +1,366 @@
+/**
+ * voiceLive/surface — the framework-free orchestration of one voice lane.
+ *
+ * Everything a `DriveModeVoiceLive` React component needs, with no React in it,
+ * so the wiring itself is testable with injected fakes:
+ *
+ *   microphone → capture worklet → CapturePipeline → controller.sendCaptureChunk
+ *                                                        ↓ (session WebSocket)
+ *   server audio chunks → PlaybackPipeline → ducked 24 kHz playback
+ *   receipt delivered   → local chime (host-owned, never model audio)
+ *   local VAD boundary  → arbiter.setOperatorSpeaking (duck) + voice_activity_state
+ *
+ * The two invariants this file is responsible for holding:
+ *
+ *   - CAPTURE IS UNCONDITIONAL FOR THE ARBITER (N5). The VAD tells the arbiter
+ *     the operator holds the floor; nothing the arbiter does can reach the
+ *     capture session. There is no call in this file that suspends capture in
+ *     response to playback.
+ *   - DUCKING IS THE FLOOR'S DECISION. The playback pipeline reads
+ *     `speechFloor` (the arbiter) — it does not decide to duck on its own, and
+ *     it never stops mid-utterance for a barge-in.
+ *
+ * Suspension is honest: `captureLifecycle` is 'suspended' only when capture is
+ * genuinely stopped (socket down, lane stopped, permission refused), and the
+ * component renders that state rather than claiming to listen.
+ */
+
+import type {
+  VoiceAudioOutputChunkMessage,
+  VoiceClientMessage,
+  VoiceReceiptEventMessage,
+  VoiceServerMessage,
+} from '@pi-web-ui/shared';
+import { type SpeechArbiter } from '../speechArbiter';
+import {
+  startCaptureSession,
+  type CaptureFaultReport,
+  type CaptureSession,
+  type CaptureStats,
+} from './captureSession';
+import {
+  PlaybackPipeline,
+  createWebAudioPlaybackBackend,
+  type PlaybackBackend,
+  type PlaybackFault,
+  type PlaybackStats,
+} from './playbackSession';
+import { asSpeechFloorSource } from './speechFloor';
+import {
+  createDeliveryChime,
+  createWebAudioChimeBackend,
+  type ChimeVariant,
+} from '../soundEffects';
+import {
+  VoiceLiveController,
+  type VoiceLiveRefusal,
+  type VoiceLiveSnapshot,
+} from './controller';
+import type { VoiceLaneIdentity } from './messages';
+
+export type CaptureLifecycle = 'idle' | 'starting' | 'live' | 'suspended' | 'error';
+
+export interface VoiceLiveSurfaceState {
+  capture: CaptureLifecycle;
+  captureDetail: string | null;
+  captureStats: CaptureStats | null;
+  playback: PlaybackStats | null;
+  lastChime: ChimeVariant | null;
+  captureFaults: CaptureFaultReport[];
+  playbackFaults: PlaybackFault[];
+  controller: VoiceLiveSnapshot;
+}
+
+/** Injection points so the wiring is testable without a browser. */
+export interface VoiceLiveSurfaceFactories {
+  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+  createAudioContext?: () => AudioContext;
+  startCaptureSession?: typeof startCaptureSession;
+  createPlaybackBackend?: (context: BaseAudioContext) => PlaybackBackend;
+  now?: () => number;
+}
+
+export interface VoiceLiveSurfaceOptions {
+  lane: VoiceLaneIdentity;
+  /** The session transport: the only outbound path. */
+  send: (frame: VoiceClientMessage) => void | Promise<void>;
+  /** The shared speech floor: the arbiter owns ducking (read-only here). */
+  arbiter: SpeechArbiter;
+  factories?: VoiceLiveSurfaceFactories;
+  onStateChange?: (state: VoiceLiveSurfaceState) => void;
+  onRefusal?: (refusal: VoiceLiveRefusal) => void;
+  onReceipt?: (message: VoiceReceiptEventMessage) => void;
+  /** Test seam: an already-built controller (its chime wiring is then external). */
+  controller?: VoiceLiveController;
+}
+
+const MAX_FAULTS = 20;
+
+export class VoiceLiveSurface {
+  /** Built here (or injected in tests) and wired to the delivery chime. */
+  readonly controller: VoiceLiveController;
+  private readonly arbiter: SpeechArbiter;
+  private readonly factories: VoiceLiveSurfaceFactories;
+  private readonly onStateChange: (state: VoiceLiveSurfaceState) => void;
+  private readonly listeners = new Set<() => void>();
+  private readonly captureFaults: CaptureFaultReport[] = [];
+  private readonly playbackFaults: PlaybackFault[] = [];
+
+  private audioContext: AudioContext | null = null;
+  private playback: PlaybackPipeline | null = null;
+  private capture: CaptureSession | null = null;
+  private captureLifecycle: CaptureLifecycle = 'idle';
+  private captureDetail: string | null = null;
+  private chime: ReturnType<typeof createDeliveryChime> | null = null;
+  private lastChime: ChimeVariant | null = null;
+  private captureStats: CaptureStats | null = null;
+  private unsubscribeController: (() => void) | null = null;
+  /**
+   * The published snapshot is cached so `useSyncExternalStore` sees a stable
+   * identity between changes (a fresh object on every read would loop).
+   */
+  private cachedState: VoiceLiveSurfaceState | null = null;
+
+  constructor(options: VoiceLiveSurfaceOptions) {
+    this.arbiter = options.arbiter;
+    this.factories = options.factories ?? {};
+    this.onStateChange = options.onStateChange ?? (() => {});
+    this.controller =
+      options.controller ??
+      new VoiceLiveController({
+        lane: options.lane,
+        send: options.send,
+        ...(options.onRefusal ? { onRefusal: options.onRefusal } : {}),
+        onReceipt: (message) => {
+          options.onReceipt?.(message);
+          // Delivered → the trusted chime. Everything else → its own distinct
+          // tone, never the delivered figure (contract §8.1).
+          if (message.receipt.outcome === 'delivered') this.playDeliveredChime();
+          else this.playNotDeliveredChime(message.receipt.outcome);
+        },
+      });
+    this.unsubscribeController = this.controller.subscribe(() => this.publish());
+  }
+
+  // ── Observation ──────────────────────────────────────────────────────────
+
+  getState(): VoiceLiveSurfaceState {
+    return this.cachedState ?? this.refreshState();
+  }
+
+  private refreshState(): VoiceLiveSurfaceState {
+    const state: VoiceLiveSurfaceState = {
+      capture: this.captureLifecycle,
+      captureDetail: this.captureDetail,
+      captureStats: this.capture ? this.capture.stats() : this.captureStats,
+      playback: this.playback ? this.playback.stats() : null,
+      lastChime: this.lastChime,
+      captureFaults: [...this.captureFaults],
+      playbackFaults: [...this.playbackFaults],
+      controller: this.controller.snapshot(),
+    };
+    this.cachedState = state;
+    return state;
+  }
+
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
+  }
+
+  private publish(): void {
+    const state = this.refreshState();
+    for (const fn of this.listeners) fn();
+    this.onStateChange(state);
+  }
+
+  // ── Audio graph ──────────────────────────────────────────────────────────
+
+  private ensureAudio(): AudioContext {
+    if (this.audioContext) return this.audioContext;
+    const context = this.factories.createAudioContext
+      ? this.factories.createAudioContext()
+      : new AudioContext();
+    this.audioContext = context;
+
+    const playbackBackend = this.factories.createPlaybackBackend
+      ? this.factories.createPlaybackBackend(context)
+      : createWebAudioPlaybackBackend(context);
+    this.playback = new PlaybackPipeline({
+      backend: playbackBackend,
+      floor: asSpeechFloorSource(this.arbiter),
+      onFault: (fault) => {
+        this.playbackFaults.push(fault);
+        if (this.playbackFaults.length > MAX_FAULTS) this.playbackFaults.shift();
+        this.publish();
+      },
+    });
+
+    const chimeBackend = createWebAudioChimeBackend(context);
+    this.chime = createDeliveryChime({ backend: chimeBackend });
+    return context;
+  }
+
+  /** Must be called from a user gesture: browsers require it to resume audio. */
+  async resumeAudio(): Promise<void> {
+    const context = this.ensureAudio();
+    if (context.state === 'suspended') await context.resume();
+  }
+
+  // ── Capture ──────────────────────────────────────────────────────────────
+
+  /**
+   * Start continuous capture (open-mic). Capture is not a playback decision:
+   * nothing but an explicit operator action or an error suspends it here.
+   */
+  async startCapture(options: { sendSilence?: boolean } = {}): Promise<'live' | 'error'> {
+    if (this.capture) {
+      if (options.sendSilence) this.capture.flush();
+      return 'live';
+    }
+    this.captureLifecycle = 'starting';
+    this.captureDetail = null;
+    this.publish();
+
+    try {
+      await this.resumeAudio();
+      const getUserMedia =
+        this.factories.getUserMedia ??
+        ((constraints: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(constraints));
+      const stream = await getUserMedia({ audio: true, video: false });
+      const context = this.ensureAudio();
+      const startSession = this.factories.startCaptureSession ?? startCaptureSession;
+      const session = await startSession({
+        context,
+        stream,
+        sink: (chunk) => {
+          this.controller.sendCaptureChunk(chunk);
+        },
+        onActivity: (activity) => this.onOperatorActivity(activity.state, activity.atMs),
+        onFault: (fault) => {
+          this.captureFaults.push(fault);
+          if (this.captureFaults.length > MAX_FAULTS) this.captureFaults.shift();
+          this.publish();
+        },
+        ...(options.sendSilence !== undefined ? { sendSilence: options.sendSilence } : {}),
+        ...(this.factories.now ? { now: this.factories.now } : {}),
+      });
+      this.capture = session;
+      this.captureLifecycle = 'live';
+      this.publish();
+      return 'live';
+    } catch (error) {
+      this.captureLifecycle = 'error';
+      this.captureDetail = error instanceof Error ? error.message : String(error);
+      // Capture failing is not a reason to pretend; the surface shows this and
+      // keeps push-to-talk and typed input reachable (intent §20).
+      this.publish();
+      return 'error';
+    }
+  }
+
+  /**
+   * The operator's floor signal. One call site, two readers: the arbiter ducks
+   * and the wire reports the boundary. Neither can reach capture.
+   */
+  private onOperatorActivity(state: 'speech_start' | 'speech_end', atMs: number): void {
+    // The arbiter is the single owner of the ducking decision (N5).
+    this.arbiter.setOperatorSpeaking(state === 'speech_start');
+    // The wire learns about the boundary (scheduling input only).
+    this.controller.reportActivity(state, atMs);
+    this.publish();
+  }
+
+  /** Push-to-talk: capture only while the control is held, then flush. */
+  async beginPushToTalk(): Promise<'live' | 'error'> {
+    return this.startCapture({ sendSilence: true });
+  }
+
+  async endPushToTalk(): Promise<void> {
+    this.capture?.flush();
+    await this.stopCapture('push-to-talk released');
+  }
+
+  /**
+   * Suspend capture explicitly (operator action, or the lane stopped). This is
+   * the ONLY way capture stops, and it is never reachable from a playback or
+   * ducking decision.
+   */
+  async stopCapture(reason = 'capture stopped'): Promise<void> {
+    const session = this.capture;
+    this.capture = null;
+    this.captureStats = session ? session.stats() : null;
+    if (session) await session.stop();
+    this.captureLifecycle = 'suspended';
+    this.captureDetail = reason;
+    // The operator is no longer speaking the moment we stop hearing them.
+    this.arbiter.setOperatorSpeaking(false);
+    this.publish();
+  }
+
+  /** Stop everything and release the microphone (component unmount). */
+  async dispose(): Promise<void> {
+    await this.stopCapture('disposed');
+    this.playback?.dispose();
+    this.playback = null;
+    this.unsubscribeController?.();
+    this.unsubscribeController = null;
+    this.listeners.clear();
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      await this.audioContext.close().catch(() => undefined);
+    }
+    this.audioContext = null;
+  }
+
+  // ── Inbound wiring ───────────────────────────────────────────────────────
+
+  /**
+   * One inbound wire frame. Interpretation happens exactly once, in the
+   * controller (the contract's own guards); this method only routes the audio
+   * payload to the playback scheduler.
+   */
+  onWireMessage(raw: unknown): 'applied' | 'refused' {
+    const outcome = this.controller.handleIncoming(raw);
+    if (outcome !== 'applied') return outcome;
+    const message = raw as VoiceServerMessage;
+    if (message.type === 'voice_audio_chunk') {
+      this.ensureAudio();
+      this.playback?.pushChunk(message as VoiceAudioOutputChunkMessage);
+    }
+    this.publish();
+    return outcome;
+  }
+
+  /** Called by the controller when a receipt says delivered (never earlier). */
+  playDeliveredChime(): ChimeVariant | null {
+    if (!this.chime) this.ensureAudio();
+    const variant = this.chime?.play('delivered') ?? null;
+    this.lastChime = variant;
+    this.publish();
+    return variant;
+  }
+
+  playNotDeliveredChime(variant: 'refused' | 'queued' | 'unknown'): void {
+    if (!this.chime) this.ensureAudio();
+    this.lastChime = this.chime?.play(variant) ?? null;
+    this.publish();
+  }
+
+  /** Explicit operator stop for playback only (capture is untouched, N5). */
+  stopPlayback(): void {
+    this.playback?.stop();
+    this.publish();
+  }
+
+  // ── Convenience pass-throughs for the component ──────────────────────────
+
+  getController(): VoiceLiveController {
+    return this.controller;
+  }
+
+  refusals(): VoiceLiveRefusal[] {
+    return this.controller.snapshot().refusals;
+  }
+}
