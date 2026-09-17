@@ -449,11 +449,13 @@ a talker that refuses to think, but one whose thinking is always labelled.
 **The labelling must not rest on the model remembering to label.** Freeing the
 talker to reason creates a genuinely new risk — you believing something false,
 said confidently — which the four-object model does *not* address, because that
-model solves authority rather than truthfulness. The intent is therefore that
-**quotes and completion claims are produced by the host, not the model**, and
-that an unlabelled statement is treated as the talker's own guess rather than as
-fact. The construction detail, the full risk list and what remains unmitigated
-are in the recommendation's §4.7.
+model solves authority rather than truthfulness. In full-duplex speech-to-speech,
+the host does not attempt real-time grammatical voice-splicing on streaming audio;
+instead, **quotes and exact worker reads are served out-of-band or via the dedicated reading scheduler**,
+**completion and delivery are signalled via host-owned chimes/earcons and UI state**,
+and **the host injects structured status into the session context each turn** (e.g. `CURRENT STATUS: RUNNING; DO NOT claim finished`).
+Unlabelled statements default to the talker's own guess (*Mine*) rather than fact.
+The construction detail, the full risk list and what remains unmitigated are in the recommendation's §4.7.
 
 ### 17.1 Reasoning depth — and nothing built in advance
 
@@ -514,6 +516,14 @@ That third case is what the operator asked for — *"relay some of the harder
 questions for the worker"* — and it is safe only under the read-back rule. The
 operator hears the actual bytes before authorising them. A reassuring gloss is
 never sufficient for composed text; the gloss is not the payload.
+
+Crucially, when the talker drafts or suggests a question aloud in conversation
+(e.g. *"Should I ask the worker: 'Why did the auth retry handler drop the session token on line 42?'"*),
+**that spoken utterance itself constitutes the read-back**. A prompt confirmation
+like *"Yes, ask that"* immediately authorises release without requiring a redundant
+second read-back loop (*"I will ask... are you sure?"*). If the talker only provided
+a summary gloss (*"Shall I ask it about the auth issue?"*), then the host must read
+back the full drafted question before asking for confirmation.
 
 ### 18.3 The offer conditions — the judgement, made explicit
 
@@ -648,9 +658,11 @@ safe to infer from a gesture anyway. So:
 > **Voice activity governs when the talker may speak. It never governs when the
 > host may send.**
 
-A pause is not consent. The 400 ms transcript-stability window is a *parameter for
-conversational turn-taking*, not a safety theorem, and it must never be the thing
-that authorises a release.
+A pause is not consent. The 400 ms transcript-stability window is purely a
+heuristic for conversational turn-taking (allowing the talker to reply without
+interrupting mid-thought), not an authority theorem. It must **never** be treated
+as an automatic dispatch or release trigger. Dispatch requires an explicit, validated
+confirmation utterance bound to a presented proposal.
 
 Three capture modes, with one state machine:
 
@@ -881,9 +893,9 @@ brief. The intent-relevant core:
 
 **Settled on 2026-09-17, recorded here so they are not reopened as questions.**
 The native-transport migration is approved in principle (recommendation D3), and
-with it: the measured campaign runs in full rather than being deferred (D4); the
-honesty mitigations are accepted (D5); the conversational seat is the standard
-model with no escalation machinery (D6); and ambient operation is deferred to a
+with it: the verification campaign is streamlined to lean deterministic safety regression on the host kernel plus real-ear dogfooding, replacing the 210-run synthetic treadmill (D4);
+provenance is enforced via out-of-band delivery receipts, structured worker context, and conversational qualification rather than audio voice-splicing (D5);
+the conversational seat is the standard model with no escalation machinery (D6); and ambient operation is deferred to a
 mobile client with a client-neutral kernel as the standing price of keeping it
 open (D7, §20.1). The recommendation's §8 is the decision record; each step of its
 §7 still carries its own gate, and production deployment remains separate.
