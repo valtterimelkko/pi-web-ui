@@ -46,6 +46,7 @@ Capped at ~10 items; older entries drop off (the rolling prose delta lives in [`
 - [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) — **start here for anything voice**: reading order across the whole corpus, what is current versus superseded, and what the lab did and did not establish
 - [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) — **Voice Mode**, canonical intent and shipped behaviour: the two lanes, the mechanical confirm-gated relay, speech policy, reading levels, mobile socket durability, observability
 - [`VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md) — **the architecture of record** (owner decisions D1–D7): native-audio target, the host authority kernel, the lab evidence audit, and the gated build sequence
+- [`VOICE-MODE-EXECUTION-PLAN.md`](./VOICE-MODE-EXECUTION-PLAN.md) — the current, owner-approved **execution plan**: the build sequence partitioned into four concurrency workstreams (A–D) with anti-early-claim gates; read it when building the migration
 - [`DRIVE-MODE.md`](./DRIVE-MODE.md) — Drive Mode, the distraction-reduced frontend overlay; for the voice/talker surface it hosts, read [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md)
 
 ## 4. WebSocket contract
