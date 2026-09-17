@@ -16,28 +16,40 @@
 
 import { verifyAttempt } from './lib/record.js';
 import { runHandshake, type CapabilitiesReport } from './lib/handshake.js';
+import { runDryAttempt } from './lib/baseline-dryrun.js';
 
-export type CliCommand = 'verify' | 'handshake' | 'help';
+export type CliCommand = 'verify' | 'handshake' | 'baseline-dryrun' | 'help';
 
 export interface CliOptions {
   command: CliCommand;
   attemptDir?: string;
   outputPath?: string;
+  scenarioPath?: string;
+  runsRoot?: string;
+  attempts?: number;
+  frameIntervalMs?: number;
   json?: boolean;
   requireFinalised?: boolean;
 }
 
+export const DEFAULT_RUNS_ROOT = '/root/agent-benchmarks/benchmarks/04-voice-live-lab/runs';
+export const DEFAULT_SCENARIO_PATH =
+  '/root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier1/t1-s1-orchestration-voice.json';
+
 export const USAGE = [
-  'Voice Live Lab (Phase L0/L1)',
+  'Voice Live Lab (Phase L0/L1/L2)',
   '',
   'Usage:',
   '  voice-live-lab verify <attemptDir> [--json] [--allow-unfinalised]',
   '  voice-live-lab handshake [--output <path>] [--json]',
+  '  voice-live-lab baseline-dryrun [--scenario <path>] [--runs-root <dir>] [--attempts N] [--frame-interval-ms N] [--json]',
   '  voice-live-lab help',
   '',
   'Commands:',
   '  verify <attemptDir>   Re-check an attempt record offline; exit 1 on damage.',
   '  handshake             Probe Gemini Live models & judge endpoints; writes capabilities.json.',
+  '  baseline-dryrun       Hermetic baseline-cascade attempt(s): scripted STT/TTS, real talker gate,',
+  '                        immutable record + offline verify. No provider is called.',
   '  help                  Show this message.',
 ].join('\n');
 
@@ -62,6 +74,22 @@ export function parseArgs(argv: string[]): CliOptions {
     return {
       command: 'handshake',
       outputPath,
+      json: rest.includes('--json'),
+    };
+  }
+  if (command === 'baseline-dryrun') {
+    const opt = (name: string): string | undefined => {
+      const idx = rest.indexOf(name);
+      return idx !== -1 && rest[idx + 1] ? rest[idx + 1] : undefined;
+    };
+    const attemptsRaw = opt('--attempts');
+    const frameRaw = opt('--frame-interval-ms');
+    return {
+      command: 'baseline-dryrun',
+      scenarioPath: opt('--scenario') ?? DEFAULT_SCENARIO_PATH,
+      runsRoot: opt('--runs-root') ?? DEFAULT_RUNS_ROOT,
+      attempts: attemptsRaw ? Math.max(1, Number.parseInt(attemptsRaw, 10)) : 1,
+      frameIntervalMs: frameRaw ? Math.max(1, Number.parseInt(frameRaw, 10)) : undefined,
       json: rest.includes('--json'),
     };
   }
@@ -96,6 +124,7 @@ export interface CliDependencies {
   writeErr?: (line: string) => void;
   verify?: (attemptDir: string, options: { json?: boolean; requireFinalised?: boolean }) => CliResult;
   handshake?: (options: { outputPath?: string; log?: (line: string) => void }) => Promise<CapabilitiesReport>;
+  dryRun?: typeof runDryAttempt;
 }
 
 export async function main(argv: string[], deps: CliDependencies = {}): Promise<number> {
@@ -103,6 +132,7 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
   const writeErr = deps.writeErr ?? ((line: string) => process.stderr.write(`${line}\n`));
   const verify = deps.verify ?? runVerify;
   const handshake = deps.handshake ?? runHandshake;
+  const dryRun = deps.dryRun ?? runDryAttempt;
 
   let options: CliOptions;
   try {
@@ -144,6 +174,41 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
       writeErr(error instanceof Error ? error.message : String(error));
       return 1;
     }
+  }
+
+  if (options.command === 'baseline-dryrun') {
+    const runId = `dryrun-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}`;
+    const outcomes: Array<Record<string, unknown>> = [];
+    let failures = 0;
+    try {
+      for (let index = 1; index <= (options.attempts ?? 1); index += 1) {
+        const outcome = await dryRun(options.scenarioPath as string, {
+          runsRoot: options.runsRoot as string,
+          runId,
+          attemptId: `attempt-${String(index).padStart(2, '0')}`,
+          frameIntervalMs: options.frameIntervalMs,
+          quiet: true,
+        });
+        if (!outcome.verifyOk) failures += 1;
+        writeOut(
+          `${outcome.attempt.attemptDir} verify=${outcome.verifyOk ? 'ok' : 'FAILED'} ` +
+            `turns=${outcome.turns} releases=${outcome.releases}`
+        );
+        for (const problem of outcome.verifyProblems) writeErr(`problem: ${problem}`);
+        outcomes.push({
+          attemptDir: outcome.attempt.attemptDir,
+          verifyOk: outcome.verifyOk,
+          verifyProblems: outcome.verifyProblems,
+          turns: outcome.turns,
+          releases: outcome.releases,
+        });
+      }
+    } catch (error) {
+      writeErr(error instanceof Error ? error.message : String(error));
+      return 2;
+    }
+    if (options.json) writeOut(JSON.stringify({ runId, attempts: outcomes }, null, 2));
+    return failures === 0 ? 0 : 1;
   }
 
   return 0;

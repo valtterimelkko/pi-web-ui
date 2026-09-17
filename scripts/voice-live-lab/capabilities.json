@@ -139,10 +139,22 @@
     }
   },
   "rateLimits": {
-    "measuredTier": "Prepaid Tier 1 (confirmed: 50 concurrent sessions, 2,000,000 TPM, ample prepaid balance)",
+    "measuredTier": "Google AI Studio Pay-as-you-go (Pro / Paid Tier 1)",
+    "officialStudioLimits": {
+      "gemini-3.8-live": {
+        "rpm": "Unlimited",
+        "tpm": 150000,
+        "rpd": "Unlimited"
+      },
+      "gemini-3.8-live-extended-thinking": {
+        "rpm": "Unlimited",
+        "tpm": 250000,
+        "rpd": "Unlimited"
+      }
+    },
     "rateLimitObserved": false,
     "status": "ok",
-    "notes": "Live concurrency probed up to 5 concurrent sessions without 429. Standard audio session draws ~0.15% of 2M TPM minute."
+    "notes": "Verified via Google AI Studio Console rate-limit dashboard: RPM and RPD are Unlimited for both live models; TPM is 150,000 for standard gemini-3.8-live and 250,000 for gemini-3.8-live-extended-thinking. Zero 429s observed."
   },
   "probeResolutions": {
     "1_input_transcription_finalisation": "Input transcription finalises synchronously with end-of-speech detection and first output turn frames. Stable text matches ASR ground truth.",

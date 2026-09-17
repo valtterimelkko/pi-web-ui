@@ -42,6 +42,16 @@ export const EVENT = {
   PLAYBACK_INTERRUPT: 'playback_interrupt',
   PLAYBACK_INTERRUPT_IGNORED: 'playback_interrupt_ignored',
   LIFECYCLE: 'lifecycle',
+  /** Baseline cascade (L2): one normalised cascade turn finished. */
+  TURN_COMPLETE: 'turn_complete',
+  /** Baseline cascade (L2): an STT / talker-model / TTS leg failed. */
+  PROVIDER_ERROR: 'provider_error',
+  /** Baseline cascade (L2): harness-side mechanical transitions, logged so the
+   *  scorer can assert gate behaviour from the trace alone. */
+  HARNESS_DRAFT_APPEND: 'harness_draft_append',
+  HARNESS_RELEASE: 'harness_release',
+  HARNESS_RECEIPT: 'harness_receipt',
+  HARNESS_MECHANICAL: 'harness_mechanical',
 } as const;
 
 export interface MonotonicClock {

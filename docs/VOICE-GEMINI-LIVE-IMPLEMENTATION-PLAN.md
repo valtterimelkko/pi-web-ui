@@ -28,8 +28,12 @@ This document contains the complete operative policies, architecture, build sequ
    - General building & fixture tasks (Phases L0, L2, L4 harness, L5 fixtures): `high` thinking.
    - Policy Core extraction & hard TDD refactoring (Phase L3): `max` thinking.
    - All children dispatched with durable goals (`POST /api/v1/sessions/:id/goal` or create-time `goal`).
-4. **Rate Limit & 429 Response Policy (Open Question 1 Approved):**
-   - If Phase L1 capability handshake detects lower quotas or 429 errors from Gemini Live, execution immediately pauses at **Gate 1** to review `capabilities.json` and adjust batching before any scored runs.
+4. **Rate Limit & 429 Response Policy (Open Question 1 Approved & Confirmed):**
+   - Live Google AI Studio console rate-limit telemetry confirmed:
+     - `gemini-3.8-live`: RPM: **Unlimited**, RPD: **Unlimited**, TPM: **150,000** (150K TPM).
+     - `gemini-3.8-live-extended-thinking`: RPM: **Unlimited**, RPD: **Unlimited**, TPM: **250,000** (250K TPM).
+   - Zero 429 errors observed; ample headroom for all planned benchmark runs and parallel sessions.
+   - If unexpected 429s or quota limits ever occur in later phases, execution immediately pauses for operator review.
 5. **Proposed Changes & Recommendations:**
    - Approved in full (decoupled streams, direct HTTP judge, in-process PCM player, parent self-execution for benchmarks).
 
