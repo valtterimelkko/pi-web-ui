@@ -1,0 +1,79 @@
+# Gate 0 criterion 3 — hard-coded verdicts / scores / recommendation literals
+Scanned files: generate_reports.mjs, lib/aggregate.mjs (the whole reporting layer; lib/ contains only aggregate.mjs)
+
+## (a) hard-coded verdict assignment (verdict/status literal):
+generate_reports.mjs:72:const measured = aggregation.verdict === 'measured';
+generate_reports.mjs:84:  verdict: aggregation.verdict,
+lib/aggregate.mjs:41: * @returns {{ status: 'measured'|'dry-run'|'invalid', problems: string[] }}
+lib/aggregate.mjs:47:    return { status: 'invalid', problems: ['manifest is not an object'] };
+lib/aggregate.mjs:57:    return { status: 'invalid', problems: [...problems, 'missing usage record'] };
+lib/aggregate.mjs:70:  if (problems.length > 0) return { status: 'invalid', problems };
+lib/aggregate.mjs:73:    return { status: 'dry-run', problems: [] };
+lib/aggregate.mjs:87:    return { status: 'invalid', problems: measuredProblems };
+lib/aggregate.mjs:89:  return { status: 'measured', problems: [] };
+lib/aggregate.mjs:156:  const verdict = measured.length > 0 ? 'measured' : 'not measured';
+lib/aggregate.mjs:172:      verdict === 'not measured'
+
+## (b) recommendation literals:
+generate_reports.mjs:8: * recommendation as object literals, and declared PLAN_PATH without ever reading
+generate_reports.mjs:105:      where: 'Corrected by the audit in pi-web-ui docs/VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md section 2.',
+generate_reports.mjs:192:      <code>pi-web-ui docs/VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md</code> §2 showed the previous
+generate_reports.mjs:217:      <p>This lab no longer carries a recommendation of its own. The architecture decision, the evidence audit
+generate_reports.mjs:219:      <code>docs/VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md</code>, with orientation in
+lib/aggregate.mjs:6:// generator hard-coded its gate verdicts, tier scores and recommendation as
+
+## (c) percentages:
+generate_reports.mjs:165:    table { width:100%; border-collapse:collapse; font-size:.9rem; margin-top:.5rem; }
+
+## (d) pass/winner/complete literals assigned to output fields:
+generate_reports.mjs:17: * says exactly "not measured" — never "passed", never a percentage. Dry runs are
+lib/aggregate.mjs:16:// "not measured" — never "passed", never a percentage.
+
+## (e) every numeric literal >= 2 digits (to show they are CSS colours, dates, versions, sizes):
+generate_reports.mjs:6:2026
+generate_reports.mjs:6:09
+generate_reports.mjs:6:17
+generate_reports.mjs:23:04
+generate_reports.mjs:50:256
+generate_reports.mjs:51:256
+generate_reports.mjs:67:256
+generate_reports.mjs:67:256
+generate_reports.mjs:102:2026
+generate_reports.mjs:102:09
+generate_reports.mjs:102:17
+generate_reports.mjs:105:2026
+generate_reports.mjs:105:09
+generate_reports.mjs:151:2233
+generate_reports.mjs:151:6478
+generate_reports.mjs:152:8860
+generate_reports.mjs:154:55
+generate_reports.mjs:155:1000
+generate_reports.mjs:157:12
+generate_reports.mjs:158:700
+generate_reports.mjs:158:04
+generate_reports.mjs:161:10
+generate_reports.mjs:163:10
+generate_reports.mjs:165:100
+generate_reports.mjs:167:78
+generate_reports.mjs:167:04
+generate_reports.mjs:168:88
+generate_reports.mjs:191:2026
+generate_reports.mjs:191:09
+generate_reports.mjs:191:17
+generate_reports.mjs:192:2026
+generate_reports.mjs:192:09
+generate_reports.mjs:219:2026
+generate_reports.mjs:219:09
+lib/aggregate.mjs:1:04
+lib/aggregate.mjs:5:2026
+lib/aggregate.mjs:5:09
+lib/aggregate.mjs:5:17
+
+## (f) every assignment to a verdict field in generated report:
+generate_reports.mjs:84:  verdict: aggregation.verdict,
+
+Conclusion: the only verdict values are the derived ternary expression
+  (aggregate.mjs: verdict = measured.length > 0 ? 'measured' : 'not measured'),
+and generate_reports.mjs consumes aggregation.verdict unchanged. No numeric
+benchmark score, percentage or recommendation string is authored in the
+reporting layer; all numbers are CSS colours, timestamps, versions or sizes.

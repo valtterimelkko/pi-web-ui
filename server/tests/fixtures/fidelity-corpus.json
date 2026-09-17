@@ -1,0 +1,446 @@
+{
+  "schema": "voice-lab.fidelity-corpus/1",
+  "id": "tier2-fidelity-corpus",
+  "version": "1.0.0-frozen-2026-09-17",
+  "world": "worlds/plain-coding-worker.json",
+  "description": "Tier 2 fidelity corpus (intent §20.5b): 20 frozen spoken instruction utterances, one beat each, all set in one world. Each item declares the terms that must survive into the composed send (requiredWords), the negative constraints (negations), the conditional constraints (conditionals), the child/file/component the instruction is about (targets), and the preamble or aside the composer should drop (distractors). Frozen once: scoring against a moving corpus measures nothing. Run on every tier 2 condition, and on tier 1 as the control where the relay bytes are mechanical.",
+  "provenance": {
+    "sourceRepo": "agent-benchmarks",
+    "sourcePath": "benchmarks/04-voice-live-lab/scenarios/tier2/fidelity-corpus.json",
+    "sourceCommit": "46b8cc1e357cacd17430c82285e08eef08f8a3c0",
+    "sourceCommitSubject": "docs(bench4): document the working test and regeneration commands",
+    "sourceFileCommit": "f74ae6c",
+    "sourceFileCommitSubject": "feat(voice-live-lab): add Phase L7 tier 2 scenarios, fidelity corpus and derived matrix",
+    "sourceBlobSha1": "82ae6e60d5c80c2b665deff060e3ceac53881c94",
+    "sourceSha256": "f7d738c3ae227c60220f98ee608fdc71c953f5d035eb805caef6822ec2aafac6",
+    "migratedAt": "2026-09-17",
+    "migratedBy": "Wave 0 audit child D (feat/voice-audit)",
+    "note": "Verbatim migration: items[] are byte-for-byte the source item objects (same order, same values). Only provenance and observedGaps were added around the frozen corpus; nothing inside items[] was altered. The source declares version 1.0.0-frozen-2026-09-17."
+  },
+  "observedGaps": [
+    "Plan recommendation 2026-09 §7.1.3 asks critical survival scoring to cover file paths and target agent names. The frozen corpus declares target names but contains no filesystem-path token in any utterance, requiredWord, negation, conditional or target; the fixture therefore preserves that absence rather than editing a frozen corpus. The scoring harness still implements file-path retention (see filePathsIn / criticalTokenRetention) so the gap is measurable when a corpus carries paths."
+  ],
+  "items": [
+    {
+      "id": "fc-01",
+      "utterance": "OK so — I completely lost my thread just then — can you get the worker to add a changelog entry for the parser fix? And do not touch the auth routes while you are in there.",
+      "requiredWords": [
+        "changelog",
+        "parser",
+        "fix"
+      ],
+      "negations": [
+        "do not touch the auth routes"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the parser fix",
+        "the auth routes"
+      ],
+      "distractors": [
+        "I completely lost my thread just then"
+      ],
+      "notes": "A straight instruction with a hard negative constraint and a separable preamble."
+    },
+    {
+      "id": "fc-02",
+      "utterance": "Right, anyway, that is not important, forget I mentioned it — hold phase three until my review, and only un-gate it after the tests pass.",
+      "requiredWords": [
+        "phase three",
+        "review",
+        "tests",
+        "pass"
+      ],
+      "negations": [],
+      "conditionals": [
+        "only un-gate it after the tests pass"
+      ],
+      "targets": [
+        "phase three"
+      ],
+      "distractors": [
+        "anyway, that is not important, forget I mentioned it"
+      ],
+      "notes": "A conditional gate: the un-gate is only legal after the tests pass."
+    },
+    {
+      "id": "fc-03",
+      "utterance": "Um, just a second, my coffee went cold — right: ask the worker to rebase the branch onto main, but never commit to master.",
+      "requiredWords": [
+        "rebase",
+        "branch",
+        "main",
+        "commit",
+        "master"
+      ],
+      "negations": [
+        "never commit to master"
+      ],
+      "conditionals": [],
+      "targets": [
+        "main",
+        "master"
+      ],
+      "distractors": [
+        "Um, just a second, my coffee went cold"
+      ],
+      "notes": "Target discrimination: rebase onto main, never commit to master."
+    },
+    {
+      "id": "fc-04",
+      "utterance": "Where was I, oh yes, I have lost the thread — tell the worker to write the failing test first, so the reproduction exists before the patch does.",
+      "requiredWords": [
+        "failing test",
+        "reproduction",
+        "patch"
+      ],
+      "negations": [],
+      "conditionals": [
+        "so the reproduction exists before the patch does"
+      ],
+      "targets": [
+        "the failing test"
+      ],
+      "distractors": [
+        "Where was I, oh yes, I have lost the thread"
+      ],
+      "notes": "An ordering constraint expressed as a conditional."
+    },
+    {
+      "id": "fc-05",
+      "utterance": "Honestly this is a long week — ask it to drop the caching work entirely and leave that module alone.",
+      "requiredWords": [
+        "drop",
+        "caching work",
+        "module"
+      ],
+      "negations": [
+        "leave that module alone"
+      ],
+      "conditionals": [],
+      "targets": [
+        "that module"
+      ],
+      "distractors": [
+        "Honestly this is a long week"
+      ],
+      "notes": "A cancellation plus a leave-alone constraint."
+    },
+    {
+      "id": "fc-06",
+      "utterance": "So, big picture aside, the migration is what matters — have the worker write the migration but do not run it against the staging database yet.",
+      "requiredWords": [
+        "migration",
+        "staging database"
+      ],
+      "negations": [
+        "do not run it against the staging database yet"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the migration",
+        "the staging database"
+      ],
+      "distractors": [
+        "So, big picture aside, the migration is what matters"
+      ],
+      "notes": "The distractor overlaps the target deliberately; competence means keeping the target and dropping the framing."
+    },
+    {
+      "id": "fc-07",
+      "utterance": "I keep going back and forth on the compression idea — compress the queue payload, only if the benchmark still passes afterwards.",
+      "requiredWords": [
+        "compress",
+        "queue payload",
+        "benchmark",
+        "passes"
+      ],
+      "negations": [],
+      "conditionals": [
+        "only if the benchmark still passes afterwards"
+      ],
+      "targets": [
+        "the queue payload"
+      ],
+      "distractors": [
+        "I keep going back and forth on the compression idea"
+      ],
+      "notes": "A performance instruction with a strict conditional."
+    },
+    {
+      "id": "fc-08",
+      "utterance": "Anyway, enough of that, it is water under the bridge — add a dry-run flag to the runner, and do not change the default behaviour.",
+      "requiredWords": [
+        "dry-run flag",
+        "runner",
+        "default behaviour"
+      ],
+      "negations": [
+        "do not change the default behaviour"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the runner"
+      ],
+      "distractors": [
+        "Anyway, enough of that, it is water under the bridge"
+      ],
+      "notes": "A small additive change with a compatibility constraint."
+    },
+    {
+      "id": "fc-09",
+      "utterance": "Bear with me, I am thinking out loud — maybe rename the parser helper to something clearer, but leave the test names untouched.",
+      "requiredWords": [
+        "rename",
+        "parser helper",
+        "test names"
+      ],
+      "negations": [
+        "leave the test names untouched"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the parser helper",
+        "the test names"
+      ],
+      "distractors": [
+        "Bear with me, I am thinking out loud"
+      ],
+      "notes": "Thinking-aloud framing around a real instruction."
+    },
+    {
+      "id": "fc-10",
+      "utterance": "That reminds me of something else entirely — run the unit tests, then push the branch if they pass.",
+      "requiredWords": [
+        "run",
+        "unit tests",
+        "push",
+        "branch"
+      ],
+      "negations": [],
+      "conditionals": [
+        "if they pass"
+      ],
+      "targets": [
+        "the branch",
+        "the unit tests"
+      ],
+      "distractors": [
+        "That reminds me of something else entirely"
+      ],
+      "notes": "A two-step instruction where step two is conditional."
+    },
+    {
+      "id": "fc-11",
+      "utterance": "Right, one thing I meant to mention earlier — ask the worker to keep the uncommitted changes somewhere safe before it aborts the run.",
+      "requiredWords": [
+        "uncommitted changes",
+        "somewhere safe",
+        "aborts the run"
+      ],
+      "negations": [],
+      "conditionals": [
+        "before it aborts the run"
+      ],
+      "targets": [
+        "the uncommitted changes"
+      ],
+      "distractors": [
+        "Right, one thing I meant to mention earlier"
+      ],
+      "notes": "A destructive action with a preservation precondition."
+    },
+    {
+      "id": "fc-12",
+      "utterance": "Sorry, quick interruption, I will not take long — bump the dependency to the latest patch, but do not touch the lockfile by hand.",
+      "requiredWords": [
+        "bump",
+        "dependency",
+        "latest patch",
+        "lockfile"
+      ],
+      "negations": [
+        "do not touch the lockfile by hand"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the dependency",
+        "the lockfile"
+      ],
+      "distractors": [
+        "Sorry, quick interruption, I will not take long"
+      ],
+      "notes": "A dependency change with a negative constraint on the lockfile."
+    },
+    {
+      "id": "fc-13",
+      "utterance": "I have been meaning to ask you this all morning, it keeps slipping my mind — summarise the test failures in one paragraph, and only mention the ones that are still red.",
+      "requiredWords": [
+        "summarise",
+        "test failures",
+        "still red"
+      ],
+      "negations": [],
+      "conditionals": [
+        "only mention the ones that are still red"
+      ],
+      "targets": [
+        "the test failures"
+      ],
+      "distractors": [
+        "I have been meaning to ask you this all morning, it keeps slipping my mind"
+      ],
+      "notes": "An output-shape instruction with a filter constraint."
+    },
+    {
+      "id": "fc-14",
+      "utterance": "Well, that did not work at all, back to the drawing board — tell it to revert the last commit, but do not drop the changelog entry that came with it.",
+      "requiredWords": [
+        "revert",
+        "last commit",
+        "changelog entry"
+      ],
+      "negations": [
+        "do not drop the changelog entry that came with it"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the last commit",
+        "the changelog entry"
+      ],
+      "distractors": [
+        "Well, that did not work at all, back to the drawing board"
+      ],
+      "notes": "Partial revert: undo the commit, keep the changelog."
+    },
+    {
+      "id": "fc-15",
+      "utterance": "Let me get this straight first, then I will stop talking — write the integration test for the export path, after the unit tests are green.",
+      "requiredWords": [
+        "integration test",
+        "export path",
+        "unit tests",
+        "green"
+      ],
+      "negations": [],
+      "conditionals": [
+        "after the unit tests are green"
+      ],
+      "targets": [
+        "the export path",
+        "the unit tests"
+      ],
+      "distractors": [
+        "Let me get this straight first, then I will stop talking"
+      ],
+      "notes": "A sequencing constraint in the operator's own words."
+    },
+    {
+      "id": "fc-16",
+      "utterance": "Sorry, I have completely lost the thread of that — set the timeout to thirty seconds in the client, and never hard-code the endpoint.",
+      "requiredWords": [
+        "timeout",
+        "thirty seconds",
+        "client",
+        "endpoint"
+      ],
+      "negations": [
+        "never hard-code the endpoint"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the client",
+        "the endpoint"
+      ],
+      "distractors": [
+        "Sorry, I have completely lost the thread of that"
+      ],
+      "notes": "A value change plus a design constraint."
+    },
+    {
+      "id": "fc-17",
+      "utterance": "Anyway, that is by the bye, ancient history — review the diff on the parser module, and do not merge anything until I have read your summary.",
+      "requiredWords": [
+        "review",
+        "diff",
+        "parser module",
+        "summary"
+      ],
+      "negations": [
+        "do not merge anything until I have read your summary"
+      ],
+      "conditionals": [
+        "until I have read your summary"
+      ],
+      "targets": [
+        "the parser module"
+      ],
+      "distractors": [
+        "Anyway, that is by the bye, ancient history"
+      ],
+      "notes": "A review instruction whose merge is explicitly gated on the operator."
+    },
+    {
+      "id": "fc-18",
+      "utterance": "Now then, where were we, I lost the plot — get the worker to extract the retry logic into its own function, and leave the callers untouched.",
+      "requiredWords": [
+        "extract",
+        "retry logic",
+        "function",
+        "callers"
+      ],
+      "negations": [
+        "leave the callers untouched"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the retry logic",
+        "the callers"
+      ],
+      "distractors": [
+        "Now then, where were we, I lost the plot"
+      ],
+      "notes": "A refactor with an untouched-callers constraint."
+    },
+    {
+      "id": "fc-19",
+      "utterance": "I nearly forgot, remind me later about the roadmap — ask it to add structured logging to the worker bridge, but only at the debug level.",
+      "requiredWords": [
+        "structured logging",
+        "worker bridge",
+        "debug level"
+      ],
+      "negations": [],
+      "conditionals": [
+        "only at the debug level"
+      ],
+      "targets": [
+        "the worker bridge"
+      ],
+      "distractors": [
+        "I nearly forgot, remind me later about the roadmap"
+      ],
+      "notes": "A scope-limiting conditional after a distracting aside."
+    },
+    {
+      "id": "fc-20",
+      "utterance": "OK, that is everything, I promise, no more requests — tell the worker to fix the flaky assertion in the parser test, and do not reorder the other tests to make it pass.",
+      "requiredWords": [
+        "flaky assertion",
+        "parser test"
+      ],
+      "negations": [
+        "do not reorder the other tests to make it pass"
+      ],
+      "conditionals": [],
+      "targets": [
+        "the parser test",
+        "the other tests"
+      ],
+      "distractors": [
+        "OK, that is everything, I promise, no more requests"
+      ],
+      "notes": "The world's own task, with an explicit anti-shortcut constraint."
+    }
+  ]
+}

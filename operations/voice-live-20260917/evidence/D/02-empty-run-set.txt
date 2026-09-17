@@ -1,0 +1,191 @@
+# Gate 0 criterion 2 — empty-run-set proof (run 2026-09-17T20:35:52Z)
+Method: copy generator + lib + PLAN to a temp dir OUTSIDE both repos, with NO runs/ dir.
+The real runs/ directory is never touched.
+TMPDIR: /tmp/voice-lab-empty-runs.jhs7nZ
+
+$ find /tmp/voice-lab-empty-runs.jhs7nZ -maxdepth 2 | sort
+/tmp/voice-lab-empty-runs.jhs7nZ
+/tmp/voice-lab-empty-runs.jhs7nZ/generate_reports.mjs
+/tmp/voice-lab-empty-runs.jhs7nZ/lib
+/tmp/voice-lab-empty-runs.jhs7nZ/lib/aggregate.mjs
+/tmp/voice-lab-empty-runs.jhs7nZ/PLAN.md
+
+$ cd /tmp/voice-lab-empty-runs.jhs7nZ && node generate_reports.mjs --test-manifest-audit; echo "EXIT:$?"
+Wrote report.json to /tmp/voice-lab-empty-runs.jhs7nZ/report.json
+Wrote report.html to /tmp/voice-lab-empty-runs.jhs7nZ/report.html
+Verdict: not measured
+EXIT:0
+
+generated report.json (zero-run set):
+verdict : not measured
+totals  : {'manifests': 0, 'measured': 0, 'dryRuns': 0, 'invalid': 0}
+tiers   : {}
+measured: []
+
+generated report.html (badge/notice/table):
+16:    .badge-unmeasured { background:var(--warn-bg); color:var(--warn); border:1px solid var(--warn); }
+17:    .badge-measured { background:var(--good-bg); color:var(--good); border:1px solid var(--good); }
+31:    <h1>Benchmark 4 · Voice Live Lab <span class="badge badge-unmeasured">NOT MEASURED</span></h1>
+35:      <b>No measured runs.</b>
+57:<tr><td colspan="5">No run manifests found.</td></tr>
+
+Assertion summary: zero manifests -> verdict 'not measured', no MEASURED badge, table renders
+'No run manifests found.' The generator fails closed: it refuses green standings.
+
+===================================================================
+# Supplementary (independent) proof — the bench repo's own report-generator suite
+$ cd /root/agent-benchmarks/benchmarks/04-voice-live-lab && node --test
+---
+✔ an empty run set renders as "not measured", never as a pass (4.035872ms)
+✔ a dry run cannot enter the standings (1.374614ms)
+✔ a genuinely measured attempt does enter the standings (0.833176ms)
+✔ a manifest with no usage record fails closed as invalid (0.683414ms)
+✔ a manifest that claims "measured" with no real provider calls fails closed (0.507363ms)
+✔ a manifest with no event log and no artifacts fails closed as invalid (0.469893ms)
+✔ an unreadable manifest fails closed as invalid (0.508456ms)
+✔ classifyManifest rejects a non-object (0.162324ms)
+✔ a missing runs directory yields "not measured" (0.288462ms)
+✔ a local run set counts nothing as measured (environment check) (9.000951ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 160.037852
+EXIT:0
+
+## runs/ non-mutation check (invariant: never write to the lab runs directory)
+runs/ tree:
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/mock-service/ctl.sh
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/mock-service/state.json
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/orchestrator-scorecard.json
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/parent-transcript.txt
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/AGENTS.md
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/docs/FEASIBILITY.md
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/docs/.gitkeep
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/COMMIT_EDITMSG
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/config
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/description
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/HEAD
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/applypatch-msg.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/commit-msg.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/fsmonitor-watchman.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/post-update.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/pre-applypatch.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/pre-commit.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/pre-merge-commit.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/prepare-commit-msg.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/pre-push.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/pre-rebase.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/pre-receive.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/push-to-checkout.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/sendemail-validate.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/hooks/update.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/index
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/info/exclude
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/logs/HEAD
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/logs/refs/heads/main
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/01/e95dd11b4a088f5fff30133fd657a0cf447a2e
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/15/983af56ed7f5d4dfe98db105555a4044c47c6d
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/16/fca83377a500cbdeaf9934ebf3cdda239748e0
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/32/bef6573a80655f53d56efcf58548032b19823d
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/42/2f06eae62e3bce9d95d06ae0231e23b88a6265
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/43/adadcc234c6818a94c2124f050787f8806755d
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/59/e7b49f92cb3a1ae9b795268100d92916d6859f
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/60/a8af47fc25378653dc7c362d076e2d7a548a77
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/61/194327f8d717dcc6a72b9a93e2cfeab7fc5c93
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/61/3669ab75adbbe13a141159a72a4cf389e63dd8
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/74/a15db9ef08e39cb1db92250156278f17544eb2
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/7b/f1169e63ba8737bc82b60005b50f9e038b31e9
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/92/7450ab415ad58945ce5484d533889e9432e195
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/94/de1563a5d68c0172cc743707e4249b820f9cc7
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/9a/69e616aa5ec4d19f0d3166a3237d9ea997b409
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/9a/b74795024110794d081331cc5fe27b780af6ab
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/9d/4d4d0ed15c619991387fb609d3aec8eeeb8954
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/a0/8dc9935ab8cc326b2ab51d2c36bc70e81e60fc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/b6/551bf2a00a05ec46ac3a8aaf3df9574992de37
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/bd/2945bce80ec349062fae7d870601f3f99123fc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/c0/2fc70aa6e4db26ed6de74736baa5600e3db169
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/c2/f71f349917c7db4acd37e1b2c843f128c5d37b
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/d5/64d0bc3dd917926892c55e3706cc116d5b165e
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/db/7a9a9ba9e9631aea9ff82ee90c1bc3b9037d0e
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/e4/56d92d32fe376991539734bda2e980b53d1c8e
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/e6/5a57dd9c158ade253d60e9562bfd25fdc29af3
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/e6/9de29bb2d1d6434b8b29ae775ad8c2e48c5391
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/e9/fd6fadaa92eb5dd68f62e836953307a037867e
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/objects/fc/247d4312f0be99cceaa750bec049bce2cf2870
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/.git/refs/heads/main
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/__init__.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/__pycache__/__init__.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/__pycache__/routes.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/__pycache__/server.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/__pycache__/worker_bridge.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/routes.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/server.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/src/worker_bridge.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/tests/__init__.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/tests/__pycache__/test_server.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/tests/__pycache__/test_transfer.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/tests/__pycache__/test_worker_middleware.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/tests/test_server.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/tests/test_transfer.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-core/tests/test_worker_middleware.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/AGENTS.md
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/COMMIT_EDITMSG
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/config
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/description
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/HEAD
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/applypatch-msg.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/commit-msg.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/fsmonitor-watchman.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/post-update.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/pre-applypatch.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/pre-commit.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/pre-merge-commit.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/prepare-commit-msg.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/pre-push.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/pre-rebase.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/pre-receive.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/push-to-checkout.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/sendemail-validate.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/hooks/update.sample
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/index
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/info/exclude
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/logs/HEAD
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/logs/refs/heads/main
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/03/1673f2ece2be872fadb3f93322d54738e7c6cb
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/14/1f2e5672cbed3ccd2b8ebe182d142c2fe7c06a
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/45/dac4b2a54924879d2bb5cf7d8902d46765bf84
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/5c/b5cffafc13f77f5e3477d73ff63843ebb6b88c
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/7c/031db9c398ebf90606aeb55696dab18e091180
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/92/670d9186af833372905805a8bd9ef707d1b547
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/93/fea86ecb96f08c28998649e3de0033d6db0533
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/94/b0741165f0eadf6933e72de10a8c2a6146f38d
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/9d/1dcfdaf1a6857c5f83dc27019c7600e1ffaff8
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/b0/8c32c361c8f49c1a290dde2677ad2685d3047a
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/b0/b51c1041c8dd1c01d3e87844c9ca6679abbe34
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/cf/e200255110f33a29887576e1e611f42d04313b
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/d5/5c636313dde6450a6458392c17082660b38f0d
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/dc/5789493012e9271a0d16eb1fc548744870a6b4
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/e0/d596bf08cb4dad27ace6473b9d7b116e4de26b
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/objects/e6/9de29bb2d1d6434b8b29ae775ad8c2e48c5391
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/.git/refs/heads/main
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/src/__init__.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/src/__pycache__/__init__.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/src/__pycache__/queue.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/src/__pycache__/runner.cpython-312.pyc
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/src/queue.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/src/runner.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/tests/__init__.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/tests/test_queue.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/repo-tools/tests/test_runner.py
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/b2-short/setup-attempt-01/run-manifest.json
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/t3/gemini-live-tier3-dryrun/E-orchestrator/off-peak/attempt-01/application/b2-short-report.json
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/t3/gemini-live-tier3-dryrun/E-orchestrator/off-peak/attempt-01/application/events.jsonl
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/t3/gemini-live-tier3-dryrun/E-orchestrator/off-peak/attempt-01/FINALISED
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/t3/gemini-live-tier3-dryrun/E-orchestrator/off-peak/attempt-01/manifest.json
+  2026-09-17 13:04  runs/tier3-dryrun-202609171304/t3/gemini-live-tier3-dryrun/E-orchestrator/off-peak/attempt-01/manifest.sha256
+manifest sha256: 1b1bf9581b4d9d111766946aaef56e557cb519bf337531229cd2e5dac1d21f0d
+-> mtimes predate this audit session (started 2026-09-17T20:26Z); the generator reads runs/ and writes only report.json/report.html at the lab root.
