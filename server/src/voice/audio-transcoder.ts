@@ -93,7 +93,7 @@ export function resamplePcm16(pcm: Buffer, fromSampleRateHz: number, toSampleRat
   const output = Buffer.alloc(outputSamples * 2);
 
   const downsampling = toSampleRateHz < fromSampleRateHz;
-  const window = downsampling ? Math.max(1, Math.ceil(fromSampleRateHz / toSampleRateHz)) : 1;
+  const boxWindow = downsampling ? Math.max(1, Math.ceil(fromSampleRateHz / toSampleRateHz)) : 1;
 
   // Read through a small accessor so the box filter and the interpolation agree.
   const sampleAt = (index: number): number => {
@@ -101,8 +101,8 @@ export function resamplePcm16(pcm: Buffer, fromSampleRateHz: number, toSampleRat
     return pcm.readInt16LE(clamped * 2);
   };
   const filteredAt = (index: number): number => {
-    if (window === 1) return sampleAt(index);
-    const half = Math.floor(window / 2);
+    if (boxWindow === 1) return sampleAt(index);
+    const half = Math.floor(boxWindow / 2);
     let sum = 0;
     for (let offset = -half; offset <= half; offset += 1) sum += sampleAt(index + offset);
     const count = half * 2 + 1;
