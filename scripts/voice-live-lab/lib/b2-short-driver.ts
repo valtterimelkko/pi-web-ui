@@ -616,6 +616,8 @@ export function createScriptedOrchestratorFactory(options: {
 export type B2ShortDryStep =
   | { kind: 'owner-beat'; beatId: string; then?: ScriptedOrchestratorTurn }
   | { kind: 'permission'; action: 'create_child' | 'restart_service' }
+  /** A branching beat: the owner's answer to a question the parent asked. */
+  | { kind: 'branching'; beatId: string }
   | { kind: 'model-turn'; turn: ScriptedOrchestratorTurn }
   | { kind: 'await-trigger'; beatId: string }
   | { kind: 'go-away'; timeLeft: string }
@@ -840,6 +842,8 @@ export interface B2ShortDryRunOptions {
   stabilityMs?: number;
   /** Which child route to force (default: the off-peak invariant). */
   peakWindow?: boolean;
+  /** Override the orchestration script (tests: prove the scorer discriminates). */
+  script?: B2ShortDryStep[];
 }
 
 export interface B2ShortRunOutcome {
@@ -1004,6 +1008,12 @@ export async function runB2ShortDryAttempt(
     return beat.text;
   }
 
+  function resolveBranching(beatId: string): string {
+    const beat = beats.branching.find((candidate) => candidate.id === beatId);
+    if (!beat) throw new Error(`unknown b2-short branching beat: ${beatId}`);
+    return beat.text;
+  }
+
   function resolvePermission(action: 'create_child' | 'restart_service'): string {
     const entry = beats.permissionTable.find((candidate) => candidate.action === action);
     if (!entry) throw new Error(`no permission entry for ${action}`);
@@ -1013,7 +1023,7 @@ export async function runB2ShortDryAttempt(
   await orchestrator.start();
   const startedAtMs = clock.nowMs();
 
-  for (const step of B2_SHORT_DRY_SCRIPT) {
+  for (const step of (options.script ?? B2_SHORT_DRY_SCRIPT)) {
     if (step.kind === 'owner-beat') {
       const text = resolveBeat(step.beatId);
       delivered.add(step.beatId);
@@ -1041,6 +1051,15 @@ export async function runB2ShortDryAttempt(
       const text = resolvePermission(step.action);
       factory.queueTurn({ inputText: text });
       await driver.stream(`permission-${step.action}`, utterancePcm(text));
+      await quiet();
+      orchestrator.settle({ force: true });
+      await quiet();
+      continue;
+    }
+    if (step.kind === 'branching') {
+      const text = resolveBranching(step.beatId);
+      factory.queueTurn({ inputText: text });
+      await driver.stream(`branching-${step.beatId}`, utterancePcm(text));
       await quiet();
       orchestrator.settle({ force: true });
       await quiet();

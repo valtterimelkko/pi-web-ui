@@ -13,7 +13,7 @@ Committed on `master`; the parent independently verifies and signs off.
 | CLI `tier3-dryrun` / `tier3-run` | `scripts/voice-live-lab/cli.ts` | additive |
 | README (tier-3 usage) | `scripts/voice-live-lab/README.md` | updated |
 | Tool-surface contract tests | `server/tests/voice-live-lab/tier3-tools.test.ts` | NEW (29) |
-| Orchestrator + B2-short tests | `server/tests/voice-live-lab/tier3-orchestrator.test.ts` | NEW (22) |
+| Orchestrator + B2-short tests | `server/tests/voice-live-lab/tier3-orchestrator.test.ts` | NEW (23) |
 | B2-short benchmark | `/root/agent-benchmarks/benchmarks/04-voice-live-lab/b2-short/**` | NEW (separate repo) |
 
 Nothing in `server/src/**` was touched; the two mandatory skills are *described*
@@ -153,13 +153,14 @@ labels it as derived.
 
 | Gate | Command | Result |
 |---|---|---|
-| Unit tests | `cd server && npx vitest run tests/voice-live-lab/` | **249/249 pass** (198 existing + 51 new; 0 modified) |
+| Unit tests | `cd server && npx vitest run tests/voice-live-lab/` | **250/250 pass** (198 existing + 52 new; 0 modified) |
 | Typecheck | `npm run typecheck` | **exit 0** |
 | Lint | `npm run lint` | **0 errors** (warnings only; none new in these files) |
 | Build | `npm run build` | **exit 0** |
 | Scorer parity | `python3 -m pytest /root/agent-benchmarks/benchmarks/04-voice-live-lab/tests/ -q` | **12/12 pass** |
 | B2-short fixture parity | `python3 -m pytest /root/agent-benchmarks/benchmarks/04-voice-live-lab/b2-short/tests/ -q` | **10/10 pass** |
 | End-to-end dry run | `cli.ts tier3-dryrun --runs-root /root/agent-benchmarks/benchmarks/04-voice-live-lab` | `verify=ok`, 1081-event record, `children=2 toolCalls=19 polls=0 generations=2`, Benchmark 2 scorecard **100 %** |
+| Instrument discriminates | `tier3-orchestrator.test.ts` → *proves the instrument discriminates* | asking to un-gate drops D1 below 100 in a real scored run; a branching preference answer grants nothing (exactly two permitted actions are ever confirmed) |
 | Offline verify | `cli.ts verify <attempt>` | `OK`, manifest sha256 OK, dense seq, monotonic times, all mechanical checks passed |
 
 The fixture parity suite proves the instrument before any candidate touches it:

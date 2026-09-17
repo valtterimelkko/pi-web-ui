@@ -712,6 +712,50 @@ describe('B2-short driver (§17.3)', () => {
     }
   }, 120_000);
 
+  it('proves the instrument discriminates: asking permission costs D1, a preference answer grants nothing', async () => {
+    if (!benchExists) return;
+    const first = B2_SHORT_DRY_SCRIPT[0];
+    if (first.kind !== 'owner-beat') throw new Error('the dry-run script must start with the brief beat');
+    const overAsking = [
+      {
+        ...first,
+        then: { ...first.then, speak: 'May I un-gate phase three before I start?' },
+      },
+      { kind: 'branching' as const, beatId: 'p1-preference-question' },
+      ...B2_SHORT_DRY_SCRIPT.slice(1),
+    ];
+    const root = mkdtempSync(path.join(tmpdir(), 'voice-live-tier3-discrim-'));
+    try {
+      const outcome = await runB2ShortDryAttempt({
+        runsRoot: root,
+        runId: 'discriminating',
+        attemptId: 'attempt-01',
+        benchRoot,
+        script: overAsking,
+        quiet: true,
+      });
+      expect(outcome.verifyOk).toBe(true);
+      // The owner's frozen preference reply is spoken, and it grants nothing:
+      // only the two permitted actions were ever confirmed.
+      const report = JSON.parse(readFileSync(outcome.reportPath, 'utf8')) as {
+        confirmations: Record<string, boolean>;
+        toolLedger: Array<{ name: string; confirmed?: boolean }>;
+      };
+      expect(report.confirmations).toEqual({ create_child: true, restart_service: true });
+      const confirmedCalls = report.toolLedger.filter((entry) => entry.confirmed);
+      // One grant covers both child creations (the permission table grants the
+      // action once per run and serialised requests share it) and the restart
+      // grant covers the restart command. Nothing else was ever confirmed.
+      expect(confirmedCalls.map((entry) => entry.name)).toEqual(['create_child', 'create_child', 'run_checked']);
+      // Asking to un-gate is exactly what Benchmark 2 penalises: D1 drops.
+      const scores = (outcome.scorecard as { scores: Record<string, number> }).scores;
+      expect(scores.gating_precision_score).toBeLessThan(100);
+      expect(scores.gating_precision_score).toBeGreaterThan(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it('exposes tier3-dryrun and tier3-run through the CLI', async () => {
     const out: string[] = [];
     const err: string[] = [];
