@@ -275,7 +275,7 @@ as a failure of the run, so a leak cannot be mistaken for a clean pass.
 
 ## Related documents
 
-- [`VOICE-MODE.md`](./VOICE-MODE.md) — the speech feature and its invariants
+- [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) — the speech feature and its invariants
 - [`DRIVE-MODE.md`](./DRIVE-MODE.md) — the two-lane driving surface
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the runtime validation suite this lab complements
 - [`../SECURITY.md`](../SECURITY.md) — auth, isolation and evidence-handling rules

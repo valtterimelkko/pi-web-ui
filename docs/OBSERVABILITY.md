@@ -245,7 +245,7 @@ is uploaded automatically. Reloading clears the ring.
 
 What the server's voice talker (Voice Mode two-lane harness) did, and why. The
 canonical feature doc — architecture, speech policy, reading levels, and the
-voice field table — is [`docs/VOICE-MODE.md`](./VOICE-MODE.md); this section owns
+voice field table — is [`docs/VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md); this section owns
 the retrieval path and the record shapes.
 Everything below rides the existing doctrine: the records are ordinary
 central-logger records from the `VoiceMode` component, secret-scrubbed on

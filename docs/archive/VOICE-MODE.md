@@ -1,16 +1,22 @@
 # Voice Mode
 
+> **ARCHIVED 2026-09-17.** This file is history, not current behaviour. Its
+> normative content was absorbed **in full** into Part II of
+> [`docs/VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md), which is now the
+> canonical intent and current-behaviour document. Cite that file instead.
+> Kept verbatim below for provenance.
+
 > **Class:** canonical feature doc. **Status:** current behaviour (two-lane harness shipped 2026-09-12…14; reading levels 2026-09-14).
 > The programme's plan history and per-package briefs live in `docs/plans/` and `docs/archive/briefs/`; this file is the only normative description of the feature.
 
-Voice Mode lets you **converse with an agent by voice while it works**. It grew out of Drive Mode (the distraction-reduced overlay — see [`DRIVE-MODE.md`](./DRIVE-MODE.md), which describes the overlay UI this feature speaks through).
+Voice Mode lets you **converse with an agent by voice while it works**. It grew out of Drive Mode (the distraction-reduced overlay — see [`DRIVE-MODE.md`](../DRIVE-MODE.md), which describes the overlay UI this feature speaks through).
 
 ## The two lanes
 
 - **Lane 1 — the talker.** A server-side conversational harness (`server/src/talker/`) that holds the spoken conversation: it answers, acks, holds your draft, and relays instructions. It never does work itself.
 - **Lane 2 — the work lane.** The ordinary worker session, untouched. Voice Mode adds no worker behaviour; it only routes your spoken instructions into it through a confirmation gate.
 
-One talker instance serves one worker session. The talker's model is chosen separately from the worker (see [`TALKER-MODEL-REQUIREMENTS.md`](./TALKER-MODEL-REQUIREMENTS.md)).
+One talker instance serves one worker session. The talker's model is chosen separately from the worker (see [`TALKER-MODEL-REQUIREMENTS.md`](../TALKER-MODEL-REQUIREMENTS.md)).
 
 ## Architecture
 
@@ -66,7 +72,7 @@ A dictated/spoken prompt must never be lost on a mobile browser:
 
 ## Observability & telemetry
 
-The full retrieval runbook (exact `voiceTurnId` queries, healthy record shapes, failure signatures, client-error reports) lives in [`OBSERVABILITY.md`](./OBSERVABILITY.md) §Voice Mode — one ring, no second buffer. The record vocabulary:
+The full retrieval runbook (exact `voiceTurnId` queries, healthy record shapes, failure signatures, client-error reports) lives in [`OBSERVABILITY.md`](../OBSERVABILITY.md) §Voice Mode — one ring, no second buffer. The record vocabulary:
 
 **`voiceTurnId`** = `runtime:workerSessionId:turnIndex`. Every operator turn emits one `voice turn` record; a release or gate refusal adds a same-id companion record. Fields (omit rather than invent — absent means unknown):
 
@@ -98,7 +104,7 @@ Counters in `GET /api/v1/diagnostics` → `.operational.voice`: `turnTotal{phase
 "The first words were eaten", "a chunk vanished", "it stopped instead of ducking"
 are claims about **rendered audio**, and nothing above can confirm or refute
 them: server logs describe scheduling, and a transcript describes text. The
-[`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md) measures the OS-level
+[`AUDIO-REGRESSION-LAB.md`](../AUDIO-REGRESSION-LAB.md) measures the OS-level
 output of a real Chrome running these exact modules — real `useReadAloud` and
 `speechArbiter`, a private PulseAudio null sink, and an independent `parec`
 monitor — and reports head/tail loss, omissions, duplications, reordering,

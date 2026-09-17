@@ -3,7 +3,7 @@
 > **This plan implements an existing intent. It does not replace it.**
 >
 > **Intent file (canonical, preserved):**
-> [`docs/VOICE-ORCHESTRATOR-FEASIBILITY.md`](../VOICE-ORCHESTRATOR-FEASIBILITY.md)
+> [`docs/VOICE-ORCHESTRATOR-FEASIBILITY.md`](../archive/VOICE-ORCHESTRATOR-FEASIBILITY.md)
 > — the 2026-09-10 findings record written with the operator. It stays intact and
 > is the reference point for every intent check. This plan reconciles against it
 > item by item in §2 and names every place where it deviates.
@@ -519,7 +519,7 @@ Deliberately not given in days until Phase 0 reports. What is known:
 
 ## 9. Canonical references
 
-- Intent file: [`docs/VOICE-ORCHESTRATOR-FEASIBILITY.md`](../VOICE-ORCHESTRATOR-FEASIBILITY.md)
+- Intent file: [`docs/VOICE-ORCHESTRATOR-FEASIBILITY.md`](../archive/VOICE-ORCHESTRATOR-FEASIBILITY.md)
 - Shipped Drive Mode behaviour: [`docs/DRIVE-MODE.md`](../DRIVE-MODE.md)
 - Talker model search brief: [`docs/TALKER-MODEL-REQUIREMENTS.md`](../TALKER-MODEL-REQUIREMENTS.md)
 - Talker evaluation harness: `agent-benchmarks/benchmarks/03-voice-relay/`

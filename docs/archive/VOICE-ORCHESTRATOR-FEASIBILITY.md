@@ -1,13 +1,19 @@
 # Voice Orchestrator Feasibility: Two Lanes
 
+> **ARCHIVED 2026-09-17.** This file is history. Its intent — the problem
+> statement, the two-axes correction, the ChatGPT Voice anti-goals and the
+> motivating Antigravity run — was absorbed into Part I and §23 of
+> [`docs/VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md), which is now canonical.
+> Cite that file instead. Kept verbatim below for provenance.
+
 > Status: **findings record, not a plan** — and now **amended with a
 > terminology clarification** (2026-09-12, appended at the top; the original
 > 2026-09-10 text is preserved unchanged below).
 > Written 2026-09-10 from a research session between the operator and Claude
 > (Fable 5.1). A later agent owns the plan, TDD, and implementation. Nothing here
 > has been built or validated.
-> Sibling report: [`REVERSE-TRANSFER-FEASIBILITY.md`](./REVERSE-TRANSFER-FEASIBILITY.md).
-> Implementation plan: [`plans/DRIVE-MODE-TWO-LANE-PLAN.md`](./plans/DRIVE-MODE-TWO-LANE-PLAN.md).
+> Sibling report: [`REVERSE-TRANSFER-FEASIBILITY.md`](../REVERSE-TRANSFER-FEASIBILITY.md).
+> Implementation plan: [`plans/DRIVE-MODE-TWO-LANE-PLAN.md`](../plans/DRIVE-MODE-TWO-LANE-PLAN.md).
 
 ---
 

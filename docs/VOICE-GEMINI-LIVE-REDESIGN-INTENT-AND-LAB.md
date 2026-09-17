@@ -11,17 +11,17 @@
 
 - **Part I (§1–§9)** is *what the operator wants and why*. It consolidates the intent scattered across five documents and one spoken briefing into one place. Operator statements are quoted as evidence of intent, not as instructions to the model.
 - **Part II (§10 onward)** is *the lab that tests it*: the harness that lets a native speech-to-speech model be benchmarked inside our own voice environment, without the operator speaking, listening or supervising a run — decisions, provider limits, the synthetic operator, per-tier harnesses, scoring, run records and a phased TDD build plan.
-- Where this file and an older document disagree on *intent*, this file wins because it is later and was written with the operator. Where they disagree on *current code behaviour*, the code and [`VOICE-MODE.md`](./VOICE-MODE.md) win.
+- Where this file and an older document disagree on *intent*, this file wins because it is later and was written with the operator. Where they disagree on *current code behaviour*, the code and [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) win.
 
 ### Source corpus (all in this folder unless noted)
 
 | File | What it contributes |
 |---|---|
-| [`VOICE-ORCHESTRATOR-FEASIBILITY.md`](./VOICE-ORCHESTRATOR-FEASIBILITY.md) | The frozen original intent (2026-09-10) and the two-axes correction (relay vs worker role) |
-| [`VOICE-MODE-INTENT-RESEARCH-2026-09.md`](./VOICE-MODE-INTENT-RESEARCH-2026-09.md) | Two weeks of fixes read as intent: the nine non-negotiables, the fluency spec, what the defect record reveals |
+| [`VOICE-ORCHESTRATOR-FEASIBILITY.md`](./archive/VOICE-ORCHESTRATOR-FEASIBILITY.md) | The frozen original intent (2026-09-10) and the two-axes correction (relay vs worker role) |
+| [`VOICE-MODE-INTENT-RESEARCH-2026-09.md`](./archive/VOICE-MODE-INTENT-RESEARCH-2026-09.md) | Two weeks of fixes read as intent: the nine non-negotiables, the fluency spec, what the defect record reveals |
 | [`VOICE-AGENT-PRICING-RESEARCH-2026-09.md`](./VOICE-AGENT-PRICING-RESEARCH-2026-09.md) | Native S2S economics, the Gemini 3.8 Live launch facts (§8), and the gap analysis (§9: the missing "ambient" clause) |
 | [`VOICE-LIVE-MODEL-EVALUATION-LAB-ARCHITECTURE.md`](./VOICE-LIVE-MODEL-EVALUATION-LAB-ARCHITECTURE.md) | First answer to "how would a lab give a voice model its inputs without a human"; evidence levels; adapter contract; measurement families |
-| [`VOICE-MODE.md`](./VOICE-MODE.md) | Normative description of what is shipped today |
+| [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) | Normative description of what is shipped today |
 | [`TALKER-MODEL-REQUIREMENTS.md`](./TALKER-MODEL-REQUIREMENTS.md), [`plans/DRIVE-MODE-TWO-LANE-PLAN.md`](./plans/DRIVE-MODE-TWO-LANE-PLAN.md) §1–2, §10 | The talker seat's requirements; the intent table I1–I18; the mechanical/instructed layering (§10.9) and the small-model finding (§10.8) |
 | `/root/agent-benchmarks/benchmarks/02-orchestrator-governance/` | **Benchmark 2** — the orchestration benchmark whose tasks the operator wants reused |
 | `/root/agent-benchmarks/benchmarks/03-voice-relay/` | **Benchmark 3** — the text-model talker benchmark that selected Gemma; its scripted-worker shape and hard-fail gate |
@@ -866,7 +866,7 @@ The lab is done when, for each tier, a run can be started by one command in the 
 ### 26.1 Read, in this order (≈ 40 minutes)
 
 1. This file, Parts I–II. Part I tells you what must not change; Part II is the design; §10 lists the decisions you are **not** re-opening.
-2. [`VOICE-MODE.md`](./VOICE-MODE.md) and the header comment of `server/src/talker/talker.ts` (the ten invariants).
+2. [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) and the header comment of `server/src/talker/talker.ts` (the ten invariants).
 3. `server/src/talker/types.ts`, `pending-proposal.ts`, `utterance-classifier.ts`, `relay-normalise.ts`, `ack.ts`, `state-view.ts` — the mechanical core you will extract in L3.
 4. `scripts/talker-harness.ts` (direct-model turn loop) and `scripts/audio-lab/lib/{fixtures,capsule,manifest,verify-record,proc}.ts` (isolation, fixtures, immutable records, teardown-by-pid — reuse, do not reinvent).
 5. `/root/agent-benchmarks/AGENTS.md`, then `benchmarks/02-orchestrator-governance/{PLAN.md,run_orchestrator_benchmark.sh,simulator/*.py,score_orchestrator.py,setup_fixtures.sh}` and `benchmarks/03-voice-relay/{README.md,scenario_lib.py,talker_runner.py,score_talker.py}`.

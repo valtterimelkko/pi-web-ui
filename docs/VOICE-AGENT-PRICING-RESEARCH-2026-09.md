@@ -460,7 +460,7 @@ single shared table** (verified 2026-09-15):
 > look for in a voice agent?"* cannot be answered without the §8 Gemini 3.8 Live
 > facts, and §9.4 below feeds directly back into §8.6's standing swap decision.
 > A standalone gap-analysis document or a home in
-> [`VOICE-MODE-INTENT-RESEARCH-2026-09.md`](./VOICE-MODE-INTENT-RESEARCH-2026-09.md)
+> [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md)
 > would be the more conventional placement; it lives here by operator request.
 >
 > **Method.** Compiled 2026-09-16 by reading the four voice documents

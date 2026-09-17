@@ -1,5 +1,12 @@
 # Voice Mode — intent research: what the operator actually asked for (September 2026)
 
+> **ARCHIVED 2026-09-17.** This file is history. Its findings — the nine
+> non-negotiables N1–N9, the P-series defect history, the fluency spec and the
+> open items — were absorbed into
+> [`docs/VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md), which is now the
+> canonical intent document. Cite that file instead. Kept verbatim below for
+> provenance, including the operator quotations in §4–§5.
+
 > **Purpose.** A research record compiled on 2026-09-16 from two weeks of Agent OS
 > session worklogs (≈30 voice-related sessions, 2026-09-02 → 2026-09-16), the
 > in-repo design corpus, the P1–P27 package briefs, the operations evidence
@@ -8,7 +15,7 @@
 > window, and **what each one reveals** about how the operator wants voice mode to
 > behave and feel.
 >
-> **Companion file.** [`VOICE-AGENT-PRICING-RESEARCH-2026-09.md`](./VOICE-AGENT-PRICING-RESEARCH-2026-09.md)
+> **Companion file.** [`VOICE-AGENT-PRICING-RESEARCH-2026-09.md`](../VOICE-AGENT-PRICING-RESEARCH-2026-09.md)
 > (same folder) answers *"what would a native speech-to-speech model cost and
 > score?"* This file answers *"what must the voice mode do, and how fluent must it
 > feel?"* Together they are the evidence base for the future decision on whether
@@ -300,7 +307,7 @@ specification; its key decisions are intent, not implementation detail:
 
 ## 7. The audio regression lab — why it exists
 
-[`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md) is the measurement
+[`AUDIO-REGRESSION-LAB.md`](../AUDIO-REGRESSION-LAB.md) is the measurement
 answer to a class of operator reports that motivated P21: *"the first words were
 eaten"*, *"a chunk vanished"*, *"it stopped instead of ducking"* are claims about
 **rendered audio**, and no server log or transcript can confirm or refute them.
@@ -324,7 +331,7 @@ quoting a pass.
 
 ## 8. The talker model — standing requirements
 
-[`TALKER-MODEL-REQUIREMENTS.md`](./TALKER-MODEL-REQUIREMENTS.md) is the
+[`TALKER-MODEL-REQUIREMENTS.md`](../TALKER-MODEL-REQUIREMENTS.md) is the
 canonical brief. The intent-relevant core:
 
 - **Latency dominates**: ≤2 s to first token target (p90); >4 s is unusable for

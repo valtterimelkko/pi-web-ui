@@ -28,9 +28,9 @@ This document specifies the lab's shape, boundaries and evidence contracts. It d
 
 ### Relationship to the existing documents
 
-- [Voice Mode](./VOICE-MODE.md): the feature's normative contract; current code resolves implementation details.
-- [Intent research](./VOICE-MODE-INTENT-RESEARCH-2026-09.md): why conversation, faithful relay and recovery matter.
-- [Original feasibility record](./VOICE-ORCHESTRATOR-FEASIBILITY.md): historical intent, including the relay/worker-role distinction; not current placement advice.
+- [Voice Mode](./VOICE-MODE-INTENT.md): the feature's normative contract; current code resolves implementation details.
+- [Intent research](./archive/VOICE-MODE-INTENT-RESEARCH-2026-09.md): why conversation, faithful relay and recovery matter.
+- [Original feasibility record](./archive/VOICE-ORCHESTRATOR-FEASIBILITY.md): historical intent, including the relay/worker-role distinction; not current placement advice.
 - [Pricing research](./VOICE-AGENT-PRICING-RESEARCH-2026-09.md): candidate economics and launch evidence; not proof of performance inside our product.
 - [Audio regression lab](./AUDIO-REGRESSION-LAB.md): existing rendered-audio measurement capability to reuse, not replace.
 

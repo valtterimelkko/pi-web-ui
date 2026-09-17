@@ -1,6 +1,6 @@
 # Pi Web UI
 
-> **Latest work:** **Voice Mode** — a two-lane voice harness for talking to an agent while it works: a server-side talker with a confirm-gated instruction relay, a client speech arbiter with the anti-duet rule, verbatim/summary/headlines reading levels, and full voice observability. See [`docs/VOICE-MODE.md`](./docs/VOICE-MODE.md). Recent maintenance: lint-ratchet headroom restored (test-file exemptions, ceiling re-baselined) and all live secrets migrated out of the repository (see [`SECURITY.md`](./SECURITY.md)). Rolling delta: [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md).
+> **Latest work:** **Voice Mode** — a two-lane voice harness for talking to an agent while it works: a server-side talker with a confirm-gated instruction relay, a client speech arbiter with the anti-duet rule, verbatim/summary/headlines reading levels, and full voice observability. See [`docs/VOICE-MODE-INTENT.md`](./docs/VOICE-MODE-INTENT.md). Recent maintenance: lint-ratchet headroom restored (test-file exemptions, ceiling re-baselined) and all live secrets migrated out of the repository (see [`SECURITY.md`](./SECURITY.md)). Rolling delta: [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md).
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 

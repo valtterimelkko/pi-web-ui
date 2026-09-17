@@ -38,7 +38,7 @@
 - `lib/speechArbiter.ts` — Client playback scheduler: speech priority ladder, anti-duet ducking, chunk-boundary scheduling; no capture authority.
 - `lib/voiceFloor.ts` / `lib/speechTelemetry.ts` — Operator-floor (barge-in) signal and speech-decision telemetry into the browser diagnostic ring.
 
-The server side of Voice Mode is the talker harness under `server/src/talker/` — see the Voice Mode section below and [`docs/VOICE-MODE.md`](./VOICE-MODE.md).
+The server side of Voice Mode is the talker harness under `server/src/talker/` — see the Voice Mode section below and [`docs/VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md).
 
 ### Files
 - `components/Files/FilesTab.tsx` — Files tab: file tree, read-only preview for other files, and the full-screen Markdown editor overlay for editable (non-truncated) Markdown files.
@@ -59,7 +59,7 @@ The server side of Voice Mode is the talker harness under `server/src/talker/` �
 - `websocket/handlers.ts` — Legacy WebSocket message handlers.
 
 ### Voice Mode / talker harness (`server/src/talker/`)
-Canonical feature doc: [`docs/VOICE-MODE.md`](./VOICE-MODE.md). One talker serves one worker session; the relay gate is mechanical (never widen its reachability).
+Canonical feature doc: [`docs/VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md). One talker serves one worker session; the relay gate is mechanical (never widen its reachability).
 - `talker/talker.ts` — per-turn loop: classify → release / refuse / converse; header comment documents the ten harness invariants.
 - `talker/utterance-classifier.ts` — mechanical confirmation/cancel/ordinal classification (model output is never an input to the gate).
 - `talker/pending-proposal.ts` — accumulating verbatim draft + confirmation window (ageing expires the confirmation, never the draft).
