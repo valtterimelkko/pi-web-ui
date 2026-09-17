@@ -1,4 +1,18 @@
-# Voice Mode — continuation brief (read this first after compaction)
+# Voice Mode — continuation brief (HISTORICAL)
+
+> ## ⚠️ Historical — corrected 2026-09-17. Superseded; do not read this as current state.
+>
+> Written **2026-09-14** and titled *“read this first after compaction.”* Both the
+> title's instruction and the state it records are stale: it pins production at
+> contract **1.42.0** and a specific process id, whereas the current contract is
+> **1.44.0** and beyond, and every feature it lists as “what is live and testable”
+> has since been extended (lanes, card identity, desktop pane, relay robustness).
+>
+> **Read instead:** [`../VOICE-MODE-INDEX.md`](../VOICE-MODE-INDEX.md) for
+> orientation, then [`../VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md) for
+> shipped behaviour.
+>
+> **Class:** history (handover brief; superseded).
 
 **Written 2026-09-14 ~14:15, immediately before a session compaction.**
 

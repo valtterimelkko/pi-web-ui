@@ -87,7 +87,7 @@ Documentation checks should cover:
 - `AGENTS.md`/`CLAUDE.md` synchronization — implemented: `npm run docs:check-agent-guides`;
 - documented environment variables versus `.env.example`/config schema;
 - Internal API route/schema versus reference/contract mirrors;
-- stale plan status markers;
+- stale or missing status markers — **implemented for the Voice Mode corpus**: `npm run docs:check-status` requires every active voice document to declare a `Class:`/`Status:` marker and requires anything marked superseded to link to its successor. Deliberately scoped: widening it to all of `docs/plans/` needs those plans to be compliant first;
 - references to removed files or retired patches.
 
 ## Review standard

@@ -1,5 +1,7 @@
 # Voice Mode — reading levels and Q&A: design (agreed 2026-09-14)
 
+> **Class:** agreed design (implemented). **Status:** implemented; the durable behaviour lives in [`VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md) §10. **Corpus:** Voice Mode — see [`VOICE-MODE-INDEX.md`](../VOICE-MODE-INDEX.md).
+
 Operator-approved design. Implemented as three sequenced packages (A, B, C) because
 they share the voice-surface files.
 

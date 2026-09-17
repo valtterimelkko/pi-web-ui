@@ -1,11 +1,40 @@
 # Voice Mode on Native Gemini Live — Master Implementation Plan & Operative Policies
 
+> ## ⚠️ Status — corrected 2026-09-17: delivered, and its verdict layer is superseded
+>
+> This plan was **executed**: phases L0–L8 were delivered, and the harness it
+> describes exists under `scripts/voice-live-lab/` with tests under
+> `server/tests/voice-live-lab/`. It is kept as the record of how the lab was
+> run and which model routes and child policies were used at the time.
+>
+> Two corrections matter to a reader today:
+>
+> 1. **Its completion claims are not evidence of measurement.** The companion
+>    [decision memo](./VOICE-GEMINI-LIVE-DECISION-MEMO.md) and
+>    [status ledger](./VOICE-GEMINI-LIVE-STATUS-LEDGER.md) signed off on dry-run
+>    and unit evidence. The
+>    [target architecture](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md)
+>    §2 audits this; owner decision **D1** annotates rather than erases.
+> 2. **The tier question is closed and the campaign has been replaced.** The
+>    three-tier bake-off this plan exists to run is no longer the programme: the
+>    architecture is decided (**D3**), and the 210-attempt synthetic campaign was
+>    replaced by a lean deterministic regression suite plus real-ear dogfooding
+>    (**D4**, revised 2026-09-17).
+>
+> Its phase policies (child runtime, model routing, thinking level, goal
+> invariants) remain useful as a historical record of that execution, not as
+> current instruction.
+>
+> **Start at [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md)** for the current
+> map of the voice corpus.
+
 > **Location:** `/root/pi-web-ui/docs/VOICE-GEMINI-LIVE-IMPLEMENTATION-PLAN.md`  
 > **Class:** Authoritative Implementation Plan & Operative Policies  
 > **Master Intent & Lab Spec:** [`VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md`](./VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md)  
 > **Status & Decision Ledger:** [`VOICE-GEMINI-LIVE-STATUS-LEDGER.md`](./VOICE-GEMINI-LIVE-STATUS-LEDGER.md)  
 > **Author:** Antigravity (Quality Control Agent & Multi-Agent Orchestrator)  
-> **Status:** `LOCKED / READY FOR GOAL EXECUTION`  
+> **Status as filed (2026-09-17):** `LOCKED / READY FOR GOAL EXECUTION`  
+> **Corrected (2026-09-17):** **delivered; superseded as current instruction.** See the status banner above.  
 > **Date:** 2026-09-17
 
 ---

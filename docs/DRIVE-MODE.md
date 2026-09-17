@@ -1,5 +1,7 @@
 # Drive Mode
 
+> **Class:** canonical shipped-feature doc. **Status:** current. **Last verified:** 2026-09-17. **Corpus:** Voice Mode — see [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md).
+>
 > Drive Mode is a shipped frontend feature.
 
 ## What It Is

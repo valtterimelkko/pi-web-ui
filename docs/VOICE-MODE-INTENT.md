@@ -903,6 +903,7 @@ open (D7, §20.1). The recommendation's §8 is the decision record; each step of
 ## 26. Source map
 
 - **This file** — canonical intent and current behaviour.
+- **Orientation for the whole corpus:** [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) — reading order, what is current versus superseded, and what the native-voice lab did and did not establish. Start here if you are new to the voice work.
 - **Architecture target:** [`VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md).
 - **Overlay UI:** [`DRIVE-MODE.md`](./DRIVE-MODE.md).
 - **Talker model brief:** [`TALKER-MODEL-REQUIREMENTS.md`](./TALKER-MODEL-REQUIREMENTS.md).

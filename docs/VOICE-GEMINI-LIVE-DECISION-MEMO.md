@@ -1,8 +1,42 @@
 # Voice Mode Gemini Live Redesign — Owner Decision Memo
 
+> ## ⚠️ Evidence status — corrected 2026-09-17
+>
+> **This verdict is superseded. Do not cite this file as evidence of measured
+> capability.**
+>
+> The [target architecture](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md)
+> §2 re-derived every claim below from source and found that **the equipment was
+> delivered but the measured runs were never performed**:
+>
+> - the only manifest under `runs/` is a **Tier-3 dry run** — `usage.mode:
+>   "dry-run"`, `realProviderCalls: 0`, and `realServices.liveModel`,
+>   `internalApi` and `childSessions` all `false`;
+> - the “443 tests / 140 condition combinations / zero unauthorized releases”
+>   claims describe dry-run and unit coverage, not scored conversational runs;
+> - the headline figures are **hard-coded object literals in the report
+>   generator**, which declares `PLAN_PATH` and never reads it again — so the
+>   honest plan has no mechanical route to contradict the published verdict;
+> - **255 ms is not operator-facing TTFA.** The capability record labels it
+>   `speechToFirstTranscriptMs` / `inputFinalisationTimingMs`; the lab spec §20.2
+>   defines TTFA as *speech-end → first played audio*, a different measurement
+>   point.
+>
+> Owner decision **D1** (2026-09-17) is to annotate rather than erase, so the
+> text below is preserved unedited for provenance. The tier question it answers
+> is **closed**: the target architecture is decided, and the synthetic campaign
+> was later replaced by a lean deterministic regression suite plus real-ear
+> dogfooding (D4, revised).
+>
+> **Current truth:** [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) for what is
+> shipped, [`VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md)
+> for what was decided. For orientation across the whole corpus, start at
+> [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md).
+
 **Date:** 2026-09-17  
 **Author:** Antigravity Parent Orchestrator & Quality Control Authority  
-**Status:** COMPLETE & PROVEN — Ready for Production Architecture Sign-Off  
+**Status as filed (2026-09-17):** COMPLETE & PROVEN — Ready for Production Architecture Sign-Off  
+**Corrected (2026-09-17):** **superseded — the completion verdict is not supported by the record.** See the evidence-status banner above.  
 **Authoritative References:** [`VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md`](./VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md), [`VOICE-GEMINI-LIVE-IMPLEMENTATION-PLAN.md`](./VOICE-GEMINI-LIVE-IMPLEMENTATION-PLAN.md), [`VOICE-GEMINI-LIVE-STATUS-LEDGER.md`](./VOICE-GEMINI-LIVE-STATUS-LEDGER.md)
 
 ---

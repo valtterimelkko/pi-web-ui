@@ -28,4 +28,5 @@ You are an agent working **on** Pi Web UI: a runtime-agnostic browser UI over fi
 ## Docs map
 - **Inward (you, maintainer):** `AGENTS.md` → [`MAINTAINER-INDEX.md`](./MAINTAINER-INDEX.md) → canonical docs (`ARCHITECTURE`, `CODEBASE-MAP`, `EVENT-PIPELINE`, `PROTOCOL`, `OBSERVABILITY`, `SHARP-EDGES`, per-runtime deep dives).
 - **Outward (adopters/integrators):** root `README.md`, `docs/GETTING-STARTED.md`, `docs/RUNTIME-OVERVIEW.md`, `API.md`, `docs/INTERNAL-API*.md`, `DEPLOYMENT.md`, `SECURITY.md`.
+- **Voice Mode:** start at [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) — reading order for the whole voice corpus, what is superseded, and what the native-voice lab did and did not establish.
 - History: `docs/archive/` (indexed) and `docs/plans/` — never cite these as current behaviour; canonical facts live in canonical docs.

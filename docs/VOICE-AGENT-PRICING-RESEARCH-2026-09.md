@@ -1,5 +1,7 @@
 # Real Voice-Agent Pricing Research (September 2026)
 
+> **Class:** research record (not a plan, not a proposal). **Status:** current as research; superseded in places by its own §8 Gemini-launch and §9 gap-analysis addenda. **Last verified:** 2026-09-17. **Corpus:** Voice Mode — see [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md).
+
 > **Question.** The Artificial Analysis Speech Agent Arena tweet
 > (<https://x.com/ArtificialAnlys/status/2090806900631994528>, 21 Aug 2026) ranks
 > speech-to-speech (S2S) models. If we replaced Drive Mode's "voice workaround"

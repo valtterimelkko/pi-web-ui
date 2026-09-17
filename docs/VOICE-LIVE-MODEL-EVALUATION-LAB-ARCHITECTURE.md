@@ -1,6 +1,28 @@
 # An unattended lab for native live voice models
 
-> **Status:** proposed architecture and design principles, not an implementation plan, a benchmark specification, or approval to replace Voice Mode.
+> ## ⚠️ Status — corrected 2026-09-17: superseded as the build specification
+>
+> This was the **first, principles-level answer** to *“how would a lab give a
+> voice model its inputs without a human?”* It was superseded on the same day by
+> the [lab specification](./VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md)
+> (Parts II–III), which is the document the harness was actually built from and
+> which states that where the two differ on a concrete choice, the specification
+> wins. The harness now exists (`scripts/voice-live-lab/`, tests in
+> `server/tests/voice-live-lab/`).
+>
+> Read it today for its **design principles and evidence levels** — the adapter
+> contract, the measurement families and the “human-free execution is possible;
+> human preference is not thereby measured” distinction — not for the lab's
+> shape, its scenario catalogue or its completion status. Its own opening
+> position (“proposed architecture… not an implementation plan”) is no longer
+> current.
+>
+> Caveat on any result read through this file: the lab delivered equipment, but
+> the scored runs were never performed. See
+> [`VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md)
+> §2 for the audit, and [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) for the map.
+
+> **Status:** **superseded** as a build specification (2026-09-17) — principles still useful, see the banner above.
 > **Written:** 2026-09-16. **Code grounding:** `edfa28f84883aae477e2deb6717891fecfe4711a`.
 > **Question:** Can agents evaluate a native speech-to-speech candidate such as Gemini 3.8 Live inside a representative Pi Web UI voice environment, without the operator speaking, listening, or supervising each run?
 > **Answer:** yes. Supply timed synthetic speech, simulate the worker independently, preserve the application's authority boundary, and record both decisions and audio. Some small integration work is unavoidable; a production migration is not.

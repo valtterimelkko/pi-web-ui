@@ -1,10 +1,26 @@
 # Voice Mode — execution state (PARENT)
 
-> **READ THIS FIRST after any compaction or handover.** This file is the durable
-> record of the 2026-09-12/13 voice-harness execution. Everything below the
-> summary is append-only history with raw evidence, in the order it happened.
+> ## ⚠️ Historical — corrected 2026-09-17. Do not read this as current state.
+>
+> This file was written as a resuming agent's handover on **2026-09-13** and
+> opened with *“READ THIS FIRST after any compaction or handover.”* **That
+> instruction is withdrawn.** It pins production at contract **1.42.0**; the
+> repository has moved well past it (contract **1.44.0** and beyond), and the
+> voice surface has since gained in-tab lanes, confirmation-card identity with
+> staleness refusal, a desktop session pane, relay robustness and a native-voice
+> lab.
+>
+> **Read instead:** [`../VOICE-MODE-INDEX.md`](../VOICE-MODE-INDEX.md) for
+> orientation, then [`../VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md) — the
+> canonical description of shipped Voice Mode behaviour. Keep this file only for
+> historical detail: the H-series execution, the two-copies-of-`pi-ai` trap, and
+> the R1/R2 event-loop stall evidence.
+>
+> **Class:** history (completed execution log; append-only from 2026-09-13).
 
-## Where things stand (2026-09-13)
+**ALL WORK PACKAGES ARE COMPLETE, VERIFIED AND MERGED (as of 2026-09-13).** Everything below the summary is append-only history with raw evidence, in the order it happened.
+
+## Where things stood (2026-09-13) — historical
 
 **All work packages are complete, verified and merged.** Production is healthy.
 

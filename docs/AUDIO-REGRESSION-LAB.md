@@ -1,5 +1,7 @@
 # Audio regression lab
 
+> **Class:** canonical measurement-tool doc. **Status:** current. **Last verified:** 2026-09-17. **Corpus:** Voice Mode — see [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md).
+
 A reusable, unattended lab that measures **the audio a real browser actually
 renders** for Pi Web UI's speech features. It exists to make "the first words
 were eaten", "chunk 4 vanished", "it ducked instead of stopping" and
