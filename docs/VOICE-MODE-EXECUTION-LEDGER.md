@@ -371,6 +371,26 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 0 — A merged locally; conductor correction; verification in flight).**
+A fired `goal_end` (achieved, idle) after four commits (`0bb5aa8`, `e65853d`,
+`08803f5`, `c634c62`). Conductor re-ran A's gates independently: Gate 1 85/85,
+Gate 2 26/26, full talker suite 592/592 — all green. Three cross-track lab
+failures confirmed by the conductor (the coupling A reported): the
+`baseline-dryrun` s7 dead-end premise and two `tier3-orchestrator` tests driven
+by the `b2-short` fixture reply. **Allocation amendment (D-07): the conductor
+takes ownership of this tiny integration correction** (plan's correction-cycle
+rule). Fixes: bench `b2-short/beats.json` restart-service reply
+`"Yes, restart it."` → `"Yes, go ahead."` (pure confirmation); new bench scenario
+`scenarios/tier1/t1-s8-bare-yes-dead-end.json` (a genuine bare `"Yes."` with
+nothing held) and the full-path dead-end regression repointed to it — the s7
+stop-reading beat is gesture/playback control and now correctly classifies as a
+talker-directed statement. A merged `--no-ff` as `28afe5d` (local; master push
+withheld until the verification run is green). Cleanup: A watch cancelled, board
+left, lease released, worktree + branch removed; D worktree + branch removed
+(its branch remains on origin — noted for end-of-programme cleanup). **E** still
+paused awaiting its reviewer's verdict; its committed contract is frozen and the
+conductor re-ran its gates green (shared build, typecheck, 238 tests).
+
 **2026-09-17 (Wave 0 — D accepted and merged).** Child D fired `goal_end` (achieved)
 and was reconciled: handback read, then **independently verified by the conductor**
 — Gate 0 command re-run (exit 0, verdict `not measured`), the bench repo's own
@@ -419,6 +439,13 @@ Wave 0 contract child E (§6).
 ---
 
 ## 13. Decisions log (append-only)
+
+- **D-07 (conductor, 2026-09-17).** Allocation amendment: after Track A froze,
+the conductor took ownership of the small cross-track integration correction its
+change required (the `b2-short` permission-reply fixture and the full-path
+dead-end probe), instead of adding another child round. RED evidence: the three
+failing lab tests reproduced on A's branch by the conductor; GREEN: the same
+suites after the correction (see §12 and the merged commit).
 
 - **D-06 (conductor, 2026-09-17).** Ruling on D's flagged wording mismatch: the
 execution plan's lab-scoped `site/` path never existed, and the repo-root
