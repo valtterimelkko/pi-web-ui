@@ -549,9 +549,14 @@ export async function runTier1DryAttempt(
   // + the utterance itself) — the scripted exchange fires as the VAD window
   // opens, never from a leaked script boundary marker.
   let cumulative = 0;
+  const dryFrameIntervalMs = options.frameIntervalMs ?? 20;
+  const dryLeadBytes = Math.round(300 / dryFrameIntervalMs) * 640;
+  const dryTrailBytes = Math.round(900 / dryFrameIntervalMs) * 640;
   const thresholds = scriptedUtterances.map((utterance) => {
-    cumulative += Math.round(300 / 20) * 640 + utterancePcm(utterance).byteLength;
-    return cumulative;
+    const audioBytes = Math.ceil(utterancePcm(utterance).byteLength / 640) * 640;
+    const triggerAt = cumulative + dryLeadBytes + audioBytes;
+    cumulative += dryLeadBytes + audioBytes + dryTrailBytes;
+    return triggerAt;
   });
 
   const liveFactory = createScriptedLiveFactory(turns, {
