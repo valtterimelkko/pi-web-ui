@@ -371,6 +371,22 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 0 — A verified green, merged and pushed; E applying its reviewer's corrections).**
+Conductor verification after the correction: `tests/voice-live-lab/` 19 files /
+450 tests green; full server suite (env-normalised) **415 files / 5135 tests
+green**; typecheck 0; build 0; lint 0 errors (315 warnings, under the 326
+ratchet); bench repo suite 10/10 after the fixture reply change. One transient
+`tier2-lean` failure appeared on a single mid-correction full run and did **not**
+reproduce in isolation (47/47) or on the full re-run — recorded as a suspected
+flake to watch, not attributed to the changes. Pushed: pi-web-ui master
+`941568d` (merge + conductor correction + fixture-based dead-end probe) and
+agent-benchmarks main `7448f9c`. Bench scenario count preserved at the planned
+seven (the dead-end probe lives as a pi-web-ui test fixture). **E**: its
+read-only reviewer produced a material finding and E has committed the
+correction (`59975d2` "correct the wire contract against the independent
+review"); E's goal is still paused while it finishes, so the contract merge and
+the Wave 1 (B/C) dispatch wait for E's completion handback.
+
 **2026-09-17 (Wave 0 — A merged locally; conductor correction; verification in flight).**
 A fired `goal_end` (achieved, idle) after four commits (`0bb5aa8`, `e65853d`,
 `08803f5`, `c634c62`). Conductor re-ran A's gates independently: Gate 1 85/85,
