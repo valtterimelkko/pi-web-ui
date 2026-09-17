@@ -71,6 +71,37 @@ every Markdown file that the correctness suite actually reads. At the time of
 writing there are eleven. The list is defined once with a YAML anchor and
 aliased for `pull_request`, so the two events cannot drift apart.
 
+## Measured results
+
+Verified on 2026-09-17 against `master`.
+
+| Push | Before | After |
+|---|---|---|
+| Documentation-only | 672 s (full suite) | **13 s** — Docs checks only; the correctness run is not created at all |
+| Any other | 672 s | **472 s** |
+
+A full run after the change (run `35248040340`, job 469 s), per step:
+
+| Step | Duration |
+|---|---|
+| checkout | 2.9 s |
+| setup-node | 8.3 s |
+| `npm ci` | 107.5 s |
+| lint | 16.6 s |
+| changed-source warning ratchet | 16.4 s |
+| typecheck | 20.9 s |
+| build | 28.0 s |
+| `test:coverage` | 262.2 s |
+
+`npm ci` is now about 23% of a full run and the suite about 56%; nothing in
+this work reduces either. The suite figure rose slightly against the baseline
+(250 s to 262 s), which is ordinary run-to-run variance and not a cost of
+running it once.
+
+Documentation-only pushes skipping the suite was confirmed on live traffic, not
+only on a scratch branch: commit `cd2f876` added a single 408-line document and
+produced a Docs checks run with no correctness run at all.
+
 ## The guard test
 
 `server/tests/unit/ci-workflow-paths.test.ts` enforces both halves of the
