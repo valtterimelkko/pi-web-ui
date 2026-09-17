@@ -3,7 +3,7 @@
 > **Class:** conductor's live execution ledger — strategy, checkpoint and progression
 > record for the multi-agent execution of
 > [`VOICE-MODE-EXECUTION-PLAN.md`](./VOICE-MODE-EXECUTION-PLAN.md).
-> **Status:** READY, NOT STARTED — awaiting owner activation of the Goal Engine.
+> **Status:** READY, NOT STARTED — owner decisions recorded 2026-09-17 (§11); awaiting the owner's Goal Engine activation.
 > **Rule of this file:** current state, not a completion claim — read before acting.
 > **Owner start signal:** the operator initiates this session's Goal Engine; until
 > that happens this file is planning only and **no child is dispatched and no
@@ -17,7 +17,7 @@
 > execution).
 >
 > Conductor session: `01a0b0ef-ab27-7359-867b-6aa4a17a6d11` (pi CLI, cwd
-> `/root/pi-web-ui`). Last updated: 2026-09-17 (planning).
+> `/root/pi-web-ui`). Last updated: 2026-09-17 (planning; owner decisions recorded).
 
 ---
 
@@ -128,8 +128,10 @@ worktree and outside the repo, per the hand-back protocol.
 ## 5. Child routing and delegation discipline
 
 Owner direction in-conversation: **DeepSeek v4.1 Flash children, always via the
-`pi` runtime, spread across the model's providers to even out quota** — with the
-policy conflicts in OQ-1/OQ-2 to be confirmed before the first dispatch.
+`pi` runtime, spread across the model's providers to even out quota** —
+**confirmed by the owner on 2026-09-17** (§11): rotation approved across
+`commandcode`, `opencode-go` and `clinepass`; `openrouter` (metered) is not part
+of the approved rotation.
 
 ### 5.1 Route table for this programme (final provider chosen at dispatch)
 
@@ -151,6 +153,7 @@ policy conflicts in OQ-1/OQ-2 to be confirmed before the first dispatch.
 3. Create the session atomically with `retention: durable` (ownerId
    `voice-exec-20260917-<child>`) and `goal` armed at creation; goal objective =
    the aim (outcome + evidence + record path + invariants), never a step list.
+   *(Owner recommendation, 2026-09-17: children run under goals.)*
 4. Register on the board: `agent-os board register --source dispatcher --name
    voice-live-<child> --harness pi --join-session <id> --parent pi-01a0b0ef
    --task "<one line>" --repo /root/pi-web-ui`; tell the child to declare on the
@@ -260,7 +263,9 @@ handle when the window settles.
 `"supervising children"` (never the `Status: NEEDS_USER_INPUT` exit); while
 paused, wake processing consumes no goal turns. Resume only when the window's
 work is fully settled (all children terminal + reconciled + no outstanding
-questions).
+questions). *(Owner delegated autonomous management of this session's goal
+engine, 2026-09-17: pause while watching/waiting, resume when settled, per the
+orchestration and long-horizon waiting skills.)*
 
 **On every wake (mandatory, regardless of which child fired):**
 
@@ -277,6 +282,7 @@ questions).
 **Notifications:** `scripts/notify.sh` (Telegram) at wave dispatch, gate
 outcomes, blockers/questions, and final completion — meaningful milestones only.
 `202` is queue acceptance, not delivery; check delivery status.
+*(Owner, 2026-09-17: standard practice for communication.)*
 
 **Command-shaped work** (test suites, builds, disposable servers) runs in
 `bg_run` in this session when the conductor must run it itself — no child, no
@@ -294,7 +300,8 @@ watch, completion wake carries the exit code.
    back to the owning child as a correction brief rather than being papered over.
 3. `--no-ff` merges with the track name in the message; push to `origin/master`
    after each accepted wave (feature-merge only — **no production action, no
-   deployment**). Subject to OQ-3.
+   deployment**). **Owner-approved 2026-09-17**: accepted waves may be merged to
+   master and pushed; production deployment/restart remains a separate owner gate.
 4. After merge: `git branch -d` the track branch (only when clean + merged),
    `git worktree remove` its directory, cancel its watch, `board leave` its entry,
    release its exact retention lease (`POST /sessions/:id/control`
@@ -320,7 +327,7 @@ watch, completion wake carries the exit code.
 | Validation-server leaks → `ADMISSION_CAPACITY_EXHAUSTED` | Serialise heavy validation; `pkill -9 -f validation-server` allowed (kills leaked children, never the service) as documented in the skill; re-check `/capacity` |
 | Another lineage starts on pi-web-ui mid-programme | Board check at every wave boundary; if a sibling owns overlapping scope, postpone the seam and continue independent work; never edit their files |
 | An external actor restarts the service mid-run (observed 2026-09-15) | Watches rehydrate, but goal+watch state is reconciled from ledger after any restart; no work depends on a single wake |
-| Cost surprise on live Gemini calls | Gate 3 probe 1 s of audio; Gate 5 scenarios bounded; no synthetic treadmill; OQ-4 confirms budget |
+| Cost surprise on live Gemini calls | Gate 3 probe 1 s of audio; Gate 5 scenarios bounded; no synthetic treadmill; owner confirmed real bounded calls and set **no maximum budget** (2026-09-17) — calls stay bounded by design |
 
 **Stop and ask the operator** (not a child question) when: the plan's premise is
 contradicted by ground truth; an owner gate is reached (Phase 7, production, a
@@ -329,44 +336,55 @@ fails two correction rounds.
 
 ---
 
-## 11. Open questions for the operator (resolve before first dispatch)
+## 11. Owner decisions (recorded 2026-09-17)
 
-- **OQ-1 (route conflict — mandatory question):** the owner-approved routing table
-  (`routing.md`) retires all DeepSeek entries as non-policy routes, *and* carries
-  rows listing `deepseek-v4.1-flash` as a sanctioned provider-varied route. This
-  conversation suggests DeepSeek v4.1 Flash children. **Confirm: DeepSeek v4.1
-  Flash as the programme's primary child model?** Default if unconfirmed: GLM 5.3
-  Flash (`zai`, off-peak) as primary.
-- **OQ-2 (provider set):** the quota pools `opencode-go` and `clinepass` are marked
-  "routes: none approved (dashboard only — owner personal use)" while the
-  conversation asks to "vary between the different providers of the model to
-  evenly use quotas". **Confirm: approved to rotate DeepSeek v4.1 Flash across
-  `commandcode`, `opencode-go` and `clinepass`?** Is `openrouter` (metered
-  pay-per-token) excluded? Default if unconfirmed: `commandcode` only.
-- **OQ-3 (merge authority):** may the conductor merge accepted waves into
-  `master` and push (feature merges; no deploy), or should everything stay on
-  `feat/voice-integration` until a single end-of-programme review? Default if
-  unconfirmed: merge accepted waves to master and push, no production action.
-- **OQ-4 (live Gemini calls):** Phase 3's ~1 s handshake probe and Phase 5's three
-  bounded disposable scenarios use the real Gemini Live API with the key already
-  in the server env. Confirm that real, bounded Live usage is acceptable (and
-  whether any per-session budget cap applies).
-- **OQ-5 (supervision level):** default design = full autonomy within each track,
-  conductor checkpoints at gates only, questions limited to §5.3. Confirm, or
-  request mid-wave check-ins.
+All pre-dispatch questions are resolved. Recorded verbatim in substance:
+
+| # | Question | Owner answer (2026-09-17) |
+|---|---|---|
+| OQ-1 | DeepSeek v4.1 Flash as the programme's primary child model? | **Confirmed.** |
+| OQ-2 | Approved to rotate across `commandcode`, `opencode-go` and `clinepass`? `openrouter` excluded? | **Rotating approved** across the three pools; `openrouter` (metered) is not part of the approved rotation. |
+| OQ-3 | Merge authority for accepted waves? | **You may merge** — accepted waves merge to master and push; feature merges only, no production action. |
+| OQ-4 | Real bounded Gemini Live calls acceptable? | **Confirmed acceptable**; **no maximum budget**. Usage stays bounded by design. |
+| OQ-5 | Supervision level | Not separately answered; the recorded default is active — autonomy within each track, conductor checkpoints at gates, children ask only at genuine blockers (§5.3). |
+
+Additional operating instructions (owner, 2026-09-17):
+
+1. **Children run under goals** — use the goal function for every track child
+   (armed at creation; see §5.2).
+2. **Conductor manages its own goal engine autonomously** — pause while
+   watching/waiting for children, resume when settled, following the orchestration
+   and long-horizon waiting skills (§8).
+3. **Telegram communication: standard practice** — meaningful milestones,
+   questions/blocked states, and completion; check delivery status (§8).
+
+No blocking questions remain. Execution starts on the owner's Goal Engine
+activation.
 
 ---
 
 ## 12. Live progression log (append-only; newest first)
 
-*(nothing yet — execution has not started; this section is written on every wake
-and at every wave boundary)*
+**2026-09-17 (planning close).** Ledger written, checked and pushed (`5b893a7`);
+baseline verified (§3). Owner resolved OQ-1…OQ-4 and added three operating
+instructions (§11); recorded here. Status remains **READY, NOT STARTED** —
+execution begins on the owner's goal-engine activation. First move on start:
+Wave 0 contract child E (§6).
 
 ---
 
 ## 13. Decisions log (append-only)
 
-*(nothing yet)*
+- **D-01 (owner, 2026-09-17).** DeepSeek v4.1 Flash confirmed as primary child
+  model; provider rotation approved across `commandcode`, `opencode-go`,
+  `clinepass`; `openrouter` not approved (metered). §11.
+- **D-02 (owner, 2026-09-17).** Accepted waves may be merged to master and
+  pushed; production deployment/restart remains a separate owner gate. §9.
+- **D-03 (owner, 2026-09-17).** Real bounded Gemini Live calls approved; no
+  maximum budget set. §10.
+- **D-04 (owner, 2026-09-17).** Children run under goals; conductor manages its
+  own goal engine autonomously (pause while waiting, resume when settled);
+  Telegram standard practice. §8, §11.
 
 ---
 
