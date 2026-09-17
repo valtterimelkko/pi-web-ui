@@ -1452,23 +1452,40 @@ export function createHttpTier3Api(options: HttpTier3ApiOptions = {}): Tier3ApiC
       const watched = (registered.body?.data ?? registered.body) as { watchId?: string; id?: string };
       if (watched?.watchId ?? watched?.id) onRegistered?.((watched.watchId ?? watched.id) as string);
 
-      while (Date.now() < deadline) {
-        const poll = await request('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`);
-        const body = (poll.body?.data ?? poll.body) as Record<string, unknown>;
-        const allFired = Boolean(body?.allFired);
-        const firings = Array.isArray(body?.firings) ? (body.firings as unknown[]) : [];
-        if (allFired && firings.length > 0) {
-          return {
-            fired: true,
-            timedOut: false,
-            conditionId: 'idle',
-            fireCount: firings.length,
-            atMs: Date.now() - startedAtMs,
-          };
+      // A one-shot watch releases its residency claim when it fires; a watch
+      // that timed out would hold one for the rest of the run, so it is always
+      // deleted on the way out (best effort: cleanup must not mask the result).
+      const release = async (): Promise<void> => {
+        try {
+          await request('DELETE', `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`);
+        } catch {
+          /* the ledger stays readable either way */
         }
-        await sleep(watchPollIntervalMs);
+      };
+
+      try {
+        for (;;) {
+          const poll = await request('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`);
+          const body = (poll.body?.data ?? poll.body) as Record<string, unknown>;
+          const allFired = Boolean(body?.allFired);
+          const firings = Array.isArray(body?.firings) ? (body.firings as unknown[]) : [];
+          if (allFired && firings.length > 0) {
+            return {
+              fired: true,
+              timedOut: false,
+              conditionId: 'idle',
+              fireCount: firings.length,
+              atMs: Date.now() - startedAtMs,
+            };
+          }
+          if (Date.now() >= deadline) {
+            return { fired: false, timedOut: true, atMs: Date.now() - startedAtMs };
+          }
+          await sleep(watchPollIntervalMs);
+        }
+      } finally {
+        await release();
       }
-      return { fired: false, timedOut: true, atMs: Date.now() - startedAtMs };
     },
 
     async deleteSession(sessionId) {

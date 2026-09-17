@@ -19,6 +19,10 @@
  *     reconnect snapshot.
  */
 import { describe, expect, it } from 'vitest';
+import { createServer } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import {
   CONFIRMATION_WINDOW_MS,
@@ -32,6 +36,7 @@ import {
   TIER3_TOOL_NAMES,
   Tier3ToolHost,
   createFakeTier3Api,
+  createHttpTier3Api,
   createScriptedCommandRunner,
   parseCheckedCommand,
   tier3ToolConditionHash,
@@ -572,4 +577,106 @@ describe('Tier3ToolHost', () => {
     expect(result.status).toBe('refused');
     expect(host.ledger.at(-1)?.status).toBe('refused');
   });
+});
+
+// ── 6. The real Internal API client over a Unix socket ───────────────────────
+
+describe('createHttpTier3Api — the real Internal API surface', () => {
+  it('drives sessions, prompts, transcripts and watches over a socket', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'voice-live-tier3-api-'));
+    const socketPath = path.join(dir, 'api.sock');
+    const requests: Array<{ method: string; url: string; body: unknown }> = [];
+    let watchPolls = 0;
+
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (chunk) => {
+        raw += chunk.toString();
+      });
+      req.on('end', () => {
+        requests.push({
+          method: req.method ?? '',
+          url: req.url ?? '',
+          body: raw ? (JSON.parse(raw) as unknown) : null,
+        });
+        res.setHeader('content-type', 'application/json');
+        const url = req.url ?? '';
+        if (url === '/api/v1/sessions' && req.method === 'POST') {
+          res.end(JSON.stringify({ data: { sessionId: 'child-9', model: 'zai/glm-5.3-flash' } }));
+          return;
+        }
+        if (url.endsWith('/prompt')) {
+          res.end(JSON.stringify({ data: { dispatchMode: 'prompt' } }));
+          return;
+        }
+        if (url.endsWith('/transcript?view=screen')) {
+          res.end(JSON.stringify({ data: { lines: ['one', 'two', 'three'] } }));
+          return;
+        }
+        if (url.endsWith('/watch') && req.method === 'POST') {
+          res.statusCode = 201;
+          res.end(JSON.stringify({ watchId: 'watch-1' }));
+          return;
+        }
+        if (url.endsWith('/watch') && req.method === 'DELETE') {
+          res.end(JSON.stringify({ deleted: true }));
+          return;
+        }
+        if (url.endsWith('/watch')) {
+          watchPolls += 1;
+          res.end(JSON.stringify(watchPolls >= 2 ? { allFired: true, firings: [{ at: 1 }] } : { allFired: false, firings: [] }));
+          return;
+        }
+        if (req.method === 'GET') {
+          res.end(JSON.stringify({ data: { busy: false, status: 'idle', lastText: 'done' } }));
+          return;
+        }
+        res.end('{}');
+      });
+    });
+
+    try {
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      const api = createHttpTier3Api({ socketPath, token: 'test-token', watchPollIntervalMs: 1 });
+
+      const created = await api.createSession({
+        runtime: 'pi',
+        cwd: '/tmp/run/repo-core',
+        model: 'zai/glm-5.3-flash',
+        thinkingLevel: 'high',
+        source: 'voice-live-lab-tier3',
+        label: 'voice-live-lab:transfer worker',
+      });
+      expect(created.sessionId).toBe('child-9');
+      expect(requests[0]).toMatchObject({ method: 'POST', url: '/api/v1/sessions' });
+
+      const dispatched = await api.prompt('child-9', 'brief', 'follow_up');
+      expect(dispatched.status).toBe(200);
+      expect(requests[1].body).toMatchObject({ message: 'brief', mode: 'follow_up', detach: true });
+
+      const info = await api.childInfo('child-9');
+      expect(info).toMatchObject({ busy: false, status: 'idle', lastText: 'done' });
+
+      const tail = await api.transcriptTail('child-9', 2);
+      expect(tail).toEqual(['two', 'three']);
+
+      const watchIds: string[] = [];
+      const outcome = await api.awaitWatch('child-9', { condition: 'idle', timeoutS: 5 }, (id) => watchIds.push(id));
+      expect(watchIds).toEqual(['watch-1']);
+      expect(outcome).toMatchObject({ fired: true, timedOut: false });
+      expect(watchPolls).toBe(2);
+      // The watch registration is released on the way out.
+      expect(requests.at(-1)).toMatchObject({ method: 'DELETE' });
+      const registration = requests.find((entry) => entry.url.endsWith('/watch') && entry.method === 'POST');
+      expect(registration?.body).toMatchObject({
+        conditions: [{ type: 'event_type', eventType: 'agent_end', once: true }],
+      });
+
+      await api.deleteSession('child-9');
+      expect(requests.at(-1)).toMatchObject({ method: 'DELETE', url: '/api/v1/sessions/child-9' });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

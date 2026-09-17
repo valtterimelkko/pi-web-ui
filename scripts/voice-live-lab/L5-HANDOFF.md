@@ -12,7 +12,7 @@ Committed on `master`; the parent independently verifies and signs off.
 | B2-short driver (dry + measured) | `scripts/voice-live-lab/lib/b2-short-driver.ts` | NEW |
 | CLI `tier3-dryrun` / `tier3-run` | `scripts/voice-live-lab/cli.ts` | additive |
 | README (tier-3 usage) | `scripts/voice-live-lab/README.md` | updated |
-| Tool-surface contract tests | `server/tests/voice-live-lab/tier3-tools.test.ts` | NEW (28) |
+| Tool-surface contract tests | `server/tests/voice-live-lab/tier3-tools.test.ts` | NEW (29) |
 | Orchestrator + B2-short tests | `server/tests/voice-live-lab/tier3-orchestrator.test.ts` | NEW (22) |
 | B2-short benchmark | `/root/agent-benchmarks/benchmarks/04-voice-live-lab/b2-short/**` | NEW (separate repo) |
 
@@ -153,7 +153,7 @@ labels it as derived.
 
 | Gate | Command | Result |
 |---|---|---|
-| Unit tests | `cd server && npx vitest run tests/voice-live-lab/` | **248/248 pass** (198 existing + 50 new; 0 modified) |
+| Unit tests | `cd server && npx vitest run tests/voice-live-lab/` | **249/249 pass** (198 existing + 51 new; 0 modified) |
 | Typecheck | `npm run typecheck` | **exit 0** |
 | Lint | `npm run lint` | **0 errors** (warnings only; none new in these files) |
 | Build | `npm run build` | **exit 0** |
