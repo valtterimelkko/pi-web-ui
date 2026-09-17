@@ -1,0 +1,21 @@
+== FULL server test suite — final code commit 08803f5 (evidence-only commits after) ==
+Command: npm --prefix server test   (worktree /root/pi-web-ui-track-a)
+FAIL  tests/voice-live-lab/baseline-dryrun.test.ts > hermetic dry run of every shipped tier-1 scenario > gate regression through the full path: a bare yes with nothing held is a mechanical dead end
+FAIL  tests/voice-live-lab/tier3-orchestrator.test.ts > B2-short driver (§17.3) > runs the whole dry run end to end against the real fixture and verifies offline
+FAIL  tests/voice-live-lab/tier3-orchestrator.test.ts > B2-short driver (§17.3) > proves the instrument discriminates: asking permission costs D1, a preference answer grants nothing
+FAIL  tests/unit/config/pi-max-sessions.test.ts > piMaxSessions (PI_MAX_SESSIONS) > defaults to 20 when PI_MAX_SESSIONS is unset
+FAIL  tests/unit/claude/claude-process-pool-abort-retry.test.ts > L4: ClaudeProcessPool disposable retry timers > a fresh turn after abort can spawn again (abort does not poison the session)
+FAIL  tests/unit/opencode/opencode-service-expanded.test.ts > OpenCodeService — refreshModels > builds a first-run snapshot, applies the allowlist, and writes it
+FAIL  tests/unit/opencode/opencode-service-expanded.test.ts > OpenCodeService — refreshModels > reports no change on a second identical refresh
+FAIL  tests/unit/opencode/opencode-service-expanded.test.ts > OpenCodeService — refreshModels > throws (fail closed) when OpenCode is unavailable
+Test Files  5 failed | 409 passed (414)
+Tests  8 failed | 5112 passed | 2 skipped (5122)
+Duration  124.66s (transform 21.89s, setup 19.18s, collect 132.22s, tests 405.61s, environment 295ms, prepare 96.58s)
+
+Failure classification:
+- tests/voice-live-lab (3 tests / 2 files): fixtures/assertions encoding the OLD accidental classification — see phase1-lab-impact.txt and phase1-lab-remaining.txt (owned by the audit/benchmark track).
+- tests/unit/config/pi-max-sessions.test.ts (1): environment — PI_MAX_SESSIONS is set in this session's environment; reproduces on master.
+- tests/unit/opencode/opencode-service-expanded.test.ts (3): environment — OPENCODE_ENABLED=false in this session's environment; reproduces on master.
+- tests/unit/claude/claude-process-pool-abort-retry.test.ts (1): load-related flake under the concurrent run; passes in isolation (5/5, 2026-09-17T20:49Z) and was green in the earlier full-suite run — unrelated to this work.
+
+Talker-relevant result: all 35 talker suites and both gates green (see the phase1/phase2 evidence files).

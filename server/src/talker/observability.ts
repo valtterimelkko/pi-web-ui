@@ -55,7 +55,7 @@ import { createHash } from 'node:crypto';
 import { createLogger, type Logger } from '../logging/logger.js';
 import { safeLogValue } from '../logging/safe-record.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
-import type { DraftSelection, DraftSnapshot } from './pending-proposal.js';
+import type { DraftSelection, DraftSnapshot } from './proposal-store.js';
 import type { DeliveryOutcome, TalkerTurnResult, WorkerDelivery } from './types.js';
 
 /** Same three-runtime union as the registry's TalkerRuntime (kept local so this module stays cycle-free). */

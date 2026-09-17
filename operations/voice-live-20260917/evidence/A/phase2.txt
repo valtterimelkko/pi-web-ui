@@ -1,0 +1,20 @@
+== PHASE 2 GREEN — consolidated record (Voice Mode execution, Wave 0 child A) ==
+Date: 2026-09-17
+Kernel: Thread (thread-store.ts) / Parking Lot (parking-lot.ts) /
+        Proposal (proposal-store.ts, refactored from pending-proposal.ts) /
+        Release (release-store.ts); orchestration in policy-core.ts
+        (HostAuthorityKernel) + typed read-only ops (kernel-operations.ts).
+
+RED (phase2-red.txt): four-objects.test.ts fails to load — kernel modules did
+  not exist yet (0 tests, EXIT=1).
+
+GREEN (phase2-green.txt): `npm --prefix server test -- tests/unit/talker/four-objects.test.ts`
+  tests/unit/talker/four-objects.test.ts (26 tests, 93 expect() assertions)
+  Test Files 1 passed | Tests 26 passed -> exit 0
+
+FULL SUITE (phase1-green-full-talker-suite.txt, same commit):
+  Test Files 35 passed (35) | Tests 590 passed | 2 skipped (592) -> exit 0
+
+Depended-on invariants preserved: card version+sha256 identity, staleness
+refusal, original-variant gate (all pre-existing suites green; see
+proposal-identity.test.ts / operator-draft.test.ts without modification).

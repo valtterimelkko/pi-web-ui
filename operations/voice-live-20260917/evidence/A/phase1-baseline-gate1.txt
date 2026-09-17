@@ -1,0 +1,20 @@
+== Gate 1 command 1 (baseline, before RED tests) ==
+2026-09-17T20:28:48Z
+$ npm --prefix server test -- tests/unit/talker/utterance-classifier.test.ts tests/unit/talker/talker-gate.test.ts
+
+> @pi-web-ui/server@0.1.0 test
+> vitest run tests/unit/talker/utterance-classifier.test.ts tests/unit/talker/talker-gate.test.ts
+
+
+ RUN  v1.6.1 /root/pi-web-ui-track-a/server
+
+ ✓ tests/unit/talker/utterance-classifier.test.ts  (16 tests) 26ms
+ ✓ tests/unit/talker/talker-gate.test.ts  (25 tests) 111ms
+
+ Test Files  2 passed (2)
+      Tests  41 passed (41)
+   Start at  20:28:48
+   Duration  1.13s (transform 433ms, setup 112ms, collect 566ms, tests 137ms, environment 0ms, prepare 162ms)
+
+JSON report written to /root/pi-web-ui-track-a/server/test-results.json
+EXIT=0

@@ -1,0 +1,18 @@
+== Full talker suite BASELINE (pre-change) ==
+2026-09-17T20:30:42Z
+ ✓ tests/unit/talker/talker-policy-core.delegation.test.ts  (5 tests) 59ms
+ ✓ tests/unit/talker/operator-draft-selection.test.ts  (5 tests) 56ms
+ ✓ tests/unit/talker/cancel-instruction.test.ts  (7 tests) 74ms
+ ✓ tests/unit/talker/dead-end.test.ts  (6 tests) 96ms
+ ✓ tests/unit/talker/focus-projection.test.ts  (5 tests) 59ms
+ ✓ tests/unit/talker/cancel-residue.test.ts  (5 tests) 7ms
+ ✓ tests/unit/talker/history.test.ts  (6 tests) 4ms
+ ✓ tests/unit/talker/session-registry.test.ts  (14 tests) 42ms
+
+ Test Files  34 passed (34)
+      Tests  520 passed | 2 skipped (522)
+   Start at  20:30:42
+   Duration  2.60s (transform 4.54s, setup 1.08s, collect 12.02s, tests 3.03s, environment 12ms, prepare 5.15s)
+
+JSON report written to /root/pi-web-ui-track-a/server/test-results.json
+EXIT=0

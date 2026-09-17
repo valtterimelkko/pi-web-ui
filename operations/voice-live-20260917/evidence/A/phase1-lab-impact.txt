@@ -1,0 +1,43 @@
+== PHASE 1 cross-check against the shipped voice-live-lab corpus ==
+Date: 2026-09-17T20:43:42Z
+Method: classify every operator utterance found in the lab scenario corpus with the
+pre-change classifier (master 26c3c26) and the repaired classifier, and diff.
+
+scanned utterances: 65
+
+== NARROWED (was confirm, now not) ==
+  "Ok, stop reading.": confirm -> statement
+
+== WIDENED (was not confirm, now confirm) — must be NONE ==
+
+== OTHER CLASS CHANGES ==
+
+== Remaining lab-suite impact (tests outside Track A ownership, reported not edited) ==
+The repaired classifier narrows exactly one shipping utterance: "Ok, stop reading."
+(the s7.6 reading-level control) — it is an instruction to the talker, not an
+authorisation, so it is now a statement. Three lab tests depend on the old
+accidental classification and fail on the repaired code:
+
+1. server/tests/voice-live-lab/baseline-dryrun.test.ts
+   "gate regression through the full path: a bare yes with nothing held is a
+   mechanical dead end": the test's own comment says s7 ends with "Ok, stop
+   reading." — confirm-shaped. That premise IS the defect (a bare 'ok' plus a
+   3-word instruction used to classify as confirm and trigger the mechanical
+   nothing-held ack). Under the repair the utterance is conversational, so the
+   mechanical ack is correctly absent. The fixture/scenario needs its closing
+   utterance changed if it wants the dead-end path exercised.
+
+2. server/tests/voice-live-lab/tier3-orchestrator.test.ts (2 tests)
+   The b2-short permission fixture replies for restart_service is
+   "Yes, restart it." (/root/agent-benchmarks/.../b2-short/beats.json). That is
+   the exact "confirm word + post-affirmation instruction" shape the brief
+   requires to classify as a statement ("yes, hold phase three" is the canonical
+   case), so the host gate correctly refuses to grant on it. The fixture's
+   permission reply needs a pure confirmation shape (e.g. "Yes, go ahead.")
+   before the tier3 dry run can pass. Owned by the audit/benchmark track.
+
+Also fixed during this cross-check: the first narrowing pass had removed the
+shipped "send that over" confirmation variant ("Yes, send that over." in
+t1-s6) because it was not a declared atom. It is restored as an atom (verbatim
+shipped behaviour) and pinned in utterance-classifier.test.ts; t1-s6 and the
+tier2 fidelity corpus then pass again. No utterance was WIDENED by the repair.

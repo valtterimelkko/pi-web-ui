@@ -1,0 +1,14 @@
+== GATE 2 (Phase 2) — FINAL run ==
+2026-09-17T20:44:37Z
+$ npm --prefix server test -- tests/unit/talker/four-objects.test.ts
+ RUN  v1.6.1 /root/pi-web-ui-track-a/server
+
+ ✓ tests/unit/talker/four-objects.test.ts  (26 tests) 32ms
+
+ Test Files  1 passed (1)
+      Tests  26 passed (26)
+   Start at  20:44:37
+   Duration  772ms (transform 202ms, setup 64ms, collect 183ms, tests 32ms, environment 0ms, prepare 116ms)
+
+JSON report written to /root/pi-web-ui-track-a/server/test-results.json
+EXIT=0

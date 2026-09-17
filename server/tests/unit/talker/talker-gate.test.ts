@@ -280,6 +280,62 @@ describe('NON-NEGOTIABLE 7: confirm-before-speak ack', () => {
   });
 });
 
+describe('NON-NEGOTIABLE 3 (Phase 1 gate repair): doubt and conditions never release a live proposal', () => {
+  it('a doubt utterance ("not sure") leaves the held instruction unreleased', async () => {
+    const { session, delivery } = makeSession();
+    await session.handleOperatorTurn(INSTRUCTION);
+    const result = await session.handleOperatorTurn('not sure');
+    expect(result.released).toBeNull();
+    expect(delivery.deliveredTexts()).toEqual([]);
+  });
+
+  it('"sure, but wait" leaves the proposal held and releases nothing', async () => {
+    const { session, delivery } = makeSession();
+    await session.handleOperatorTurn(INSTRUCTION);
+    const result = await session.handleOperatorTurn('sure, but wait');
+    expect(result.released).toBeNull();
+    expect(delivery.deliveredTexts()).toEqual([]);
+  });
+
+  it('"yes, hold phase three" is an instruction, not an authorisation, and releases nothing', async () => {
+    const { session, delivery } = makeSession();
+    await session.handleOperatorTurn(INSTRUCTION);
+    const result = await session.handleOperatorTurn('yes, hold phase three');
+    expect(result.released).toBeNull();
+    expect(delivery.deliveredTexts()).toEqual([]);
+  });
+
+  it('a disconnected confirmation with nothing pending delivers nothing (kept behaviour)', async () => {
+    const { session, delivery } = makeSession();
+    const result = await session.handleOperatorTurn('yes');
+    expect(result.released).toBeNull();
+    expect(delivery.deliveredTexts()).toEqual([]);
+  });
+
+  it('an expired-card confirmation surfaces the held draft, releases nothing, and re-arms the window', async () => {
+    const delivery = createNullDelivery();
+    const model = stubModel('Understood — shall I send that to the worker?');
+    const session = new TalkerSession({
+      model,
+      delivery,
+      workerSessionId: 'worker-1',
+      snapshotProvider: () => SNAPSHOT,
+      config: { maxPendingAgeTurns: 2 },
+    });
+    await session.handleOperatorTurn(INSTRUCTION);
+    await session.handleOperatorTurn("how's it going?"); // turn 2 — no append
+    await session.handleOperatorTurn("how's it going?"); // turn 3 — window now lapsed
+    const lapsed = await session.handleOperatorTurn('yes');
+    expect(lapsed.released).toBeNull();
+    expect(delivery.deliveredTexts()).toEqual([]);
+    expect(lapsed.reply).toMatch(/still want that sent/i);
+    // The surfacing re-armed the confirmation: a fresh yes now releases.
+    const reconfirmed = await session.handleOperatorTurn('yes');
+    expect(reconfirmed.released?.text).toBe(RELAYED_INSTRUCTION);
+    expect(delivery.deliveredTexts()).toEqual([RELAYED_INSTRUCTION]);
+  });
+});
+
 describe('structural bypass attempts (second-angle verification)', () => {
   it('calling the delivery adapter directly with an unconfirmed proposal is impossible from the session', async () => {
     const { session, delivery } = makeSession();

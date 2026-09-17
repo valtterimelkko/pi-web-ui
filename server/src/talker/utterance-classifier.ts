@@ -14,7 +14,7 @@
  */
 
 import type { UtteranceClass } from './types.js';
-import type { DraftSelection, OrdinalPosition } from './pending-proposal.js';
+import type { DraftSelection, OrdinalPosition } from './proposal-store.js';
 
 /** Explicit withdrawals of the pending proposal. Each pattern consumes its
  *  natural object ("cancel that" / "cancel it") — see extractPostCancelInstruction
@@ -33,32 +33,132 @@ const CANCEL_PATTERNS: RegExp[] = [
 ];
 
 /**
- * Affirmations and send-imperatives. Deliberately conservative shapes; see the
- * ordered guards below for what keeps an instruction from being mistaken for
- * one of these.
+ * The closed confirmation vocabulary. A confirmation is built ONLY from these
+ * atoms, matched as whole words over the whole utterance — never from a
+ * substring anywhere in a larger utterance. This is the Phase 1 repair of the
+ * live gate defect: `\bsure\b` used to match inside "not sure", `\byes\b`
+ * inside "yes, hold phase three", and either released a held draft.
  */
-const CONFIRM_PATTERN =
-  /\b(yes|yeah|yep|yup|sure|ok|okay|go ahead|go on|send it|send that|send it over|do it|do that|please do|confirmed|confirm|that'?s right|affirmative|carry on|off you go)\b/i;
+const CONFIRM_ATOMS = [
+  'go ahead',
+  'go on',
+  'carry on',
+  'off you go',
+  "that's right",
+  'send it over',
+  'send it',
+  'send that over',
+  'send that',
+  'do it',
+  'do that',
+  'please do',
+  'yes',
+  'yeah',
+  'yep',
+  'yup',
+  'sure',
+  'ok',
+  'okay',
+  'affirmative',
+  'confirmed',
+  'confirm',
+] as const;
+
+/** Word-boundary presence of any confirmation atom (used by the pushback branch). */
+const CONFIRM_ATOM_PRESENCE = new RegExp(`\\b(?:${CONFIRM_ATOMS.join('|')})\\b`, 'i');
+
+/**
+ * Discourse glue that may surround atoms without changing their meaning
+ * ("well, yes", "ok then send it"). Fillers never stand alone as a
+ * confirmation: at least one atom must carry it.
+ */
+const CONFIRM_FILLERS = new Set([
+  'please',
+  'just',
+  'now',
+  'then',
+  'and',
+  'um',
+  'uh',
+  'ah',
+  'er',
+  'well',
+  'so',
+  'ok',
+  'okay',
+  'right',
+]);
+
+/**
+ * Explicit negation / uncertainty vocabulary (Phase 1 repair, brief item 2).
+ * Anything carrying one of these is a statement — never a confirmation —
+ * regardless of an affirmative word elsewhere in it ("not sure", "I doubt
+ * it", "I would never say yes").
+ */
+const CONFIRM_DISQUALIFIER =
+  /\b(?:not|never|hardly|doubt|unsure|uncertain|can'?t|won'?t|don'?t|doesn'?t|didn'?t|isn'?t|aren'?t|shouldn'?t|wouldn'?t|couldn'?t)\b/i;
+
+/** Sentence punctuation tolerated at the edges; the words carry the meaning. */
+const EDGE_PUNCTUATION = /^[\s,;:.!—-]+|[\s,;:.!—-]+$/g;
+
+/** Word separators inside an utterance (commas and sentence stops are seams). */
+const WORD_SEPARATORS = /[\s,;:.!?—-]+/;
+
+/**
+ * A whole-utterance confirmation (brief item 2): every word belongs to the
+ * closed confirmation vocabulary — atoms and discourse glue only — and at
+ * least one atom is present. A qualifier, a negation, a conditional, a quote
+ * or any post-affirmation instruction is a word outside the vocabulary, so it
+ * falls through to `statement`. Deliberately narrow: the safe direction for
+ * the gate is that nothing is released.
+ */
+const CONFIRM_MAX_WORDS = 8;
+const CONFIRM_PHRASES = [...CONFIRM_ATOMS].sort((a, b) => b.length - a.length);
+
+function isWholeUtteranceConfirmation(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .replace(EDGE_PUNCTUATION, '')
+    .split(WORD_SEPARATORS)
+    .filter(Boolean);
+  if (words.length === 0 || words.length > CONFIRM_MAX_WORDS) return false;
+  let index = 0;
+  let atoms = 0;
+  while (index < words.length) {
+    const phrase = CONFIRM_PHRASES.find(atom =>
+      atom.split(' ').every((part, offset) => words[index + offset] === part)
+    );
+    if (phrase) {
+      atoms += 1;
+      index += phrase.split(' ').length;
+      continue;
+    }
+    if (CONFIRM_FILLERS.has(words[index])) {
+      index += 1;
+      continue;
+    }
+    return false;
+  }
+  return atoms > 0;
+}
 
 /**
  * Operator pushback on the gate itself ("just do it, don't ask me every
  * single time"). With a live proposal this is an authorisation; this pattern
- * is what keeps the mandatory pushback turn working despite its length.
+ * is what keeps the mandatory pushback turn working despite its length. The
+ * dismissal phrases are stripped before the negation check so that "don't ask
+ * me" — a complaint about the ritual, not a denial of the authorisation —
+ * cannot disqualify it; a negation elsewhere still does.
  */
 const PUSHBACK_PATTERN =
   /\b(just do it|just send it|stop asking|don'?t ask(ing)?( me)?( every| each)?|no more asking|every (single )?time)\b/i;
+const PUSHBACK_DISMISSAL =
+  /\b(?:stop asking(?: me)?|don'?t ask(?:ing)?(?: me)?|no more asking|every (?:single )?time|it'?s a simple thing)\b/gi;
 
 /** Questions are never confirmations ("did you send it?" must not release). */
 const QUESTION_TRAILING = /\?\s*$/;
 const QUESTION_LEADING =
   /^\s*(what|why|how|when|where|who|which|is|are|was|were|did|does|do\s+(you|i|we|they|he|she)|can|could|should|would|will|has|have|had|shall|may|any)\b/i;
-
-/**
- * Discourse markers stripped before deciding whether a confirmation-shaped
- * utterance carries substantial new content ("ok so tell the worker to
- * rebase" is an instruction, not an authorisation of the previous one).
- */
-const LEADING_MARKERS = /^(?:\s*(?:yes|yeah|yep|yup|ok|okay|well|so|right|and|um|uh|ah)[,;\s—-]*)+/i;
 
 /**
  * Meta questions about the send in flight ("did you send it?"). They must
@@ -94,22 +194,26 @@ export function classifyOperatorUtterance(raw: string): UtteranceClass {
   const isLeadingQuestion = QUESTION_LEADING.test(text) && !PUSHBACK_PATTERN.test(text);
   const isQuestion = isTrailingQuestion || isLeadingQuestion;
 
-  const matchesConfirm = CONFIRM_PATTERN.test(text);
-
   if (isQuestion) {
     return 'question';
   }
 
-  if (matchesConfirm) {
-    // Pushback utterances are confirmations even though they are long.
-    if (PUSHBACK_PATTERN.test(text)) return 'confirm';
-    // Otherwise a confirmation shape must not carry substantial new content:
-    // strip leading discourse markers and require the remainder to be short.
-    const remainder = text.replace(LEADING_MARKERS, '').trim();
-    const remainderWords = remainder ? remainder.split(/\s+/).length : 0;
-    if (remainderWords <= 3) return 'confirm';
-    return 'statement';
+  // The mandatory pushback turn stays an authorisation — but only when it
+  // actually carries one ("just do it"), and only when the dismissal itself
+  // is not a negation of the authorisation ("just don't do it, stop asking").
+  if (PUSHBACK_PATTERN.test(text) && CONFIRM_ATOM_PRESENCE.test(text)) {
+    const withoutDismissal = text.replace(PUSHBACK_DISMISSAL, ' ');
+    if (!CONFIRM_DISQUALIFIER.test(withoutDismissal)) return 'confirm';
   }
+
+  // Explicit negation/uncertainty disqualifies before any shape is considered
+  // ("not sure" must never release because of the word inside it).
+  if (CONFIRM_DISQUALIFIER.test(text)) return 'statement';
+
+  // A confirmation must be a confirmation SHAPE: its whole utterance is built
+  // from the closed confirmation vocabulary. Everything else — a condition, a
+  // quote, a delay, or a post-affirmation instruction — is a statement.
+  if (isWholeUtteranceConfirmation(text)) return 'confirm';
 
   return 'statement';
 }

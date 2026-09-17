@@ -1,0 +1,12 @@
+== Phase 1 + 2 regression: FULL talker suite — FINAL run ==
+2026-09-17T20:43:59Z
+$ npm --prefix server test -- tests/unit/talker/
+ ✓ tests/unit/talker/session-registry.test.ts  (14 tests) 123ms
+
+ Test Files  35 passed (35)
+      Tests  590 passed | 2 skipped (592)
+   Start at  20:44:00
+   Duration  2.89s (transform 4.92s, setup 1.91s, collect 14.01s, tests 3.15s, environment 13ms, prepare 5.06s)
+
+JSON report written to /root/pi-web-ui-track-a/server/test-results.json
+EXIT=0
