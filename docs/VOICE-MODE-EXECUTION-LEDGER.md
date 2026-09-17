@@ -371,6 +371,24 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 0 COMPLETE — E accepted and merged; contract frozen v1 on master).**
+E's independent review returned PARTIALLY CONSISTENT with six material findings;
+E reproduced each before acting, corrected five in `59975d2` (schema-exact
+client→server frames closing a real N1/N2 hole, per-message required-field
+validation, decoded-byte audio ceilings, `proposal`/`receipt` payload nesting,
+probe-verified assertions replacing three provably **vacuous** type-level
+sweeps) and did not accept one with sound reasoning (a handler would cross its
+ownership boundary; the contract now states the handler's validation order
+instead). Conductor re-verification **on the corrected tree** (`59975d2`, which
+my earlier gate run did not cover): shared build + typecheck clean, **244/244**
+shared tests (238 at first freeze + 6 from the correction), diff scope exactly
+the three owned paths. Merged `53baf94` (--no-ff) and linked from
+`VOICE-MODE-INDEX.md` §3.4. Honest note: E's goal ended formally **paused** (its
+final run reported completion in prose but the goal never reached an `achieved`
+state); completion is therefore **conductor-adjudicated on verified
+deliverables**, and the session is being released. Wave 0 is closed: D ✅, A ✅,
+E ✅. Next: Wave 1 — B (bridge) and C (client) dispatched from post-E master.
+
 **2026-09-17 (Wave 0 — A verified green, merged and pushed; E applying its reviewer's corrections).**
 Conductor verification after the correction: `tests/voice-live-lab/` 19 files /
 450 tests green; full server suite (env-normalised) **415 files / 5135 tests

@@ -111,6 +111,7 @@ schema or canonical docs.
 
 | Document | Vintage | Status | Read it when |
 |---|---|---|---|
+| [`plans/VOICE-LIVE-WIRE-CONTRACT.md`](./plans/VOICE-LIVE-WIRE-CONTRACT.md) | 2026-09-17 | **Frozen v1 contract** | You are building or consuming the native-voice wire surface (transport, envelope, message catalogue, audio framing, server service boundary). The normative types are `shared/src/types/voice-messages.ts`; a breaking change is v2 alongside, never an in-place edit. |
 | [`plans/DRIVE-MODE-TWO-LANE-PLAN.md`](./plans/DRIVE-MODE-TWO-LANE-PLAN.md) | 2026-09-17 | Programme plan, **complete** | You need the original two-lane programme: its intent table I1–I18 and the mechanical/instructed layering. |
 | [`plans/VOICE-MODE-DESKTOP-LANES-AND-SESSION-VIEW-PLAN.md`](./plans/VOICE-MODE-DESKTOP-LANES-AND-SESSION-VIEW-PLAN.md) | 2026-09-16 | **Implemented & validated** | You are working on the desktop pane or lane layout. |
 | [`plans/VOICE-READING-AND-QA-DESIGN.md`](./plans/VOICE-READING-AND-QA-DESIGN.md) | 2026-09-14 | Agreed design, **implemented** | You are changing reading levels or the focus/recap behaviour. |
