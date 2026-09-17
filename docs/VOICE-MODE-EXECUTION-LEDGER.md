@@ -371,6 +371,26 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 2 DISPATCHED — F integration + G regression, from master `97359fe`).**
+Briefs written and committed (`97359fe`): `briefs/F-integration.md` (Phase 5 — mount
+wiring, slice runner, the three scenarios, byte-fidelity proof, negative control)
+and `briefs/G-regression.md` (Phase 6 — six vetoes through Track D's runner,
+20-utterance corpus scoring, falsifiability controls, <20 s bound). Children
+created with goals armed + durable leases + handback-keyed `verifyCommand`:
+**F** `01a0b1ae-a973-711b-bb08-c2c7e3c5cece` — `opencode-go/deepseek-v4.1-flash`
+(max), worktree `/root/pi-web-ui-wt-integration`, branch `feat/voice-integration`,
+lease `efd4c022-7981-4145-81b7-fa2010cd12ae` (owner `voice-exec-20260917-f`);
+**G** `01a0b1ae-acb5-711b-bb08-c2c94e7d46c9` — `clinepass/cline-pass/deepseek-v4.1-flash`
+(high), worktree `/root/pi-web-ui-wt-regression`, branch `feat/voice-regression`,
+lease `7428f5e5-bf42-4e3b-a4f9-6129814db221` (owner `voice-exec-20260917-g`).
+Both started on dispatch (goal running, session busy). Worktrees created with the
+proven `node_modules` isolation (real dir; `@pi-web-ui/shared` → own tree; shared
+built locally — verified by resolver probe) before any child started. Watches
+`ww_6`/`ww_7` (goal_end + goal_state(paused) + `PARENT-INPUT-NEEDED`); backstop
+`deadline-3950c64b` until 00:53Z (~90 min, F does real provider sessions and a
+server boot). Preflight: capacity 0/16; quota opencode-go monthly 80 %,
+commandcode 36 %, clinepass 43 %, zai-glm 100 % (off-peak).
+
 **2026-09-17 (Wave 1 COMPLETE — B and C verified, merged `--no-ff`, pushed, cleaned up; Wave 2 is next).**
 Master `15cf5d0` (plus `8089dac` declaring `@google/genai`). Both tracks were
 verified by me **on their frozen commits and again on the merged tree**, never on
