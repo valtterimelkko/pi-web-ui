@@ -1,13 +1,16 @@
-# Voice Live Lab — Phase L0 Equipment + L2 Baseline Lane + L4 Tier 1 Guarded Harness + L5 Tier 3 Orchestrator + L6 Adaptive Operator Instrument
+# Voice Live Lab — Phase L0 Equipment + L2 Baseline Lane + L4 Tier 1 Guarded Harness + L5 Tier 3 Orchestrator + L6 Adaptive Operator Instrument + L7 Tier 2 Lean Harness
 
 > **Scope:** L0 (measuring equipment), L2 (baseline lane: Gemma cascade
 > provider, tier-1 scenarios, scorer), L4 (tier 1 guarded native harness:
 > Gemini Live adapter, policy-core-driven gating, commit rule, dry-run
 > runner), L5 (tier 3: the live model as orchestrator over the shortened
 > Benchmark 2, with the Internal API tool surface, the host-enforced
-> confirmation protocol and session-lifetime handling) and L6 (the adaptive
+> confirmation protocol and session-lifetime handling), L6 (the adaptive
 > operator instrument: an LLM playing the operator, a mechanical director,
-> the Gate 4 entry gate, and freezing discoveries back into regressions).
+> the Gate 4 entry gate, and freezing discoveries back into regressions) and
+> L7 (tier 2: the lean instructed harness — one `send_to_worker` tool, no
+> draft store, the `free` / `confirm-guided` / `fixed-text` send policies, and
+> the 20-utterance fidelity corpus).
 > The lab itself is
 > specified in
 > [`docs/VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md`](../../docs/VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md)
@@ -44,13 +47,14 @@ defect must fail for the intended reason.
 | `lib/baseline-dryrun.ts` | **L2.** Hermetic attempts: scripted STT/TTS + real talker gate drive the full path (driver → cascade → player → immutable record → verify). Manifests are labelled `mode: "dry-run", realProviderCalls: 0`. |
 | `lib/providers/gemini-live.ts` | **L4.** The injectable seam to `@google/genai` 1.52.0 `ai.live.connect`: tier-1 connect config (audio modalities, both transcriptions, session resumption, E/N activity detection), the two declared functions (`mark_addressed_to_talker`, `offer_ask_worker` — NON_BLOCKING, acknowledged SILENT), `provider_content`/`provider_usage`/lifecycle events, state-view context updates coalesced ≥ 2 s apart and never mid-speech. Tests and dry runs inject a mock session factory; the real `@google/genai` factory is built only for a measured `tier1-run`. |
 | `lib/harness/tier1-guarded.ts` | **L4.** The guarded native harness: `TranscriptCommitTracker` (the §16.3 400 ms stabilisation commit rule as a pure state machine), `Tier1GuardedHarness` executing the L3 policy core exactly as `TalkerSession` does — `release` → recorded `WorkerDelivery`; mechanical decisions → trusted mechanical voice at receipt tier + context update, with native audio queued before the decision discarded under honest player accounting; conversational decisions → the model's own native reply, with the tool calls interpreted through the same `decideAfterModelReply` semantics. `native` and `sidecar` transcript conditions; `buildTier1SystemInstruction` (v3 prompt minus the text-marker lines, plus the function contract and "you never send; the host sends"). |
+| `lib/harness/tier2-lean.ts` | **L7.** The lean instructed harness: ONE tool (`send_to_worker`, `NON_BLOCKING`, answered `WHEN_IDLE`, Zod-validated `{ text }`), a versioned and SHA-256-hashed ≤ 250-word system instruction, the `free` / `confirm-guided` / `fixed-text` send policies (host `confirmRequest` + 60 s window, and fixed-words substitution), the L4 commit rule and trusted receipts reused unchanged, the `tier2_send` / `tier2_confirm_*` event vocabulary, the mechanical tier-2 scorer (premature sends, over-ask rate, honesty, fidelity), the §20.5b fidelity-corpus schema + scoring, the §18.1 matrix derivation (`deriveTier2Matrix`) and Step 4 verdict (`decideTier2Verdict`), and the hermetic (`runTier2DryAttempt`) and measured (`runTier2MeasuredAttempt`) runners. |
 | `lib/tier1-dryrun.ts` | **L4.** `runTier1DryAttempt`: hermetic guarded-native attempts (scripted live client + scripted shadow ASR + silence mechanical voice + null delivery) across all shipped tier-1 scenarios in both transcript conditions and both lanes. `runTier1MeasuredAttempt` + `createWhisperShadowAsr` + `encodeWav`: the guarded real-run entry for `tier1-run` (refuses without `GEMINI_API_KEY`). |
 | `lib/tier3-tools.ts` | **L5.** The tier-3 tool surface (§17.2): the seven declared functions (`create_child`, `prompt_child`, `child_status`, `read_child`, `wait_for`, `run_checked`, `notify_owner`), all `NON_BLOCKING` with `WHEN_IDLE`-scheduled responses; Zod-validated arguments; the `run_checked` allow-list as a pure grammar (no shell metacharacters at all, `git -C` inside the run dir with `log|status|diff` only, `python3 -m unittest` with the run dir as cwd, `bash … ctl.sh restart|health|status`, `cat`/`ls` inside the run dir); the 30 s polling rule; the host-enforced confirmation protocol (a committed `confirm` within 60 s, never the model's claim); the tool ledger; and both the real Unix-socket Internal API client and full hermetic doubles. |
 | `lib/harness/tier3-orchestrator.ts` | **L5.** The tier-3 orchestrator: the connect config (`sessionResumption: {}` and `contextWindowCompression` at 100k tokens on EVERY connection), the versioned/hashed ≤600-word system instruction, the operator path (PCM + E-lane markers + the 400 ms commit rule), tool-call dispatch with `WHEN_IDLE` responses, and `goAway` handling — finish in-flight responses, close, reconnect with the last `newHandle`, increment the generation, restore host state from its own ledger, and re-issue (tagged with the original call id) any result that could not go out while the socket was down. |
 | `lib/b2-short-driver.ts` | **L5.** The B2-short driver (§17.3): builds the fixture testbed, evaluates the declarative triggers, supplies the scripted children and scripted live model for the hermetic dry run, walks `B2_SHORT_DRY_SCRIPT`, derives a parent transcript from the event log and scores the run with the UNCHANGED Benchmark 2 `score_orchestrator.py`. `runB2ShortMeasuredAttempt` is the real-run entry. |
 | `lib/director.ts` | **L6.** Mechanical, model-free director validation (§14.5): Zod JSON shape (`say`/`interrupt`/`waitMs` 0–4000 int/`beatDone`/`why`), ≤ 60 words, en-GB spoken prose (no markdown, no spelled-out paths, no American spelling), the permissions allow-list (a confirmation-shaped line needs a `confirm:`/`card:confirm` grant AND an assistant proposal the operator actually heard), golden-truth leakage against `world.hiddenTruth` (revealed facts allowed), disallowed interrupts, per-beat and per-run turn budgets. Refusal precedence and the by-reason rejection ledger are fixed and documented; the pre-registered Gate 4 ceiling (> 20 % rejected ⇒ `insufficient-evidence`) and the `simulator-failure` exclusion from candidate denominators live in `evaluateInstrument`. A leakage rejection never persists the offending text. |
 | `lib/operator-sim.ts` | **L6.** The adaptive operator (§14.1, §14.3, §14.5): the verbatim persona, exact §14.5 turn-prompt assembly (permissions rendered in plain words, one heard line per played segment with seconds and an `[interrupted]` marker), default seat `commandcode/deepseek/deepseek-v4.1-flash` @ `high` @ 0.7, the one-re-ask protocol, the beat loop (`completed` / `simulator-failure` / `budget-stopped`), and a hermetic `ScriptedSimulatorClient` for offline runs. Simulator reaction latency (model + optional TTS) is stamped on its own event flagged `excludedFromCandidateLatency`. Also holds the Gate 4 entry gate (`runInstrumentEntryGate`, token-F1 agreement with known-good lines) and `buildFrozenVariant`/`extractBeatEvidence` for `freeze`. |
-| `cli.ts` | `verify <attemptDir>` — the offline trust boundary; `handshake` — the L1 probes; `baseline-dryrun` — hermetic L2 attempts; `tier1-dryrun` — hermetic L4 attempts; `tier1-run` — measured L4 attempts (needs `GEMINI_API_KEY`); `tier3-dryrun` — hermetic L5 tier-3 attempts over B2-short; `tier3-run` — measured L5 attempts (needs `GEMINI_API_KEY`, a named socket and operator audio fixtures); `freeze` — **L6**, freeze one adaptive beat's actually-spoken lines into a `provenance: synthetic` frozen variant. |
+| `cli.ts` | `verify <attemptDir>` — the offline trust boundary; `handshake` — the L1 probes; `baseline-dryrun` — hermetic L2 attempts; `tier1-dryrun` — hermetic L4 attempts; `tier1-run` — measured L4 attempts (needs `GEMINI_API_KEY`); `tier2-dryrun` — **L7** hermetic tier-2 attempts (prints the mechanical tier-2 score); `tier2-run` — **L7** measured tier-2 attempts (needs `GEMINI_API_KEY` and an explicit `--condition`; prints the derived matrix with every run); `tier3-dryrun` — hermetic L5 tier-3 attempts over B2-short; `tier3-run` — measured L5 attempts (needs `GEMINI_API_KEY`, a named socket and operator audio fixtures); `freeze` — **L6**, freeze one adaptive beat's actually-spoken lines into a `provenance: synthetic` frozen variant. |
 | `boot-disposable-server.sh` | `systemd-run --scope --collect` boot of an isolated validation server, outside the production cgroup. |
 
 ## The L0 verification gate
@@ -70,7 +74,7 @@ manifest/artefact hashes.
 ## Usage
 
 ```bash
-# Run the lab unit tests (L0 + L2 + L4 + L5 + L6)
+# Run the lab unit tests (L0 + L2 + L4 + L5 + L6 + L7)
 cd server && npx vitest run tests/voice-live-lab/
 
 # Verify a finalised attempt record
@@ -152,6 +156,109 @@ bash scripts/voice-live-lab/boot-disposable-server.sh stop
 0 only once the socket exists. `status`/`stop` find the state dir via
 `/tmp/voice-lab-current` (or `VOICE_LAB_DIR`). The server's own cgroup guard
 (exit 78) remains the authoritative safety control.
+
+## Tier 2 — the lean instructed harness (L7)
+
+Tier 1 keeps the shipped gate: the model proposes, the policy core decides, the
+host releases the operator's own words. Tier 2 removes that machinery on
+purpose — no draft store, no classifier in the send path — and asks whether a
+short instruction can make a live model get the relay right and still ask when
+it should (§6.2, §18). It has exactly ONE tool.
+
+```bash
+# Hermetic tier-2 attempt(s): scripted live client + scripted shadow ASR, the
+# REAL commit rule, the REAL send policy, the REAL sandbox sink, an immutable
+# record and the offline verifier. No provider is called (mode: dry-run).
+npx tsx scripts/voice-live-lab/cli.ts tier2-dryrun \
+  --scenario /root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier2/t2-fidelity-corpus.json \
+  --condition confirm-guided \        # free | confirm-guided | fixed-text
+  --attempts 1 --runs-root /tmp/tier2-runs
+#   --transcript sidecar   (implemented; held out of the pre-registered matrix — §18.1 T1-C)
+#   --confirm-window-ms N  (hermetic only; the rule is 60 000 ms)
+
+# MEASURED tier-2 attempt: real Gemini Live session, real Whisper shadow.
+# Refuses without GEMINI_API_KEY and without an explicit --condition, and
+# prints the derived (§18.1) matrix with every run.
+GEMINI_API_KEY=... npx tsx scripts/voice-live-lab/cli.ts tier2-run \
+  --scenario /root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier2/t2-s1-orchestration-voice.json \
+  --condition free --model gemini-3.8-live
+```
+
+The one tool. `send_to_worker(text)`, `behavior: NON_BLOCKING`, its response
+scheduled `WHEN_IDLE` so answering a call never opens a new model turn, and its
+arguments validated with Zod (`{ text: string }`) — a bad call is a refusal with
+a reason, never a throw inside the provider's message loop.
+
+The three conditions (§18).
+
+- **`free`** — the send reaches the recording sink immediately. The model owns
+the words and the moment.
+- **`confirm-guided`** — the host injects a `confirmRequest` and HOLDS the send
+until a committed operator utterance the shipped `classifyOperatorUtterance`
+reads as `confirm` arrives, or 60 s lapses (`refused: no-confirmation`). The
+model's own claim grants nothing. One send may await confirmation at a time; a
+second is refused with a reason (see the two record rules below).
+- **`fixed-text`** — "free timing, fixed words": the model chooses *when* to
+send, but the delivered bytes are the operator's committed transcript. If no
+turn has committed yet, the send is refused rather than delivered empty.
+
+Every send is followed by a trusted receipt: the host speaks the ack from the
+shipped `ack.ts` (`harness_receipt`) and injects it as a context note, so "what
+the host said" is never the model's own claim.
+
+### Two record rules, and why
+
+1. **`harness_release` keeps its tier-1 meaning** — a release the HOST
+authorised against a committed operator confirmation. `confirm-guided` emits
+it; `free` deliberately does not, because there is no host authorisation to
+point at, and emitting one uniformly would make the tier-1 authorisation
+invariant (§20.1: no `delivered` without an eligible confirm) vacuous rather
+than meaningful. Every send in every condition is recorded as **`tier2_send`**
+with its status, the authorisation it rests on and any substitution, and the
+tier-2 scorer reads that ledger. Consequence for the shared scorer: its
+`releases` count is the host-authorised count only.
+2. **One confirmation at a time.** A second `send_to_worker` while one send
+awaits confirmation is refused (`refused: another send is already awaiting the
+operator's confirmation`), not queued. Tier 3 serialises requests because each
+of its actions is granted once per run (§17.3); in tier 2 one grant would
+authorise an unbounded number of held sends — exactly the failure this tier
+exists to catch.
+
+### The fidelity corpus (§20.5b)
+
+`scenarios/tier2/fidelity-corpus.json` is 20 frozen spoken instructions, one
+beat each, all in one world, each declaring `requiredWords`, `negations`,
+`conditionals`, `targets` and `distractors`. `scenarios/tier2/t2-fidelity-corpus.json`
+is the runnable scenario and links back to the corpus, so the two cannot drift.
+Scored mechanically (no model, no judge): required-word recall, negation /
+conditional / target survival, distractor leakage, length ratio, and
+`unexplainedAdditions` as the candidate list for the §20.5 judge's
+added-constraints rubric. Fidelity is measured on the text the MODEL composed
+(every condition, including a held or refused send) and separately on the bytes
+DELIVERED — 1.0 by construction under `fixed-text`, and the point of the
+comparison. Tier 1's mechanical relay is the control: recall 1.0 with
+distractor leakage 1.0, because verbatim bytes keep the preamble.
+
+### The matrix is derived, not chosen
+
+`deriveTier2Matrix()` applies §18.1 Steps 1–3 to the L4 and L5 findings with
+fixed thresholds and returns the conditions, variants, attempts and the rule
+verdicts that produced them; `decideTier2Verdict()` is Step 4 ("the least
+harness that still met §4"). An UNMEASURED rule is `unresolved`, never treated
+as "did not fire", and while a matrix-shaping rule is unresolved the matrix is
+labelled `provisional` and the conservative §18 superset runs. The derived
+matrix is written into `/root/agent-benchmarks/benchmarks/04-voice-live-lab/PLAN.md`
+**before** any run, and `server/tests/voice-live-lab/tier2-lean.test.ts` asserts
+the file and the function agree — so the two cannot drift.
+
+What a green `tier2-dryrun` proves: the one-tool surface, the instruction's
+word budget and hash, the commit rule, all three send policies (including the
+held → granted and held → timed-out paths), the sandbox sink, the trusted
+receipt, the event vocabulary, the tier-2 scorer, the fidelity corpus, the
+immutable record and the offline verifier agree with each other on real files.
+What it does NOT prove: anything about any live model — every record carries
+`usage.mode: "dry-run"`, `realProviderCalls: 0` and
+`usage.provider: "gemini-live-tier2-dryrun"`.
 
 ## L6 — the adaptive operator instrument
 

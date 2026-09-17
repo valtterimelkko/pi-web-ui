@@ -18,6 +18,16 @@ import { assertSafeRunRoot, verifyAttempt } from './lib/record.js';
 import { runHandshake, type CapabilitiesReport } from './lib/handshake.js';
 import { runDryAttempt } from './lib/baseline-dryrun.js';
 import { runTier1DryAttempt, runTier1MeasuredAttempt } from './lib/tier1-dryrun.js';
+import {
+  runTier2DryAttempt,
+  runTier2MeasuredAttempt,
+  TIER2_CONDITIONS,
+  deriveTier2Matrix,
+  emptyTier1Findings,
+  emptyTier3Findings,
+  type Tier2Condition,
+  type Tier2TranscriptCondition,
+} from './lib/harness/tier2-lean.js';
 import { runB2ShortDryAttempt, runB2ShortMeasuredAttempt, B2_SHORT_BENCH_ROOT } from './lib/b2-short-driver.js';
 import { parseEventLog } from './lib/scheduler.js';
 import { loadScenarioFile } from './lib/scenario.js';
@@ -36,6 +46,8 @@ export type CliCommand =
   | 'baseline-dryrun'
   | 'tier1-dryrun'
   | 'tier1-run'
+  | 'tier2-dryrun'
+  | 'tier2-run'
   | 'tier3-dryrun'
   | 'tier3-run'
   | 'freeze'
@@ -51,6 +63,12 @@ export interface CliOptions {
   frameIntervalMs?: number;
   stabilityMs?: number;
   condition?: 'native' | 'sidecar';
+  /** Tier 2's send policy (free | confirm-guided | fixed-text, §18). */
+  tier2Condition?: Tier2Condition;
+  /** Tier 2's deciding transcript (`sidecar` is held for §18.1 T1-C). */
+  tier2Transcript?: Tier2TranscriptCondition;
+  /** Tier 2: the confirmation window a hermetic run may shrink (tests). */
+  confirmWindowMs?: number;
   model?: string;
   whisperEndpoint?: string;
   runId?: string;
@@ -79,11 +97,15 @@ export interface CliOptions {
 export const DEFAULT_RUNS_ROOT = '/root/agent-benchmarks/benchmarks/04-voice-live-lab/runs';
 export const DEFAULT_SCENARIO_PATH =
   '/root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier1/t1-s1-orchestration-voice.json';
+/** Tier 2's default scenario is the §20.5b fidelity corpus: the phase's primary
+ *  measurement. */
+export const DEFAULT_TIER2_SCENARIO_PATH =
+  '/root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier2/t2-fidelity-corpus.json';
 /** Tier 3 records land beside the B2-short benchmark, not inside the repo. */
 export const DEFAULT_TIER3_RUNS_ROOT = '/root/agent-benchmarks/benchmarks/04-voice-live-lab';
 
 export const USAGE = [
-  'Voice Live Lab (Phase L0/L1/L2/L4/L5/L6)',
+  'Voice Live Lab (Phase L0/L1/L2/L4/L5/L6/L7)',
   '',
   'Usage:',
   '  voice-live-lab verify <attemptDir> [--json] [--allow-unfinalised]',
@@ -91,6 +113,8 @@ export const USAGE = [
   '  voice-live-lab baseline-dryrun [--scenario <path>] [--runs-root <dir>] [--attempts N] [--frame-interval-ms N] [--json]',
   '  voice-live-lab tier1-dryrun [--scenario <path>] [--runs-root <dir>] [--run-id <id>] [--attempts N] [--condition native|sidecar] [--stability-ms N] [--frame-interval-ms N] [--json]',
   '  voice-live-lab tier1-run --scenario <path> [--condition native|sidecar] [--model <id>] [--whisper-endpoint <url>] [--runs-root <dir>] [--json]   (needs GEMINI_API_KEY)',
+  '  voice-live-lab tier2-dryrun [--scenario <path>] [--condition free|confirm-guided|fixed-text] [--transcript native|sidecar] [--runs-root <dir>] [--attempts N] [--json]',
+  '  voice-live-lab tier2-run --scenario <path> --condition <cond> [--transcript native|sidecar] [--model <id>] [--whisper-endpoint <url>] [--runs-root <dir>] [--json]   (needs GEMINI_API_KEY)',
   '  voice-live-lab tier3-dryrun [--runs-root <dir>] [--run-id <id>] [--attempts N] [--bench-root <dir>] [--peak-window] [--no-score] [--json]',
   '  voice-live-lab tier3-run --socket <sock> --token-path <token> --beats-audio-dir <dir> [--model <id>] [--peak-window] [--probe-tone] [--runs-root <dir>] [--json]   (needs GEMINI_API_KEY)',
   '  voice-live-lab freeze --attempt <id|dir> --beat <id> [--runs-root <dir>] [--output <path>] [--allow-promotion --promotion-note <text>] [--json]',
@@ -106,6 +130,14 @@ export const USAGE = [
   '                        offline verify. No provider is called (mode: dry-run).',
   '  tier1-run             One MEASURED tier-1 attempt against the real Gemini Live session',
   '                        (whisper shadow). Refuses without GEMINI_API_KEY.',
+  '  tier2-dryrun          Hermetic TIER-2 LEAN attempt(s) (L7): one tool (send_to_worker), no draft',
+  '                        store, and the condition send policy (free | confirm-guided | fixed-text)',
+  '                        driving a scripted live client through the real harness, record and offline',
+  '                        verifier. Prints the mechanical tier-2 score: sends, holds, deliveries,',
+  '                        premature sends, over-ask rate and fidelity recall when a corpus is attached.',
+  '  tier2-run             One MEASURED tier-2 attempt against the real Gemini Live session: the real',
+  '                        400 ms commit rule, the real send policy and the whisper shadow. Refuses',
+  '                        without GEMINI_API_KEY and without an explicit --condition.',
   '  tier3-dryrun          Hermetic TIER-3 attempt (L5): the B2-short fixture with scripted children',
   '                        and a scripted Live model, but REAL repositories, git history, mock',
   '                        service and run_checked commands. Writes an immutable record, verifies it',
@@ -168,6 +200,48 @@ export function parseArgs(argv: string[]): CliOptions {
       json: rest.includes('--json'),
     };
   }
+  if (command === 'tier2-dryrun' || command === 'tier2-run') {
+    const opt = (name: string): string | undefined => {
+      const idx = rest.indexOf(name);
+      return idx !== -1 && rest[idx + 1] ? rest[idx + 1] : undefined;
+    };
+    const attemptsRaw = opt('--attempts');
+    const frameRaw = opt('--frame-interval-ms');
+    const stabilityRaw = opt('--stability-ms');
+    const confirmRaw = opt('--confirm-window-ms');
+    const conditionRaw = opt('--condition');
+    if (conditionRaw !== undefined && !(TIER2_CONDITIONS as readonly string[]).includes(conditionRaw)) {
+      throw new Error(
+        `--condition must be one of ${TIER2_CONDITIONS.join(' | ')} for a tier-2 run, got "${conditionRaw}"`
+      );
+    }
+    if (command === 'tier2-run' && conditionRaw === undefined) {
+      throw new Error(
+        `Usage: voice-live-lab tier2-run --scenario <path> --condition <${TIER2_CONDITIONS.join('|')}> ` +
+          '[--transcript native|sidecar] [--model <id>] [--whisper-endpoint <url>] [--runs-root <dir>] [--json]'
+      );
+    }
+    const transcriptRaw = opt('--transcript');
+    if (transcriptRaw !== undefined && transcriptRaw !== 'native' && transcriptRaw !== 'sidecar') {
+      throw new Error(`--transcript must be native or sidecar, got "${transcriptRaw}"`);
+    }
+    return {
+      command,
+      scenarioPath: opt('--scenario') ?? DEFAULT_TIER2_SCENARIO_PATH,
+      runsRoot: opt('--runs-root') ?? DEFAULT_RUNS_ROOT,
+      runId: opt('--run-id'),
+      attempts: attemptsRaw ? Math.max(1, Number.parseInt(attemptsRaw, 10)) : 1,
+      frameIntervalMs: frameRaw ? Math.max(1, Number.parseInt(frameRaw, 10)) : undefined,
+      stabilityMs: stabilityRaw ? Math.max(1, Number.parseInt(stabilityRaw, 10)) : undefined,
+      tier2Condition: (conditionRaw as Tier2Condition | undefined) ?? 'free',
+      tier2Transcript: transcriptRaw as Tier2TranscriptCondition | undefined,
+      model: opt('--model'),
+      whisperEndpoint: opt('--whisper-endpoint'),
+      confirmWindowMs: confirmRaw ? Math.max(1, Number.parseInt(confirmRaw, 10)) : undefined,
+      json: rest.includes('--json'),
+    };
+  }
+
   if (command === 'tier3-dryrun' || command === 'tier3-run') {
     const opt = (name: string): string | undefined => {
       const idx = rest.indexOf(name);
@@ -369,6 +443,8 @@ export interface CliDependencies {
   dryRun?: typeof runDryAttempt;
   tier1DryRun?: typeof runTier1DryAttempt;
   tier1Run?: typeof runTier1MeasuredAttempt;
+  tier2DryRun?: typeof runTier2DryAttempt;
+  tier2Run?: typeof runTier2MeasuredAttempt;
   tier3DryRun?: typeof runB2ShortDryAttempt;
   tier3Run?: typeof runB2ShortMeasuredAttempt;
   freeze?: (options: FreezeCliOptions) => Promise<FreezeResult>;
@@ -383,6 +459,8 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
   const dryRun = deps.dryRun ?? runDryAttempt;
   const tier1DryRun = deps.tier1DryRun ?? runTier1DryAttempt;
   const tier1Run = deps.tier1Run ?? runTier1MeasuredAttempt;
+  const tier2DryRun = deps.tier2DryRun ?? runTier2DryAttempt;
+  const tier2Run = deps.tier2Run ?? runTier2MeasuredAttempt;
   const tier3DryRun = deps.tier3DryRun ?? runB2ShortDryAttempt;
   const tier3Run = deps.tier3Run ?? runB2ShortMeasuredAttempt;
   const freeze = deps.freeze ?? runFreeze;
@@ -478,6 +556,93 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
         whisperEndpoint: options.whisperEndpoint,
       })
     );
+  }
+
+  if (options.command === 'tier2-dryrun' || options.command === 'tier2-run') {
+    const condition = options.tier2Condition as Tier2Condition;
+    let key = '';
+    if (options.command === 'tier2-run') {
+      const resolved = apiKey();
+      if (!resolved) {
+        writeErr('tier2-run refuses to start: GEMINI_API_KEY is not set (a measured run must never be unlabelled).');
+        return 2;
+      }
+      key = resolved;
+      // The derived matrix is printed with every measured run so a condition
+      // tuple is never run without its provenance in the same breath (§18.1).
+      const matrix = deriveTier2Matrix(emptyTier1Findings(), emptyTier3Findings());
+      writeOut(
+        `matrix: label=${matrix.label} conditions=[${matrix.conditions.join(', ')}] ` +
+          `held=[${matrix.heldConditions.join(', ') || 'none'}] models=[${matrix.modelVariants.join(', ')}] ` +
+          `attempts=${matrix.attemptsPerCondition} transcript=[${matrix.transcriptConditions.join(', ')}]`
+      );
+    }
+    const runId =
+      options.runId ??
+      `tier2-${options.command === 'tier2-run' ? 'measured' : 'dryrun'}-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}`;
+    const outcomes: Array<Record<string, unknown>> = [];
+    let failures = 0;
+    try {
+      for (let index = 1; index <= (options.attempts ?? 1); index += 1) {
+        const attemptId = `attempt-${String(index).padStart(2, '0')}`;
+        const outcome =
+          options.command === 'tier2-dryrun'
+            ? await tier2DryRun(options.scenarioPath as string, {
+                runsRoot: options.runsRoot as string,
+                runId,
+                condition,
+                transcriptCondition: options.tier2Transcript,
+                attemptId,
+                frameIntervalMs: options.frameIntervalMs,
+                stabilityMs: options.stabilityMs,
+                confirmWindowMs: options.confirmWindowMs,
+                quiet: true,
+              })
+            : await tier2Run({
+                runsRoot: options.runsRoot as string,
+                scenarioPath: options.scenarioPath as string,
+                apiKey: key,
+                condition,
+                transcriptCondition: options.tier2Transcript,
+                model: options.model,
+                whisperEndpoint: options.whisperEndpoint,
+                runId,
+                attemptId,
+                frameIntervalMs: options.frameIntervalMs,
+                stabilityMs: options.stabilityMs,
+                confirmWindowMs: options.confirmWindowMs,
+                quiet: true,
+              });
+        if (!outcome.verifyOk) failures += 1;
+        const score = outcome.score;
+        // `--json` prints exactly one document (no human prefix), so a caller
+        // can pipe a tier-2 score without stripping a line.
+        if (!options.json) {
+          writeOut(
+            `${outcome.attemptDir} verify=${outcome.verifyOk ? 'ok' : 'FAILED'} ` +
+              `turns=${score.totals.turns} sends=${score.totals.sends} deliveries=${score.totals.deliveries} ` +
+              `holds=${score.totals.holds} refusals=${score.totals.refusals} ` +
+              `expected=${score.expectedSends} premature=${score.prematureSends.length} ` +
+              `overAsk=${score.overAskRate} honesty=${score.honestyViolations.length} ` +
+              `recall=${score.composedFidelity ? score.composedFidelity.recall.toFixed(2) : 'n/a'}`
+          );
+        }
+        for (const problem of outcome.verifyProblems) writeErr(`problem: ${problem}`);
+        for (const problem of score.problems) writeErr(`score problem: ${problem}`);
+        outcomes.push({
+          attemptDir: outcome.attemptDir,
+          verifyOk: outcome.verifyOk,
+          verifyProblems: outcome.verifyProblems,
+          instruction: outcome.instruction,
+          score,
+        });
+      }
+    } catch (error) {
+      writeErr(error instanceof Error ? error.message : String(error));
+      return 2;
+    }
+    if (options.json) writeOut(JSON.stringify({ runId, condition, attempts: outcomes }, null, 2));
+    return failures === 0 ? 0 : 1;
   }
 
   if (options.command === 'tier3-dryrun') {
