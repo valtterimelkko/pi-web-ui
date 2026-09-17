@@ -371,6 +371,26 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-17 (Wave 1 in flight — B's environment blocker answered; worktree `shared` isolation fixed).**
+B raised a correctly reproduced blocker: my Wave 1 worktree setup symlinked
+`node_modules` into production's, so `@pi-web-ui/shared` resolved to production's
+`shared/dist`, which predates the frozen contract (`dist/types/voice-messages.js`
+absent) — B's repro included the resolver probe and the root cause. Options it
+offered: (1) rebuild production's dist, (2) per-worktree `node_modules`,
+(3) injected-guard divergence. **Decision: (2), implemented by the conductor with
+zero production writes** — each Wave 1 worktree now resolves `@pi-web-ui/shared`
+to its *own* tree (track-b: real `node_modules` directory with per-entry
+symlinks except `@pi-web-ui/shared` → `../../shared`; track-c had independently
+self-patched a lighter variant at 21:36), and each worktree's `shared` was built
+locally (`shared/dist/types/voice-messages.js` now present in both; production's
+dist mtime unchanged at 21:05). Verified with B's exact probe (index and subpath
+to `dist/types/voice-messages.js`). The answer was written to
+`coordination/B/01-questions.md` §"Parent answer" **and** steered into B's
+running turn; B's goal was re-armed (running). `@google/genai` 1.52.0 stays an
+undeclared transitive dependency for now (B records it in its handback); the
+conductor declares it in `server/package.json` + the root lockfile at
+merge/Phase-5 wiring, since the lockfile is a shared, conductor-managed file.
+
 **2026-09-17 (Wave 1 DISPATCHED — B bridge + C client in parallel from post-E master `e56128b`).**
 Children created with goals armed (create-with-goal, atomic) and durable leases,
 each with an objective-side `verifyCommand` keyed to its handback file:
