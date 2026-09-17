@@ -96,6 +96,7 @@ Core architectural themes:
 | Add a REST route | `server/src/routes/*.ts` and `cookieAuthMiddleware`; then read [`SECURITY.md`](./SECURITY.md) |
 | Auth / CSRF / prompt-injection / path validation | `server/src/security/*`, `server/src/middleware/auth.ts`, [`SECURITY.md`](./SECURITY.md) |
 | Config / env vars / ops | `server/src/config.ts`, `.env.example`, [`DEPLOYMENT.md`](./DEPLOYMENT.md) |
+| CI workflows, triggers, or which paths skip the suite | `.github/workflows/application.yml`, `.github/workflows/docs.yml`, `server/tests/unit/ci-workflow-paths.test.ts`, [`docs/CI-PIPELINE.md`](./docs/CI-PIPELINE.md) |
 | Fast session diagnosis / log or session-file lookup | [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md), first run `npm run debug:where -- <id-or-path>`, then use the printed canonical paths/API filters |
 | Logging / levels / namespaces / correlation / diagnostics / error codes | `server/src/logging/*`, `server/src/internal-api/error-codes.ts`, `server/src/internal-api/diagnostics-buffer.ts`, [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md) |
 
