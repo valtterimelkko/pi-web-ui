@@ -102,6 +102,35 @@ Documentation-only pushes skipping the suite was confirmed on live traffic, not
 only on a scratch branch: commit `cd2f876` added a single 408-line document and
 produced a Docs checks run with no correctness run at all.
 
+GitHub evaluates the path filters against the files changed by the push. On a
+**brand-new branch** it uses the branch's first commit against that commit's
+parent, so a branch whose first commit is a documentation change skips the
+correctness job even on its very first push. Verified on 2026-09-17:
+`ci-trigger-verify-2` started at a commit touching only two non-exempt
+documents, and only the Docs checks workflow was created.
+
+### Known pre-existing trap: a new branch fails the warning ratchet
+
+On a new branch, `github.event.before` is the all-zero SHA, so the ratchet step
+falls back to the repository's **root commit**. The diff from the root commit is
+every file, so every pre-existing warning in the repository is reported as new
+debt and the step fails. Observed directly: pushing `ci-trigger-verify` (whose
+first commit touched workflow files) failed at "Changed-source warning ratchet"
+with exit 1 and a list of long-standing warnings.
+
+This is **pre-existing**, not a consequence of the changes above: the ratchet
+step is byte-identical to its form before them. It affects pushes of new
+branches that carry non-documentation changes, and it cannot make a `master`
+push red, because a `master` push has a real previous commit as its base.
+
+When verifying a trigger change on a scratch branch, therefore, judge the
+result by **which workflows were created**, not by the correctness job's
+conclusion. A ratchet failure on a scratch branch says nothing about the trigger
+change. A fix is deliberately not included here, because relaxing a gate's base
+comparison is a decision for the repository owner; the two candidate fixes are
+to skip the step when the base is the zero SHA, or to compare against the
+branch's merge base with `master`.
+
 ## The guard test
 
 `server/tests/unit/ci-workflow-paths.test.ts` enforces both halves of the
