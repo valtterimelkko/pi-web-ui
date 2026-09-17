@@ -1,0 +1,33 @@
+# Gate 0 criterion 1 — plan exit command (run 2026-09-17T20:35:43Z)
+$ cd /root/agent-benchmarks/benchmarks/04-voice-live-lab
+$ node generate_reports.mjs --test-manifest-audit; echo "EXIT:$?"
+---
+Wrote report.json to /root/agent-benchmarks/benchmarks/04-voice-live-lab/report.json
+Wrote report.html to /root/agent-benchmarks/benchmarks/04-voice-live-lab/report.html
+Verdict: not measured
+EXIT:0
+---
+generated report.json (verdict + totals + tiers):
+schema      : voice-lab.report/2
+verdict     : not measured
+verdictReason: No attempt record in runs/ declares a measured run with real provider calls against real services. Dry runs are equipment proofs and cannot enter the standings.
+totals      : {'manifests': 1, 'measured': 0, 'dryRuns': 1, 'invalid': 0}
+tiers       : {
+  "t3": {
+    "tier": "t3",
+    "conditions": [
+      "t3/gemini-live-tier3-dryrun/E-orchestrator/off-peak"
+    ],
+    "scoredAttempts": 0,
+    "dryRunAttempts": 1,
+    "invalidAttempts": 0,
+    "status": "not measured"
+  }
+}
+measured    : []
+--- generated report.html (badge/notice/tier rows) ---
+16:    .badge-unmeasured { background:var(--warn-bg); color:var(--warn); border:1px solid var(--warn); }
+17:    .badge-measured { background:var(--good-bg); color:var(--good); border:1px solid var(--good); }
+31:    <h1>Benchmark 4 · Voice Live Lab <span class="badge badge-unmeasured">NOT MEASURED</span></h1>
+35:      <b>No measured runs.</b>
+62:          <td>not measured</td>

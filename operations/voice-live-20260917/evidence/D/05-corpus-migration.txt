@@ -1,0 +1,35 @@
+# Task 2 — fidelity corpus migration evidence (run 2026-09-17T20:36:28Z)
+
+Source : /root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier2/fidelity-corpus.json
+Fixture: /root/pi-web-ui-track-d/server/tests/fixtures/fidelity-corpus.json
+
+source sha256 : f7d738c3ae227c60220f98ee608fdc71c953f5d035eb805caef6822ec2aafac6
+fixture sha256: e893b9a3917bd9cab0802db2a1e7e86dab4ad1e039e590829f1718262d68cd83
+
+bench HEAD commit (recorded in fixture provenance):
+46b8cc1e357cacd17430c82285e08eef08f8a3c0
+source file blob sha1:
+82ae6e60d5c80c2b665deff060e3ceac53881c94
+
+## items byte-equality (parsed JSON deep-equality of source items vs fixture items)
+items identical: True
+item count     : 20
+ids            : fc-01 .. fc-20
+totals requiredWords=68 negations=12 conditionals=9 targets=31 distractors=20
+provenance     : {
+  "sourceRepo": "agent-benchmarks",
+  "sourcePath": "benchmarks/04-voice-live-lab/scenarios/tier2/fidelity-corpus.json",
+  "sourceCommit": "46b8cc1e357cacd17430c82285e08eef08f8a3c0",
+  "sourceCommitSubject": "docs(bench4): document the working test and regeneration commands",
+  "sourceFileCommit": "f74ae6c",
+  "sourceFileCommitSubject": "feat(voice-live-lab): add Phase L7 tier 2 scenarios, fidelity corpus and derived matrix",
+  "sourceBlobSha1": "82ae6e60d5c80c2b665deff060e3ceac53881c94",
+  "sourceSha256": "f7d738c3ae227c60220f98ee608fdc71c953f5d035eb805caef6822ec2aafac6",
+  "migratedAt": "2026-09-17",
+  "migratedBy": "Wave 0 audit child D (feat/voice-audit)",
+  "note": "Verbatim migration: items[] are byte-for-byte the source item objects (same order, same values). Only provenance and observedGaps were added around the frozen corpus; nothing inside items[] was altered. The source declares version 1.0.0-frozen-2026-09-17."
+}
+observedGaps   : [
+  "Plan recommendation 2026-09 \u00a77.1.3 asks critical survival scoring to cover file paths and target agent names. The frozen corpus declares target names but contains no filesystem-path token in any utterance, requiredWord, negation, conditional or target; the fixture therefore preserves that absence rather than editing a frozen corpus. The scoring harness still implements file-path retention (see filePathsIn / criticalTokenRetention) so the gap is measurable when a corpus carries paths."
+]
+file-path tokens in frozen utterances: []

@@ -1,0 +1,48 @@
+# Task 3 — regression harness suite evidence (run 2026-09-17T20:36:36Z)
+
+$ npm --prefix /root/pi-web-ui-track-d/server test -- tests/regression/; echo "EXIT:$?"
+---
+
+> @pi-web-ui/server@0.1.0 test
+> vitest run tests/regression/
+
+
+ RUN  v1.6.1 /root/pi-web-ui-track-d/server
+
+ ✓ tests/regression/fidelity-corpus.test.ts  (13 tests) 20ms
+
+ Test Files  1 passed (1)
+      Tests  13 passed (13)
+   Start at  20:36:37
+   Duration  665ms (transform 105ms, setup 55ms, collect 64ms, tests 20ms, environment 0ms, prepare 124ms)
+
+JSON report written to /root/pi-web-ui-track-d/server/test-results.json
+EXIT:0
+
+## no-skip proof from server/test-results.json
+numTotalTests     : 13
+numPassedTests    : 13
+numFailedTests    : 0
+numPendingTests   : 0
+numTodoTests      : 0
+
+file: /root/pi-web-ui-track-d/server/tests/regression/fidelity-corpus.test.ts
+    passed -  migrated fidelity corpus fixture is a valid voice-lab.fidelity-corpus/1 document with exactly 20 items
+    passed -  migrated fidelity corpus fixture records provenance back to the bench source and commit
+    passed -  migrated fidelity corpus fixture has ids fc-01 … fc-20, all unique
+    passed -  migrated fidelity corpus fixture declares every required word and target inside its own utterance
+    passed -  migrated fidelity corpus fixture scores the frozen corpus to recall 1.0 with the hermetic composer
+    passed -  scoring helpers (§7.1.3) worked example (fc-01): a clean send keeps recall and the negation; dropping "not" loses the constraint
+    passed -  scoring helpers (§7.1.3) recognised → delivered byte equality is exact for semi-verbatim instructions
+    passed -  scoring helpers (§7.1.3) retains file paths and target names when a corpus item carries them
+    passed -  scoring helpers (§7.1.3) records honestly that the frozen corpus declares no file paths
+    passed -  regression runner skeleton executes checks and passes only when all of them hold
+    passed -  regression runner skeleton fails the whole suite when a single veto check throws
+    passed -  regression runner skeleton fails a suite that executed zero checks (no vacuously green suites)
+    passed -  fixture path resolves to server/tests/fixtures/fidelity-corpus.json
+
+## harness files
+  server/tests/fixtures/fidelity-corpus.json
+  server/tests/regression/fidelity-corpus.test.ts
+  server/tests/regression/harness/corpus.ts
+  server/tests/regression/harness/run.ts
