@@ -388,6 +388,13 @@ review subagent (board entry `pi-01a0b113`, session already gone) — within its
 session tree, no action needed. **E** still running (contract drafted in worktree,
 not yet committed). **A** still running (Phase 1 committed: `0bb5aa8`
 "whole-utterance confirmation shapes — doubt and conditions never release").
+**Conductor early probe on A's Phase 1 commit (read-only, ahead of Gate 1):**
+all 13 of the ledger's Appendix C + pushback cases behave correctly on the
+branch — doubts/conditionals/echoes → `statement`, `why did you say yes` →
+`question`, pure confirmations and the pushback authorisation → `confirm`. Ten
+minutes later, D's session remained busy handling the automated capture lane
+with no repo impact; its retention lease was released and its worktree is kept
+until it settles.
 
 **2026-09-17 (Wave 0 dispatched — strategy amendment).** Execution started on the
 owner's goal-engine activation. Wave 0 was amended to pull **A (kernel) and D
