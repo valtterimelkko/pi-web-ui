@@ -1,11 +1,14 @@
-# Voice Live Lab — Phase L0 Equipment + L2 Baseline Lane + L4 Tier 1 Guarded Harness + L5 Tier 3 Orchestrator
+# Voice Live Lab — Phase L0 Equipment + L2 Baseline Lane + L4 Tier 1 Guarded Harness + L5 Tier 3 Orchestrator + L6 Adaptive Operator Instrument
 
 > **Scope:** L0 (measuring equipment), L2 (baseline lane: Gemma cascade
 > provider, tier-1 scenarios, scorer), L4 (tier 1 guarded native harness:
 > Gemini Live adapter, policy-core-driven gating, commit rule, dry-run
-> runner) and L5 (tier 3: the live model as orchestrator over the shortened
+> runner), L5 (tier 3: the live model as orchestrator over the shortened
 > Benchmark 2, with the Internal API tool surface, the host-enforced
-> confirmation protocol and session-lifetime handling). The lab itself is
+> confirmation protocol and session-lifetime handling) and L6 (the adaptive
+> operator instrument: an LLM playing the operator, a mechanical director,
+> the Gate 4 entry gate, and freezing discoveries back into regressions).
+> The lab itself is
 > specified in
 > [`docs/VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md`](../../docs/VOICE-GEMINI-LIVE-REDESIGN-INTENT-AND-LAB.md)
 > (Parts II–III) and sequenced in
@@ -45,7 +48,9 @@ defect must fail for the intended reason.
 | `lib/tier3-tools.ts` | **L5.** The tier-3 tool surface (§17.2): the seven declared functions (`create_child`, `prompt_child`, `child_status`, `read_child`, `wait_for`, `run_checked`, `notify_owner`), all `NON_BLOCKING` with `WHEN_IDLE`-scheduled responses; Zod-validated arguments; the `run_checked` allow-list as a pure grammar (no shell metacharacters at all, `git -C` inside the run dir with `log|status|diff` only, `python3 -m unittest` with the run dir as cwd, `bash … ctl.sh restart|health|status`, `cat`/`ls` inside the run dir); the 30 s polling rule; the host-enforced confirmation protocol (a committed `confirm` within 60 s, never the model's claim); the tool ledger; and both the real Unix-socket Internal API client and full hermetic doubles. |
 | `lib/harness/tier3-orchestrator.ts` | **L5.** The tier-3 orchestrator: the connect config (`sessionResumption: {}` and `contextWindowCompression` at 100k tokens on EVERY connection), the versioned/hashed ≤600-word system instruction, the operator path (PCM + E-lane markers + the 400 ms commit rule), tool-call dispatch with `WHEN_IDLE` responses, and `goAway` handling — finish in-flight responses, close, reconnect with the last `newHandle`, increment the generation, restore host state from its own ledger, and re-issue (tagged with the original call id) any result that could not go out while the socket was down. |
 | `lib/b2-short-driver.ts` | **L5.** The B2-short driver (§17.3): builds the fixture testbed, evaluates the declarative triggers, supplies the scripted children and scripted live model for the hermetic dry run, walks `B2_SHORT_DRY_SCRIPT`, derives a parent transcript from the event log and scores the run with the UNCHANGED Benchmark 2 `score_orchestrator.py`. `runB2ShortMeasuredAttempt` is the real-run entry. |
-| `cli.ts` | `verify <attemptDir>` — the offline trust boundary; `handshake` — the L1 probes; `baseline-dryrun` — hermetic L2 attempts; `tier1-dryrun` — hermetic L4 attempts; `tier1-run` — measured L4 attempts (needs `GEMINI_API_KEY`); `tier3-dryrun` — hermetic L5 tier-3 attempts over B2-short; `tier3-run` — measured L5 attempts (needs `GEMINI_API_KEY`, a named socket and operator audio fixtures). |
+| `lib/director.ts` | **L6.** Mechanical, model-free director validation (§14.5): Zod JSON shape (`say`/`interrupt`/`waitMs` 0–4000 int/`beatDone`/`why`), ≤ 60 words, en-GB spoken prose (no markdown, no spelled-out paths, no American spelling), the permissions allow-list (a confirmation-shaped line needs a `confirm:`/`card:confirm` grant AND an assistant proposal the operator actually heard), golden-truth leakage against `world.hiddenTruth` (revealed facts allowed), disallowed interrupts, per-beat and per-run turn budgets. Refusal precedence and the by-reason rejection ledger are fixed and documented; the pre-registered Gate 4 ceiling (> 20 % rejected ⇒ `insufficient-evidence`) and the `simulator-failure` exclusion from candidate denominators live in `evaluateInstrument`. A leakage rejection never persists the offending text. |
+| `lib/operator-sim.ts` | **L6.** The adaptive operator (§14.1, §14.3, §14.5): the verbatim persona, exact §14.5 turn-prompt assembly (permissions rendered in plain words, one heard line per played segment with seconds and an `[interrupted]` marker), default seat `commandcode/deepseek/deepseek-v4.1-flash` @ `high` @ 0.7, the one-re-ask protocol, the beat loop (`completed` / `simulator-failure` / `budget-stopped`), and a hermetic `ScriptedSimulatorClient` for offline runs. Simulator reaction latency (model + optional TTS) is stamped on its own event flagged `excludedFromCandidateLatency`. Also holds the Gate 4 entry gate (`runInstrumentEntryGate`, token-F1 agreement with known-good lines) and `buildFrozenVariant`/`extractBeatEvidence` for `freeze`. |
+| `cli.ts` | `verify <attemptDir>` — the offline trust boundary; `handshake` — the L1 probes; `baseline-dryrun` — hermetic L2 attempts; `tier1-dryrun` — hermetic L4 attempts; `tier1-run` — measured L4 attempts (needs `GEMINI_API_KEY`); `tier3-dryrun` — hermetic L5 tier-3 attempts over B2-short; `tier3-run` — measured L5 attempts (needs `GEMINI_API_KEY`, a named socket and operator audio fixtures); `freeze` — **L6**, freeze one adaptive beat's actually-spoken lines into a `provenance: synthetic` frozen variant. |
 | `boot-disposable-server.sh` | `systemd-run --scope --collect` boot of an isolated validation server, outside the production cgroup. |
 
 ## The L0 verification gate
@@ -65,7 +70,7 @@ manifest/artefact hashes.
 ## Usage
 
 ```bash
-# Run the lab unit tests (L0 + L2 + L4)
+# Run the lab unit tests (L0 + L2 + L4 + L5 + L6)
 cd server && npx vitest run tests/voice-live-lab/
 
 # Verify a finalised attempt record
@@ -147,6 +152,46 @@ bash scripts/voice-live-lab/boot-disposable-server.sh stop
 0 only once the socket exists. `status`/`stop` find the state dir via
 `/tmp/voice-lab-current` (or `VOICE_LAB_DIR`). The server's own cgroup guard
 (exit 78) remains the authoritative safety control.
+
+## L6 — the adaptive operator instrument
+
+Adaptive beats let the simulator model choose the next operator line from a
+persona, the beat goal, the permissions and `heard`. It is the only component
+in the lab with **no oracle**, so it is handled explicitly (§14.5):
+
+1. **An entry gate before L6 runs** (`runInstrumentEntryGate`). The simulator
+   is driven against frozen and branching beats whose correct next line is
+   known, and scored on token-F1 agreement with it plus the director's
+   rejection rate. The known line and a frozen beat's golden `utterance` are
+   never placed in the prompt, so the gate cannot be passed by reading the
+   answer.
+2. **Rejection rate is first-class, with a pre-registered ceiling.** More than
+   20 % rejected proposals for a condition ⇒ that condition's adaptive beats
+   are reported `insufficient-evidence`, not scored.
+3. **Failures are attributed to the instrument.** A beat ending
+   `simulator-failure` is excluded from every candidate quality denominator,
+   and a headline dimension may not rest on adaptive beats alone (§20.1).
+
+```bash
+# Freeze one adaptive beat's actually-spoken lines into a regression variant.
+# The variant keeps provenance: synthetic and is NOT part of the frozen
+# comparison backbone. Promotion needs BOTH --allow-promotion and an
+# explaining note; anything less is refused (§14.5).
+npx tsx scripts/voice-live-lab/cli.ts freeze \
+  --attempt attempt-01 --beat b9-adaptive-tail \
+  --runs-root /root/agent-benchmarks/benchmarks/04-voice-live-lab/runs
+
+# --attempt may be an attempt id (searched under --runs-root) or a directory.
+# --output writes elsewhere; without it the variant lands in runs/<run-id>/frozen/.
+# --json prints the whole variant.
+```
+
+Grounded checks live in `server/tests/voice-live-lab/`: `director.test.ts`
+(every rejection rule, the refusal precedence, the ledger and the 20 % rule),
+`operator-sim.test.ts` (persona, exact prompt assembly, the re-ask protocol,
+`simulator-failure`, latency segregation, the beat loop and the entry gate),
+and `freeze.test.ts` (extraction from a real attempt record, synthetic
+provenance, promotion protection, CLI wiring).
 
 ## In-situ verification (2026-09-17)
 

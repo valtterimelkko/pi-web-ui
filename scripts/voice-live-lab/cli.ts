@@ -14,11 +14,21 @@
  * real Live models and judge endpoints, writing capabilities.json.
  */
 
-import { verifyAttempt } from './lib/record.js';
+import { assertSafeRunRoot, verifyAttempt } from './lib/record.js';
 import { runHandshake, type CapabilitiesReport } from './lib/handshake.js';
 import { runDryAttempt } from './lib/baseline-dryrun.js';
 import { runTier1DryAttempt, runTier1MeasuredAttempt } from './lib/tier1-dryrun.js';
 import { runB2ShortDryAttempt, runB2ShortMeasuredAttempt, B2_SHORT_BENCH_ROOT } from './lib/b2-short-driver.js';
+import { parseEventLog } from './lib/scheduler.js';
+import { loadScenarioFile } from './lib/scenario.js';
+import {
+  buildFrozenVariant,
+  freezeManifestNote,
+  manifestEventLogPath,
+  type FrozenVariant,
+} from './lib/operator-sim.js';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 export type CliCommand =
   | 'verify'
@@ -28,6 +38,7 @@ export type CliCommand =
   | 'tier1-run'
   | 'tier3-dryrun'
   | 'tier3-run'
+  | 'freeze'
   | 'help';
 
 export interface CliOptions {
@@ -55,6 +66,14 @@ export interface CliOptions {
   benchRoot?: string;
   /** Tier 3 dry run: skip the Benchmark 2 scoring step. */
   noScore?: boolean;
+  /** freeze: the attempt id or attempt directory to read. */
+  attempt?: string;
+  /** freeze: the beat whose actually-spoken lines become a regression case. */
+  beat?: string;
+  /** freeze: permit promotion into the frozen backbone (needs a note). */
+  allowPromotion?: boolean;
+  /** freeze: the manifest note explaining a synthetic input's promotion. */
+  promotionNote?: string;
 }
 
 export const DEFAULT_RUNS_ROOT = '/root/agent-benchmarks/benchmarks/04-voice-live-lab/runs';
@@ -64,7 +83,7 @@ export const DEFAULT_SCENARIO_PATH =
 export const DEFAULT_TIER3_RUNS_ROOT = '/root/agent-benchmarks/benchmarks/04-voice-live-lab';
 
 export const USAGE = [
-  'Voice Live Lab (Phase L0/L1/L2/L4/L5)',
+  'Voice Live Lab (Phase L0/L1/L2/L4/L5/L6)',
   '',
   'Usage:',
   '  voice-live-lab verify <attemptDir> [--json] [--allow-unfinalised]',
@@ -74,6 +93,7 @@ export const USAGE = [
   '  voice-live-lab tier1-run --scenario <path> [--condition native|sidecar] [--model <id>] [--whisper-endpoint <url>] [--runs-root <dir>] [--json]   (needs GEMINI_API_KEY)',
   '  voice-live-lab tier3-dryrun [--runs-root <dir>] [--run-id <id>] [--attempts N] [--bench-root <dir>] [--peak-window] [--no-score] [--json]',
   '  voice-live-lab tier3-run --socket <sock> --token-path <token> --beats-audio-dir <dir> [--model <id>] [--peak-window] [--probe-tone] [--runs-root <dir>] [--json]   (needs GEMINI_API_KEY)',
+  '  voice-live-lab freeze --attempt <id|dir> --beat <id> [--runs-root <dir>] [--output <path>] [--allow-promotion --promotion-note <text>] [--json]',
   '  voice-live-lab help',
   '',
   'Commands:',
@@ -93,6 +113,10 @@ export const USAGE = [
   '  tier3-run             One MEASURED tier-3 attempt: real Internal API, real Live session, real',
   '                        children. Refuses without GEMINI_API_KEY, and without operator audio',
   '                        fixtures unless --probe-tone labels an equipment smoke run.',
+  '  freeze                Freeze the actually-spoken lines of one adaptive beat (from an attempt',
+  '                        record) into a new frozen regression variant, tagged provenance: synthetic.',
+  '                        Refuses promotion into the frozen backbone without --allow-promotion and',
+  '                        --promotion-note (intent §14.5).',
   '  help                  Show this message.',
 ].join('\n');
 
@@ -170,6 +194,30 @@ export function parseArgs(argv: string[]): CliOptions {
       json: rest.includes('--json'),
     };
   }
+  if (command === 'freeze') {
+    const opt = (name: string): string | undefined => {
+      const idx = rest.indexOf(name);
+      return idx !== -1 && rest[idx + 1] ? rest[idx + 1] : undefined;
+    };
+    const attempt = opt('--attempt');
+    const beatId = opt('--beat');
+    if (!attempt || !beatId) {
+      throw new Error(
+        'Usage: voice-live-lab freeze --attempt <id|dir> --beat <id> [--runs-root <dir>] ' +
+          '[--output <path>] [--allow-promotion --promotion-note <text>] [--json]'
+      );
+    }
+    return {
+      command: 'freeze',
+      attempt,
+      beat: beatId,
+      runsRoot: opt('--runs-root') ?? DEFAULT_RUNS_ROOT,
+      outputPath: opt('--output'),
+      allowPromotion: rest.includes('--allow-promotion'),
+      promotionNote: opt('--promotion-note'),
+      json: rest.includes('--json'),
+    };
+  }
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -196,6 +244,123 @@ export function runVerify(attemptDir: string, options: { json?: boolean; require
   };
 }
 
+// ---------------------------------------------------------------------------
+// freeze (L6, intent §14.5)
+// ---------------------------------------------------------------------------
+
+export interface FreezeCliOptions {
+  /** Attempt id (searched under runs-root) or a direct attempt directory. */
+  attempt: string;
+  beat: string;
+  runsRoot: string;
+  outputPath?: string;
+  allowPromotion?: boolean;
+  promotionNote?: string;
+  json?: boolean;
+}
+
+export interface FreezeResult extends CliResult {
+  variant?: FrozenVariant;
+  outputPath?: string;
+}
+
+/** Resolve an attempt id, or an attempt directory, to its on-disk directory. */
+export function resolveAttemptDir(runsRoot: string, attempt: string): string {
+  const direct = path.resolve(attempt);
+  if (existsSync(direct) && statSync(direct).isDirectory() && existsSync(path.join(direct, 'manifest.json'))) {
+    return direct;
+  }
+  const root = path.resolve(runsRoot);
+  const found = findAttemptDir(root, path.basename(attempt), 0);
+  if (found) return found;
+  throw new Error(`no attempt directory named "${attempt}" with a manifest.json under ${root}`);
+}
+
+function findAttemptDir(dir: string, name: string, depth: number): string | null {
+  if (depth > 4) return null;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry);
+    let isDirectory = false;
+    try {
+      isDirectory = statSync(full).isDirectory();
+    } catch {
+      continue;
+    }
+    if (!isDirectory) continue;
+    if (entry === name && existsSync(path.join(full, 'manifest.json'))) return full;
+    const nested = findAttemptDir(full, name, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+/**
+ * Freeze one adaptive beat's actually-spoken lines into a frozen regression
+ * variant. The variant keeps `provenance: synthetic` and is not eligible for
+ * the frozen backbone unless promotion is granted *and* explained (§14.5); the
+ * output is written once and never overwritten.
+ */
+export async function runFreeze(options: FreezeCliOptions): Promise<FreezeResult> {
+  try {
+    const attemptDir = resolveAttemptDir(options.runsRoot, options.attempt);
+    const manifestPath = path.join(attemptDir, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    const eventsPath = path.join(attemptDir, manifestEventLogPath(manifest));
+    if (!existsSync(eventsPath)) throw new Error(`event log not found: ${eventsPath}`);
+    const parsed = parseEventLog(readFileSync(eventsPath, 'utf8'));
+    if (parsed.problems.length > 0) {
+      throw new Error(`refusing to freeze a damaged event log:\n  - ${parsed.problems.join('\n  - ')}`);
+    }
+
+    const scenarioPath = path.join(attemptDir, 'scenario.json');
+    const scenario = existsSync(scenarioPath) ? loadScenarioFile(scenarioPath) : undefined;
+    const attemptId = typeof manifest.attemptId === 'string' ? manifest.attemptId : path.basename(attemptDir);
+    const variant = buildFrozenVariant({
+      events: parsed.events,
+      attemptId,
+      beatId: options.beat,
+      scenario,
+      allowPromotion: options.allowPromotion,
+      promotionNote: options.promotionNote,
+    });
+
+    const outputPath = path.resolve(
+      options.outputPath ?? path.join(attemptDir, '..', '..', 'frozen', `${variant.id}.json`)
+    );
+    assertSafeRunRoot(path.dirname(outputPath));
+    if (existsSync(outputPath)) {
+      throw new Error(`refusing to overwrite an existing frozen variant: ${outputPath}`);
+    }
+    mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+    const payload = { ...variant, manifestNote: freezeManifestNote(variant) };
+    writeFileSync(outputPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+
+    if (options.json) {
+      return { code: 0, stdout: [JSON.stringify({ ...payload, outputPath }, null, 2)], stderr: [], variant, outputPath };
+    }
+    return {
+      code: 0,
+      stdout: [
+        `froze ${variant.beats[0]?.syntheticLines.length ?? 0} synthetic line(s) from ${attemptId}/${options.beat}`,
+        `wrote ${outputPath}`,
+        `provenance=${variant.provenance} promoted=${String(variant.promotion.promoted)} ` +
+          `syntheticBackboneEligible=${String(variant.promotion.syntheticBackboneEligible)}`,
+      ],
+      stderr: [],
+      variant,
+      outputPath,
+    };
+  } catch (error) {
+    return { code: 1, stdout: [], stderr: [error instanceof Error ? error.message : String(error)] };
+  }
+}
+
 export interface CliDependencies {
   writeOut?: (line: string) => void;
   writeErr?: (line: string) => void;
@@ -206,6 +371,7 @@ export interface CliDependencies {
   tier1Run?: typeof runTier1MeasuredAttempt;
   tier3DryRun?: typeof runB2ShortDryAttempt;
   tier3Run?: typeof runB2ShortMeasuredAttempt;
+  freeze?: (options: FreezeCliOptions) => Promise<FreezeResult>;
   apiKey?: () => string | undefined;
 }
 
@@ -219,6 +385,7 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
   const tier1Run = deps.tier1Run ?? runTier1MeasuredAttempt;
   const tier3DryRun = deps.tier3DryRun ?? runB2ShortDryAttempt;
   const tier3Run = deps.tier3Run ?? runB2ShortMeasuredAttempt;
+  const freeze = deps.freeze ?? runFreeze;
   const apiKey = deps.apiKey ?? (() => process.env.GEMINI_API_KEY);
 
   let options: CliOptions;
@@ -261,6 +428,21 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
       writeErr(error instanceof Error ? error.message : String(error));
       return 1;
     }
+  }
+
+  if (options.command === 'freeze') {
+    const result = await freeze({
+      attempt: options.attempt as string,
+      beat: options.beat as string,
+      runsRoot: options.runsRoot as string,
+      outputPath: options.outputPath,
+      allowPromotion: options.allowPromotion,
+      promotionNote: options.promotionNote,
+      json: options.json,
+    });
+    for (const line of result.stdout) writeOut(line);
+    for (const line of result.stderr) writeErr(line);
+    return result.code;
   }
 
   if (options.command === 'baseline-dryrun') {
