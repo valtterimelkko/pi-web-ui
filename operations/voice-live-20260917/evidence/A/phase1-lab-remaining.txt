@@ -1,0 +1,58 @@
+== voice-live-lab cross-check on the final repaired classifier ==
+2026-09-17T20:44:13Z
+ FAIL  tests/voice-live-lab/tier3-orchestrator.test.ts > B2-short driver (§17.3) > runs the whole dry run end to end against the real fixture and verifies offline
+AssertionError: expected 0 to be greater than 0
+ ❯ tests/voice-live-lab/tier3-orchestrator.test.ts:734:72
+    732|       expect(outcome.scorecard).not.toBeNull();
+    733|       const scores = (outcome.scorecard as { scores: Record<string, nu…
+    734|       for (const dimension of Object.values(scores)) expect(dimension)…
+       |                                                                        ^
+    735|       // The report is inside the record and hashed by the manifest.
+    736|       const report = JSON.parse(readFileSync(outcome.reportPath, 'utf8…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  tests/voice-live-lab/tier3-orchestrator.test.ts > B2-short driver (§17.3) > proves the instrument discriminates: asking permission costs D1, a preference answer grants nothing
+AssertionError: expected { create_child: true, …(1) } to deeply equal { create_child: true, …(1) }
+
+- Expected
++ Received
+
+  Object {
+    "create_child": true,
+-   "restart_service": true,
++   "restart_service": false,
+  }
+
+ ❯ tests/voice-live-lab/tier3-orchestrator.test.ts:791:36
+    789|         toolLedger: Array<{ name: string; confirmed?: boolean }>;
+    790|       };
+    791|       expect(report.confirmations).toEqual({ create_child: true, resta…
+       |                                    ^
+    792|       const confirmedCalls = report.toolLedger.filter((entry) => entry…
+    793|       // One grant covers both child creations (the permission table g…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+ Test Files  2 failed | 2 passed (4)
+      Tests  3 failed | 111 passed (114)
+   Start at  20:44:14
+   Duration  123.02s (transform 1.26s, setup 162ms, collect 3.50s, tests 161.36s, environment 1ms, prepare 326ms)
+
+JSON report written to /root/pi-web-ui-track-a/server/test-results.json
+
+--- full inventory: the two other failures in the same run (rerun of the single s7 dead-end test for the exact output) ---
+ FAIL  tests/voice-live-lab/baseline-dryrun.test.ts > hermetic dry run of every shipped tier-1 scenario > gate regression through the full path: a bare yes with nothing held is a mechanical dead end
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ tests/voice-live-lab/baseline-dryrun.test.ts:163:93
+    161|     const events = eventsOf(outcome.attempt.attemptDir);
+    162|     const mech = events.filter((e) => e.kind === EVENT.HARNESS_MECHANI…
+    163|     expect(mech.some((e) => String(e.payload.reply).includes('Nothing …
+       |                                                                                             ^
