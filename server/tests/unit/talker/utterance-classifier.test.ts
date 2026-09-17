@@ -70,6 +70,96 @@ describe('classifyOperatorUtterance', () => {
 });
 
 // ============================================================================
+// Phase 1 (Voice Mode execution, Wave 0 child A): the live confirmation-gate
+// defect. The classifier used to match confirmation words ANYWHERE in the
+// utterance, so doubt ("not sure" — the word *sure* inside it), conditional
+// agreement ("sure, but wait") and post-affirmation instructions ("yes, hold
+// phase three") released a held draft. These cases pin the repaired
+// whole-utterance semantics: a confirmation must be a confirmation SHAPE,
+// built only from the closed confirmation vocabulary — never a substring, and
+// never a qualifier that takes the authorisation back.
+// ============================================================================
+
+describe('confirmation-gate repair: doubt and uncertainty never confirm', () => {
+  it.each([
+    'not sure',
+    "I'm not sure",
+    'I am not sure',
+    'not really',
+    'not certain',
+    'hard to say',
+    'I doubt it',
+    "I don't doubt it",
+    'unsure about that',
+    'uncertain',
+  ])('classifies %s as a statement, never a confirmation', utterance => {
+    expect(classifyOperatorUtterance(utterance)).toBe('statement');
+  });
+});
+
+describe('confirmation-gate repair: conditional agreement and delay are statements', () => {
+  it.each([
+    'sure, but wait',
+    'yes, hold phase three',
+    'ok but check line 10 first',
+    'yes if the tests pass',
+    'yes, but only after the run finishes',
+    'yes, wait for me',
+    'ok, hold on',
+    'sure, after you finish the current one',
+  ])('classifies %s as a statement, never a confirmation', utterance => {
+    expect(classifyOperatorUtterance(utterance)).toBe('statement');
+  });
+});
+
+describe('confirmation-gate repair: quotation and echo never confirm', () => {
+  it.each([
+    ['I said yes earlier', 'statement'],
+    ['I already said yes', 'statement'],
+    ['why did you say yes', 'question'],
+    ['why did you say yes?', 'question'],
+    ['did you hear me say yes?', 'question'],
+  ] as const)('classifies %s as a %s', (utterance, expected) => {
+    expect(classifyOperatorUtterance(utterance)).toBe(expected);
+  });
+});
+
+describe('confirmation-gate repair: substantial post-affirmation instruction is a statement', () => {
+  it.each([
+    'yes, tell it to also update the changelog',
+    'ok, now ask the worker to rerun the tests',
+    'sure, and tell it to stop after this phase',
+    'yes, make sure the tests pass too',
+  ])('classifies %s as a statement, never a confirmation', utterance => {
+    expect(classifyOperatorUtterance(utterance)).toBe('statement');
+  });
+});
+
+describe('confirmation-gate repair: pure confirmations stay confirmations (keep-green)', () => {
+  it.each(['yes', 'send it', 'confirmed', 'go ahead', 'sure', 'yep', 'okay', 'please send that'])(
+    'classifies %s as a confirmation',
+    utterance => {
+      expect(classifyOperatorUtterance(utterance)).toBe('confirm');
+    }
+  );
+
+  it('keeps the mandatory pushback turn a confirmation (with or without a live proposal)', () => {
+    expect(classifyOperatorUtterance("just do it, don't ask me every single time, it's a simple thing")).toBe('confirm');
+    expect(classifyOperatorUtterance("just do it, don't ask me every single time")).toBe('confirm');
+    expect(classifyOperatorUtterance('just do it, stop asking me every time')).toBe('confirm');
+  });
+
+  it('does not widen the pushback path: a complaint with no authorisation never confirms', () => {
+    expect(classifyOperatorUtterance('stop asking me every single time')).toBe('statement');
+    expect(classifyOperatorUtterance('please stop asking every time')).toBe('statement');
+  });
+
+  it('a pushback whose authorisation is negated never confirms', () => {
+    expect(classifyOperatorUtterance("just don't do it, stop asking me")).toBe('statement');
+  });
+});
+
+// ============================================================================
 // Finding F1 (P7): a cancel-shaped utterance can carry instruction material
 // AFTER the cancel boundary. The classifier reads the cancel first (safe
 // default — the gate must not move), so without a mechanical split the

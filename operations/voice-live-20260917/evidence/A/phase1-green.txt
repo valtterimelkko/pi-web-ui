@@ -1,0 +1,19 @@
+== PHASE 1 GREEN — consolidated record (Voice Mode execution, Wave 0 child A) ==
+Date: 2026-09-17
+
+Defect (conductor baseline, reproduced in phase1-defect-repro.txt):
+  classifyOperatorUtterance returned 'confirm' for 'not sure', 'sure, but wait'
+  and 'yes, hold phase three', so any of them would release a held draft.
+
+RED (phase1-red.txt): 9 failing / 73 passing across
+  tests/unit/talker/utterance-classifier.test.ts + talker-gate.test.ts
+  (doubt, conditional agreement and post-affirmation instruction cases failing).
+
+GREEN (phase1-green-gate1.txt): the two gate files pass, EXIT=0
+  tests/unit/talker/utterance-classifier.test.ts  (54 tests)
+  tests/unit/talker/talker-gate.test.ts           (30 tests)
+  Test Files 2 passed | Tests 84 passed -> exit 0
+  (>= 25 distinct classifier cases; 3 new gate-level tests fail closed)
+
+FULL SUITE (phase1-green-full-talker-suite.txt): EXIT=0
+  Test Files 35 passed (35) | Tests 589 passed | 2 skipped (591)

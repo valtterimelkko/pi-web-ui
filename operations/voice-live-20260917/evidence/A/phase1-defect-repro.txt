@@ -1,0 +1,15 @@
+"not sure" => confirm
+"I am not sure" => statement
+"sure, but wait" => confirm
+"yes, hold phase three" => confirm
+"yes" => confirm
+"send it" => confirm
+"confirmed" => confirm
+"go ahead" => confirm
+"I said yes earlier" => statement
+"why did you say yes" => question
+"hard to say" => statement
+"I doubt it" => statement
+"ok but check line 10 first" => statement
+"yes if the tests pass" => statement
+"just do it, stop asking me every single time" => confirm

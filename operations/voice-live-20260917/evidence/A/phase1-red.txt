@@ -1,0 +1,64 @@
+== Gate 1 RED (Phase 1 tests added, classifier not yet repaired) ==
+2026-09-17T20:31:17Z
+$ npm --prefix server test -- tests/unit/talker/utterance-classifier.test.ts tests/unit/talker/talker-gate.test.ts
+ FAIL  tests/unit/talker/talker-gate.test.ts > NON-NEGOTIABLE 3 (Phase 1 gate repair): doubt and conditions never release a live proposal > "yes, hold phase three" is an instruction, not an authorisation, and releases nothing
+AssertionError: expected { utteranceId: 1, …(2) } to be null
+ ❯ tests/unit/talker/talker-gate.test.ts:304:29
+    302|     await session.handleOperatorTurn(INSTRUCTION);
+    303|     const result = await session.handleOperatorTurn('yes, hold phase t…
+    304|     expect(result.released).toBeNull();
+       |                             ^
+    305|     expect(delivery.deliveredTexts()).toEqual([]);
+    306|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+ FAIL  tests/unit/talker/utterance-classifier.test.ts > confirmation-gate repair: doubt and uncertainty never confirm > classifies not sure as a statement, never a confirmation
+ FAIL  tests/unit/talker/utterance-classifier.test.ts > confirmation-gate repair: doubt and uncertainty never confirm > classifies I'm not sure as a statement, never a confirmation
+AssertionError: expected 'confirm' to be 'statement' // Object.is equality
+
+- Expected
++ Received
+
+- statement
++ confirm
+
+ ❯ tests/unit/talker/utterance-classifier.test.ts:96:50
+     94|     'uncertain',
+     95|   ])('classifies %s as a statement, never a confirmation', utterance =…
+     96|     expect(classifyOperatorUtterance(utterance)).toBe('statement');
+       |                                                  ^
+     97|   });
+     98| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯
+
+ FAIL  tests/unit/talker/utterance-classifier.test.ts > confirmation-gate repair: conditional agreement and delay are statements > classifies sure, but wait as a statement, never a confirmation
+ FAIL  tests/unit/talker/utterance-classifier.test.ts > confirmation-gate repair: conditional agreement and delay are statements > classifies yes, hold phase three as a statement, never a confirmation
+ FAIL  tests/unit/talker/utterance-classifier.test.ts > confirmation-gate repair: conditional agreement and delay are statements > classifies yes, wait for me as a statement, never a confirmation
+ FAIL  tests/unit/talker/utterance-classifier.test.ts > confirmation-gate repair: conditional agreement and delay are statements > classifies ok, hold on as a statement, never a confirmation
+AssertionError: expected 'confirm' to be 'statement' // Object.is equality
+
+- Expected
++ Received
+
+- statement
++ confirm
+
+ ❯ tests/unit/talker/utterance-classifier.test.ts:111:50
+    109|     'sure, after you finish the current one',
+    110|   ])('classifies %s as a statement, never a confirmation', utterance =…
+    111|     expect(classifyOperatorUtterance(utterance)).toBe('statement');
+       |                                                  ^
+    112|   });
+    113| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯
+
+ Test Files  2 failed (2)
+      Tests  9 failed | 73 passed (82)
+   Start at  20:31:17
+   Duration  1.11s (transform 410ms, setup 88ms, collect 526ms, tests 149ms, environment 0ms, prepare 186ms)
+
+JSON report written to /root/pi-web-ui-track-a/server/test-results.json
+EXIT=1
