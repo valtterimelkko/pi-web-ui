@@ -93,6 +93,7 @@ describe.skipIf(!benchExists)('hermetic dry run of every shipped tier-1 scenario
     { file: 't1-s5-sparse-state.json', releases: 1 },
     { file: 't1-s6-worker-permission.json', releases: 2 },
     { file: 't1-s7-reading-levels.json', releases: 0 },
+    { file: 't1-s8-bare-yes-dead-end.json', releases: 0 },
   ];
 
   for (const { file, releases } of scenarios) {
@@ -148,12 +149,14 @@ describe.skipIf(!benchExists)('hermetic dry run of every shipped tier-1 scenario
   }
 
   it('gate regression through the full path: a bare yes with nothing held is a mechanical dead end', async () => {
-    // s7 ends with "Ok, stop reading." — confirm-shaped, but with the level
-    // flips suppressed [[to-talker]] there is nothing held: no release, and
-    // the fixed nothing-pending ack is what reaches TTS.
-    const outcome = await runDryAttempt(path.join(BENCH_SCENARIOS, 't1-s7-reading-levels.json'), {
+    // s8 is a single bare "Yes." with nothing held: no release, and the fixed
+    // nothing-pending ack is what reaches TTS. (The s7 stop-reading beat is a
+    // gesture/playback control; after the 2026-09-17 gate repair its utterance
+    // classifies as a talker-directed statement, so the full-path dead end is
+    // probed here with a genuine bare confirmation.)
+    const outcome = await runDryAttempt(path.join(BENCH_SCENARIOS, 't1-s8-bare-yes-dead-end.json'), {
       runsRoot: root,
-      runId: 'dryrun-s7-deadend',
+      runId: 'dryrun-s8-deadend',
       attemptId: 'attempt-01',
       frameIntervalMs: 1,
       quiet: true,
