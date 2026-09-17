@@ -25,19 +25,29 @@ const benchRootExists = existsSync(BENCH_ROOT);
 
 /** Paths of the shipped tier-1 scenarios, sorted by id. */
 function tier1ScenarioPaths(): string[] {
-  const dir = path.join(BENCH_ROOT, 'scenarios', 'tier1');
-  return readdirSync(dir)
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => path.join(dir, name))
-    .sort();
+  if (!benchRootExists) return [];
+  try {
+    const dir = path.join(BENCH_ROOT, 'scenarios', 'tier1');
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => path.join(dir, name))
+      .sort();
+  } catch {
+    return [];
+  }
 }
 
 function worldPaths(): string[] {
-  const dir = path.join(BENCH_ROOT, 'worlds');
-  return readdirSync(dir)
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => path.join(dir, name))
-    .sort();
+  if (!benchRootExists) return [];
+  try {
+    const dir = path.join(BENCH_ROOT, 'worlds');
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => path.join(dir, name))
+      .sort();
+  } catch {
+    return [];
+  }
 }
 
 /** Every word sequence a world hides, checked against spoken golden text. */

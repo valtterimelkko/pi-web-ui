@@ -542,9 +542,48 @@ describe('Tier3Orchestrator — lifetime handling (§17.4)', () => {
   });
 });
 
+const BENCH_ROOT_B2 = process.env.B2_SHORT_BENCH_ROOT ?? '/root/agent-benchmarks/benchmarks/04-voice-live-lab/b2-short';
+const benchB2Exists = existsSync(path.join(BENCH_ROOT_B2, 'beats.json'));
+
 /** A minimal B2-short manifest for the pure trigger-rule tests. */
 function manifestStub(): B2ShortManifest {
-  const beats = loadB2ShortBeats();
+  const beats: B2ShortBeatsFile = benchB2Exists
+    ? loadB2ShortBeats(path.join(BENCH_ROOT_B2, 'beats.json'))
+    : {
+        schema: 'voice-lab.b2short-beats/1',
+        benchmark: 'b2-short',
+        sizing: { targetSeconds: 720, hardCapSeconds: 900 },
+        childInvariant: { runtime: 'pi', provider: 'zai', model: 'zai/glm-5.3-flash', thinkingLevel: 'high' },
+        frozen: [
+          { id: 'b1-initial-brief', kind: 'brief', trigger: 't=0', text: 'brief' },
+          { id: 'b2-defect', kind: 'supervisor-event-1', trigger: 'repo state', text: 'defect' },
+          { id: 'b3-feasibility', kind: 'supervisor-event-2', trigger: 'repo state', text: 'feasibility' },
+          { id: 'b4-restart', kind: 'supervisor-event-3', trigger: 'repo state', text: 'restart' },
+        ],
+        triggers: {
+          'b2-defect': {
+            afterBeats: ['b1-initial-brief'],
+            anyOf: [{ repoCommits: { repo: 'repo-core', atLeast: 1 } }, { elapsedS: 60 }],
+          },
+          'b3-feasibility': {
+            afterBeats: ['b2-defect'],
+            anyOf: [{ repoCommits: { repo: 'repo-tools', atLeast: 1 } }, { elapsedS: 60 }],
+          },
+          'b4-restart': {
+            afterBeats: ['b3-feasibility'],
+            anyOf: [
+              { fileContains: { repo: 'repo-core', path: 'src/routes.py', text: 'request = request or {}' } },
+              { repoCommits: { repo: 'repo-core', atLeast: 2 } },
+              { elapsedS: 60 },
+            ],
+          },
+        },
+        branching: [{ id: 'b-help', trigger: 'user ask', text: "don't need to ask" }],
+        permissionTable: [
+          { action: 'create_child', granted: 'once' },
+          { action: 'restart_service', granted: 'once' },
+        ],
+      };
   return {
     benchmark: 'b2-short',
     schema: beats.schema,
@@ -574,8 +613,8 @@ function manifestStub(): B2ShortManifest {
 // ── 4. The B2-short driver (fixture, triggers, script, end-to-end dry run) ───
 
 describe('B2-short driver (§17.3)', () => {
-  const benchRoot = process.env.B2_SHORT_BENCH_ROOT ?? '/root/agent-benchmarks/benchmarks/04-voice-live-lab/b2-short';
-  const benchExists = existsSync(path.join(benchRoot, 'beats.json'));
+  const benchRoot = BENCH_ROOT_B2;
+  const benchExists = benchB2Exists;
 
   it('loads four frozen beats, the permission table and the triggers', () => {
     if (!benchExists) return;
