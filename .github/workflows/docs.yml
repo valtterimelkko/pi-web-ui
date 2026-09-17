@@ -1,0 +1,30 @@
+name: Docs checks
+
+# Runs on every push and pull request with no path filter, because the
+# correctness workflow skips documentation-only changes. These checks must
+# therefore stay in a workflow that cannot be filtered out, or a broken
+# relative link or a diverged AGENTS.md/CLAUDE.md pair could reach a green
+# push unobserved.
+#
+# Both scripts use only Node built-ins, so this job deliberately skips
+# `npm ci` and stays in the seconds range.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.20.0'
+      - run: npm run docs:check-agent-guides && npm run docs:check-links

@@ -2,16 +2,36 @@ name: Application correctness
 
 on:
   push:
+    # Documentation-only changes cannot affect this job, so they skip it and are
+    # covered by the always-on `docs` workflow instead. The negated entries are
+    # Markdown files this suite actually reads: skipping the suite for a change
+    # that touches only one of those would let a broken build reach a green
+    # push, because a skipped job cannot fail. Both halves of this list are
+    # enforced mechanically by tests/unit/ci-workflow-paths.test.ts.
+    paths-ignore: &docs-only-changes
+      - '**.md'
+      - '!AGENTS.md'
+      - '!README.md'
+      - '!SECURITY.md'
+      - '!docs/INTERNAL-API-CONTRACT.md'
+      - '!docs/INTERNAL-API.md'
+      - '!docs/LIVE-VALIDATION.md'
+      - '!docs/LONG-HORIZON-VALIDATION.md'
+      - '!docs/OBSERVABILITY.md'
+      - '!docs/OPENCODE-DIRECT-INTEGRATION.md'
+      - '!docs/PRODUCTION-STOP-ROBUSTNESS.md'
+      - '!docs/TROUBLESHOOTING.md'
   pull_request:
+    paths-ignore: *docs-only-changes
 
 permissions:
   contents: read
 
 # Supersede in-flight runs for the same workflow and ref. This repository takes
-# rapid successive pushes (frequently docs-only), and without this every push
-# ran the whole ~11-minute suite to completion even after a newer commit had
-# made it stale. A superseded run reports `cancelled`, never `success`, so no
-# consumer may read a cancelled run as a passing gate.
+# rapid successive pushes, and without this every push ran the whole suite to
+# completion even after a newer commit had made it stale. A superseded run
+# reports `cancelled`, never `success`, so no consumer may read a cancelled run
+# as a passing gate.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -32,7 +52,6 @@ jobs:
           node-version: '24.20.0'
           cache: npm
       - run: npm ci
-      - run: npm run docs:check-agent-guides && npm run docs:check-links
       - run: npm run lint
       - name: Changed-source warning ratchet
         env:
