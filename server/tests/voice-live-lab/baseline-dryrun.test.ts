@@ -19,7 +19,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { EVENT, parseEventLog } from '../../../scripts/voice-live-lab/lib/scheduler.js';
-import { runDryAttempt } from '../../../scripts/voice-live-lab/lib/baseline-dryrun.js';
+import {
+  runDryAttempt,
+  createDryRunTalkerModel,
+  createScriptedStt,
+  createSilentTts,
+  utterancePcm,
+  DRY_RUN_TALKER,
+  DRY_RUN_STT_PROVIDER,
+  DRY_RUN_TTS_PROVIDER,
+} from '../../../scripts/voice-live-lab/lib/baseline-dryrun.js';
 import { main as cliMain } from '../../../scripts/voice-live-lab/cli.js';
 
 const BENCH_SCENARIOS = '/root/agent-benchmarks/benchmarks/04-voice-live-lab/scenarios/tier1';
@@ -38,6 +47,42 @@ function eventsOf(attemptDir: string) {
   expect(parsed.problems).toEqual([]);
   return parsed.events;
 }
+
+describe('baseline dry-run hermetic primitives', () => {
+  it('exposes deterministic dry-run provider and talker identities', () => {
+    expect(DRY_RUN_TALKER).toBe('dryrun-script');
+    expect(DRY_RUN_STT_PROVIDER).toBe('script');
+    expect(DRY_RUN_TTS_PROVIDER).toBe('silence-mock');
+  });
+
+  it('scripted stt serves utterances deterministically', async () => {
+    const stt = createScriptedStt(['hello', 'world']);
+    const r1 = await stt.transcribe(Buffer.alloc(10));
+    expect(r1.text).toBe('hello');
+    const r2 = await stt.transcribe(Buffer.alloc(10));
+    expect(r2.text).toBe('world');
+    expect(stt.served).toEqual(['hello', 'world']);
+  });
+
+  it('silent tts synthesises pcm proportional to word count', async () => {
+    const tts = createSilentTts(24000);
+    const r = await tts.synthesise('one two three');
+    expect(r.pcm.length).toBeGreaterThan(0);
+    expect(r.provider).toBe('silence-mock');
+  });
+
+  it('utterance pcm produces valid non-empty audio buffer', () => {
+    const pcm = utterancePcm('test prompt');
+    expect(pcm.length).toBeGreaterThan(0);
+  });
+
+  it('scripted talker model responds from worker snapshot', async () => {
+    const model = createDryRunTalkerModel({ activity: 'Testing in progress' });
+    const res = await model.completeTurn([{ role: 'user', content: 'status' }]);
+    expect(res.text).toContain('Testing in progress');
+    expect(model.calls).toBe(1);
+  });
+});
 
 describe.skipIf(!benchExists)('hermetic dry run of every shipped tier-1 scenario', () => {
   const scenarios = [
