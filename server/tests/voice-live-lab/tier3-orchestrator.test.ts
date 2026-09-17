@@ -707,6 +707,14 @@ describe('B2-short driver (§17.3)', () => {
       ) as { usage: Record<string, unknown> };
       expect(manifest.usage).toMatchObject({ mode: 'dry-run', realProviderCalls: 0 });
       expect((manifest.usage.realServices as Record<string, unknown>).repositories).toBe(true);
+      // The manifest itself records children, briefs, tool calls, polls and
+      // the connection generations used.
+      const orchestration = manifest.usage.orchestration as Record<string, unknown>;
+      expect(orchestration).toMatchObject({ generations: 2, polls: 0, createChildCalls: 2, milestones: 3 });
+      expect((orchestration.childSessions as Array<Record<string, unknown>>).map((child) => child.name)).toEqual([
+        'transfer worker',
+        'tools worker',
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

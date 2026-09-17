@@ -1158,6 +1158,24 @@ export async function runB2ShortDryAttempt(
         declarations: TIER3_FUNCTION_DECLARATIONS.length,
         names: TIER3_FUNCTION_DECLARATIONS.map((declaration) => declaration.name),
       },
+      // The manifest is the frozen artefact, so it carries the facts the
+      // report and the lifecycle events also show: child sessions, briefs,
+      // tool calls, polls and the connection generations used.
+      orchestration: {
+        generations: orchestrator.connectionGeneration,
+        toolCalls: toolHost.ledger.length,
+        polls: toolHost.polls,
+        createChildCalls: toolHost.createChildCalls,
+        milestones: toolHost.milestones.length,
+        childSessions: toolHost.children.map((child) => ({
+          name: child.name,
+          sessionId: child.sessionId,
+          briefBytes: child.briefBytes,
+          briefSha256: child.briefSha256,
+          model: child.model,
+          thinkingLevel: child.thinkingLevel,
+        })),
+      },
     },
     outcome: 'completed',
   });
@@ -1520,6 +1538,22 @@ export async function runB2ShortMeasuredAttempt(
       toolCondition: {
         declarations: TIER3_FUNCTION_DECLARATIONS.length,
         names: TIER3_FUNCTION_DECLARATIONS.map((declaration) => declaration.name),
+      },
+      // The manifest is the frozen artefact, so it carries the facts the
+      // report and the lifecycle events also show.
+      orchestration: {
+        generations: orchestrator.connectionGeneration,
+        toolCalls: toolHost.ledger.length,
+        polls: toolHost.polls,
+        milestones: toolHost.milestones.length,
+        childSessions: toolHost.children.map((child) => ({
+          name: child.name,
+          sessionId: child.sessionId,
+          briefBytes: child.briefBytes,
+          briefSha256: child.briefSha256,
+          model: child.model,
+          thinkingLevel: child.thinkingLevel,
+        })),
       },
     },
     outcome: budgetStopped ? 'budget-stopped' : 'completed',
