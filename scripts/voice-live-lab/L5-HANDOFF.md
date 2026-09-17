@@ -208,8 +208,9 @@ repository state, and the manifest's beats are byte-identical to `beats.json`.
 
 ## 7. For the parent
 
-- Commits: `c0a3ff4`, `412712a`, `5c9d8f3` on `master` (pi-web-ui);
-  `afa130e` on `main` (agent-benchmarks). Both pushed.
+- Commits: `c0a3ff4` … `6b2192e` on `master` (pi-web-ui, five commits: feature,
+  two test/hardening, docs, manifest detail); `afa130e` on `main`
+  (agent-benchmarks). Both pushed.
 - `docs/VOICE-GEMINI-LIVE-STATUS-LEDGER.md` carries the parent's uncommitted
   "Child C Dispatched (Phase L5)" entry and was deliberately left untouched.
 - Gate 3's live half (live candidates + the two B2-short text controls) is the
