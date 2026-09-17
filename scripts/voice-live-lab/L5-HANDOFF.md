@@ -206,6 +206,17 @@ repository state, and the manifest's beats are byte-identical to `beats.json`.
    discriminating in a tier-3 row; the canonical fix belongs in
    `score_voice.py::tier3_transcript_dimensions`, outside this child's paths.
 
+## 7. For the parent
+
+- Commits: `c0a3ff4`, `412712a`, `5c9d8f3` on `master` (pi-web-ui);
+  `afa130e` on `main` (agent-benchmarks). Both pushed.
+- `docs/VOICE-GEMINI-LIVE-STATUS-LEDGER.md` carries the parent's uncommitted
+  "Child C Dispatched (Phase L5)" entry and was deliberately left untouched.
+- Gate 3's live half (live candidates + the two B2-short text controls) is the
+  next step and is a scheduled, budgeted, operator-window run, not a code task.
+- An Agent OS capture for this phase is best taken by the parent at sign-off,
+  together with the L4 row, rather than duplicated from a child session.
+
 ---
 
 FROZEN-HANDBACK: Phase L5 Tier 3 Live Model as Orchestrator Complete.
