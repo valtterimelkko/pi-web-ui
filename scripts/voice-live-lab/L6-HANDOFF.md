@@ -2,7 +2,8 @@
 
 **Child D, Voice Live Lab build sequence (plan §23 L6 row; intent §14.5, §18.1,
 §20.1, §23; implementation plan §Phase L6).**
-Committed on `master`; the parent independently verifies and signs off.
+Committed on `master` as `30e2f5f`; the parent independently verifies and signs
+off.
 
 ## What was delivered
 
@@ -233,9 +234,9 @@ The workspace `typecheck`/`build` results are recorded in the commit message.
   schema already accepts `mode: "adaptive"` with `goal`, `maxTurns` and
   `permissions`; this phase builds the instrument, it does not add beats to
   existing scenario files (those paths are outside this child's ownership).
-- Commits: this phase's commit(s) on `master` in `pi-web-ui` (see the commit
-  message for the exact SHA); nothing was pushed by the child if the parent's
-  standing rule is to push per phase.
+- Commits: this phase is `30e2f5f` on `master` in `pi-web-ui` (pushed to
+  `origin/master`); no other path was touched. Nothing was deployed and no
+  production service was restarted.
 - An Agent OS capture for this phase is best taken by the parent at sign-off,
   together with the L4/L5 rows.
 
