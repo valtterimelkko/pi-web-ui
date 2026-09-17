@@ -31,7 +31,7 @@ export default defineConfig({
       reporter: ['text', 'json', 'html'],
       // Measure production source explicitly (truthful coverage of src/**).
       include: ['src/**/*.{ts,tsx}'],
-      exclude: ['node_modules/', 'tests/', 'dist/', 'src/**/*.d.ts'],
+      exclude: ['node_modules/', 'tests/', 'dist/', 'src/**/*.d.ts', 'src/**/*.test.ts', 'src/**/*.test.tsx'],
       // Truthful ratchet (Q4): the explicit `include` now measures ALL of src/**,
       // so the previous 70/70/60/70 thresholds (which silently ignored
       // unmeasured components) were inflated. The measured baseline with full
@@ -46,6 +46,11 @@ export default defineConfig({
         statements: 56,
       },
     },
-    include: ['tests/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
+    include: [
+      'tests/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}',
+      // Co-located unit suites (the voice-live surface keeps its tests next to
+      // the module they pin, as `client/src/**` is the owned path in the brief).
+      'src/**/*.{test,spec}.{ts,tsx}',
+    ],
   },
 });

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice Mode ducking lab (Track C)</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 1.5rem; background: #0f1115; color: #e6e8eb; }
+      main { display: flex; gap: 2rem; align-items: flex-start; flex-wrap: wrap; }
+      #readout { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+      #react-root { min-width: 26rem; }
+      button { font-size: 13px; padding: 0.4rem 0.8rem; margin-right: 0.4rem; border-radius: 8px; }
+      h1 { font-size: 15px; }
+    </style>
+  </head>
+  <body>
+    <h1>Voice Mode ducking lab — real Web Audio, real AudioWorklet, virtual microphone</h1>
+    <main>
+      <section>
+        <p>
+          <button id="arm">Arm audio (user gesture)</button>
+          <button id="start">Start listening</button>
+          <button id="speak">Operator speaks</button>
+          <button id="silence">Operator stops</button>
+        </p>
+        <pre id="readout">idle</pre>
+      </section>
+      <section id="react-root"></section>
+    </main>
+    <script type="module" src="/client/src/dev/voiceLiveLab.tsx"></script>
+  </body>
+</html>
