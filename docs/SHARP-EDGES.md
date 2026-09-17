@@ -273,3 +273,5 @@ The frontend input box stays disabled from `agent_start` until `agent_end`. If y
 
 ### Claude and OpenCode availability checks are async
 Availability is not known at page load. The UI must handle `claudeAvailable: false` and `opencodeAvailable: false` gracefully until the server announces status after WebSocket auth.
+
+<!-- ci trigger verification marker -->
