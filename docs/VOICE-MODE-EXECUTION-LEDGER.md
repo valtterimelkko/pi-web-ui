@@ -387,8 +387,10 @@ follow-up `4ca8262`: the default Playwright config now excludes the three voice-
 are opt-in via their own configs — CI does not run Playwright, but a bare local
 `npx playwright test` would otherwise run them against the wrong server and page). Cleanup: watch
 cancelled, lease released, worktree removed, branch deleted. **Honest process note: the merge and
-config commits were pushed before the post-merge full gate finished; the gate result is recorded in
-the next entry.** **Phase 7 handed to the operator** (Telegram question + `PHASE-7-RUNBOOK.md`):
+config commits were pushed before the post-merge full gate finished; **the gate then passed on the
+final master**: `npm run typecheck && npm test` exit 0 — shared 9 files/246, server 431 files/
+5355 passed (+2 skipped), client 144 files/1611, internal-api-mcp 8/71; `npm run lint` exit 0.**
+**Phase 7 handed to the operator** (Telegram question + `PHASE-7-RUNBOOK.md`):
 one-command disposable slice with the live engine, pre-tested by me (lane live, audio streamed,
 clean detach). **Wave 3 closeout summary: all eleven review findings plus M7/M8 are closed across
 K/L/M; three items are recorded as accepted LOWs rather than silently claimed — L3 (present-variant
