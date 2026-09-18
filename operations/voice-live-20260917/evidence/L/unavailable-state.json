@@ -1,0 +1,23 @@
+{
+  "capturedAt": "2026-09-18T03:45:49.146Z",
+  "lane": {
+    "state": "unavailable",
+    "detail": "voice_provider_unavailable: live voice is disabled on this server (VOICE_MODE_ENGINE=cascade); the push-to-talk cascade is now serving this lane"
+  },
+  "startFrame": {
+    "type": "voice_session_start",
+    "version": 1,
+    "laneId": "voice-lab-worker:lab",
+    "attachmentGeneration": 0,
+    "requestId": "voicereq-1-ys5vhe",
+    "workerSessionId": "voice-lab-worker",
+    "runtime": "pi",
+    "captureMode": "open-mic",
+    "readingLevel": "verbatim"
+  },
+  "lastError": {
+    "code": "voice_provider_unavailable",
+    "message": "live voice is disabled on this server (VOICE_MODE_ENGINE=cascade); the push-to-talk cascade is now serving this lane",
+    "fatal": true
+  }
+}

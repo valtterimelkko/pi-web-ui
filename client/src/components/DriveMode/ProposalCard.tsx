@@ -29,12 +29,18 @@ export interface ProposalCardProps {
   staleDetail?: string;
   /** True while a confirmation is in flight. */
   busy?: boolean;
+  /** True while a read-back of this proposal is playing (H3). */
+  readingBack?: boolean;
+  /** False when this host cannot speak the read-back at all. */
+  readBackSupported?: boolean;
   onConfirm: (variant: VoiceProposalVariant) => void;
   onCancel: () => void;
-  /** Ask the surface to read this variant back aloud (starts presentation). */
+  /**
+   * Ask the surface to read this variant back aloud. The click starts playback
+   * and nothing else: only the playback's own completion may report the
+   * proposal as presented (H3), which is why the card has no report callback.
+   */
   onReadBack?: (variant: VoiceProposalVariant) => void;
-  /** Report that a read-back finished or was interrupted. */
-  onPresentationReport?: (completed: boolean, stoppedAtChar?: number) => void;
 }
 
 const STATUS_LABEL: Record<ProposalPresentationStatus, string> = {
@@ -48,10 +54,11 @@ export function ProposalCard({
   status,
   staleDetail,
   busy = false,
+  readingBack = false,
+  readBackSupported = true,
   onConfirm,
   onCancel,
   onReadBack,
-  onPresentationReport,
 }: ProposalCardProps) {
   const [view, setView] = useState<VoiceProposalVariant>(proposal.presentedVariant);
   const shown = view === 'original' ? proposal.original : proposal.tidied;
@@ -180,15 +187,19 @@ export function ProposalCard({
           <button
             type="button"
             data-testid="proposal-readback"
-            disabled={status === 'stale'}
+            data-reading={readingBack ? 'true' : 'false'}
+            disabled={status === 'stale' || readingBack || !readBackSupported}
+            title={readBackSupported ? undefined : 'This browser cannot read it back aloud'}
             className="inline-flex items-center gap-1.5 rounded-lg border border-outline-default dark:border-outline-default-dark px-3 py-1.5 text-xs disabled:opacity-50"
             onClick={() => {
+              // Starts the read-back and NOTHING ELSE. "Presented" is decided by
+              // the playback reaching its end (surface.reportPresentation), so a
+              // click can never fabricate a completed presentation (H3).
               onReadBack(view);
-              onPresentationReport?.(true);
             }}
           >
             <Volume2 size={13} aria-hidden />
-            Read it back
+            {readingBack ? 'Reading it back…' : 'Read it back'}
           </button>
         )}
         <button

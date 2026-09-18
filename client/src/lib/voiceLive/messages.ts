@@ -36,6 +36,7 @@ import {
   VOICE_AUDIO_OUTPUT_MIME,
   VOICE_CLIENT_MESSAGE_FIELDS,
   VOICE_ENVELOPE_FIELDS,
+  VOICE_SERVER_REQUIRED_FIELDS,
   VOICE_WIRE_VERSION,
   checkVoiceEnvelope,
   isVoiceAudioPayloadWithinLimit,
@@ -368,14 +369,74 @@ export type VoiceInboundRefusalReason =
   | 'stale-generation'
   | 'foreign-request';
 
+/**
+ * A refusal the SERVER sent about the transport itself, carried by a frame that
+ * names no lane (M8). The budget/rate limiter refuses a frame it could not read
+ * an envelope from — `laneId: ''` — and the lane envelope check would otherwise
+ * classify that notice as a malformed frame and drop it, so the one surface the
+ * operator most needs when the client is misbehaving was the one it could never
+ * see. It is accepted as what it is and rendered; it still names no lane, so it
+ * grants nothing.
+ */
+export interface VoiceTransportRefusal {
+  code: string;
+  message: string;
+  fatal: boolean;
+  /** The refusal answered a frame at this attachment generation, when known. */
+  attachmentGeneration: number | null;
+}
+
 export type VoiceInboundResult =
   | { kind: 'accepted'; message: VoiceServerMessage }
+  | { kind: 'transport-refusal'; refusal: VoiceTransportRefusal }
   | {
       kind: 'refused';
       reason: VoiceInboundRefusalReason;
       code: VoiceErrorCode;
       detail: string;
     };
+
+/**
+ * Recognise a well-formed server→client `voice_error` that does not name a lane:
+ * the transport-level refusal shape of M8. Everything about the frame must still
+ * be exactly the declared shape — known type, the version this client speaks,
+ * and every declared field of `voice_error` present and of the right type — so a
+ * genuinely malformed frame is still refused, never promoted to a notice by
+ * accident. Unknown EXTRA fields stay tolerated: server→client frames follow the
+ * contract's additive rule.
+ */
+export function readTransportRefusal(raw: unknown): VoiceTransportRefusal | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (record.type !== 'voice_error') return null;
+  // A frame that names a lane is a lane frame and takes the normal path.
+  if (typeof record.laneId === 'string' && record.laneId.length > 0) return null;
+  if (record.laneId !== undefined && record.laneId !== null && typeof record.laneId !== 'string') {
+    return null;
+  }
+  if (record.version !== VOICE_WIRE_VERSION) return null;
+  // The shared schema's own declared fields, so this cannot drift from it.
+  if (VOICE_SERVER_REQUIRED_FIELDS.voice_error.some((key) => record[key] === undefined || record[key] === null)) {
+    return null;
+  }
+  if (typeof record.code !== 'string' || record.code.length === 0) return null;
+  if (typeof record.message !== 'string' || record.message.length === 0) return null;
+  if (typeof record.fatal !== 'boolean') return null;
+  const generation = record.attachmentGeneration;
+  if (
+    generation !== undefined &&
+    generation !== null &&
+    !(typeof generation === 'number' && Number.isInteger(generation) && generation >= 0)
+  ) {
+    return null;
+  }
+  return {
+    code: record.code,
+    message: record.message,
+    fatal: record.fatal,
+    attachmentGeneration: typeof generation === 'number' ? generation : null,
+  };
+}
 
 /**
  * Decide whether one inbound frame may be applied to this lane. Nothing is
@@ -392,6 +453,13 @@ export function interpretInbound(
   lane: VoiceLaneIdentity,
   acceptedRequestIds?: ReadonlySet<string>,
 ): VoiceInboundResult {
+  // A transport-level refusal is decided FIRST, because its defining property is
+  // that it carries no lane envelope — which the envelope check refuses by
+  // construction. The shape check inside `readTransportRefusal` is what keeps
+  // "no envelope" from becoming "anything goes" (M8).
+  const transportRefusal = readTransportRefusal(raw);
+  if (transportRefusal) return { kind: 'transport-refusal', refusal: transportRefusal };
+
   const check = checkVoiceEnvelope(raw, 'server-to-client');
   if (!check.ok) {
     const record = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;

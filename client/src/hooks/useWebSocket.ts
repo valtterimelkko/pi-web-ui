@@ -15,6 +15,7 @@ import { useSessionStore, useUIStore } from '../store';
 import { WebSocketClient, createWebSocketClient, type WebSocketSendResult, type WebSocketStatus } from '../lib/websocket';
 import { emitTalkerTurnResult } from '../lib/talkerBus';
 import { emitTurnDigestResult } from '../lib/turnDigest';
+import { emitVoiceFrame } from '../lib/voiceLive/frameBus';
 
 export function useWebSocket() {
   const clientRef = useRef<WebSocketClient | null>(null);
@@ -47,6 +48,11 @@ export function useWebSocket() {
         // P17 digest tap: the reading levels' digest answer is consumed the
         // same way, and for the same reason (see lib/turnDigest.ts).
         if (emitTurnDigestResult(message)) return;
+        // M7 voice-lane tap: `voice_*` frames belong to the mounted native
+        // voice lanes, and the session store has no voice vocabulary — it would
+        // record each of them as protocol drift. Consumed BEFORE the store, as
+        // the talker tap is (see lib/voiceLive/frameBus.ts).
+        if (emitVoiceFrame(message)) return;
         handleServerMessage(message);
       },
       onStatusChange: (status: WebSocketStatus) => {

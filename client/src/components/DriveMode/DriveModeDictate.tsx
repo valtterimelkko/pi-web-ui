@@ -16,6 +16,7 @@ import {
 } from './readingLevel';
 import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
 import { VoiceLayoutToggle } from './VoiceLayoutToggle';
+import { NativeVoiceLane } from './NativeVoiceLane';
 import { useVoiceLayout } from './useVoiceLayout';
 import { speechArbiter } from '../../lib/speechArbiter';
 import { getTurnAssistantText, useAnswerReader } from './useAnswerReader';
@@ -401,6 +402,20 @@ export function DriveModeDictate({
         only when they ramble, never rewritten. The worker never knows this
         voice exists.
       </p>
+
+      {/* M7: the native voice lane, mounted where the voice lane lives. One lane
+          per addressed surface (the non-addressed lanes of a multi-lane tab are
+          hidden, so their lane is not mounted twice); closed by default, and a
+          lane that cannot start explains itself in place rather than breaking
+          anything on this screen. */}
+      {(!laneEnabled || addressed) && sessionId && (
+        <NativeVoiceLane
+          sessionId={sessionId}
+          {...(talkerRuntime ? { runtime: talkerRuntime } : {})}
+          sessionRuntime={sdkType ?? null}
+          workerLabel={sessionDisplayName}
+        />
+      )}
 
       {/* The exit recap (P18/2): everything that arrived while focus was on,
           surfaced explicitly — the thing that happened while you were away

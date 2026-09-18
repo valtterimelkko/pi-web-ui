@@ -35,6 +35,7 @@ import {
   mintIdempotencyKey,
   notDeliveredReceiptTone,
   pcm16Base64,
+  readTransportRefusal,
   resetVoiceLiveCounters,
 } from './messages';
 import type { VoiceServerMessage } from '@pi-web-ui/shared';
@@ -341,6 +342,92 @@ describe('interpretInbound (fail closed)', () => {
     const result = interpretInbound(raw, LANE);
     expect(result.kind).toBe('refused');
     expect(isVoiceServerMessage(raw)).toBe(true); // the wire happened; the LANE refused it
+  });
+});
+
+// ── Transport-level refusals (M8) ───────────────────────────────────────────
+
+describe('interpretInbound — refusals that name no lane (M8)', () => {
+  /** Exactly the frame the server's voice-frame budget limiter sends when the
+   *  offending frame carried no envelope (connection.ts). */
+  function rateRefusal(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      type: 'voice_error',
+      version: VOICE_WIRE_VERSION,
+      laneId: '',
+      attachmentGeneration: 0,
+      code: 'voice_internal_error',
+      message: 'Voice frame rate exceeded; the frame was dropped.',
+      fatal: false,
+      ...overrides,
+    };
+  }
+
+  it('renders the over-budget notice instead of calling it malformed', () => {
+    const result = interpretInbound(rateRefusal(), LANE);
+    expect(result.kind).toBe('transport-refusal');
+    if (result.kind !== 'transport-refusal') throw new Error('unreachable');
+    expect(result.refusal).toMatchObject({
+      code: 'voice_internal_error',
+      message: 'Voice frame rate exceeded; the frame was dropped.',
+      fatal: false,
+      attachmentGeneration: 0,
+    });
+  });
+
+  it('reads the refusal with no envelope fields at all', () => {
+    const result = readTransportRefusal({
+      type: 'voice_error',
+      version: VOICE_WIRE_VERSION,
+      code: 'voice_internal_error',
+      message: 'dropped',
+      fatal: false,
+    });
+    expect(result).toMatchObject({ code: 'voice_internal_error', attachmentGeneration: null });
+  });
+
+  it('still refuses genuinely malformed frames (shape, version, fields, types)', () => {
+    // Missing / wrong-typed declared fields: refused, and never promoted to a
+    // rendered notice. (With no lane envelope the refusal is reported as a
+    // malformed frame, which is what it is: not a well-formed refusal at all.)
+    for (const broken of [
+      rateRefusal({ fatal: undefined }),
+      rateRefusal({ code: undefined }),
+      rateRefusal({ message: 42 }),
+      rateRefusal({ fatal: 'no' }),
+    ]) {
+      const result = interpretInbound(broken, LANE);
+      expect(result.kind).toBe('refused');
+      expect(readTransportRefusal(broken)).toBeNull();
+    }
+    // Unsupported version is still an unsupported version.
+    expect(interpretInbound(rateRefusal({ version: 99 }), LANE)).toMatchObject({
+      kind: 'refused',
+      reason: 'unsupported-version',
+    });
+    // Not the voice_error shape at all.
+    expect(interpretInbound({ type: 'voice_telepathy', version: VOICE_WIRE_VERSION }, LANE)).toMatchObject({
+      kind: 'refused',
+      reason: 'unknown-type',
+    });
+    expect(interpretInbound('not a frame', LANE)).toMatchObject({ kind: 'refused', reason: 'malformed' });
+  });
+
+  it('treats a lane-named voice_error as a lane frame, not a transport refusal', () => {
+    const result = interpretInbound(
+      rateRefusal({ laneId: LANE.laneId, attachmentGeneration: LANE.attachmentGeneration }),
+      LANE,
+    );
+    expect(result.kind).toBe('accepted');
+    expect(readTransportRefusal(rateRefusal({ laneId: LANE.laneId }))).toBeNull();
+  });
+
+  it('never lets a lane-less refusal stand in for another lane\u2019s frame', () => {
+    // A refusal that DOES name a lane other than ours stays a lane mismatch.
+    expect(interpretInbound(rateRefusal({ laneId: 'other:lane' }), LANE)).toMatchObject({
+      kind: 'refused',
+      reason: 'other-lane',
+    });
   });
 });
 

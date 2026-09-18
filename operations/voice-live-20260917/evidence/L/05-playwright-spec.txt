@@ -1,0 +1,15 @@
+[WebServer] 
+[WebServer]   VITE v5.4.21  ready in 190 ms
+[WebServer] 
+[WebServer]   ➜  Local:   http://127.0.0.1:3459/
+
+Running 5 tests using 1 worker
+
+  ✓  1 [chromium] › tests/e2e/voice-live-presentation.spec.ts:149:7 › Track L — the voice surface is honest and reachable (real browser) › read-back plays the composed bytes; presentation is reported only when playback ends; the confirm echoes the identity (1.4s)
+  ✓  2 [chromium] › tests/e2e/voice-live-presentation.spec.ts:225:7 › Track L — the voice surface is honest and reachable (real browser) › a read-back click that never finishes playback leaves the proposal unconfirmable (1.6s)
+  ✓  3 [chromium] › tests/e2e/voice-live-presentation.spec.ts:256:7 › Track L — the voice surface is honest and reachable (real browser) › the lane is opened on the wire, and the server’s own reason is rendered when it cannot serve it (677ms)
+  ✓  4 [chromium] › tests/e2e/voice-live-presentation.spec.ts:304:7 › Track L — the voice surface is honest and reachable (real browser) › a lane start that is never answered becomes honestly unavailable (engine unreachable) (1.1s)
+  ✓  5 [chromium] › tests/e2e/voice-live-presentation.spec.ts:327:7 › Track L — the voice surface is honest and reachable (real browser) › a transport-level rate refusal (no lane envelope) is rendered, not dropped (512ms)
+
+  5 passed (7.1s)
+EXIT_PLAYWRIGHT=0
