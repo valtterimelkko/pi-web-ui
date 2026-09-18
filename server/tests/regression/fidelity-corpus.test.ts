@@ -1,13 +1,17 @@
 /**
- * Fidelity corpus + regression harness skeleton (Voice Mode execution plan,
- * Phase 6; architecture recommendation 2026-09 §7.1.3).
+ * Fidelity corpus + regression harness (Voice Mode execution plan, Phase 6;
+ * architecture recommendation 2026-09 §7.1.3).
  *
- * Wave 0 scope: load the migrated frozen corpus, assert its shape and its
- * provenance, and execute one worked scoring example through the harness. The
- * kernel-dependent veto suites (proposal SHA binding, idempotency, disconnect
- * safety, lane isolation) are deliberately **not** here — they need the merged
- * host kernel and belong to a later child. Nothing in this file skips: the
- * corpus is a committed fixture, so a missing or damaged fixture is a failure.
+ * Wave 0 (child D) loaded the migrated frozen corpus, asserted its shape and
+ * provenance, and executed one worked scoring example. Wave 2 (child G) adds
+ * the Gate 6 scoring suite: recognition WER, required-word recall, 100 %
+ * retention of critical negations/conditionals, file paths and semi-verbatim
+ * byte equality, all scored hermetically from the frozen fixture (no live
+ * provider calls). The kernel-dependent vetoes live in `safety-veto.test.ts`.
+ *
+ * Nothing in this file skips: the corpus is a committed fixture, so a missing
+ * or damaged fixture is a failure, and every Gate 6 score runs through Track
+ * D's runner (zero checks fails; one failure fails the suite).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -16,17 +20,23 @@ import {
   DEFAULT_FIXTURE_PATH,
   FIDELITY_CORPUS_SCHEMA,
   aggregateFidelity,
+  aggregateRecognition,
   byteEqual,
   composeCandidateText,
   contentTokens,
   criticalTokenRetention,
   filePathsIn,
   loadFidelityCorpus,
+  recognitionWords,
+  recognisedTextProblems,
   scoreFidelityItem,
+  scoreRecognition,
   validateFidelityCorpus,
+  wordErrorRate,
   type FidelityItem,
 } from './harness/corpus.js';
-import { assertRegressionPass, runRegressionChecks } from './harness/run.js';
+import { assertRegressionPass, runRegressionChecks, type RegressionCheck } from './harness/run.js';
+import { PendingProposalStore } from '../../src/talker/proposal-store.js';
 
 // Loaded at module scope, so an invalid fixture fails the file rather than
 // quietly shrinking the suite.
@@ -202,5 +212,126 @@ describe('regression runner skeleton', () => {
 describe('fixture path', () => {
   it('resolves to server/tests/fixtures/fidelity-corpus.json', () => {
     expect(DEFAULT_FIXTURE_PATH.endsWith('/server/tests/fixtures/fidelity-corpus.json')).toBe(true);
+  });
+});
+
+// ── Gate 6 scoring suite (runs through the D runner) ──────────────────────────
+
+function check(id: string, run: () => void): RegressionCheck {
+  return { id, run };
+}
+
+describe('Gate 6: the frozen corpus scored through the regression runner', () => {
+  it('scores recognition, recall, critical retention, file paths and byte equality hermetically', () => {
+    const composed = corpus.items.map((entry) => scoreFidelityItem(entry, composeCandidateText(entry)));
+    const composedAggregate = aggregateFidelity(composed);
+    const recognition = aggregateRecognition(
+      corpus.items.map((entry) => scoreRecognition(entry, entry.recognisedText as string))
+    );
+    const verbatim = corpus.items.map((entry) =>
+      scoreFidelityItem(entry, entry.recognisedText as string, entry.recognisedText as string)
+    );
+
+    const syntheticPathItem: FidelityItem = {
+      id: 'fc-99',
+      utterance:
+        'Rename the helper in server/src/talker/policy-core.ts and do not touch src/talker/talker.ts, only if the tests pass.',
+      recognisedText:
+        'Rename the helper in server/src/talker/policy-core.ts and do not touch src/talker/talker.ts, only if the tests pass.',
+      requiredWords: ['helper'],
+      negations: ['do not touch src/talker/talker.ts'],
+      conditionals: ['only if the tests pass'],
+      targets: ['server/src/talker/policy-core.ts'],
+      distractors: ['I have lost my thread here'],
+    };
+
+    const checks: RegressionCheck[] = [
+      check('fixture-carries-20-recognised-texts-with-provenance', () => {
+        expect(recognisedTextProblems(corpus)).toEqual([]);
+        expect(corpus.items).toHaveLength(20);
+        expect(corpus.recognisedProvenance?.source).toBe('frozen-reference');
+      }),
+      check('recognition-wer-is-zero-on-the-frozen-transcription-lane', () => {
+        expect(recognition.items).toBe(20);
+        expect(recognition.wer).toBe(0);
+        expect(recognition.maxWer).toBe(0);
+        for (const score of recognition.perItem) {
+          expect(score.referenceWords, score.itemId).toBeGreaterThan(0);
+        }
+      }),
+      check('recognition-loses-no-required-word-and-no-critical-token', () => {
+        expect(recognition.recall).toBe(1);
+        expect(recognition.intactRatio).toBe(1);
+        expect(recognition.negationCueRetention).toBe(1);
+        expect(recognition.conditionalCueRetention).toBe(1);
+      }),
+      check('composed-delivery-keeps-100pc-of-negations-and-conditionals', () => {
+        expect(composedAggregate.items).toBe(20);
+        expect(composedAggregate.recall).toBe(1);
+        expect(composedAggregate.negationSurvival).toBe(1);
+        expect(composedAggregate.conditionalSurvival).toBe(1);
+        expect(composedAggregate.criticalSurvival).toBe(1);
+      }),
+      check('every-critical-negation-and-conditional-phrase-survives-exactly', () => {
+        for (const entry of corpus.items) {
+          const score = scoreFidelityItem(entry, composeCandidateText(entry));
+          expect(score.negations.dropped, entry.id).toEqual([]);
+          expect(score.conditionals.dropped, entry.id).toEqual([]);
+          expect(score.requiredTotal - score.requiredRecalled, entry.id).toBe(0);
+        }
+      }),
+      check('semi-verbatim-byte-equality-from-recognised-to-delivered', () => {
+        for (const entry of corpus.items) {
+          const recognised = entry.recognisedText as string;
+          // The tier-1 mechanical relay delivers the recognised bytes verbatim.
+          expect(byteEqual(recognised, recognised), entry.id).toBe(true);
+        }
+        expect(byteEqual('Hold phase three.', 'Hold phase three')).toBe(false);
+        expect(byteEqual('Hold phase three.', 'Hold  phase three.')).toBe(false);
+      }),
+      check('recognised-to-delivered-bytes-through-the-real-relay-store', () => {
+        // A clean instruction (nothing for the semi-verbatim normaliser to
+        // remove) must reach the delivery store byte-for-byte identical.
+        const recognised = 'Hold phase three until my review.';
+        const store = new PendingProposalStore();
+        store.appendToDraft(1, recognised, 1);
+        const taken = store.takeForRelease(1);
+        expect(taken?.text).toBe(recognised);
+      }),
+      check('verbatim-control-recalls-every-required-word-at-length-ratio-1', () => {
+        const verbatimAggregate = aggregateFidelity(verbatim);
+        expect(verbatimAggregate.recall).toBe(1);
+        expect(verbatimAggregate.lengthRatio).toBe(1);
+      }),
+      check('file-path-retention-is-measurable-even-though-the-corpus-has-none', () => {
+        expect(corpus.items.flatMap((entry) => filePathsIn(entry.utterance))).toEqual([]);
+        expect(corpus.observedGaps?.some((gap) => gap.includes('file'))).toBe(true);
+        expect(criticalTokenRetention(syntheticPathItem, syntheticPathItem.utterance).filePaths.ratio).toBe(1);
+        const pathDropped = criticalTokenRetention(
+          syntheticPathItem,
+          syntheticPathItem.utterance.replace('src/talker/talker.ts', 'the other file')
+        );
+        expect(pathDropped.filePaths.ratio).toBeLessThan(1);
+      }),
+      check('the-wer-metric-detects-a-dropped-negation', () => {
+        const entry = corpus.items.find((item) => item.negations.length > 0);
+        expect(entry, 'corpus must declare at least one negation').toBeTruthy();
+        const damaged = (entry?.recognisedText as string).replace(/\bnot\b/i, '');
+        expect(wordErrorRate(entry?.utterance as string, damaged)).toBeGreaterThan(0);
+        const scored = scoreFidelityItem(entry as FidelityItem, damaged, entry?.recognisedText);
+        expect(scored.negations.ratio).toBeLessThan(1);
+      }),
+      check('wordErrorRate-is-a-working-metric', () => {
+        expect(wordErrorRate('alpha beta gamma', 'alpha beta gamma')).toBe(0);
+        expect(wordErrorRate('alpha beta gamma', 'alpha beta')).toBeCloseTo(1 / 3, 10);
+        expect(wordErrorRate('alpha beta gamma', '')).toBe(1);
+        expect(recognitionWords("Don't stop, okay?")).toEqual(['dont', 'stop', 'okay']);
+      }),
+    ];
+
+    expect(checks.length).toBeGreaterThanOrEqual(10);
+    const report = runRegressionChecks('gate6-fidelity-corpus', checks);
+    expect(report.executed).toBe(checks.length);
+    assertRegressionPass(report);
   });
 });
