@@ -51,6 +51,7 @@ is green on the reviewed master (see §D). This file is the part only the operat
 | Check | How | Expected |
 |---|---|---|
 | Engine selected | authenticated `GET /api/v1/diagnostics` → `voice.live.engine` | `gemini-live` |
+| Model in use | the same snapshot's `voice.live.model` (and the `voice live session ready {"model":…}` line on the `VoiceLive` component) | `gemini-3.8-live` — the seat every `connect` sends |
 | Lane goes live | open the native voice lane in the UI | status `live · worker idle`; audio flows |
 | No silent degradation | the same snapshot's `voice.live.engineFallbacks`, `connectionDrops` | `0` in a quiet session |
 | Honest delivery | confirm one instruction | a receipt with `outcome: delivered` and the delivery chime; on anything else, the verdict line says what actually happened (`queued` / `refused` / `unknown`) |

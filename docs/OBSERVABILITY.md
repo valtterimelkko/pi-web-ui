@@ -289,6 +289,14 @@ curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
 
 # 3. Machine-readable counters for the same story:
 curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice'
+
+# 3a. Which provider model is the live engine actually on?
+curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice.live.model'
+# → "gemini-3.8-live" (the seat every `connect` sends); `null` means the server
+#   has not stated it, never an assumed model. The live path also announces it
+#   once per lane at the default log level: `voice live session ready {"model":
+#   "gemini-3.8-live"}` on the `VoiceLive` component, emitted when the provider
+#   reports `setupComplete` — the model is a recorded fact, not an inference.
 ```
 
 `voiceTurnId` is a plain string match and composes with the existing

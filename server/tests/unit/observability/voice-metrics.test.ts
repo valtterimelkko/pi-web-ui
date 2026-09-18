@@ -7,6 +7,13 @@ import { OperationalMetrics } from '../../../src/observability/operational-metri
  * outcomes, not errors; cardinality is bounded like every other dynamic map.
  */
 describe('OperationalMetrics — voice section', () => {
+  it('reports the live model actually in use, null until the mount states it', () => {
+    const metrics = new OperationalMetrics();
+    expect(metrics.snapshot().voice.live.model).toBeNull();
+    metrics.setVoiceLiveModel('gemini-3.8-live');
+    expect(metrics.snapshot().voice.live.model).toBe('gemini-3.8-live');
+  });
+
   it('counts voice turns by phase and latencies in the shared bucket style', () => {
     const metrics = new OperationalMetrics({ now: () => 10_000 });
     metrics.recordVoiceTurn('answered');
@@ -70,6 +77,8 @@ describe('OperationalMetrics — voice section', () => {
       audio: { inputBytes: 0, outputBytes: 0, inputMinutes: 0, outputMinutes: 0 },
       live: {
         engine: 'cascade',
+        // Null means the server has not stated the seat yet — never an assumed model.
+        model: null,
         connectionDrops: 0,
         resumptionAttempts: 0,
         resumptionSuccesses: 0,

@@ -34,6 +34,7 @@ import { isTransferSessionContext, isTalkerTurnMessage, isTalkerDigestMessage } 
 // voice frame, so a socket that never speaks the voice protocol sees exactly
 // the behaviour it saw before this wiring existed.
 import { VoiceLiveMount, createLogEvidenceSink, createVoiceLiveLogger, VOICE_LANE_CAPACITY_CODE, type VoiceMountRefusalCode } from './voice-live-mount.js';
+import { VOICE_PROVIDER_MODEL } from '../voice/types.js';
 import {
   isVoiceClientMessageType,
   VOICE_WIRE_VERSION,
@@ -447,6 +448,10 @@ export class WebSocketConnectionManager {
     // diagnostics snapshot exposes it from startup, not only after the first
     // voice frame. `cascade` (config default) means no live path can activate.
     getOperationalMetrics().setVoiceEngine(config.voiceModeEngine);
+    // …and so is the provider seat the live engine would open sessions on
+    // (asked for by the operator while testing: "which model is actually in
+    // use?" must be answerable from /diagnostics, not from inference).
+    getOperationalMetrics().setVoiceLiveModel(VOICE_PROVIDER_MODEL);
     this.wss = new WebSocketServer({ noServer: true });
     this.piService = getPiService();
     this.sessionPool = new SessionPool(this.piService);

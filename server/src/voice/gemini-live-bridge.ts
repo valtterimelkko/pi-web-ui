@@ -470,6 +470,9 @@ export class GeminiLiveBridge {
 
     if (message.setupComplete !== undefined) {
       this.usageValue.setupCompletes += 1;
+      // The model a live lane is actually running on is a recorded fact at the
+      // default log level, not something an operator has to infer from config.
+      this.log.info('voice live session ready', { model: this.model });
       const wasReconnect = this.resumingSession;
       this.resumingSession = false;
       this.lastProviderError = null;

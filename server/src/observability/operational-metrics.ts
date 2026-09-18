@@ -44,6 +44,13 @@ export interface VoiceAudioMetricsSnapshot {
 export interface VoiceLiveMetricsSnapshot {
   /** The engine selected by the server (plan Phase 8 flag). */
   engine: 'gemini-live' | 'cascade';
+  /**
+   * The provider seat the live engine opens sessions on (the resolved model
+   * constant — the same value the bridge sends in every `connect`). `null`
+   * until the server states it at startup, so "which model is actually live?"
+   * is answerable from the diagnostics response alone.
+   */
+  model: string | null;
   /** Unexpected live-connection losses (provider session died while live). */
   connectionDrops: number;
   /** Reconnects attempted after a drop (a drop without a resumption handle attempts none). */
@@ -226,6 +233,7 @@ export class OperationalMetrics {
   private readonly voiceDeliveryLatency = new Map<string, LatencySnapshot>();
   // Phase 8 operational counters (monotonic, no labels, no session ids).
   private voiceEngine: 'gemini-live' | 'cascade' = 'cascade';
+  private voiceLiveModel: string | null = null;
   private voiceAudioInputBytes = 0;
   private voiceAudioOutputBytes = 0;
   private voiceConnectionDrops = 0;
@@ -393,6 +401,14 @@ export class OperationalMetrics {
     this.voiceEngine = engine;
   }
 
+  /**
+   * The live provider model actually in use (server startup states it); a
+   * gauge, last write wins. `null` means "not stated", never an assumed seat.
+   */
+  setVoiceLiveModel(model: string | null): void {
+    this.voiceLiveModel = model;
+  }
+
   /** Accepted-and-sent operator PCM bytes (provider input rate). */
   recordVoiceAudioInput(bytes: number): void {
     if (!Number.isFinite(bytes) || bytes < 0) return;
@@ -514,6 +530,7 @@ export class OperationalMetrics {
       },
       live: {
         engine: this.voiceEngine,
+        model: this.voiceLiveModel,
         connectionDrops: this.voiceConnectionDrops,
         resumptionAttempts: attempts,
         resumptionSuccesses: this.voiceResumptionSuccesses,

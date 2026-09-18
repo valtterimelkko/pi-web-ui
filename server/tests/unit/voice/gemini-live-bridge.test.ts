@@ -104,7 +104,10 @@ function createCallbacks() {
   };
 }
 
-function createBridge(overrides: Partial<Parameters<typeof GeminiLiveBridge.prototype.connect>> = {}) {
+function createBridge(
+  overrides: Partial<Parameters<typeof GeminiLiveBridge.prototype.connect>> = {},
+  logLines: string[] = []
+) {
   const mock = createMockFactory();
   const { callbacks, events } = createCallbacks();
   const scheduled: Array<{ fn: () => void; delayMs: number }> = [];
@@ -114,6 +117,12 @@ function createBridge(overrides: Partial<Parameters<typeof GeminiLiveBridge.prot
     systemInstruction: 'You are a test talker.',
     callbacks,
     sessionFactory: mock.factory,
+    log: {
+      debug: (message: string, meta?: unknown) => logLines.push(`debug ${message} ${JSON.stringify(meta ?? {})}`),
+      info: (message: string, meta?: unknown) => logLines.push(`info ${message} ${JSON.stringify(meta ?? {})}`),
+      warn: (message: string, meta?: unknown) => logLines.push(`warn ${message} ${JSON.stringify(meta ?? {})}`),
+      error: (message: string, meta?: unknown) => logLines.push(`error ${message} ${JSON.stringify(meta ?? {})}`),
+    },
     clock: () => 1_000,
     scheduler: (fn, delayMs) => {
       scheduled.push({ fn, delayMs });
@@ -150,6 +159,20 @@ describe('GeminiLiveBridge connect/setup', () => {
     expect(bridge.state).toBe('live');
     expect(events.filter((event) => event.kind === 'setup')).toHaveLength(1);
     expect(bridge.usage.setupCompletes).toBe(1);
+    bridge.close();
+  });
+
+  it('announces the live model at info the moment the provider reports setup complete', async () => {
+    // The server's whole point of this line: at the default log level, the model
+    // a live lane is actually running on is a recorded fact, not an inference.
+    const lines: string[] = [];
+    const { bridge, mock } = createBridge({}, lines);
+    await bridge.connect();
+    mock.open();
+    mock.emit({ setupComplete: {} });
+    const ready = lines.filter((line) => line.startsWith('info ') && line.includes('voice live session ready'));
+    expect(ready).toHaveLength(1);
+    expect(ready[0]).toContain('gemini-3.8-live');
     bridge.close();
   });
 
