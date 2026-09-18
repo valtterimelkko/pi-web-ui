@@ -127,10 +127,46 @@ export interface GateLeakAudit {
 }
 
 /**
+ * Read a text field that the kernel log may carry EITHER in full (pre-L1
+ * evidence) or as a scrubbed excerpt with a truncation flag (L1 hygiene: full
+ * instruction text is never logged). Returns null when the log carries none.
+ */
+function readTextField(
+  event: KernelLogEvent | undefined,
+  base: string
+): { text: string; truncated: boolean } | null {
+  if (event === undefined) return null;
+  const full = event[base];
+  if (typeof full === 'string') return { text: full, truncated: false };
+  const excerpt = event[`${base}Excerpt`];
+  if (typeof excerpt === 'string') {
+    return { text: excerpt, truncated: event[`${base}Truncated`] === true };
+  }
+  return null;
+}
+
+/** Two logged fields describe the same bytes: equal, or prefix-equal when either is truncated. */
+function excerptMatches(
+  a: { text: string; truncated: boolean } | null,
+  b: { text: string; truncated: boolean } | null
+): boolean {
+  if (a === null || b === null) return false;
+  if (a.text === b.text) return true;
+  if (!a.truncated && !b.truncated) return false;
+  const [shorter, longer] = a.text.length <= b.text.length ? [a.text, b.text] : [b.text, a.text];
+  return shorter.length > 0 && longer.startsWith(shorter);
+}
+
+/**
  * The negative gate: NOTHING reaches the worker without a logged proposal id
  * and a matching SHA. Every `delivery_attempt` must be preceded by a
  * `confirm_authorised` for the same proposal, the same idempotency key and the
  * same SHA, carrying byte-identical text. The two counts must agree exactly.
+ *
+ * The log carries scrubbed excerpts (post-L1), so the digest is recomputed
+ * strictly only when both fields are untruncated; a truncated excerpt falls
+ * back to the SHA chain plus excerpt equality and SAYS SO — a logged excerpt is
+ * never silently treated as the whole text.
  */
 export function auditGateLeak(events: KernelLogEvent[]): GateLeakAudit {
   const checks: Check[] = [];
@@ -147,40 +183,70 @@ export function auditGateLeak(events: KernelLogEvent[]): GateLeakAudit {
   // that its authorisation carried, and carry bytes the kernel's own digest
   // formula reproduces from the retained proposal.
   let unverifiable = 0;
+  let notRecomputable = 0;
   const unverifiableDetails: string[] = [];
   for (const delivery of deliveries) {
     const creation = creations.find((candidate) => candidate.proposalId === delivery.proposalId);
     const authorisation = authorisations.find(
       (candidate) => candidate.idempotencyKey === delivery.idempotencyKey
     );
-    const tidied = typeof creation?.tidied === 'string' ? creation.tidied : '';
-    const original = typeof creation?.original === 'string' ? creation.original : tidied;
+    const tidiedField = readTextField(creation, 'tidied');
+    const originalField = readTextField(creation, 'original') ?? tidiedField;
     const variant = typeof authorisation?.variant === 'string' ? authorisation.variant : 'tidied';
-    const expectedBytes = variant === 'original' ? original : tidied;
-    const digestMatchesKernel =
-      creation !== undefined &&
-      proposalHash(tidied, original !== tidied ? original : undefined) === creation.sha256;
-    const ok =
-      creation !== undefined &&
-      authorisation !== undefined &&
-      typeof delivery.proposalId === 'string' &&
-      delivery.proposalId.length > 0 &&
-      delivery.sha256 === creation.sha256 &&
-      delivery.sha256 === authorisation.sha256 &&
-      delivery.bytes === expectedBytes &&
-      digestMatchesKernel;
+    const expectedField = variant === 'original' ? originalField : tidiedField;
+    const deliveryBytes = readTextField(delivery, 'bytes');
+    const authorisationBytes = readTextField(authorisation, 'bytes');
+
+    const reasons: string[] = [];
+    if (creation === undefined) reasons.push('no-creation');
+    if (authorisation === undefined) reasons.push('no-authorisation');
+    if (typeof delivery.proposalId !== 'string' || delivery.proposalId.length === 0) {
+      reasons.push('no-proposal-id');
+    }
+    if (creation !== undefined) {
+      if (
+        delivery.sha256 !== creation.sha256 ||
+        (authorisation !== undefined && authorisation.sha256 !== creation.sha256)
+      ) {
+        reasons.push('sha-chain-mismatch');
+      }
+      const recomputable =
+        tidiedField !== null &&
+        originalField !== null &&
+        !tidiedField.truncated &&
+        !originalField.truncated;
+      if (!recomputable) {
+        // Never a silent pass: the digest genuinely cannot be recomputed from a
+        // scrubbed excerpt. The SHA chain above and the excerpt equality below
+        // still bind the delivery to its proposal, and the check SAYS SO — a
+        // logged excerpt is never treated as the whole text.
+        notRecomputable += 1;
+      } else if (
+        proposalHash(
+          tidiedField.text,
+          originalField.text !== tidiedField.text ? originalField.text : undefined
+        ) !== creation.sha256
+      ) {
+        reasons.push('digest-mismatch');
+      }
+    }
+    if (!excerptMatches(deliveryBytes, expectedField)) reasons.push('bytes-mismatch');
+    if (!excerptMatches(deliveryBytes, authorisationBytes)) reasons.push('authorised-bytes-mismatch');
+    const ok = reasons.length === 0;
     if (!ok) {
       unverifiable += 1;
       unverifiableDetails.push(
         `proposal=${String(delivery.proposalId)} key=${String(delivery.idempotencyKey)} ` +
-          `created=${creation !== undefined} authorised=${authorisation !== undefined} digest=${digestMatchesKernel}`
+          `reasons=${reasons.join(',')}`
       );
     }
   }
   checks.push({
     name: 'every delivery carries a proposal id and a SHA matching its authorised bytes',
     passed: unverifiable === 0,
-    details: unverifiable === 0 ? `${deliveries.length} deliveries verified` : unverifiableDetails.join('; '),
+    details:
+      (unverifiable === 0 ? `${deliveries.length} deliveries verified` : unverifiableDetails.join('; ')) +
+      (notRecomputable > 0 ? ` digest=not-recomputable(${notRecomputable})` : ''),
   });
 
   // Positional check: the authorisation precedes its delivery in log order.
@@ -193,7 +259,7 @@ export function auditGateLeak(events: KernelLogEvent[]): GateLeakAudit {
         auth.proposalId === delivery.proposalId &&
         auth.idempotencyKey === delivery.idempotencyKey &&
         auth.sha256 === delivery.sha256 &&
-        auth.bytes === delivery.bytes
+        excerptMatches(readTextField(auth, 'bytes'), readTextField(delivery, 'bytes'))
     );
     if (!authorised) outOfOrder += 1;
   }
@@ -297,6 +363,7 @@ export function auditByteFidelity(
   const deliveries = events.filter((event) => event.event === 'delivery_attempt');
 
   let digestMismatch = 0;
+  let digestNotRecomputable = 0;
   let byteMismatch = 0;
   let notDelivered = 0;
   for (const creation of creations) {
@@ -307,14 +374,29 @@ export function auditByteFidelity(
       // delivery to prove; it is not a fidelity failure.
       continue;
     }
+    const tidiedField = readTextField(creation, 'tidied');
+    const originalField = readTextField(creation, 'original') ?? tidiedField;
+    const tidied = tidiedField?.text ?? '';
+    const original = originalField?.text ?? tidied;
     for (const delivery of settled) {
-      const tidied = String(creation.tidied);
-      const original = String(creation.original);
-      const expectedDigest = proposalHash(tidied, original !== tidied ? original : undefined);
-      if (expectedDigest !== creation.sha256) digestMismatch += 1;
-      const deliveredBytes = String(delivery.bytes);
-      if (deliveredBytes !== tidied) byteMismatch += 1;
-      const received = workerInbox.some((text) => text.includes(tidied));
+      const deliveredField = readTextField(delivery, 'bytes');
+      const deliveredBytes = deliveredField?.text ?? '';
+      const recomputable =
+        tidiedField !== null &&
+        originalField !== null &&
+        !tidiedField.truncated &&
+        !originalField.truncated;
+      if (!recomputable) {
+        // The excerpt cannot reproduce the digest. Reported, never guessed.
+        digestNotRecomputable += 1;
+      } else {
+        const expectedDigest = proposalHash(tidied, original !== tidied ? original : undefined);
+        if (expectedDigest !== creation.sha256) digestMismatch += 1;
+      }
+      if (deliveredField !== null && tidiedField !== null && !excerptMatches(deliveredField, tidiedField)) {
+        byteMismatch += 1;
+      }
+      const received = workerInbox.some((entry) => entry.includes(tidied));
       if (!received) notDelivered += 1;
       verified.push({
         proposalId,
@@ -329,7 +411,9 @@ export function auditByteFidelity(
   checks.push({
     name: 'the kernel digest over the retained bytes reproduces the confirmed SHA',
     passed: digestMismatch === 0 && verified.length > 0,
-    details: `proposals delivered=${verified.length} mismatches=${digestMismatch}`,
+    details:
+      `proposals delivered=${verified.length} mismatches=${digestMismatch}` +
+      (digestNotRecomputable > 0 ? ` digest=not-recomputable(${digestNotRecomputable} truncated excerpt(s))` : ''),
   });
   checks.push({
     name: 'delivered bytes are byte-identical to the confirmed proposal bytes',
@@ -342,6 +426,57 @@ export function auditByteFidelity(
     details: `delivered proposals not found in the worker store=${notDelivered}`,
   });
   return { ok: checks.every((check) => check.passed), checks, verified };
+}
+
+export interface WorkerStoreCoverageAudit {
+  ok: boolean;
+  checks: Check[];
+  /** Store instructions that are neither a delivery nor a declared non-gate message. */
+  unauthorised: string[];
+  /** Unauthorised texts that CONTAIN a delivery: the extra bytes are the concern. */
+  wrapped: string[];
+}
+
+/**
+ * The converse of the byte-fidelity audit (review R, Gate-5 coverage limit 2).
+ *
+ * The fidelity checks prove `delivered ⊆ worker store`; this proves
+ * `store ⊆ delivered` — every instruction the worker actually received is
+ * byte-equal to an authorised delivery. The single exception is the harness's
+ * own slow-worker baseline, which the runner injects through the Internal API
+ * by design to make the worker genuinely busy; it is **named explicitly** here
+ * and can never pass by accident.
+ *
+ * Failure direction is the point: a store text that is not accounted for — a
+ * near miss, or a message that CONTAINS a delivery plus extra bytes — fails the
+ * gate and is reported with the offending text, so the plan's wording ("ANY
+ * instruction reaching the worker without a logged proposal ID fails the
+ * gate") is proven rather than implied.
+ */
+export function auditWorkerStoreCoverage(
+  workerInstructions: string[],
+  deliveredBytes: string[],
+  allowlistedNonGateInstructions: readonly string[] = []
+): WorkerStoreCoverageAudit {
+  const delivered = deliveredBytes.filter((bytes) => bytes.length > 0);
+  const allowed = new Set(allowlistedNonGateInstructions);
+  const unauthorised: string[] = [];
+  const wrapped: string[] = [];
+  for (const text of workerInstructions) {
+    if (delivered.includes(text) || allowed.has(text)) continue;
+    if (delivered.some((bytes) => text.includes(bytes))) wrapped.push(text);
+    unauthorised.push(text);
+  }
+  const checks: Check[] = [
+    {
+      name: 'every instruction in the worker store is an authorised delivery (or the named harness baseline)',
+      passed: unauthorised.length === 0 && workerInstructions.length > 0,
+      details:
+        `store instructions=${workerInstructions.length} unauthorised=${unauthorised.length} wrapped=${wrapped.length}` +
+        (unauthorised.length > 0 ? ` first=${JSON.stringify(unauthorised[0]?.slice(0, 80))}` : ''),
+    },
+  ];
+  return { ok: checks.every((check) => check.passed), checks, unauthorised, wrapped };
 }
 
 // ── The runner ──────────────────────────────────────────────────────────────
@@ -363,6 +498,7 @@ export interface VerticalSliceResult {
   negativeControl: NegativeControlRecord;
   gateLeak: GateLeakAudit;
   byteFidelity: ByteFidelityAudit;
+  workerStoreCoverage: WorkerStoreCoverageAudit;
   evidencePaths: string[];
   failures: string[];
   worker: {
@@ -385,12 +521,31 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
   let workerSessionId: string | null = null;
   let fixtures: OperatorFixtureSet | null = null;
   let workerInbox: string[] = [];
+  /** Guards the one teardown: every exit path (including early failures) runs it. */
+  let tornDown = false;
   const evidencePaths: string[] = [];
 
   const finish = async (
     result: Omit<VerticalSliceResult, 'evidencePaths' | 'failures' | 'scenarios' | 'worker' | 'fixtures' | 'ok' | 'exitCode'>,
     scenarioList: ScenarioRecord[]
   ): Promise<VerticalSliceResult> => {
+    // EVERY exit path tears down the disposable server. An early failure return
+    // (e.g. the lane start refused) previously left the spawned server alive and
+    // the process hung until an external timeout killed it (observed: a 25-minute
+    // stale run). Idempotent so the normal-path teardown still owns the message.
+    if (!tornDown) {
+      tornDown = true;
+      try {
+        client?.close();
+      } catch {
+        /* a closed socket must never mask the result */
+      }
+      if (server) {
+        await server.stop().catch(() => {
+          /* teardown failure must never mask the gate result */
+        });
+      }
+    }
     const ok = failures.length === 0 && scenarioList.length === 3 && scenarioList.every((scenario) => scenario.passed);
     if (!ok) {
       // FAIL-CLOSED VISIBILITY: a gate that exits non-zero must say why, on
@@ -435,6 +590,7 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
           negativeControl: { attempted: false, refused: false, refusalCode: null, deliveredNothing: true, instructionTextRefused: false, instructionTextRefusalCode: null, details: [] },
           gateLeak: { ok: false, checks: [] },
           byteFidelity: { ok: false, checks: [], verified: [] },
+          workerStoreCoverage: { ok: false, checks: [], unauthorised: [], wrapped: [] },
         },
         scenarios
       );
@@ -453,6 +609,12 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
         // with a 403 before the lane starts. The slice states its own origin
         // explicitly, so the gate reproduces from any shell.
         ALLOWED_ORIGINS: SLICE_ORIGIN,
+        // The slice exists to exercise the LIVE engine end to end. Track H's
+        // rollout flag defaults to `cascade`, so without this the disposable
+        // server would serve the cascade and every lane start would be refused
+        // with `voice_provider_unavailable` (observed 2026-09-18: the gate was
+        // silently misconfigured the moment the flag landed on master).
+        VOICE_MODE_ENGINE: 'gemini-live',
         // A disposable login; NODE_ENV=test, so a plaintext value is accepted.
         AUTH_PASSWORD: 'voice-slice-disposable',
       },
@@ -467,8 +629,8 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
       ...(options.fixtureCacheDir ? { cacheDir: options.fixtureCacheDir } : {}),
       log: (line) => log(line),
     });
-    if (fixtures.fixtures.size !== 9) {
-      failures.push(`expected 9 operator fixtures, synthesised ${fixtures.fixtures.size}`);
+    if (fixtures.fixtures.size !== 10) {
+      failures.push(`expected 10 operator fixtures, synthesised ${fixtures.fixtures.size}`);
     }
 
     // ── Real disposable Pi worker session ───────────────────────────────────
@@ -513,6 +675,7 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
           negativeControl: { attempted: false, refused: false, refusalCode: null, deliveredNothing: true, instructionTextRefused: false, instructionTextRefusalCode: null, details: [] },
           gateLeak: { ok: false, checks: [] },
           byteFidelity: { ok: false, checks: [], verified: [] },
+          workerStoreCoverage: { ok: false, checks: [], unauthorised: [], wrapped: [] },
         },
         scenarios
       );
@@ -548,7 +711,15 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
     log(`voice-kernel evidence lines: ${kernelEvents.length}`);
     const gateLeak = auditGateLeak(kernelEvents);
     const byteFidelity = auditByteFidelity(kernelEvents, store.text.split('\n'));
-    for (const check of [...gateLeak.checks, ...byteFidelity.checks]) {
+    // The converse direction (review R, Gate-5 coverage limit 2): every user
+    // instruction in the worker's own store must be an authorised delivery, or
+    // the one baseline this runner injects directly to make the worker busy.
+    const workerStoreCoverage = auditWorkerStoreCoverage(
+      workerInbox,
+      byteFidelity.verified.map((entry) => entry.deliveredBytes),
+      [SLOW_WORKER_PROMPT]
+    );
+    for (const check of [...gateLeak.checks, ...byteFidelity.checks, ...workerStoreCoverage.checks]) {
       if (!check.passed) failures.push(`audit: ${check.name} — ${check.details ?? ''}`);
     }
 
@@ -585,6 +756,7 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
       })),
       wireFrames: wire.redactedFrames(),
       failures,
+      workerStoreCoverage,
     };
     evidencePaths.push(writeEvidence(evidenceDir, 'slice-run.json', record));
     evidencePaths.push(writeEvidence(evidenceDir, 'negative-control.json', record.negativeControl));
@@ -601,6 +773,19 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
         evidenceDir,
         'byte-fidelity-audit.json',
         { ok: byteFidelity.ok, checks: byteFidelity.checks, verified: byteFidelity.verified }
+      )
+    );
+    evidencePaths.push(
+      writeEvidence(
+        evidenceDir,
+        'worker-store-coverage.json',
+        {
+          ok: workerStoreCoverage.ok,
+          checks: workerStoreCoverage.checks,
+          unauthorised: workerStoreCoverage.unauthorised,
+          wrapped: workerStoreCoverage.wrapped,
+          allowlisted: ['SLOW_WORKER_PROMPT (injected directly to make the worker genuinely busy)'],
+        }
       )
     );
     evidencePaths.push(
@@ -623,7 +808,7 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
       );
     }
 
-    const summary = renderSummary(scenarios, s2.negativeControl, gateLeak, byteFidelity, failures);
+    const summary = renderSummary(scenarios, s2.negativeControl, gateLeak, byteFidelity, workerStoreCoverage, failures);
     evidencePaths.push(writeEvidence(evidenceDir, 'run-summary.txt', summary));
     for (const line of summary.split('\n')) log(line);
 
@@ -633,6 +818,7 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
     // touches production state.
     client.close();
     await server.stop();
+    tornDown = true;
     log(`disposable state dir kept for inspection: ${server.stateDir}`);
 
     const okResult = await finish(
@@ -664,6 +850,7 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
       await server.stop().catch(() => {
         /* ignore */
       });
+      tornDown = true;
     }
     return finish(
       {
@@ -671,6 +858,7 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
         negativeControl: { attempted: false, refused: false, refusalCode: null, deliveredNothing: true, instructionTextRefused: false, instructionTextRefusalCode: null, details: [] },
         gateLeak: { ok: false, checks: [] },
         byteFidelity: { ok: false, checks: [], verified: [] },
+        workerStoreCoverage: { ok: false, checks: [], unauthorised: [], wrapped: [] },
       },
       scenarios
     );
@@ -967,21 +1155,35 @@ async function runScenario2(
   const busy = await waitForWorkerBusy(api, workerSessionId, 30_000);
   checks.check('the worker is mid-run when the operator confirms', busy, `busy=${busy}`);
 
-  // 5. The spoken confirmation ("Yes, send that") releases the proposal.
-  const confirmMark = wire.client.mark();
-  await wire.speak('s2-confirm');
-  let receiptFrame: Record<string, unknown> | null = null;
-  try {
-    receiptFrame = await wire.client.waitForNew(confirmMark, {
-      label: 'receipt_event for the spoken confirmation',
-      timeoutMs: 60_000,
-      predicate: (frame) => frame.type === 'receipt_event',
-    });
-  } catch {
-    receiptFrame = null;
-  }
+  // 5. The spoken confirmation releases the proposal. The live provider's ASR
+  // may mishear the first attempt (observed 2026-09-18: "Yes, send that." →
+  // "Yes and that.", a statement, so nothing was released and nothing was
+  // wrong — the classifier refused to treat it as a confirmation). A human
+  // repeats themselves: the beat is retried once with a second phrase, and the
+  // check says which attempt (if any) landed.
+  const attemptReceipt = async (fixture: string, timeoutMs: number): Promise<Record<string, unknown> | null> => {
+    const mark = wire.client.mark();
+    await wire.speak(fixture);
+    try {
+      return await wire.client.waitForNew(mark, {
+        label: `receipt_event after ${fixture}`,
+        timeoutMs,
+        predicate: (candidate) => candidate.type === 'receipt_event',
+      });
+    } catch {
+      return null;
+    }
+  };
+  const firstAttempt = await attemptReceipt('s2-confirm', 25_000);
+  const receiptFrame = firstAttempt ?? (await attemptReceipt('s2-confirm-retry', 30_000));
+  const confirmAttempt =
+    firstAttempt !== null ? 's2-confirm' : receiptFrame !== null ? 's2-confirm-retry' : 'both attempts';
   const receipt = (receiptFrame as { receipt?: Record<string, unknown> } | null)?.receipt ?? null;
-  checks.check('the spoken confirmation produced a delivery receipt', receipt !== null, receipt === null ? 'no receipt_event' : 'receipt received');
+  checks.check(
+    'the spoken confirmation produced a delivery receipt',
+    receipt !== null,
+    receipt === null ? `no receipt_event (${confirmAttempt} failed)` : `receipt received (${confirmAttempt})`
+  );
   checks.check(
     'the receipt says delivered (the out-of-band chime condition)',
     receipt?.outcome === 'delivered',
@@ -1312,6 +1514,7 @@ function renderSummary(
   control: NegativeControlRecord,
   gateLeak: GateLeakAudit,
   fidelity: ByteFidelityAudit,
+  coverage: WorkerStoreCoverageAudit,
   failures: string[]
 ): string {
   const lines: string[] = [];
@@ -1329,6 +1532,8 @@ function renderSummary(
   for (const check of gateLeak.checks) lines.push(`      ${check.passed ? '✓' : '✗'} ${check.name}${check.details ? ` — ${check.details}` : ''}`);
   lines.push(`  byte fidelity: ${fidelity.ok ? '100%' : 'FAILED'}`);
   for (const check of fidelity.checks) lines.push(`      ${check.passed ? '✓' : '✗'} ${check.name}${check.details ? ` — ${check.details}` : ''}`);
+  lines.push(`  worker-store coverage (store ⊆ delivered): ${coverage.ok ? 'clean' : 'VIOLATED'}`);
+  for (const check of coverage.checks) lines.push(`      ${check.passed ? '✓' : '✗'} ${check.name}${check.details ? ` — ${check.details}` : ''}`);
   if (failures.length > 0) {
     lines.push('failures:');
     for (const failure of failures) lines.push(`  - ${failure}`);

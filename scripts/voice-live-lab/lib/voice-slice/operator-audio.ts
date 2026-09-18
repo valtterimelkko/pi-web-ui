@@ -38,6 +38,12 @@ export const SLICE_UTTERANCES: Record<string, string> = {
   's1-turn4': 'What would you check first?',
   's2-direct': 'Tell the worker to check the tests.',
   's2-confirm': 'Yes, send that.',
+  // ASR robustness (2026-09-18): the live provider transcribed the first
+  // fixture as "Yes and that." — a statement, so the (correct) classifier
+  // never treated it as a confirmation and S2 failed without any product
+  // fault. A human repeats themselves; the scenario now gets one repeat with
+  // a different phrase, and EVERY attempt is reported by the check.
+  's2-confirm-retry': 'Yes, go ahead.',
   's3-flag1': 'Tell the worker to check the logs for the retry.',
   's3-flag2': 'Tell the worker to update the changelog.',
   's3-confirm': 'Yes, send that.',
