@@ -36,7 +36,7 @@ speech API, when the presentation report left the client, and what the confirm f
 | `01-typecheck-scoped.txt` | `npm run typecheck --workspace=shared` and `--workspace=client`: exit 0 / 0 |
 | `02-typecheck-root-server-preexisting.txt` | `npm run typecheck` (root) fails on **pre-existing** `server/src/routes/*` zod errors — reproduced with Track L's changes stashed (identical output), so it is not Track L's |
 | `03-build.txt` | `build --workspace=shared` exit 0; `build --workspace=client` exit 0 |
-| `04-client-suite.txt` | full client suite: 144 files / 1601 tests passed, exit 0 |
+| `04-client-suite.txt` | full client suite: 144 files / 1603 tests passed, exit 0 |
 | `05-playwright-spec.txt` | `npx playwright test --config playwright.voice-live-presentation.config.ts`: 5 passed, exit 0 |
 | `browser-console.log` | the browser console/page errors from the evidence run (no page errors) |
 | `card-flow.json` | the flow's own frames: spoken text, one `proposal_presentation {completed:true}`, and the `proposal_confirm` carrying `proposalRef {version, sha256}` |
