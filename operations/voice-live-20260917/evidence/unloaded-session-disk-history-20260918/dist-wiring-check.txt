@@ -1,0 +1,3 @@
+$ node dist-wiring-check.mjs   # the SHIPPED wiring unit (createWorkerBriefSource) + shipped registry + real resolver, worker session absent from memory
+WIRING: activity="worker status: idle" entries=162 total=162 mode=full chars=49046
+EXIT=0

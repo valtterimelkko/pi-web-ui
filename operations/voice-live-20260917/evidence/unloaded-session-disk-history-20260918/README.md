@@ -46,6 +46,11 @@ composition with a brief *handed to it* — it never faced an unloaded session.
 - Every failure degrades to the previous honest view — never to an invented conversation.
 - **Observability:** `worker_brief_empty` records a lane given a status line and *nothing* about the work. This
   incident was diagnosable only by noticing which event was **missing**; that is now a positive record.
+- **The wiring itself is now a tested unit.** The ~12-line closure in `connection.ts` that maps a snapshot to the
+  lane's brief — where this report was actually decided — had no test: the composition beneath it was covered, but
+  the mapping in between was only visible by reading the code. It is now
+  `server/src/websocket/worker-brief-source.ts` (`createWorkerBriefSource`), covered by
+  `server/tests/unit/websocket/worker-brief-source.test.ts`, including the unloaded-session case.
 
 **Other runtimes are unaffected and were checked.** Claude is already disk-aware
 (`hasDirectSession` → `existsSync(sessionStore.getFilePath(...))`, `loadSessionHistory` → `sessionStore.loadHistory`),
@@ -59,6 +64,14 @@ memory:
 
 ```
 DIST: entries=162 total=162 mode=full chars=49046
+EXIT=0
+```
+
+`dist-wiring-check.txt` — the same, driven through the **shipped wiring unit** `createWorkerBriefSource` rather than
+reproducing the mapping by hand, so the last untested link is covered too:
+
+```
+WIRING: activity="worker status: idle" entries=162 total=162 mode=full chars=49046
 EXIT=0
 ```
 
@@ -79,10 +92,15 @@ entries (tool results are correctly excluded), 59 ms, retrieval `matches=13 sear
 - `server/tests/unit/talker/session-registry-disk-history.test.ts` (6) — the disk fallback end to end, plus
   **read-once caching** under repeated polling and **re-read on change**, and "a resolver that fails invents nothing".
 - `server/tests/unit/websocket/voice-live-mount.test.ts` — the `worker_brief_empty` evidence assertion.
+- `server/tests/unit/websocket/worker-brief-source.test.ts` (6) — the wiring: the on-disk conversation of a session
+  this server is not holding in memory, the `pi` runtime and deeper source tail, the count travelling with the
+  entries, no `entries` key when there is no conversation, nothing invented for an unresolvable session, and a
+  registry failure left to surface so the mount can still record `worker_brief_unavailable`.
 
 ## Not proven here
 
-The deployed behaviour on a **live** lane was not confirmed from a real browser in this session: the operator's lane
-had already detached (15:14:34) before the restart (15:14:39). The remaining unverified link is the ~15-line mapping
-from the snapshot to the brief in `connection.ts`, which the dist check reproduces. The operator is retesting the same
-session; the journal then shows either `worker_brief_injected` with real `briefChars`, or `worker_brief_empty`.
+**Live-lane confirmation is still outstanding.** The operator's lane had already detached (15:14:34) before the
+restart (15:14:39), and no lane has started since, so the deployed behaviour has not yet been observed on a real
+lane. Everything above is the shipped code driven directly; the operator is retesting the same session, and the
+journal will then show either `worker_brief_injected` with real `briefChars`, or `worker_brief_empty` — in which case
+this is a miss and the diagnosis reopens.
