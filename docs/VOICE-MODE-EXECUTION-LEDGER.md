@@ -5,10 +5,11 @@
 > [`VOICE-MODE-EXECUTION-PLAN.md`](./VOICE-MODE-EXECUTION-PLAN.md).
 > **Status:** Waves 0–3 COMPLETE and merged (contract, kernel, audit, bridge, client,
 > regression, mount, rollout, server/client corrections, receipt UI). **Gate 5 re-proven
-> through the corrected code** (`2900997`); an independent verifier is re-running the live
-> slice. **Phase 7 (real-ear) is with the operator** (handed over 2026-09-18); Phase 8
-> implementation is done and its production-readiness checklist is prepared. **No production
-> deploy/restart has been performed or authorised.**
+> through the corrected code** (`2900997`, loophole found by the independent verifier and
+> closed in `b9e7fb4`). **PRODUCTION IS DEPLOYED** (`b9e7fb4`, contract 1.44.0, live engine
+> enabled) under the owner's 2026-09-18 authorisation for their Phase 7 real-ear test;
+> rollback = `VOICE_MODE_ENGINE=cascade` + restart. CI green on master. No other production
+> change is authorised — a further restart needs the owner.
 > See §12 for the live progression log.
 > **Rule of this file:** current state, not a completion claim — read before acting.
 > **Owner start signal:** received 2026-09-17 (goal engine activated); owner decisions in §11.
@@ -21,8 +22,9 @@
 > execution).
 >
 > Conductor session: `01a0b0ef-ab27-7359-867b-6aa4a17a6d11` (pi CLI, cwd
-> `/root/pi-web-ui`). Last updated: 2026-09-18 (Gate 5 re-proven through the corrected
-> code; independent verification of the harness fix in flight; Phase 7 with the operator).
+> `/root/pi-web-ui`). Last updated: 2026-09-18 (production deployed for the owner's Phase 7
+> test; CI green on master; independent verification of the Gate-5 harness completed and its
+> finding closed).
 
 ---
 
@@ -376,7 +378,33 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
-**2026-09-18 (GATE 5 RE-PROVEN THROUGH THE CORRECTED CODE — three harness defects found and fixed; R's audit-converse limit closed on live evidence).**
+**2026-09-18 (PRODUCTION DEPLOYED for Phase 7 — owner-authorised; and the red CI made green).**
+The owner authorised deploy + restart so they can run the Phase 7 real-ear test on production,
+asked for a Telegram ping when it was running, and for CI to be green. All three are done.
+**Deployed**: master `b9e7fb4` built (`npm run build`, exit 0) and production restarted through the
+audited wrapper at 06:16:12Z (`RESTART-REQUESTED` recorded with the owner's reason; drain
+pre-flight 0 busy of 200; `NRestarts=0`). **Verified after restart**: service active, HTTP 200,
+the served bundle is the freshly built one (`index-uBjwOgGB.js`, contains the voice surface),
+contract 1.44.0, clean boot log showing `Allowed origins: https://pi.letsautomate.work`.
+**Two env values added** (secrets env, never printed): `GEMINI_API_KEY` — it was genuinely
+missing, so the live engine could not have worked — and `VOICE_MODE_ENGINE=gemini-live`.
+Rollback = flip the flag to `cascade` and restart. **Not verified by me**: a real voice lane on
+production, because login needs the owner's plaintext password (the stored value is a bcrypt
+hash) — that is precisely the Phase 7 test, and the owner was pinged with the exact steps.
+**CI**: the `Application correctness` workflow had been red on the voice pushes in two layers.
+(1) The warning ratchet: 349 > 326 — fixed by consuming the contract's 19 assertion aliases in
+one exported tuple (an orphaned alias asserts nothing), deleting two stale test declarations, and
+extending the existing `^_` ignore convention from args to vars; **no ceiling change and no
+suppression** (`a38c65d`, 353 → 323 locally). (2) The shared coverage gate: functions 91.3% <
+93.11% — three contract guards (`isVoiceClientMessageType`, `isVoiceServerMessageType`,
+`hasNoToolArguments`) are called in production (websocket routing, client validator, bridge's
+parameterless-tool check) but had no tests; covered (`20c02b5`, now 95.65% functions / 95.85%
+lines / 84.25% branches). **`Application correctness` is green on master** (run 35314914811), and
+Docs checks stayed green throughout. Production runs `b9e7fb4`; the two later commits are
+lint/test/type-level only, so their runtime is identical — no further restart (the owner is
+testing).
+
+**2026-09-18 (GATE 5 RE-PROVEN THROUGH THE CORRECTED CODE — three harness defects found and fixed; R's audit-converse limit closed on live evidence; then the loophole the verifier found closed too).**
 Running the Gate-5 slice after the Wave-3 merges exposed that the harness itself had not been
 exercised since the corrections, and found four real problems — **two of them integration defects
 that the merges introduced and no gate had caught**:
