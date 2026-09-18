@@ -89,6 +89,23 @@ function renderSurface(sdkType = 'pi') {
   );
 }
 
+/** The multi-lane shape: `laneEnabled` is Drive Mode's own flag, `addressed` says
+ *  which lane the operator is looking at. */
+function renderFace(options: { laneEnabled: boolean; addressed: boolean }) {
+  return render(
+    <DriveModeDictate
+      sessionId={WORKER}
+      sdkType="pi"
+      modelName="test-model"
+      sessionDisplayName="Worker"
+      onExit={vi.fn()}
+      onAbort={vi.fn()}
+      laneEnabled={options.laneEnabled}
+      addressed={options.addressed}
+    />
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // jsdom has no microphone; the lane's honest capability check would report
@@ -153,5 +170,39 @@ describe('DriveModeDictate — the native voice lane is reachable from the voice
     await waitFor(() => expect(capture.toggle).toHaveBeenCalled());
 
     unmount();
+  });
+
+  /**
+   * ONE PLAYBACK CHAIN PER PAGE.
+   *
+   * The operator reported the talker's voice "talking on top of each other", and
+   * the one mechanism a single scheduler cannot produce is a second output chain:
+   * every mounted lane surface owns its own AudioContext and its own playback
+   * pipeline, so two mounted surfaces would play the same model audio twice.
+   * Multi-lane Drive Mode mounts the dictate surface once per lane (all of them
+   * stay mounted so their capture and cards live per lane), so the guard that
+   * only the ADDRESSED lane mounts a voice lane is what keeps a two-lane page from
+   * becoming two players. Production evidence agrees (every lane the server has
+   * ever seen is index 1, one per page); this pins it so it cannot regress.
+   */
+  it('mounts exactly one lane per page: a non-addressed lane mounts none', async () => {
+    const { voiceLaneRegistrationCount } = await import('../../lib/voiceLive/frameBus');
+
+    const addressed = renderFace({ laneEnabled: true, addressed: true });
+    expect(screen.getAllByTestId('native-voice-lane')).toHaveLength(1);
+    expect(voiceLaneRegistrationCount()).toBe(1);
+    addressed.unmount();
+    await waitFor(() => expect(voiceLaneRegistrationCount()).toBe(0));
+
+    const addressedTwo = renderFace({ laneEnabled: true, addressed: true });
+    const notAddressed = renderFace({ laneEnabled: true, addressed: false });
+    // Two dictate surfaces are mounted (as multi-lane Drive Mode does), and still
+    // only one of them is a player.
+    expect(screen.getAllByTestId('native-voice-lane')).toHaveLength(1);
+    expect(voiceLaneRegistrationCount()).toBe(1);
+
+    notAddressed.unmount();
+    addressedTwo.unmount();
+    await waitFor(() => expect(voiceLaneRegistrationCount()).toBe(0));
   });
 });

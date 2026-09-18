@@ -93,13 +93,41 @@ bug, not the rule.
   other (the operator's symptom), duplicate payloads, stranded audio, drops, sequence breaks, declared-vs-decoded
   duration, a second AudioContext, a second lane surface and a second lane.
 
-## 5. Not proven here
+## 5. Was there a SECOND playback chain? Production evidence: no
 
-- **A second output chain in the operator's browser** (two AudioContexts, two mounted lane surfaces, or two tabs) is a
-  finding this detector can raise but could not be evaluated on a protocol-level capture: `audioContexts`,
-  `mountedLaneSurfaces` are reported as 0 by this run, which means "not measured", never "clean". A browser-based
-  scenario is the next increment of the lab.
+The one mechanism a single scheduler cannot produce is a second output chain (two AudioContexts / two mounted lane
+surfaces / two tabs): each mounted lane surface owns its own AudioContext and its own pipeline, so two of them would
+play the same model audio twice — which is literally "on top of each other".
+
+`lane-inventory.txt` answers it from the journal. A lane id is `<workerSessionId>:vl-<index>-<per-page nonce>`, so a
+second lane on one page would appear as **index 2 for the same nonce**, and a second tab as a second nonce with its
+own `clientId`:
+
+- **every lane the server has ever seen is index 1** (30 lane-event lines over 7 days, one index value);
+- today's five lanes each carry a **distinct `clientId`** and each was **detached before the next appeared** — the
+  operator's 14:34 and 16:34 lanes are `:vl-1-zze18jkx` and `:vl-1-9fhlzwha`, different page loads a hour apart.
+
+So the symptom was **one page, one lane, one playback chain** — the chain this lab measured. The other mechanism is
+not merely unmeasured now: it is ruled out for the reported period. `client/src/components/DriveMode/DriveModeDictate.native-lane.test.tsx`
+pins the invariant at the code level (a non-addressed lane in multi-lane Drive Mode mounts no lane; a page holds
+exactly one frameBus registration) so it cannot regress.
+
+## 6. What is still not proven
+
 - **OS-rendered audio.** The audio regression lab's capture chain cannot start on this host (`doctor` →
   `capture:chain` FAIL), so this lab measures what the product schedules and what the server sends, not what the
   speaker emitted. An overlap in the schedule is an overlap in reality (Web Audio starts a booked source when it was
   booked); a device-level dropout is outside this lane.
+- **The page-level checks in a live browser.** `audioContexts` and `mountedLaneSurfaces` are reported as 0 by a
+  protocol-level capture, which means *not measured* — the invariant above is pinned by a component test and by
+  production lane inventory, not by a browser run of the detector.
+- **The operator's ear.** The final acceptance is theirs and cannot be self-certified by any agent.
+
+## 7. What a provider interrupt should do (found, not changed)
+
+The captured lane had **no** provider interruption (three `voice_state` events, none of them
+`provider interrupted playback`), so this defect did not involve one. It is worth recording that the client's
+playback ignores that signal entirely: with the queue now played rather than stranded, an interrupted answer will play
+out (ducked) to its end. Whether an interrupt should instead flush the queue is a product decision — the contract's
+N5 rule is "duck, never stop" for *operator* speech, and the lab's own reference player has a separate
+`native-interrupt` profile that flushes — so it is flagged here rather than changed unilaterally.

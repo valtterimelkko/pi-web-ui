@@ -1,0 +1,25 @@
+Was a SECOND playback chain ever live? Production evidence, journal of pi-web-ui.service.
+A lane id is '<workerSessionId>:vl-<index>-<per-page nonce>', so a second lane on one page
+appears as index 2 for the same nonce, and a second tab appears as a second nonce with its own clientId.
+
+$ sudo journalctl -u pi-web-ui.service --since '7 days ago' | grep -oE '"[^"]*:vl-[0-9]+-[a-z0-9]+"' | sort -u
+"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-6g26ssnp"
+"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-9fhlzwha"
+"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-glcgo9sm"
+"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-pbzjuop2"
+"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-zze18jkx"
+
+Lane index distribution (1 = only ever one lane per page):
+     30 1
+
+Lane lifetimes today (clientId = one page load):
+"lane_detached","laneId":"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-6g26ssnp","clientId":"client_1789720054372_owwm03q2k"
+"lane_detached","laneId":"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-pbzjuop2","clientId":"client_1789722257389_rvozu4xn0"
+"lane_detached","laneId":"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-glcgo9sm","clientId":"client_1789730571240_ohyuj1mx2"
+"lane_detached","laneId":"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-zze18jkx","clientId":"client_1789742073983_3gb0fo933"
+"lane_detached","laneId":"01a0a575-7d40-7494-847d-2f42042c7759:vl-1-9fhlzwha","clientId":"client_1789749248259_pw5dpshlx"
+
+Conclusion: every lane the server has ever seen is index 1, each with its own clientId,
+and each was detached before the next appeared. No page opened two lanes; no two pages held
+a lane at the same time. The operator's symptom was ONE page, ONE lane, ONE playback chain -
+the chain whose defects the lab measured.

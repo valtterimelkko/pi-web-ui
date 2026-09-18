@@ -420,9 +420,24 @@ drain fails 1, restoring the old count bound fails 2; restored, 18/18 pass. The 
 48 vs 99 scheduled, 4.6 s vs 0 stranded — so it is the scheduling change alone, not a change of instrument. Evidence +
 `arrival-shape.txt`: `operations/voice-live-20260917/evidence/lane-overlap-20260918/`.
 
-**NOT PROVEN:** a second output chain in the operator's browser (two AudioContexts, two mounted lane surfaces or two
-tabs) is a finding the detector can raise but a protocol-level capture reports as "not measured", never "clean"; and
-this lane cannot see OS-rendered audio. A browser scenario is the next increment.
+**THE SECOND-OUTPUT-CHAIN QUESTION IS CLOSED BY PRODUCTION EVIDENCE, not left open.** A lane id is
+`<workerSessionId>:vl-<index>-<page nonce>`, so a second lane on one page would be index 2 for the same nonce and a
+second tab a second nonce with its own `clientId`. Over 7 days of journal there are **only index-1 lanes**, each with
+a distinct `clientId`, each detached before the next appeared (today's five lanes include the operator's 14:34
+`:vl-1-zze18jkx` and 16:34 `:vl-1-9fhlzwha`, an hour apart). So the symptom was one page, one lane, one playback
+chain — the chain the lab measured. Pinned at the code level too:
+`client/src/components/DriveMode/DriveModeDictate.native-lane.test.tsx` now asserts a non-addressed lane in multi-lane
+Drive Mode mounts NO lane and a page holds exactly one frameBus registration. Evidence: `lane-inventory.txt`.
+
+**NOT PROVEN (unchanged):** this lane cannot see OS-rendered audio (the audio regression lab's `capture:chain` fails on
+this host), and the page-level checks have not been fed by a live browser run — they are pinned by a component test and
+by the production lane inventory instead. The operator's ear remains the final acceptance.
+
+**FOUND, NOT CHANGED:** the captured lane had no provider interruption, so this defect did not involve one. But the
+client's playback ignores `provider interrupted playback` entirely, so with the queue now played rather than stranded
+an interrupted answer will play out (ducked) to its end. Whether an interrupt should flush the queue is a product
+decision (N5 says duck-never-stop for OPERATOR speech; the lab's reference player has a separate `native-interrupt`
+profile that flushes), so it is flagged for the owner rather than changed unilaterally.
 
 **2026-09-18 ("IT DOES NOT HAVE ACCESS TO THE SESSION" AGAIN — the worker was on disk, not in memory; root-caused
 from the journal, fixed, proven against the operator's real session).**
