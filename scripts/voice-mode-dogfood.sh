@@ -54,14 +54,19 @@ VOICE_MODE_ENGINE=gemini-live \
 SERVER_PID=$!
 
 VITE_PID=""
+CLEANED=0
 cleanup() {
+  [ "$CLEANED" = 1 ] && return 0
+  CLEANED=1
+  trap - INT TERM EXIT
   echo
   echo "stopping the slice…"
   if [ -n "$VITE_PID" ]; then kill "$VITE_PID" 2>/dev/null || true; fi
+  # The validation server's own single teardown authority.
   node "$REPO/scripts/validation-server-stop.mjs" --dir "$DIR" 2>/dev/null || true
   echo "slice stopped. (Dir $DIR is preserved; remove it when you are done looking.)"
 }
-trap cleanup INT TERM
+trap cleanup INT TERM EXIT
 
 for _ in $(seq 1 90); do
   if [ -f "$DIR/internal-api-token" ] && (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
@@ -74,7 +79,13 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 
-VITE_API_TARGET="http://localhost:$PORT" npm run dev:client -- --port "$CPORT" --strictPort &
+# Invoke the vite binary directly: `npm run dev -- --port …` lets npm swallow
+# --port as its own config (vite then runs on its default port with a stray root
+# argument — observed in the conductor's self-test). exec keeps the pid honest,
+# so the cleanup trap can kill exactly this process.
+VITE_BIN="$REPO/node_modules/.bin/vite"
+if [ ! -x "$VITE_BIN" ]; then VITE_BIN="$REPO/node_modules/vite/bin/vite.js"; fi
+( cd "$REPO/client" && VITE_API_TARGET="http://localhost:$PORT" exec "$VITE_BIN" --port "$CPORT" --strictPort ) &
 VITE_PID=$!
 
 sleep 3

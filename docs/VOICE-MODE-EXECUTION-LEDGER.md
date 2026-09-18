@@ -373,6 +373,23 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (PHASE 7 SLICE SELF-TESTED — the composed browser↔server loop now proven on it).**
+`scripts/voice-mode-dogfood.sh` + `PHASE-7-RUNBOOK.md` prepared, then self-tested end to end by the
+conductor: the disposable child demonstrably carried `VOICE_MODE_ENGINE=gemini-live` and the client
+origin; a real Chromium (fake media) logged in, entered Voice Mode, continued a session, expanded
+the **native voice lane** and started it — observed client-side as **`live · worker idle`** with
+`Listening — open mic` and **no** `unavailable` state, and server-side as a stream of
+`voice_audio_chunk` frames followed by `lane_send_unbound` + `lane_detached` on browser close. The
+script's own teardown (client kill → validation-server stopper) was exercised and verified twice
+(stopper recorded `group verified gone`; both ports freed). **This closes review R's Gate-5 coverage
+limit 1 for the browser path** ("the composed browser↔server loop has never run against the composed
+server") — evidence in `operations/voice-live-20260917/evidence/phase7-prep/`. It does NOT close
+Phase 7: no audio was heard; real-ear stays the operator's verdict. One defect was found and fixed
+during the self-test: `npm run dev:client -- --port …` let npm swallow `--port` (vite ran as
+`vite 3499` on its default port); the script now execs the vite binary directly and the trap
+hardened. **Track M (receipt verdicts visible, N6) still in flight** — the Phase 7 handover message
+to the operator waits for M to land and pass verification.
+
 **2026-09-18 (K VERIFIED AND MERGED `44aad1c` — all eleven review findings closed server-side).**
 Conductor verification on K's frozen commit (`33af7dd`): **typecheck exit 0; focused suites 49 files /
 801 tests; full server suite 431 files / 5357 tests (2 skipped)** — all re-run by me; then the

@@ -1,0 +1,54 @@
+{
+  "steps": [
+    {
+      "name": "login",
+      "detail": "submitted",
+      "at": "2026-09-18T04:15:24.114Z"
+    },
+    {
+      "name": "voice-mode",
+      "detail": "overlay open",
+      "at": "2026-09-18T04:15:25.365Z"
+    },
+    {
+      "name": "session-list",
+      "detail": "[\"Chat\",\"Shell\",\"Files\",\"Git\",\"TasksSoon\",\"Create new session\",\"No Model\",\"Chat\",\"Shell\",\"Files\",\"Git\",\"More\"]",
+      "at": "2026-09-18T04:15:26.946Z"
+    },
+    {
+      "name": "dictate-surface",
+      "detail": "visible",
+      "at": "2026-09-18T04:15:32.061Z"
+    },
+    {
+      "name": "lane-expanded",
+      "detail": "ok",
+      "at": "2026-09-18T04:15:32.697Z"
+    },
+    {
+      "name": "lane-start",
+      "detail": "clicked",
+      "at": "2026-09-18T04:15:32.780Z"
+    },
+    {
+      "name": "observed",
+      "detail": "{\"wireState\":\"live · worker idle\",\"status\":\"VOICE MODE — (NO MESSAGES)\\nlive · worker idle\\n\\nListening — open mic. Talking over the talker ducks it; it never stops you being heard.\\n\\nPause listening\\nOpen mic\",\"unavailable\":null,\"unavailableDetail\":null,\"listening\":\"Listening — open mic. Talking over the talker ducks it; it never stops you being heard.\"}",
+      "at": "2026-09-18T04:15:41.801Z"
+    },
+    {
+      "name": "screenshot",
+      "detail": "/tmp/dogfood-composed-loop.png",
+      "at": "2026-09-18T04:15:41.892Z"
+    }
+  ],
+  "errors": [
+    "console: Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "observed": {
+    "wireState": "live · worker idle",
+    "status": "VOICE MODE — (NO MESSAGES)\nlive · worker idle\n\nListening — open mic. Talking over the talker ducks it; it never stops you being heard.\n\nPause listening\nOpen mic",
+    "unavailable": null,
+    "unavailableDetail": null,
+    "listening": "Listening — open mic. Talking over the talker ducks it; it never stops you being heard."
+  }
+}
