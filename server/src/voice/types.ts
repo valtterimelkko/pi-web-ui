@@ -166,8 +166,18 @@ export interface GeminiLiveBridgeOptions {
   log?: VoiceLogSink;
   /** Default true: the driver supplies explicit activity markers. */
   manualActivityDetection?: boolean;
-  /** Default true: acknowledge valid tool calls with SILENT scheduling. */
+  /** Default true: acknowledge valid tool calls (scheduling below). */
   ackToolCalls?: boolean;
+  /**
+   * Scheduling for the acknowledgement of a declared function call.
+   *
+   * Default `WHEN_IDLE` (finding F-1): with `SILENT`, `gemini-3.8-live` answers
+   * conversational speech by calling a tool and ending the turn with no audio —
+   * the operator hears nothing. `WHEN_IDLE` lets the model speak first and lands
+   * the acknowledgement when it is idle. `SILENT` remains available as an
+   * explicit opt-in for a caller that has measured its own turn behaviour.
+   */
+  toolResponseScheduling?: VoiceFunctionResponseScheduling;
   reconnect?: { maxAttempts?: number; delayMs?: number };
   /** Seed a resumed lane with a handle captured before a process restart. */
   resumptionHandle?: string | null;
@@ -272,10 +282,23 @@ export const VOICE_PROVIDER_MODEL = 'gemini-3.8-live';
 export const VOICE_TOOL_NAMES = ['mark_addressed_to_talker', 'offer_ask_worker'] as const;
 
 /**
- * Function responses are acknowledged with SILENT scheduling: the result joins
- * the model's context without triggering a new model turn (proven in the lab).
+ * Function-response scheduling for a declared tool acknowledgement.
+ *
+ * `WHEN_IDLE` (the default, finding F-1): the model's spoken reply completes
+ * first and the acknowledgement joins its context afterwards, so conversational
+ * speech that triggers `mark_addressed_to_talker` / `offer_ask_worker` still
+ * produces speech. `SILENT`: the acknowledgement joins the context without
+ * triggering a turn — measured in the lab, but it made the turn end with no
+ * audio when no other speech had been generated.
  */
-export const VOICE_FUNCTION_RESPONSE_SCHEDULING = 'SILENT';
+export type VoiceFunctionResponseScheduling = 'WHEN_IDLE' | 'SILENT';
+
+/**
+ * Default scheduling for tool-call acknowledgements: `WHEN_IDLE`, so calling a
+ * declared function never leaves the operator in silence (F-1). Overridable via
+ * `GeminiLiveBridgeOptions.toolResponseScheduling`.
+ */
+export const VOICE_FUNCTION_RESPONSE_SCHEDULING: VoiceFunctionResponseScheduling = 'WHEN_IDLE';
 
 export const systemVoiceScheduler: VoiceScheduler = (fn, delayMs) => {
   const timer = setTimeout(fn, delayMs);

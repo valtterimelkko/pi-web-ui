@@ -55,6 +55,7 @@ import {
   type LiveServerMessageShape,
   type LiveSessionFactory,
   type LiveSessionLike,
+  type VoiceFunctionResponseScheduling,
 } from './types.js';
 
 // ── Config construction ─────────────────────────────────────────────────────
@@ -169,6 +170,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Classify a provider failure into the contract's error codes. Quota/rate-limit
+ * failures (Google's `RESOURCE_EXHAUSTED`, an HTTP 429, or a quota message) are
+ * surfaced as `voice_quota_exhausted` so the operator and the fallback path can
+ * tell "we are over the plan" apart from "the socket died" (plan Phase 8:
+ * quota exhaustion is a named fallback trigger).
+ */
+export function classifyProviderFailure(error: unknown): 'voice_quota_exhausted' | 'voice_provider_unavailable' {
+  const message = errorMessage(error).toLowerCase();
+  return /quota|resource[_-]?exhausted|429|rate[ _-]?limit|too many requests/.test(message)
+    ? 'voice_quota_exhausted'
+    : 'voice_provider_unavailable';
+}
+
 export class GeminiLiveBridge {
   private readonly callbacks: GeminiLiveBridgeCallbacks;
   private readonly clock: () => number;
@@ -178,6 +193,7 @@ export class GeminiLiveBridge {
   private readonly systemInstruction: string;
   private readonly manualActivityDetection: boolean;
   private readonly ackToolCalls: boolean;
+  private readonly toolResponseScheduling: VoiceFunctionResponseScheduling;
   private readonly maxReconnectAttempts: number;
   private readonly reconnectDelayMs: number;
   private readonly apiKeyProvider: () => string | undefined;
@@ -194,6 +210,8 @@ export class GeminiLiveBridge {
   private resumingSession = false;
   private reconnectAttempts = 0;
   private cancelPendingReconnect: (() => void) | null = null;
+  /** Last socket error, so a later fatal give-up can classify quota vs. transport. */
+  private lastProviderError: unknown = null;
   private usageValue: GeminiLiveBridgeUsage = emptyUsage();
 
   constructor(options: GeminiLiveBridgeOptions) {
@@ -205,6 +223,7 @@ export class GeminiLiveBridge {
     this.systemInstruction = options.systemInstruction;
     this.manualActivityDetection = options.manualActivityDetection ?? true;
     this.ackToolCalls = options.ackToolCalls ?? true;
+    this.toolResponseScheduling = options.toolResponseScheduling ?? VOICE_FUNCTION_RESPONSE_SCHEDULING;
     this.maxReconnectAttempts = options.reconnect?.maxAttempts ?? DEFAULT_RECONNECT_ATTEMPTS;
     this.reconnectDelayMs = options.reconnect?.delayMs ?? DEFAULT_RECONNECT_DELAY_MS;
     this.apiKeyProvider = options.apiKeyProvider ?? (() => process.env.GEMINI_API_KEY);
@@ -247,7 +266,7 @@ export class GeminiLiveBridge {
     try {
       await this.openSession();
     } catch (error) {
-      this.emitError('voice_provider_unavailable', errorMessage(error), true);
+      this.emitError(classifyProviderFailure(error), errorMessage(error), true);
       throw error;
     }
   }
@@ -374,7 +393,8 @@ export class GeminiLiveBridge {
 
   private handleSocketError(error: unknown): void {
     if (this.closing) return;
-    this.emitError('voice_provider_unavailable', errorMessage(error), false);
+    this.lastProviderError = error;
+    this.emitError(classifyProviderFailure(error), errorMessage(error), false);
   }
 
   private handleSocketClose(): void {
@@ -393,11 +413,21 @@ export class GeminiLiveBridge {
     if (!this.resumptionHandleValue) {
       // Without a handle the conversation cannot be resumed; reopening would
       // silently start a different one. Refuse loudly instead (N9).
-      this.emitError('voice_provider_unavailable', `provider session lost before a resumption handle was issued (${reason})`, true);
+      const cause = this.lastProviderError ?? reason;
+      this.emitError(
+        classifyProviderFailure(cause),
+        `provider session lost before a resumption handle was issued (${reason}): ${errorMessage(cause)}`,
+        true
+      );
       return;
     }
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.emitError('voice_provider_unavailable', `provider session lost and reconnect attempts are exhausted (${reason})`, true);
+      const cause = this.lastProviderError ?? reason;
+      this.emitError(
+        classifyProviderFailure(cause),
+        `provider session lost and reconnect attempts are exhausted (${reason}): ${errorMessage(cause)}`,
+        true
+      );
       return;
     }
     this.reconnecting = true;
@@ -428,7 +458,7 @@ export class GeminiLiveBridge {
       this.log.info('voice bridge reconnected', { attempt: this.reconnectAttempts });
     } catch (error) {
       this.resumingSession = false;
-      this.emitError('voice_provider_unavailable', errorMessage(error), true);
+      this.emitError(classifyProviderFailure(error), errorMessage(error), true);
     }
   }
 
@@ -442,6 +472,7 @@ export class GeminiLiveBridge {
       this.usageValue.setupCompletes += 1;
       const wasReconnect = this.resumingSession;
       this.resumingSession = false;
+      this.lastProviderError = null;
       this.stateValue = 'live';
       this.callbacks.onSetupComplete?.();
       this.setState('live');
@@ -508,7 +539,7 @@ export class GeminiLiveBridge {
           id: call.id,
           name: call.name,
           response: { ok: true },
-          scheduling: VOICE_FUNCTION_RESPONSE_SCHEDULING,
+          scheduling: this.toolResponseScheduling,
         })),
       });
     } catch (error) {

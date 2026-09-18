@@ -314,7 +314,7 @@ describe('GeminiLiveBridge receive', () => {
 // ── Tool calls: the two declared functions, parameterless by construction ───
 
 describe('GeminiLiveBridge tool calls', () => {
-  it('forwards a declared parameterless call and acknowledges it with SILENT scheduling', async () => {
+  it('forwards a declared parameterless call and acknowledges it WHEN_IDLE by default (F-1)', async () => {
     const { bridge, mock, events } = await connectedBridge();
     mock.emit({
       toolCall: { functionCalls: [{ name: 'mark_addressed_to_talker', args: {}, id: 'call-1' }] },
@@ -326,9 +326,21 @@ describe('GeminiLiveBridge tool calls', () => {
     expect(acknowledgement.functionResponses[0]).toMatchObject({
       id: 'call-1',
       name: 'mark_addressed_to_talker',
-      scheduling: 'SILENT',
+      scheduling: 'WHEN_IDLE',
     });
     expect(bridge.usage.toolCalls).toBe(1);
+    bridge.close();
+  });
+
+  it('honours an explicit SILENT tool-response scheduling override', async () => {
+    const { bridge, mock } = await connectedBridge({ toolResponseScheduling: 'SILENT' });
+    mock.emit({
+      toolCall: { functionCalls: [{ name: 'offer_ask_worker', args: {}, id: 'call-silent' }] },
+    });
+    expect(mock.last().sentToolResponses[0].functionResponses[0]).toMatchObject({
+      id: 'call-silent',
+      scheduling: 'SILENT',
+    });
     bridge.close();
   });
 
@@ -419,6 +431,34 @@ describe('GeminiLiveBridge resumption and reconnect', () => {
     expect(error?.payload.code).toBe('voice_provider_unavailable');
     expect(error?.payload.fatal).toBe(true);
     expect(bridge.usage.reconnects).toBe(0);
+    bridge.close();
+  });
+
+  it('classifies a quota-exhausted provider failure as voice_quota_exhausted', async () => {
+    const { bridge, mock, events } = await connectedBridge();
+    mock.fail(new Error('429 RESOURCE_EXHAUSTED: quota exceeded for project'));
+    mock.socketClose();
+    const error = events.filter((event) => event.kind === 'error').at(-1);
+    expect(error?.payload.code).toBe('voice_quota_exhausted');
+    expect(error?.payload.fatal).toBe(true);
+    bridge.close();
+  });
+
+  it('classifies a quota-exhausted connect failure as voice_quota_exhausted', async () => {
+    const { callbacks, events } = createCallbacks();
+    const bridge = new GeminiLiveBridge({
+      laneId: 'lane-1:probe',
+      attachmentGeneration: 3,
+      systemInstruction: 'test',
+      callbacks,
+      sessionFactory: async () => {
+        throw new Error('429 Too Many Requests: rate limit exceeded');
+      },
+    });
+    await expect(bridge.connect()).rejects.toThrow(/rate limit/i);
+    const error = events.find((event) => event.kind === 'error');
+    expect(error?.payload.code).toBe('voice_quota_exhausted');
+    expect(error?.payload.fatal).toBe(true);
     bridge.close();
   });
 

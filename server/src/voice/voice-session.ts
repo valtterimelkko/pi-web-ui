@@ -49,6 +49,7 @@ import {
   resamplePcm16,
 } from './audio-transcoder.js';
 import { GeminiLiveBridge } from './gemini-live-bridge.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 import {
   NOOP_VOICE_LOG,
   systemVoiceClock,
@@ -59,6 +60,7 @@ import {
   type GeminiLiveBridgeOptions,
   type VoiceBridgeLike,
   type VoiceClock,
+  type VoiceFunctionResponseScheduling,
   type VoiceLogSink,
   type VoiceScheduler,
 } from './types.js';
@@ -94,6 +96,14 @@ export interface VoiceSessionServiceDeps {
   contextCoalesceMs?: number;
   /** Provider input rate; default 16 kHz (proven live). */
   providerInputSampleRateHz?: number;
+  /**
+   * Scheduling for tool-call acknowledgements (finding F-1). Default
+   * `WHEN_IDLE` so a declared tool call never ends the turn in silence;
+   * `SILENT` restores the pre-F-1 behaviour for a caller that opts in.
+   */
+  toolResponseScheduling?: VoiceFunctionResponseScheduling;
+  /** Operational metrics sink (Phase 8); default the process-wide registry. */
+  metrics?: OperationalMetrics;
 }
 
 interface LaneRecord {
@@ -131,6 +141,7 @@ export class VoiceSessionService implements VoiceBridgeService {
   private readonly clock: VoiceClock;
   private readonly scheduler: VoiceScheduler;
   private readonly log: VoiceLogSink;
+  private readonly metrics: OperationalMetrics;
   private disposed = false;
 
   private readonly bridgeFactory: (options: GeminiLiveBridgeOptions) => VoiceBridgeLike;
@@ -138,14 +149,17 @@ export class VoiceSessionService implements VoiceBridgeService {
   private readonly systemInstructionFor: (options: VoiceBridgeStartOptions) => string;
   private readonly contextCoalesceMs: number;
   private readonly providerInputSampleRateHz: number;
+  private readonly toolResponseScheduling: VoiceFunctionResponseScheduling | undefined;
   private readonly apiKeyProvider: (() => string | undefined) | undefined;
 
   constructor(deps: VoiceSessionServiceDeps = {}) {
     this.clock = deps.clock ?? systemVoiceClock;
     this.scheduler = deps.scheduler ?? systemVoiceScheduler;
     this.log = deps.log ?? NOOP_VOICE_LOG;
+    this.metrics = deps.metrics ?? getOperationalMetrics();
     this.contextCoalesceMs = deps.contextCoalesceMs ?? VOICE_CONTEXT_COALESCE_MS;
     this.providerInputSampleRateHz = deps.providerInputSampleRateHz ?? VOICE_PROVIDER_INPUT_FORMAT.sampleRateHz;
+    this.toolResponseScheduling = deps.toolResponseScheduling;
     this.model = deps.model;
     this.apiKeyProvider = deps.apiKeyProvider;
     this.systemInstructionFor = deps.systemInstructionFor ?? (() => DEFAULT_VOICE_SYSTEM_INSTRUCTION);
@@ -279,6 +293,7 @@ export class VoiceSessionService implements VoiceBridgeService {
       scheduler: this.scheduler,
       log: this.log,
       resumptionHandle,
+      ...(this.toolResponseScheduling ? { toolResponseScheduling: this.toolResponseScheduling } : {}),
     });
     lane.bridge = bridge;
     try {
@@ -411,6 +426,10 @@ export class VoiceSessionService implements VoiceBridgeService {
     const sent = lane.bridge?.sendAudio(pcm) ?? false;
     if (!sent) {
       this.surfaceNonFatal(lane, 'voice_internal_error', 'audio frame dropped: provider write did not accept it');
+    } else {
+      // Phase 8: audio minutes streamed in (recorded only once the provider
+      // write accepted the frame, so a refused frame is not counted as heard).
+      this.metrics.recordVoiceAudioInput(pcm.byteLength);
     }
   }
 
@@ -522,6 +541,12 @@ export class VoiceSessionService implements VoiceBridgeService {
         // stop reason); a bridge-close `stopped` must not duplicate it.
         if (lane.state === 'stopped' || state === 'stopped') return;
         lane.state = state as VoiceWireState;
+        if (state === 'reconnecting') {
+          // Phase 8: one drop and one resumption attempt per transition into
+          // reconnecting (the bridge attempts a reopen after the delay).
+          this.metrics.recordVoiceLiveDrop();
+          this.metrics.recordVoiceResumptionAttempt();
+        }
         if (state === 'error') {
           lane.workerActivity = 'unknown';
           lane.errorAnnounced = true;
@@ -537,6 +562,8 @@ export class VoiceSessionService implements VoiceBridgeService {
       },
       onSetupComplete: () => {},
       onReconnected: () => {
+        // Phase 8: the reopen reached setup complete again.
+        this.metrics.recordVoiceResumptionSuccess();
         this.flushContext(lane, true);
       },
       onAudioPcm: (pcm, mimeType, atMs) => this.emitAudioOut(lane, pcm, mimeType, atMs),
@@ -615,7 +642,15 @@ export class VoiceSessionService implements VoiceBridgeService {
         });
       },
       onError: (error) => {
-        if (error.fatal) lane.state = 'error';
+        if (error.fatal) {
+          // Phase 8: a fatal error while live is a drop with no resumption
+          // attempt (no handle, or attempts already exhausted); while
+          // reconnecting it is the failure of the attempt counted when the
+          // lane entered reconnecting.
+          if (lane.state === 'live') this.metrics.recordVoiceLiveDrop();
+          else if (lane.state === 'reconnecting') this.metrics.recordVoiceResumptionFailure();
+          lane.state = 'error';
+        }
         if (error.fatal) {
           this.dispatch(lane, {
             kind: 'error',
@@ -644,6 +679,8 @@ export class VoiceSessionService implements VoiceBridgeService {
         ? pcm
         : resamplePcm16(pcm, providerRate, VOICE_CLIENT_PLAYBACK_FORMAT.sampleRateHz);
     for (const frame of chunkPcm16(pcmAtClientRate, VOICE_CLIENT_PLAYBACK_FORMAT)) {
+      // Phase 8: audio minutes streamed out (the bytes the client can play).
+      this.metrics.recordVoiceAudioOutput(frame.byteLength);
       this.dispatch(lane, {
         kind: 'audio_out',
         laneId: lane.laneId,

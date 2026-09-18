@@ -8,7 +8,7 @@ import {
   authenticateWebSocket,
   type WsAuthResult,
 } from '../security/websocket.js';
-import { wsMessageLimiter } from '../security/rate-limit.js';
+import { wsMessageLimiter, wsVoiceFrameLimiter } from '../security/rate-limit.js';
 import { detectPromptInjection } from '../security/prompt-injection.js';
 import {
   assertPiSessionFileIdentity,
@@ -433,17 +433,16 @@ export class WebSocketConnectionManager {
   private commandCodeSessionIds: Set<string> = new Set();
   private commandCodeSubs = new Map<string, Set<string>>();
   private pendingClaudePermissions: Map<string, string> = new Map();
-  /**
-   * Phase 5 (Track F): per-client voice frame budget. One frame per voice
-   * audio chunk is the protocol's own pacing; the cap is far above a real
-   * microphone (which the contract bounds at ≤100 ms chunks) and far below
-   * what could pin the event loop.
-   */
-  private voiceFrameBudget = new Map<string, { count: number; resetAt: number }>();
-  private static readonly VOICE_FRAMES_PER_WINDOW = 1200;
-  private static readonly VOICE_FRAME_WINDOW_MS = 2_000;
+  // Finding F-2: the dedicated voice-frame budget (1200 frames / 2 s per
+  // client) now lives in `security/rate-limit.ts` beside the generic message
+  // limiter; the transport asks that limiter and surfaces a refusal as
+  // `voice_error` below.
 
   constructor(commandCodeService?: CommandCodeService) {
+    // Phase 8: the selected Voice Mode engine is a process-lifetime fact; the
+    // diagnostics snapshot exposes it from startup, not only after the first
+    // voice frame. `cascade` (config default) means no live path can activate.
+    getOperationalMetrics().setVoiceEngine(config.voiceModeEngine);
     this.wss = new WebSocketServer({ noServer: true });
     this.piService = getPiService();
     this.sessionPool = new SessionPool(this.piService);
@@ -922,7 +921,7 @@ export class WebSocketConnectionManager {
       });
       return;
     }
-    if (isVoiceFrame && !this.checkVoiceFrameBudget(clientId)) {
+    if (isVoiceFrame && !wsVoiceFrameLimiter.check(clientId)) {
       const envelope = message as unknown as { laneId?: unknown; attachmentGeneration?: unknown };
       this.sendMessage(clientId, {
         type: 'voice_error',
@@ -4020,7 +4019,7 @@ export class WebSocketConnectionManager {
       this.clientCwd.delete(clientId);
       this.clientViewingSession.delete(clientId);
       this.clients.delete(clientId);
-      this.voiceFrameBudget.delete(clientId);
+      wsVoiceFrameLimiter.release(clientId);
 
       // Phase 5 (Track F): stop this client's voice lanes and drop their
       // bindings. Only when the mount exists — a client that never spoke the
@@ -4244,7 +4243,18 @@ export class WebSocketConnectionManager {
               error: (message, meta) => logger.error(message, meta ?? ''),
             },
             evidence: createLogEvidenceSink(logger),
+            // Phase 8 (Gate 8): the reversible engine flag. Default `cascade`
+            // keeps today's behaviour — in cascade mode the mount registers
+            // lanes but never opens a provider session or calls the bridge
+            // factory. The cascade hand-off sink is the talker session
+            // registry: the single server-side entry point for the Gemma
+            // cascade that serves the lane after a live failure.
+            engine: config.voiceModeEngine,
+            cascade: {
+              noteEngineFallback: (input) => this.talkerSessionRegistry.noteEngineFallback(input),
+            },
           });
+          logger.info(`Voice Mode engine selected: ${config.voiceModeEngine}`);
           this.voiceLiveMount = mount;
           return mount;
         } catch (error) {
@@ -4282,23 +4292,6 @@ export class WebSocketConnectionManager {
   private isBusyPath(sessionPath: string): boolean {
     const status = this.multiSessionManager.getSessionStatus(sessionPath)?.status;
     return status === 'busy' || status === 'streaming';
-  }
-
-  /**
-   * The dedicated voice-frame budget (Phase 5). 1200 frames / 2 s = 600/s
-   * sustained, which is 12× a 20 ms microphone cadence and 60× the contract's
-   * own suggested chunk pace; a flood is refused before any decode or provider
-   * write.
-   */
-  private checkVoiceFrameBudget(clientId: string): boolean {
-    const now = Date.now();
-    const entry = this.voiceFrameBudget.get(clientId);
-    if (!entry || entry.resetAt <= now) {
-      this.voiceFrameBudget.set(clientId, { count: 1, resetAt: now + WebSocketConnectionManager.VOICE_FRAME_WINDOW_MS });
-      return true;
-    }
-    entry.count += 1;
-    return entry.count <= WebSocketConnectionManager.VOICE_FRAMES_PER_WINDOW;
   }
 
   /**
