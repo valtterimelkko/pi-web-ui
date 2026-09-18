@@ -41,7 +41,7 @@ import {
   waitForHealth,
   type DisposableServer,
 } from './disposable-server.js';
-import { login, VoiceWireClient } from './ws-client.js';
+import { login, SLICE_ORIGIN, VoiceWireClient } from './ws-client.js';
 import { prepareOperatorAudio, type OperatorFixtureSet, type OperatorUtterance } from './operator-audio.js';
 
 export const SLICE_LANE_ID = 'voice-slice-lane';
@@ -392,6 +392,22 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
     scenarioList: ScenarioRecord[]
   ): Promise<VerticalSliceResult> => {
     const ok = failures.length === 0 && scenarioList.length === 3 && scenarioList.every((scenario) => scenario.passed);
+    if (!ok) {
+      // FAIL-CLOSED VISIBILITY: a gate that exits non-zero must say why, on
+      // stdout, for a human and for a bare CLI shell — not only inside the
+      // JSON record (a thrown error would otherwise exit 1 with no output).
+      const passed = scenarioList.filter((scenario) => scenario.passed).length;
+      log(
+        `vertical slice: FAILED — ${passed}/${scenarioList.length || 3} scenarios passed, ${failures.length} failure(s)`
+      );
+      for (const scenario of scenarioList) {
+        log(`  [${scenario.passed ? 'PASS' : 'FAIL'}] ${scenario.id} ${scenario.name}`);
+        for (const check of scenario.checks) {
+          if (!check.passed) log(`      x ${check.name}${check.details ? ` — ${check.details}` : ''}`);
+        }
+      }
+      for (const failure of failures) log(`  failure: ${failure}`);
+    }
     return {
       ...result,
       ok,
@@ -430,6 +446,13 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
       env: {
         GEMINI_API_KEY: apiKey,
         LOG_FORMAT: 'json',
+        // GATE REPRODUCIBILITY: the disposable server refuses the `/ws`
+        // upgrade unless its allowed origins include the origin this client
+        // sends. A bare CLI shell carries no ALLOWED_ORIGINS, so the server
+        // would fall back to localhost defaults and reject every voice frame
+        // with a 403 before the lane starts. The slice states its own origin
+        // explicitly, so the gate reproduces from any shell.
+        ALLOWED_ORIGINS: SLICE_ORIGIN,
         // A disposable login; NODE_ENV=test, so a plaintext value is accepted.
         AUTH_PASSWORD: 'voice-slice-disposable',
       },
@@ -722,6 +745,14 @@ class SliceWire {
 
   count(type: string): number {
     return this.client.framesOfType(type).length;
+  }
+
+  /** The most recent FINAL operator transcript, for failure diagnostics. */
+  lastOperatorUtterance(): string {
+    const finals = this.client
+      .framesOfType('transcript_delta')
+      .filter((frame) => frame.speaker === 'operator' && frame.final === true);
+    return String(finals.at(-1)?.text ?? '');
   }
 
   redactedFrames(): Array<{ atMs: number; direction: string; type: string; frame: Record<string, unknown> }> {
@@ -1063,7 +1094,11 @@ async function runScenario3(
     parked2 = null;
   }
   const items2 = ((parked2 as { items?: unknown[] } | null)?.items ?? []) as Array<Record<string, unknown>>;
-  checks.check('the second flagged item parks as well', parked2 !== null && items2.length === 2, `items=${items2.length}`);
+  checks.check(
+    'the second flagged item parks as well',
+    parked2 !== null && items2.length === 2,
+    `items=${items2.length} (last operator utterance: "${wire.lastOperatorUtterance()}")`
+  );
   const parkedTexts = items2.map((item) => String(item.text ?? ''));
   checks.check(
     'both parked items carry the operator instruction text',
@@ -1241,10 +1276,34 @@ export function readWorkerInbox(sessionPath: string): string[] {
 
 // ── Evidence rendering ──────────────────────────────────────────────────────
 
+/**
+ * Credential-shaped values, redacted from every evidence file.
+ *
+ * WHY: the evidence copies the worker session's own store verbatim, and a Pi
+ * worker can run a shell command whose output includes its environment — the
+ * disposable server's process environment carries provider credentials, so a
+ * worker's `env` dump puts real keys inside a tool result. The runner must
+ * never write credentials into a repository. The live gate is NOT affected:
+ * redaction happens only on the way to disk, never on the strings the audits
+ * compare; the audits use the in-memory values, not the written evidence.
+ */
+export function redactSecrets(text: string): string {
+  const redacted = text
+    .replace(/AIza[0-9A-Za-z_-]{30,}/g, '<redacted-google-key>')
+    .replace(/sk-or-v1-[A-Za-z0-9]+/g, '<redacted-openrouter-key>')
+    .replace(/(?<![A-Za-z0-9])sk-[A-Za-z0-9]{20,}/g, '<redacted-api-key>')
+    .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, '<redacted-github-token>')
+    .replace(/xox[baprs]-[A-Za-z0-9-]{10,}/g, '<redacted-slack-token>')
+    .replace(/([A-Z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Z_]*=)([^\s"'|\\=]{6,})/g, '$1<redacted>')
+    .replace(/(Authorization:\s*Bearer\s+)[^\s"']+/gi, '$1<redacted>')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '<redacted-private-key>');
+  return redacted;
+}
+
 function writeEvidence(dir: string, name: string, payload: unknown): string {
   const target = path.join(dir, name);
   const text = typeof payload === 'string' ? payload : `${JSON.stringify(payload, null, 2)}\n`;
-  writeFileSync(target, text, { mode: 0o600 });
+  writeFileSync(target, redactSecrets(text), { mode: 0o600 });
   return target;
 }
 

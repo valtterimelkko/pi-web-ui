@@ -98,3 +98,71 @@ receipt says `delivered`.
 **What the runner does:** the byte-fidelity check polls the worker store for up
 to 45 s instead of reading once, so the proof is taken from the worker's own
 record rather than from the delivery call.
+
+---
+
+## F-5 — ASR can drop a commission frame's addressee, so a directed utterance becomes a silent no-op
+
+**Severity:** medium (product behaviour, surfaced by the gate's reproducibility
+run on 2026-09-18).
+
+**Observed:** the operator said *"Ask it to update the changelog."*; the
+provider transcribed *"Ask to update the changelog."* The frozen relay
+normaliser can only strip a commission frame that names its addressee
+(`ask the worker` / `ask it`), so the utterance classified as an ordinary
+statement, no item was parked and no proposal was created — the operator got
+no feedback of any kind. The same utterance shape ("Tell the worker to …")
+transcribed correctly in every other run.
+
+**Why it matters:** a directed instruction that the ASR garbles is silently
+dropped by the mechanical gate, which is the safe direction (nothing reaches
+the worker) but is invisible to the operator. The mount's directed predicate is
+deliberately narrow and unchanged; widening it to "ask to …" would be a
+capability change and is not made here.
+
+**What the runner does:** the parking scenario uses utterance shapes that carry
+the explicit `the worker` addressee (the frame that transcribed reliably), and a
+failed park check now prints the last operator utterance so the cause is visible
+in one line.
+
+**Durable fix (owner):** decide whether the host should ask a one-line
+clarification when a commission verb arrives without an addressee, or whether
+an ASR-garbled directive is acceptable as a silent no-op. Out of scope for the
+Phase-5 slice.
+
+---
+
+## F-6 — Worker sessions inherit the server's provider credentials, and evidence snapshots must redact them
+
+**Severity:** high (security hygiene; caught by the repository's push protection
+on 2026-09-18).
+
+**Observed:** the disposable worker ran a shell command whose output included
+its environment (an `env`-style dump captured as a `bash` tool result). The
+disposable server's process environment carries the credentials it was started
+with — the operator's Google key and an OpenRouter key present in the ambient
+environment — so the worker's tool result contained live credentials. The runner
+copies the worker session store verbatim as fidelity evidence, which put those
+credentials into an evidence file; the unpushed correction commit was rejected
+by GitHub push protection ("OpenRouter API Key").
+
+**Why it matters:** any Pi worker started by the server inherits the server's
+environment, so a worker that prints its environment surfaces provider
+credentials in its transcript, and evidence pipelines that copy worker
+transcripts verbatim carry them into repositories (this repo is treated as
+permanently public). The keys in this incident never reached the remote: the
+already-pushed deliverable commit was verified clean of every credential
+pattern; only the unpushed correction commit and the local working tree held
+them.
+
+**What the runner does:** every evidence file passes through `redactSecrets` on
+the way to disk (Google keys, OpenRouter keys, generic
+API-key/token/secret/password assignments, GitHub and Slack tokens, bearer
+headers, private-key blocks). The live gate and its audits keep using the
+unredacted in-memory values; benign environment values are preserved and the
+JSONL stays valid JSON.
+
+**Durable fix (owner):** decide whether runtime tool subprocesses should be
+started with a sanitised environment that omits provider credentials, and
+whether local disposable state should hold credentials at all. The evidence
+redaction is a floor, not the fix.

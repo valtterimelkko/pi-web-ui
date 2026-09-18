@@ -39,7 +39,7 @@ export const SLICE_UTTERANCES: Record<string, string> = {
   's2-direct': 'Tell the worker to check the tests.',
   's2-confirm': 'Yes, send that.',
   's3-flag1': 'Tell the worker to check the logs for the retry.',
-  's3-flag2': 'Ask it to update the changelog.',
+  's3-flag2': 'Tell the worker to update the changelog.',
   's3-confirm': 'Yes, send that.',
 };
 

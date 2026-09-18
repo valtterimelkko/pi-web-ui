@@ -39,6 +39,13 @@ Both are asserted by the runner; either failing makes the gate exit non-zero.
 
 ## Reproducing
 
+The committed evidence is from the gate run executed in a shell with
+`ALLOWED_ORIGINS`, `AUTH_PASSWORD` and `NODE_ENV` removed (`env -u …`). The
+runner states its own WebSocket origin in the disposable server's boot
+environment, so the gate does not depend on any ambient origin configuration;
+the server's banner in that run reads `Allowed origins: https://pi.letsautomate.work`
+with zero upgrade rejections.
+
 ```bash
 # GEMINI_API_KEY must be in the environment (the runner refuses otherwise).
 npx tsx scripts/voice-live-lab/cli.ts test-vertical-slice

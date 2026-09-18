@@ -26,17 +26,17 @@ rendering chunks...
 (!) /root/pi-web-ui-wt-integration/client/src/lib/api.ts is dynamically imported by /root/pi-web-ui-wt-integration/client/src/store/sessionStore.ts but also statically imported by /root/pi-web-ui-wt-integration/client/src/components/Chat/MessageInput.tsx, /root/pi-web-ui-wt-integration/client/src/components/Chat/SlashPalette.tsx, /root/pi-web-ui-wt-integration/client/src/components/Session/NewSessionModal.tsx, /root/pi-web-ui-wt-integration/client/src/components/Session/ResumeNativeSessionModal.tsx, /root/pi-web-ui-wt-integration/client/src/components/Settings/SettingsModal.tsx, /root/pi-web-ui-wt-integration/client/src/components/Sidebar/SessionItem.tsx, /root/pi-web-ui-wt-integration/client/src/components/Sidebar/TransferConfirmationModal.tsx, /root/pi-web-ui-wt-integration/client/src/store/sessionStore.ts, dynamic import will not move module into another chunk.
 
 computing gzip size...
-dist/index.html                        0.51 kB │ gzip:   0.33 kB
+dist/index.html                        0.51 kB │ gzip:   0.34 kB
 dist/assets/index-Csg_8BF-.css       101.15 kB │ gzip:  16.97 kB
 dist/assets/addon-fit-YJmn1quW.js      1.65 kB │ gzip:   0.76 kB │ map:     3.53 kB
 dist/assets/xterm-BT7tBf8A.js        332.48 kB │ gzip:  84.22 kB │ map:   693.84 kB
-dist/assets/index-BjXUzk1D.js      1,432.09 kB │ gzip: 335.72 kB │ map: 4,986.52 kB
+dist/assets/index-DvzS_5fQ.js      1,432.09 kB │ gzip: 335.72 kB │ map: 4,986.52 kB
 
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
-✓ built in 9.08s
+✓ built in 9.14s
 
 > @pi-web-ui/internal-api-mcp@0.1.0 build
 > tsc
