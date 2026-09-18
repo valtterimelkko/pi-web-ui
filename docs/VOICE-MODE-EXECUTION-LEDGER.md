@@ -371,6 +371,38 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (GATE 6 CLOSED — G merged `e997d2a`; an npm incident damaged the main checkout's `node_modules` and was repaired).**
+**G verified and merged.** Gate 6 re-run by me: **3 files / 30 tests in 1.8–1.9 s**
+(bound < 20 s). The suite drives the **real** kernel/voice code (imports
+`utterance-classifier`, `policy-core`, `proposal-store`, `release-store`,
+`talker`, `delivery`, `voice-session`, `voice-router`, `contract` — no
+reimplementation), and I **independently probed its falsifiability in two
+lanes**: dropping a critical negation from a corpus item's recognised text
+fails the fidelity suite; disabling the real duplicate guard in
+`release-store.record()` fails the replay family with a precise report
+(`executed 4, passed 3`). Both probes restored; tree clean. The fixture change
+is additive (`recognisedText` + `recognisedProvenance`), with the honest caveat
+recorded by G: the corpus's transcription lane is its own frozen reference text
+(no scored live capture exists), to be replaced when a real capture happens.
+G also independently reproduced the **`tier2-lean` flake** I recorded in Wave 0
+(19/20 delivered recall once under full-suite load, then green on re-run) — two
+independent observations now; it is a lab timing sensitivity in a NO-TOUCH path,
+recorded for a future fix, not a Wave 2 defect. Post-merge gates: typecheck
+clean; **full server suite 424 files / 5285 tests green**.
+
+**INCIDENT (conductor-repaired):** an npm operation during Wave 2 (child G's
+environment repair, handback §6) damaged the **main checkout's**
+`node_modules`: top-level `@google/genai` and `@vitest/utils` went missing, with
+npm staging dirs left under `node_modules/@google/`, and the main checkout's
+`vitest` was broken. Repaired with `env -u NODE_ENV npm install --include=dev`
+(`NODE_ENV=production` is set globally on this host — the trap that caused G's
+first install to omit devDependencies). Verified: `@google/genai` resolves from
+`server/`, vitest runs, tracked files never dirty, **production healthy
+throughout** (service active, HTTP 200; the missing package is imported only by
+the not-yet-mounted voice bridge). Standing rule recorded for future dispatches:
+**children must not run `npm install` outside their own worktree** — the wave
+briefs must say so explicitly.
+
 **2026-09-17 (Wave 2 DISPATCHED — F integration + G regression, from master `97359fe`).**
 Briefs written and committed (`97359fe`): `briefs/F-integration.md` (Phase 5 — mount
 wiring, slice runner, the three scenarios, byte-fidelity proof, negative control)
