@@ -509,6 +509,19 @@ window.__voiceLiveLab = {
   deliverResolved,
   /** M7: open the lane on the wire (voice_session_start). */
   startLane: () => ensureSurface().startLane(),
+  /**
+   * Feed ONE raw server frame.
+   *
+   * The named `deliver*` helpers below are fixtures for the visual section; this is
+   * the seam a harness needs to replay a REAL captured lane frame for frame (the
+   * lane-audio lab feeds a capture with its measured arrival pacing through it, so
+   * the shipped scheduler is exercised in a real browser's audio graph).
+   */
+  deliverRaw: (raw: unknown) => deliver(raw),
+  /** The lane's own playback accounting: scheduled, pending, dropped, faults. */
+  playback: () => ensureSurface().getState().playback,
+  /** This page's lane identity, so a harness can address frames the surface accepts. */
+  lane: () => ({ ...LANE }),
   /** M7: the lane's honest availability from the surface's own state. */
   laneState: () => ensureSurface().getState().lane,
   // M8: a refusal that carried no lane envelope (the rate limiter's answer).

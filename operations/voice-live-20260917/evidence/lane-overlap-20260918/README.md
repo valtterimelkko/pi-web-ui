@@ -93,6 +93,36 @@ bug, not the rule.
   other (the operator's symptom), duplicate payloads, stranded audio, drops, sequence breaks, declared-vs-decoded
   duration, a second AudioContext, a second lane surface and a second lane.
 
+### Verified in a REAL browser, too
+
+Everything above is the shipped scheduler driven from Node. The fix's only environment-dependent parts are that
+`AudioContext.currentTime` advances with the audio clock and that the drain's timers actually fire — so the lab also
+replays the same capture through the dev-lab page (`client/voice-live-lab.html`, NOT in the production bundle), which
+mounts the REAL `VoiceLiveSurface` on a REAL Web Audio graph, with the page's own audio sources instrumented:
+
+```
+npx vite --config client/voice-live-lab.vite.config.ts --port 5273 --strictPort &
+npx vite-node scripts/voice-lane-lab/cli.ts browser \
+  --capture operations/voice-live-20260917/evidence/lane-overlap-20260918 \
+  --url http://127.0.0.1:5273/client/voice-live-lab.html
+```
+
+Measured in Chromium, same capture, same arrival pacing, the drain the only variable
+(`browser-mutation-drain-disabled.json` vs `browser-measurement.json`):
+
+| in a real browser | chunks scheduled | booked | stranded | overlap | AudioContexts |
+|---|---|---|---|---|---|
+| drain disabled (pre-fix behaviour) | 53 | 4 610 ms | **4 160 ms** | 0 ms | 1 |
+| the shipped fix | **99** | **8 770 ms** | **0 ms** | **0 ms** | **1** |
+
+That also answers the one question a Node-side harness cannot: **the page created exactly ONE AudioContext**, so
+there was no second output chain in the graph.
+
+> Probe bug worth recording: the first version of this check plotted overlaps from the wall-clock moment `start()` was
+> called instead of the audio-clock time it was booked for, and so reported a 91 ms "overlap" on a perfectly correct
+> one-ahead schedule. The schedule is graded from `when`; a measurement that invents a defect is worse than no
+> measurement.
+
 ## 5. Was there a SECOND playback chain? Production evidence: no
 
 The one mechanism a single scheduler cannot produce is a second output chain (two AudioContexts / two mounted lane
@@ -118,10 +148,11 @@ exactly one frameBus registration) so it cannot regress.
   `capture:chain` FAIL), so this lab measures what the product schedules and what the server sends, not what the
   speaker emitted. An overlap in the schedule is an overlap in reality (Web Audio starts a booked source when it was
   booked); a device-level dropout is outside this lane.
-- **The page-level checks in a live browser.** `audioContexts` and `mountedLaneSurfaces` are reported as 0 by a
-  protocol-level capture, which means *not measured* — the invariant above is pinned by a component test and by
-  production lane inventory, not by a browser run of the detector.
-- **The operator's ear.** The final acceptance is theirs and cannot be self-certified by any agent.
+- **The operator's ear.** The final acceptance is theirs and cannot be self-certified by any agent. Everything above
+  says the audio the client books is complete, contiguous and single-chained; it cannot say how it sounds in the room.
+- **A live lane driven through the real app UI in a browser.** The browser run above feeds a capture into the real
+  surface on the dev-lab page; it does not click through Drive Mode and open a lane, so the app-UI path is still
+  covered by the component tests and by the operator's own use.
 
 ## 7. What a provider interrupt should do (found, not changed)
 

@@ -429,6 +429,14 @@ chain — the chain the lab measured. Pinned at the code level too:
 `client/src/components/DriveMode/DriveModeDictate.native-lane.test.tsx` now asserts a non-addressed lane in multi-lane
 Drive Mode mounts NO lane and a page holds exactly one frameBus registration. Evidence: `lane-inventory.txt`.
 
+**ALSO VERIFIED IN A REAL BROWSER, with the same capture and the drain the only variable** (`browser` command: the
+dev-lab page mounts the real `VoiceLiveSurface` on a real `AudioContext`, every booked source instrumented): drain
+disabled = 53 of 99 chunks scheduled, 4 160 ms stranded; shipped fix = **99 of 99, 8 770 ms booked, 0 stranded, 0
+overlap**, and the page created **exactly ONE AudioContext**. Evidence: `browser-mutation-drain-disabled.json` /
+`browser-measurement.json`. (Probe bug found and fixed on the way: the first version graded overlaps from the
+wall-clock moment `start()` was called instead of the audio-clock time it was booked for, and so reported a 91 ms
+"overlap" on a correct one-ahead schedule.)
+
 **NOT PROVEN (unchanged):** this lane cannot see OS-rendered audio (the audio regression lab's `capture:chain` fails on
 this host), and the page-level checks have not been fed by a live browser run — they are pinned by a component test and
 by the production lane inventory instead. The operator's ear remains the final acceptance.

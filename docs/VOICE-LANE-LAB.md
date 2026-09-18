@@ -30,6 +30,13 @@ npx vite-node scripts/voice-lane-lab/cli.ts run --out /root/voice-lane-lab/run-A
 # Re-analyse a recorded capture, offline and deterministically (no server, no provider).
 # This replays the SHIPPED scheduler over the SAME chunks: a before/after of the code on identical input.
 npx vite-node scripts/voice-lane-lab/cli.ts analyse /root/voice-lane-lab/run-A
+
+# The same capture, in a REAL browser's audio graph: the dev-lab page mounts the real
+# VoiceLiveSurface on a real AudioContext, and the page's audio sources are instrumented.
+# Needs the lab's own Vite config serving the dev page (NOT part of the production bundle).
+npx vite --config client/voice-live-lab.vite.config.ts --port 5273 --strictPort &
+npx vite-node scripts/voice-lane-lab/cli.ts browser \
+  --capture <captureDir> --url http://127.0.0.1:5273/client/voice-live-lab.html
 ```
 
 Exit codes: **0** clean, **1** a defect was demonstrated, **2** no proof (refused, or the capture was incomplete).
@@ -44,6 +51,7 @@ Exit codes: **0** clean, **1** a defect was demonstrated, **2** no proof (refuse
 |---|---|
 | **Server** | every `voice_audio_chunk` a real lane received — arrival time, `seq`, declared duration, mime type, decoded samples, payload sha256 |
 | **Client schedule** | the SHIPPED `PlaybackPipeline` (`client/src/lib/voiceLive/playbackSession.ts`) driven through a recording backend, in real arrival time, so the real arithmetic produced the schedule |
+| **Client schedule, in a browser** (`browser`) | the same scheduler on a REAL `AudioContext` via the dev-lab page, with every `AudioBufferSourceNode.start` recorded — the schedule is graded from the AUDIO-CLOCK time it was booked for, never from when the JS call happened |
 | **Page** | AudioContexts created, mounted lane surfaces, and distinct lane ids — the only things that can produce two output chains for one lane |
 
 The oracle is deterministic and has teeth in the audio regression lab's sense: a clean control must pass, and every

@@ -1,0 +1,90 @@
+{
+  "captureVersion": "voice-lane-lab.capture/1",
+  "appUrl": "http://127.0.0.1:5273/client/voice-live-lab.html",
+  "probe": {
+    "audioContexts": 1,
+    "booked": 53,
+    "playback": {
+      "chunksScheduled": 53,
+      "chunksDropped": 0,
+      "queuedMs": 2000.340136054422,
+      "pendingChunks": 46,
+      "pendingMs": 4160,
+      "pendingSeqs": [
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98
+      ],
+      "ducked": false
+    },
+    "faults": []
+  },
+  "verdict": {
+    "verdict": "stranded_audio",
+    "findings": [
+      {
+        "code": "stranded_audio",
+        "detail": "46 chunk(s), 4160 ms of speech, were accepted and never booked",
+        "measured": {
+          "strandedChunks": 46,
+          "strandedMs": 4160
+        }
+      }
+    ],
+    "summary": {
+      "chunks": 99,
+      "scheduled": 53,
+      "bookedMs": 4610,
+      "bookedSpanMs": 4610,
+      "overlapMs": 0,
+      "strandedMs": 4160,
+      "droppedChunks": 0,
+      "audioContexts": 1,
+      "mountedLaneSurfaces": 1,
+      "laneIds": 1
+    }
+  }
+}

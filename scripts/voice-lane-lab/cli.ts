@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto';
 
 import { captureLane, DEFAULT_QUESTION } from './lib/capture.js';
 import { runShippedScheduler } from './lib/schedule.js';
+import { gradeBrowserRun, probeInBrowser } from './lib/browser-probe.js';
 import { analyseLaneAudio, type CapturedAudioChunk, type PageFacts } from './lib/oracle.js';
 
 const CAPTURE_VERSION = 'voice-lane-lab.capture/1';
@@ -228,6 +229,42 @@ async function main(argv: string[]): Promise<number> {
       const result = await measure(dir);
       writeOut(JSON.stringify(result.verdict, null, 2));
       return result.verdict.verdict === 'clean' ? 0 : 1;
+    } catch (error) {
+      writeErr(error instanceof Error ? error.message : String(error));
+      return 2;
+    }
+  }
+
+  if (command === 'browser') {
+    // The same capture, played by the same scheduler, inside a real browser's audio
+    // graph. Needs a dev server serving the dev lab page (`client/voice-live-lab.html`).
+    const dir = flag(argv, '--capture') ?? argv.find((arg) => !arg.startsWith('--') && existsSync(path.join(arg, 'chunks.json')));
+    if (!dir) {
+      writeErr('browser needs --capture <captureDir> (a directory with chunks.json)');
+      return 2;
+    }
+    const appUrl = flag(argv, '--url') ?? 'http://127.0.0.1:5273/client/voice-live-lab.html';
+    try {
+      const rows = JSON.parse(readFileSync(path.join(dir, 'chunks.json'), 'utf8')) as Array<{
+        seq: number;
+        arrivedAtMs: number;
+        declaredDurationMs: number;
+        mimeType: string;
+        data?: string;
+        pcmPath?: string;
+      }>;
+      const probe = await probeInBrowser({ captureDir: dir, appUrl, log: writeOut });
+      const verdict = gradeBrowserRun({ chunks: rows }, probe, dir);
+      writeFileSync(
+        path.join(dir, 'browser-measurement.json'),
+        JSON.stringify({ captureVersion: CAPTURE_VERSION, appUrl, probe: { audioContexts: probe.audioContexts, booked: probe.booked.length, playback: probe.playback, faults: probe.faults }, verdict }, null, 2) + '\n'
+      );
+      writeOut('');
+      writeOut(`browser verdict: ${verdict.verdict}`);
+      for (const finding of verdict.findings) writeOut(`  - ${finding.code}: ${finding.detail}`);
+      writeOut(`summary: ${JSON.stringify(verdict.summary)}`);
+      writeOut(`AudioContexts created by the page: ${probe.audioContexts}`);
+      return verdict.verdict === 'clean' ? 0 : 1;
     } catch (error) {
       writeErr(error instanceof Error ? error.message : String(error));
       return 2;
