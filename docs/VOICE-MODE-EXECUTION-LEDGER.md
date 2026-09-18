@@ -378,6 +378,46 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (NATIVE LANE CAPTURE FIX — operator-reported production failure, root-caused, fixed, deployed).**
+
+The operator reported that in production the native lane's **open mic** did nothing, **Start listening**
+said "microphone unavailable — failed to load worklet module script", and **push-to-talk** claimed there was
+no microphone — while the **legacy relay lane worked fine**. That asymmetry named the fault domain: two
+capture paths, one broken.
+
+**Root cause (reproduced, not inferred)**: `audioWorklet.addModule()` is a script fetch governed by
+`script-src`; production's policy is helmet's default (`script-src 'self'`, **no `blob:`**), and the capture
+session's only worklet URL was a `blob:`. Dev servers send no CSP, which is exactly why every dogfood run
+passed and the deployed UI never could. All three microphone controls failed together because they share
+one capture path.
+
+**Fix `5992f84`**: the worklet's bytes (still generated from ONE source) are delivered as a **same-origin
+asset** — a vite plugin serves them in dev and emits `voice-live-capture-worklet.js` into the bundle, which
+the production server's `express.static` serves. No policy is relaxed. The blob stays only as a fallback for
+a stale dist. Two further defects fixed with it: the worklet can no longer fail *anonymously* (the failure is
+reported as the named fault `worklet_unavailable` with every candidate's error), and the surface's copy — which
+promised "Push-to-talk and typing still work" after a capture failure while push-to-talk drives that same
+path — is now derived from the named reason.
+
+**Observability for the native lane** (the operator's report was visible NOWHERE server-side): a capture fault
+now rides the activity frame as an additive v1 field (contract catalogue updated in the same change),
+recorded as `voice-kernel {"event":"voice_capture_fault",…}` and counted in a bounded
+`.operational.voice.live.captureFaultTotal` (unknown reasons bucket as `other`). Observation only.
+
+**Verification**: real Chromium + real built bundle + the EXACT production CSP + the real UI: the same-origin
+worklet **loads**, the blob **is refused** (the operator's error, reproduced on demand), and the native lane
+reaches `capture: "live"` for **open mic and push-to-talk** with zero CSP violations. Evidence:
+`operations/voice-live-20260917/evidence/native-lane-csp-fix-20260918/`.
+
+**Deployed** 2026-09-18T10:04:37Z (owner-authorised restart, `RESTART-REQUESTED` recorded, drain pre-flight
+0 busy of 200): service active, `NRestarts=0`, bundle `index-DyxmZ2CZ.js`, CSP unchanged, and
+`http://localhost:3456/voice-live-capture-worklet.js` → 200 `application/javascript`, bytes identical to
+the built asset. The restart also carried the previously-undeployed live-model visibility (`voice.live.model`
+now reads **`gemini-3.8-live`** in production) and the `VoiceLive` log component.
+
+**Open with the operator**: typing-latency was mentioned in the same report and has NOT been reproduced or
+diagnosed; ask them to re-test it now that capture no longer fails.
+
 **2026-09-18 (MODEL VERIFICATION + two observability additions, owner-requested).**
 The owner asked the backend to prove which model the live path actually uses. **Verified: `gemini-3.8-live`**
 (`VOICE_PROVIDER_MODEL`, `server/src/voice/types.ts:279`), by a five-link chain: (1) the mount constructs
