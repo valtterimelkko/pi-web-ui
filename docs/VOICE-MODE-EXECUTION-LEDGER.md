@@ -378,6 +378,30 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (OBSERVABILITY AUDIT — the pre-wave stack survived intact; the native voice path gained its own log component).**
+The owner asked whether the observability tooling that existed before the execution waves still exists
+and whether Voice Mode is as observable. Checked against the pre-Wave-0 baseline (`f46d5b1`):
+**nothing was removed or weakened** — no observability file added or deleted under `server/src/logging`
+or `server/src/internal-api`; `error-codes.ts` (457 lines) and `event-types.ts` (67 lines) are
+byte-identical to the baseline; `session-cleanup.ts`, `fatal-error-handlers.ts` and the whole
+`logging/` module are untouched (`git diff` empty); `docs/OBSERVABILITY.md`'s section list is
+identical. **Verified live on production** (which is serving `gemini-live` during the owner's Phase 7
+test): `.voiceMode.lanes` (2 lanes bound with `boundAt`/`lastTurnAt`/`turnCount`),
+`.voiceMode.recentTurns` (real turns, e.g. a confirm → `released` → `delivered`),
+`.operational.voice` (turnTotal, releaseTotal, gateDeniedTotal, receiptAckTotal, turnDuration,
+modelLatency, deliveryLatency, audio, live, proposals), and the journal carrying `[VoiceMode] voice
+turn/release`, structured `voice-kernel {...}` evidence lines, the engine-selection record and the
+WebSocket frame log. **One real gap found**: everything the NATIVE path emitted went out under the
+generic `WebUI` component, so `DEBUG=`/`?component=` could not isolate a live-lane problem; fixed in
+`a707ba8` (`VOICE_LIVE_LOG_COMPONENT` + `createVoiceLiveLogger()`, wired through the mount's
+serviceLog/evidence sinks and construction lines; `docs/OBSERVABILITY.md` now lists
+`VoiceLive`/`VoiceMode`/`ClientVoice` with filter recipes). Tests: 525 voice+websocket, full server
+434 files/5374, ratchet 323 ≤ 326, CI green. **Honest limits**: voice records deliberately carry no
+`sessionId` (the voice path is the global diagnostics route — documented), so the per-session
+evidence bundle does not carry voice rows; retrieval is the documented global-route query filtered
+by `workerSessionId`. The native audio counters read 0 at audit time (no operator PCM had reached the
+server) — a fact about the flow in use, not a fault; the talker turn counters were moving normally.
+
 **2026-09-18 (PRODUCTION DEPLOYED for Phase 7 — owner-authorised; and the red CI made green).**
 The owner authorised deploy + restart so they can run the Phase 7 real-ear test on production,
 asked for a Telegram ping when it was running, and for CI to be green. All three are done.
