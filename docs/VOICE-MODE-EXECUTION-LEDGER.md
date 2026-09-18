@@ -437,9 +437,15 @@ overlap**, and the page created **exactly ONE AudioContext**. Evidence: `browser
 wall-clock moment `start()` was called instead of the audio-clock time it was booked for, and so reported a 91 ms
 "overlap" on a correct one-ahead schedule.)
 
+**AND ON A LONG ANSWER, where the old code did its worst damage** (at the old chunk-count bound a 30 s answer lost
+156 chunks from the middle): a second real lane run produced **46.83 s of speech in 11.48 s (4.08x)**, and BOTH
+instruments agree — Node `analyse` 534/534 chunks scheduled, 46 830 ms booked, 0 stranded, 0 dropped; browser
+`browser` the same, on **1 AudioContext**. Evidence: `long-answer/`.
+
 **NOT PROVEN (unchanged):** this lane cannot see OS-rendered audio (the audio regression lab's `capture:chain` fails on
-this host), and the page-level checks have not been fed by a live browser run — they are pinned by a component test and
-by the production lane inventory instead. The operator's ear remains the final acceptance.
+this host), and the page-level checks have been fed by the lab's own browser run replaying a capture — never by a
+browser run on the operator's live page — so production page facts are pinned by a component test and by the lane
+inventory instead. The operator's ear remains the final acceptance.
 
 **FOUND, NOT CHANGED:** the captured lane had no provider interruption, so this defect did not involve one. But the
 client's playback ignores `provider interrupted playback` entirely, so with the queue now played rather than stranded

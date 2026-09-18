@@ -1,0 +1,349 @@
+{
+  "captureVersion": "voice-lane-lab.capture/1",
+  "workerSessionId": "01a0b5dd-5aa9-76eb-a275-2bf403f426f0",
+  "laneId": "voice-lane-lab-1",
+  "operatorQuestion": {
+    "text": "Please explain in detail, over at least ten or twelve sentences, why a streaming audio player must keep a bounded queue, how it should behave when audio arrives faster than it can be played, and what goes wrong in each of the failure modes you can think of. Be thorough and do not summarise briefly.",
+    "durationMs": 18320.5625,
+    "rms": 0.05138401295405803
+  },
+  "transcripts": [
+    {
+      "atMs": 1789757598655,
+      "speaker": "operator",
+      "text": "Please explain in detail, over at least 10 or 12 sentences, why a streaming audio player must keep a bounded queue, how it should behave when audio arrives faster than it can be played, and what goes wrong in each of the failure modes you can think of. Be thorough and do not summarize briefly.",
+      "final": false
+    },
+    {
+      "atMs": 1789757599344,
+      "speaker": "talker",
+      "text": "A streaming audio player ",
+      "final": false
+    },
+    {
+      "atMs": 1789757599696,
+      "speaker": "talker",
+      "text": "must keep a bounded",
+      "final": false
+    },
+    {
+      "atMs": 1789757599927,
+      "speaker": "talker",
+      "text": " queue to balance",
+      "final": false
+    },
+    {
+      "atMs": 1789757600175,
+      "speaker": "talker",
+      "text": " memory usage",
+      "final": false
+    },
+    {
+      "atMs": 1789757600406,
+      "speaker": "talker",
+      "text": " while ensuring uninterrupted",
+      "final": false
+    },
+    {
+      "atMs": 1789757600614,
+      "speaker": "talker",
+      "text": " playback. By",
+      "final": false
+    },
+    {
+      "atMs": 1789757600883,
+      "speaker": "talker",
+      "text": " limiting the number",
+      "final": false
+    },
+    {
+      "atMs": 1789757601161,
+      "speaker": "talker",
+      "text": " of buffered packets, the system",
+      "final": false
+    },
+    {
+      "atMs": 1789757601418,
+      "speaker": "talker",
+      "text": " prevents",
+      "final": false
+    },
+    {
+      "atMs": 1789757601630,
+      "speaker": "talker",
+      "text": " memory exhaustion",
+      "final": false
+    },
+    {
+      "atMs": 1789757601856,
+      "speaker": "talker",
+      "text": " that could cause the player",
+      "final": false
+    },
+    {
+      "atMs": 1789757602094,
+      "speaker": "talker",
+      "text": " to crash or impact",
+      "final": false
+    },
+    {
+      "atMs": 1789757602359,
+      "speaker": "talker",
+      "text": " other processes",
+      "final": false
+    },
+    {
+      "atMs": 1789757602627,
+      "speaker": "talker",
+      "text": " on the device. When",
+      "final": false
+    },
+    {
+      "atMs": 1789757602844,
+      "speaker": "talker",
+      "text": " audio arrives",
+      "final": false
+    },
+    {
+      "atMs": 1789757603105,
+      "speaker": "talker",
+      "text": " faster than it can",
+      "final": false
+    },
+    {
+      "atMs": 1789757603340,
+      "speaker": "talker",
+      "text": " be played, the queue",
+      "final": false
+    },
+    {
+      "atMs": 1789757603607,
+      "speaker": "talker",
+      "text": " quickly fills up.",
+      "final": false
+    },
+    {
+      "atMs": 1789757603869,
+      "speaker": "talker",
+      "text": " The player must",
+      "final": false
+    },
+    {
+      "atMs": 1789757604105,
+      "speaker": "talker",
+      "text": " then either drop new",
+      "final": false
+    },
+    {
+      "atMs": 1789757604383,
+      "speaker": "talker",
+      "text": " incoming packets to maintain",
+      "final": false
+    },
+    {
+      "atMs": 1789757604603,
+      "speaker": "talker",
+      "text": " real-time playback",
+      "final": false
+    },
+    {
+      "atMs": 1789757604874,
+      "speaker": "talker",
+      "text": " or pause temporarily",
+      "final": false
+    },
+    {
+      "atMs": 1789757605045,
+      "speaker": "talker",
+      "text": " to avoid",
+      "final": false
+    },
+    {
+      "atMs": 1789757605345,
+      "speaker": "talker",
+      "text": " buffer overflow. If",
+      "final": false
+    },
+    {
+      "atMs": 1789757605582,
+      "speaker": "talker",
+      "text": " the queue is allowed",
+      "final": false
+    },
+    {
+      "atMs": 1789757605783,
+      "speaker": "talker",
+      "text": " to grow indefinitely,",
+      "final": false
+    },
+    {
+      "atMs": 1789757606023,
+      "speaker": "talker",
+      "text": " the delay between",
+      "final": false
+    },
+    {
+      "atMs": 1789757606327,
+      "speaker": "talker",
+      "text": " the live stream and the",
+      "final": false
+    },
+    {
+      "atMs": 1789757606524,
+      "speaker": "talker",
+      "text": " output becomes too large.",
+      "final": false
+    },
+    {
+      "atMs": 1789757606826,
+      "speaker": "talker",
+      "text": " Failure modes",
+      "final": false
+    },
+    {
+      "atMs": 1789757607024,
+      "speaker": "talker",
+      "text": " include buffer",
+      "final": false
+    },
+    {
+      "atMs": 1789757607273,
+      "speaker": "talker",
+      "text": " underflow, where the",
+      "final": false
+    },
+    {
+      "atMs": 1789757607495,
+      "speaker": "talker",
+      "text": " player runs out of data",
+      "final": false
+    },
+    {
+      "atMs": 1789757607826,
+      "speaker": "talker",
+      "text": " and stalls or stutters.",
+      "final": false
+    },
+    {
+      "atMs": 1789757608062,
+      "speaker": "talker",
+      "text": " Another mode",
+      "final": false
+    },
+    {
+      "atMs": 1789757608330,
+      "speaker": "talker",
+      "text": " involves latency spikes",
+      "final": false
+    },
+    {
+      "atMs": 1789757608535,
+      "speaker": "talker",
+      "text": " where audio is drastically",
+      "final": false
+    },
+    {
+      "atMs": 1789757608802,
+      "speaker": "talker",
+      "text": " out of sync with visual",
+      "final": false
+    },
+    {
+      "atMs": 1789757609041,
+      "speaker": "talker",
+      "text": " elements. Finally,",
+      "final": false
+    },
+    {
+      "atMs": 1789757609272,
+      "speaker": "talker",
+      "text": " excessive queue",
+      "final": false
+    },
+    {
+      "atMs": 1789757609482,
+      "speaker": "talker",
+      "text": " depth can lead to dropped",
+      "final": false
+    },
+    {
+      "atMs": 1789757609777,
+      "speaker": "talker",
+      "text": " connections or timeout errors,",
+      "final": false
+    },
+    {
+      "atMs": 1789757610008,
+      "speaker": "talker",
+      "text": " forcing the player",
+      "final": false
+    },
+    {
+      "atMs": 1789757610278,
+      "speaker": "talker",
+      "text": " to restart the stream entirely.",
+      "final": false
+    },
+    {
+      "atMs": 1789757646189,
+      "speaker": "operator",
+      "text": "Please explain in detail, over at least 10 or 12 sentences, why a streaming audio player must keep a bounded queue, how it should behave when audio arrives faster than it can be played, and what goes wrong in each of the failure modes you can think of. Be thorough and do not summarize briefly.",
+      "final": true
+    },
+    {
+      "atMs": 1789757646199,
+      "speaker": "talker",
+      "text": "A streaming audio player must keep a bounded queue to balance memory usage while ensuring uninterrupted playback. By limiting the number of buffered packets, the system prevents memory exhaustion that could cause the player to crash or impact other processes on the device. When audio arrives faster than it can be played, the queue quickly fills up. The player must then either drop new incoming packets to maintain real-time playback or pause temporarily to avoid buffer overflow. If the queue is allowed to grow indefinitely, the delay between the live stream and the output becomes too large. Failure modes include buffer underflow, where the player runs out of data and stalls or stutters. Another mode involves latency spikes where audio is drastically out of sync with visual elements. Finally, excessive queue depth can lead to dropped connections or timeout errors, forcing the player to restart the stream entirely.",
+      "final": true
+    }
+  ],
+  "events": [
+    {
+      "atMs": 1789757579100,
+      "type": "voice_state",
+      "detail": "{\"version\":1,\"laneId\":\"voice-lane-lab-1\",\"attachmentGeneration\":1,\"type\":\"voice_state\",\"state\":\"connecting\",\"detail\":\"runtime=pi capture=push-to-talk reading=verbatim\",\"workerActivity\":\"unknown\",\"readingLevel\":\"verbatim\",\"captureMode\":\"push-to-talk\",\"resumption\":{\"resumable\":false}}"
+    },
+    {
+      "atMs": 1789757579467,
+      "type": "voice_state",
+      "detail": "{\"version\":1,\"laneId\":\"voice-lane-lab-1\",\"attachmentGeneration\":1,\"type\":\"voice_state\",\"state\":\"live\",\"workerActivity\":\"unknown\",\"readingLevel\":\"verbatim\",\"captureMode\":\"push-to-talk\",\"resumption\":{\"resumable\":false}}"
+    },
+    {
+      "atMs": 1789757579589,
+      "type": "voice_state",
+      "detail": "{\"version\":1,\"laneId\":\"voice-lane-lab-1\",\"attachmentGeneration\":1,\"type\":\"voice_state\",\"state\":\"live\",\"resumption\":{\"resumable\":true}}"
+    }
+  ],
+  "scheduler": {
+    "module": "client/src/lib/voiceLive/playbackSession.ts",
+    "sourceSha256": "abd507791abd144770fca96c790e65949737b4cc32fbc0731ac7cbf43702c806",
+    "scheduled": 534,
+    "strandedSeqs": [],
+    "droppedChunks": 0,
+    "faults": [],
+    "peakQueuedMs": 2099
+  },
+  "page": {
+    "audioContexts": 0,
+    "mountedLaneSurfaces": 0,
+    "laneIds": [
+      "voice-lane-lab-1"
+    ]
+  },
+  "verdict": {
+    "verdict": "clean",
+    "findings": [],
+    "summary": {
+      "chunks": 534,
+      "scheduled": 534,
+      "bookedMs": 46830,
+      "bookedSpanMs": 46830,
+      "overlapMs": 0,
+      "strandedMs": 0,
+      "droppedChunks": 0,
+      "audioContexts": 0,
+      "mountedLaneSurfaces": 0,
+      "laneIds": 1
+    }
+  }
+}

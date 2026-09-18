@@ -77,8 +77,10 @@ Findings, worst first (the operator's symptom is first):
   ([`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md)) is the OS-output lane; its `capture:chain` fails on this
   host, and that is why this sibling exists.
 - The page-level findings are only as good as the run. A protocol-level capture reports `audioContexts: 0` and
-  `mountedLaneSurfaces: 0`, which means **not measured** — never "clean". A browser scenario is the natural next
-  increment and is not implemented here.
+  `mountedLaneSurfaces: 0`, which means **not measured** — never "clean". The `browser` command supplies them from a
+  real Web Audio graph, but it has only been run against the lab's own dev page replaying a captured lane, never
+  against the operator's live page; production page facts therefore still come from the lane inventory and the
+  component test that pins the one-chain invariant.
 - It never touches production: a disposable server outside the production cgroup, its own state dir, token and socket.
 
 ## Evidence and privacy
@@ -87,6 +89,13 @@ A capture directory holds `chunks.json` (per-chunk metadata and digests), `frame
 payloads redacted to their length), `transcripts.json`, `measurement.json` and `audio/chunk-NNNN.pcm` (the decoded
 model speech). Runs are written outside Git (`/root/voice-lane-lab`); nothing here is uploaded, and no operator
 utterance text or credential is recorded.
+
+**Deliberate deviation from the audio lab's convention.** `AUDIO-REGRESSION-LAB.md` keeps raw audio **outside** Git.
+This lab commits the decoded model speech for a record when the capture is small (single-digit MB), because it is the
+only way the record can be **re-analysed offline** — `analyse <dir>` replays the shipped scheduler over the same bytes
+and reproduces the published verdict. The audio is the MODEL's own speech answering a normalised question on a
+disposable server: no operator recording, no credentials, no session content. Where a capture is large, only the
+metadata, measurements and arrival shape are committed, and the record says so.
 
 ## Related documents
 

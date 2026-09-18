@@ -253,7 +253,8 @@ async function main(argv: string[]): Promise<number> {
         data?: string;
         pcmPath?: string;
       }>;
-      const probe = await probeInBrowser({ captureDir: dir, appUrl, log: writeOut });
+      const settleMs = Number(flag(argv, '--settle-ms') ?? 25_000);
+      const probe = await probeInBrowser({ captureDir: dir, appUrl, settleMs, log: writeOut });
       const verdict = gradeBrowserRun({ chunks: rows }, probe, dir);
       writeFileSync(
         path.join(dir, 'browser-measurement.json'),

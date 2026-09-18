@@ -1,0 +1,11 @@
+A LONG real answer on the same lane (scripts/voice-lane-lab, real Gemini Live, real spoken question).
+
+chunks            : 534
+arrival span      : 11.48 s
+audio delivered   : 46.83 s
+delivery rate     : 4.08x real time
+duplicate payloads: 0
+seq range         : 0..533 (contiguous: True)
+
+This is the case the OLD code gutted: at the old chunk-count bound (50 chunks of the
+100 ms frames this provider sends) a 30 s answer lost 156 chunks from the middle.

@@ -142,7 +142,32 @@ not merely unmeasured now: it is ruled out for the reported period. `client/src/
 pins the invariant at the code level (a non-addressed lane in multi-lane Drive Mode mounts no lane; a page holds
 exactly one frameBus registration) so it cannot regress.
 
-## 6. What is still not proven
+## 6. The long answer: the case the old bound gutted — also verified
+
+The 9.9 s answer above is not where the old code did its worst damage: at the old chunk-count bound (50 chunks of the
+100 ms frames this provider sends) a **30 s** answer lost **156 chunks** from the middle. So the lab was run again on
+an answer long enough to matter — a real lane, a real spoken question that asks for a thorough multi-sentence
+answer — and measured with BOTH instruments:
+
+`long-answer/arrival-shape.txt` — 534 chunks, seq 0…533 contiguous, no duplicate payloads, **46.83 s of speech
+delivered in 11.48 s (4.08× real time)**.
+
+| 46.8 s answer | chunks scheduled | booked | stranded | dropped | overlap | AudioContexts |
+|---|---|---|---|---|---|---|
+| Node (`analyse`) | **534 / 534** | 46 830 ms | **0** | **0** | 0 ms | — |
+| Browser (`browser`) | **534 / 534** | 46 830 ms | **0** | **0** | 0 ms | **1** |
+
+The whole answer plays, contiguously, in a real audio graph — which is the property the old bound violated.
+(Same deliberate deviation as the lab doc records: this record commits the decoded model speech so `analyse` can
+reproduce it; it is the model's own speech on a disposable server, never an operator recording.)
+
+Both rows are machine-written and committed here: `long-answer/measurement.json` (the Node `analyse` result, verdict
+`clean`) and `long-answer/browser-measurement.json` (the browser probe: `booked: 534`, `audioContexts: 1`, verdict
+`clean`). The Node row was **re-verified from the committed bytes** after the capture was written:
+`npx vite-node scripts/voice-lane-lab/cli.ts analyse operations/voice-live-20260917/evidence/lane-overlap-20260918/long-answer`
+→ `clean`, 534/534 scheduled, 46 830 ms booked, 0 stranded, 0 dropped, 0 overlap.
+
+## 7. What is still not proven
 
 - **OS-rendered audio.** The audio regression lab's capture chain cannot start on this host (`doctor` →
   `capture:chain` FAIL), so this lab measures what the product schedules and what the server sends, not what the
@@ -154,7 +179,7 @@ exactly one frameBus registration) so it cannot regress.
   surface on the dev-lab page; it does not click through Drive Mode and open a lane, so the app-UI path is still
   covered by the component tests and by the operator's own use.
 
-## 7. What a provider interrupt should do (found, not changed)
+## 8. What a provider interrupt should do (found, not changed)
 
 The captured lane had **no** provider interruption (three `voice_state` events, none of them
 `provider interrupted playback`), so this defect did not involve one. It is worth recording that the client's
