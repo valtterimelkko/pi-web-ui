@@ -415,7 +415,9 @@ the pump trigger were the bug, not the rule.
 **PROOF, same capture, only the scheduler changed:** 48 → **99 chunks scheduled**, 4.17 s → **8.77 s booked**,
 4.5 s → **0 stranded**, 1 → **0 dropped**, overlap 0 ms both sides (the shipped scheduler has never overlapped itself;
 the operator's phrase describes what the stranding and the drops sound like). Mutation-checked tests: disabling the
-drain fails 1, restoring the old count bound fails 2; restored, 18/18 pass. Evidence +
+drain fails 1, restoring the old count bound fails 2; restored, 18/18 pass. The comparison is CONTROLLED: the
+"before" figure was re-taken with the CURRENT harness (real-time replay, same capture) with only the drain disabled —
+48 vs 99 scheduled, 4.6 s vs 0 stranded — so it is the scheduling change alone, not a change of instrument. Evidence +
 `arrival-shape.txt`: `operations/voice-live-20260917/evidence/lane-overlap-20260918/`.
 
 **NOT PROVEN:** a second output chain in the operator's browser (two AudioContexts, two mounted lane surfaces or two

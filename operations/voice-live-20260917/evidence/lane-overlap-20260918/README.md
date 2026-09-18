@@ -52,6 +52,18 @@ stream:
 
 The same probe on a 1× control stream dropped nothing and stranded nothing — which is why this was never caught.
 
+### The comparison is controlled, not two different harnesses
+
+The "before" figure above was first taken with the lab's earlier revision. It was re-taken with the CURRENT harness —
+real-time replay, same capture, same arrival times — with only the drain disabled, which is the single variable:
+
+| same harness, same capture | chunks scheduled | booked | stranded | dropped |
+|---|---|---|---|---|
+| drain disabled (pre-fix behaviour) | 48 | 4 170 ms | 4 600 ms | 0 |
+| the shipped fix | **99** | **8 770 ms** | **0 ms** | **0** |
+
+So the before/after is the scheduling change alone, not a change of instrument.
+
 ## 3. The fix
 
 `client/src/lib/voiceLive/playbackSession.ts` + `audioConstants.ts`:
