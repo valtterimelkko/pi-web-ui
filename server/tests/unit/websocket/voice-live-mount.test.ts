@@ -212,6 +212,21 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     expect(delivery.calls).toHaveLength(0);
 
     // The genuine confirmation delivers byte-for-byte what the proposal held.
+    // H3: the read-back must have completed before a release is allowed, and the
+    // identity echo is required on the typed path.
+    await mount.route(
+      'client-1',
+      { send: (message) => sent.push(message as unknown as Sent) },
+      {
+        type: 'proposal_presentation',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        proposalId: payload.proposalId,
+        presentedVariant: 'tidied',
+        completed: true,
+      } as never
+    );
     const code = await mount.route(
       'client-1',
       { send: (message) => sent.push(message as unknown as Sent) },
@@ -260,8 +275,24 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
           proposalId: payload.proposalId,
           variant: 'tidied',
           idempotencyKey,
+          // H3: the typed/card path requires the identity echo.
+          proposalRef: { version: payload.version, sha256: payload.sha256 },
         } as never
       );
+    // H3: and a completed read-back (the presentation state, now enforced).
+    await mount.route(
+      'client-1',
+      { send },
+      {
+        type: 'proposal_presentation',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        proposalId: payload.proposalId,
+        presentedVariant: 'tidied',
+        completed: true,
+      } as never
+    );
     expect(await confirm('idem-a')).toBeNull();
     expect(await confirm('idem-b')).toBe('voice_proposal_stale');
     expect(delivery.calls).toHaveLength(1);
@@ -388,7 +419,14 @@ describe('VoiceLiveMount — the operator-speech adapter', () => {
   it('releases the live proposal on a spoken confirmation, with a stable idempotency key', async () => {
     const service = new FakeService();
     const delivery = makeDelivery({ outcome: 'delivered', mechanism: 'steer' });
-    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
+    // The echo window (M6) is a separate concern; disabled here so this test
+    // isolates the spoken presentation gate.
+    const mount = new VoiceLiveMount({
+      service,
+      delivery,
+      isWorkerBusy: async () => false,
+      echoSuppressionWindowMs: 0,
+    });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
     utterance(service, 'Tell the worker to check the tests.');
@@ -396,6 +434,19 @@ describe('VoiceLiveMount — the operator-speech adapter', () => {
     const proposal = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       tidied: string;
     };
+
+    // H3(c): the talker's spoken read-back IS the presentation (intent §18.2).
+    service.emit({
+      kind: 'transcript',
+      laneId: LANE,
+      attachmentGeneration: GENERATION,
+      speaker: 'talker',
+      source: 'native',
+      text: `I will ask the worker to ${proposal.tidied}`,
+      final: true,
+      atMs: 1,
+    });
+    await flush();
 
     utterance(service, 'Yes, send that.');
     await flush();

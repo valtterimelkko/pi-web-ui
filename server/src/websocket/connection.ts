@@ -33,12 +33,11 @@ import { isTransferSessionContext, isTalkerTurnMessage, isTalkerDigestMessage } 
 // Phase 5 (Track F): the Voice Mode mount. Constructed lazily on the first
 // voice frame, so a socket that never speaks the voice protocol sees exactly
 // the behaviour it saw before this wiring existed.
-import { VoiceLiveMount, createLogEvidenceSink } from './voice-live-mount.js';
+import { VoiceLiveMount, createLogEvidenceSink, VOICE_LANE_CAPACITY_CODE, type VoiceMountRefusalCode } from './voice-live-mount.js';
 import {
   isVoiceClientMessageType,
   VOICE_WIRE_VERSION,
   type VoiceClientMessage,
-  type VoiceErrorCode,
   type VoiceServerMessage,
 } from '../voice/contract.js';
 import { handleSessionWebSocket } from './session-websocket.js';
@@ -69,7 +68,7 @@ const logger = createLogger('WebUI');
  * Refusals are healthy outcomes and are never silent (N9); none of these
  * strings is a capability, and none can be reached without a refusal.
  */
-const VOICE_REFUSAL_TEXT: Partial<Record<VoiceErrorCode, string>> = {
+const VOICE_REFUSAL_TEXT: Partial<Record<VoiceMountRefusalCode, string>> = {
   voice_message_malformed: 'The voice frame was malformed.',
   voice_message_unknown: 'Unknown voice frame type.',
   voice_message_unknown_field: 'The voice frame carried an unexpected field.',
@@ -87,6 +86,9 @@ const VOICE_REFUSAL_TEXT: Partial<Record<VoiceErrorCode, string>> = {
   voice_provider_unavailable: 'The voice provider is unavailable.',
   voice_quota_exhausted: 'The voice provider quota is exhausted.',
   voice_internal_error: 'Internal voice error; nothing was sent.',
+  // H2 (review R): the honest capacity refusal — replacing the previous
+  // mislabelled `voice_internal_error` for a full lane table.
+  [VOICE_LANE_CAPACITY_CODE]: 'The voice lane table is full; try again shortly.',
 };
 
 /**
@@ -652,6 +654,13 @@ export class WebSocketConnectionManager {
         this.outbound.flushPending(client.ws);
       }
 
+      // M4 (review R, plan Phase 3 task 5): worker-status context injection for
+      // live voice lanes. `refreshWorkerStatuses` injects only on a CHANGE; the
+      // service coalesces the sends and holds them while the operator speaks.
+      if (this.voiceLiveMount) {
+        void this.voiceLiveMount.refreshWorkerStatuses();
+      }
+
       // Pi SDK session statuses
       const statuses = this.multiSessionManager.getAllSessionStatuses();
       for (const status of statuses) {
@@ -922,16 +931,43 @@ export class WebSocketConnectionManager {
       return;
     }
     if (isVoiceFrame && !wsVoiceFrameLimiter.check(clientId)) {
-      const envelope = message as unknown as { laneId?: unknown; attachmentGeneration?: unknown };
-      this.sendMessage(clientId, {
-        type: 'voice_error',
-        version: VOICE_WIRE_VERSION,
-        laneId: typeof envelope.laneId === 'string' ? envelope.laneId : '',
-        attachmentGeneration: typeof envelope.attachmentGeneration === 'number' ? envelope.attachmentGeneration : 0,
-        code: 'voice_internal_error',
-        message: 'Voice frame rate exceeded; the frame was dropped.',
-        fatal: false,
-      } as unknown as ServerMessage);
+      const envelope = message as unknown as {
+        laneId?: unknown;
+        attachmentGeneration?: unknown;
+        requestId?: unknown;
+      };
+      const laneId =
+        typeof envelope.laneId === 'string' && envelope.laneId.length > 0 ? envelope.laneId : null;
+      const attachmentGeneration =
+        typeof envelope.attachmentGeneration === 'number' &&
+        Number.isInteger(envelope.attachmentGeneration) &&
+        envelope.attachmentGeneration >= 0
+          ? envelope.attachmentGeneration
+          : null;
+      const requestId = typeof envelope.requestId === 'string' ? envelope.requestId : undefined;
+      // M8 (review R): a refusal must carry an envelope the client accepts. An
+      // emptied laneId is rejected by the client's own envelope check, so the
+      // drop notice vanished exactly when the client was most misbehaving.
+      // Echo the offending frame's envelope when it had one; when it genuinely
+      // did not, use the generic error frame rather than a malformed voice one.
+      if (laneId !== null && attachmentGeneration !== null) {
+        this.sendMessage(clientId, {
+          type: 'voice_error',
+          version: VOICE_WIRE_VERSION,
+          laneId,
+          attachmentGeneration,
+          ...(requestId !== undefined ? { requestId } : {}),
+          code: 'voice_internal_error',
+          message: 'Voice frame rate exceeded; the frame was dropped.',
+          fatal: false,
+        } as unknown as ServerMessage);
+      } else {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'Voice frame rate exceeded; the frame was dropped.',
+          code: 'RATE_LIMIT',
+        });
+      }
       return;
     }
 
@@ -4322,6 +4358,7 @@ export class WebSocketConnectionManager {
         version: VOICE_WIRE_VERSION,
         laneId: message.laneId,
         attachmentGeneration: message.attachmentGeneration,
+        ...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
         code,
         message: VOICE_REFUSAL_TEXT[code] ?? code,
         fatal: false,

@@ -424,7 +424,13 @@ export type TalkerUtteranceClass = 'confirm' | 'cancel' | 'question' | 'statemen
 export type TalkerDeliveryOutcome =
   | { outcome: 'delivered'; mechanism: 'steer' | 'prompt'; disclosure?: string }
   | { outcome: 'queued'; mechanism: 'follow_up'; disclosure: string }
-  | { outcome: 'refused'; reason: string };
+  | { outcome: 'refused'; reason: string }
+  /**
+   * M2 (review R): the harness's first-class ambiguous state (§4.4/§7.3) — a
+   * post-submission timeout/transport failure is not a refusal. Additive wire
+   * variant; the direct-voice receipt path already carries `unknown`.
+   */
+  | { outcome: 'unknown'; cause: 'timeout' | 'disconnect' | 'transport_error'; reason: string };
 
 /**
  * Client → Server: one operator utterance for the worker session's talker.

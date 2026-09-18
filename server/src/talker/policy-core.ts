@@ -779,6 +779,17 @@ export class HostAuthorityKernel {
 
   private readonly offers: AskWorkerOffers;
   private readonly now: () => number;
+  /**
+   * Idempotency keys reserved by a confirmation that has been AUTHORISED but
+   * whose release receipt has not been appended yet (M1, review R). The release
+   * store is only written after delivery resolves, so a check against it alone
+   * left a check-then-act window: two concurrent confirms sharing one key could
+   * both pass and deliver twice. `confirm` is synchronous, so reserving here is
+   * atomic with respect to other confirms on the same event loop turn. A
+   * refusal releases its reservation (a refusal consumes nothing); an
+   * authorisation keeps it for the life of the kernel — the key is spent.
+   */
+  private readonly reservedIdempotencyKeys = new Map<string, string>();
 
   constructor(opts?: HostAuthorityKernelOptions) {
     this.now = opts?.now ?? Date.now;
@@ -842,8 +853,9 @@ export class HostAuthorityKernel {
    *   1. an already-released proposal answers `duplicate_refusal` (never a
    *      second delivery);
    *   2. an unknown proposal refuses;
-   *   3. an already-used idempotency key answers `duplicate_refusal` WITHOUT
-   *      consuming the proposal;
+   *   3. an already-used OR already-reserved idempotency key answers
+   *      `duplicate_refusal` WITHOUT consuming the proposal (the reservation
+   *      closes the check-then-act window between authorisation and receipt);
    *   4. the ProposalStore gate validates live → version+sha256 → original
    *      variant and consumes atomically on success.
    * A refusal consumes nothing.
@@ -863,23 +875,26 @@ export class HostAuthorityKernel {
       };
     }
     if (!proposal) return { kind: 'refused', reason: 'not_found', proposal: null };
-    if (this.releases.hasIdempotencyKey(input.idempotencyKey)) {
-      const priorForKey = this.releases.latest(input.idempotencyKey);
-      if (priorForKey) {
-        return {
-          kind: 'duplicate_refusal',
-          proposalId: input.proposalId,
-          idempotencyKey: input.idempotencyKey,
-          prior: priorForKey,
-        };
-      }
+    // M1: a key that is recorded OR reserved is spent. The reservation is taken
+    // below BEFORE the proposal is consumed, so two confirms sharing a key can
+    // never both reach delivery (review R probe 3).
+    if (this.releases.hasIdempotencyKey(input.idempotencyKey) || this.reservedIdempotencyKeys.has(input.idempotencyKey)) {
+      return {
+        kind: 'duplicate_refusal',
+        proposalId: input.proposalId,
+        idempotencyKey: input.idempotencyKey,
+        prior: this.releases.latest(input.idempotencyKey),
+      };
     }
+    this.reservedIdempotencyKeys.set(input.idempotencyKey, input.proposalId);
     const take = this.proposals.takeForConfirmation({
       proposalId: input.proposalId,
       ...(input.variant !== undefined ? { variant: input.variant } : {}),
       identity: input.identity,
     });
     if (take.kind !== 'taken') {
+      // A refusal consumes nothing — including its key reservation.
+      this.reservedIdempotencyKeys.delete(input.idempotencyKey);
       return {
         kind: 'refused',
         reason: take.kind,

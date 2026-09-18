@@ -332,6 +332,22 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     expect(sent.some((frame) => frame.type === 'voice_error' && frame.fatal === true)).toBe(true);
 
     // (b) The active draft survives: confirming it still releases its exact bytes.
+    //     H3: the read-back presentation state survives the engine fallback too
+    //     (the kernel owns it; the fallback only changes the serving engine).
+    const presented = await mount.route(
+      'client-1',
+      { send },
+      {
+        type: 'proposal_presentation',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        proposalId: draft.proposalId,
+        presentedVariant: 'tidied',
+        completed: true,
+      } as never
+    );
+    expect(presented).toBeNull();
     const confirmCode = await mount.route(
       'client-1',
       { send },
@@ -437,7 +453,22 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     expect(refusedCode).toBe('voice_confirm_requires_proposal');
     expect(metrics.snapshot().voice?.proposals).toMatchObject({ created: 1, released: 0, refused: 1 });
 
-    // The genuine confirmation releases exactly once.
+    // The genuine confirmation releases exactly once (H3: after a completed
+    // read-back and with the identity echo).
+    const presented = await mount.route(
+      'client-1',
+      { send },
+      {
+        type: 'proposal_presentation',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        proposalId: draft.proposalId,
+        presentedVariant: 'tidied',
+        completed: true,
+      } as never
+    );
+    expect(presented).toBeNull();
     const releasedCode = await mount.route(
       'client-1',
       { send },
