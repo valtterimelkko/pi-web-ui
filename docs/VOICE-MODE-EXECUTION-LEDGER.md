@@ -371,6 +371,32 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (L VERIFIED AND MERGED `9caa44d`; conductor isolation gap found and repaired).**
+L's handback (`coordination/L/complete.md`) closes H3-client, M7 and M8-client. Conductor
+verification on the frozen commit: scope clean (client only + the two disclosed new root files);
+the click-alone test exists and the buggy `onPresentationReport` prop is **removed from the card's
+API** (the mistake cannot be reintroduced by a caller); the browser spec drives the real component
+tree (the speech service is a disclosed deterministic stand-in; the product only ever learns of
+completion from the utterance's own end event) and asserts the load-bearing sequence — pending →
+disabled, a click sends **zero** `proposal_presentation` frames, playback end → presented → enabled,
+confirm carries `proposalRef {version, sha256}`. **I re-ran the gates myself: root typecheck exit 0;
+shared+client builds 0/0; client suite 144 files / 1603 tests; Playwright 5/5 in a real browser.**
+Post-merge on master: typecheck + client suite green. Merged `9caa44d`, pushed; a conductor follow-up
+fixed a prose typo in L's evidence README (`979c21a`, the committed log is the artefact). Cleanup:
+watch cancelled, lease released, worktree removed, branch deleted. L's honest gaps stand as recorded
+(audibility not measured on this host; real OS speech engine not exercised; no live server socket in
+the browser evidence) — real-ear remains Gate 7, the operator's.
+
+**CONDUCTOR DEFECT FOUND AND REPAIRED (D-08):** L honestly reported that `npm run typecheck` at the
+repo root fails in the **server** workspace (`src/routes/*.ts`, zod `.errors`) and reproduced it with
+its changes stashed. The cause was **my worktree isolation recipe**, not the product: the worktrees
+lacked the **nested** workspace `node_modules` (main's `server/node_modules/zod` 3.25.76 and
+`shared/node_modules/zod` shadow the root zod 4.4.3 that npm hoisted for another consumer). Both
+correction worktrees now have the nested entries symlinked and resolve zod 3.25.76 (resolver-verified);
+the root typecheck then passed in both. **Recipe v2: isolate nested `server|client|shared/node_modules`
+as well as the root** — this also protected K's final gate. (It likely explains earlier one-off gate
+oddities; future pre-dispatch checks must probe a nested import, not just `@pi-web-ui/shared`.)
+
 **2026-09-18 (WAVE 3 CLOSEOUT — independent review R landed; two correction children dispatched `4ae2bcf`).**
 R's review of record (`coordination/R/complete.md`, read-only, zai GLM 5.3 Flash for model-family
 independence) reviewed `b39cc27` and re-ran its probes on post-H `edccdbe`. Gate verdicts: 0, 1, 2,
