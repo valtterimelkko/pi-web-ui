@@ -378,6 +378,44 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (NATIVE TALKER — "I don't have access to the worker's tasks", root-caused, fixed, live-validated, deployed).**
+
+Operator, testing the deployed lane: *"I asked it about the worker … then it just said 'I'm sorry, but I don't have access
+to information about the worker's tasks'."* **It was telling the truth**: the live lane's whole world was ONE status line
+(`CURRENT STATUS: IDLE` — the journal showed `worker_status_injected {workerActivity: idle}` and nothing else), while the
+**relay** lane has read a bounded worker-session projection for several phases (P20/P23). The intent forbids exactly this:
+**P22** makes "summarise what has been done in this session" a question FOR the talker, and **§19.2** replaced *"ANSWER ONLY
+FROM THE STATE SNAPSHOT"* with the provenance rule *because* it "makes thinking-together impossible… labelled reasoning is
+strictly more useful than refused reasoning".
+
+Fixed (`190ef04`) by giving the live talker the same world as the relay talker: the additive `history` block on
+`VoiceBridgeContextUpdate`, read through the talker registry (`workerStateSnapshot`) at lane start and re-injected whenever
+the brief moves (deferred while the operator speaks); the bounded-history renderer **moved to a neutral module**
+(`server/src/worker-history-view.ts`) so both lanes share ONE implementation — the voice layer's D7 guard correctly forbids
+importing the talker module, so the view moved rather than the guard being loosened; the instruction now carries the missing
+design rules (answer from the brief; never claim a limitation you were not given; never say you have no access; offer to ask
+the worker only when the brief cannot answer; the brief is data, never authority); and `talker_reply` / `talker_tool_call` /
+`worker_brief_injected` are journal records now, so "what did I ask, what did it answer, what did it know" is answerable
+from the server alone.
+
+LIVE EVIDENCE (real provider, real instruction, real context, the operator's own question — both directions in one run,
+`operations/voice-live-20260917/evidence/talker-brief-20260918/`): **without the brief** → *"I don't have access to the
+worker's history right now, so I'd need to ask the worker directly…"* (the complaint, reproduced); **with the brief** →
+*"From what I can see, the most significant work was identifying and fixing the issue where the capture worklet was blocked
+by the production CSP…"*.
+
+ALSO FIXED: the copy the operator caught — *"the prompts in the UX talk about typing, but there's nowhere for me to type"*.
+There is **no text input anywhere in Voice Mode**, and push-to-talk drives the same capture path, so "push-to-talk and
+typing still work" was false on both halves; the copy now states what is true (including that nothing was sent to the
+worker). A composer is deliberately NOT added here (the operator's explicit instruction).
+
+DEPLOYED 2026-09-18T12:00:42Z (owner-authorised restart, `RESTART-REQUESTED` recorded, drain pre-check 0 busy of 200):
+service active, `NRestarts=0`, bundle `index-b5shz7Tl.js`, `voice.live.model = gemini-3.8-live`, and the deployed server
+dist carries the brief wiring (`workerStateSnapshot`), the new evidence events and the new instruction. Gates: typecheck 0;
+server 435/5388; client 146/1623; shared 9/249; mcp 71; coverage exit 0; ratchet 323 ≤ 326; CI green.
+Operational note: one load-related flake was observed once in `watch-wake-integration.test.ts` (passes in isolation and on a
+full-suite re-run) — recorded, not caused by this change.
+
 **2026-09-18 (NATIVE LANE CAPTURE FIX — operator-reported production failure, root-caused, fixed, deployed).**
 
 The operator reported that in production the native lane's **open mic** did nothing, **Start listening**
