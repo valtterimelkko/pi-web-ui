@@ -420,6 +420,19 @@ Tests: `server/tests/unit/talker/session-file-history.test.ts` (10) and
 `server/tests/unit/talker/session-registry-disk-history.test.ts` (6, including read-once caching and
 re-read-on-change), plus the `worker_brief_empty` assertion in the mount suite.
 
+**Follow-up in the same sitting (operator had not yet retested): the last untested link is now tested.** The ~12-line
+closure in `connection.ts` that turns a snapshot into the lane's brief is exactly where this report was decided, and
+it was the one link in the chain with no test — the composition beneath it was covered, the mapping in between was
+only visible by reading the code. It is now `server/src/websocket/worker-brief-source.ts`
+(`createWorkerBriefSource`, 6 tests), called from the same wiring with no behaviour change. It sits beside the wiring
+rather than under `voice/` because the D7 client-neutrality guard forbids `server/src/voice/**` importing
+`../talker` or `../websocket`. Proven through the SHIPPED wiring unit against the operator's real session with the
+worker absent from memory: `entries=162 total=162 mode=full chars=49046`. Deployed 15:56:03Z.
+
+**Still outstanding: confirmation on a real lane.** No voice lane has started since the first deploy, so the
+corrected behaviour has not yet been observed live. The journal will show either `worker_brief_injected` with real
+`briefChars` or `worker_brief_empty`; the latter is a miss and reopens the diagnosis.
+
 **2026-09-18 (the talker's WINDOW ON THE WORK — the operator's "let it see the entire session", measured,
 built, live-validated through the shipped path).**
 
