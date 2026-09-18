@@ -23,12 +23,24 @@ import { readBackgroundTasksSnapshot } from '../internal-api/background-children
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager } from '../pi/multi-session-manager.js';
 import { TalkerSessionRegistry } from '../talker/session-registry.js';
+import { createDefaultDeliveries } from '../talker/delivery.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
 import { getOperationalMetrics } from '../observability/operational-metrics.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage, TalkerTurnMessage, TalkerTurnPhase, TalkerDigestMessage } from './protocol.js';
 import { isTransferSessionContext, isTalkerTurnMessage, isTalkerDigestMessage } from './protocol.js';
+// Phase 5 (Track F): the Voice Mode mount. Constructed lazily on the first
+// voice frame, so a socket that never speaks the voice protocol sees exactly
+// the behaviour it saw before this wiring existed.
+import { VoiceLiveMount, createLogEvidenceSink } from './voice-live-mount.js';
+import {
+  isVoiceClientMessageType,
+  VOICE_WIRE_VERSION,
+  type VoiceClientMessage,
+  type VoiceErrorCode,
+  type VoiceServerMessage,
+} from '../voice/contract.js';
 import { handleSessionWebSocket } from './session-websocket.js';
 import { config } from '../config.js';
 import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
@@ -51,6 +63,31 @@ import { withCorrelation, newRequestId } from '../logging/correlation.js';
 import { resolveCanonicalSessionId } from '../observability/session-correlation.js';
 
 const logger = createLogger('WebUI');
+
+/**
+ * Short operator-facing text for each voice refusal code (contract §6.4).
+ * Refusals are healthy outcomes and are never silent (N9); none of these
+ * strings is a capability, and none can be reached without a refusal.
+ */
+const VOICE_REFUSAL_TEXT: Partial<Record<VoiceErrorCode, string>> = {
+  voice_message_malformed: 'The voice frame was malformed.',
+  voice_message_unknown: 'Unknown voice frame type.',
+  voice_message_unknown_field: 'The voice frame carried an unexpected field.',
+  voice_message_missing_field: 'The voice frame was missing a required field.',
+  voice_version_unsupported: 'Unsupported voice wire version.',
+  voice_lane_unknown: 'No such voice lane.',
+  voice_generation_stale: 'That voice lane has been replaced by a newer attachment.',
+  voice_not_started: 'The voice lane is not live yet.',
+  voice_client_text_forbidden: 'Voice frames may not carry instruction text.',
+  voice_confirm_requires_proposal: 'That confirmation names no live proposal.',
+  voice_proposal_stale: 'That proposal is out of date; nothing was sent.',
+  voice_presentation_incomplete: 'The proposal was not read back in full; nothing was sent.',
+  voice_audio_chunk_too_large: 'The audio chunk exceeded the size ceiling.',
+  voice_audio_chunk_corrupt: 'The audio chunk was corrupt.',
+  voice_provider_unavailable: 'The voice provider is unavailable.',
+  voice_quota_exhausted: 'The voice provider quota is exhausted.',
+  voice_internal_error: 'Internal voice error; nothing was sent.',
+};
 
 /**
  * Default disconnect grace window before a pending AskUserQuestion whose session
@@ -343,6 +380,13 @@ export class WebSocketConnectionManager {
   private multiSessionManager: MultiSessionManager;
   /** Phase 3 (H6): the server's voice talker, wired to the manager this class owns. */
   private talkerSessionRegistry: TalkerSessionRegistry;
+  /**
+   * Phase 5 (Track F): the Voice Mode mount (Track B service + Track A kernel +
+   * the operator-speech adapter). Null until a voice frame arrives; disposed
+   * with the manager.
+   */
+  private voiceLiveMount: VoiceLiveMount | null = null;
+  private voiceLiveInit: Promise<VoiceLiveMount | null> | null = null;
   private eventForwarder: EventForwarder;
   /** Track CWD per client for session info */
   private clientCwd: Map<string, string> = new Map();
@@ -389,6 +433,15 @@ export class WebSocketConnectionManager {
   private commandCodeSessionIds: Set<string> = new Set();
   private commandCodeSubs = new Map<string, Set<string>>();
   private pendingClaudePermissions: Map<string, string> = new Map();
+  /**
+   * Phase 5 (Track F): per-client voice frame budget. One frame per voice
+   * audio chunk is the protocol's own pacing; the cap is far above a real
+   * microphone (which the contract bounds at ≤100 ms chunks) and far below
+   * what could pin the event loop.
+   */
+  private voiceFrameBudget = new Map<string, { count: number; resetAt: number }>();
+  private static readonly VOICE_FRAMES_PER_WINDOW = 1200;
+  private static readonly VOICE_FRAME_WINDOW_MS = 2_000;
 
   constructor(commandCodeService?: CommandCodeService) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -855,13 +908,31 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    // Rate limiting
-    if (!wsMessageLimiter.check(clientId)) {
+    // Rate limiting. Voice frames are a real-time stream (a 20 ms audio chunk
+    // is one frame, so ~50 frames/s): the generic 60-per-minute budget would
+    // silently drop the operator's audio and, with it, the whole conversation.
+    // They get a dedicated, bounded per-client budget instead — still a hard
+    // cap, enforced before any frame is acted on.
+    const isVoiceFrame = isVoiceClientMessageType((message as { type?: unknown }).type);
+    if (!isVoiceFrame && !wsMessageLimiter.check(clientId)) {
       this.sendMessage(clientId, {
         type: 'error',
         message: 'Rate limit exceeded',
         code: 'RATE_LIMIT',
       });
+      return;
+    }
+    if (isVoiceFrame && !this.checkVoiceFrameBudget(clientId)) {
+      const envelope = message as unknown as { laneId?: unknown; attachmentGeneration?: unknown };
+      this.sendMessage(clientId, {
+        type: 'voice_error',
+        version: VOICE_WIRE_VERSION,
+        laneId: typeof envelope.laneId === 'string' ? envelope.laneId : '',
+        attachmentGeneration: typeof envelope.attachmentGeneration === 'number' ? envelope.attachmentGeneration : 0,
+        code: 'voice_internal_error',
+        message: 'Voice frame rate exceeded; the frame was dropped.',
+        fatal: false,
+      } as unknown as ServerMessage);
       return;
     }
 
@@ -891,6 +962,15 @@ export class WebSocketConnectionManager {
   private async routeMessage(clientId: string, message: ClientMessage): Promise<void> {
     const client = this.clients.get(clientId);
     if (!client) return;
+
+    // Phase 5 (Track F): the typed Voice Mode frame path (contract §6.4). One
+    // dispatch point for every `VOICE_CLIENT_MESSAGE_TYPES` entry — the set
+    // comes from the frozen catalogue, so the transport cannot drift from it.
+    // Non-voice frames fall straight through to the switch below, unchanged.
+    if (isVoiceClientMessageType((message as { type?: unknown }).type)) {
+      await this.handleVoiceMessage(clientId, message as unknown as VoiceClientMessage);
+      return;
+    }
 
     switch (message.type) {
       case 'prompt':
@@ -3940,6 +4020,15 @@ export class WebSocketConnectionManager {
       this.clientCwd.delete(clientId);
       this.clientViewingSession.delete(clientId);
       this.clients.delete(clientId);
+      this.voiceFrameBudget.delete(clientId);
+
+      // Phase 5 (Track F): stop this client's voice lanes and drop their
+      // bindings. Only when the mount exists — a client that never spoke the
+      // voice protocol must not construct one by disconnecting. Kernel state
+      // (proposals, receipts, parked items) survives; the worker continues.
+      if (this.voiceLiveMount) {
+        void this.voiceLiveMount.detachClient(clientId);
+      }
 
       // Remove this client's Pi event handler exactly once so disconnected
       // clients do not accumulate in the PiService handler map. (The `if`
@@ -4123,6 +4212,134 @@ export class WebSocketConnectionManager {
    */
   getTalkerSessionRegistry(): TalkerSessionRegistry {
     return this.talkerSessionRegistry;
+  }
+
+  // ── Phase 5 (Track F): the Voice Mode mount ───────────────────────────────
+
+  /**
+   * The Voice Mode mount factory. Constructed once, lazily, on the first voice
+   * frame: a server whose sockets never speak the voice protocol constructs
+   * nothing and behaves exactly as before (no provider session, no timer, no
+   * subscription). The mount is wired to THIS class's MultiSessionManager, so
+   * its delivery path targets exactly the sessions this server manages, and to
+   * the shared session registry, so a worker that is idle or evicted is still
+   * resolvable.
+   */
+  private async getVoiceLiveMount(): Promise<VoiceLiveMount | null> {
+    if (this.voiceLiveMount) return this.voiceLiveMount;
+    if (!this.voiceLiveInit) {
+      this.voiceLiveInit = (async () => {
+        try {
+          const deliveries = await createDefaultDeliveries({
+            multiSessionManager: this.multiSessionManager,
+            resolveWorkerSession: (sessionId) => this.resolveRegisteredWorker(sessionId),
+          });
+          const mount = new VoiceLiveMount({
+            delivery: deliveries.pi,
+            isWorkerBusy: (ref) => this.isWorkerSessionBusy(ref),
+            serviceLog: {
+              debug: (message, meta) => logger.debug(message, meta ?? ''),
+              info: (message, meta) => logger.info(message, meta ?? ''),
+              warn: (message, meta) => logger.warn(message, meta ?? ''),
+              error: (message, meta) => logger.error(message, meta ?? ''),
+            },
+            evidence: createLogEvidenceSink(logger),
+          });
+          this.voiceLiveMount = mount;
+          return mount;
+        } catch (error) {
+          logger.error('Failed to construct the Voice Mode mount:', error);
+          return null;
+        }
+      })();
+    }
+    return this.voiceLiveInit;
+  }
+
+  /** Resolve a wire session reference through the shared session registry. */
+  private async resolveRegisteredWorker(
+    sessionId: string
+  ): Promise<{ path: string; cwd?: string } | undefined> {
+    try {
+      const entry = await getSessionRegistry(config.sessionRegistryPath).get(sessionId);
+      return entry ? { path: entry.path, cwd: entry.cwd } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** True while the named worker session is mid-run (the parking rule's input). */
+  private async isWorkerSessionBusy(ref: string): Promise<boolean> {
+    const loaded =
+      this.multiSessionManager.resolveSessionRef(ref) ??
+      (this.multiSessionManager.hasSession(ref) ? ref : undefined);
+    if (loaded) return this.isBusyPath(loaded);
+    const entry = await this.resolveRegisteredWorker(ref);
+    if (!entry) return false;
+    return this.isBusyPath(entry.path);
+  }
+
+  private isBusyPath(sessionPath: string): boolean {
+    const status = this.multiSessionManager.getSessionStatus(sessionPath)?.status;
+    return status === 'busy' || status === 'streaming';
+  }
+
+  /**
+   * The dedicated voice-frame budget (Phase 5). 1200 frames / 2 s = 600/s
+   * sustained, which is 12× a 20 ms microphone cadence and 60× the contract's
+   * own suggested chunk pace; a flood is refused before any decode or provider
+   * write.
+   */
+  private checkVoiceFrameBudget(clientId: string): boolean {
+    const now = Date.now();
+    const entry = this.voiceFrameBudget.get(clientId);
+    if (!entry || entry.resetAt <= now) {
+      this.voiceFrameBudget.set(clientId, { count: 1, resetAt: now + WebSocketConnectionManager.VOICE_FRAME_WINDOW_MS });
+      return true;
+    }
+    entry.count += 1;
+    return entry.count <= WebSocketConnectionManager.VOICE_FRAMES_PER_WINDOW;
+  }
+
+  /**
+   * Handle one typed Voice Mode frame. The mount owns every decision; this
+   * method binds the socket (outbound server→client voice frames) and surfaces
+   * a refusal as `voice_error` — never silence (N9). It adds no capability of
+   * its own.
+   */
+  private async handleVoiceMessage(clientId: string, message: VoiceClientMessage): Promise<void> {
+    const mount = await this.getVoiceLiveMount();
+    if (!mount) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Voice Mode is not available in this server instance',
+        code: 'INTERNAL_ERROR',
+      });
+      return;
+    }
+    const code = await mount.route(
+      clientId,
+      { send: (voiceMessage: VoiceServerMessage) => this.sendMessage(clientId, voiceMessage as unknown as ServerMessage) },
+      message
+    );
+    if (code === null) return;
+    if (typeof message.laneId === 'string' && message.laneId.length > 0 && typeof message.attachmentGeneration === 'number') {
+      this.sendMessage(clientId, {
+        type: 'voice_error',
+        version: VOICE_WIRE_VERSION,
+        laneId: message.laneId,
+        attachmentGeneration: message.attachmentGeneration,
+        code,
+        message: VOICE_REFUSAL_TEXT[code] ?? code,
+        fatal: false,
+      } as unknown as ServerMessage);
+      return;
+    }
+    this.sendMessage(clientId, {
+      type: 'error',
+      message: `Voice frame refused: ${code}`,
+      code: 'INVALID_MESSAGE',
+    });
   }
 
   /**
@@ -4347,6 +4564,7 @@ export class WebSocketConnectionManager {
         this.opencodeService.shutdown(),
         this.antigravityService.shutdown(),
         this.commandCodeService.shutdown(),
+        this.voiceLiveMount ? this.voiceLiveMount.dispose() : Promise.resolve(),
       ]);
       const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failure) throw failure.reason;

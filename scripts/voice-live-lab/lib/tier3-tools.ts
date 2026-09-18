@@ -528,6 +528,10 @@ export interface Tier3ChildSessionInfo {
   busy: boolean;
   status: string;
   lastText: string;
+  /** Conversation message count reported by `GET /sessions/:id` (when present). */
+  messageCount?: number;
+  /** On-disk session file reported by `GET /sessions/:id` (when present). */
+  sessionPath?: string;
 }
 
 export interface Tier3CreateSessionInput {
@@ -1419,6 +1423,8 @@ export function createHttpTier3Api(options: HttpTier3ApiOptions = {}): Tier3ApiC
         busy: Boolean(body?.busy),
         status: typeof body?.status === 'string' ? body.status : 'unknown',
         lastText,
+        ...(typeof body?.messageCount === 'number' ? { messageCount: body.messageCount } : {}),
+        ...(typeof body?.sessionPath === 'string' ? { sessionPath: body.sessionPath } : {}),
       };
     },
 

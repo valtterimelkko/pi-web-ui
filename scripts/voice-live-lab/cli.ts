@@ -50,6 +50,7 @@ export type CliCommand =
   | 'tier2-run'
   | 'tier3-dryrun'
   | 'tier3-run'
+  | 'test-vertical-slice'
   | 'freeze'
   | 'help';
 
@@ -92,6 +93,14 @@ export interface CliOptions {
   allowPromotion?: boolean;
   /** freeze: the manifest note explaining a synthetic input's promotion. */
   promotionNote?: string;
+  /** test-vertical-slice: where the machine-readable evidence is written. */
+  evidenceDir?: string;
+  /** test-vertical-slice: the disposable Pi worker's model. */
+  workerModel?: string;
+  /** test-vertical-slice: the repo the disposable server boots from. */
+  repoRoot?: string;
+  /** test-vertical-slice: leave the disposable state dir in place. */
+  keepState?: boolean;
 }
 
 export const DEFAULT_RUNS_ROOT = '/root/agent-benchmarks/benchmarks/04-voice-live-lab/runs';
@@ -117,6 +126,7 @@ export const USAGE = [
   '  voice-live-lab tier2-run --scenario <path> --condition <cond> [--transcript native|sidecar] [--model <id>] [--whisper-endpoint <url>] [--runs-root <dir>] [--json]   (needs GEMINI_API_KEY)',
   '  voice-live-lab tier3-dryrun [--runs-root <dir>] [--run-id <id>] [--attempts N] [--bench-root <dir>] [--peak-window] [--no-score] [--json]',
   '  voice-live-lab tier3-run --socket <sock> --token-path <token> --beats-audio-dir <dir> [--model <id>] [--peak-window] [--probe-tone] [--runs-root <dir>] [--json]   (needs GEMINI_API_KEY)',
+  '  voice-live-lab test-vertical-slice [--repo-root <dir>] [--evidence-dir <dir>] [--worker-model <id>] [--keep-state] [--json]   (needs GEMINI_API_KEY; Phase 5 gate)',
   '  voice-live-lab freeze --attempt <id|dir> --beat <id> [--runs-root <dir>] [--output <path>] [--allow-promotion --promotion-note <text>] [--json]',
   '  voice-live-lab help',
   '',
@@ -145,6 +155,12 @@ export const USAGE = [
   '  tier3-run             One MEASURED tier-3 attempt: real Internal API, real Live session, real',
   '                        children. Refuses without GEMINI_API_KEY, and without operator audio',
   '                        fixtures unless --probe-tone labels an equipment smoke run.',
+  '  test-vertical-slice   Phase 5 gate: boot a disposable server THIS repo, attach Voice Mode to a',
+  '                        real disposable Pi worker session and run the three end-to-end scenarios',
+  '                        (thinking together, directed steer, parking & surface) over the real',
+  '                        authenticated WebSocket with real spoken operator audio and a real Gemini',
+  '                        Live session. Writes machine-readable evidence; exits non-zero when a',
+  '                        scenario, the gate-leak audit or the byte-fidelity audit fails.',
   '  freeze                Freeze the actually-spoken lines of one adaptive beat (from an attempt',
   '                        record) into a new frozen regression variant, tagged provenance: synthetic.',
   '                        Refuses promotion into the frozen backbone without --allow-promotion and',
@@ -265,6 +281,20 @@ export function parseArgs(argv: string[]): CliOptions {
       probeTone: rest.includes('--probe-tone'),
       peakWindow: rest.includes('--peak-window'),
       noScore: rest.includes('--no-score'),
+      json: rest.includes('--json'),
+    };
+  }
+  if (command === 'test-vertical-slice') {
+    const opt = (name: string): string | undefined => {
+      const idx = rest.indexOf(name);
+      return idx !== -1 && rest[idx + 1] ? rest[idx + 1] : undefined;
+    };
+    return {
+      command,
+      evidenceDir: opt('--evidence-dir'),
+      workerModel: opt('--worker-model'),
+      repoRoot: opt('--repo-root'),
+      keepState: rest.includes('--keep-state'),
       json: rest.includes('--json'),
     };
   }
@@ -502,6 +532,36 @@ export async function main(argv: string[], deps: CliDependencies = {}): Promise<
         writeOut(`Handshake completed successfully. Status: ${report.rateLimits.status}`);
       }
       return report.rateLimits.status === 'ok' ? 0 : 1;
+    } catch (error) {
+      writeErr(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
+  }
+
+  if (options.command === 'test-vertical-slice') {
+    const key = apiKey();
+    if (!key) {
+      writeErr(
+        'test-vertical-slice refuses to start: GEMINI_API_KEY is not set (a measured operator loop must never run unlabelled).'
+      );
+      return 2;
+    }
+    const repoRoot = options.repoRoot ?? process.cwd();
+    const evidenceDir =
+      options.evidenceDir ?? path.join(repoRoot, 'operations', 'voice-live-20260917', 'evidence', 'F');
+    try {
+      const { runVerticalSlice } = await import('./lib/voice-slice/slice-runner.js');
+      const result = await runVerticalSlice({
+        repoRoot,
+        evidenceDir,
+        ...(options.workerModel ? { workerModel: options.workerModel } : {}),
+        ...(options.keepState ? { keepState: true } : {}),
+        log: options.json ? () => {} : writeOut,
+      });
+      if (options.json) {
+        writeOut(JSON.stringify(result, null, 2));
+      }
+      return result.exitCode;
     } catch (error) {
       writeErr(error instanceof Error ? error.message : String(error));
       return 1;
