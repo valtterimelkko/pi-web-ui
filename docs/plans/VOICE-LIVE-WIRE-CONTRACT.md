@@ -539,6 +539,7 @@ promotion is still only a proposal.
 | `voice_lane_unknown` / `voice_generation_stale` / `voice_not_started` | No such lane/generation, or audio before a successful start. |
 | `voice_client_text_forbidden` | A client frame tried to carry instruction text. Nothing acted on. |
 | `voice_confirm_requires_proposal` | A confirmation without a usable proposal identity. |
+| `voice_lane_capacity` | The lane table is full; this start was refused. *Added additively 2026-09-18 (Wave 3 corrections, after independent review R); no existing frame or code changed.* |
 | `voice_proposal_stale` / `voice_presentation_incomplete` | The confirmation named a proposal that moved on, or whose read-back did not complete. |
 | `voice_audio_chunk_too_large` / `voice_audio_chunk_corrupt` | Chunk dropped (§5.3). Never fatal. |
 | `voice_provider_unavailable` / `voice_quota_exhausted` | The bridge could not reach or could not continue the provider session. |

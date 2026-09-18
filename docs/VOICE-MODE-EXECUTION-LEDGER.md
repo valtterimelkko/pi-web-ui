@@ -373,6 +373,30 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (K VERIFIED AND MERGED `44aad1c` — all eleven review findings closed server-side).**
+Conductor verification on K's frozen commit (`33af7dd`): **typecheck exit 0; focused suites 49 files /
+801 tests; full server suite 431 files / 5357 tests (2 skipped)** — all re-run by me; then the
+**merged-tree full gate (`npm run typecheck && npm test`, all four workspaces) exit 0** before the
+push: shared 9/244, server 431/5355+2 skipped, client 144/1603, internal-api-mcp 8/71. RED-first
+evidence is recorded per finding (21/25 red pre-fix with per-finding failure messages; M8 2/2 red).
+**All four of R's probes re-verified by me on the merged tree**: `RETARGETED=false` + refusal
+(H1); a confirm with no echo / no presentation refused with zero deliveries (H3); the lane table
+reclaims a detached lane so a full table recovers (H2); M1's exactly-once is proven by a dedicated
+test that gates the first delivery in flight and shares one idempotency key across two proposals
+(1 delivery, 1 release record, loser refused). K chose resolve-then-retarget (option b) with
+`proposal_resolved{outcome:'replaced'}` + evidence `reason:'worker_retarget_same_generation'` — the
+change is never silent. The four modified existing tests were each **strengthened** (notably
+`talker-transport`, whose old expectations pinned exactly the P25 channel shape M5 forbids).
+Contract doc extended **additively** with `voice_lane_capacity` (no test parses the code table;
+shared suite green after the edit). Cleanup: watch cancelled, lease released, worktree removed,
+branch deleted. **Residuals recorded honestly:** L2 was improved (a spoken confirm now releases the
+variant the read-back matched); **L3** (`ProposalStore.present` records `presentedVariant:'original'`
+even when nothing was removed) and R's **audit-converse** observation (the Gate-5 audit proves
+delivered ⊆ store, never store ⊆ delivered, so the plan's wording is stronger than the proof) remain
+**accepted LOWs** — narrowing-only, no safety hole, not silently claimed closed. **Phase 7 prep
+ready**: `scripts/voice-mode-dogfood.sh` (one command: disposable server with
+`VOICE_MODE_ENGINE=gemini-live` + dev client wired to it, self-test pending) + `PHASE-7-RUNBOOK.md`.
+
 **2026-09-18 (L VERIFIED AND MERGED `9caa44d`; conductor isolation gap found and repaired).**
 L's handback (`coordination/L/complete.md`) closes H3-client, M7 and M8-client. Conductor
 verification on the frozen commit: scope clean (client only + the two disclosed new root files);
