@@ -91,6 +91,34 @@ export function parseLogLevel(raw: string | undefined, fallback: LogLevel = 'inf
   return (LOG_LEVELS as readonly string[]).includes(value) ? (value as LogLevel) : fallback;
 }
 
+// ─── Voice Mode engine selection (plan Phase 8) ──────────────────────────────
+
+/**
+ * Which engine serves the Voice Mode talker lane.
+ * - `gemini-live` — the native-voice bridge (provider audio in/out);
+ * - `cascade`     — the existing Gemma talker cascade (push-to-talk/typed), the
+ *                   default until the operator enables the live engine.
+ */
+export type VoiceModeEngine = 'gemini-live' | 'cascade';
+
+export const VOICE_MODE_ENGINES: readonly VoiceModeEngine[] = ['gemini-live', 'cascade'];
+
+/**
+ * Resolve `VOICE_MODE_ENGINE`. Unset/blank = `cascade` (today's behaviour —
+ * no silent activation of the live path). An unknown value fails fast with a
+ * clear message rather than falling back to a default the operator did not ask
+ * for.
+ */
+export function resolveVoiceModeEngine(env: NodeJS.ProcessEnv = process.env): VoiceModeEngine {
+  const raw = env.VOICE_MODE_ENGINE;
+  if (raw === undefined || raw.trim() === '') return 'cascade';
+  const value = raw.trim().toLowerCase();
+  if ((VOICE_MODE_ENGINES as readonly string[]).includes(value)) return value as VoiceModeEngine;
+  throw new Error(
+    `VOICE_MODE_ENGINE must be one of ${VOICE_MODE_ENGINES.join('|')} (got '${raw}').`
+  );
+}
+
 // ─── Per-component DEBUG namespaces ──────────────────────────────────────────
 
 /**
@@ -168,6 +196,8 @@ export interface ServerConfig {
   debugNamespaces: DebugNamespaceFilter;
   /** Log line rendering mode. See {@link parseLogFormat}. */
   logFormat: LogFormat;
+  /** Voice Mode engine selection (plan Phase 8). Default `cascade`. */
+  voiceModeEngine: VoiceModeEngine;
   jwtSecret: string;
   jwtExpiresIn: string;
   allowedOrigins: string[];
@@ -329,6 +359,7 @@ export const config: ServerConfig = {
   logLevel: parseLogLevel(process.env.LOG_LEVEL),
   debugNamespaces: parseDebugNamespaces(process.env.DEBUG),
   logFormat: parseLogFormat(process.env.LOG_FORMAT),
+  voiceModeEngine: resolveVoiceModeEngine(process.env),
   jwtSecret: isProduction 
     ? getRequiredEnvVar('JWT_SECRET')
     : (process.env.JWT_SECRET || 'dev-secret-change-in-production'),

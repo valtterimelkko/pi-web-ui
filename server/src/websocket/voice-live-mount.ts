@@ -59,21 +59,16 @@ import type {
   VoiceProposalVariant,
   VoiceReceipt,
   VoiceRouteContext,
+  VoiceRuntime,
   VoiceServerMessage,
 } from '../voice/contract.js';
 import { VoiceSessionService } from '../voice/voice-session.js';
-import {
-  GeminiLiveBridge,
-  createGenaiLiveSessionFactory,
-} from '../voice/gemini-live-bridge.js';
+import { GeminiLiveBridge } from '../voice/gemini-live-bridge.js';
 import type {
   GeminiLiveBridgeOptions,
-  LiveConnectRequest,
-  LiveSessionFactory,
-  LiveSessionLike,
   VoiceBridgeLike,
 } from '../voice/types.js';
-import { VoiceSessionRouter, mapBridgeEventToServerMessage, type VoiceKernelDelegate } from '../voice/voice-router.js';
+import { VoiceSessionRouter, mapBridgeEventToServerMessage, KERNEL_OWNED_CLIENT_MESSAGE_TYPES, type VoiceKernelDelegate } from '../voice/voice-router.js';
 import { HostAuthorityKernel } from '../talker/policy-core.js';
 import { classifyOperatorUtterance, isWorkerDirectedQuestion } from '../talker/utterance-classifier.js';
 import { normaliseRelayText, type RelayNormalisation } from '../talker/relay-normalise.js';
@@ -81,6 +76,8 @@ import type { Proposal } from '../talker/proposal-store.js';
 import type { ReleaseOutcome } from '../talker/release-store.js';
 import type { DeliveryOutcome, WorkerDelivery } from '../talker/types.js';
 import type { VoiceLogSink } from '../voice/types.js';
+import type { VoiceModeEngine } from '../config.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 
 // ── The commission-frame predicate (machine, narrow, model-free) ─────────────
 
@@ -113,60 +110,43 @@ export function isDirectedWorkerInstruction(
   return isWorkerDirectedQuestion(raw);
 }
 
-// ── Phase-5 finding F-1: tool acknowledgements must not end the turn ────────
+// ── The mount's bridge factory ──────────────────────────────────────────────
 //
-// The live check this slice exists to run found a native-audio behaviour the
-// lab never measured: with `responseModalities: ['AUDIO']` and the contract's
-// two declared functions, `gemini-3.8-live` answers a conversational utterance
-// by CALLING a tool and ending the turn — no speech at all — when the tool
-// response is scheduled `SILENT` (the frozen Track B constant). The operator
-// hears nothing, so the talker lane is dead for exactly the utterances where
-// the marks matter (`mark_addressed_to_talker`, `offer_ask_worker`).
-//
-// Re-scheduling the acknowledgement `WHEN_IDLE` restores the reply: the model
-// speaks, then the response lands when it is idle. This is a MOUNT-SIDE
-// behaviour repair through the bridge's documented `sessionFactory` seam —
-// Track B's code, declarations and constant are untouched. It is recorded as
-// finding F-1 in the Phase-5 evidence and flagged for the parent: the durable
-// fix belongs in Track B (or in an owner decision about the tool surface).
-export function withIdleToolAcknowledgements(inner: LiveSessionFactory): LiveSessionFactory {
-  return async (request: LiveConnectRequest): Promise<LiveSessionLike> => {
-    const session = await inner(request);
-    return {
-      sendRealtimeInput: (input) => session.sendRealtimeInput(input),
-      sendClientContent: (content) => session.sendClientContent(content),
-      sendToolResponse: (response) => {
-        session.sendToolResponse({
-          ...response,
-          functionResponses: response.functionResponses.map((entry) => ({ ...entry, scheduling: 'WHEN_IDLE' })),
-        });
-      },
-      close: () => session.close(),
-    };
-  };
-}
+// Finding F-1 (Wave 2) is now owned by the engine, not the mount: the bridge's
+// `toolResponseScheduling` option defaults to `WHEN_IDLE`, so a declared tool
+// call can never end the turn without speech. The Phase-5
+// `withIdleToolAcknowledgements` session wrapper is deleted; Track B's option
+// surface is the one place the scheduling decision lives.
 
 /**
- * The mount's bridge factory: Track B's bridge, with the F-1 session wrapper
- * applied when a provider key is available. A missing key is left to the
- * bridge's own honest error path (nothing here guesses or hides it).
+ * The mount's bridge factory: Track B's bridge, with the provider key seam kept
+ * injectable. A missing key is left to the bridge's own honest error path
+ * (nothing here guesses or hides it).
  */
 export function createVoiceMountBridgeFactory(
   apiKeyProvider: () => string | undefined = () => process.env.GEMINI_API_KEY
 ): (options: GeminiLiveBridgeOptions) => VoiceBridgeLike {
-  return (options) => {
-    const apiKey = apiKeyProvider();
-    return new GeminiLiveBridge({
-      ...options,
-      apiKeyProvider,
-      ...(apiKey && apiKey.trim()
-        ? { sessionFactory: withIdleToolAcknowledgements(createGenaiLiveSessionFactory(apiKey)) }
-        : {}),
-    });
-  };
+  return (options) => new GeminiLiveBridge({ ...options, apiKeyProvider });
 }
 
 // ── Seams ───────────────────────────────────────────────────────────────────
+
+/**
+ * Phase 8 cascade hand-off. When the live engine cannot continue for a lane,
+ * the Gemma talker cascade (the session registry, which is the single
+ * server-side entry point for a worker's talker conversation) takes the lane
+ * over. The sink records/announces the degradation; it carries no delivery
+ * capability and is not an input to the release gate (N1/N8).
+ */
+export interface VoiceCascadeSink {
+  noteEngineFallback(input: {
+    laneId: string;
+    workerSessionId: string;
+    runtime: VoiceRuntime;
+    reason: string;
+    atMs: number;
+  }): void;
+}
 
 export interface VoiceLiveMountOptions {
   /** The real worker delivery adapter (pi steer/prompt through the session manager). */
@@ -188,6 +168,35 @@ export interface VoiceLiveMountOptions {
   now?: () => number;
   /** Injectable service (tests); default constructs the real Track B service. */
   service?: VoiceBridgeService;
+  /**
+   * Which engine serves new lanes (plan Phase 8 flag). Default `gemini-live`
+   * for direct construction; the server passes `config.voiceModeEngine`, whose
+   * default is `cascade`. When `cascade`, a lane start never touches the live
+   * bridge or the provider — the client is told the cascade is active.
+   */
+  engine?: VoiceModeEngine;
+  /** Cascade hand-off sink (the talker session registry in production). */
+  cascade?: VoiceCascadeSink;
+  /** Operational metrics sink (Phase 8); default the process-wide registry. */
+  metrics?: OperationalMetrics;
+}
+
+/** The bounded interval for surfacing refusals on a cascade lane (one per lane). */
+const CASCADE_REFUSAL_SURFACE_INTERVAL_MS = 1_000;
+
+const CASCADE_SERVING_DETAIL = 'the push-to-talk cascade is now serving this lane';
+
+function fallbackDetail(lane: LaneRecord): string {
+  const because = lane.fallbackReason ? ` (${lane.fallbackReason})` : '';
+  return `live engine unavailable${because}; ${CASCADE_SERVING_DETAIL}`;
+}
+
+function configuredCascadeDetail(): string {
+  return `live voice is disabled on this server (VOICE_MODE_ENGINE=cascade); ${CASCADE_SERVING_DETAIL}`;
+}
+
+function isKernelOwnedFrame(type: string): boolean {
+  return (KERNEL_OWNED_CLIENT_MESSAGE_TYPES as readonly string[]).includes(type);
 }
 
 interface PresentationReport {
@@ -200,7 +209,14 @@ interface LaneRecord {
   laneId: string;
   attachmentGeneration: number;
   workerSessionId: string;
-  runtime: string;
+  runtime: VoiceRuntime;
+  /** Which engine serves this lane; a fatal live failure flips it to cascade. */
+  engine: VoiceModeEngine;
+  /** Set when the lane degraded to the cascade; null while live owns it. */
+  fallbackReason: string | null;
+  /** Bounded surfacing for frames arriving on a cascade lane. */
+  lastCascadeRefusalAtMs: number | null;
+  suppressedCascadeRefusals: number;
   /** Monotonic per-lane utterance counter (provenance for parked/proposed items). */
   utteranceSeq: number;
   /** Read-back reports by proposal id (contract §4.6: narrowing only). */
@@ -272,6 +288,9 @@ export class VoiceLiveMount {
   private readonly serviceValue: VoiceBridgeService;
   private readonly router: VoiceSessionRouter;
   private readonly unsubscribe: () => void;
+  private readonly engine: VoiceModeEngine;
+  private readonly cascade: VoiceCascadeSink | null;
+  private readonly metrics: OperationalMetrics;
   private readonly lanes = new Map<string, LaneRecord>();
   /** Where host-originated frames for a lane go (the socket that started it). */
   private readonly bindings = new Map<string, LaneBinding>();
@@ -282,6 +301,9 @@ export class VoiceLiveMount {
     this.isWorkerBusy = options.isWorkerBusy;
     this.now = options.now ?? (() => Date.now());
     this.evidence = options.evidence ?? (() => {});
+    this.engine = options.engine ?? 'gemini-live';
+    this.cascade = options.cascade ?? null;
+    this.metrics = options.metrics ?? getOperationalMetrics();
     this.kernel = new HostAuthorityKernel({ now: this.now });
     this.serviceValue =
       options.service ??
@@ -330,6 +352,29 @@ export class VoiceLiveMount {
     // Every accepted frame (re)binds the lane's host-originated output to the
     // socket that is speaking for it.
     this.bindings.set(message.laneId, { clientId, send: context.send });
+    const lane = this.lanes.get(message.laneId);
+
+    // Phase 8: a lane served by the cascade never touches the live service.
+    // - a start is acknowledged honestly (configured cascade, or a lane that
+    //   already fell back), and no provider session is ever opened;
+    // - a stop is accepted as a no-op (nothing live is running);
+    // - bridge-owned frames are bounded-refused with a surfaced `voice_error`;
+    // - kernel-owned frames still route, so active drafts and parked items are
+    //   never dropped by the fallback (N1/N8 unaffected: the gate is the same).
+    if (lane && lane.engine === 'cascade' && message.type !== 'voice_session_start') {
+      if (message.type === 'voice_session_stop') {
+        this.evidence({ event: 'cascade_lane_stop', laneId: message.laneId, atMs: this.now() });
+        return null;
+      }
+      if (!isKernelOwnedFrame(message.type)) {
+        return this.refuseCascadeFrame(lane, message.type);
+      }
+    } else if (lane && lane.engine === 'cascade' && message.type === 'voice_session_start') {
+      if (lane.fallbackReason === null) this.announceConfiguredCascade(lane);
+      else this.sendToLane(lane.laneId, this.cascadeStateFrame(lane, fallbackDetail(lane)));
+      return null;
+    }
+
     const code = await this.router.handle(context, message);
     if (code !== null) {
       this.evidence({
@@ -342,6 +387,16 @@ export class VoiceLiveMount {
       });
     }
     return code;
+  }
+
+  /** The lane's serving engine (`gemini-live` until a fallback flips it). */
+  getLaneEngine(laneId: string): VoiceModeEngine | null {
+    return this.lanes.get(laneId)?.engine ?? null;
+  }
+
+  /** Why the lane degraded to the cascade; null while the live engine owns it. */
+  getLaneFallbackReason(laneId: string): string | null {
+    return this.lanes.get(laneId)?.fallbackReason ?? null;
   }
 
   /**
@@ -376,7 +431,7 @@ export class VoiceLiveMount {
     laneId: string,
     attachmentGeneration: number,
     workerSessionId: string,
-    runtime: string
+    runtime: VoiceRuntime
   ): VoiceErrorCode | null {
     const existing = this.lanes.get(laneId);
     if (!existing && this.lanes.size >= MAX_VOICE_LANES) {
@@ -402,6 +457,7 @@ export class VoiceLiveMount {
       const live = this.kernel.proposals.live(laneId);
       if (live) {
         this.kernel.proposals.cancel(live.id);
+        this.metrics.recordVoiceProposalReconciled();
         this.sendToLane(laneId, {
           type: 'proposal_resolved',
           version: 1,
@@ -425,11 +481,133 @@ export class VoiceLiveMount {
       attachmentGeneration,
       workerSessionId,
       runtime,
+      // A new attachment attempts the configured engine again; the cascade is
+      // only sticky within one attachment generation.
+      engine: this.engine,
+      fallbackReason: null,
+      lastCascadeRefusalAtMs: null,
+      suppressedCascadeRefusals: 0,
       utteranceSeq: 0,
       presentations: new Map(),
       spokenConfirmKeys: new Map(),
     });
     return null;
+  }
+
+  // ── Phase 8: cascade mode and live-engine fallback ───────────────────────
+
+  /** Tell the client honestly that the live engine is disabled by configuration. */
+  private announceConfiguredCascade(lane: LaneRecord): void {
+    const detail = configuredCascadeDetail();
+    this.evidence({
+      event: 'engine_configured_cascade',
+      laneId: lane.laneId,
+      attachmentGeneration: lane.attachmentGeneration,
+      engine: 'cascade',
+      atMs: this.now(),
+    });
+    this.sendToLane(lane.laneId, this.cascadeStateFrame(lane, detail));
+    this.sendToLane(lane.laneId, {
+      type: 'voice_error',
+      version: 1,
+      laneId: lane.laneId,
+      attachmentGeneration: lane.attachmentGeneration,
+      code: 'voice_provider_unavailable',
+      message: detail,
+      fatal: true,
+    });
+  }
+
+  private cascadeStateFrame(lane: LaneRecord, detail: string): VoiceServerMessage {
+    return {
+      type: 'voice_state',
+      version: 1,
+      laneId: lane.laneId,
+      attachmentGeneration: lane.attachmentGeneration,
+      state: 'error',
+      detail,
+    };
+  }
+
+  /**
+   * Bounded refusal for a bridge-owned frame arriving on a cascade lane: one
+   * surfaced `voice_error` per lane per second, with the suppressed count
+   * riding the next one (the contract's §5.3 bounded-surfacing rule). Returns
+   * null so the transport adds no second frame.
+   */
+  private refuseCascadeFrame(lane: LaneRecord, frameType: string): null {
+    const now = this.now();
+    const last = lane.lastCascadeRefusalAtMs;
+    if (last !== null && now - last < CASCADE_REFUSAL_SURFACE_INTERVAL_MS) {
+      lane.suppressedCascadeRefusals += 1;
+      return null;
+    }
+    lane.lastCascadeRefusalAtMs = now;
+    const suppressed = lane.suppressedCascadeRefusals;
+    lane.suppressedCascadeRefusals = 0;
+    const detail = `the live engine is not active for this lane; ${CASCADE_SERVING_DETAIL}`;
+    this.sendToLane(lane.laneId, {
+      type: 'voice_error',
+      version: 1,
+      laneId: lane.laneId,
+      attachmentGeneration: lane.attachmentGeneration,
+      code: 'voice_not_started',
+      message: suppressed > 0 ? `${detail} (${suppressed} similar voice frames suppressed)` : detail,
+      fatal: false,
+    });
+    this.evidence({
+      event: 'cascade_frame_refused',
+      laneId: lane.laneId,
+      frameType,
+      suppressed,
+      atMs: now,
+    });
+    return null;
+  }
+
+  /**
+   * The live engine cannot continue for this lane (connect failure,
+   * unrecoverable drop, quota exhaustion): the Gemma cascade takes the lane's
+   * conversation over. Kernel state — active drafts and parked items — is
+   * untouched; only the serving engine changes. The wire announcement is
+   * emitted by {@link onBridgeEvent} for the fatal error and its state event.
+   */
+  private engageCascadeFallback(lane: LaneRecord, code: VoiceErrorCode, reason: string): void {
+    if (lane.engine === 'cascade') return;
+    lane.engine = 'cascade';
+    lane.fallbackReason = `${code}: ${reason}`;
+    lane.lastCascadeRefusalAtMs = null;
+    lane.suppressedCascadeRefusals = 0;
+    this.metrics.recordVoiceEngineFallback();
+    this.evidence({
+      event: 'engine_fallback',
+      laneId: lane.laneId,
+      attachmentGeneration: lane.attachmentGeneration,
+      workerSessionId: lane.workerSessionId,
+      code,
+      reason,
+      engine: 'cascade',
+      atMs: this.now(),
+    });
+    if (!this.cascade) return;
+    try {
+      this.cascade.noteEngineFallback({
+        laneId: lane.laneId,
+        workerSessionId: lane.workerSessionId,
+        runtime: lane.runtime,
+        reason: lane.fallbackReason,
+        atMs: this.now(),
+      });
+    } catch (error) {
+      // A cascade hand-off that cannot be recorded must not break the lane or
+      // the announcement; it is surfaced as evidence and the fallback stands.
+      this.evidence({
+        event: 'engine_fallback_notify_failed',
+        laneId: lane.laneId,
+        message: error instanceof Error ? error.message : String(error),
+        atMs: this.now(),
+      });
+    }
   }
 
   /** Resolve a frame's lane + generation against the lanes this mount accepted. */
@@ -511,6 +689,7 @@ export class VoiceLiveMount {
     const proposal = this.kernel.proposals.get(proposalId);
     if (!proposal || proposal.laneId !== lane.laneId) return 'voice_proposal_stale';
     this.kernel.proposals.cancel(proposalId);
+    this.metrics.recordVoiceProposalReconciled();
     this.sendResolved(lane.laneId, proposalId, 'cancelled');
     this.evidence({
       event: 'proposal_cancelled',
@@ -570,6 +749,7 @@ export class VoiceLiveMount {
   ): Promise<VoiceErrorCode | null> {
     const proposal = this.kernel.proposals.get(request.proposalId);
     if (!proposal || proposal.laneId !== lane.laneId) {
+      this.metrics.recordVoiceProposalRefused();
       this.evidence({
         event: 'confirm_refused',
         source: request.source,
@@ -586,6 +766,7 @@ export class VoiceLiveMount {
       request.proposalRef &&
       (request.proposalRef.version !== proposal.version || request.proposalRef.sha256 !== proposal.sha256)
     ) {
+      this.metrics.recordVoiceProposalRefused();
       this.evidence({
         event: 'confirm_refused',
         source: request.source,
@@ -601,6 +782,7 @@ export class VoiceLiveMount {
     // narrows.
     const presentation = lane.presentations.get(request.proposalId);
     if (presentation && presentation.completed === false) {
+      this.metrics.recordVoiceProposalRefused();
       this.evidence({
         event: 'confirm_refused',
         source: request.source,
@@ -620,6 +802,7 @@ export class VoiceLiveMount {
       variant: request.variant,
     });
     if (result.kind === 'duplicate_refusal') {
+      this.metrics.recordVoiceProposalRefused();
       this.evidence({
         event: 'confirm_refused',
         source: request.source,
@@ -634,6 +817,7 @@ export class VoiceLiveMount {
     }
     if (result.kind === 'refused') {
       const code = refusalCode(result.reason);
+      this.metrics.recordVoiceProposalRefused();
       this.evidence({
         event: 'confirm_refused',
         source: request.source,
@@ -647,6 +831,7 @@ export class VoiceLiveMount {
     }
 
     const authorised = result.proposal;
+    this.metrics.recordVoiceProposalReleased();
     const bytes = request.variant === 'original' ? authorised.original : authorised.tidied;
     // THE GATE-LEAK PROOF: the delivery line carries the proposal id and the
     // SHA of the exact bytes, and it can only be written after an authorised
@@ -793,6 +978,7 @@ export class VoiceLiveMount {
   }
 
   private announceProposal(lane: LaneRecord, proposal: Proposal, extra?: { sourceItemId?: string }): void {
+    this.metrics.recordVoiceProposalCreated();
     const promotionRoute =
       proposal.promotionRoute === 'direct_address'
         ? 'directed'
@@ -863,11 +1049,33 @@ export class VoiceLiveMount {
     const lane = this.lanes.get(event.laneId);
     if (!lane || lane.attachmentGeneration !== event.attachmentGeneration) return;
 
+    // Phase 8: a fatal provider error means the live engine cannot continue for
+    // this lane (connect failure, unrecoverable drop, quota exhaustion). Engage
+    // the cascade BEFORE the wire frames below are sent, so the error/state
+    // frames the client receives carry the fallback announcement. Kernel state
+    // — active drafts and parked items — is untouched: it lives in the kernel,
+    // not in the provider session.
+    if (event.kind === 'error' && event.fatal) {
+      this.engageCascadeFallback(lane, event.code, event.message);
+    }
+
     // 1. Relay the wire-visible half of the event (audio, transcripts, state,
     //    errors). `tool_call` deliberately has no wire form — it is how the
     //    kernel is driven, and the model has no send path.
     const wire = mapBridgeEventToServerMessage(event, this.serviceValue.getState(event.laneId));
-    if (wire) this.sendToLane(event.laneId, wire);
+    if (wire) {
+      // The contract's voice_state/voice_error frames are the client's
+      // announcement surface; once the lane has fallen back, the final frames
+      // say which engine is serving it and why.
+      if (lane.engine === 'cascade' && lane.fallbackReason !== null) {
+        if (wire.type === 'voice_state' && wire.state === 'error') {
+          wire.detail = fallbackDetail(lane);
+        } else if (wire.type === 'voice_error' && wire.fatal) {
+          wire.message = `${wire.message} — ${fallbackDetail(lane)}`;
+        }
+      }
+      this.sendToLane(event.laneId, wire);
+    }
 
     // 2. The operator-speech adapter consumes final operator transcripts.
     if (event.kind !== 'transcript' || event.speaker !== 'operator' || !event.final) return;
@@ -931,6 +1139,7 @@ export class VoiceLiveMount {
       const live = this.kernel.proposals.live(laneId);
       if (live) {
         this.kernel.proposals.cancel(live.id);
+        this.metrics.recordVoiceProposalReconciled();
         this.sendResolved(laneId, live.id, 'cancelled');
         this.evidence({ event: 'proposal_cancelled', laneId, proposalId: live.id, reason: 'spoken_cancel', atMs });
       }

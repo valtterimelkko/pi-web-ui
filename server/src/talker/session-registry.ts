@@ -143,6 +143,37 @@ export interface TalkerDigestResult {
   error?: string;
 }
 
+/**
+ * Phase 8 (plan): the fixed host announcement spoken once by the cascade after
+ * a live-engine fallback. Host-written — never model output — so the operator
+ * always hears that the live engine stopped and that the cascade is serving
+ * them. No reason text or provider error is read aloud.
+ */
+export const TALKER_LIVE_ENGINE_FALLBACK_ANNOUNCEMENT =
+  'The live voice engine stopped, so I am on the standard talker now. Nothing you had pending was lost.';
+
+/** Phase 8: a live-engine fallback note for one worker lane. */
+export interface TalkerEngineFallbackInput {
+  /** Worker session the live lane was attached to (id or path; resolved canonically). */
+  workerSessionId: string;
+  runtime?: TalkerRuntime;
+  /** The voice lane that degraded (observation only). */
+  laneId?: string;
+  /** Short cause, e.g. `voice_provider_unavailable: reason`. Never spoken. */
+  reason: string;
+  atMs?: number;
+}
+
+export interface TalkerEngineFallbackRecord {
+  workerSessionId: string;
+  runtime: TalkerRuntime;
+  laneId?: string;
+  reason: string;
+  atMs: number;
+  /** True once the one-time announcement rode a cascade reply. */
+  announced: boolean;
+}
+
 export interface TalkerSessionRegistryDeps {
   /** The manager the server already owns — supplied by the owner, never created here. */
   multiSessionManager: MultiSessionManager;
@@ -172,6 +203,8 @@ export interface TalkerSessionRegistryDeps {
 }
 
 const DEFAULT_MAX_SESSIONS = 32;
+/** Bound on remembered engine-fallback notes (low-cardinality diagnostic state). */
+const MAX_ENGINE_FALLBACKS = 64;
 
 /** Split a `${runtime}:${workerSessionId}` key — refs are paths and may contain colons. */
 function splitLaneKey(key: string): [TalkerRuntime, string] {
@@ -230,6 +263,12 @@ export class TalkerSessionRegistry {
   private readonly deps: TalkerSessionRegistryDeps;
   /** key: `${runtime}:${workerSessionId}` — insertion order is the LRU order. */
   private readonly sessions = new Map<string, TalkerSession>();
+  /**
+   * Phase 8: worker lanes whose live engine failed and are now served by this
+   * cascade. Observation only (the announcement + diagnostics); it carries no
+   * delivery capability and never touches the gate.
+   */
+  private readonly engineFallbacks = new Map<string, TalkerEngineFallbackRecord>();
   private readonly maxSessions: number;
   private deliveriesPromise?: Promise<DefaultDeliveries>;
   private resolvedModel?: TalkerModelClient | null;
@@ -270,6 +309,9 @@ export class TalkerSessionRegistry {
   dispose(workerSessionId: string, runtime: TalkerRuntime = 'pi'): void {
     const key = this.key(this.canonicalWorkerRef(workerSessionId, runtime), runtime);
     this.sessions.delete(key);
+    // Phase 8: the lane is gone, so a fallback note for it is stale; a future
+    // attachment must not be greeted by an old announcement.
+    this.engineFallbacks.delete(key);
     // P24: the lane is no longer live — the binding query must not name it.
     noteVoiceLaneDisposed(...splitLaneKey(key));
   }
@@ -359,7 +401,59 @@ export class TalkerSessionRegistry {
       ...(input.releaseVariant !== undefined ? { releaseVariant: input.releaseVariant } : {}),
       ...(input.proposalRef !== undefined ? { proposalRef: input.proposalRef } : {}),
     });
-    return { reply: turn.reply, turn };
+    // Phase 8: the first successful cascade reply after a live-engine fallback
+    // carries the host announcement exactly once. Consumed only after a turn
+    // actually happened, so a pre-model refusal cannot swallow it.
+    const fallbackAnnouncement = this.consumeEngineFallbackAnnouncement(workerRef, runtime);
+    return {
+      reply: fallbackAnnouncement ? `${fallbackAnnouncement} ${turn.reply}` : turn.reply,
+      turn,
+    };
+  }
+
+  /**
+   * Phase 8: record that a lane's live engine failed and the Gemma cascade now
+   * serves this worker. The next successful cascade reply speaks the fixed
+   * announcement once. Observation only — this method cannot deliver anything
+   * and is not an input to the gate (N1/N8).
+   */
+  noteEngineFallback(input: TalkerEngineFallbackInput): TalkerEngineFallbackRecord {
+    const runtime = input.runtime ?? 'pi';
+    const workerSessionId = this.canonicalWorkerRef(input.workerSessionId, runtime);
+    const record: TalkerEngineFallbackRecord = {
+      workerSessionId,
+      runtime,
+      ...(input.laneId !== undefined ? { laneId: input.laneId } : {}),
+      reason: input.reason.slice(0, 200),
+      atMs: input.atMs ?? Date.now(),
+      announced: false,
+    };
+    const key = this.key(workerSessionId, runtime);
+    this.engineFallbacks.delete(key);
+    this.engineFallbacks.set(key, record);
+    while (this.engineFallbacks.size > MAX_ENGINE_FALLBACKS) {
+      const oldest = this.engineFallbacks.keys().next().value;
+      if (oldest === undefined) break;
+      this.engineFallbacks.delete(oldest);
+    }
+    return record;
+  }
+
+  /** The recorded live→cascade fallback for a worker lane, if any. */
+  getEngineFallback(workerSessionId: string, runtime: TalkerRuntime = 'pi'): TalkerEngineFallbackRecord | null {
+    return this.engineFallbacks.get(this.key(this.canonicalWorkerRef(workerSessionId, runtime), runtime)) ?? null;
+  }
+
+  /** All live→cascade fallback notes (bounded, newest last); diagnostics only. */
+  listEngineFallbacks(): TalkerEngineFallbackRecord[] {
+    return [...this.engineFallbacks.values()].map((record) => ({ ...record }));
+  }
+
+  private consumeEngineFallbackAnnouncement(workerSessionId: string, runtime: TalkerRuntime): string | null {
+    const record = this.getEngineFallback(workerSessionId, runtime);
+    if (!record || record.announced) return null;
+    record.announced = true;
+    return TALKER_LIVE_ENGINE_FALLBACK_ANNOUNCEMENT;
   }
 
   /**

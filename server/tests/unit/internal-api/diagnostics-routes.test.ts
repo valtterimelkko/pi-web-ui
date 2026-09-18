@@ -160,6 +160,37 @@ describe('diagnostics routes (Task 10)', () => {
     expect(res.body).not.toContain('/private/path');
   });
 
+  it('exposes the Phase 8 voice operational metrics (audio, live health, proposals)', async () => {
+    const metrics = new OperationalMetrics();
+    metrics.setVoiceEngine('gemini-live');
+    metrics.recordVoiceAudioInput(1_920_000);
+    metrics.recordVoiceAudioOutput(1_440_000);
+    metrics.recordVoiceLiveDrop();
+    metrics.recordVoiceResumptionAttempt();
+    metrics.recordVoiceResumptionSuccess();
+    metrics.recordVoiceEngineFallback();
+    metrics.recordVoiceProposalCreated();
+    metrics.recordVoiceProposalReleased();
+    metrics.recordVoiceProposalRefused();
+    metrics.recordVoiceProposalReconciled();
+    const routes = createDiagnosticsRoutes({ metrics, sessionRegistry: { listAll: async () => [] } });
+    const res = mockRes();
+    await routes.handleGetDiagnostics({} as never, res, new URLSearchParams());
+    const body = JSON.parse(res.body);
+    expect(body.operational.voice).toMatchObject({
+      audio: { inputBytes: 1_920_000, outputBytes: 1_440_000, inputMinutes: 1, outputMinutes: 0.5 },
+      live: {
+        engine: 'gemini-live',
+        connectionDrops: 1,
+        resumptionAttempts: 1,
+        resumptionSuccesses: 1,
+        resumptionSuccessRate: 1,
+        engineFallbacks: 1,
+      },
+      proposals: { created: 1, released: 1, refused: 1, reconciled: 1 },
+    });
+  });
+
   it('excludes Command Code browser sessions from operational counts, logs, and session diagnostics', async () => {
     pushDiagnosticsRecord(rec({ msg: 'shadow evidence', runtime: 'commandcode', sessionId: 'shadow' }));
     pushDiagnosticsRecord(rec({ msg: 'browser evidence', runtime: 'commandcode', sessionId: 'browser' }));

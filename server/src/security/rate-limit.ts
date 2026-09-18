@@ -61,6 +61,58 @@ export const wsMessageLimiter = (() => {
 })();
 
 /**
+ * Voice-frame budget (finding F-2): a microphone stream is one frame per audio
+ * chunk (~10-50/s), so the generic 60-per-minute `wsMessageLimiter` would drop
+ * the operator's audio. Voice frames carry their own bounded per-client budget
+ * instead — 1200 frames / 2 s = 600/s sustained, which is 12× a 20 ms
+ * microphone cadence and 60× the contract's suggested chunk pace, far below a
+ * flood. The generic limiter is unchanged for every non-voice message; the
+ * transport asks THIS limiter for voice frames only, and surfaces a refusal as
+ * `voice_error`.
+ */
+export const VOICE_FRAMES_PER_WINDOW = 1_200;
+export const VOICE_FRAME_WINDOW_MS = 2_000;
+
+export const wsVoiceFrameLimiter = (() => {
+  const limits = new Map<string, { count: number; resetAt: number }>();
+
+  const cleanup = setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of limits.entries()) {
+      if (data.resetAt < now) {
+        limits.delete(key);
+      }
+    }
+  }, VOICE_FRAME_WINDOW_MS);
+  // Do not keep the Node process alive solely for voice-budget cleanup.
+  cleanup.unref?.();
+
+  return {
+    check: (clientId: string): boolean => {
+      const now = Date.now();
+      const data = limits.get(clientId);
+
+      if (!data || data.resetAt <= now) {
+        limits.set(clientId, { count: 1, resetAt: now + VOICE_FRAME_WINDOW_MS });
+        return true;
+      }
+
+      data.count += 1;
+      return data.count <= VOICE_FRAMES_PER_WINDOW;
+    },
+    /** Drop a client's budget (socket close); the next frame starts a fresh window. */
+    release: (clientId: string): void => {
+      limits.delete(clientId);
+    },
+    getRemaining: (clientId: string): number => {
+      const data = limits.get(clientId);
+      if (!data || data.resetAt <= Date.now()) return VOICE_FRAMES_PER_WINDOW;
+      return Math.max(0, VOICE_FRAMES_PER_WINDOW - data.count);
+    },
+  };
+})();
+
+/**
  * Upgrade rate limiter — bounds how many WebSocket upgrade attempts a single
  * client may make per minute. Applied by the central pre-upgrade guard
  * (`decideWsUpgrade`) to every accepted WebSocket path, so reconnect loops or

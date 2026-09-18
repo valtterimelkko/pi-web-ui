@@ -26,6 +26,49 @@ interface LatencySnapshot {
 export type { LatencySnapshot };
 
 /**
+ * Phase 8 operational metrics: audio streamed, live-engine health and proposal
+ * lifecycle. All counters are process-local, monotonically increasing, bounded
+ * in cardinality and testable without a provider (plan Phase 8).
+ */
+export interface VoiceAudioMetricsSnapshot {
+  /** Accepted-and-sent operator PCM bytes (provider input rate). */
+  inputBytes: number;
+  /** Model PCM bytes emitted to the client (client playback rate). */
+  outputBytes: number;
+  /** inputBytes converted at the provider input rate (16 kHz mono PCM16). */
+  inputMinutes: number;
+  /** outputBytes converted at the client playback rate (24 kHz mono PCM16). */
+  outputMinutes: number;
+}
+
+export interface VoiceLiveMetricsSnapshot {
+  /** The engine selected by the server (plan Phase 8 flag). */
+  engine: 'gemini-live' | 'cascade';
+  /** Unexpected live-connection losses (provider session died while live). */
+  connectionDrops: number;
+  /** Reconnects attempted after a drop (a drop without a resumption handle attempts none). */
+  resumptionAttempts: number;
+  resumptionSuccesses: number;
+  resumptionFailures: number;
+  /** successes / attempts, 0 when no attempt has been made. */
+  resumptionSuccessRate: number;
+  /** Times a lane degraded from the live engine to the cascade (Phase 8 fallback). */
+  engineFallbacks: number;
+}
+
+/**
+ * Proposal lifecycle counters. `reconciled` = the proposal left its live slot
+ * without a release (cancelled or replaced): the slot was reconciled, not
+ * delivered.
+ */
+export interface VoiceProposalMetricsSnapshot {
+  created: number;
+  released: number;
+  refused: number;
+  reconciled: number;
+}
+
+/**
  * P10 Voice Mode metrics (docs/plans/VOICE-MODE-OBSERVABILITY-DESIGN.md D3).
  * Same doctrine as every other section: process-local, low-cardinality,
  * no session ids, no prompt text. Labels are bounded like the other dynamic
@@ -46,6 +89,12 @@ export interface VoiceMetricsSnapshot {
   modelLatency: LatencySnapshot;
   /** voice_delivery_latency_ms{mechanism} — the delivery-adapter call duration */
   deliveryLatency: Record<string, LatencySnapshot>;
+  /** Phase 8: audio streamed in/out. */
+  audio: VoiceAudioMetricsSnapshot;
+  /** Phase 8: live connection drops, resumption and engine fallback. */
+  live: VoiceLiveMetricsSnapshot;
+  /** Phase 8: proposal lifecycle. */
+  proposals: VoiceProposalMetricsSnapshot;
 }
 
 export interface TurnMetricsSnapshot extends Record<TerminalStatus | 'accepted', number | LatencySnapshot> {
@@ -59,6 +108,11 @@ export interface TurnMetricsSnapshot extends Record<TerminalStatus | 'accepted',
 
 const LAG_WINDOW_MS = 60_000;
 const LAG_MAX_SAMPLES = 120;
+
+/** PCM16 mono bytes in one minute at the provider input rate (16 kHz). */
+const VOICE_INPUT_BYTES_PER_MINUTE = 16_000 * 2 * 60;
+/** PCM16 mono bytes in one minute at the client playback rate (24 kHz). */
+const VOICE_OUTPUT_BYTES_PER_MINUTE = 24_000 * 2 * 60;
 
 export interface OperationalSnapshot {
   generatedAt: string;
@@ -170,6 +224,19 @@ export class OperationalMetrics {
   private readonly voiceTurnDuration = newLatencySnapshot();
   private readonly voiceModelLatency = newLatencySnapshot();
   private readonly voiceDeliveryLatency = new Map<string, LatencySnapshot>();
+  // Phase 8 operational counters (monotonic, no labels, no session ids).
+  private voiceEngine: 'gemini-live' | 'cascade' = 'cascade';
+  private voiceAudioInputBytes = 0;
+  private voiceAudioOutputBytes = 0;
+  private voiceConnectionDrops = 0;
+  private voiceResumptionAttempts = 0;
+  private voiceResumptionSuccesses = 0;
+  private voiceResumptionFailures = 0;
+  private voiceEngineFallbacks = 0;
+  private voiceProposalCreated = 0;
+  private voiceProposalReleased = 0;
+  private voiceProposalRefused = 0;
+  private voiceProposalReconciled = 0;
 
   constructor(options: OperationalMetricsOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -319,6 +386,67 @@ export class OperationalMetrics {
     recordLatency(snapshot, latencyMs);
   }
 
+  // ── Phase 8: live-engine and proposal operational counters ─────────────
+
+  /** The engine selected by the server (config flag); a gauge, last write wins. */
+  setVoiceEngine(engine: 'gemini-live' | 'cascade'): void {
+    this.voiceEngine = engine;
+  }
+
+  /** Accepted-and-sent operator PCM bytes (provider input rate). */
+  recordVoiceAudioInput(bytes: number): void {
+    if (!Number.isFinite(bytes) || bytes < 0) return;
+    this.voiceAudioInputBytes += Math.round(bytes);
+  }
+
+  /** Model PCM bytes emitted to the client (client playback rate). */
+  recordVoiceAudioOutput(bytes: number): void {
+    if (!Number.isFinite(bytes) || bytes < 0) return;
+    this.voiceAudioOutputBytes += Math.round(bytes);
+  }
+
+  /** An unexpected live-connection loss. */
+  recordVoiceLiveDrop(): void {
+    this.voiceConnectionDrops += 1;
+  }
+
+  /** A reconnect attempt started after a drop. */
+  recordVoiceResumptionAttempt(): void {
+    this.voiceResumptionAttempts += 1;
+  }
+
+  /** A reconnect attempt that reached setup complete again. */
+  recordVoiceResumptionSuccess(): void {
+    this.voiceResumptionSuccesses += 1;
+  }
+
+  /** A reconnect attempt that ended fatally. */
+  recordVoiceResumptionFailure(): void {
+    this.voiceResumptionFailures += 1;
+  }
+
+  /** A lane degraded from the live engine to the Gemma cascade. */
+  recordVoiceEngineFallback(): void {
+    this.voiceEngineFallbacks += 1;
+  }
+
+  recordVoiceProposalCreated(): void {
+    this.voiceProposalCreated += 1;
+  }
+
+  recordVoiceProposalReleased(): void {
+    this.voiceProposalReleased += 1;
+  }
+
+  recordVoiceProposalRefused(): void {
+    this.voiceProposalRefused += 1;
+  }
+
+  /** A proposal left its live slot without a release (cancelled/replaced). */
+  recordVoiceProposalReconciled(): void {
+    this.voiceProposalReconciled += 1;
+  }
+
   snapshot(): OperationalSnapshot {
     const now = this.now();
     const turns: OperationalSnapshot['turns'] = {};
@@ -367,6 +495,7 @@ export class OperationalMetrics {
   }
 
   private voiceSnapshot(): VoiceMetricsSnapshot {
+    const attempts = this.voiceResumptionAttempts;
     return {
       turnTotal: Object.fromEntries(this.voiceTurnTotal),
       releaseTotal: Object.fromEntries(this.voiceReleaseTotal),
@@ -377,6 +506,27 @@ export class OperationalMetrics {
       deliveryLatency: Object.fromEntries(
         [...this.voiceDeliveryLatency].map(([mechanism, latency]) => [mechanism, structuredClone(latency)]),
       ),
+      audio: {
+        inputBytes: this.voiceAudioInputBytes,
+        outputBytes: this.voiceAudioOutputBytes,
+        inputMinutes: roundMinutes(this.voiceAudioInputBytes, VOICE_INPUT_BYTES_PER_MINUTE),
+        outputMinutes: roundMinutes(this.voiceAudioOutputBytes, VOICE_OUTPUT_BYTES_PER_MINUTE),
+      },
+      live: {
+        engine: this.voiceEngine,
+        connectionDrops: this.voiceConnectionDrops,
+        resumptionAttempts: attempts,
+        resumptionSuccesses: this.voiceResumptionSuccesses,
+        resumptionFailures: this.voiceResumptionFailures,
+        resumptionSuccessRate: attempts === 0 ? 0 : round4(this.voiceResumptionSuccesses / attempts),
+        engineFallbacks: this.voiceEngineFallbacks,
+      },
+      proposals: {
+        created: this.voiceProposalCreated,
+        released: this.voiceProposalReleased,
+        refused: this.voiceProposalRefused,
+        reconciled: this.voiceProposalReconciled,
+      },
     };
   }
 
@@ -409,6 +559,15 @@ export class OperationalMetrics {
 }
 
 const MAX_DYNAMIC_CATEGORIES = 32;
+
+function roundMinutes(bytes: number, bytesPerMinute: number): number {
+  if (bytes === 0) return 0;
+  return Math.round((bytes / bytesPerMinute) * 1_000) / 1_000;
+}
+
+function round4(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
 
 function incrementBounded(values: Map<string, number>, requestedKey: string): number {
   const key = values.has(requestedKey) || values.size < MAX_DYNAMIC_CATEGORIES ? requestedKey : 'other';

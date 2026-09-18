@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 
 import { VoiceSessionService } from '../../../src/voice/voice-session.js';
 import { GeminiLiveBridge } from '../../../src/voice/gemini-live-bridge.js';
+import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
 import {
   VOICE_CONTEXT_COALESCE_MS,
   type VoiceBridgeEmittedEvent,
@@ -176,6 +177,66 @@ describe('VoiceSessionService lifecycle', () => {
       startedAtMs: 1_000,
     });
     expect(events.at(-1)).toMatchObject({ kind: 'state', state: 'live' });
+  });
+
+  it('passes toolResponseScheduling through to the bridge option surface (F-1)', async () => {
+    const { service, bridges } = createServiceHarness({ toolResponseScheduling: 'SILENT' });
+    await service.start(startOptions());
+    expect(bridges[0].options.toolResponseScheduling).toBe('SILENT');
+  });
+
+  it('records audio streamed in/out and live drop/resumption counters (Phase 8)', async () => {
+    const metrics = new OperationalMetrics();
+    const { service, bridges } = createServiceHarness({ metrics });
+    await service.start(startOptions());
+    bridges[0].callbacks.onState?.('live');
+
+    service.feedAudio(audioChunk(1));
+    expect(metrics.snapshot().voice?.audio.inputBytes).toBe(640);
+
+    bridges[0].callbacks.onAudioPcm?.(Buffer.alloc(960, 1), 'audio/pcm;rate=24000', 10);
+    expect(metrics.snapshot().voice?.audio.outputBytes).toBe(960);
+
+    bridges[0].callbacks.onState?.('reconnecting', 'socket closed unexpectedly');
+    expect(metrics.snapshot().voice?.live).toMatchObject({ connectionDrops: 1, resumptionAttempts: 1 });
+    bridges[0].callbacks.onReconnected?.();
+    expect(metrics.snapshot().voice?.live).toMatchObject({
+      connectionDrops: 1,
+      resumptionAttempts: 1,
+      resumptionSuccesses: 1,
+      resumptionFailures: 0,
+      resumptionSuccessRate: 1,
+    });
+  });
+
+  it('counts a fatal error while live as a drop with no resumption attempt', async () => {
+    const metrics = new OperationalMetrics();
+    const { service, bridges } = createServiceHarness({ metrics });
+    await service.start(startOptions());
+    bridges[0].callbacks.onState?.('live');
+    bridges[0].callbacks.onError?.({ code: 'voice_provider_unavailable', message: 'no handle, session lost', fatal: true });
+    expect(metrics.snapshot().voice?.live).toMatchObject({
+      connectionDrops: 1,
+      resumptionAttempts: 0,
+      resumptionSuccesses: 0,
+      resumptionFailures: 0,
+    });
+  });
+
+  it('counts a failed resumption when a fatal error lands mid-reconnect', async () => {
+    const metrics = new OperationalMetrics();
+    const { service, bridges } = createServiceHarness({ metrics });
+    await service.start(startOptions());
+    bridges[0].callbacks.onState?.('live');
+    bridges[0].callbacks.onState?.('reconnecting', 'provider goAway');
+    bridges[0].callbacks.onError?.({ code: 'voice_provider_unavailable', message: 'attempt failed', fatal: true });
+    expect(metrics.snapshot().voice?.live).toMatchObject({
+      connectionDrops: 1,
+      resumptionAttempts: 1,
+      resumptionSuccesses: 0,
+      resumptionFailures: 1,
+      resumptionSuccessRate: 0,
+    });
   });
 
   it('records resumption handles and reports resumable', async () => {

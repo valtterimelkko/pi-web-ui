@@ -67,6 +67,58 @@ describe('OperationalMetrics — voice section', () => {
       turnDuration: { count: 0, totalMs: 0, maxMs: 0, buckets: { le1000: 0, le5000: 0, le30000: 0, gt30000: 0 } },
       modelLatency: { count: 0, totalMs: 0, maxMs: 0, buckets: { le1000: 0, le5000: 0, le30000: 0, gt30000: 0 } },
       deliveryLatency: {},
+      audio: { inputBytes: 0, outputBytes: 0, inputMinutes: 0, outputMinutes: 0 },
+      live: {
+        engine: 'cascade',
+        connectionDrops: 0,
+        resumptionAttempts: 0,
+        resumptionSuccesses: 0,
+        resumptionFailures: 0,
+        resumptionSuccessRate: 0,
+        engineFallbacks: 0,
+      },
+      proposals: { created: 0, released: 0, refused: 0, reconciled: 0 },
     });
+  });
+
+  it('counts audio bytes/minutes, live drops and resumptions, engine fallbacks and proposal lifecycle (Phase 8)', () => {
+    const metrics = new OperationalMetrics();
+    metrics.setVoiceEngine('gemini-live');
+    metrics.recordVoiceAudioInput(1_920_000); // exactly one 16 kHz mono PCM16 minute
+    metrics.recordVoiceAudioOutput(1_440_000); // half a 24 kHz mono PCM16 minute
+    metrics.recordVoiceLiveDrop();
+    metrics.recordVoiceResumptionAttempt();
+    metrics.recordVoiceResumptionSuccess();
+    metrics.recordVoiceLiveDrop();
+    metrics.recordVoiceResumptionAttempt();
+    metrics.recordVoiceResumptionFailure();
+    metrics.recordVoiceEngineFallback();
+    metrics.recordVoiceProposalCreated();
+    metrics.recordVoiceProposalCreated();
+    metrics.recordVoiceProposalReleased();
+    metrics.recordVoiceProposalRefused();
+    metrics.recordVoiceProposalReconciled();
+
+    expect(metrics.snapshot().voice).toMatchObject({
+      audio: { inputBytes: 1_920_000, outputBytes: 1_440_000, inputMinutes: 1, outputMinutes: 0.5 },
+      live: {
+        engine: 'gemini-live',
+        connectionDrops: 2,
+        resumptionAttempts: 2,
+        resumptionSuccesses: 1,
+        resumptionFailures: 1,
+        resumptionSuccessRate: 0.5,
+        engineFallbacks: 1,
+      },
+      proposals: { created: 2, released: 1, refused: 1, reconciled: 1 },
+    });
+  });
+
+  it('ignores non-finite or negative audio byte counts (monotonic, cheap counters)', () => {
+    const metrics = new OperationalMetrics();
+    metrics.recordVoiceAudioInput(Number.NaN);
+    metrics.recordVoiceAudioInput(-5);
+    metrics.recordVoiceAudioOutput(Number.POSITIVE_INFINITY);
+    expect(metrics.snapshot().voice?.audio).toEqual({ inputBytes: 0, outputBytes: 0, inputMinutes: 0, outputMinutes: 0 });
   });
 });
