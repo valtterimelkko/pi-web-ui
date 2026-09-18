@@ -33,7 +33,6 @@ import { Behavior, GoogleGenAI, Type } from '@google/genai';
 import { validateToolArguments } from './tool-arguments.js';
 
 import {
-  hasNoToolArguments,
   type AttachmentGeneration,
   type VoiceBridgeToolName,
   type VoiceErrorCode,

@@ -619,7 +619,9 @@ export class TalkerSessionRegistry {
     workerSessionId: string,
     historyTail: number = HISTORY_PROVIDER_TAIL
   ): WorkerStateSnapshot | Promise<WorkerStateSnapshot> {
-    if (runtime === 'claude') return this.buildClaudeSnapshot(workerSessionId, historyTail);
+    // Only the Pi source can read a deeper tail; the Claude snapshot carries no
+    // history in this path, so it is not given a bound it would ignore.
+    if (runtime === 'claude') return this.buildClaudeSnapshot(workerSessionId);
     if (runtime === 'pi') return this.buildSnapshot(workerSessionId, historyTail);
     return { activity: honestUnavailableActivity(runtime) };
   }
@@ -647,10 +649,7 @@ export class TalkerSessionRegistry {
    * as running once the live observation says otherwise. Every failure degrades
    * to a plainer, weaker view — never to an invented one.
    */
-  private async buildClaudeSnapshot(
-    workerSessionId: string,
-    historyTail: number = HISTORY_PROVIDER_TAIL
-  ): Promise<WorkerStateSnapshot> {
+  private async buildClaudeSnapshot(workerSessionId: string): Promise<WorkerStateSnapshot> {
     let source: TalkerClaudeWorkerState | null = null;
     try {
       source = await this.resolveClaudeWorkerState();

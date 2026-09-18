@@ -65,7 +65,7 @@ import type {
   VoiceServerMessage,
   VoiceWorkerActivity,
 } from '../voice/contract.js';
-import { VoiceSessionService, composeContextText } from '../voice/voice-session.js';
+import { VoiceSessionService } from '../voice/voice-session.js';
 import { planWorkerBrief, searchWorkerHistory } from '../voice/worker-brief.js';
 import { GeminiLiveBridge } from '../voice/gemini-live-bridge.js';
 import type {

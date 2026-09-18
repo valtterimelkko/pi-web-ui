@@ -62,12 +62,7 @@ export interface VoiceBriefInput {
   acknowledgedEntries: number;
 }
 
-const CONTENT_HEADER = '--- WORKER SESSION HISTORY ---';
 const CONTINUED_HEADER = '--- WORKER SESSION HISTORY (new since your last update) ---';
-
-function sizeOf(lines: string[]): number {
-  return lines.reduce((sum, line) => sum + line.length + 1, 0);
-}
 
 /**
  * What the session costs to send, from the SOURCE rather than from a rendering:
