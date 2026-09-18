@@ -290,6 +290,25 @@ export class TalkerSessionRegistry {
   }
 
   /** The manager this registry is wired to (wiring pin for tests and the owner). */
+  /**
+   * The worker state projection for a session, for consumers that are not a
+   * talker turn — the native voice lane, whose live talker must answer questions
+   * about the same worker and therefore needs the same world (2026-09-18 field
+   * report: it held a status line and could only refuse).
+   *
+   * Read-only and bounded by the same renderer; never an authority.
+   */
+  async workerStateSnapshot(
+    workerSessionId: string,
+    runtime: TalkerRuntime = 'pi'
+  ): Promise<WorkerStateSnapshot> {
+    try {
+      return await this.buildSnapshotFor(runtime, workerSessionId);
+    } catch {
+      return { activity: honestUnavailableActivity(runtime) };
+    }
+  }
+
   getMultiSessionManager(): MultiSessionManager {
     return this.manager;
   }

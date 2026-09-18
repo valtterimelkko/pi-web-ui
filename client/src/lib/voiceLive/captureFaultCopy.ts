@@ -27,14 +27,14 @@ export function captureUnavailableMessage(input: CaptureUnavailableInput): strin
   if (input.reason === 'worklet_unavailable') {
     return (
       `Microphone unavailable${detailText}. The capture worklet could not be loaded, ` +
-      'which blocks every microphone mode, including push-to-talk; typing still works.'
+      'which blocks every microphone mode, including push-to-talk. Nothing was sent to the worker.'
     );
   }
 
   const pttNote =
     input.mode === 'push-to-talk'
-      ? 'Push-to-talk runs through the same microphone path, so it is affected by the same failure; typing still works.'
-      : 'Push-to-talk uses the same microphone path and is affected by the same failure; typing still works.';
+      ? 'Push-to-talk runs through the same microphone path, so it is affected by the same failure.'
+      : 'Push-to-talk uses the same microphone path and is affected by the same failure.';
 
-  return `Microphone unavailable${detailText}. ${pttNote}`;
+  return `Microphone unavailable${detailText}. ${pttNote} Nothing was sent to the worker.`;
 }

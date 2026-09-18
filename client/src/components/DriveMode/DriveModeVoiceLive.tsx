@@ -256,8 +256,8 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
                       mode: captureMode,
                     })
                   : state.capture === 'suspended'
-                    ? `Listening suspended${state.captureDetail ? ` — ${state.captureDetail}` : ''}. Push-to-talk and typing still work.`
-                    : 'Not listening yet. Start the microphone, or type in the composer.'}
+                    ? `Listening suspended${state.captureDetail ? ` — ${state.captureDetail}` : ''}. Nothing is being heard until you start it again.`
+                    : 'Not listening yet. Start the microphone to talk to the talker.'}
             </p>
 
             <div className="mt-2.5 flex flex-wrap items-center gap-2">

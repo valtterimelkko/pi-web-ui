@@ -17,14 +17,18 @@ describe('capture unavailable copy', () => {
 
     expect(message).toContain('capture worklet could not be loaded');
     expect(message).toContain('including push-to-talk');
-    expect(message).toContain('typing still works');
+    expect(message).toContain('Nothing was sent to the worker');
+    // The claim that broke the report: there is no text input in Voice Mode, so
+    // promising that typing works is false wherever this copy is shown.
+    expect(message).not.toContain('typing');
     expect(message).not.toMatch(/push-to-talk (and typing )?(still )?(work|works)\./i);
   });
 
   it('says push-to-talk shares the failing path for any other capture failure', () => {
     const message = captureUnavailableMessage({ reason: 'capture_failed', mode: 'open-mic' });
     expect(message).toContain('same microphone path');
-    expect(message).not.toContain('push-to-talk and typing still work');
+    expect(message).not.toContain('typing');
+    expect(message).toContain('Nothing was sent to the worker');
   });
 
   it('still reports the cause verbatim when the browser names one', () => {

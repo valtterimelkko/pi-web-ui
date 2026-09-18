@@ -4279,6 +4279,19 @@ export class WebSocketConnectionManager {
           const mount = new VoiceLiveMount({
             delivery: deliveries.pi,
             isWorkerBusy: (ref) => this.isWorkerSessionBusy(ref),
+            // The live talker's world: the SAME worker projection the relay lane
+            // uses (P20/P23), so a question about the work is answerable in the
+            // native lane instead of refused (2026-09-18 field report).
+            workerBrief: async (workerSessionId) => {
+              const snapshot = await this.talkerSessionRegistry.workerStateSnapshot(workerSessionId);
+              const entries = snapshot.recentHistory;
+              return {
+                ...(snapshot.activity ? { activity: snapshot.activity } : {}),
+                ...(entries && entries.length > 0
+                  ? { history: { entries, total: snapshot.historyTotal ?? entries.length } }
+                  : {}),
+              };
+            },
             // The native voice path logs under its own component so a
             // live-lane problem is separable from general WebUI traffic in
             // both `DEBUG=` and the diagnostics `?component=` filter.

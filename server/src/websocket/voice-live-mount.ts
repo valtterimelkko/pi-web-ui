@@ -64,7 +64,7 @@ import type {
   VoiceServerMessage,
   VoiceWorkerActivity,
 } from '../voice/contract.js';
-import { VoiceSessionService } from '../voice/voice-session.js';
+import { VoiceSessionService, composeContextText } from '../voice/voice-session.js';
 import { GeminiLiveBridge } from '../voice/gemini-live-bridge.js';
 import type {
   GeminiLiveBridgeOptions,
@@ -165,6 +165,16 @@ export interface VoiceLiveMountOptions {
   /** Server logger sink for `server/src/voice/**`'s own diagnostics. */
   serviceLog?: VoiceLogSink;
   /**
+   * Reads the worker session's state for the live talker (P20/P23 projection).
+   *
+   * The live lane's instruction tells it to answer questions about the work from
+   * what it holds; this is what it holds. Without a provider the lane injects the
+   * status line alone and the talker correctly says it cannot see the work — the
+   * 2026-09-18 field report. A provider that throws degrades to exactly that,
+   * never to an invented brief.
+   */
+  workerBrief?: (workerSessionId: string) => Promise<VoiceWorkerBrief | null>;
+  /**
    * Structured evidence line. Default is a no-op; the WebSocket mount supplies
    * `createLogEvidenceSink(logger)` so every run is auditable from the server
    * log. A test injects a collector instead.
@@ -215,6 +225,20 @@ interface PresentationReport {
   stoppedAtChar?: number;
 }
 
+/**
+ * The worker state a live lane may hold, mirroring the relay lane's projection:
+ * the bounded conversation window plus (for evidence) what was shown.
+ */
+export interface VoiceWorkerBrief {
+  /** One-line activity, host-rendered (optional: the status line already exists). */
+  activity?: string;
+  /** The worker session's bounded conversation window (oldest first). */
+  history?: {
+    entries: Array<{ role: 'user' | 'assistant'; text: string }>;
+    total: number;
+  };
+}
+
 interface LaneRecord {
   laneId: string;
   attachmentGeneration: number;
@@ -229,6 +253,10 @@ interface LaneRecord {
   suppressedCascadeRefusals: number;
   /** Monotonic per-lane utterance counter (provenance for parked/proposed items). */
   utteranceSeq: number;
+  /** Signature of the last injected worker brief; null until one is injected. */
+  briefSignature: string | null;
+  /** A brief deferred while the operator was speaking, flushed at speech end. */
+  pendingBrief: VoiceWorkerBrief | null;
   /** Read-back reports by proposal id (contract §4.6: narrowing only). */
   presentations: Map<string, PresentationReport>;
   /** Idempotency key minted for a spoken confirmation, by proposal id. */
@@ -361,6 +389,7 @@ export class VoiceLiveMount {
   private readonly isWorkerBusy: (workerSessionId: string) => Promise<boolean>;
   private readonly now: () => number;
   private readonly evidence: (event: Record<string, unknown>) => void;
+  private readonly workerBrief: ((workerSessionId: string) => Promise<VoiceWorkerBrief | null>) | null;
   private readonly serviceValue: VoiceBridgeService;
   private readonly router: VoiceSessionRouter;
   private readonly unsubscribe: () => void;
@@ -380,6 +409,7 @@ export class VoiceLiveMount {
     this.isWorkerBusy = options.isWorkerBusy;
     this.now = options.now ?? (() => Date.now());
     this.evidence = options.evidence ?? (() => {});
+    this.workerBrief = options.workerBrief ?? null;
     this.engine = options.engine ?? 'gemini-live';
     this.cascade = options.cascade ?? null;
     this.metrics = options.metrics ?? getOperationalMetrics();
@@ -645,6 +675,8 @@ export class VoiceLiveMount {
       lastCascadeRefusalAtMs: null,
       suppressedCascadeRefusals: 0,
       utteranceSeq: 0,
+      briefSignature: null,
+      pendingBrief: null,
       presentations: new Map(),
       spokenConfirmKeys: new Map(),
       detachedAtMs: null,
@@ -1338,6 +1370,29 @@ export class VoiceLiveMount {
     // for the spoken path (intent §18.2).
     if (event.kind === 'transcript' && event.speaker === 'talker' && event.final) {
       this.noteSpokenReadBack(lane, event.text, event.atMs);
+      // What the TALKER actually said, recorded server-side. Until this, the
+      // operator's own utterances were in the journal but its replies were not,
+      // so "I was told it had no access" could not be checked against anything
+      // (the 2026-09-18 report).
+      this.evidence({
+        event: 'talker_reply',
+        laneId: lane.laneId,
+        workerSessionId: lane.workerSessionId,
+        chars: event.text.length,
+        excerpt: scrubExcerpt(event.text),
+        atMs: event.atMs,
+      });
+    }
+
+    // Why the talker asked for a confirmation (or offered to ask the worker):
+    // the tool call is the mechanical cause, and it was previously invisible.
+    if (event.kind === 'tool_call') {
+      this.evidence({
+        event: 'talker_tool_call',
+        laneId: lane.laneId,
+        tool: event.name,
+        atMs: event.atMs,
+      });
     }
 
     // 1. Relay the wire-visible half of the event (audio, transcripts, state,
@@ -1409,8 +1464,10 @@ export class VoiceLiveMount {
     if (lane.operatorSpeechActive) return;
     if (lane.pendingWorkerActivity === null) return;
     const activity = lane.pendingWorkerActivity;
+    const brief = lane.pendingBrief;
     lane.pendingWorkerActivity = null;
-    this.injectWorkerStatus(lane, activity);
+    lane.pendingBrief = null;
+    this.injectWorkerStatus(lane, activity, brief);
   }
 
   /**
@@ -1499,30 +1556,77 @@ export class VoiceLiveMount {
       } catch {
         activity = 'unknown';
       }
-      this.noteWorkerActivity(lane, activity);
+      const brief = await this.readWorkerBrief(lane);
+      this.noteWorkerActivity(lane, activity, brief);
     }
   }
 
-  /** M4: inject a worker-status CHANGE, or defer it while the operator speaks. */
-  private noteWorkerActivity(lane: LaneRecord, activity: VoiceWorkerActivity): void {
-    if (lane.workerActivity === activity) return;
+  /**
+   * Read the worker brief, degrading to `null` on any failure. A host that
+   * cannot read the session leaves the status line alone: the talker is then
+   * honestly limited, and nothing is invented to fill the gap.
+   */
+  private async readWorkerBrief(lane: LaneRecord): Promise<VoiceWorkerBrief | null> {
+    if (!this.workerBrief) return null;
+    try {
+      return await this.workerBrief(lane.workerSessionId);
+    } catch (error) {
+      this.evidence({
+        event: 'worker_brief_unavailable',
+        laneId: lane.laneId,
+        message: error instanceof Error ? error.message : String(error),
+        atMs: this.now(),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * M4: inject a worker-status CHANGE — or a brief that has MOVED — and defer
+   * either while the operator speaks.
+   *
+   * The brief moves when the worker produces something new, which is exactly
+   * when a question about the work needs a new answer; gating the injection on
+   * the activity enum alone would freeze the talker's world at lane start.
+   */
+  private noteWorkerActivity(
+    lane: LaneRecord,
+    activity: VoiceWorkerActivity,
+    brief: VoiceWorkerBrief | null = null,
+  ): void {
+    const signature = briefSignature(brief);
+    const activityChanged = lane.workerActivity !== activity;
+    const briefChanged = signature !== lane.briefSignature;
+    if (!activityChanged && !briefChanged) return;
     lane.workerActivity = activity;
+    lane.briefSignature = signature;
     if (lane.operatorSpeechActive) {
       lane.pendingWorkerActivity = activity;
+      lane.pendingBrief = brief;
       return;
     }
-    this.injectWorkerStatus(lane, activity);
+    this.injectWorkerStatus(lane, activity, brief);
   }
 
   /** M4: one structured status injection (the service coalesces the sends). */
-  private injectWorkerStatus(lane: LaneRecord, activity: VoiceWorkerActivity): void {
+  private injectWorkerStatus(
+    lane: LaneRecord,
+    activity: VoiceWorkerActivity,
+    brief: VoiceWorkerBrief | null = null,
+  ): void {
     const statusLine =
       activity === 'busy'
         ? 'CURRENT STATUS: RUNNING'
         : activity === 'idle'
           ? 'CURRENT STATUS: IDLE'
           : 'CURRENT STATUS: UNKNOWN';
-    const update: VoiceBridgeContextUpdate = { workerActivity: activity, statusLine, atMs: this.now() };
+    const update: VoiceBridgeContextUpdate = {
+      workerActivity: activity,
+      statusLine,
+      atMs: this.now(),
+      ...(brief?.activity ? { activity: brief.activity } : {}),
+      ...(brief?.history && brief.history.entries.length > 0 ? { history: brief.history } : {}),
+    };
     try {
       this.serviceValue.injectContext(lane.laneId, update);
       this.evidence({
@@ -1531,6 +1635,19 @@ export class VoiceLiveMount {
         workerActivity: activity,
         atMs: this.now(),
       });
+      if (brief?.history) {
+        // What the talker was given, so "it said it could not see the work" is
+        // checkable against what it actually held.
+        this.evidence({
+          event: 'worker_brief_injected',
+          laneId: lane.laneId,
+          workerSessionId: lane.workerSessionId,
+          historyMessages: brief.history.entries.length,
+          historyTotal: brief.history.total,
+          briefChars: composeContextText(update).length,
+          atMs: this.now(),
+        });
+      }
     } catch (error) {
       this.evidence({
         event: 'worker_status_injection_failed',
@@ -1694,6 +1811,27 @@ export function createVoiceLiveLogger(): Logger {
  * the central logger's scrubber, so a credential shape that slipped into an
  * excerpt is redacted too.
  */
+/** A bounded single-line excerpt for evidence (never a whole reply). */
+function scrubExcerpt(text: string, max = 240): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
+}
+
+/**
+ * A cheap, stable fingerprint of a brief: the activity plus the message count and
+ * the newest entry's length. Enough to notice new work without hashing a whole
+ * session on every poll.
+ */
+function briefSignature(brief: VoiceWorkerBrief | null): string | null {
+  if (!brief) return null;
+  const history = brief.history;
+  return [
+    brief.activity ?? '',
+    history ? history.total : -1,
+    history && history.entries.length > 0 ? history.entries[history.entries.length - 1].text.length : -1,
+  ].join('|');
+}
+
 export function createLogEvidenceSink(
   log: { info(message: string): void }
 ): (event: Record<string, unknown>) => void {

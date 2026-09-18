@@ -290,6 +290,19 @@ curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
 # 3. Machine-readable counters for the same story:
 curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice'
 
+# 3c. What did the live talker SAY, and why did it say it?
+journalctl -u pi-web-ui.service | grep -E "talker_reply|talker_tool_call|worker_brief_injected"
+#   voice-kernel {"event":"talker_reply","excerpt":"…","chars":N}        ← its actual reply
+#   voice-kernel {"event":"talker_tool_call","tool":"offer_ask_worker"}  ← why it asked to confirm
+#   voice-kernel {"event":"worker_brief_injected","historyMessages":N,
+#                 "historyTotal":M,"briefChars":C}                       ← what it held
+#   Together with the existing
+#   `operator_utterance` line (what the operator said, classified), these four
+#   answer "what did I ask, what did it answer, what did it know" from the
+#   server alone — the gap the 2026-09-18 "it says it has no access" report
+#   exposed. Excerpts are single-line and length-bounded; the full transcript
+#   stays in the browser by design.
+
 # 3b. Has a client reported a capture fault (a microphone that could not start)?
 curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice.live.captureFaultTotal'
 # → {"worklet_unavailable": 1} etc; unknown reasons bucket as "other". The same

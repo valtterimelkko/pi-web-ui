@@ -1,0 +1,15 @@
+[without brief (shipped behaviour)] socket open
+[without brief (shipped behaviour)] (no transcript on the first attempt; asking again)
+
+[without brief (shipped behaviour)] ANSWER: I don't have access  to the worker's history  right now, so I'd need  to ask the worker directly  about their most  significant progress.
+
+[with brief (the fix)] socket open
+[with brief (the fix)] (no transcript on the first attempt; asking again)
+
+[with brief (the fix)] ANSWER: From what I can  see, the most significant  work was identifying  and fixing the issue  where the capture  worklet was blocked  by the production CSP.  By serving  the worklet as  a same-origin asset,  the worker restored  native lane capture for  both open mic  and push-to-talk in the deployed  UI.
+
+--- verdict ---
+without brief refused/hedged: true
+with brief refused?          : false
+with brief mentions the work : true
+with brief length            : 300 chars

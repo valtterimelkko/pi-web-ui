@@ -639,6 +639,14 @@ The exact field shapes are normative in
 `VoiceBridgeStartOptions`, `VoiceBridgeContextUpdate`, `VoiceBridgeLaneState`, `VoiceBridgeCallbacks`,
 `VoiceBridgeEmittedEvent`) and are not restated here to avoid a second source of truth.
 
+`VoiceBridgeContextUpdate` gained the additive `history` block on the host side (the worker session's
+bounded conversation window, rendered by the same P20/P23 renderer the relay lane uses) so the live
+talker can answer questions *about the work* instead of refusing them — the 2026-09-18 field report
+(§19.2 replaces "answer only from the state snapshot" with the provenance rule; P22 makes a question
+about the session the talker's own). It is host-derived **data, never authority**: it rides
+`injectContext` (the existing seam) and can authorise no delivery. Nothing in the frozen client↔server
+catalogue changed.
+
 Implementation invariants:
 
 1. **No credential ever leaves the service.** `GEMINI_API_KEY` is read from the server environment; it

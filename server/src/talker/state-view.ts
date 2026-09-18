@@ -14,6 +14,12 @@
  */
 
 import type { HarnessView, WorkerStateSnapshot } from './types.js';
+import {
+  clip,
+  renderSessionHistory,
+  SESSION_HISTORY_LIMITS,
+  type WorkerHistoryBlockLike,
+} from '../worker-history-view.js';
 
 export const STATE_VIEW_LIMITS = {
   recentEvents: 6,
@@ -57,23 +63,6 @@ export const STATE_VIEW_LIMITS = {
  *     The prompt's never-imply-knowledge-beyond-the-window rule and the
  *     [[ask-worker]] fallback are untouched.
  */
-export const SESSION_HISTORY_LIMITS = {
-  /** Line-count guard; the char budget below is the primary bound. */
-  entries: 40,
-  /** Per-message clip for the operator's (user) messages. */
-  entryChars: 400,
-  /** Per-message clip for the worker's own (assistant) messages — deep enough
-   *  for a long answer's numbered items (the P23 case had them at ~2100). */
-  assistantChars: 2200,
-  /** Total budget for the block's entry lines, enforced newest-first. */
-  totalChars: 12000,
-} as const;
-
-export function clip(text: string, max: number): string {
-  const oneLine = text.replace(/\s+/g, ' ').trim();
-  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
-}
-
 function elapsedLabel(snapshot: WorkerStateSnapshot): string {
   if (snapshot.elapsedLabel) return snapshot.elapsedLabel;
   if (typeof snapshot.startedAtEpochMs === 'number') {
@@ -100,38 +89,12 @@ function elapsedLabel(snapshot: WorkerStateSnapshot): string {
  * gives exact counts: complete when nothing is hidden, otherwise how many
  * messages are not included.
  */
-function renderSessionHistory(snapshot: WorkerStateSnapshot): string[] | null {
-  const all = snapshot.recentHistory ?? [];
-  if (all.length === 0) return null;
-  const total = Math.max(snapshot.historyTotal ?? all.length, all.length);
+export { clip, renderSessionHistory, SESSION_HISTORY_LIMITS };
 
-  const shown: Array<{ label: string; text: string }> = [];
-  let budget = SESSION_HISTORY_LIMITS.totalChars;
-  let shortened = false;
-  const first = Math.max(0, all.length - SESSION_HISTORY_LIMITS.entries);
-  for (let i = all.length - 1; i >= first; i--) {
-    const entry = all[i];
-    const allowance =
-      entry.role === 'assistant' ? SESSION_HISTORY_LIMITS.assistantChars : SESSION_HISTORY_LIMITS.entryChars;
-    const normalisedLength = entry.text.replace(/\s+/g, ' ').trim().length;
-    if (normalisedLength > allowance) shortened = true;
-    const text = clip(entry.text, allowance);
-    const cost = text.length + 12; // "operator: " / "worker: " + newline
-    if (shown.length > 0 && budget - cost < 0) break; // budget spent; the older tail is disclosed, not hidden
-    budget -= cost;
-    shown.unshift({ label: entry.role === 'assistant' ? 'worker' : 'operator', text });
-  }
-  const hidden = Math.max(0, total - shown.length);
-
-  const lines = ['--- WORKER SESSION HISTORY ---'];
-  lines.push(
-    hidden > 0
-      ? `Showing the most recent ${shown.length} of ${total} messages; ${hidden} earlier are not included.`
-      : `All ${shown.length} messages of the session so far are shown.`
-  );
-  if (shortened) lines.push('Some shown messages are shortened to fit (they end with …).');
-  for (const s of shown) lines.push(`${s.label}: ${s.text}`);
-  return lines;
+/** Adapt the talker's snapshot to the neutral block shape (one definition). */
+function historyBlockFor(snapshot: WorkerStateSnapshot): WorkerHistoryBlockLike | null {
+  if (!snapshot.recentHistory || snapshot.recentHistory.length === 0) return null;
+  return { entries: snapshot.recentHistory, ...(snapshot.historyTotal !== undefined ? { total: snapshot.historyTotal } : {}) };
 }
 
 export function renderStateView(snapshot: WorkerStateSnapshot, harness: HarnessView): string {
@@ -163,7 +126,7 @@ export function renderStateView(snapshot: WorkerStateSnapshot, harness: HarnessV
 
   // P20: the session's earlier turns, so a mid-session question about them is
   // answerable from real history. Absent when the provider supplied none.
-  const historyBlock = renderSessionHistory(snapshot);
+  const historyBlock = renderSessionHistory(historyBlockFor(snapshot));
   if (historyBlock) lines.push(...historyBlock);
 
   if (harness.draft && harness.draft.utterances.length > 0) {

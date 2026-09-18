@@ -180,10 +180,11 @@ describe('DriveModeVoiceLive', () => {
     const text = screen.getByTestId('voice-live-listening-state').textContent ?? '';
     expect(text).toContain('Microphone unavailable');
     expect(text).toContain('permission denied');
-    // Push-to-talk drives the same capture path, so promising it here would be
-    // a false claim (the 2026-09-18 field report).
+    // Push-to-talk drives the same capture path, and there is NO text input in
+    // Voice Mode, so both halves of the old promise were false claims.
     expect(text).toContain('same microphone path');
-    expect(text).toContain('typing still works');
+    expect(text).toContain('Nothing was sent to the worker');
+    expect(text).not.toContain('typing');
     expect(text).not.toContain('Push-to-talk and typing still work');
     expect(screen.getByTestId('voice-live-start')).toBeTruthy(); // retryable
   });
@@ -199,7 +200,7 @@ describe('DriveModeVoiceLive', () => {
     const text = screen.getByTestId('voice-live-listening-state').textContent ?? '';
     expect(text).toContain('capture worklet could not be loaded');
     expect(text).toContain('including push-to-talk');
-    expect(text).not.toContain('push-to-talk and typing still work');
+    expect(text).not.toContain('typing');
   });
 
   it('shows the honest suspended state after an explicit pause', async () => {

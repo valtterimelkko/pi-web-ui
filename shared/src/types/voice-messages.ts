@@ -1139,6 +1139,21 @@ export interface VoiceBridgeContextUpdate {
   workerActivity: VoiceWorkerActivity;
   /** One-line current activity, host-rendered. */
   activity?: string;
+  /**
+   * The worker session's bounded conversation view, host-read (P20/P23).
+   *
+   * Why it is here: the live talker's whole world used to be the status line, so
+   * "what has the worker done?" could only be answered with a refusal — the
+   * 2026-09-18 field report. The relay lane has read a bounded worker-session
+   * projection for several phases, and the intent is explicit that a question
+   * about the session's work is a question FOR the talker (P22). This is the
+   * same projection, rendered by the same rules (honest counts, disclosed
+   * truncation, hard budget), so both lanes answer from the same world.
+   *
+   * Data, never authority: it is host-derived state, and nothing in it can
+   * authorise a delivery (N2/N7 unchanged).
+   */
+  history?: VoiceWorkerHistoryBlock;
   /** Background children with statuses, host-rendered. */
   children?: string[];
   /** Pending items, host-rendered. */
@@ -1146,6 +1161,14 @@ export interface VoiceBridgeContextUpdate {
   /** The status line injected each turn, e.g. 'CURRENT STATUS: RUNNING'. */
   statusLine: string;
   atMs: number;
+}
+
+/** The worker conversation view carried in {@link VoiceBridgeContextUpdate}. */
+export interface VoiceWorkerHistoryBlock {
+  /** Oldest first; bounded by the renderer, never by the caller. */
+  entries: Array<{ role: 'user' | 'assistant'; text: string }>;
+  /** How many conversation messages the host saw in total, for honest disclosure. */
+  total: number;
 }
 
 /** Minimum spacing between context injections, in ms (§16.2 / Phase 3). */

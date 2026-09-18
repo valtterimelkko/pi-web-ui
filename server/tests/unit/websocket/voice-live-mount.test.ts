@@ -30,6 +30,7 @@ import type {
 import type { DeliveryOutcome, WorkerDelivery } from '../../../src/talker/types.js';
 import { VoiceLiveMount, isDirectedWorkerInstruction } from '../../../src/websocket/voice-live-mount.js';
 import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
+import { composeContextText } from '../../../src/voice/voice-session.js';
 
 const LANE = 'lane-1';
 const GENERATION = 1;
@@ -38,6 +39,7 @@ class FakeService implements VoiceBridgeService {
   private readonly listeners = new Set<(event: VoiceBridgeEmittedEvent) => void>();
   readonly states = new Map<string, VoiceBridgeLaneState>();
   readonly starts: VoiceBridgeStartOptions[] = [];
+  readonly contextUpdates: VoiceBridgeContextUpdate[] = [];
   stopped: Array<{ laneId: string; reason: VoiceStopReason }> = [];
 
   async start(options: VoiceBridgeStartOptions): Promise<void> {
@@ -68,7 +70,9 @@ class FakeService implements VoiceBridgeService {
 
   feedAudio(_chunk: VoiceAudioInputChunk & { laneId: string; attachmentGeneration: number }): void {}
   noteActivity(_note: VoiceActivityNote): void {}
-  injectContext(_laneId: string, _update: VoiceBridgeContextUpdate): void {}
+  injectContext(_laneId: string, update: VoiceBridgeContextUpdate): void {
+    this.contextUpdates.push(update);
+  }
   setReadingLevel(_laneId: string, _level: VoiceReadingLevel): void {}
   getState(laneId: string): VoiceBridgeLaneState | null {
     return this.states.get(laneId) ?? null;
@@ -219,6 +223,68 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     metrics.recordVoiceCaptureFault('something_new_from_a_future_client');
     metrics.recordVoiceCaptureFault('capture_failed');
     expect(metrics.snapshot().voice.live.captureFaultTotal).toEqual({ other: 1, capture_failed: 1 });
+  });
+
+  it('hands the live talker a bounded worker brief, and refreshes it when the work moves', async () => {
+    // The field report: the talker held one status line, so "what has the worker
+    // done?" could only be refused. The lane now carries the worker's own
+    // conversation window (P20/P23), rendered by the same bounded renderer.
+    const service = new FakeService();
+    const evidence: Array<Record<string, unknown>> = [];
+    let total = 2;
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+      workerBrief: async () => ({
+        activity: 'idle',
+        history: {
+          entries: [
+            { role: 'user', text: 'Inventory the retry paths.' },
+            { role: 'assistant', text: `Answer number ${total}.` },
+          ],
+          total,
+        },
+      }),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+
+    await mount.refreshWorkerStatuses();
+    const first = service.contextUpdates.at(-1);
+    expect(first?.history?.total).toBe(2);
+    expect(composeContextText(first as never)).toContain('WORKER SESSION HISTORY');
+    expect(composeContextText(first as never)).toContain('Inventory the retry paths.');
+
+    // New work appears: the brief must refresh, not freeze at lane start.
+    total = 3;
+    await mount.refreshWorkerStatuses();
+    const refreshed = service.contextUpdates.at(-1);
+    expect(refreshed?.history?.total).toBe(3);
+
+    // And the injection is a recorded fact, so the operator can see what it knew.
+    const briefEvent = evidence.filter((event) => event.event === 'worker_brief_injected').at(-1);
+    expect(briefEvent?.historyTotal).toBe(3);
+  });
+
+  it('injects the status alone when the host cannot read a brief (never an invented one)', async () => {
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => true,
+      workerBrief: async () => {
+        throw new Error('session not loaded');
+      },
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    await mount.refreshWorkerStatuses();
+
+    const last = service.contextUpdates.at(-1);
+    expect(last?.statusLine).toBe('CURRENT STATUS: RUNNING');
+    expect(last?.history).toBeUndefined();
   });
 
   it('delivers the exact retained bytes when a confirmation is authorised', async () => {
@@ -542,3 +608,43 @@ async function confirmWith(
     } as never
   );
 }
+
+describe('VoiceLiveMount — what the talker said, and why', () => {
+  it('records the talker’s reply and its tool calls, so a complaint is checkable', async () => {
+    const service = new FakeService();
+    const evidence: Array<Record<string, unknown>> = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+
+    service.emit({
+      kind: 'transcript',
+      laneId: LANE,
+      attachmentGeneration: 1,
+      speaker: 'talker',
+      text: 'From what I can see, the worker rewrote the retry handler and added a test.',
+      final: true,
+      atMs: 1_700_000_000_100,
+    } as never);
+    service.emit({
+      kind: 'tool_call',
+      laneId: LANE,
+      attachmentGeneration: 1,
+      callId: 'c1',
+      name: 'mark_addressed_to_talker',
+      args: {},
+      atMs: 1_700_000_000_101,
+    } as never);
+    await Promise.resolve();
+
+    const reply = evidence.find((event) => event.event === 'talker_reply');
+    expect(reply?.excerpt).toContain('rewrote the retry handler');
+    expect(reply?.chars).toBeGreaterThan(20);
+    expect(evidence.find((event) => event.event === 'talker_tool_call')?.tool).toBe('mark_addressed_to_talker');
+  });
+});
