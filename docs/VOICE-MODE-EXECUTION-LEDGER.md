@@ -378,6 +378,28 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (MODEL VERIFICATION + two observability additions, owner-requested).**
+The owner asked the backend to prove which model the live path actually uses. **Verified: `gemini-3.8-live`**
+(`VOICE_PROVIDER_MODEL`, `server/src/voice/types.ts:279`), by a five-link chain: (1) the mount constructs
+`VoiceSessionService` with no model and no env override exists in `config.ts` (production's runtime env
+carries only `GEMINI_API_KEY` and `VOICE_MODE_ENGINE`); (2) the bridge resolves `options.model ??
+VOICE_PROVIDER_MODEL`; (3) production's **deployed** `server/dist/voice/types.js` contains the constant;
+(4) a direct provider call using the server's own `createGenaiLiveSessionFactory` +
+`buildVoiceConnectConfig` was **accepted — socket open 102 ms, `setupComplete` 505 ms** (a wrong or retired
+model id fails setup, so acceptance is the provider's own receipt for that seat); (5) the owner's live
+sessions (lanes bound, engine `gemini-live`, turns and a delivered release recorded) only reach `live`
+after that same `setupComplete`. *(The first receipt attempt failed at 12 s — my script imported the
+system instruction from the wrong module, leaving `parts:[{text: undefined}]`; that was a scratch-tool
+bug, not a product issue, and it is exactly why the addition below matters.)*
+**Because nothing at runtime actually SAID which seat was in use** (the model was debug-only; the
+snapshot named the engine, not the model), the owner's "improve the observability tools" request was
+answered with two additions (`f37f22d`): `operational.voice.live.model` states the seat from startup
+(`null` = not stated, never assumed) and the bridge logs `voice live session ready {model}` at **info**
+on `setupComplete`, once per lane, on the `VoiceLive` component. Docs (OBSERVABILITY.md retrieval
+queries) and the Phase-8 checklist carry both checks. Gates: 545 focused tests, full server suite 434
+files/5376, ratchet 323 ≤ 326, CI green. **Not yet on production** (which runs `b9e7fb4`): the two
+visibility additions need a restart, deliberately not taken while the owner is testing.
+
 **2026-09-18 (OBSERVABILITY AUDIT — the pre-wave stack survived intact; the native voice path gained its own log component).**
 The owner asked whether the observability tooling that existed before the execution waves still exists
 and whether Voice Mode is as observable. Checked against the pre-Wave-0 baseline (`f46d5b1`):
