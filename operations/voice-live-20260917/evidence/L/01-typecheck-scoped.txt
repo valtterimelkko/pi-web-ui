@@ -1,0 +1,10 @@
+
+> @pi-web-ui/shared@0.1.0 typecheck
+> tsc --noEmit
+
+EXIT_SHARED_TYPECHECK=0
+
+> @pi-web-ui/client@0.1.0 typecheck
+> tsc --noEmit
+
+EXIT_CLIENT_TYPECHECK=0

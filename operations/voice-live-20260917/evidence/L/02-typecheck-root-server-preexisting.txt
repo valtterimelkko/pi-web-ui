@@ -1,0 +1,56 @@
+== npm run typecheck (repo root) ==
+
+> pi-web-ui@0.1.0 typecheck
+> npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared && npm run typecheck --workspace=@pi-web-ui/internal-api-mcp
+
+
+> @pi-web-ui/shared@0.1.0 build
+> tsc
+
+
+> @pi-web-ui/server@0.1.0 typecheck
+> tsc --noEmit
+
+src/routes/preferences.ts(451,75): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(469,112): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(481,114): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(493,116): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(511,108): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(529,110): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(547,117): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/worktrees.ts(222,79): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/worktrees.ts(313,79): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/worktrees.ts(398,79): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /root/pi-web-ui-wt-corr-client/server
+npm error workspace @pi-web-ui/server@0.1.0
+npm error location /root/pi-web-ui-wt-corr-client/server
+npm error command failed
+npm error command sh -c tsc --noEmit
+EXIT=2
+
+== the same command with Track L's changes stashed (clean base edccdbe) ==
+(server typecheck only, which is where the root command stops)
+
+> @pi-web-ui/server@0.1.0 typecheck
+> tsc --noEmit
+
+src/routes/preferences.ts(451,75): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(469,112): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(481,114): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(493,116): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(511,108): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(529,110): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/preferences.ts(547,117): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/worktrees.ts(222,79): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/worktrees.ts(313,79): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+src/routes/worktrees.ts(398,79): error TS2339: Property 'errors' does not exist on type 'ZodError<unknown>'.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /root/pi-web-ui-wt-corr-client/server
+npm error workspace @pi-web-ui/server@0.1.0
+npm error location /root/pi-web-ui-wt-corr-client/server
+npm error command failed
+npm error command sh -c tsc --noEmit
+BASE_SERVER_TYPECHECK_EXIT=2

@@ -409,3 +409,71 @@ describe('controller source invariants (no instruction path, no capture authorit
     expect(sourceOfMessages).toMatch(/isDeliveredReceipt/);
   });
 });
+
+// ── Transport-level refusals (M8) ───────────────────────────────────────────
+
+describe('VoiceLiveController — refusals about the transport, not the lane (M8)', () => {
+  it('records a lane-less rate refusal and applies no lane state', () => {
+    const { controller } = makeController();
+    const outcome = controller.handleIncoming({
+      type: 'voice_error',
+      version: VOICE_WIRE_VERSION,
+      laneId: '',
+      attachmentGeneration: 0,
+      code: 'voice_internal_error',
+      message: 'Voice frame rate exceeded; the frame was dropped.',
+      fatal: false,
+    });
+    expect(outcome).toBe('transport-refusal');
+    const snapshot = controller.snapshot();
+    expect(snapshot.transportRefusals).toHaveLength(1);
+    expect(snapshot.transportRefusals[0]).toMatchObject({
+      code: 'voice_internal_error',
+      fatal: false,
+    });
+    // It is not a lane refusal, not lane state, and never a delivery.
+    expect(snapshot.refusals).toHaveLength(0);
+    expect(snapshot.lastError).toBeNull();
+    expect(snapshot.receipts).toHaveLength(0);
+  });
+
+  it('treats a fatal transport refusal as the whole lane stopping', () => {
+    const { controller } = makeController();
+    expect(
+      controller.handleIncoming({
+        type: 'voice_error',
+        version: VOICE_WIRE_VERSION,
+        code: 'voice_internal_error',
+        message: 'the voice transport stopped',
+        fatal: true,
+      }),
+    ).toBe('transport-refusal');
+    const snapshot = controller.snapshot();
+    expect(snapshot.wireState).toBe('error');
+    expect(snapshot.listeningSuspended).toBe(true);
+  });
+
+  it('still refuses a malformed frame outright', () => {
+    const { controller, refusals } = makeController();
+    expect(controller.handleIncoming({ type: 'voice_error', version: VOICE_WIRE_VERSION })).toBe('refused');
+    expect(refusals).toHaveLength(1);
+    expect(controller.snapshot().transportRefusals).toHaveLength(0);
+  });
+});
+
+// ── The presented variant is what was read back (H3) ────────────────────────
+
+describe('VoiceLiveController — the presentation report names what was read back', () => {
+  it('reports the variant the operator actually heard, not the announced default', () => {
+    const { controller, frames } = makeController();
+    controller.handleIncoming(proposalMessage());
+    controller.reportPresentation({ completed: true, presentedVariant: 'original' });
+    expect(frames[0]).toMatchObject({
+      type: 'proposal_presentation',
+      presentedVariant: 'original',
+      completed: true,
+    });
+    expect(controller.snapshot().proposal?.proposal.presentedVariant).toBe('original');
+    expect(controller.presentationStatus()).toBe('presented');
+  });
+});

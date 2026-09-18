@@ -8,6 +8,7 @@ import {
 import { createSpeechArbiter } from '../speechArbiter';
 import { VoiceLiveSurface, type VoiceLiveSurfaceFactories } from './surface';
 import { createVoiceLane, pcm16Base64 } from './messages';
+import type { ReadBackSpeech, ReadBackSpeaker } from './readBack';
 import type { CaptureActivityReport, CaptureChunk, CaptureSession, StartCaptureSessionOptions } from './captureSession';
 import type { PlaybackBackend, ScheduledHandle } from './playbackSession';
 
@@ -64,17 +65,69 @@ interface Harness {
   activity: Array<(report: CaptureActivityReport) => void>;
   backend: FakePlaybackBackend;
   arbiter: ReturnType<typeof createSpeechArbiter>;
+  speaker: FakeReadBackSpeaker;
   /** Live counters (a primitive returned by value would go stale). */
   counters: { captureStops: number; mediaRequests: number };
 }
 
-function makeSurface(options: { failMic?: boolean; captureFault?: boolean } = {}): Harness {
+/**
+ * A read-back speaker whose playback only ends when the test says so — which is
+ * exactly what makes the H3 property testable: nothing may be reported between
+ * `speak()` and the host's own end event.
+ */
+class FakeReadBackSpeaker implements ReadBackSpeaker {
+  readonly supported: boolean;
+  readonly spoken: string[] = [];
+  cancellations = 0;
+  private pending: ReadBackSpeech | null = null;
+
+  constructor(supported = true) {
+    this.supported = supported;
+  }
+
+  speak(speech: ReadBackSpeech): boolean {
+    if (!this.supported) return false;
+    this.spoken.push(speech.text);
+    this.pending = speech;
+    return true;
+  }
+
+  cancel(): void {
+    this.cancellations += 1;
+    this.pending = null;
+  }
+
+  boundary(charIndex: number): void {
+    this.pending?.onBoundary?.(charIndex);
+  }
+
+  /** Playback reached the end of the utterance. */
+  finish(): void {
+    const speech = this.pending;
+    this.pending = null;
+    speech?.onEnd();
+  }
+
+  /** Playback was stopped or failed. */
+  interrupt(reason = 'interrupted'): void {
+    const speech = this.pending;
+    this.pending = null;
+    speech?.onError(reason);
+  }
+
+  get reading(): boolean {
+    return this.pending !== null;
+  }
+}
+
+function makeSurface(options: { failMic?: boolean; captureFault?: boolean; readBack?: ReadBackSpeaker; laneProbeTimeoutMs?: number } = {}): Harness {
   const frames: VoiceClientMessage[] = [];
   const captureOptions: StartCaptureSessionOptions[] = [];
   const activity: Array<(report: CaptureActivityReport) => void> = [];
   const backend = new FakePlaybackBackend();
   const arbiter = createSpeechArbiter();
   const counters = { captureStops: 0, mediaRequests: 0 };
+  const speaker = new FakeReadBackSpeaker();
 
   const fakeContext = {
     state: 'running',
@@ -92,6 +145,8 @@ function makeSurface(options: { failMic?: boolean; captureFault?: boolean } = {}
   const factories: VoiceLiveSurfaceFactories = {
     createAudioContext: () => fakeContext,
     createPlaybackBackend: () => backend,
+    createReadBackSpeaker: () => options.readBack ?? speaker,
+    ...(options.laneProbeTimeoutMs !== undefined ? { laneProbeTimeoutMs: options.laneProbeTimeoutMs } : {}),
     getUserMedia: async () => {
       counters.mediaRequests += 1;
       if (options.failMic) throw new Error('NotAllowedError: microphone denied');
@@ -124,7 +179,30 @@ function makeSurface(options: { failMic?: boolean; captureFault?: boolean } = {}
     arbiter,
     factories,
   });
-  return { surface, frames, captureOptions, activity, backend, arbiter, counters };
+  return { surface, frames, captureOptions, activity, backend, arbiter, speaker, counters };
+}
+
+/** A live proposal that has NOT been read back yet (the H3 starting point). */
+function proposalFrame(overrides: Record<string, unknown> = {}): unknown {
+  return env('proposal_created', {
+    proposal: {
+      proposalId: 'prop-1',
+      version: 3,
+      sha256: 'a'.repeat(64),
+      promotionRoute: 'directed',
+      original: 'ask it whether the retry handler drops the token',
+      tidied: 'ask whether the retry handler drops the token',
+      presentedVariant: 'tidied',
+      presentation: { completed: false },
+      ...overrides,
+    },
+  });
+}
+
+function presentationFrames(frames: VoiceClientMessage[]): Array<Record<string, unknown>> {
+  return frames.filter((frame) => frame.type === 'proposal_presentation') as unknown as Array<
+    Record<string, unknown>
+  >;
 }
 
 describe('VoiceLiveSurface — capture lifecycle is honest', () => {
@@ -261,5 +339,244 @@ describe('VoiceLiveSurface — teardown', () => {
     expect(harness.backend.stops).toBe(1);
     expect(harness.counters.captureStops).toBe(0);
     expect(harness.surface.getState().capture).toBe('live');
+  });
+});
+
+describe('VoiceLiveSurface — presentation is reported only after the read-back (H3)', () => {
+  it('speaks the retained bytes, reports nothing on start, and reports completion only at the end', async () => {
+    const harness = makeSurface();
+    harness.surface.onWireMessage(proposalFrame());
+    expect(harness.surface.getState().controller.proposal?.proposal.proposalId).toBe('prop-1');
+    // Nothing is presented yet: the proposal announced completed: false.
+    expect(harness.surface.controller.presentationStatus()).toBe('pending');
+
+    const done = harness.surface.readBackProposal('tidied');
+    // Playback started with the exact release bytes...
+    expect(harness.speaker.spoken).toEqual(['ask whether the retry handler drops the token']);
+    expect(harness.surface.getState().readBack.state).toBe('reading');
+    // ...and the wire has heard NOTHING: a start is not a presentation.
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+    expect(harness.surface.controller.presentationStatus()).toBe('pending');
+
+    harness.speaker.finish();
+    expect(await done).toBe('completed');
+    const reported = presentationFrames(harness.frames);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({
+      type: 'proposal_presentation',
+      proposalId: 'prop-1',
+      presentedVariant: 'tidied',
+      completed: true,
+    });
+    expect(harness.surface.controller.presentationStatus()).toBe('presented');
+    expect(harness.surface.getState().readBack.state).toBe('completed');
+  });
+
+  it('an interrupted read-back reports the narrowing outcome with where it stopped', async () => {
+    const harness = makeSurface();
+    harness.surface.onWireMessage(proposalFrame());
+    const done = harness.surface.readBackProposal();
+    harness.speaker.boundary(12);
+    // Mid-playback: still nothing on the wire.
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+    harness.speaker.interrupt('interrupted');
+
+    expect(await done).toBe('interrupted');
+    const reported = presentationFrames(harness.frames);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ completed: false, stoppedAtChar: 12 });
+    expect(harness.surface.controller.presentationStatus()).toBe('pending');
+    expect(harness.surface.getState().readBack.state).toBe('interrupted');
+  });
+
+  it('reads back whichever retained variant the operator is looking at, verbatim', async () => {
+    const harness = makeSurface();
+    harness.surface.onWireMessage(proposalFrame());
+    const done = harness.surface.readBackProposal('original');
+    expect(harness.speaker.spoken).toEqual(['ask it whether the retry handler drops the token']);
+    harness.speaker.finish();
+    await done;
+    expect(presentationFrames(harness.frames)[0]).toMatchObject({
+      presentedVariant: 'original',
+      completed: true,
+    });
+  });
+
+  it('has nothing to read back when there is no live proposal', async () => {
+    const harness = makeSurface();
+    expect(await harness.surface.readBackProposal()).toBe('no-proposal');
+    expect(harness.speaker.spoken).toHaveLength(0);
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+  });
+
+  it('says the host cannot read back rather than fabricating a completion', async () => {
+    const harness = makeSurface({ readBack: new FakeReadBackSpeaker(false) });
+    harness.surface.onWireMessage(proposalFrame());
+    expect(await harness.surface.readBackProposal()).toBe('unsupported');
+    expect(harness.surface.getState().readBack.state).toBe('unsupported');
+    expect(harness.surface.getState().readBack.supported).toBe(false);
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+    expect(harness.surface.controller.presentationStatus()).toBe('pending');
+  });
+
+  it('drops a read-back in flight when a newer proposal replaces the one being read', async () => {
+    const harness = makeSurface();
+    harness.surface.onWireMessage(proposalFrame());
+    const done = harness.surface.readBackProposal();
+    harness.surface.onWireMessage(
+      proposalFrame({ proposalId: 'prop-2', version: 4, sha256: 'b'.repeat(64) }),
+    );
+    expect(await done).toBe('interrupted');
+    expect(harness.speaker.cancellations).toBeGreaterThan(0);
+    expect(harness.surface.getState().readBack.state).toBe('idle');
+    // A replaced proposal is never reported as presented.
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+  });
+
+  it('cancels the read-back on teardown', async () => {
+    const harness = makeSurface();
+    harness.surface.onWireMessage(proposalFrame());
+    const done = harness.surface.readBackProposal();
+    await harness.surface.dispose();
+    expect(await done).toBe('interrupted');
+    expect(harness.speaker.cancellations).toBeGreaterThan(0);
+  });
+});
+
+describe('VoiceLiveSurface — lane reachability is honest (M7)', () => {
+  it('opens the lane on the wire, then reports live when the engine says so', () => {
+    const harness = makeSurface();
+    expect(harness.surface.getState().lane.state).toBe('unknown');
+    expect(harness.surface.startLane()).toBe('started');
+    expect(harness.frames[0].type).toBe('voice_session_start');
+    expect(harness.surface.getState().lane.state).toBe('connecting');
+
+    harness.surface.onWireMessage(env('voice_state', { state: 'live' }));
+    expect(harness.surface.getState().lane.state).toBe('live');
+  });
+
+  it('does not re-open a lane that is already live (a capture pause is not a lane stop)', () => {
+    const harness = makeSurface();
+    harness.surface.startLane();
+    harness.surface.onWireMessage(env('voice_state', { state: 'live' }));
+    harness.surface.startLane();
+    harness.surface.startLane();
+    const starts = harness.frames.filter((frame) => frame.type === 'voice_session_start');
+    expect(starts).toHaveLength(1);
+    expect(harness.surface.getState().lane.state).toBe('live');
+  });
+
+  it('renders the server\u2019s own words when the live engine is disabled (cascade)', async () => {
+    const harness = makeSurface();
+    expect(harness.surface.startLane()).toBe('started');
+    // Exactly the pair the cascade server sends: an error state, then a fatal
+    // voice_error carrying the reason.
+    harness.surface.onWireMessage(
+      env('voice_state', { state: 'error', detail: 'live voice is disabled on this server (VOICE_MODE_ENGINE=cascade); the push-to-talk cascade is now serving this lane' }),
+    );
+    harness.surface.onWireMessage(
+      env('voice_error', {
+        code: 'voice_provider_unavailable',
+        message: 'live voice is disabled on this server (VOICE_MODE_ENGINE=cascade); the push-to-talk cascade is now serving this lane',
+        fatal: true,
+      }),
+    );
+    const state = harness.surface.getState();
+    expect(state.lane.state).toBe('unavailable');
+    expect(state.lane.detail).toContain('VOICE_MODE_ENGINE=cascade');
+    expect(state.controller.lastError?.fatal).toBe(true);
+  });
+
+  it('a lane start that is never answered becomes honestly unavailable, and stops capture', async () => {
+    const harness = makeSurface({ laneProbeTimeoutMs: 15 });
+    await harness.surface.startCapture();
+    expect(harness.surface.getState().capture).toBe('live');
+    harness.surface.startLane();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const state = harness.surface.getState();
+    expect(state.lane.state).toBe('unavailable');
+    expect(state.lane.detail).toContain('no answer from the voice engine');
+    // A lane that cannot be served must not keep the microphone open.
+    expect(state.capture).toBe('suspended');
+  });
+
+  it('a fatal lane error stops capture and a retry can open the lane again', async () => {
+    const harness = makeSurface();
+    harness.surface.startLane();
+    await harness.surface.startCapture();
+    harness.surface.onWireMessage(
+      env('voice_error', { code: 'voice_internal_error', message: 'engine exploded', fatal: true }),
+    );
+    expect(harness.surface.getState().lane.state).toBe('unavailable');
+    // Stopping capture is asynchronous (the session is released first).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.surface.getState().capture).toBe('suspended');
+
+    harness.surface.retryLane();
+    expect(harness.surface.getState().lane.state).toBe('connecting');
+    const starts = harness.frames.filter((frame) => frame.type === 'voice_session_start');
+    expect(starts.length).toBe(2);
+
+    // A retry that succeeds must not keep reporting the stale failure.
+    harness.surface.onWireMessage(env('voice_state', { state: 'live' }));
+    expect(harness.surface.getState().lane.state).toBe('live');
+    expect(harness.surface.getState().controller.lastError).toBeNull();
+  });
+
+  it('reports an unsupported host as unsupported without touching the wire', () => {
+    const harness = makeSurface();
+    // A host whose capture seam is absent cannot run the lane at all.
+    const bare = new VoiceLiveSurface({
+      lane: LANE,
+      send: () => undefined,
+      arbiter: createSpeechArbiter(),
+      factories: {},
+    });
+    // jsdom has no getUserMedia: the honest answer is "unsupported", not a dead start.
+    const previous = (navigator as unknown as { mediaDevices?: unknown }).mediaDevices;
+    Reflect.deleteProperty(navigator as unknown as Record<string, unknown>, 'mediaDevices');
+    try {
+      expect(bare.getState().lane.state).toBe('unsupported');
+      expect(bare.getState().lane.detail).toContain('no microphone capture API');
+      expect(bare.startLane()).toBe('unsupported');
+    } finally {
+      if (previous !== undefined) {
+        Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: previous });
+      }
+    }
+    expect(harness.surface.getState().lane.state).toBe('unknown');
+  });
+});
+
+describe('VoiceLiveSurface — transport-level refusals reach the surface (M8)', () => {
+  it('accepts and records a rate refusal that carried no lane envelope', () => {
+    const harness = makeSurface();
+    const refusal = {
+      type: 'voice_error',
+      version: VOICE_WIRE_VERSION,
+      laneId: '',
+      attachmentGeneration: 0,
+      code: 'voice_internal_error',
+      message: 'Voice frame rate exceeded; the frame was dropped.',
+      fatal: false,
+    };
+    expect(harness.surface.onWireMessage(refusal)).toBe('transport-refusal');
+    const state = harness.surface.getState();
+    expect(state.controller.transportRefusals).toHaveLength(1);
+    expect(state.controller.transportRefusals[0]).toMatchObject({
+      code: 'voice_internal_error',
+      fatal: false,
+    });
+    // It is NOT a lane refusal and NOT lane state: nothing was applied.
+    expect(state.controller.refusals).toHaveLength(0);
+    expect(state.controller.lastError).toBeNull();
+  });
+
+  it('still refuses a genuinely malformed frame', () => {
+    const harness = makeSurface();
+    expect(harness.surface.onWireMessage({ type: 'voice_error', version: VOICE_WIRE_VERSION })).toBe(
+      'refused',
+    );
+    expect(harness.surface.getState().controller.transportRefusals).toHaveLength(0);
   });
 });

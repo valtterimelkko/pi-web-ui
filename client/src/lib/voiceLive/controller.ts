@@ -55,6 +55,7 @@ import {
   type VoiceClientMessage,
   type VoiceInboundRefusalReason,
   type VoiceLaneIdentity,
+  type VoiceTransportRefusal,
 } from './messages';
 
 /** How a proposal is displayed: read back in full, not yet, or superseded. */
@@ -89,6 +90,12 @@ export interface VoiceLiveSnapshot {
   receipts: VoiceReceipt[];
   lastError: { code: VoiceErrorCode; message: string; fatal: boolean } | null;
   refusals: VoiceLiveRefusal[];
+  /**
+   * Refusals the SERVER sent about the transport itself (M8): notices that
+   * carried no lane envelope and would otherwise be dropped as malformed.
+   * Rendered, never silent — and never lane authority, because they name none.
+   */
+  transportRefusals: VoiceTransportRefusal[];
   pendingRequests: string[];
 }
 
@@ -108,6 +115,7 @@ export interface VoiceLiveControllerOptions {
 const MAX_CAPTIONS = 200;
 const MAX_RECEIPTS = 50;
 const MAX_REFUSALS = 50;
+const MAX_TRANSPORT_REFUSALS = 20;
 
 export class VoiceLiveController {
   private readonly options: VoiceLiveControllerOptions;
@@ -117,6 +125,7 @@ export class VoiceLiveController {
   private readonly captions: VoiceTranscriptDeltaMessage[] = [];
   private readonly receipts: VoiceReceipt[] = [];
   private readonly refusals: VoiceLiveRefusal[] = [];
+  private readonly transportRefusals: VoiceTransportRefusal[] = [];
   private proposal: VoiceLiveProposal | null = null;
   private parking: VoiceLiveSnapshot['parking'] = { items: [], operation: null };
   private wireState: VoiceWireState = 'idle';
@@ -152,6 +161,7 @@ export class VoiceLiveController {
       receipts: [...this.receipts],
       lastError: this.lastError ? { ...this.lastError } : null,
       refusals: [...this.refusals],
+      transportRefusals: [...this.transportRefusals],
       pendingRequests: [...this.pendingRequests],
     };
   }
@@ -181,6 +191,10 @@ export class VoiceLiveController {
     if (input.readingLevel) this.readingLevel = input.readingLevel;
     this.wireState = 'connecting';
     this.detail = null;
+    // A fresh start supersedes the previous lane's error: leaving a stale fatal
+    // error on the snapshot would make a retry that is genuinely in flight read
+    // as permanently unavailable (M7 retry path).
+    this.lastError = null;
     const requestId = mintRequestId();
     this.pendingRequests.add(requestId);
     this.send(
@@ -360,18 +374,29 @@ export class VoiceLiveController {
   /**
    * Report whether the read-back of the live proposal completed. `completed:
    * true` authorises nothing; `false` only narrows a later confirmation.
+   *
+   * `presentedVariant` defaults to the proposal's own announced variant, but the
+   * caller MUST name it when the read-back was of the other retained variant:
+   * the frame records which bytes the operator actually heard (H3 — a read-back
+   * of "your words" may not be reported as a read-back of the tidy).
    */
-  reportPresentation(input: { completed: boolean; stoppedAtChar?: number }): 'sent' | 'refused' {
+  reportPresentation(input: {
+    completed: boolean;
+    stoppedAtChar?: number;
+    presentedVariant?: VoiceProposalVariant;
+  }): 'sent' | 'refused' {
     const live = this.proposal;
     if (!live) return 'refused';
+    const presentedVariant = input.presentedVariant ?? live.proposal.presentedVariant;
     this.send(
       buildProposalPresentation(this.lane, {
         proposalId: live.proposal.proposalId,
-        presentedVariant: live.proposal.presentedVariant,
+        presentedVariant,
         completed: input.completed,
         ...(input.stoppedAtChar !== undefined ? { stoppedAtChar: input.stoppedAtChar } : {}),
       }),
     );
+    live.proposal.presentedVariant = presentedVariant;
     live.proposal.presentation = {
       completed: input.completed,
       ...(input.stoppedAtChar !== undefined ? { stoppedAtChar: input.stoppedAtChar } : {}),
@@ -383,8 +408,20 @@ export class VoiceLiveController {
   // ── Inbound ──────────────────────────────────────────────────────────────
 
   /** Interpret and apply one inbound frame. Returns whether it was applied. */
-  handleIncoming(raw: unknown): 'applied' | 'refused' {
+  handleIncoming(raw: unknown): 'applied' | 'refused' | 'transport-refusal' {
     const result = interpretInbound(raw, this.lane, this.pendingRequests);
+    if (result.kind === 'transport-refusal') {
+      // A notice about the transport, not about a lane: recorded and rendered,
+      // never applied as lane state and never mistaken for a lane refusal.
+      this.transportRefusals.push(result.refusal);
+      if (this.transportRefusals.length > MAX_TRANSPORT_REFUSALS) this.transportRefusals.shift();
+      if (result.refusal.fatal) {
+        this.wireState = 'error';
+        this.listeningSuspended = true;
+      }
+      this.notify();
+      return 'transport-refusal';
+    }
     if (result.kind === 'refused') {
       this.refuse({
         direction: 'inbound',

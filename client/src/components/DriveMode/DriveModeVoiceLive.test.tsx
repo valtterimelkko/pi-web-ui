@@ -8,13 +8,50 @@ import {
 import { createSpeechArbiter } from '../../lib/speechArbiter';
 import { VoiceLiveSurface, type VoiceLiveSurfaceFactories } from '../../lib/voiceLive/surface';
 import { createVoiceLane } from '../../lib/voiceLive/messages';
+import type { ReadBackSpeech, ReadBackSpeaker } from '../../lib/voiceLive/readBack';
 import type { CaptureActivityReport, CaptureSession, StartCaptureSessionOptions } from '../../lib/voiceLive/captureSession';
 import type { PlaybackBackend, ScheduledHandle } from '../../lib/voiceLive/playbackSession';
 import { DriveModeVoiceLive } from './DriveModeVoiceLive';
 
 const LANE = createVoiceLane({ workerSessionId: 'worker-9', nonce: 'ui1' });
 
+/** Read-back playback that only ends when the test says so (H3 evidence). */
+class FakeReadBackSpeaker implements ReadBackSpeaker {
+  readonly supported: boolean;
+  readonly spoken: string[] = [];
+  cancellations = 0;
+  private pending: ReadBackSpeech | null = null;
+  constructor(supported = true) {
+    this.supported = supported;
+  }
+  speak(speech: ReadBackSpeech): boolean {
+    if (!this.supported) return false;
+    this.spoken.push(speech.text);
+    this.pending = speech;
+    return true;
+  }
+  cancel(): void {
+    this.cancellations += 1;
+    this.pending = null;
+  }
+  finish(): void {
+    const speech = this.pending;
+    this.pending = null;
+    speech?.onEnd();
+  }
+  interrupt(reason = 'interrupted'): void {
+    const speech = this.pending;
+    this.pending = null;
+    speech?.onError(reason);
+  }
+}
+
 function makeSurface(options: { failMic?: boolean } = {}) {
+  return makeSurfaceWith(options);
+}
+
+function makeSurfaceWith(options: { failMic?: boolean; readBack?: ReadBackSpeaker } = {}) {
+  const speaker = new FakeReadBackSpeaker();
   const frames: VoiceClientMessage[] = [];
   const activity: Array<(report: CaptureActivityReport) => void> = [];
   const counters = { captureStops: 0 };
@@ -44,6 +81,7 @@ function makeSurface(options: { failMic?: boolean } = {}) {
   const factories: VoiceLiveSurfaceFactories = {
     createAudioContext: () => fakeContext,
     createPlaybackBackend: () => backend,
+    createReadBackSpeaker: () => options.readBack ?? speaker,
     getUserMedia: async () => {
       if (options.failMic) throw new Error('NotAllowedError: permission denied');
       return { getAudioTracks: () => [{ stop() {} }] } as unknown as MediaStream;
@@ -67,7 +105,7 @@ function makeSurface(options: { failMic?: boolean } = {}) {
     arbiter: createSpeechArbiter(),
     factories,
   });
-  return { surface, frames, activity, counters };
+  return { surface, frames, activity, counters, speaker };
 }
 
 function env(type: string, extra: Record<string, unknown> = {}): unknown {
@@ -78,6 +116,23 @@ function env(type: string, extra: Record<string, unknown> = {}): unknown {
     attachmentGeneration: LANE.attachmentGeneration,
     ...extra,
   };
+}
+
+/** A proposal that has NOT been read back yet: the H3 starting point. */
+function pendingProposal(overrides: Record<string, unknown> = {}): unknown {
+  return env('proposal_created', {
+    proposal: {
+      proposalId: 'prop-9',
+      version: 5,
+      sha256: 'c'.repeat(64),
+      promotionRoute: 'directed',
+      original: 'ask it whether the retry handler drops the token',
+      tidied: 'ask whether the retry handler drops the token',
+      presentedVariant: 'tidied',
+      presentation: { completed: false },
+      ...overrides,
+    },
+  });
 }
 
 describe('DriveModeVoiceLive', () => {
@@ -225,5 +280,150 @@ describe('DriveModeVoiceLive', () => {
     await waitFor(() => expect(frames.some((frame) => frame.type === 'voice_reading_level')).toBe(true));
     const level = frames.find((frame) => frame.type === 'voice_reading_level') as { level: string };
     expect(level.level).toBe('headlines');
+  });
+});
+
+describe('DriveModeVoiceLive — the read-back is real, and confirms the identity echo (H3)', () => {
+  it('confirm disabled → read-back plays → playback ends → confirm enabled → confirm echoes the identity', async () => {
+    const { surface, frames, speaker } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(pendingProposal());
+
+    const confirm = (await screen.findByTestId('proposal-confirm')) as HTMLButtonElement;
+    expect(screen.getByTestId('proposal-card').getAttribute('data-presentation-status')).toBe('pending');
+    expect(confirm.disabled).toBe(true);
+
+    // Start the read-back: the composed bytes are spoken...
+    fireEvent.click(screen.getByTestId('proposal-readback'));
+    expect(speaker.spoken).toEqual(['ask whether the retry handler drops the token']);
+    // ...and NOTHING has been reported: a click is not a presentation.
+    expect(frames.some((frame) => frame.type === 'proposal_presentation')).toBe(false);
+    expect(screen.getByTestId('proposal-readback').getAttribute('data-reading')).toBe('true');
+    expect((screen.getByTestId('proposal-confirm') as HTMLButtonElement).disabled).toBe(true);
+
+    // Playback completes: now (and only now) presentation is reported.
+    speaker.finish();
+    await waitFor(() =>
+      expect(screen.getByTestId('proposal-card').getAttribute('data-presentation-status')).toBe('presented'),
+    );
+    const presentation = frames.find((frame) => frame.type === 'proposal_presentation');
+    expect(presentation).toMatchObject({ completed: true, presentedVariant: 'tidied' });
+    await waitFor(() => expect((screen.getByTestId('proposal-confirm') as HTMLButtonElement).disabled).toBe(false));
+
+    // The typed confirm carries the proposalRef echo of the displayed identity.
+    fireEvent.click(screen.getByTestId('proposal-confirm'));
+    await waitFor(() => expect(frames.some((frame) => frame.type === 'proposal_confirm')).toBe(true));
+    const confirmation = frames.find((frame) => frame.type === 'proposal_confirm');
+    expect(confirmation).toMatchObject({
+      proposalId: 'prop-9',
+      proposalRef: { version: 5, sha256: 'c'.repeat(64) },
+    });
+  });
+
+  it('reads back whichever variant is on screen, verbatim', async () => {
+    const { surface, speaker } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(pendingProposal());
+    await screen.findByTestId('proposal-card');
+
+    fireEvent.click(screen.getByTestId('proposal-variant-original'));
+    fireEvent.click(screen.getByTestId('proposal-readback'));
+    expect(speaker.spoken).toEqual(['ask it whether the retry handler drops the token']);
+    speaker.finish();
+    await waitFor(() =>
+      expect(screen.getByTestId('proposal-card').getAttribute('data-presentation-status')).toBe('presented'),
+    );
+  });
+
+  it('an interrupted read-back leaves the confirm refused and says where it stopped', async () => {
+    const { surface, frames, speaker } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(pendingProposal());
+
+    fireEvent.click(await screen.findByTestId('proposal-readback'));
+    speaker.interrupt('interrupted');
+    await waitFor(() => expect(screen.getByTestId('voice-live-readback-interrupted')).toBeTruthy());
+    expect(
+      frames.some(
+        (frame) => frame.type === 'proposal_presentation' && (frame as { completed: boolean }).completed === false,
+      ),
+    ).toBe(true);
+    expect((screen.getByTestId('proposal-confirm') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('DriveModeVoiceLive — honest reachability (M7) and transport refusals (M8)', () => {
+  it('renders the server\u2019s own reason when the live engine serves the lane elsewhere', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} workerLabel="worker-9" />);
+    expect(screen.getByTestId('voice-live-start')).toBeTruthy();
+
+    // Exactly what a cascade server answers a lane start with.
+    const detail =
+      'live voice is disabled on this server (VOICE_MODE_ENGINE=cascade); the push-to-talk cascade is now serving this lane';
+    surface.onWireMessage(env('voice_state', { state: 'error', detail }));
+    surface.onWireMessage(
+      env('voice_error', { code: 'voice_provider_unavailable', message: detail, fatal: true }),
+    );
+
+    const panel = await screen.findByTestId('voice-live-unavailable');
+    expect(panel.getAttribute('data-reason')).toBe('unavailable');
+    expect(screen.getByTestId('voice-live-unavailable-detail').textContent).toContain(
+      'VOICE_MODE_ENGINE=cascade',
+    );
+    // The lane offers an honest retry instead of a control that cannot work.
+    expect(screen.getByTestId('voice-live-retry')).toBeTruthy();
+    expect(screen.queryByTestId('voice-live-start')).toBeNull();
+    expect(screen.getByTestId('voice-live-typed-fallback')).toBeTruthy();
+  });
+
+  it('starts the lane on the wire before capture, and explains a start that fails', async () => {
+    const { surface, frames } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    fireEvent.click(screen.getByTestId('voice-live-start'));
+    // The lane is opened on the wire — the surface is genuinely reachable.
+    await waitFor(() => expect(frames.some((frame) => frame.type === 'voice_session_start')).toBe(true));
+
+    surface.onWireMessage(
+      env('voice_error', { code: 'voice_provider_unavailable', message: 'no provider', fatal: true }),
+    );
+    const panel = await screen.findByTestId('voice-live-unavailable');
+    expect(panel.getAttribute('data-reason')).toBe('unavailable');
+    // A failed start must not leave the microphone open onto nothing.
+    await waitFor(() => expect(surface.getState().capture).toBe('suspended'));
+    expect(screen.getByTestId('voice-live-retry')).toBeTruthy();
+  });
+
+  it('shows the unavailable state in place, leaving the rest of the surface intact', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(
+      env('voice_state', { state: 'error', detail: 'the live engine is unreachable' }),
+    );
+    await screen.findByTestId('voice-live-unavailable');
+    // Nothing else on the surface was destroyed: the lane still names its worker
+    // and the typed fallback is still reachable.
+    expect(screen.getByTestId('drive-mode-voice-live')).toBeTruthy();
+    expect(screen.getByTestId('voice-live-typed-fallback')).toBeTruthy();
+  });
+
+  it('renders a transport-level refusal that named no lane (M8)', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage({
+      type: 'voice_error',
+      version: VOICE_WIRE_VERSION,
+      laneId: '',
+      attachmentGeneration: 0,
+      code: 'voice_internal_error',
+      message: 'Voice frame rate exceeded; the frame was dropped.',
+      fatal: false,
+    });
+    const line = await screen.findByTestId('voice-live-transport-refusal');
+    expect(line.getAttribute('data-code')).toBe('voice_internal_error');
+    expect(line.textContent).toContain('Voice frame rate exceeded');
+    // It is a transport notice, not a lane error and not a lane refusal.
+    expect(screen.queryByTestId('voice-live-error')).toBeNull();
+    expect(screen.queryByTestId('voice-live-refusal')).toBeNull();
   });
 });

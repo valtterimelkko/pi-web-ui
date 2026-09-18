@@ -1,0 +1,28 @@
+{
+  "capturedAt": "2026-09-18T03:45:46.887Z",
+  "spokenText": "ask whether the retry handler drops the token",
+  "presentationFrame": {
+    "type": "proposal_presentation",
+    "version": 1,
+    "laneId": "voice-lab-worker:lab",
+    "attachmentGeneration": 0,
+    "proposalId": "prop-lab-1",
+    "presentedVariant": "tidied",
+    "completed": true
+  },
+  "confirmFrame": {
+    "type": "proposal_confirm",
+    "version": 1,
+    "laneId": "voice-lab-worker:lab",
+    "attachmentGeneration": 0,
+    "requestId": "voicereq-1-cued8w",
+    "proposalId": "prop-lab-1",
+    "variant": "tidied",
+    "idempotencyKey": "voiceidem-1-3n18eidi",
+    "proposalRef": {
+      "version": 3,
+      "sha256": "ab12777777777777777777777777777777777777777777777777777777777777"
+    }
+  },
+  "presentationReportedBeforePlaybackEnded": false
+}

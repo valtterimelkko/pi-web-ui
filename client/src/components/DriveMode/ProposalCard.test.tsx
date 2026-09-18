@@ -97,9 +97,8 @@ describe('ProposalCard', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('offers a read-back which reports completion (and an interrupted stop point)', () => {
+  it('starts a read-back on click and reports NOTHING from the click itself (H3)', () => {
     const onReadBack = vi.fn();
-    const onPresentationReport = vi.fn();
     render(
       <ProposalCard
         proposal={proposal({ presentedVariant: 'original' })}
@@ -107,12 +106,50 @@ describe('ProposalCard', () => {
         onConfirm={noop}
         onCancel={noop}
         onReadBack={onReadBack}
-        onPresentationReport={onPresentationReport}
       />,
     );
     fireEvent.click(screen.getByTestId('proposal-readback'));
+    // The read-back was asked for, exactly once, naming what is on screen...
+    expect(onReadBack).toHaveBeenCalledTimes(1);
     expect(onReadBack).toHaveBeenCalledWith('original');
-    expect(onPresentationReport).toHaveBeenCalledWith(true);
+    // ...and NOTHING was reported as presented: this card has no way to say
+    // "completed", because a click is not a playback. Presentation is decided by
+    // the surface, from the utterance's own end event (H3).
+    expect(screen.getByTestId('proposal-readback').getAttribute('data-reading')).toBe('false');
+    expect(screen.getByTestId('proposal-card').getAttribute('data-presentation-status')).toBe('pending');
+    expect((screen.getByTestId('proposal-confirm') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows a read-back in flight and does not offer to start it twice', () => {
+    render(
+      <ProposalCard
+        proposal={proposal()}
+        status="pending"
+        readingBack
+        onConfirm={noop}
+        onCancel={noop}
+        onReadBack={noop}
+      />,
+    );
+    const button = screen.getByTestId('proposal-readback') as HTMLButtonElement;
+    expect(button.getAttribute('data-reading')).toBe('true');
+    expect(button.textContent).toContain('Reading it back');
+    expect(button.disabled).toBe(true);
+  });
+
+  it('says so when this host cannot read a proposal back aloud', () => {
+    render(
+      <ProposalCard
+        proposal={proposal()}
+        status="pending"
+        readBackSupported={false}
+        onConfirm={noop}
+        onCancel={noop}
+        onReadBack={noop}
+      />,
+    );
+    expect((screen.getByTestId('proposal-readback') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('proposal-confirm') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('marks a visible tidy rather than claiming it is the operator words exactly', () => {

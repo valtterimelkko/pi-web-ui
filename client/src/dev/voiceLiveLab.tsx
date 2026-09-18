@@ -27,6 +27,7 @@ import { createElement } from 'react';
 import {
   VOICE_AUDIO_OUTPUT_MIME,
   VOICE_WIRE_VERSION,
+  type VoiceClientMessage,
   type VoiceServerMessage,
 } from '@pi-web-ui/shared';
 import { createSpeechArbiter } from '../lib/speechArbiter';
@@ -55,6 +56,8 @@ interface LabState {
   chimePlays: Array<{ variant: string; at: number }>;
   captureChunksSent: number;
   activityReports: Array<{ state: string; at: number }>;
+  /** Every frame the surface handed to its transport (evidence: the echo). */
+  sentFrames: VoiceClientMessage[];
 }
 
 const state: LabState = {
@@ -66,7 +69,15 @@ const state: LabState = {
   chimePlays: [],
   captureChunksSent: 0,
   activityReports: [],
+  sentFrames: [],
 };
+
+/** How long a lane start may stay unanswered in this lab (M7 evidence). */
+let laneProbeTimeoutMs = 12_000;
+
+/** The exact reason a cascade server gives for refusing a live lane. */
+const CASCADE_DETAIL =
+  'live voice is disabled on this server (VOICE_MODE_ENGINE=cascade); the push-to-talk cascade is now serving this lane';
 
 function now(): number {
   return Math.round(performance.now() * 1000) / 1000;
@@ -144,6 +155,7 @@ function ensureSurface(): VoiceLiveSurface {
     factories: {
       createAudioContext: () => context as AudioContext,
       createPlaybackBackend: () => backend,
+      laneProbeTimeoutMs,
       getUserMedia: async () => {
         if (!virtualMic) throw new Error('virtual microphone not armed');
         // The production path calls this exact API; the lab substitutes the
@@ -152,6 +164,10 @@ function ensureSurface(): VoiceLiveSurface {
       },
     },
     send: (frame) => {
+      // The lab's transport seam: every frame the production surface builds is
+      // recorded verbatim, so the spec can assert what really went out (the
+      // proposalRef echo, the presentation report after playback).
+      state.sentFrames.push(frame as VoiceClientMessage);
       if (frame.type === 'voice_audio_chunk') state.captureChunksSent += 1;
       log('send', frame.type);
     },
@@ -296,9 +312,42 @@ function snapshot(): unknown {
     },
     events: [...state.events],
     chimePlays: [...state.chimePlays],
+    sentFrames: state.sentFrames.map((frame) => ({ ...frame })),
     surface: active.getState(),
     arbiter: arbiter.getState(),
   };
+}
+
+/** Frames of one type the surface has sent, oldest first. */
+function sentFramesOfType(type: string): VoiceClientMessage[] {
+  return state.sentFrames.filter((frame) => frame.type === type);
+}
+
+/** The frames a cascade server sends back for a lane it will not serve live. */
+function deliverCascadeUnavailable(): void {
+  deliver(serverMessage('voice_state', { state: 'error', detail: CASCADE_DETAIL }));
+  deliver(
+    serverMessage('voice_error', {
+      code: 'voice_provider_unavailable',
+      message: CASCADE_DETAIL,
+      fatal: true,
+    }),
+  );
+  render();
+}
+
+/** The frame the voice-frame budget limiter sends when nothing named a lane. */
+function deliverTransportRefusal(): void {
+  deliver({
+    type: 'voice_error',
+    version: VOICE_WIRE_VERSION,
+    laneId: '',
+    attachmentGeneration: 0,
+    code: 'voice_internal_error',
+    message: 'Voice frame rate exceeded; the frame was dropped.',
+    fatal: false,
+  });
+  render();
 }
 
 // ── Wire fixtures for the visual (React) section ────────────────────────────
@@ -433,10 +482,27 @@ window.__voiceLiveLab = {
   deliverReceipt,
   deliverParking,
   deliverResolved,
+  /** M7: open the lane on the wire (voice_session_start). */
+  startLane: () => ensureSurface().startLane(),
+  /** M7: the lane's honest availability from the surface's own state. */
+  laneState: () => ensureSurface().getState().lane,
+  // M8: a refusal that carried no lane envelope (the rate limiter's answer).
+  deliverTransportRefusal,
+  // M7: the pair a cascade server sends instead of serving the lane live.
+  deliverCascadeUnavailable,
+  /** H3: read the live proposal back aloud (the production read-back path). */
+  readBack: (variant?: 'original' | 'tidied') => ensureSurface().readBackProposal(variant),
+  sentFrames: (type?: string) => (type ? sentFramesOfType(type) : state.sentFrames.map((frame) => ({ ...frame }))),
+  /** Must be called before arm(): the surface reads it when it is built. */
+  setLaneProbeTimeout: (ms: number) => {
+    laneProbeTimeoutMs = ms;
+    return laneProbeTimeoutMs;
+  },
   resetEvents: () => {
     state.events.length = 0;
     state.activityReports.length = 0;
     state.chimePlays.length = 0;
+    state.sentFrames.length = 0;
     render();
     return true;
   },

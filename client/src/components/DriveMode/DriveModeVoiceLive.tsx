@@ -45,10 +45,27 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
   const listening = state.capture === 'live';
   const proposal = controllerSnapshot.proposal;
   const status = proposal ? (proposal.superseded ? 'stale' : proposal.proposal.presentation.completed ? 'presented' : 'pending') : 'stale';
+  // M7: honest reachability. When the lane cannot be served at all, the surface
+  // says so (with the host's/server's own reason) instead of offering a control
+  // that cannot work.
+  const laneUnavailable = state.lane.state === 'unavailable' || state.lane.state === 'unsupported';
+  const lastTransportRefusal = controllerSnapshot.transportRefusals[controllerSnapshot.transportRefusals.length - 1];
 
   // Both publish through the surface, so `useSyncExternalStore` re-renders.
   const startListening = useCallback(async () => {
+    // Open the lane on the wire FIRST (voice_session_start), then start capture:
+    // a lane that is never opened server-side is not a lane at all, and capture
+    // for it would be a microphone open onto nothing.
+    const lane = surface.startLane();
+    if (lane === 'unsupported') return;
     await surface.startCapture();
+    const after = surface.getState();
+    if (
+      after.capture === 'live' &&
+      (after.lane.state === 'unavailable' || after.lane.state === 'unsupported')
+    ) {
+      await surface.stopCapture('the voice lane is unavailable');
+    }
   }, [surface]);
 
   const stopListening = useCallback(async () => {
@@ -63,6 +80,7 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
         className="w-full max-w-md rounded-2xl border border-outline-default dark:border-outline-default-dark bg-surface dark:bg-surface-dark px-4 py-3"
         aria-label="Native voice lane"
         data-testid="voice-live-status"
+        data-lane={state.lane.state}
       >
         <header className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -85,27 +103,68 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
           </span>
         </header>
 
-        {/* Honest capture state: never claim to listen while suspended. */}
-        <p
-          className={`mt-2 text-xs ${
-            listening ? 'text-content-muted dark:text-content-muted-dark' : 'text-amber-600 dark:text-amber-400'
-          }`}
-          data-testid="voice-live-listening-state"
-          data-listening={listening ? 'true' : 'false'}
-          data-capture={state.capture}
-        >
-          {listening
-            ? captureMode === 'push-to-talk'
-              ? 'Listening while you hold the button.'
-              : 'Listening — open mic. Talking over the talker ducks it; it never stops you being heard.'
-            : state.capture === 'error'
-              ? `Microphone unavailable — ${state.captureDetail ?? 'unknown error'}. Push-to-talk and typing still work.`
-              : state.capture === 'suspended'
-                ? `Listening suspended${state.captureDetail ? ` — ${state.captureDetail}` : ''}. Push-to-talk and typing still work.`
-                : 'Not listening yet. Start the microphone, or type in the composer.'}
-        </p>
+        {/* M7: the honest unavailable state. A lane that cannot start is named,
+            with the host's or the server's own words, and offers a retry; the
+            surrounding Drive Mode surface is untouched by the failure. */}
+        {laneUnavailable && (
+          <div
+            className="mt-2 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-3 py-2"
+            data-testid="voice-live-unavailable"
+            data-reason={state.lane.state}
+            role="status"
+          >
+            <p className="inline-flex items-center gap-1 text-xs font-medium text-amber-800 dark:text-amber-200">
+              <AlertTriangle size={13} aria-hidden />
+              {state.lane.state === 'unsupported'
+                ? 'Native voice lane unavailable on this browser'
+                : 'Native voice lane unavailable'}
+            </p>
+            <p className="mt-1 text-[11px] text-amber-800 dark:text-amber-200" data-testid="voice-live-unavailable-detail">
+              {state.lane.detail ?? 'no reason was reported'}
+            </p>
+            <p className="mt-1 text-[11px] text-content-muted dark:text-content-muted-dark">
+              Voice Mode's existing microphone path is unaffected; nothing here was sent to the worker.
+            </p>
+            {state.lane.state === 'unavailable' && (
+              <button
+                type="button"
+                data-testid="voice-live-retry"
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-400 dark:border-amber-700 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-200"
+                onClick={() => {
+                  surface.retryLane();
+                }}
+              >
+                <Mic size={13} aria-hidden />
+                Try the lane again
+              </button>
+            )}
+          </div>
+        )}
 
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        {/* Honest capture state: never claim to listen while suspended; and no
+            capture controls at all when the lane cannot be served (M7). */}
+        {!laneUnavailable && (
+          <>
+            <p
+              className={`mt-2 text-xs ${
+                listening ? 'text-content-muted dark:text-content-muted-dark' : 'text-amber-600 dark:text-amber-400'
+              }`}
+              data-testid="voice-live-listening-state"
+              data-listening={listening ? 'true' : 'false'}
+              data-capture={state.capture}
+            >
+              {listening
+                ? captureMode === 'push-to-talk'
+                  ? 'Listening while you hold the button.'
+                  : 'Listening — open mic. Talking over the talker ducks it; it never stops you being heard.'
+                : state.capture === 'error'
+                  ? `Microphone unavailable — ${state.captureDetail ?? 'unknown error'}. Push-to-talk and typing still work.`
+                  : state.capture === 'suspended'
+                    ? `Listening suspended${state.captureDetail ? ` — ${state.captureDetail}` : ''}. Push-to-talk and typing still work.`
+                    : 'Not listening yet. Start the microphone, or type in the composer.'}
+            </p>
+
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
           {listening ? (
             <button
               type="button"
@@ -127,7 +186,6 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
               Start listening
             </button>
           )}
-
           <div className="flex items-center gap-1" role="radiogroup" aria-label="Capture mode">
             {(['open-mic', 'push-to-talk'] as VoiceCaptureMode[]).map((mode) => (
               <button
@@ -193,6 +251,40 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
             </span>
           )}
         </div>
+        </>
+        )}
+
+        {/* The read-back of the composed draft: the click starts playback, and
+            the surface reports "presented" only when the utterance ends (H3). */}
+        {controllerSnapshot.proposal && state.readBack.state === 'interrupted' && (
+          <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400" data-testid="voice-live-readback-interrupted">
+            Read-back stopped early
+            {state.readBack.stoppedAtChar !== undefined ? ` at character ${state.readBack.stoppedAtChar}` : ''}
+            {state.readBack.detail ? ` — ${state.readBack.detail}` : ''}. Confirm stays refused until it is read in
+            full.
+          </p>
+        )}
+        {controllerSnapshot.proposal && state.readBack.state === 'unsupported' && (
+          <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400" data-testid="voice-live-readback-unsupported">
+            {state.readBack.detail ?? 'This browser cannot read it back aloud'} — the confirmation stays refused until
+            the read-back rule is satisfied.
+          </p>
+        )}
+
+        {/* Transport-level refusals (M8): the server refused a frame before it
+            could name a lane (e.g. the voice-frame rate budget). Rendered, not
+            dropped, and clearly not a lane event. */}
+        {lastTransportRefusal && (
+          <p
+            className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400"
+            data-testid="voice-live-transport-refusal"
+            data-code={lastTransportRefusal.code}
+            data-fatal={lastTransportRefusal.fatal ? 'true' : 'false'}
+          >
+            Voice transport {lastTransportRefusal.fatal ? 'stopped' : 'refused a frame'}: {lastTransportRefusal.code}
+            {lastTransportRefusal.message ? ` — ${lastTransportRefusal.message}` : ''}
+          </p>
+        )}
 
         {lastCaption && (
           <p
@@ -227,9 +319,14 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
           proposal={proposal.proposal}
           status={status}
           staleDetail={proposal.superseded ? 'a newer proposal replaced this one' : undefined}
+          readingBack={
+            state.readBack.state === 'reading' &&
+            state.readBack.proposalId === proposal.proposal.proposalId
+          }
+          readBackSupported={state.readBack.supported}
           onConfirm={(variant) => controller.confirmProposal({ variant })}
           onCancel={() => controller.cancelProposal()}
-          onPresentationReport={(completed) => controller.reportPresentation({ completed })}
+          onReadBack={(variant) => void surface.readBackProposal(variant)}
         />
       )}
 
