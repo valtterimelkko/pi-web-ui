@@ -371,6 +371,44 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (WAVE 3 CLOSEOUT — independent review R landed; two correction children dispatched `4ae2bcf`).**
+R's review of record (`coordination/R/complete.md`, read-only, zai GLM 5.3 Flash for model-family
+independence) reviewed `b39cc27` and re-ran its probes on post-H `edccdbe`. Gate verdicts: 0, 1, 2,
+6 **SOUND**; 3, 4, 5 **WEAK**. Eleven findings. **I reproduced all four of R's executable probes
+myself on master and confirmed every cited code site**: `PROBE1 RETARGETED=true` (same-generation
+`voice_session_start` silently re-targets the lane's delivery worker — contract §3.2 "never
+retargets"); `PROBE2 deliveries=1` (a confirm with no echo and no presentation released
+immediately; `proposal_created`'s announced `presentation:{completed:false}` is never seeded and
+the identity is fabricated from the live proposal); `PROBE3 deliveries=2 releaseRecords=1`
+(concurrent confirms sharing an idempotency key); `PROBE4 lanesRetained=64` (lane table caps at 64
+and never evicts — 64 page loads permanently exhaust voice until restart, refused as
+`voice_internal_error`). Weaknesses confirmed at code level: `injectContext` has **zero** production
+callers (plan Phase-3 property is dead code in the composed system); the normaliser lets lead-in
+channel shapes reach the worker; no echo/self-transcript exclusion; the budget refusal is
+unrenderable client-side; the card's typed Confirm is permanently disabled in the real UI while the
+spoken path bypasses presentation (intent §18.2: the spoken read-back itself constitutes the
+presentation — so both paths must require the read-back). R's negative results are as valuable:
+instruction-bearing client frames, model output reaching the release path, double delivery of one
+proposal, classifier bypass, audio-ceiling gaming and forged generations all held.
+
+**Corrections dispatched (Wave 3 closeout, two children, disjoint paths, briefs `4ae2bcf`):**
+- **K (server safety & honesty)** — session `01a0b286-ebe3-711b-bb08-c2cfa2ead195`,
+  clinepass/cline-pass/deepseek-v4.1-flash high, worktree `/root/pi-web-ui-wt-corr-server`,
+  branch `fix/voice-corr-server`, lease `0abf06dd-905b-4429-b626-1a3d30afc9df`
+  (owner `voice-exec-20260917-k`). Closes H1, H2, M1, M2, M3, M4, M5, M6, M8 (server half),
+  L1 and H3-server. Owns `voice-live-mount.ts`, `connection.ts`, `talker/**`, `voice/**`.
+- **L (client presentation & reachability)** — session `01a0b286-ef54-711b-bb08-c2d1cfb0cfda`,
+  commandcode/deepseek/deepseek-v4.1-flash high, worktree `/root/pi-web-ui-wt-corr-client`,
+  branch `fix/voice-corr-client`. Closes H3-client (read-back really plays; presentation reported
+  only after playback; typed Confirm enabled once presented and carrying the `proposalRef` echo),
+  M7 (the surface is mounted in the app with an honest unavailable state — Phase 7 prerequisite)
+  and M8-client. Owns `client/**`.
+Watches `ww_11`/`ww_12` (goal_end + goal_state paused + PARENT-INPUT-NEEDED); backstop 90 min.
+Both briefs require RED-first tests per finding and, for L, real-browser Playwright evidence.
+**Phase 7 (real-ear) waits for these to land and pass conductor verification** — shipping known
+safety gaps into an operator trial would be wrong. R's session cleaned up (watch cancelled, lease
+released). Worktree isolation recipe applied and resolver-verified (OWN TREE) before dispatch.
+
 **2026-09-18 (GATE 8 CLOSED — H verified and merged `edccdbe`; R still reviewing).**
 H's 17-file diff is exactly its owned paths (config, session-registry, voice/**,
 websocket/{connection,voice-live-mount}, security/rate-limit, observability/operational-metrics,
