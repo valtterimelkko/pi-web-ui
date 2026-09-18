@@ -3,9 +3,12 @@
 > **Class:** conductor's live execution ledger — strategy, checkpoint and progression
 > record for the multi-agent execution of
 > [`VOICE-MODE-EXECUTION-PLAN.md`](./VOICE-MODE-EXECUTION-PLAN.md).
-> **Status:** EXECUTING — Waves 0–2 complete and merged; Wave 3 closeout in flight
-> (H merged; review R delivered and adjudicated; corrections **L merged** `9caa44d`,
-> **K in flight**). No production deploy/restart has been performed or authorised.
+> **Status:** Waves 0–3 COMPLETE and merged (contract, kernel, audit, bridge, client,
+> regression, mount, rollout, server/client corrections, receipt UI). **Gate 5 re-proven
+> through the corrected code** (`2900997`); an independent verifier is re-running the live
+> slice. **Phase 7 (real-ear) is with the operator** (handed over 2026-09-18); Phase 8
+> implementation is done and its production-readiness checklist is prepared. **No production
+> deploy/restart has been performed or authorised.**
 > See §12 for the live progression log.
 > **Rule of this file:** current state, not a completion claim — read before acting.
 > **Owner start signal:** received 2026-09-17 (goal engine activated); owner decisions in §11.
@@ -18,8 +21,8 @@
 > execution).
 >
 > Conductor session: `01a0b0ef-ab27-7359-867b-6aa4a17a6d11` (pi CLI, cwd
-> `/root/pi-web-ui`). Last updated: 2026-09-18 (Wave 3 closeout: R adjudicated, L
-> merged, K in flight).
+> `/root/pi-web-ui`). Last updated: 2026-09-18 (Gate 5 re-proven through the corrected
+> code; independent verification of the harness fix in flight; Phase 7 with the operator).
 
 ---
 
