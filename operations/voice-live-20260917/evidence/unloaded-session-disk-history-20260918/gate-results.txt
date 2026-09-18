@@ -1,0 +1,24 @@
+Gate run 2026-09-18 (commit 0c4ba97, pre-push, base d481305)
+
+typecheck: exit 0
+lint ratchet: exit 0
+{
+  "base": "d4813051679ee8a61469047a38d763124ab08725",
+  "warnings": 324,
+  "ceiling": 326,
+  "checkedChangedFiles": 6,
+  "violations": []
+}
+
+lint: ✖ 315 problems (0 errors, 315 warnings)
+
+test:coverage exit 0:
+ Test Files  9 passed (9)
+ Test Files  440 passed (440)
+ Test Files  146 passed (146)
+ Test Files  8 passed (8)
+occurrences of 'failed' in the suite log: 0
+
+docs:check-status exit 0 / docs:check-links exit 0 / docs:check-agent-guides exit 0
+
+CI: run 35358663175 'Application correctness' completed success 6m26s; run 35358663182 'Docs checks' success 12s

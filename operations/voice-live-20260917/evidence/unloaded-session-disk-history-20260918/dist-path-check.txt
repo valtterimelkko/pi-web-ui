@@ -1,0 +1,3 @@
+$ node /tmp/dist-path-check.mjs   # shipped artifact, real session registry, unloaded-session manager
+DIST: entries=162 total=162 mode=full chars=49046
+EXIT=0
