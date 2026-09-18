@@ -63,6 +63,23 @@ describe('L1: status-broadcast timer ownership', () => {
     expect(multi.getAllSessionStatuses).not.toHaveBeenCalled(); // interval cleared
   });
 
+  it('refreshes voice worker statuses on each poll when a voice mount exists (M4)', async () => {
+    const mgr = new WebSocketConnectionManager();
+    const multi = fakeMulti();
+    (mgr as any).multiSessionManager = multi;
+    const refreshWorkerStatuses = vi.fn().mockResolvedValue(undefined);
+    (mgr as any).voiceLiveMount = {
+      refreshWorkerStatuses,
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.advanceTimersByTime(1000);
+    expect(refreshWorkerStatuses).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(refreshWorkerStatuses).toHaveBeenCalledTimes(2);
+    await mgr.close();
+  });
+
   it('repeated construct/close does not accumulate intervals', async () => {
     const closedMultis = [];
     for (let i = 0; i < 3; i++) {

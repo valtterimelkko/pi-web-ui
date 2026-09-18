@@ -210,9 +210,10 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
     const release = lastOfType('talker_turn_result');
     expect(release?.message.phase).toBe('released');
     expect(release?.message.receiptAck ?? undefined).toBeUndefined();
-    // Both batch parts release, joined verbatim (plan §4.2 multi-part draft):
+    // Both batch parts release, joined semi-verbatim (plan §4.2 multi-part
+    // draft; P25/M5: the commission channel is removed before release).
     expect(piDelivery.deliveredTexts()).toEqual([
-      'please tell the worker to add a smoke test to the login flow\nand also deploy staging',
+      'add a smoke test to the login flow\nand also deploy staging',
     ]);
   });
 
@@ -225,10 +226,11 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
     expect(result?.message.phase).toBe('released');
     expect(result?.message.reply).toBe('sending that now');
     expect(result?.message.reply).toBe(RELEASE_ACK);
-    // Relay fidelity: the worker received the operator's verbatim words.
-    expect(piDelivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    // Relay fidelity is SEMI-verbatim (P25/M5): the operator's own words with
+    // the commission channel removed, so a worker never reads "tell the worker".
+    expect(piDelivery.deliveredTexts()).toEqual(['add a smoke test to the login flow']);
     const released = result?.message.released as { text: string; utteranceId: number; delivery: { outcome: string } };
-    expect(released.text).toBe(INSTRUCTION);
+    expect(released.text).toBe('add a smoke test to the login flow');
     expect(released.delivery.outcome).toBe('delivered');
     // The confirm turn made no model call.
     expect(model.calls.length).toBe(1);
@@ -238,7 +240,7 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
     buildHarness();
     await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: INSTRUCTION });
     await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: CONFIRM });
-    expect(piDelivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(piDelivery.deliveredTexts()).toEqual(['add a smoke test to the login flow']);
 
     await sendBrowserMessage({ type: 'talker_turn', workerSessionId: PATH, utterance: CONFIRM, requestId: 'r4' });
     const result = lastOfType('talker_turn_result');
@@ -248,7 +250,7 @@ describe('H7 talker transport (talker_turn → talker_turn_result)', () => {
     expect(result?.message.phase).toBe('answered');
     expect(result?.message.released ?? null).toBeNull();
     expect(result?.message.reply).toMatch(/nothing is held/i);
-    expect(piDelivery.deliveredTexts()).toEqual([INSTRUCTION]);
+    expect(piDelivery.deliveredTexts()).toEqual(['add a smoke test to the login flow']);
     expect(model.calls.length).toBe(1);
   });
 

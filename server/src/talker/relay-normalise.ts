@@ -114,6 +114,30 @@ const MARKER_PUNCTUATED = /^(?:so|right|and)\b\s*(?:[,;:]\s*|\s+\u2014\s+)/i;
  */
 const POLITENESS = /^(?:could|can|would|will)\s+you\s+(?:please\s+)?(?:be\s+able\s+to\s+)?/i;
 
+/**
+ * M5 (review R, P25 failure class): acknowledgement/lead-in particles directly
+ * in front of a commission frame — "yeah tell the worker to …", "so, please ask
+ * it …". This is the operator's channel, not their instruction, and leaving it
+ * in is what made a worker dispatch sub-agents. Closed list, and stripped ONLY
+ * when a commission verb follows (optionally behind a politeness prelude), so an
+ * ordinary "yeah, the tests are green" keeps its particle byte-for-byte.
+ */
+const COMMISSION_VERB = '(?:ask|tell|let|pass)\\b';
+const COMMISSION_LEAD_IN = new RegExp(
+  '^(?:(?:all\\s+right|yeah|yep|yup|okay|ok|alright|right|so|well|um|uh|er|erm|please)\\b[\\s,;:]*)+' +
+    `(?=(?:(?:could|can|would|will)\\s+you\\s+(?:please\\s+)?(?:be\\s+able\\s+to\\s+)?)?${COMMISSION_VERB})`,
+  'i'
+);
+
+/**
+ * M5 (review R): a polite interpolation between a commission frame and its
+ * connector — "tell the worker, if you would, to check line 10". Closed list;
+ * only removed INSIDE a parsed commission frame and only when a real connector
+ * follows, so the same phrase in an unrelated sentence is never touched.
+ */
+const POLITE_INTERPOLATION =
+  /^\s*,?\s*(?:if\s+you\s+(?:would|could|don'?t\s+mind|please|like)|if\s+you\s+like|please|if\s+that'?s\s+(?:okay|ok|alright|fine))\s*,?\s*/i;
+
 /** The addressee vocabulary for commission frames. Deliberately closed:
  *  'the worker' is unambiguous (this is the talker's own relay), and 'it' is
  *  the pronoun the operator actually uses for the worker in voice mode.
@@ -141,12 +165,17 @@ function frameConsumer(verb: 'ask' | 'tell', connectorsKept: boolean): (work: st
   return (work: string): number | null => {
     const headMatch = head.exec(work);
     if (!headMatch) return null;
-    const after = work.slice(headMatch[0].length);
-    const withConnector = /^\s+(?:to|that)\s+/i.exec(after);
-    if (withConnector) return headMatch[0].length + withConnector[0].length;
+    const afterHead = work.slice(headMatch[0].length);
+    // M5: skip a closed-list polite interpolation before the connector, and
+    // count it as part of the consumed frame (it is channel, not content).
+    const polite = POLITE_INTERPOLATION.exec(afterHead);
+    const base = headMatch[0].length + (polite ? polite[0].length : 0);
+    const after = polite ? afterHead.slice(polite[0].length) : afterHead;
+    const withConnector = /^\s*(?:to|that)\b[\s,;:]+/i.exec(after);
+    if (withConnector) return base + withConnector[0].length;
     const withColon = /^\s*[:\u2014-]\s*/.exec(after);
     if (withColon && /\S/.test(after.slice(withColon[0].length))) {
-      return headMatch[0].length + withColon[0].length;
+      return base + withColon[0].length;
     }
     if (connectorsKept) {
       const kept = /^\s+(?:if|whether|about|for|what|when|where|why|how|which|who|whose)\b/i.exec(after);
@@ -154,7 +183,7 @@ function frameConsumer(verb: 'ask' | 'tell', connectorsKept: boolean): (work: st
         // Consume the frame together with its trailing whitespace so the
         // removal record keeps the phrase whole ('ask the worker ').
         const ws = /^\s*/.exec(after);
-        return headMatch[0].length + (ws ? ws[0].length : 0);
+        return base + (ws ? ws[0].length : 0);
       }
     }
     return null;
@@ -246,6 +275,15 @@ export function normaliseRelayText(raw: string): RelayNormalisation {
       }
     }
     if (consumed !== null) continue;
+    // M5: the lead-in particle in front of a commission frame ('yeah tell the
+    // worker to …'). Only when a commission verb follows — ordinary speech
+    // keeps its particle.
+    const leadIn = COMMISSION_LEAD_IN.exec(work);
+    if (leadIn?.[0]) {
+      record(leadIn[0]);
+      work = work.slice(leadIn[0].length);
+      continue;
+    }
     const politeness = POLITENESS.exec(work);
     if (politeness?.[0]) {
       record(politeness[0]);
