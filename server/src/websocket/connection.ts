@@ -33,7 +33,7 @@ import { isTransferSessionContext, isTalkerTurnMessage, isTalkerDigestMessage } 
 // Phase 5 (Track F): the Voice Mode mount. Constructed lazily on the first
 // voice frame, so a socket that never speaks the voice protocol sees exactly
 // the behaviour it saw before this wiring existed.
-import { VoiceLiveMount, createLogEvidenceSink, VOICE_LANE_CAPACITY_CODE, type VoiceMountRefusalCode } from './voice-live-mount.js';
+import { VoiceLiveMount, createLogEvidenceSink, createVoiceLiveLogger, VOICE_LANE_CAPACITY_CODE, type VoiceMountRefusalCode } from './voice-live-mount.js';
 import {
   isVoiceClientMessageType,
   VOICE_WIRE_VERSION,
@@ -62,6 +62,8 @@ import { withCorrelation, newRequestId } from '../logging/correlation.js';
 import { resolveCanonicalSessionId } from '../observability/session-correlation.js';
 
 const logger = createLogger('WebUI');
+/** Native Voice Mode path logger (component `VoiceLive`) — see voice-live-mount.ts. */
+const voiceLiveLogger = createVoiceLiveLogger();
 
 /**
  * Short operator-facing text for each voice refusal code (contract §6.4).
@@ -4272,13 +4274,16 @@ export class WebSocketConnectionManager {
           const mount = new VoiceLiveMount({
             delivery: deliveries.pi,
             isWorkerBusy: (ref) => this.isWorkerSessionBusy(ref),
+            // The native voice path logs under its own component so a
+            // live-lane problem is separable from general WebUI traffic in
+            // both `DEBUG=` and the diagnostics `?component=` filter.
             serviceLog: {
-              debug: (message, meta) => logger.debug(message, meta ?? ''),
-              info: (message, meta) => logger.info(message, meta ?? ''),
-              warn: (message, meta) => logger.warn(message, meta ?? ''),
-              error: (message, meta) => logger.error(message, meta ?? ''),
+              debug: (message, meta) => voiceLiveLogger.debug(message, meta ?? ''),
+              info: (message, meta) => voiceLiveLogger.info(message, meta ?? ''),
+              warn: (message, meta) => voiceLiveLogger.warn(message, meta ?? ''),
+              error: (message, meta) => voiceLiveLogger.error(message, meta ?? ''),
             },
-            evidence: createLogEvidenceSink(logger),
+            evidence: createLogEvidenceSink(voiceLiveLogger),
             // Phase 8 (Gate 8): the reversible engine flag. Default `cascade`
             // keeps today's behaviour — in cascade mode the mount registers
             // lanes but never opens a provider session or calls the bridge
@@ -4290,11 +4295,11 @@ export class WebSocketConnectionManager {
               noteEngineFallback: (input) => this.talkerSessionRegistry.noteEngineFallback(input),
             },
           });
-          logger.info(`Voice Mode engine selected: ${config.voiceModeEngine}`);
+          voiceLiveLogger.info(`Voice Mode engine selected: ${config.voiceModeEngine}`);
           this.voiceLiveMount = mount;
           return mount;
         } catch (error) {
-          logger.error('Failed to construct the Voice Mode mount:', error);
+          voiceLiveLogger.error('Failed to construct the Voice Mode mount:', error);
           return null;
         }
       })();

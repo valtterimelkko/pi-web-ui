@@ -67,14 +67,27 @@ DEBUG=claude,opencode* LOG_LEVEL=debug
 Canonical components (the names actually used in code): `AntigravityService`,
 `Auth`, `ClaudeChannel`, `ClaudeChannelService`, `ClaudeEventNormalizer`,
 `ClaudeProfiles`, `ClaudeProcessPool`, `ClaudeSdkService`, `ClaudeService`,
-`Config`, `Connection`/`WebUI`, `EventForwarder`, `Extensions`, `Fatal`,
+`ClientVoice`, `Config`, `Connection`/`WebUI`, `EventForwarder`, `Extensions`, `Fatal`,
 `Files`, `Health`, `InternalAPI`, `JSONRPCToRPCConverter`, `MergeCoordinator`,
 `Models`, `MultiSessionManager`, `NotificationManager`, `NotificationStore`,
 `NotificationsRoutes`, `OpenCodeProcessManager`, `OpenCodeService`,
 `OpenCodeSSE`, `PiService`, `Preferences`, `RPCProtocolBridge`, `Server`,
 `SessionCleanup`, `SessionOrchestrator`, `SessionPool`, `SessionRegistry`,
 `SessionRPCClient`, `SessionWatcher`, `SessionWebSocket`, `Stt`, `TerminalManager`,
-`Transfer`, `Tts`, `Usage`, `Worktrees`.
+`Transfer`, `Tts`, `Usage`, `VoiceLive`, `VoiceMode`, `Worktrees`.
+
+Voice Mode uses three of these: **`VoiceLive`** is the native live path (lane
+lifecycle, the structured `voice-kernel` evidence lines, the engine-selection
+record at mount construction, and the bridge's own diagnostics), **`VoiceMode`**
+is the talker/harness turn records, and **`ClientVoice`** is the uploaded
+client error reporter. The two server components are separate on purpose — a
+live-lane problem is separable from the WebSocket traffic that shares `WebUI`:
+
+```bash
+DEBUG=VoiceLive LOG_LEVEL=debug     # only the native live path
+DEBUG=VoiceMode                     # only the talker turn records
+# …or via the diagnostics route: ?component=VoiceLive / ?component=VoiceMode
+```
 
 ### Format (`LOG_FORMAT`)
 

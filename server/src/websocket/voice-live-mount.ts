@@ -82,6 +82,7 @@ import type { VoiceModeEngine } from '../config.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 // Defence in depth for the L1 log-hygiene fix: the evidence sink projects text
 // fields to a bounded excerpt AND runs the logging scrubber over the result.
+import { createLogger, type Logger } from '../logging/logger.js';
 import { safeLogValue } from '../logging/safe-record.js';
 
 // ── The commission-frame predicate (machine, narrow, model-free) ─────────────
@@ -1644,6 +1645,23 @@ export function projectEvidenceEvent(event: Record<string, unknown>): Record<str
     out[`${field}Truncated`] = value.length > EVIDENCE_EXCERPT_MAX_CHARS;
   }
   return out;
+}
+
+/** Log component for the native Voice Mode path (bridge, lane lifecycle, kernel evidence). */
+export const VOICE_LIVE_LOG_COMPONENT = 'VoiceLive';
+
+/**
+ * The native path's own logger.
+ *
+ * The talker/harness path already logs as `VoiceMode`; until this factory the
+ * native path shared the generic `WebUI` component (the mount is wired from
+ * `connection.ts`'s module logger), so neither `DEBUG=` nor the diagnostics
+ * `?component=` filter could isolate a live-lane problem from ordinary
+ * WebSocket traffic. One home for the name, one factory, both documented in
+ * docs/OBSERVABILITY.md.
+ */
+export function createVoiceLiveLogger(): Logger {
+  return createLogger(VOICE_LIVE_LOG_COMPONENT);
 }
 
 /**
