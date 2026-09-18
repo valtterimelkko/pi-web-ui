@@ -371,6 +371,31 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (Wave 2 F in flight — backstop reconciled; F has already run Gate 5 and with real findings).**
+Backstop `deadline-3950c64b` expired; **expiry ≠ completion** — F was verified
+alive and productive (goal running, session busy, 619 messages, new files:
+`server/src/websocket/voice-live-mount.ts` (995 lines) + its 451-line test,
+`scripts/voice-live-lab/lib/voice-slice/*` (slice runner 1278 lines +
+disposable-server/operator-audio/ws-client), and `evidence/F/` already carrying
+`gate5-run.txt`, `byte-fidelity-audit.json`, `gate-leak-audit.json`,
+`negative-control.json`). Backstop re-armed as `deadline-5e079e2b` until 01:53Z;
+`ww_6` still armed for `goal_end`. F's interim **FINDINGS.md** documents four
+issues it hit while wiring the real system, each worked around inside its own
+owned paths without touching frozen code: **F-1** (high) tool acknowledgements
+scheduled `SILENT` end the turn with no speech — Gemini Live calls the declared
+function and the operator hears nothing; the mount wraps the provider session to
+re-schedule acknowledgements `WHEN_IDLE` (durable fix is a Track-B/parent
+decision on where the scheduling belongs). **F-2** (high) the generic
+`wsMessageLimiter` (60 msg/min) drops the operator's audio frames (~10–50/s);
+the mount exempts voice frames with a bounded per-client budget (1200 frames /
+2 s) — the generic limiter is unchanged for every other message. **F-3**
+(medium) `offer_ask_worker` is emitted as `tool_call` with no wire form and is
+deliberately not turned into a kernel offer — an intent §19.4 capability
+decision, not a Phase-5 convenience. **F-4** (low) a mid-run steer is only
+visible in the worker store at the worker's turn boundary; the runner polls the
+worker's own record for up to 45 s so byte fidelity is proven from the worker,
+not the delivery call. Durable-fix ownership will be decided at handback review.
+
 **2026-09-18 (GATE 6 CLOSED — G merged `e997d2a`; an npm incident damaged the main checkout's `node_modules` and was repaired).**
 **G verified and merged.** Gate 6 re-run by me: **3 files / 30 tests in 1.8–1.9 s**
 (bound < 20 s). The suite drives the **real** kernel/voice code (imports
