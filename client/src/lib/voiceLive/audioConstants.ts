@@ -40,13 +40,28 @@ export const VOICE_CAPTURE_MAX_PENDING_CHUNKS = 50;
  *  clipped (contract §5.2, P21). 40 ms. */
 export const VOICE_CAPTURE_PREROLL_FRAMES = 2;
 
-/** Bounded playback queue: 2 s of unplayed model audio. On overflow the OLDEST
- *  unplayed chunk is dropped and surfaced; the current utterance is never
- *  hard-stopped (ducking replaces stopping, N5). */
+/**
+ * Bounded playback queue: 2 s of unplayed model audio. This is the SCHEDULING
+ * horizon — how far ahead of the clock audio is booked — and it is not a cap on
+ * how much audio the lane may hold (see the backlog bound below).
+ */
 export const VOICE_PLAYBACK_MAX_QUEUED_MS = 2_000;
 
-/** Accepted-but-not-yet-booked chunks: 50 × 20 ms = 1 s of backlog. */
-export const VOICE_PLAYBACK_MAX_PENDING_CHUNKS = 50;
+/**
+ * The backlog bound: how much accepted-but-not-yet-booked audio the scheduler
+ * will hold, measured in AUDIO rather than in chunks.
+ *
+ * Why it is measured in audio (2026-09-18): it used to be a count (50 chunks),
+ * which silently assumed 20 ms chunks. The live lane's model audio arrives in
+ * 100 ms chunks at ~4x playback speed (measured on a real Gemini Live lane: 9.9 s
+ * of speech delivered in 2.1 s), so 50 chunks is 5 s of speech — and a long
+ * answer therefore had its middle thrown away mid-sentence. The bound exists to
+ * bound MEMORY, not to keep the client near-live, and it must comfortably hold
+ * the unplayed surplus of one answer: at the measured rate that surplus is about
+ * 0.75x the answer's duration, so 60 s covers answers up to ~80 s of speech for
+ * about 5.8 MB.
+ */
+export const VOICE_PLAYBACK_MAX_PENDING_MS = 60_000;
 
 // ── Local voice-activity detection (scheduling signal only, never authority) ─
 

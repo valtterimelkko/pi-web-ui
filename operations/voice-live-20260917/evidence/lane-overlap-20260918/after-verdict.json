@@ -1,0 +1,16 @@
+{
+  "verdict": "clean",
+  "findings": [],
+  "summary": {
+    "chunks": 99,
+    "scheduled": 99,
+    "bookedMs": 8770,
+    "bookedSpanMs": 8770,
+    "overlapMs": 0,
+    "strandedMs": 0,
+    "droppedChunks": 0,
+    "audioContexts": 0,
+    "mountedLaneSurfaces": 0,
+    "laneIds": 1
+  }
+}

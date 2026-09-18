@@ -1,0 +1,199 @@
+{
+  "captureVersion": "voice-lane-lab.capture/1",
+  "workerSessionId": "01a0b569-afe2-75dd-85fb-81a60e0a43ea",
+  "laneId": "voice-lane-lab-1",
+  "operatorQuestion": {
+    "text": "Please summarise what you can see about this session in a few sentences, and then tell me what you would check first and why.",
+    "durationMs": 7941.1875,
+    "rms": 0.04404934837354265
+  },
+  "transcripts": [
+    {
+      "atMs": 1789750007366,
+      "speaker": "operator",
+      "text": "Please summarize what you can see about this session in a few sentences and then tell me what you would check first and why.",
+      "final": false
+    },
+    {
+      "atMs": 1789750008017,
+      "speaker": "operator",
+      "text": "Please summarize what you can see about this session in a few sentences and then tell me what you would check first and why.",
+      "final": true
+    },
+    {
+      "atMs": 1789750008962,
+      "speaker": "talker",
+      "text": "The worker session is ",
+      "final": false
+    },
+    {
+      "atMs": 1789750009229,
+      "speaker": "talker",
+      "text": "not currently loaded",
+      "final": false
+    },
+    {
+      "atMs": 1789750009555,
+      "speaker": "talker",
+      "text": " on this server.",
+      "final": false
+    },
+    {
+      "atMs": 1789750009770,
+      "speaker": "talker",
+      "text": " Because the status is",
+      "final": false
+    },
+    {
+      "atMs": 1789750010038,
+      "speaker": "talker",
+      "text": " idle with no loaded history,",
+      "final": false
+    },
+    {
+      "atMs": 1789750010206,
+      "speaker": "talker",
+      "text": " there's nothing",
+      "final": false
+    },
+    {
+      "atMs": 1789750010468,
+      "speaker": "talker",
+      "text": " available for me to check",
+      "final": false
+    },
+    {
+      "atMs": 1789750010736,
+      "speaker": "talker",
+      "text": " or summarize.",
+      "final": false
+    },
+    {
+      "atMs": 1789750017735,
+      "speaker": "talker",
+      "text": "The worker session is not currently loaded on this server. Because the status is idle with no loaded history, there's nothing available for me to check or summarize.",
+      "final": true
+    }
+  ],
+  "events": [
+    {
+      "atMs": 1789749998623,
+      "type": "voice_state",
+      "detail": "{\"version\":1,\"laneId\":\"voice-lane-lab-1\",\"attachmentGeneration\":1,\"type\":\"voice_state\",\"state\":\"connecting\",\"detail\":\"runtime=pi capture=push-to-talk reading=verbatim\",\"workerActivity\":\"unknown\",\"readingLevel\":\"verbatim\",\"captureMode\":\"push-to-talk\",\"resumption\":{\"resumable\":false}}"
+    },
+    {
+      "atMs": 1789749998957,
+      "type": "voice_state",
+      "detail": "{\"version\":1,\"laneId\":\"voice-lane-lab-1\",\"attachmentGeneration\":1,\"type\":\"voice_state\",\"state\":\"live\",\"workerActivity\":\"unknown\",\"readingLevel\":\"verbatim\",\"captureMode\":\"push-to-talk\",\"resumption\":{\"resumable\":false}}"
+    },
+    {
+      "atMs": 1789749999083,
+      "type": "voice_state",
+      "detail": "{\"version\":1,\"laneId\":\"voice-lane-lab-1\",\"attachmentGeneration\":1,\"type\":\"voice_state\",\"state\":\"live\",\"resumption\":{\"resumable\":true}}"
+    }
+  ],
+  "scheduler": {
+    "module": "client/src/lib/voiceLive/playbackSession.ts",
+    "sourceSha256": "4ca42574b43840a341c38f89a83cab3b9d639285d423921bfaa7e5283a6d9099",
+    "scheduled": 48,
+    "strandedSeqs": [
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98
+    ],
+    "droppedChunks": 1,
+    "faults": [
+      {
+        "reason": "playback_overflow",
+        "detail": "playback backlog exceeded its bound; the oldest unplayed chunk was dropped"
+      }
+    ],
+    "peakQueuedMs": 2088
+  },
+  "page": {
+    "audioContexts": 0,
+    "mountedLaneSurfaces": 0,
+    "laneIds": [
+      "voice-lane-lab-1"
+    ]
+  },
+  "verdict": {
+    "verdict": "stranded_audio",
+    "findings": [
+      {
+        "code": "stranded_audio",
+        "detail": "50 chunk(s), 4500 ms of speech, were accepted and never booked",
+        "measured": {
+          "strandedChunks": 50,
+          "strandedMs": 4500
+        }
+      },
+      {
+        "code": "dropped_audio",
+        "detail": "1 chunk(s) were refused by the scheduler",
+        "measured": {
+          "droppedChunks": 1
+        }
+      }
+    ],
+    "summary": {
+      "chunks": 99,
+      "scheduled": 48,
+      "bookedMs": 4170,
+      "bookedSpanMs": 4170,
+      "overlapMs": 0,
+      "strandedMs": 4500,
+      "droppedChunks": 1,
+      "audioContexts": 0,
+      "mountedLaneSurfaces": 0,
+      "laneIds": 1
+    }
+  }
+}

@@ -1,0 +1,992 @@
+[
+  {
+    "seq": 0,
+    "arrivedAtMs": 1789750008962,
+    "declaredDurationMs": 90,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 5760,
+    "sampleCount": 2160,
+    "sha256": "487e2153e42ff0e8c09cebbe01f964d7556e354b55857aaab9f52e2466f9a249",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0000.pcm"
+  },
+  {
+    "seq": 1,
+    "arrivedAtMs": 1789750009041,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "847c0dcdc27ea0041afbf549d061af904ac1da17ae07e960d14f015ba328c51d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0001.pcm"
+  },
+  {
+    "seq": 2,
+    "arrivedAtMs": 1789750009041,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "111b70c1bf6d95d24f78d31f2ae20ff77d1a1c69a60a5e5c8897245fdc645dc1",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0002.pcm"
+  },
+  {
+    "seq": 3,
+    "arrivedAtMs": 1789750009041,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "0f503de44399f8483e6c23ab2911549d6640f58403ab31c8360b4a74bd915bb2",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0003.pcm"
+  },
+  {
+    "seq": 4,
+    "arrivedAtMs": 1789750009041,
+    "declaredDurationMs": 60,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 3840,
+    "sampleCount": 1440,
+    "sha256": "110a21d6366eaf39bddf29d7bf08aec467b5126a690724c98c7cd38cae8839ce",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0004.pcm"
+  },
+  {
+    "seq": 5,
+    "arrivedAtMs": 1789750009129,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "51b28691ac0b7aab8ac0011307c22f2d4ea6362225d3aac809093efb4801b721",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0005.pcm"
+  },
+  {
+    "seq": 6,
+    "arrivedAtMs": 1789750009129,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "5432134b29e414a770a3c6e4c520182af994fadff038565311ecc2e36399b67d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0006.pcm"
+  },
+  {
+    "seq": 7,
+    "arrivedAtMs": 1789750009129,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "cbf57f83eb1d761e565437d160e3e3fd0eda80a7684556c28859bd6ecae91f54",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0007.pcm"
+  },
+  {
+    "seq": 8,
+    "arrivedAtMs": 1789750009129,
+    "declaredDurationMs": 20,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 1280,
+    "sampleCount": 480,
+    "sha256": "b515e77d0a030174e2a4fe19a0ce8d92f273f6d69e87fb8c5f4ba0ad371e2197",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0008.pcm"
+  },
+  {
+    "seq": 9,
+    "arrivedAtMs": 1789750009228,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "8ae6f27e41f5b03ded263d8ca58f4fb820e59bc92693584a6c2fb1b31acf824e",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0009.pcm"
+  },
+  {
+    "seq": 10,
+    "arrivedAtMs": 1789750009228,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "1c602d112be5daa93af5a744dec49c3e5578489b160619bff9b8714566ac9f7f",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0010.pcm"
+  },
+  {
+    "seq": 11,
+    "arrivedAtMs": 1789750009228,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "08854e7f39ab08bc994b8ed1ea36ed184c8cb9de2a6e161cc57242d49eb46f43",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0011.pcm"
+  },
+  {
+    "seq": 12,
+    "arrivedAtMs": 1789750009228,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "ccc44f4d79a0dfe6da2ba46cf51dfbecd00ad084d3842c20943d9d80ebcd127b",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0012.pcm"
+  },
+  {
+    "seq": 13,
+    "arrivedAtMs": 1789750009228,
+    "declaredDurationMs": 40,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 2560,
+    "sampleCount": 960,
+    "sha256": "c2336a5c57ba8cae084e4ba62468f3b04965f897e92563c29e3215b88f4784b4",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0013.pcm"
+  },
+  {
+    "seq": 14,
+    "arrivedAtMs": 1789750009305,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "da629b41f3f5344be08ee6ea9f87467d33de4657e2d179b4bb857b6f3fd1f576",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0014.pcm"
+  },
+  {
+    "seq": 15,
+    "arrivedAtMs": 1789750009306,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "100c2f3ff2c20a53bd367484ffb17824a462e5e7a2764ae6ecc5b56a9da7b1ff",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0015.pcm"
+  },
+  {
+    "seq": 16,
+    "arrivedAtMs": 1789750009306,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "4376f68369a5fd8b303636632e7f207a568120b2c92b8948d21102b18e3d6929",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0016.pcm"
+  },
+  {
+    "seq": 17,
+    "arrivedAtMs": 1789750009306,
+    "declaredDurationMs": 20,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 1280,
+    "sampleCount": 480,
+    "sha256": "5911dfd9ad2d3c5f6a1b1253e3e8b0be072d0942b7254ef2fdd2a5f0aadca36d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0017.pcm"
+  },
+  {
+    "seq": 18,
+    "arrivedAtMs": 1789750009363,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "439838ae0b2d6ba61bebea9ce8119e38f1e21cb762bc369ac3254967b547fd94",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0018.pcm"
+  },
+  {
+    "seq": 19,
+    "arrivedAtMs": 1789750009363,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "6240479ffcc7b25e9b8ec57dc6fbd8c239e8ebdd2f063b1660d754e267db4ca1",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0019.pcm"
+  },
+  {
+    "seq": 20,
+    "arrivedAtMs": 1789750009363,
+    "declaredDurationMs": 40,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 2560,
+    "sampleCount": 960,
+    "sha256": "a34fe29cece6ac885a6c8bf675d12aaa46c7c1ead27f12c87001d56bbe92e1f4",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0020.pcm"
+  },
+  {
+    "seq": 21,
+    "arrivedAtMs": 1789750009554,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "a5c506f05aaa115209b6b6a01f675da6b410765c23ec0fbd53a1e60de1c37134",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0021.pcm"
+  },
+  {
+    "seq": 22,
+    "arrivedAtMs": 1789750009554,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "dd18b24d364fc6d97762e92acc20133234e2d79e398d67f217933805480d59ab",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0022.pcm"
+  },
+  {
+    "seq": 23,
+    "arrivedAtMs": 1789750009554,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "01b73fe53636fbba7258fa05168fe9215d91cf10c943e789fc14642b8eeba97f",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0023.pcm"
+  },
+  {
+    "seq": 24,
+    "arrivedAtMs": 1789750009555,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "34ad0a035ca03d07238742d6a5e8aa6b87e8cda28a76f5e355b575142f88a8c0",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0024.pcm"
+  },
+  {
+    "seq": 25,
+    "arrivedAtMs": 1789750009555,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "2874589f5301ed18fc05d35a006a48de879df8d26cb6769303902e85639fe800",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0025.pcm"
+  },
+  {
+    "seq": 26,
+    "arrivedAtMs": 1789750009555,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "de1c3ae3dde13dbc36c5c968cfff96d66111d9ca4dbbe608ef3437c08c51e3c0",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0026.pcm"
+  },
+  {
+    "seq": 27,
+    "arrivedAtMs": 1789750009555,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "da3253fc059af705b669a3066b97119a78552cd5c5450b6145b78cc04edf9df2",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0027.pcm"
+  },
+  {
+    "seq": 28,
+    "arrivedAtMs": 1789750009555,
+    "declaredDurationMs": 20,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 1280,
+    "sampleCount": 480,
+    "sha256": "17469f45aa699b58f182287815c27a7dc22339810284716808370cb79444ded3",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0028.pcm"
+  },
+  {
+    "seq": 29,
+    "arrivedAtMs": 1789750009601,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "1a3afc4386add75bcdfa7f6caf391a47f236b396ada7dc72d6d305844b4aea42",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0029.pcm"
+  },
+  {
+    "seq": 30,
+    "arrivedAtMs": 1789750009601,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "2ec67a7e785ec4f5e3676a88bbde8f4af8ca765d00d35306ec337243797cb9e4",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0030.pcm"
+  },
+  {
+    "seq": 31,
+    "arrivedAtMs": 1789750009601,
+    "declaredDurationMs": 80,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 5120,
+    "sampleCount": 1920,
+    "sha256": "14779399e7f954d5ddbc14d8877667acaccced48ee4e22339a08680ba14a9a54",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0031.pcm"
+  },
+  {
+    "seq": 32,
+    "arrivedAtMs": 1789750009769,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "33b16e4d25005db3b76db8d06d461e683671157b700b90d54ab34bee2fb2cf12",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0032.pcm"
+  },
+  {
+    "seq": 33,
+    "arrivedAtMs": 1789750009769,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "bdc6a4b7badc5bff4ea8e44a1a9a11e9c54f2c14b69a397dfb04798fe59cf63b",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0033.pcm"
+  },
+  {
+    "seq": 34,
+    "arrivedAtMs": 1789750009769,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "2ee356826995b987390786d7b4dffba248c715bdcc263b8fcaae0ef74b11bc85",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0034.pcm"
+  },
+  {
+    "seq": 35,
+    "arrivedAtMs": 1789750009769,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "3e9dc15f1fe8342631fac687498e7626390e4b7399a0434a54e2b37555ae213d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0035.pcm"
+  },
+  {
+    "seq": 36,
+    "arrivedAtMs": 1789750009769,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "f33b11ef93d07476758069d57251da39afc6e9fdb608fc326b1b8a60930b728d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0036.pcm"
+  },
+  {
+    "seq": 37,
+    "arrivedAtMs": 1789750009770,
+    "declaredDurationMs": 20,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 1280,
+    "sampleCount": 480,
+    "sha256": "b72492faf2776d3e9cd118b8afe482c64e59269c4a85707a3fd30a55ecaad4c1",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0037.pcm"
+  },
+  {
+    "seq": 38,
+    "arrivedAtMs": 1789750009808,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "4628dc14accb01c855bd7f2b9c1963a58e2651677349973797d408854edfdaff",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0038.pcm"
+  },
+  {
+    "seq": 39,
+    "arrivedAtMs": 1789750009809,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "c05fa12b81ed5cf04f8e1b676937973162cc8d4a1fde7cdcdce6ddcd78dfa5e7",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0039.pcm"
+  },
+  {
+    "seq": 40,
+    "arrivedAtMs": 1789750009809,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "8bc4f8c898899216cf8b608cc06035dbda64ef76a6db33139b1b41524ae8a0e4",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0040.pcm"
+  },
+  {
+    "seq": 41,
+    "arrivedAtMs": 1789750009809,
+    "declaredDurationMs": 20,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 1280,
+    "sampleCount": 480,
+    "sha256": "1b81b680468f334bd16358b97b58215d3d530f875403357f959a790a4c356e27",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0041.pcm"
+  },
+  {
+    "seq": 42,
+    "arrivedAtMs": 1789750009864,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "d6a9ef28ee33f2e97ad07809e81040ae611f16c0678b9b9502319161fbfc8bcf",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0042.pcm"
+  },
+  {
+    "seq": 43,
+    "arrivedAtMs": 1789750009864,
+    "declaredDurationMs": 60,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 3840,
+    "sampleCount": 1440,
+    "sha256": "e42f364e8838f9e7deb3f2c7a3093aa2b39baf205da28f081ec7bb962c6cc4b8",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0043.pcm"
+  },
+  {
+    "seq": 44,
+    "arrivedAtMs": 1789750010038,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "3ee3fa258cea0e8eaef40ea4f3aceee0a3b3faf1838cf6e761332e162bf442c3",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0044.pcm"
+  },
+  {
+    "seq": 45,
+    "arrivedAtMs": 1789750010038,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "8352c6d417fc25ddbb40f30650b694dfd51dc557c3ab342020ff39e615608450",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0045.pcm"
+  },
+  {
+    "seq": 46,
+    "arrivedAtMs": 1789750010038,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "1d4c74d57ac65f394fa47702389bec44b3dd802beb0b2ad165c9a15c9cb4afea",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0046.pcm"
+  },
+  {
+    "seq": 47,
+    "arrivedAtMs": 1789750010038,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "f32f9a2c2ec1639b56da88a8174cc2bfe03d320ebd2bac6b732ab591cddc76c3",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0047.pcm"
+  },
+  {
+    "seq": 48,
+    "arrivedAtMs": 1789750010038,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "52173b83213a36e3cf6dbcedf0d077e7273fd8e121bc31c53d8b4a579fc0b8f9",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0048.pcm"
+  },
+  {
+    "seq": 49,
+    "arrivedAtMs": 1789750010038,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "fd717bea809f4d1d2d507bfb074ba6b78395d0966d867d348ce3dee2f879e4ee",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0049.pcm"
+  },
+  {
+    "seq": 50,
+    "arrivedAtMs": 1789750010038,
+    "declaredDurationMs": 40,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 2560,
+    "sampleCount": 960,
+    "sha256": "812e8138efddeba427ba977250f4d4b553bd1fdefa9946862a6d0df3d1a0352e",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0050.pcm"
+  },
+  {
+    "seq": 51,
+    "arrivedAtMs": 1789750010103,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "36388aa3972db064705a7311eddf5f7641ca023f720dd8514f720ee5cb1137e8",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0051.pcm"
+  },
+  {
+    "seq": 52,
+    "arrivedAtMs": 1789750010103,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "76b4bcf3e5dfeb990327827cf90ba3b3029f91f8c5ef8430bf158e3ea24b5400",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0052.pcm"
+  },
+  {
+    "seq": 53,
+    "arrivedAtMs": 1789750010103,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "4ddf274b0a73f18da15a0a1b4f5d86191d8ca1a7bad16b03a2f71f56f63eeadc",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0053.pcm"
+  },
+  {
+    "seq": 54,
+    "arrivedAtMs": 1789750010104,
+    "declaredDurationMs": 60,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 3840,
+    "sampleCount": 1440,
+    "sha256": "0cc429316f2d32c2519eabc9995fc20dc53366e1ee75e1a26a9df423497b0576",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0054.pcm"
+  },
+  {
+    "seq": 55,
+    "arrivedAtMs": 1789750010206,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "0e61ca577ccc5ba3b62648ef47b837f4b79a0da79cba7ba2bae64a7e44b77b5d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0055.pcm"
+  },
+  {
+    "seq": 56,
+    "arrivedAtMs": 1789750010206,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "e3fea5992a5c1a55cf718fc87a7da41869536ebf7b837ad6a432ff7f31065958",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0056.pcm"
+  },
+  {
+    "seq": 57,
+    "arrivedAtMs": 1789750010206,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "5a2aa0f9d66ba6b758898f1c659dd350c74aad0fec2272d7d718da400c023391",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0057.pcm"
+  },
+  {
+    "seq": 58,
+    "arrivedAtMs": 1789750010206,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "1beee5e87b46a30c6b7729886b6ffb70b982b5184c44baf8a1c70961a25fd545",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0058.pcm"
+  },
+  {
+    "seq": 59,
+    "arrivedAtMs": 1789750010311,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "8f30ad7b2d5a78d021d3e4a94cb0ab7cc6f1031c9fb25beeb1366a3182c0904c",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0059.pcm"
+  },
+  {
+    "seq": 60,
+    "arrivedAtMs": 1789750010312,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "ecbef41867cd1318ac448cd82cc64a3f29a4743120beb6415106b4ff58392c2f",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0060.pcm"
+  },
+  {
+    "seq": 61,
+    "arrivedAtMs": 1789750010312,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "7ac8d7d004ad2f6f20850d2af0d4c53ca20c810f172f0404e1f9921afb28d758",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0061.pcm"
+  },
+  {
+    "seq": 62,
+    "arrivedAtMs": 1789750010312,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "2df75edc17e839c5b12780a8915f84071d81495055cde2188437fc22da28481a",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0062.pcm"
+  },
+  {
+    "seq": 63,
+    "arrivedAtMs": 1789750010337,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "16b3e57966ecbd2c1fda3125c66c1349623c94f55a417ae58b595ccf67c9b727",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0063.pcm"
+  },
+  {
+    "seq": 64,
+    "arrivedAtMs": 1789750010337,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "6e9788c527341e79c7ec78bc10cd8e935ab4124df067498383fccf3235e9dfb4",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0064.pcm"
+  },
+  {
+    "seq": 65,
+    "arrivedAtMs": 1789750010466,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "2a06ec02150c78ab2704b5c7229b81d8c2690ed1f34ccb5ba47f29cadceda1b3",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0065.pcm"
+  },
+  {
+    "seq": 66,
+    "arrivedAtMs": 1789750010466,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "c966999699fcd220c9ec8d78c06d4a67cdea100148a1aedaf37ee07fc7627988",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0066.pcm"
+  },
+  {
+    "seq": 67,
+    "arrivedAtMs": 1789750010466,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "575d0ed5cbbceac530b2398ee7ec24962ab9a4b096aa3cc77f990eabc72ca747",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0067.pcm"
+  },
+  {
+    "seq": 68,
+    "arrivedAtMs": 1789750010467,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "666f2ff7aca00d7093c45313e89005a5be5977dbbffe306df50ac62be56428e0",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0068.pcm"
+  },
+  {
+    "seq": 69,
+    "arrivedAtMs": 1789750010468,
+    "declaredDurationMs": 40,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 2560,
+    "sampleCount": 960,
+    "sha256": "32309ec49b875cbb1baefc3642ffc4e1fac4f4bd0d809c4b4d7a5d634cc1ca5d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0069.pcm"
+  },
+  {
+    "seq": 70,
+    "arrivedAtMs": 1789750010578,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "135d7db6f6810566654aa72131f13d8a0c28f078898f2ed33cca8fe3c51b649a",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0070.pcm"
+  },
+  {
+    "seq": 71,
+    "arrivedAtMs": 1789750010579,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "0c6e14233838821d9b0780e7f607411230b87caca13f0ec7f80c4170c7937ad8",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0071.pcm"
+  },
+  {
+    "seq": 72,
+    "arrivedAtMs": 1789750010579,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "48a2c5a8310a99155300c9ce8e251020881dcb06aeadb25280d41fbfb4396753",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0072.pcm"
+  },
+  {
+    "seq": 73,
+    "arrivedAtMs": 1789750010579,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "e0d9ee0334190936ce355ff5c25dad1b5c47b1c3bd49af95ba64f74a188a204c",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0073.pcm"
+  },
+  {
+    "seq": 74,
+    "arrivedAtMs": 1789750010579,
+    "declaredDurationMs": 40,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 2560,
+    "sampleCount": 960,
+    "sha256": "99ecf4367a99623dbe1218bec6599e11e145626d645c8d53e3aaf2b7419f8129",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0074.pcm"
+  },
+  {
+    "seq": 75,
+    "arrivedAtMs": 1789750010735,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "623d7807d508a3def8b0fe09d25d19eb3032c5f693518fd418c0d2edaa93f2b3",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0075.pcm"
+  },
+  {
+    "seq": 76,
+    "arrivedAtMs": 1789750010735,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "8f441faaa7caafce0590be3ea4370f1c9aec135f87fc844d3b3db6c7de248867",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0076.pcm"
+  },
+  {
+    "seq": 77,
+    "arrivedAtMs": 1789750010735,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "14d2694a9eff6fd98ffd6f096d8e55a399844b161dfd3665abec059b2fa1cea1",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0077.pcm"
+  },
+  {
+    "seq": 78,
+    "arrivedAtMs": 1789750010736,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "042dacb5af2ac758f0880d07447a313ad2f056b1e1f9feb700c0e2aa7bd0b9fd",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0078.pcm"
+  },
+  {
+    "seq": 79,
+    "arrivedAtMs": 1789750010736,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "621a628142c2818a16d0324fe60829438701c4193ee389b2b54f243b4c456b2b",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0079.pcm"
+  },
+  {
+    "seq": 80,
+    "arrivedAtMs": 1789750010736,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "8b1870059b74752fcd48d825c48efd262315e55a76db236d5d88506dd57e6622",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0080.pcm"
+  },
+  {
+    "seq": 81,
+    "arrivedAtMs": 1789750010812,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "e45702bdcbfe0adf7a11ccba0d1615845c5167edb713a0653fd1d01d46efce35",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0081.pcm"
+  },
+  {
+    "seq": 82,
+    "arrivedAtMs": 1789750010812,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "9ec417d7a59f01fb56cfca80adee3561cf1ebb0c4d35f69337cc70504715758d",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0082.pcm"
+  },
+  {
+    "seq": 83,
+    "arrivedAtMs": 1789750010812,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "e3828d480950283d7b7b80cefd6ff843c8c41a6ff00bd7ead925480b3f998e2c",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0083.pcm"
+  },
+  {
+    "seq": 84,
+    "arrivedAtMs": 1789750010812,
+    "declaredDurationMs": 60,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 3840,
+    "sampleCount": 1440,
+    "sha256": "c8e88af7c10b3ce4ae3e83453903f58bd66bafd3d57b2037d3060f5743736fe6",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0084.pcm"
+  },
+  {
+    "seq": 85,
+    "arrivedAtMs": 1789750010874,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "74bc86728cd17ab5239690e63307a709838c70c9aea121e537112f0c98a29e28",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0085.pcm"
+  },
+  {
+    "seq": 86,
+    "arrivedAtMs": 1789750010874,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "501681bfa7bb8903f4d2bee39fb3fa4547fdfbbf610d641cf8bfc62e95b9844b",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0086.pcm"
+  },
+  {
+    "seq": 87,
+    "arrivedAtMs": 1789750010874,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "63fbc5ebb3aa4c5233b307025725cd11fae86a40c17e10b0dc12823ab78af5d4",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0087.pcm"
+  },
+  {
+    "seq": 88,
+    "arrivedAtMs": 1789750010874,
+    "declaredDurationMs": 20,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 1280,
+    "sampleCount": 480,
+    "sha256": "e0360dee37ff3d4fb16f70c9b6644e243233756fee81bcd15bab7f4860884be3",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0088.pcm"
+  },
+  {
+    "seq": 89,
+    "arrivedAtMs": 1789750010992,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "2c6d77fd6b31d3fd28991bac2f33e8fce141a7c51dac33d50026427522428886",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0089.pcm"
+  },
+  {
+    "seq": 90,
+    "arrivedAtMs": 1789750010992,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "8c2b83d976d844ffcd109934df4baf459e23ee35c4513dea8bc246cfcf824c9f",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0090.pcm"
+  },
+  {
+    "seq": 91,
+    "arrivedAtMs": 1789750010992,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "77a33ad7e6c2e1c17eba6b9d1ed1ed8915ac043628d463953fd0258de88d6061",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0091.pcm"
+  },
+  {
+    "seq": 92,
+    "arrivedAtMs": 1789750010992,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "0f50596d9c243c3d73d8d8e929138b2a2b09375cc48e9da7f7c8f43c6a2f1372",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0092.pcm"
+  },
+  {
+    "seq": 93,
+    "arrivedAtMs": 1789750010992,
+    "declaredDurationMs": 80,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 5120,
+    "sampleCount": 1920,
+    "sha256": "b9dd65be6b54236ff0fba23fb84cb8a5ce7c247437f603c8dd65d904dd930ba0",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0093.pcm"
+  },
+  {
+    "seq": 94,
+    "arrivedAtMs": 1789750011078,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "cc53a4ec03e875456adb9b5c44c78d3042e38359c7750b2b10dfb0288df5471c",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0094.pcm"
+  },
+  {
+    "seq": 95,
+    "arrivedAtMs": 1789750011078,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "bd23ccabd41a810c7e3c194d3b810740eb2dae4797b60aca54ce15e07a5792f8",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0095.pcm"
+  },
+  {
+    "seq": 96,
+    "arrivedAtMs": 1789750011078,
+    "declaredDurationMs": 100,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 6400,
+    "sampleCount": 2400,
+    "sha256": "037d7c806753b49b7c733ac1fa239caad408d19ed34564fa0acdc8fdef3b9936",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0096.pcm"
+  },
+  {
+    "seq": 97,
+    "arrivedAtMs": 1789750011078,
+    "declaredDurationMs": 20,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 1280,
+    "sampleCount": 480,
+    "sha256": "107b41fefcb2bc172aa64d308abecd842797bc75400f0ee05377c8bdbbaade6b",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0097.pcm"
+  },
+  {
+    "seq": 98,
+    "arrivedAtMs": 1789750011078,
+    "declaredDurationMs": 40,
+    "mimeType": "audio/pcm;rate=24000",
+    "base64Chars": 2560,
+    "sampleCount": 960,
+    "sha256": "d1218947781de3510237f85df0131eb6ea4de9102f3fdfa3a0b9ef069f4498ad",
+    "pcmPath": "/root/voice-lane-lab/run-B/audio/chunk-0098.pcm"
+  }
+]

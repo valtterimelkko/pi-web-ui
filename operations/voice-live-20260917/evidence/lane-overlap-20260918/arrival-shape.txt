@@ -1,0 +1,14 @@
+One real native lane, captured by scripts/voice-lane-lab (disposable server, real Gemini Live,
+real synthesised operator speech). Model-speech chunks only, arrival = receive time at the client.
+
+chunks            : 99
+arrival span      : 2.12 s
+audio delivered   : 8.77 s
+delivery rate     : 4.14x real time
+inter-arrival gap : min=0ms p50=0ms p90=99ms max=191ms
+chunk sizes       : [480, 960, 1440, 1920, 2160, 2400] samples (20-100 ms)
+declared durations: [20, 40, 60, 80, 90, 100] ms
+duplicate payloads: 0
+
+Distinct payload for every chunk: the server did NOT duplicate or replay audio.
+The audio itself is a single, in-order stream (seq 0..98, no gaps, no repeats).

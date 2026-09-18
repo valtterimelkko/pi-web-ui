@@ -83,6 +83,7 @@ tell what is newer than what.
 | [`DRIVE-MODE.md`](./DRIVE-MODE.md) | Canonical shipped-UI doc | 2026-09-16 `edfa28f` | Working on the overlay, lanes, layout modes or worker switching. |
 | [`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md) | Canonical measurement-tool doc | 2026-09-17 `578e621` | Making claims about **rendered audio** (eaten first words, vanishing chunks, ducking vs stopping). Note the host caveat: `doctor` reports 18/19 here because the private PulseAudio capture lane cannot start, so the OS-output oracle is *indeterminate* on this machine. |
 | [`OBSERVABILITY.md`](./OBSERVABILITY.md) §Voice Mode | Canonical reference, voice records | 2026-09-17 | Reading or changing voice telemetry: `voiceTurnId`, gate outcomes, counters, client speech events. |
+| [`VOICE-LANE-LAB.md`](./VOICE-LANE-LAB.md) | Canonical measurement-tool doc | 2026-09-18 | Making claims about **a live lane's audio** (the talker's voice running together, sentences arriving at once) when the OS-output lab is unavailable: measures the server's chunks and the SHIPPED client scheduler's schedule. |
 
 ### 3.2 Design inputs and the current execution plan
 
@@ -156,6 +157,7 @@ P1–P27, R1–R2) of the completed voice programmes.
 | Phase handoffs | [`L0`](../scripts/voice-live-lab/L0-HANDOFF.md), [`L2`](../scripts/voice-live-lab/L2-HANDOFF.md), [`L4`](../scripts/voice-live-lab/L4-HANDOFF.md), [`L5`](../scripts/voice-live-lab/L5-HANDOFF.md), [`L6`](../scripts/voice-live-lab/L6-HANDOFF.md), [`L7`](../scripts/voice-live-lab/L7-HANDOFF.md) | Per-phase delivery records with their own gaps and limitations. |
 | Lab tests | `server/tests/voice-live-lab/` (19 files) | Regression tests for the harness, including deliberately damaged-trace verification. |
 | Rendered-audio lab | `scripts/audio-lab/` | Measures the audio a real browser actually renders, via a private null sink and an independent monitor. Host caveat in [`AUDIO-REGRESSION-LAB.md`](./AUDIO-REGRESSION-LAB.md). |
+| Lane-audio lab | `scripts/voice-lane-lab/` | Measures a real lane's model audio and the SHIPPED client scheduler's schedule for it. See [`VOICE-LANE-LAB.md`](./VOICE-LANE-LAB.md). |
 | Benchmark packaging & published site | `/root/agent-benchmarks/benchmarks/04-voice-live-lab/` (**sibling repository**) | `PLAN.md` (honest, matrices marked pending), `generate_reports.mjs`, `report.json`/`report.html`, `run_voice_lab.sh`, `runs/` (gitignored), `site/`. Decision **D1** corrected its verdict layer on 2026-09-17: the report is now compiled from run manifests and fails closed, and the published figures are marked withdrawn. The site's source is corrected; **republishing it is a separate, owner-gated act.** |
 | Operations evidence | `operations/voice-card-20260915/`, `operations/voice-desktop-20260916/`, `operations/voice-relay-20260916/` | Per-workstream briefs, parent verification, harnesses, logs and screenshots for the card-identity, desktop and relay-robustness work. |
 

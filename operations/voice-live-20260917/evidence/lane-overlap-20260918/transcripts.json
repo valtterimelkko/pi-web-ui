@@ -1,0 +1,68 @@
+[
+  {
+    "atMs": 1789750007366,
+    "speaker": "operator",
+    "text": "Please summarize what you can see about this session in a few sentences and then tell me what you would check first and why.",
+    "final": false
+  },
+  {
+    "atMs": 1789750008017,
+    "speaker": "operator",
+    "text": "Please summarize what you can see about this session in a few sentences and then tell me what you would check first and why.",
+    "final": true
+  },
+  {
+    "atMs": 1789750008962,
+    "speaker": "talker",
+    "text": "The worker session is ",
+    "final": false
+  },
+  {
+    "atMs": 1789750009229,
+    "speaker": "talker",
+    "text": "not currently loaded",
+    "final": false
+  },
+  {
+    "atMs": 1789750009555,
+    "speaker": "talker",
+    "text": " on this server.",
+    "final": false
+  },
+  {
+    "atMs": 1789750009770,
+    "speaker": "talker",
+    "text": " Because the status is",
+    "final": false
+  },
+  {
+    "atMs": 1789750010038,
+    "speaker": "talker",
+    "text": " idle with no loaded history,",
+    "final": false
+  },
+  {
+    "atMs": 1789750010206,
+    "speaker": "talker",
+    "text": " there's nothing",
+    "final": false
+  },
+  {
+    "atMs": 1789750010468,
+    "speaker": "talker",
+    "text": " available for me to check",
+    "final": false
+  },
+  {
+    "atMs": 1789750010736,
+    "speaker": "talker",
+    "text": " or summarize.",
+    "final": false
+  },
+  {
+    "atMs": 1789750017735,
+    "speaker": "talker",
+    "text": "The worker session is not currently loaded on this server. Because the status is idle with no loaded history, there's nothing available for me to check or summarize.",
+    "final": true
+  }
+]

@@ -27,7 +27,7 @@ import {
   type SpeechFloorSource,
 } from './speechFloor';
 import {
-  VOICE_PLAYBACK_MAX_PENDING_CHUNKS,
+  VOICE_PLAYBACK_MAX_PENDING_MS,
   VOICE_PLAYBACK_MAX_QUEUED_MS,
   VOICE_PLAYBACK_RATE,
 } from './audioConstants';
@@ -73,8 +73,11 @@ export interface PlaybackPipelineOptions {
   backend: PlaybackBackend;
   floor: SpeechFloorSource;
   onFault?: (fault: PlaybackFault) => void;
+  /** Scheduling horizon: how far ahead of the clock audio is booked, in ms. */
   maxQueuedMs?: number;
-  /** Bound on accepted-but-not-yet-booked chunks. */
+  /** Bound on accepted-but-not-yet-booked audio, in ms (memory guard, not a latency policy). */
+  maxPendingMs?: number;
+  /** Optional hard bound on the backlog's chunk COUNT, for a caller that wants one. */
   maxPendingChunks?: number;
   /** Lead time before the first chunk starts (lets the graph warm up). */
   leadSeconds?: number;
@@ -85,6 +88,8 @@ export interface PlaybackStats {
   chunksDropped: number;
   queuedMs: number;
   pendingChunks: number;
+  /** Unplayed audio held before booking, in ms — the bound this is measured against. */
+  pendingMs: number;
   /** Seq numbers of the chunks accepted but not yet booked (oldest first). */
   pendingSeqs: number[];
   ducked: boolean;
@@ -97,22 +102,45 @@ interface BookedChunk {
 }
 
 /**
- * One-ahead schedule, bounded queue, ducked gain.
+ * One-ahead schedule, bounded backlog, ducked gain.
  *
- * Overflow drops the OLDEST unplayed chunk and surfaces it: the bound is real
- * (memory and latency stay finite) and the fault is visible (N9). The current
- * utterance is never hard-stopped by a duck — only an explicit `stop()`.
+ * The scheduling rules here are written against the delivery rate the live lane
+ * ACTUALLY has, which is not real time: the model's audio arrives at roughly 4x
+ * playback speed (measured 2026-09-18 on a real Gemini Live lane — 9.9 s of
+ * speech delivered in 2.1 s, in bursts of 3-4 chunks every ~80-100 ms). Two
+ * consequences follow, and both were defects before this was measured:
+ *
+ *   1. A burst that ends the turn leaves unplayed audio behind. Booking only on
+ *      arrival strands it — the lane goes quiet mid-answer and the leftover
+ *      sentences reappear later, on top of whatever is being said then. So the
+ *      scheduler also pumps on the CLOCK (see `scheduleDrain`).
+ *   2. A long answer needs a backlog of about 0.75x its duration, because 4x
+ *      arrives and 1x plays. The backlog bound is therefore in audio, not in
+ *      chunks, so a long answer is never gutted in the middle.
+ *
+ * Overflow beyond that bound still drops the OLDEST unplayed chunk and surfaces
+ * it: memory stays finite and the fault stays visible (N9). The current utterance
+ * is never hard-stopped by a duck — only an explicit `stop()`.
  */
 export class PlaybackPipeline {
   private readonly backend: PlaybackBackend;
   private readonly floor: SpeechFloorSource;
   private readonly onFault: (fault: PlaybackFault) => void;
   private readonly maxQueuedMs: number;
+  private readonly maxPendingMs: number;
   private readonly leadSeconds: number;
   private readonly unsubscribe: () => void;
   private readonly booked: BookedChunk[] = [];
   /** Chunks accepted but not yet booked into the graph, oldest first. */
   private pending: Array<{ message: VoiceAudioOutputChunkMessage; samples: Float32Array }> = [];
+  /** Unplayed audio in `pending`, in ms — the bound is in audio, not in chunks. */
+  private pendingMs = 0;
+  /**
+   * The clock drain. Booking on arrival alone strands everything still pending
+   * when a burst ends, which is where a 4x provider always leaves the tail of an
+   * answer. Armed only while there is a backlog, and cleared with the lane.
+   */
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly maxPendingChunks: number;
   private nextStartTime = 0;
   private lastSeq: number | null = null;
@@ -126,7 +154,8 @@ export class PlaybackPipeline {
     this.floor = options.floor;
     this.onFault = options.onFault ?? (() => {});
     this.maxQueuedMs = options.maxQueuedMs ?? VOICE_PLAYBACK_MAX_QUEUED_MS;
-    this.maxPendingChunks = options.maxPendingChunks ?? VOICE_PLAYBACK_MAX_PENDING_CHUNKS;
+    this.maxPendingMs = options.maxPendingMs ?? VOICE_PLAYBACK_MAX_PENDING_MS;
+    this.maxPendingChunks = options.maxPendingChunks ?? Number.POSITIVE_INFINITY;
     this.leadSeconds = options.leadSeconds ?? 0.02;
     this.lastFloorSpeaking = options.floor.getState().operatorSpeaking;
     // Live duck on barge-in. The release is deliberately NOT applied here: the
@@ -167,42 +196,52 @@ export class PlaybackPipeline {
     // Keep the decoded frames with the chunk so the pending backlog does not
     // decode twice.
     this.pending.push({ message, samples });
-    if (this.pending.length > this.maxPendingChunks) {
-      // The backlog beyond the scheduler's horizon is what can still be dropped
-      // without cutting audio that is already committed to the graph. The
-      // OLDEST pending chunk goes, so latency and memory stay bounded and the
-      // most recent model speech is the speech that survives.
+    this.pendingMs += (samples.length / VOICE_PLAYBACK_RATE) * 1000;
+    while (this.pendingMs > this.maxPendingMs && this.pending.length > 1) {
+      // The backlog beyond what is already committed to the graph is what can
+      // still be dropped without cutting audio mid-word. The OLDEST pending chunk
+      // goes, so memory stays bounded and the most recent model speech is the
+      // speech that survives.
       const dropped = this.pending.shift();
-      if (dropped) {
-        this.chunksDropped += 1;
-        // Bounded surfacing (contract §5.3): a burst must not become a storm of
-        // fault reports — at most one per second, carrying the running count.
-        const nowMs = this.backend.currentTime() * 1000;
-        if (nowMs - this.lastOverflowFaultAtMs >= 1_000) {
-          this.lastOverflowFaultAtMs = nowMs;
-          this.onFault({
-            reason: 'playback_overflow',
-            detail: 'playback backlog exceeded its bound; the oldest unplayed chunk was dropped',
-            droppedChunks: this.chunksDropped,
-          });
-        }
+      if (!dropped) break;
+      this.pendingMs -= (dropped.samples.length / VOICE_PLAYBACK_RATE) * 1000;
+      this.chunksDropped += 1;
+      // Bounded surfacing (contract §5.3): a burst must not become a storm of
+      // fault reports — at most one per second, carrying the running count.
+      const nowMs = this.backend.currentTime() * 1000;
+      if (nowMs - this.lastOverflowFaultAtMs >= 1_000) {
+        this.lastOverflowFaultAtMs = nowMs;
+        this.onFault({
+          reason: 'playback_overflow',
+          detail: 'playback backlog exceeded its bound; the oldest unplayed chunk was dropped',
+          droppedChunks: this.chunksDropped,
+        });
       }
     }
     this.pump();
     return 'scheduled';
   }
 
-  /** Book pending chunks while the scheduled horizon is under the bound. */
+  /**
+   * Book pending chunks while the scheduled horizon is under the bound.
+   *
+   * Exits through `scheduleDrain()` in every case: when the horizon is full, the
+   * backlog must still be booked as playback consumes it, or the audio the lane
+   * accepted is never played (the measured defect: at the live delivery rate,
+   * half of every answer).
+   */
   private pump(): void {
     this.pruneFinished();
+    let booked = 0;
     for (;;) {
       const next = this.pending[0];
-      if (!next) return;
+      if (!next) break;
       const now = this.backend.currentTime();
       const queuedMs = Math.max(0, (this.nextStartTime - now) * 1000);
       const durationSeconds = next.samples.length / VOICE_PLAYBACK_RATE;
-      if (queuedMs >= this.maxQueuedMs) return; // the graph must catch up first
+      if (queuedMs >= this.maxQueuedMs) break; // the graph must catch up first
       this.pending.shift();
+      this.pendingMs -= durationSeconds * 1000;
 
       // One-ahead: contiguous after what is already booked, never overlapping.
       const startAt = Math.max(now + this.leadSeconds, this.nextStartTime);
@@ -215,6 +254,37 @@ export class PlaybackPipeline {
       this.booked.push({ handle, startAt, endAt: startAt + durationSeconds });
       this.nextStartTime = startAt + durationSeconds;
       this.chunksScheduled += 1;
+      booked += 1;
+    }
+    this.pendingMs = Math.max(0, this.pendingMs);
+    this.scheduleDrain(booked);
+  }
+
+  /**
+   * Arm the clock drain, at most one timer at a time.
+   *
+   * The delay is exactly how long the horizon must fall before another chunk
+   * fits, so a full backlog drains at playback speed and never lags behind it.
+   * `booked` is passed so a clock that is not advancing (a suspended audio
+   * context) backs off instead of spinning.
+   */
+  private scheduleDrain(booked: number): void {
+    if (this.drainTimer !== null) return;
+    if (this.pending.length === 0) return;
+    const now = this.backend.currentTime();
+    const queuedMs = Math.max(0, (this.nextStartTime - now) * 1000);
+    const excessMs = Math.max(0, queuedMs - this.maxQueuedMs);
+    const delayMs = booked > 0 ? Math.min(1_000, Math.max(5, excessMs + 5)) : 250;
+    this.drainTimer = setTimeout(() => {
+      this.drainTimer = null;
+      this.pump();
+    }, delayMs);
+  }
+
+  private clearDrain(): void {
+    if (this.drainTimer !== null) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
     }
   }
 
@@ -226,9 +296,11 @@ export class PlaybackPipeline {
 
   /** Explicit stop (operator action). Never triggered by speech. */
   stop(): void {
+    this.clearDrain();
     this.backend.stopAll();
     this.booked.length = 0;
     this.pending = [];
+    this.pendingMs = 0;
     this.nextStartTime = 0;
     this.lastSeq = null;
   }
@@ -240,12 +312,14 @@ export class PlaybackPipeline {
       chunksDropped: this.chunksDropped,
       queuedMs,
       pendingChunks: this.pending.length,
+      pendingMs: Math.max(0, Math.round(this.pendingMs)),
       pendingSeqs: this.pending.map((entry) => entry.message.seq),
       ducked: this.floor.getState().operatorSpeaking,
     };
   }
 
   dispose(): void {
+    this.clearDrain();
     this.unsubscribe();
   }
 }

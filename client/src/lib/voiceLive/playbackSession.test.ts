@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   VOICE_AUDIO_OUTPUT_MIME,
   VOICE_WIRE_VERSION,
   type VoiceAudioOutputChunkMessage,
 } from '@pi-web-ui/shared';
-import { VOICE_PLAYBACK_MAX_QUEUED_MS, VOICE_PLAYBACK_RATE } from './audioConstants';
+import { VOICE_PLAYBACK_MAX_PENDING_MS, VOICE_PLAYBACK_MAX_QUEUED_MS, VOICE_PLAYBACK_RATE } from './audioConstants';
 import { pcm16Base64 } from './messages';
 import {
   PlaybackPipeline,
@@ -240,34 +240,48 @@ describe('PlaybackPipeline — duck, never stop (N5)', () => {
 // ── Faults, bounds, corruption ──────────────────────────────────────────────
 
 describe('PlaybackPipeline — bounded queue and surfaced faults', () => {
-  it('bounds the queued audio and drops the OLDEST unplayed chunk (newest survives)', () => {
+  it('bounds the backlog in AUDIO and drops the OLDEST unplayed chunk (newest survives)', () => {
     const { backend, pipeline, faults } = makePipeline();
-    // 50 ms per chunk (1200 frames). A burst arrives while the clock is frozen,
-    // which is the only way a backlog can build at all.
+    // 50 ms per chunk (1200 frames). A frozen clock is the most extreme burst
+    // possible, and the backlog bound is in AUDIO, so this has to exceed
+    // VOICE_PLAYBACK_MAX_PENDING_MS of speech before anything is dropped.
     const perChunk = 1_200;
     const chunkMs = (perChunk / VOICE_PLAYBACK_RATE) * 1000; // 50 ms
-    const count = 100;
+    const count =
+      Math.ceil((VOICE_PLAYBACK_MAX_PENDING_MS + VOICE_PLAYBACK_MAX_QUEUED_MS) / chunkMs) + 20;
     for (let seq = 0; seq < count; seq += 1) pipeline.pushChunk(outputChunk(seq, perChunk));
 
     const overflow = faults.filter((fault) => fault.reason === 'playback_overflow');
-    expect(overflow).toHaveLength(1);
-    expect(overflow[0].droppedChunks).toBeGreaterThan(0);
+    expect(overflow.length).toBeGreaterThan(0);
     expect(pipeline.stats().chunksDropped).toBeGreaterThan(0);
 
-    // The SCHEDULED horizon is hard-capped, so latency cannot run away.
+    // The SCHEDULED horizon is hard-capped, so the booked audio cannot run away.
     const stats = pipeline.stats();
     expect(stats.queuedMs).toBeLessThanOrEqual(VOICE_PLAYBACK_MAX_QUEUED_MS + chunkMs);
     expect(stats.chunksScheduled).toBeLessThanOrEqual(
       Math.ceil(VOICE_PLAYBACK_MAX_QUEUED_MS / chunkMs) + 1,
     );
-    // The backlog is bounded too, and the NEWEST chunk is still pending (it was
-    // not the one dropped); the oldest pending chunks are gone.
-    expect(stats.pendingChunks).toBeLessThanOrEqual(50);
+    // The backlog is bounded in audio, and the NEWEST chunk is still pending (it
+    // was not the one dropped); the oldest pending chunks are gone.
+    expect(stats.pendingMs).toBeLessThanOrEqual(VOICE_PLAYBACK_MAX_PENDING_MS);
     expect(stats.pendingSeqs).toContain(count - 1);
     // The first pending chunk was dropped: the retained backlog starts after it.
     expect(stats.pendingSeqs).not.toContain(stats.chunksScheduled);
     expect(stats.pendingSeqs[0]).toBe(stats.chunksScheduled + stats.chunksDropped);
     expect(backend.stops).toBe(0);
+  });
+
+  it('holds a whole answer delivered 4x fast without dropping any of it', () => {
+    // The measured live-lane shape: 9 s of speech in 90 x 100 ms chunks, arriving
+    // 4 chunks every 100 ms (a real Gemini Live lane, 2026-09-18). A count-based
+    // backlog bound gutted the middle of exactly this answer.
+    const { pipeline, advance } = makePipeline();
+    for (let seq = 0; seq < 90; seq += 1) {
+      if (seq > 0 && seq % 4 === 0) advance(0.1);
+      pipeline.pushChunk(outputChunk(seq, 2_400));
+    }
+    expect(pipeline.stats().chunksDropped).toBe(0);
+    expect(pipeline.stats().pendingChunks + pipeline.stats().chunksScheduled).toBe(90);
   });
 
   it('never drops a chunk when the stream arrives in real time', () => {
@@ -283,6 +297,94 @@ describe('PlaybackPipeline — bounded queue and surfaced faults', () => {
     for (let i = 1; i < backend.schedules.length; i += 1) {
       expect(backend.schedules[i].startAt).toBeCloseTo(backend.schedules[i - 1].startAt + 0.05, 9);
     }
+  });
+
+  // ── The delivery rate the provider actually uses (measured 2026-09-18) ────
+  //
+  // The live lane's real traffic is NOT real time: the model's audio arrives at
+  // ~4.1x playback speed (measured on a real Gemini Live lane: 8.77 s of speech
+  // delivered in 2.12 s, in bursts of 3-4 chunks every ~80-100 ms). Every
+  // scheduling rule below is about that rate, because the shipped rules were
+  // written for a 1x stream.
+  describe('faster-than-real-time delivery (the measured live-lane rate)', () => {
+    it('plays the WHOLE answer: accepted audio is booked as the clock advances, not only on the next arrival', () => {
+      vi.useFakeTimers();
+      try {
+        const { backend, pipeline, advance } = makePipeline();
+        // 9 s of speech in 90 x 100 ms chunks, 4 chunks every 100 ms — the shape
+        // measured on a real lane (8.77 s delivered in 2.12 s).
+        for (let seq = 0; seq < 90; seq += 1) {
+          if (seq > 0 && seq % 4 === 0) advance(0.1);
+          pipeline.pushChunk(outputChunk(seq, 2_400));
+        }
+        const afterBurst = pipeline.stats();
+        expect(afterBurst.chunksScheduled).toBeLessThan(90); // the burst did not fit
+
+        // The burst has ended. Nothing more arrives — as at the end of a turn —
+        // while playback continues. The queue must drain into the graph on its
+        // own, or the operator hears the answer stop halfway.
+        for (let step = 0; step < 60; step += 1) {
+          advance(0.25);
+          vi.advanceTimersByTime(250);
+        }
+
+        const stats = pipeline.stats();
+        expect(stats.chunksScheduled).toBe(90);
+        expect(stats.pendingChunks).toBe(0);
+        expect(stats.chunksDropped).toBe(0);
+        // And still contiguous: booked end to end, never overlapping.
+        for (let i = 1; i < backend.schedules.length; i += 1) {
+          expect(backend.schedules[i].startAt).toBeCloseTo(
+            backend.schedules[i - 1].startAt + backend.schedules[i - 1].frames / VOICE_PLAYBACK_RATE,
+            9,
+          );
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stops the drain when the lane is stopped, so nothing plays after an explicit stop', () => {
+      vi.useFakeTimers();
+      try {
+        const { backend, pipeline, advance } = makePipeline();
+        for (let seq = 0; seq < 40; seq += 1) {
+          if (seq > 0 && seq % 4 === 0) advance(0.1);
+          pipeline.pushChunk(outputChunk(seq, 2_400));
+        }
+        const scheduledBefore = backend.schedules.length;
+        pipeline.stop();
+        for (let step = 0; step < 20; step += 1) {
+          advance(0.25);
+          vi.advanceTimersByTime(250);
+        }
+        expect(pipeline.stats().pendingChunks).toBe(0);
+        expect(backend.schedules.length).toBe(scheduledBefore);
+        expect(backend.stops).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('leaves no timer behind after dispose (no work on a dead lane)', () => {
+      vi.useFakeTimers();
+      try {
+        const { backend, pipeline, advance } = makePipeline();
+        for (let seq = 0; seq < 40; seq += 1) {
+          if (seq > 0 && seq % 4 === 0) advance(0.1);
+          pipeline.pushChunk(outputChunk(seq, 2_400));
+        }
+        pipeline.dispose();
+        const scheduledBefore = backend.schedules.length;
+        for (let step = 0; step < 20; step += 1) {
+          advance(0.25);
+          vi.advanceTimersByTime(250);
+        }
+        expect(backend.schedules.length).toBe(scheduledBefore);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('drops a corrupt chunk and surfaces it rather than throwing', () => {

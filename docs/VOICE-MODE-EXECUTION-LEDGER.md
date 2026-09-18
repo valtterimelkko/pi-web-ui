@@ -379,6 +379,49 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 ("IT STARTS TALKING ON TOP OF EACH OTHER" — the client's playback scheduler was built for a stream that
+arrives at real time; the live lane arrives 4.1x faster. Measured with a new lab, root-caused, fixed).**
+
+Operator: *"the talker's voice starts talking on top of each other … it loads several sentences at the same time …
+they all kind of go on top of each other and it becomes … I can't really understand what it's saying."* The operator
+also said the observability tools probably cannot see this. They were right: `voice-kernel` records turns, briefs,
+receipts and capture faults, and nothing about the shape of the audio; the audio regression lab's OS-output oracle
+cannot run here (`doctor` → `capture:chain` FAIL).
+
+**New equipment:** `scripts/voice-lane-lab/` (canonical doc `docs/VOICE-LANE-LAB.md`) — captures a REAL lane
+(disposable server, real Gemini Live, real synthesised operator speech) keeping every `voice_audio_chunk` with its
+arrival time and samples, then replays the SHIPPED client scheduler
+(`client/src/lib/voiceLive/playbackSession.ts`) over that exact capture through a recording backend. Detector +
+teeth: `server/tests/voice-lane-lab/oracle.test.ts` (14), including the operator's own symptom (`chunk_overlap`),
+duplicate payloads, stranded audio, drops, sequence breaks, declared-vs-decoded duration, and the three ways a second
+output chain can exist.
+
+**MEASURED.** The lane's model audio arrives at **4.14x real time** (99 chunks, seq 0..98 with no gaps and no
+duplicate payloads, 8.77 s of speech in 2.12 s, bursts of 3-4 chunks every ~80-100 ms). The server's stream is clean.
+The SHIPPED scheduler over that exact capture: **48 of 99 chunks booked (4.17 s of 8.77 s), 4.5 s accepted and never
+booked, 1 dropped.** Two rules, both written for a 1x stream: (1) `pump()` was called only from `pushChunk`, so
+nothing re-booked as playback consumed the queue — the tail of every answer was stranded until a LATER chunk pushed
+it into a later moment of the conversation; (2) the backlog bound was a chunk COUNT of 50, silently assuming 20 ms
+chunks, so it was 5 s of speech rather than 1 s and cut the middle out of longer answers (measured: 30 s answer →
+**156 chunks dropped**). A 1x control stream dropped and stranded nothing, which is why this was never caught.
+
+**FIX** (`playbackSession.ts`, `audioConstants.ts`): drain on the CLOCK as well as on arrival (a timer armed for
+exactly when another chunk fits, cleared by `stop()`/`dispose()`, backing off rather than spinning if the audio clock
+is stalled), and bound the backlog in AUDIO rather than in chunks (`VOICE_PLAYBACK_MAX_PENDING_MS = 60_000`, a memory
+guard, not a latency policy). Overflow still drops the OLDEST unplayed chunk and surfaces `playback_overflow`, and the
+utterance is still never hard-stopped by a duck: §5.2 of the frozen contract is preserved as written — the units and
+the pump trigger were the bug, not the rule.
+
+**PROOF, same capture, only the scheduler changed:** 48 → **99 chunks scheduled**, 4.17 s → **8.77 s booked**,
+4.5 s → **0 stranded**, 1 → **0 dropped**, overlap 0 ms both sides (the shipped scheduler has never overlapped itself;
+the operator's phrase describes what the stranding and the drops sound like). Mutation-checked tests: disabling the
+drain fails 1, restoring the old count bound fails 2; restored, 18/18 pass. Evidence +
+`arrival-shape.txt`: `operations/voice-live-20260917/evidence/lane-overlap-20260918/`.
+
+**NOT PROVEN:** a second output chain in the operator's browser (two AudioContexts, two mounted lane surfaces or two
+tabs) is a finding the detector can raise but a protocol-level capture reports as "not measured", never "clean"; and
+this lane cannot see OS-rendered audio. A browser scenario is the next increment.
+
 **2026-09-18 ("IT DOES NOT HAVE ACCESS TO THE SESSION" AGAIN — the worker was on disk, not in memory; root-caused
 from the journal, fixed, proven against the operator's real session).**
 
