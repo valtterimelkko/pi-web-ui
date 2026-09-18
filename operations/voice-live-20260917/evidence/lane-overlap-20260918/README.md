@@ -26,6 +26,10 @@ So the server's stream is clean: one stream, in order, nothing duplicated. The d
 
 ## 2. What the shipped client did with it
 
+`chunks.json` + `audio/` are the capture itself (every model-speech chunk with its arrival time, digest and
+samples), so this evidence **re-runs offline**: `npx vite-node scripts/voice-lane-lab/cli.ts analyse
+operations/voice-live-20260917/evidence/lane-overlap-20260918`.
+
 `before-measurement.json` — the SHIPPED scheduler (`client/src/lib/voiceLive/playbackSession.ts`, driven through a
 recording backend so the real arithmetic produced it) over those exact 99 chunks at their exact arrival times:
 

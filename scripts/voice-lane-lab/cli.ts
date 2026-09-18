@@ -67,7 +67,10 @@ async function measure(captureDir: string): Promise<{ verdict: ReturnType<typeof
   }>;
 
   const arrived = records.map((record) => {
-    const bytes = readFileSync(record.pcmPath);
+    // A capture is portable: a relative payload path is resolved against the
+    // capture directory, so a committed record can be re-analysed offline.
+    const pcmPath = path.isAbsolute(record.pcmPath) ? record.pcmPath : path.join(captureDir, record.pcmPath);
+    const bytes = readFileSync(pcmPath);
     const samples = new Float32Array(bytes.byteLength / 2);
     for (let index = 0; index < samples.length; index += 1) samples[index] = bytes.readInt16LE(index * 2) / 32768;
     return {
