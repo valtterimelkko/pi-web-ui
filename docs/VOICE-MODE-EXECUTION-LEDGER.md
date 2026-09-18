@@ -379,6 +379,47 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 ("IT DOES NOT HAVE ACCESS TO THE SESSION" AGAIN — the worker was on disk, not in memory; root-caused
+from the journal, fixed, proven against the operator's real session).**
+
+Operator, minutes after the deploy above: *"I was asking it if it can summarise what the worker had been doing. It
+was attached to a worker session and it told me it was an existing one … but basically the talker told me it does
+not have access to the session."*
+
+**The journal answered it, which is the point of the earlier observability work.** For lane
+`01a0a575-…:vl-1-zze18jkx` the run shows `worker_status_injected {workerActivity: idle}`, `talker_tool_call
+{offer_ask_worker}`, `operator_utterance` ("Tell me what you think is the most significant of the work…") and
+`talker_reply` — *"I don't have access to the worker's session history…"* — and **no `worker_brief_injected` at
+all**. The lane was never handed any of the work: not a truncated view, an empty one.
+
+**Root cause.** A worker session is loaded into the Pi manager LAZILY. `TalkerSessionRegistry.buildSnapshot`
+read only `manager.getAgentSession(id).messages`, so a session that is idle, evicted, or post-restart — the
+operator's session is a 540-entry 2026-09-15 session that was not loaded — presented as an EMPTY conversation,
+while the very same session file was complete on disk and the UI displayed it perfectly well (the UI reads the
+file). The talker was not lying; it had been told nothing. This also explains why the earlier live validation
+passed while production did not: that check ran through the shipped composition with a brief handed to it, never
+against an unloaded session.
+
+**Fix.** `server/src/talker/session-file-history.ts` (new): stream the session file ONCE, keep the newest
+conversation entries while counting every one (so the total stays exact and the disclosure honest), reusing
+`parsePiSessionHistory` — the same interpretation of a session file the browser replay uses — with tool results
+and raw thinking excluded. `buildSnapshot` falls back to it ONLY when the in-memory session holds no messages,
+using the SAME `resolveWorkerSession` resolver the relay's load-on-demand dispatch already used, and caches by
+the file's own version because the worker-status poll runs **every second**: an unchanged file costs one `stat`.
+Every failure degrades to the previous honest view, never to an invented conversation.
+
+**Observability.** `worker_brief_empty` now records a lane that was given a status line and NOTHING about the
+work. It exists precisely because this incident was diagnosable only by noticing which event was *missing*.
+
+**Proof against the operator's actual session** (real session resolver + real registry snapshot + real policy,
+scratch run, `/root/si` session `01a0a575-…`): `activity="worker status: idle" entries=162 total=162`, brief
+`mode=full chars=49046` — the talker now holds the session's real work. Retrieval over the same session:
+`matches=13 searched=162`.
+
+Tests: `server/tests/unit/talker/session-file-history.test.ts` (10) and
+`server/tests/unit/talker/session-registry-disk-history.test.ts` (6, including read-once caching and
+re-read-on-change), plus the `worker_brief_empty` assertion in the mount suite.
+
 **2026-09-18 (the talker's WINDOW ON THE WORK — the operator's "let it see the entire session", measured,
 built, live-validated through the shipped path).**
 

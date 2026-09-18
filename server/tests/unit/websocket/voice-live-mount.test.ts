@@ -356,10 +356,12 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
 
   it('injects the status alone when the host cannot read a brief (never an invented one)', async () => {
     const service = new FakeService();
+    const evidence: Array<Record<string, unknown>> = [];
     const mount = new VoiceLiveMount({
       service,
       delivery: makeDelivery(),
       isWorkerBusy: async () => true,
+      evidence: (event) => evidence.push(event),
       workerBrief: async () => {
         throw new Error('session not loaded');
       },
@@ -371,6 +373,11 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     const last = service.contextUpdates.at(-1);
     expect(last?.statusLine).toBe('CURRENT STATUS: RUNNING');
     expect(last?.note).toBeUndefined();
+    // And the journal says so POSITIVELY. The 2026-09-18 operator report was
+    // diagnosable only by noticing which event was missing; a lane handed a status
+    // line and nothing about the work now records that fact itself.
+    expect(evidence.filter((event) => event.event === 'worker_brief_empty')).toHaveLength(1);
+    expect(evidence.filter((event) => event.event === 'worker_brief_injected')).toHaveLength(0);
   });
 
   it('delivers the exact retained bytes when a confirmation is authorised', async () => {

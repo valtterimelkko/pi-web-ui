@@ -307,14 +307,21 @@ journalctl -u pi-web-ui.service | grep -E "talker_reply|talker_tool_call|worker_
 #   stays in the browser by design.
 
 # 3d. Did the talker read further back for itself, and did it find anything?
-journalctl -u pi-web-ui.service | grep -E "worker_history_retrieved|worker_brief_unavailable"
+journalctl -u pi-web-ui.service | grep -E "worker_history_retrieved|worker_brief_unavailable|worker_brief_empty"
 #   voice-kernel {"event":"worker_history_retrieved","queryChars":N,
 #                 "matches":M,"searched":S,"chars":C}                 ← the read
+#   voice-kernel {"event":"worker_brief_empty","conversationEntries":N} ← it held NO work
 #   voice-kernel {"event":"worker_brief_unavailable","message":"…"}   ← the read failed
 #   `searched` is how many messages the host could see and `matches` how many
 #   matched, so "it said the session does not contain that" is checkable rather
 #   than taken on trust. `worker_brief_unavailable` is the honest degraded state:
 #   the talker then holds only the status line, and says so.
+#   `worker_brief_empty` is the one to look for when the talker says it cannot see
+#   the work: the lane was given a status line and nothing about the work at all.
+#   It exists because on 2026-09-18 that condition was diagnosable only by
+#   noticing which event was MISSING (an unloaded worker session read as an empty
+#   one — since fixed: an unloaded session's file is read, see
+#   `server/src/talker/session-file-history.ts`).
 
 # 3b. Has a client reported a capture fault (a microphone that could not start)?
 curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice.live.captureFaultTotal'

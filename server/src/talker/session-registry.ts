@@ -31,6 +31,7 @@
  */
 
 import { TalkerSession } from './talker.js';
+import { readSessionFileHistory, sessionFileVersion, type SessionFileHistory, type SessionFileVersion } from './session-file-history.js';
 import type { ReleaseVariant } from './proposal-store.js';
 import { digestTurn, type DigestKind } from './digest.js';
 import { createDefaultDeliveries, type DefaultDeliveries } from './delivery.js';
@@ -238,6 +239,15 @@ function extractTextContent(content: unknown): string | undefined {
 const HISTORY_PROVIDER_TAIL = 200;
 
 /**
+ * How many conversation entries a single on-disk read keeps (the renderer budgets
+ * from there), and how many sessions' reads are retained. The read happens only
+ * for sessions this server is NOT holding in memory, and only when the file has
+ * actually changed.
+ */
+const DISK_HISTORY_ENTRIES = 2_000;
+const DISK_HISTORY_CACHE_ENTRIES = 8;
+
+/**
  * P20: the session's earlier conversation for the projection — user and
  * assistant messages only (tool results are harness noise, never spoken
  * material), non-empty text only, oldest first. The renderer bounds and
@@ -273,6 +283,13 @@ export class TalkerSessionRegistry {
    */
   private readonly engineFallbacks = new Map<string, TalkerEngineFallbackRecord>();
   private readonly maxSessions: number;
+  /**
+   * On-disk conversation reads, keyed by session path and validated by the file's
+   * own version. The worker-status poll runs every second, so an unchanged file
+   * must cost one `stat` and nothing more — while a file that HAS changed (a
+   * session resumed elsewhere) is re-read rather than served stale.
+   */
+  private readonly diskHistory = new Map<string, { version: SessionFileVersion; history: SessionFileHistory }>();
   private deliveriesPromise?: Promise<DefaultDeliveries>;
   private resolvedModel?: TalkerModelClient | null;
   /** Tri-state: undefined = not yet resolved; null = resolution failed (stays honest per build). */
@@ -727,7 +744,7 @@ export class TalkerSessionRegistry {
    * session's earlier conversation joins the view, bounded by the renderer,
    * with a truthful total so truncation is disclosed, never hidden.
    */
-  private buildSnapshot(workerSessionId: string, historyTail: number = HISTORY_PROVIDER_TAIL): WorkerStateSnapshot {
+  private async buildSnapshot(workerSessionId: string, historyTail: number = HISTORY_PROVIDER_TAIL): Promise<WorkerStateSnapshot> {
     const status = this.manager.getSessionStatus(workerSessionId);
     let lastAssistantText: string | undefined;
     let history: { entries: WorkerHistoryEntry[]; total: number } | undefined;
@@ -745,6 +762,21 @@ export class TalkerSessionRegistry {
     } catch {
       // Unloaded/disposed session: the status-derived view is still honest.
     }
+    // NOT LOADED HERE (idle, evicted, or after a restart) is not the same as EMPTY.
+    // The session file holds the worker's own conversation and the UI reads it; the
+    // talker must not be told it has no access to a session the operator can see
+    // (2026-09-18 operator report).
+    if (!history) {
+      history = await this.readDiskHistory(workerSessionId, historyTail);
+      if (!lastAssistantText && history) {
+        for (let i = history.entries.length - 1; i >= 0; i--) {
+          if (history.entries[i].role === 'assistant') {
+            lastAssistantText = history.entries[i].text;
+            break;
+          }
+        }
+      }
+    }
     const historyFields = history
       ? { recentHistory: history.entries, historyTotal: history.total }
       : {};
@@ -757,5 +789,48 @@ export class TalkerSessionRegistry {
       ...(lastAssistantText ? { lastAssistantText } : {}),
       ...historyFields,
     };
+  }
+
+  /**
+   * The conversation of a session this server is NOT holding in memory, read from
+   * its file through the same session registry the UI and the relay's dispatch
+   * use. Every failure is an honest unknown (undefined): the status view then
+   * stands alone, and nothing is invented to fill the gap.
+   */
+  private async readDiskHistory(
+    workerSessionId: string,
+    historyTail: number
+  ): Promise<{ entries: WorkerHistoryEntry[]; total: number } | undefined> {
+    const resolver = this.deps.resolveWorkerSession;
+    if (!resolver) return undefined;
+    try {
+      const resolved = await resolver(workerSessionId);
+      if (!resolved?.path) return undefined;
+      const history = await this.readSessionFile(resolved.path);
+      return history.total > 0
+        ? { entries: history.entries.slice(-Math.max(1, historyTail)), total: history.total }
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Cached by file version, so the once-a-second status poll re-reads only on change. */
+  private async readSessionFile(sessionPath: string): Promise<SessionFileHistory> {
+    const version = await sessionFileVersion(sessionPath);
+    if (!version) return { entries: [], total: 0 };
+    const cached = this.diskHistory.get(sessionPath);
+    if (cached && cached.version.size === version.size && cached.version.mtimeMs === version.mtimeMs) {
+      return cached.history;
+    }
+    const history = await readSessionFileHistory(sessionPath, { maxEntries: DISK_HISTORY_ENTRIES });
+    if (history.fileVersion) {
+      if (this.diskHistory.size >= DISK_HISTORY_CACHE_ENTRIES) {
+        const oldest = this.diskHistory.keys().next();
+        if (!oldest.done) this.diskHistory.delete(oldest.value);
+      }
+      this.diskHistory.set(sessionPath, { version: history.fileVersion, history });
+    }
+    return history;
   }
 }

@@ -1716,6 +1716,19 @@ export class VoiceLiveMount {
           briefChars: note.length,
           atMs: this.now(),
         });
+      } else {
+        // A lane given a status line and NOTHING about the work. Recorded
+        // explicitly rather than left as the absence of the event above: on
+        // 2026-09-18 this gap could only be diagnosed by noticing what was
+        // missing, and the operator's report deserves a positive record.
+        this.evidence({
+          event: 'worker_brief_empty',
+          laneId: lane.laneId,
+          workerSessionId: lane.workerSessionId,
+          conversationEntries: entries.length,
+          historyTotal: brief?.total ?? entries.length,
+          atMs: this.now(),
+        });
       }
     } catch (error) {
       this.evidence({
