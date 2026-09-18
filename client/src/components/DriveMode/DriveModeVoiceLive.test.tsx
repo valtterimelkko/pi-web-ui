@@ -12,6 +12,7 @@ import type { ReadBackSpeech, ReadBackSpeaker } from '../../lib/voiceLive/readBa
 import type { CaptureActivityReport, CaptureSession, StartCaptureSessionOptions } from '../../lib/voiceLive/captureSession';
 import type { PlaybackBackend, ScheduledHandle } from '../../lib/voiceLive/playbackSession';
 import { DriveModeVoiceLive } from './DriveModeVoiceLive';
+import { loadCaptureWorklet } from '../../lib/voiceLive/captureSession';
 
 const LANE = createVoiceLane({ workerSessionId: 'worker-9', nonce: 'ui1' });
 
@@ -46,11 +47,11 @@ class FakeReadBackSpeaker implements ReadBackSpeaker {
   }
 }
 
-function makeSurface(options: { failMic?: boolean } = {}) {
+function makeSurface(options: { failMic?: boolean; failWorklet?: boolean } = {}) {
   return makeSurfaceWith(options);
 }
 
-function makeSurfaceWith(options: { failMic?: boolean; readBack?: ReadBackSpeaker } = {}) {
+function makeSurfaceWith(options: { failMic?: boolean; failWorklet?: boolean; readBack?: ReadBackSpeaker } = {}) {
   const speaker = new FakeReadBackSpeaker();
   const frames: VoiceClientMessage[] = [];
   const activity: Array<(report: CaptureActivityReport) => void> = [];
@@ -72,7 +73,11 @@ function makeSurfaceWith(options: { failMic?: boolean; readBack?: ReadBackSpeake
     state: 'running',
     currentTime: 0,
     destination: {},
-    audioWorklet: { addModule: async () => undefined },
+    audioWorklet: {
+      addModule: async (url: string) => {
+        if (options.failWorklet) throw new Error(`Failed to load module script: ${url}`);
+      },
+    },
     createGain: gain,
     createOscillator: () => ({ type: 'sine', frequency: { setValueAtTime() {} }, connect() {}, start() {}, stop() {} }),
     resume: async () => undefined,
@@ -87,6 +92,13 @@ function makeSurfaceWith(options: { failMic?: boolean; readBack?: ReadBackSpeake
       return { getAudioTracks: () => [{ stop() {} }] } as unknown as MediaStream;
     },
     startCaptureSession: async (opts: StartCaptureSessionOptions) => {
+      // Faithful to the real wiring: load the worklet exactly as production
+      // does (same-origin asset first) before handing back a session, so a
+      // worklet that will not load fails HERE, not silently.
+      await loadCaptureWorklet(opts.context, {
+        ...(opts.onFault ? { onFault: opts.onFault } : {}),
+        ...(opts.workletUrls ? { workletUrls: opts.workletUrls } : {}),
+      });
       activity.push(opts.onActivity ?? (() => {}));
       const session: CaptureSession = {
         inputRate: 48_000,
@@ -168,8 +180,26 @@ describe('DriveModeVoiceLive', () => {
     const text = screen.getByTestId('voice-live-listening-state').textContent ?? '';
     expect(text).toContain('Microphone unavailable');
     expect(text).toContain('permission denied');
-    expect(text).toContain('Push-to-talk and typing still work');
+    // Push-to-talk drives the same capture path, so promising it here would be
+    // a false claim (the 2026-09-18 field report).
+    expect(text).toContain('same microphone path');
+    expect(text).toContain('typing still works');
+    expect(text).not.toContain('Push-to-talk and typing still work');
     expect(screen.getByTestId('voice-live-start')).toBeTruthy(); // retryable
+  });
+
+  it('names the worklet as the cause and never claims push-to-talk works', async () => {
+    const { surface } = makeSurface({ failWorklet: true });
+    render(<DriveModeVoiceLive surface={surface} />);
+    fireEvent.click(screen.getByTestId('voice-live-mode-push-to-talk'));
+    fireEvent.click(screen.getByTestId('voice-live-start'));
+    await waitFor(() =>
+      expect(screen.getByTestId('voice-live-listening-state').getAttribute('data-capture')).toBe('error'),
+    );
+    const text = screen.getByTestId('voice-live-listening-state').textContent ?? '';
+    expect(text).toContain('capture worklet could not be loaded');
+    expect(text).toContain('including push-to-talk');
+    expect(text).not.toContain('push-to-talk and typing still work');
   });
 
   it('shows the honest suspended state after an explicit pause', async () => {

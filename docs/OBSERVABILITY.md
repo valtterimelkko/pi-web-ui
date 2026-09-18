@@ -290,6 +290,14 @@ curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
 # 3. Machine-readable counters for the same story:
 curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice'
 
+# 3b. Has a client reported a capture fault (a microphone that could not start)?
+curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice.live.captureFaultTotal'
+# → {"worklet_unavailable": 1} etc; unknown reasons bucket as "other". The same
+#   report appears in the journal as a structured evidence line:
+#   `voice-kernel {"event":"voice_capture_fault","laneId":…,"reason":…}`
+#   This is how a failure that only the operator could see in their browser
+#   console (the 2026-09-18 native-lane worklet failure) becomes server-side.
+
 # 3a. Which provider model is the live engine actually on?
 curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice.live.model'
 # → "gemini-3.8-live" (the seat every `connect` sends); `null` means the server

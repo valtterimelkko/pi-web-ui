@@ -37,7 +37,7 @@ import {
   resampleMono,
   type ResamplerState,
 } from './captureDsp';
-import { createCaptureWorkletUrl } from './captureWorkletSource';
+import { resolveCaptureWorkletUrls } from './captureWorkletSource';
 import { pcm16Base64 } from './messages';
 
 /** One encoded, ready-to-send microphone chunk. */
@@ -256,6 +256,8 @@ export interface StartCaptureSessionOptions {
   /** Sends silence too (push-to-talk precision mode). */
   sendSilence?: boolean;
   now?: () => number;
+  /** Candidate worklet URLs, in order (tests inject; production uses the default). */
+  workletUrls?: string[];
 }
 
 export interface CaptureSession {
@@ -268,24 +270,62 @@ export interface CaptureSession {
 }
 
 /**
+ * Load the capture worklet from the first candidate URL that works.
+ *
+ * Order matters and is not cosmetic: the same-origin asset satisfies
+ * `script-src 'self'`, while a blob: URL does not (production's policy carries
+ * no `blob:`). Every candidate that fails is named, and total failure is
+ * reported as the NAMED fault `worklet_unavailable` before it throws — so the
+ * reason survives as its own fact instead of collapsing into a generic capture
+ * error. Nothing here decides anything about playback or the gate.
+ */
+export async function loadCaptureWorklet(
+  context: AudioContext,
+  options: { onFault?: (fault: CaptureFaultReport) => void; workletUrls?: string[] } = {},
+): Promise<void> {
+  const candidates = options.workletUrls ?? resolveCaptureWorkletUrls();
+  const failures: string[] = [];
+
+  for (const url of candidates) {
+    const isObjectUrl = url.startsWith('blob:');
+    try {
+      await context.audioWorklet.addModule(url);
+      return;
+    } catch (error) {
+      const name = isObjectUrl ? 'blob:' : url;
+      failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      // Revoking must never mask the real failure: an environment that can
+      // create the object URL is not guaranteed to expose the revoke beside it.
+      if (isObjectUrl && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+    }
+  }
+
+  const detail = failures.join('; ');
+  options.onFault?.({ reason: 'worklet_unavailable', detail });
+  throw new Error(`capture worklet could not be loaded (${detail})`);
+}
+
+/**
  * Wire a live microphone stream through the worklet into a `CapturePipeline`.
- * Throws when AudioWorklet is unavailable so the surface can fall back to
- * push-to-talk honestly rather than pretending to listen.
+ * Throws when the worklet cannot be loaded (a named `worklet_unavailable`
+ * fault) so the surface reports the real reason rather than pretending to
+ * listen — capture is the one thing that must never be faked.
  */
 export async function startCaptureSession(
   options: StartCaptureSessionOptions,
 ): Promise<CaptureSession> {
   const { context, stream } = options;
   if (!context.audioWorklet) {
-    throw new Error('AudioWorklet is unavailable in this browser context');
+    const detail = 'AudioWorklet is unavailable in this browser context';
+    options.onFault?.({ reason: 'worklet_unavailable', detail });
+    throw new Error(detail);
   }
 
-  const workletUrl = createCaptureWorkletUrl();
-  try {
-    await context.audioWorklet.addModule(workletUrl);
-  } finally {
-    URL.revokeObjectURL(workletUrl);
-  }
+  await loadCaptureWorklet(context, {
+    ...(options.onFault ? { onFault: options.onFault } : {}),
+    ...(options.workletUrls ? { workletUrls: options.workletUrls } : {}),
+  });
 
   const source = context.createMediaStreamSource(stream);
   const node = new AudioWorkletNode(context, VOICE_CAPTURE_PROCESSOR_NAME, {

@@ -1,3 +1,4 @@
+import { captureUnavailableMessage } from '../../lib/voiceLive/captureFaultCopy';
 import { useCallback, useSyncExternalStore } from 'react';
 import { Mic, MicOff, Radio, Keyboard, AlertTriangle, BellRing, Clock, HelpCircle } from 'lucide-react';
 import type {
@@ -249,7 +250,11 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
                   ? 'Listening while you hold the button.'
                   : 'Listening — open mic. Talking over the talker ducks it; it never stops you being heard.'
                 : state.capture === 'error'
-                  ? `Microphone unavailable — ${state.captureDetail ?? 'unknown error'}. Push-to-talk and typing still work.`
+                  ? captureUnavailableMessage({
+                      detail: state.captureDetail,
+                      reason: state.captureFaultReason,
+                      mode: captureMode,
+                    })
                   : state.capture === 'suspended'
                     ? `Listening suspended${state.captureDetail ? ` — ${state.captureDetail}` : ''}. Push-to-talk and typing still work.`
                     : 'Not listening yet. Start the microphone, or type in the composer.'}

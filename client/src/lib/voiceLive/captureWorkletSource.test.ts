@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { VOICE_CAPTURE_BLOCK_MS, VOICE_CAPTURE_PROCESSOR_NAME } from './audioConstants';
-import { CAPTURE_WORKLET_SOURCE } from './captureWorkletSource';
+import {
+  CAPTURE_WORKLET_PATH,
+  CAPTURE_WORKLET_SOURCE,
+  resolveCaptureWorkletUrls,
+} from './captureWorkletSource';
 
 /**
  * The worklet processor is evaluated here as the AudioWorkletGlobalScope would
@@ -157,5 +161,35 @@ describe('capture worklet source', () => {
     processor.port.onmessage?.({ data: { type: 'nonsense' } });
     processor.port.onmessage?.({ data: null });
     expect(posted).toHaveLength(0);
+  });
+});
+
+/**
+ * The worklet is served as a same-origin asset (dev middleware + build emit),
+ * NOT only as a blob: URL: production serves `script-src 'self'` with no
+ * `blob:`, and a blob-URL worklet is blocked there (the 2026-09-18 field
+ * failure). The same-origin path must therefore be the FIRST candidate; the
+ * blob stays as a fallback for a stale bundle or a harness that serves neither.
+ */
+describe('capture worklet delivery (CSP-safe asset first)', () => {
+  beforeEach(() => {
+    // jsdom implements neither `createObjectURL` nor a real audio thread; the
+    // browser shape is what is under test here.
+    Object.defineProperty(URL, 'createObjectURL', { value: () => 'blob:stub', configurable: true, writable: true });
+  });
+  afterEach(() => {
+    delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+  });
+
+  it('offers the same-origin asset path before any blob URL', () => {
+    const urls = resolveCaptureWorkletUrls();
+    expect(urls[0]).toBe(CAPTURE_WORKLET_PATH);
+    expect(urls[0].startsWith('/')).toBe(true);
+    expect(urls.some((url) => url.startsWith('blob:'))).toBe(true);
+  });
+
+  it('names a path a `script-src self` policy can load', () => {
+    expect(CAPTURE_WORKLET_PATH.endsWith('.js')).toBe(true);
+    expect(CAPTURE_WORKLET_PATH).not.toContain('://');
   });
 });

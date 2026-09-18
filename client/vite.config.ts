@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type ConfigEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { captureWorkletPlugin } from './voice-capture-worklet-plugin';
 import {
   createSourceBuildIdentity,
   generateBuildManifest,
@@ -44,7 +45,7 @@ export default defineConfig(({ command }) => {
   const buildIdentityJson = JSON.stringify(buildIdentity);
 
   return {
-    plugins: [react()],
+    plugins: [react(), captureWorkletPlugin()],
     define: {
       'import.meta.env.VITE_BUILD_IDENTITY': JSON.stringify(buildIdentityJson),
       // Compatibility for older bundles; this is the identity's build id, not

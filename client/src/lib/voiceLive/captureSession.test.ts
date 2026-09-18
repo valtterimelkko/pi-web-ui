@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   VOICE_AUDIO_INPUT_FORMAT,
   VOICE_AUDIO_INPUT_MIME,
@@ -10,7 +10,13 @@ import {
   VOICE_FRAME_MS,
   VAD_HANGOVER_FRAMES,
 } from './audioConstants';
-import { CapturePipeline, type CaptureChunk, type CaptureFaultReport } from './captureSession';
+import {
+  CapturePipeline,
+  loadCaptureWorklet,
+  type CaptureChunk,
+  type CaptureFaultReport,
+} from './captureSession';
+import { CAPTURE_WORKLET_PATH } from './captureWorkletSource';
 import { buildAudioChunk, createVoiceLane } from './messages';
 
 // Vite raw import (the jsdom test environment has no Node builtins).
@@ -226,5 +232,52 @@ describe('captureSession source invariants (N5 — capture is never scheduled)',
     const exported = code.match(/export (?:async )?function (\w+)/g) ?? [];
     expect(exported).toContain('export async function startCaptureSession');
     for (const name of exported) expect(name).not.toMatch(/suppress|suspend|mute/i);
+  });
+});
+
+/**
+ * A worklet that cannot be loaded is a NAMED fault, not a generic capture
+ * error: the operator's report named this failure and the reason must reach the
+ * surface (and, later, the server) as its own fact.
+ */
+describe('capture worklet loading (ordered candidates)', () => {
+  beforeEach(() => {
+    Object.defineProperty(URL, 'createObjectURL', { value: () => 'blob:stub', configurable: true, writable: true });
+    Object.defineProperty(URL, 'revokeObjectURL', { value: () => undefined, configurable: true, writable: true });
+  });
+  afterEach(() => {
+    delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
+  });
+
+  function contextWith(addModule: (url: string) => Promise<void>): AudioContext {
+    return { audioWorklet: { addModule } } as unknown as AudioContext;
+  }
+
+  it('falls back to the blob URL when the same-origin asset is not served', async () => {
+    const tried: string[] = [];
+    const faults: CaptureFaultReport[] = [];
+    await loadCaptureWorklet(contextWith(async (url) => {
+      tried.push(url);
+      if (url === CAPTURE_WORKLET_PATH) throw new Error('Failed to load module script');
+    }), { onFault: (fault) => faults.push(fault) });
+
+    expect(tried[0]).toBe(CAPTURE_WORKLET_PATH);
+    expect(tried[1]?.startsWith('blob:')).toBe(true);
+    expect(faults).toEqual([]);
+  });
+
+  it('reports worklet_unavailable, naming both attempts, when no candidate loads', async () => {
+    const faults: CaptureFaultReport[] = [];
+    await expect(
+      loadCaptureWorklet(contextWith(async () => { throw new Error('blocked by CSP'); }), {
+        onFault: (fault) => faults.push(fault),
+      }),
+    ).rejects.toThrow(/capture worklet could not be loaded/);
+
+    expect(faults).toHaveLength(1);
+    expect(faults[0].reason).toBe('worklet_unavailable');
+    expect(faults[0].detail).toContain(CAPTURE_WORKLET_PATH);
+    expect(faults[0].detail).toContain('blocked by CSP');
   });
 });

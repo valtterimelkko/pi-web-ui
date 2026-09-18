@@ -287,6 +287,10 @@ consent (N3).
   "attachmentGeneration": 3, "state": "speech_start", "atMs": 1758100000000 }
 ```
 
+| Field | Req | Notes |
+|---|---|---|
+| `captureFault` | no | **Additive v1.** `{ reason, detail?, atMs }` — a capture fault the CLIENT observed (a worklet that would not load, a refused device, backpressure), so the server can record why the microphone is not running instead of the reason living only in the operator's browser console. Observation only: it changes no capture authority, no gate input, and no lane state, and `state` still carries the true local activity boundary. `reason` is a short machine token (`worklet_unavailable` \| `capture_failed` \| `capture_backpressure`); the server buckets anything else as `other` to keep counters bounded. Added 2026-09-18 in the same change as its catalogue entry (§1.3 rule 2). |
+
 #### `proposal_confirm`
 
 | Field | Req | Notes |

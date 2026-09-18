@@ -34,6 +34,7 @@ import type {
 import { type SpeechArbiter } from '../speechArbiter';
 import {
   startCaptureSession,
+  type CaptureFaultReason,
   type CaptureFaultReport,
   type CaptureSession,
   type CaptureStats,
@@ -101,6 +102,13 @@ export interface ReadBackState {
 export interface VoiceLiveSurfaceState {
   capture: CaptureLifecycle;
   captureDetail: string | null;
+  /**
+   * The NAMED cause of the last capture failure (`worklet_unavailable` when the
+   * worklet would not load, `capture_failed` when it broke mid-stream). The
+   * surface's copy is derived from this, so a failure can never be described by
+   * a claim that is false for its cause.
+   */
+  captureFaultReason: CaptureFaultReason | null;
   captureStats: CaptureStats | null;
   playback: PlaybackStats | null;
   lastChime: ChimeVariant | null;
@@ -159,6 +167,8 @@ export class VoiceLiveSurface {
   private capture: CaptureSession | null = null;
   private captureLifecycle: CaptureLifecycle = 'idle';
   private captureDetail: string | null = null;
+  /** The named cause of the last capture failure; cleared by a fresh attempt. */
+  private captureFaultReasonValue: CaptureFaultReason | null = null;
   private chime: ReturnType<typeof createDeliveryChime> | null = null;
   private lastChime: ChimeVariant | null = null;
   private captureStats: CaptureStats | null = null;
@@ -242,9 +252,10 @@ export class VoiceLiveSurface {
   }
 
   private refreshState(): VoiceLiveSurfaceState {
-    const state: VoiceLiveSurfaceState = {
-      capture: this.captureLifecycle,
-      captureDetail: this.captureDetail,
+      const state: VoiceLiveSurfaceState = {
+        capture: this.captureLifecycle,
+        captureDetail: this.captureDetail,
+        captureFaultReason: this.captureFaultReasonValue,
       captureStats: this.capture ? this.capture.stats() : this.captureStats,
       playback: this.playback ? this.playback.stats() : null,
       lastChime: this.lastChime,
@@ -317,6 +328,7 @@ export class VoiceLiveSurface {
     }
     this.captureLifecycle = 'starting';
     this.captureDetail = null;
+    this.captureFaultReasonValue = null;
     this.publish();
 
     try {
@@ -337,6 +349,9 @@ export class VoiceLiveSurface {
         onFault: (fault) => {
           this.captureFaults.push(fault);
           if (this.captureFaults.length > MAX_FAULTS) this.captureFaults.shift();
+          // A named fault is the cause the copy is built from.
+          this.captureFaultReasonValue = fault.reason;
+          this.reportCaptureFault(fault);
           this.publish();
         },
         ...(options.sendSilence !== undefined ? { sendSilence: options.sendSilence } : {}),
@@ -349,10 +364,35 @@ export class VoiceLiveSurface {
     } catch (error) {
       this.captureLifecycle = 'error';
       this.captureDetail = error instanceof Error ? error.message : String(error);
-      // Capture failing is not a reason to pretend; the surface shows this and
-      // keeps push-to-talk and typed input reachable (intent §20).
+      // A thrown failure with no named fault is still a capture failure, and it
+      // is named as one — never left for the copy to guess at.
+      if (this.captureFaultReasonValue === null) {
+        this.captureFaultReasonValue = 'capture_failed';
+        const fault = { reason: 'capture_failed' as const, detail: this.captureDetail ?? undefined };
+        this.captureFaults.push(fault);
+        if (this.captureFaults.length > MAX_FAULTS) this.captureFaults.shift();
+        this.reportCaptureFault(fault);
+      }
+      // Capture failing is not a reason to pretend; the surface shows the named
+      // cause and says plainly what is still reachable (intent §20).
       this.publish();
       return 'error';
+    }
+  }
+
+  /**
+   * Put a capture fault on the wire. Reporting is strictly best-effort: a
+   * transport that refuses the frame (or a lane that is not open yet) must never
+   * turn a microphone problem into a second, different failure.
+   */
+  private reportCaptureFault(fault: { reason: string; detail?: string }): void {
+    try {
+      this.controller.reportCaptureFault(
+        fault.detail === undefined ? { reason: fault.reason } : { reason: fault.reason, detail: fault.detail },
+        this.factories.now ? this.factories.now() : Date.now(),
+      );
+    } catch {
+      /* best effort: the operator-facing state is already set */
     }
   }
 

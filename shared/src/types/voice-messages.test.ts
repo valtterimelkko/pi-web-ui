@@ -107,6 +107,7 @@ const CLIENT_EXAMPLES: Record<VoiceClientMessage['type'], VoiceClientMessage> = 
     type: 'voice_activity_state',
     state: 'speech_start',
     atMs: 1_700_000_000_000,
+    captureFault: { reason: 'worklet_unavailable', atMs: 1_700_000_000_001 },
   },
   proposal_confirm: {
     ...ENVELOPE,
@@ -522,6 +523,21 @@ describe('voice wire v1 — audio framing', () => {
     // so an additive v1 field cannot break an older client.
     expect(
       checkVoiceEnvelope({ ...SERVER_EXAMPLES.voice_state, futureField: true }, 'server-to-client')
+    ).toEqual({ ok: true });
+  });
+
+  it('accepts the additive capture-fault field on the activity frame (v1, named)', () => {
+    // The client reports a microphone that could not start, so the server can
+    // record it. Purely additive and named in the catalogue — the rule that an
+    // unnamed client field is refused still stands right beside it.
+    expect(
+      checkVoiceEnvelope(
+        {
+          ...CLIENT_EXAMPLES.voice_activity_state,
+          captureFault: { reason: 'worklet_unavailable', detail: 'blocked', atMs: 1 },
+        },
+        'client-to-server'
+      )
     ).toEqual({ ok: true });
   });
 

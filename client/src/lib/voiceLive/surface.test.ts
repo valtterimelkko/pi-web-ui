@@ -6,6 +6,7 @@ import {
   type VoiceReceiptEventMessage,
 } from '@pi-web-ui/shared';
 import { createSpeechArbiter } from '../speechArbiter';
+import { loadCaptureWorklet } from './captureSession';
 import { VoiceLiveSurface, type VoiceLiveSurfaceFactories } from './surface';
 import { createVoiceLane, pcm16Base64 } from './messages';
 import type { ReadBackSpeech, ReadBackSpeaker } from './readBack';
@@ -120,7 +121,7 @@ class FakeReadBackSpeaker implements ReadBackSpeaker {
   }
 }
 
-function makeSurface(options: { failMic?: boolean; captureFault?: boolean; readBack?: ReadBackSpeaker; laneProbeTimeoutMs?: number } = {}): Harness {
+function makeSurface(options: { failMic?: boolean; failWorklet?: boolean; captureFault?: boolean; readBack?: ReadBackSpeaker; laneProbeTimeoutMs?: number } = {}): Harness {
   const frames: VoiceClientMessage[] = [];
   const captureOptions: StartCaptureSessionOptions[] = [];
   const activity: Array<(report: CaptureActivityReport) => void> = [];
@@ -132,7 +133,11 @@ function makeSurface(options: { failMic?: boolean; captureFault?: boolean; readB
   const fakeContext = {
     state: 'running',
     currentTime: 0,
-    audioWorklet: { addModule: async () => undefined },
+    audioWorklet: {
+      addModule: async (url: string) => {
+        if (options.failWorklet) throw new Error(`Failed to load module script: ${url}`);
+      },
+    },
     destination: {} as AudioNode,
     createGain: () => ({ gain: { value: 1, setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {}, value0: 1 }, connect() {}, disconnect() {} }),
     createOscillator: () => ({ type: 'sine', frequency: { setValueAtTime() {} }, connect() {}, start() {}, stop() {} }),
@@ -154,6 +159,12 @@ function makeSurface(options: { failMic?: boolean; captureFault?: boolean; readB
     },
     startCaptureSession: async (opts) => {
       captureOptions.push(opts);
+      // Faithful to production: the worklet is really loaded (same-origin asset
+      // first) before a session exists, so a worklet failure is the same failure.
+      await loadCaptureWorklet(opts.context, {
+        ...(opts.onFault ? { onFault: opts.onFault } : {}),
+        ...(opts.workletUrls ? { workletUrls: opts.workletUrls } : {}),
+      });
       activity.push(opts.onActivity ?? (() => {}));
       const session: CaptureSession = {
         inputRate: 48_000,
@@ -223,6 +234,25 @@ describe('VoiceLiveSurface — capture lifecycle is honest', () => {
     sink(chunk);
     expect(harness.frames).toHaveLength(1);
     expect(harness.frames[0].type).toBe('voice_audio_chunk');
+  });
+
+  it('names the worklet as the cause when the worklet will not load', async () => {
+    const harness = makeSurface({ failWorklet: true });
+    const result = await harness.surface.startCapture();
+    expect(result).toBe('error');
+    expect(harness.surface.getState().captureFaultReason).toBe('worklet_unavailable');
+    expect(harness.surface.getState().captureFaults.at(-1)?.reason).toBe('worklet_unavailable');
+
+    // …and the SERVER is told, on the activity frame, so the reason is not
+    // confined to this browser (the gap the field failure exposed).
+    type ActivityFrame = Extract<VoiceClientMessage, { type: 'voice_activity_state' }>;
+    const faultFrame = harness.frames.filter(
+      (frame): frame is ActivityFrame => frame.type === 'voice_activity_state' && 'captureFault' in frame,
+    );
+    expect(faultFrame).toHaveLength(1);
+    expect(faultFrame[0].captureFault?.reason).toBe('worklet_unavailable');
+    // The boundary carried is the TRUE local state, not a fabricated one.
+    expect(faultFrame[0].state).toBe('speech_end');
   });
 
   it('reports an error and keeps going when the microphone is refused (fallback stays reachable)', async () => {

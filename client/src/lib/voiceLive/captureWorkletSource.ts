@@ -100,3 +100,30 @@ registerProcessor(${JSON.stringify(VOICE_CAPTURE_PROCESSOR_NAME)}, VoiceCaptureP
 export function createCaptureWorkletUrl(): string {
   return URL.createObjectURL(new Blob([CAPTURE_WORKLET_SOURCE], { type: 'text/javascript' }));
 }
+
+/**
+ * The same-origin path the worklet is served from: a vite dev middleware serves
+ * `CAPTURE_WORKLET_SOURCE` there, and the production build emits the same bytes
+ * as an asset. It exists because a **blob: URL is not loadable as a script under
+ * `script-src 'self'`** — production's own CSP carries no `blob:` (the
+ * 2026-09-18 field failure: capture could never start in the deployed UI while
+ * every dev-server run worked). Nothing about this path weakens the policy: it is
+ * the page's own origin, and the bytes are still generated from one source.
+ */
+export const CAPTURE_WORKLET_PATH = '/voice-live-capture-worklet.js';
+
+/**
+ * The candidate URLs in the order they are tried. The same-origin asset comes
+ * FIRST (the only one a strict CSP permits); the blob stays last so a bundle
+ * whose dist predates the asset — or a harness that serves neither — still has a
+ * path that works where the policy is absent.
+ */
+export function resolveCaptureWorkletUrls(): string[] {
+  const urls = [CAPTURE_WORKLET_PATH];
+  // A browser without `createObjectURL` simply has no second candidate; it also
+  // has no need for one, since the same-origin asset is the first choice.
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    urls.push(createCaptureWorkletUrl());
+  }
+  return urls;
+}

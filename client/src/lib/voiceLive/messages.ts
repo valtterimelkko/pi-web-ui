@@ -45,6 +45,7 @@ import {
   type AttachmentGeneration,
   type VoiceActivityState,
   type VoiceActivityStateMessage,
+  type VoiceCaptureFault,
   type VoiceAudioInputChunk,
   type VoiceAudioInputChunkMessage,
   type VoiceAudioOutputChunkMessage,
@@ -243,8 +244,16 @@ export function buildActivityState(
   state: VoiceActivityState,
   atMs: number,
   stamp?: VoiceStamp,
+  captureFault?: VoiceCaptureFault,
 ): VoiceActivityStateMessage {
-  return finalise({ type: 'voice_activity_state', ...envelope(lane, stamp), state, atMs });
+  return finalise({
+    type: 'voice_activity_state',
+    ...envelope(lane, stamp),
+    state,
+    atMs,
+    // Additive and optional: the boundary is the message, the fault rides along.
+    ...(captureFault ? { captureFault } : {}),
+  });
 }
 
 export function buildProposalCancel(

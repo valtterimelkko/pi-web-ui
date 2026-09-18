@@ -329,10 +329,26 @@ export interface VoiceAudioInputChunkMessage extends VoiceEnvelope, VoiceAudioIn
 }
 
 /** Local voice-activity boundary. Scheduling input only — never a send trigger. */
+/**
+ * A capture fault the CLIENT observed — a worklet that would not load, a device
+ * that refused, backpressure. It rides the activity frame as an additive
+ * optional field so the server can record it: a microphone that cannot start is
+ * then a fact in the server's own diagnostics and journal, not only in the one
+ * operator's browser console (the 2026-09-18 native-lane field failure was
+ * visible nowhere on the server side). The reason is a short machine token, so
+ * the server's counters keep bounded cardinality.
+ */
+export interface VoiceCaptureFault {
+  reason: string;
+  detail?: string;
+  atMs: number;
+}
+
 export interface VoiceActivityStateMessage extends VoiceEnvelope {
   type: 'voice_activity_state';
   state: VoiceActivityState;
   atMs: number;
+  captureFault?: VoiceCaptureFault;
 }
 
 /**
@@ -657,7 +673,7 @@ export const VOICE_CLIENT_MESSAGE_FIELDS: {
   voice_session_start: ['workerSessionId', 'runtime', 'captureMode', 'readingLevel', 'resume'],
   voice_session_stop: ['reason'],
   voice_audio_chunk: ['seq', 'mimeType', 'data', 'durationMs', 'capturedAtMs'],
-  voice_activity_state: ['state', 'atMs'],
+  voice_activity_state: ['state', 'atMs', 'captureFault'],
   proposal_confirm: ['proposalId', 'variant', 'idempotencyKey', 'proposalRef'],
   proposal_cancel: ['proposalId', 'reason'],
   proposal_presentation: ['proposalId', 'presentedVariant', 'completed', 'stoppedAtChar'],

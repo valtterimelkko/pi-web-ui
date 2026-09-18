@@ -258,6 +258,26 @@ export class VoiceLiveController {
   }
 
   /**
+   * Report a capture fault the CLIENT hit (a worklet that would not load, a
+   * device that refused, backpressure). It rides an activity frame carrying the
+   * TRUE local activity state, so the boundary the server mirrors is unchanged;
+   * the point is that the server learns the microphone could not start, instead
+   * of the reason living only in one browser console. No capture authority is
+   * created or moved by this call.
+   */
+  reportCaptureFault(fault: { reason: string; detail?: string }, atMs: number): void {
+    const state = this.operatorSpeaking ? 'speech_start' : 'speech_end';
+    this.send(
+      buildActivityState(this.lane, state, atMs, undefined, {
+        reason: fault.reason,
+        atMs,
+        ...(fault.detail ? { detail: fault.detail } : {}),
+      }),
+    );
+    this.notify();
+  }
+
+  /**
    * Send one captured microphone chunk. This is the ONLY path audio leaves the
    * client: the frame is built by the contract's builder (16 kHz, PCM16LE,
    * under the decoded-byte ceiling) and carries no words. An over-limit or

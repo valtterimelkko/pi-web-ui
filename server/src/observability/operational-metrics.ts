@@ -61,6 +61,8 @@ export interface VoiceLiveMetricsSnapshot {
   resumptionSuccessRate: number;
   /** Times a lane degraded from the live engine to the cascade (Phase 8 fallback). */
   engineFallbacks: number;
+  /** Capture faults reported by clients, by reason (bounded: unknown -> `other`). */
+  captureFaultTotal: Record<string, number>;
 }
 
 /**
@@ -234,6 +236,7 @@ export class OperationalMetrics {
   // Phase 8 operational counters (monotonic, no labels, no session ids).
   private voiceEngine: 'gemini-live' | 'cascade' = 'cascade';
   private voiceLiveModel: string | null = null;
+  private readonly voiceCaptureFaultTotal = new Map<string, number>();
   private voiceAudioInputBytes = 0;
   private voiceAudioOutputBytes = 0;
   private voiceConnectionDrops = 0;
@@ -402,6 +405,17 @@ export class OperationalMetrics {
   }
 
   /**
+   * A capture fault the client reported (a worklet that would not load, a
+   * refused device, backpressure). Reasons are short machine tokens; anything
+   * else is bucketed as `other` so the map keeps bounded cardinality.
+   */
+  recordVoiceCaptureFault(reason: string): void {
+    const known = ['worklet_unavailable', 'capture_failed', 'capture_backpressure'];
+    const key = known.includes(reason) ? reason : 'other';
+    this.voiceCaptureFaultTotal.set(key, (this.voiceCaptureFaultTotal.get(key) ?? 0) + 1);
+  }
+
+  /**
    * The live provider model actually in use (server startup states it); a
    * gauge, last write wins. `null` means "not stated", never an assumed seat.
    */
@@ -537,6 +551,7 @@ export class OperationalMetrics {
         resumptionFailures: this.voiceResumptionFailures,
         resumptionSuccessRate: attempts === 0 ? 0 : round4(this.voiceResumptionSuccesses / attempts),
         engineFallbacks: this.voiceEngineFallbacks,
+        captureFaultTotal: Object.fromEntries(this.voiceCaptureFaultTotal),
       },
       proposals: {
         created: this.voiceProposalCreated,

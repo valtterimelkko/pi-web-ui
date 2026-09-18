@@ -29,6 +29,7 @@ import type {
 } from '../../../src/voice/contract.js';
 import type { DeliveryOutcome, WorkerDelivery } from '../../../src/talker/types.js';
 import { VoiceLiveMount, isDirectedWorkerInstruction } from '../../../src/websocket/voice-live-mount.js';
+import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
 
 const LANE = 'lane-1';
 const GENERATION = 1;
@@ -177,6 +178,47 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
       { type: 'parking_list', version: 1, laneId: LANE, attachmentGeneration: 99 } as never
     );
     expect(code).toBe('voice_generation_stale');
+  });
+
+  it('records a capture fault the client reported, and counts it', async () => {
+    // The 2026-09-18 native-lane failure: the microphone could not start in the
+    // deployed UI and NO server-side record existed. The client now says so.
+    const service = new FakeService();
+    const evidence: Array<Record<string, unknown>> = [];
+    const metrics = new OperationalMetrics();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+      metrics,
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+
+    const code = await mount.route('client-1', { send: () => {} }, {
+      type: 'voice_activity_state',
+      version: 1,
+      laneId: LANE,
+      attachmentGeneration: 1,
+      state: 'speech_end',
+      atMs: 1_700_000_000_000,
+      captureFault: { reason: 'worklet_unavailable', detail: 'blocked by CSP', atMs: 1_700_000_000_000 },
+    } as never);
+
+    expect(code).toBeNull();
+    const faultEvent = evidence.find((event) => event.event === 'voice_capture_fault');
+    expect(faultEvent).toBeTruthy();
+    expect(faultEvent?.reason).toBe('worklet_unavailable');
+    expect(faultEvent?.detail).toBe('blocked by CSP');
+    expect(metrics.snapshot().voice.live.captureFaultTotal).toEqual({ worklet_unavailable: 1 });
+  });
+
+  it('buckets an unrecognised capture-fault reason so the counter stays bounded', () => {
+    const metrics = new OperationalMetrics();
+    metrics.recordVoiceCaptureFault('something_new_from_a_future_client');
+    metrics.recordVoiceCaptureFault('capture_failed');
+    expect(metrics.snapshot().voice.live.captureFaultTotal).toEqual({ other: 1, capture_failed: 1 });
   });
 
   it('delivers the exact retained bytes when a confirmation is authorised', async () => {

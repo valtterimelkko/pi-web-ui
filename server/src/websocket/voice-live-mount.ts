@@ -441,6 +441,10 @@ export class VoiceLiveMount {
     // M4/M6: mirror the client's local voice-activity boundary on the lane.
     if (lane && message.type === 'voice_activity_state') {
       this.noteOperatorSpeech(lane, message.state);
+      // A capture fault the CLIENT hit is recorded server-side: without this the
+      // only record of "the microphone could not start" was the operator's own
+      // browser console (the 2026-09-18 native-lane failure).
+      if (message.captureFault) this.noteClientCaptureFault(lane, message.captureFault);
     }
 
     // Phase 8: a lane served by the cascade never touches the live service.
@@ -1407,6 +1411,26 @@ export class VoiceLiveMount {
     const activity = lane.pendingWorkerActivity;
     lane.pendingWorkerActivity = null;
     this.injectWorkerStatus(lane, activity);
+  }
+
+  /**
+   * Record a capture fault the client reported (journal at warn, plus a
+   * bounded-cardinality counter). This is observation only: nothing about
+   * capture authority, the gate, or the lane's own state changes here.
+   */
+  private noteClientCaptureFault(
+    lane: LaneRecord,
+    fault: { reason: string; detail?: string; atMs: number },
+  ): void {
+    this.metrics.recordVoiceCaptureFault(fault.reason);
+    this.evidence({
+      event: 'voice_capture_fault',
+      laneId: lane.laneId,
+      workerSessionId: lane.workerSessionId,
+      reason: fault.reason,
+      ...(fault.detail ? { detail: fault.detail.slice(0, 300) } : {}),
+      atMs: fault.atMs,
+    });
   }
 
   /** M6: why this final operator transcript cannot be gate input, or null. */

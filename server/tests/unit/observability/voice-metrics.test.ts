@@ -85,6 +85,8 @@ describe('OperationalMetrics — voice section', () => {
         resumptionFailures: 0,
         resumptionSuccessRate: 0,
         engineFallbacks: 0,
+        // No client has reported a microphone it could not start.
+        captureFaultTotal: {},
       },
       proposals: { created: 0, released: 0, refused: 0, reconciled: 0 },
     });
