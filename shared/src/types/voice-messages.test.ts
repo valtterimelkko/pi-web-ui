@@ -44,6 +44,9 @@ import {
   isProposalConfirmMessage,
   isVoiceAudioPayloadWithinLimit,
   isVoiceMessageType,
+  isVoiceClientMessageType,
+  isVoiceServerMessageType,
+  hasNoToolArguments,
   voiceBase64DecodedByteLength,
   voicePcm16ByteLength,
   type VoiceClientMessage,
@@ -640,5 +643,29 @@ describe('voice wire v1 — the additive lane-capacity code (Wave 3 correction M
       'voice_lane_unknown',
       'voice_not_started',
     ]);
+  });
+});
+
+describe('voice wire v1 — runtime guards the server and client actually call', () => {
+  it('accepts exactly the catalogued types, per direction', () => {
+    for (const type of VOICE_CLIENT_MESSAGE_TYPES) expect(isVoiceClientMessageType(type)).toBe(true);
+    for (const type of VOICE_SERVER_MESSAGE_TYPES) expect(isVoiceServerMessageType(type)).toBe(true);
+    // A type catalogued in the other direction is not a member of this one.
+    expect(isVoiceClientMessageType(VOICE_SERVER_MESSAGE_TYPES[0])).toBe(false);
+    expect(isVoiceServerMessageType(VOICE_CLIENT_MESSAGE_TYPES[0])).toBe(false);
+    expect(isVoiceClientMessageType('voice_not_a_type')).toBe(false);
+    expect(isVoiceClientMessageType(1)).toBe(false);
+    expect(isVoiceClientMessageType(undefined)).toBe(false);
+    expect(isVoiceServerMessageType({})).toBe(false);
+  });
+
+  it('accepts only genuinely empty tool arguments (the parameterless-tool rule)', () => {
+    expect(hasNoToolArguments({})).toBe(true);
+    // Anything with content must be refused: this is the guard that keeps a
+    // model-chosen argument from ever looking like operator-supplied bytes.
+    expect(hasNoToolArguments({ path: '/tmp/delete-me' })).toBe(false);
+    expect(hasNoToolArguments([])).toBe(false);
+    expect(hasNoToolArguments(null)).toBe(false);
+    expect(hasNoToolArguments('x')).toBe(false);
   });
 });
