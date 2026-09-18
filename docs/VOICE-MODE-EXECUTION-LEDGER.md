@@ -25,7 +25,7 @@
 > `/root/pi-web-ui`). Last updated: 2026-09-18 (production deployed for the owner's Phase 7
 > test; CI green on master; independent verification of the Gate-5 harness completed and its
 > finding closed; the talker's full-session brief — measured ceiling, deltas, retrieval —
-> live-validated through the shipped path and awaiting the deploy step of this change).
+> live-validated through the shipped path and **deployed 14:24:12Z**; CI green on `c466589`).
 
 ---
 
@@ -411,9 +411,17 @@ FIRST message (`operations/voice-live-20260917/evidence/full-session-brief-20260
 Honest limit: text turns are driven with `sendClientContent` because the production bridge exposes no text send
 (audio only), so the audio transport is not re-validated here — the Gate-5 slice remains that evidence.
 
-Still owed before this can be called done: **the deploy step of this change** (the owner authorised a
-restart for it) and the owner's own re-test of the deployed lane, which is the acceptance step. This note is a
-record, not a completion claim.
+**Shipped and deployed.** Commits `652b0b0` (the change) and `c466589` (the changed-source warning ratchet
+caught five genuine dead symbols; removed), pushed. CI green on `c466589` — Application correctness 7m59s and
+Docs checks. Production restarted **14:24:12Z** under the owner's authorisation for this change, through the
+production lock (build inside it). Independently verified after the restart: service active, `NRestarts=0`,
+contract 1.44.0; the served client bundle is byte-for-byte the freshly built `index-CC6AHi7q.js`; the capture
+worklet is served byte-identical to the built asset (sha256 match); `server/dist` carries `read_worker_history`,
+`worker_history_retrieved` and `validateToolArguments`; and diagnostics report
+`operational.voice.live.engine = gemini-live`, `model = gemini-3.8-live`.
+
+**What is still owed: the owner's own re-test of the deployed lane.** That is the acceptance step — this note is
+a record, not a completion claim, and no agent self-signs the operator's real-ear verdict.
 
 **2026-09-18 (NATIVE TALKER — "I don't have access to the worker's tasks", root-caused, fixed, live-validated, deployed).**
 

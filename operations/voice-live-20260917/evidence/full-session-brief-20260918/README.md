@@ -1,8 +1,18 @@
 # The talker's window on the work: the whole session, a measured ceiling, and retrieval (2026-09-18)
 
 **Class:** capability change, measured before it was designed, live-validated through the shipped
-composition path. **Status:** implemented; validation green; deployment covered by the owner's
-authorisation for this change.
+composition path. **Status:** deployed 2026-09-18 14:24:12Z (commits `652b0b0` + `c466589`, CI green on the
+latter, restart through the production lock). Owner's real-ear re-test remains the acceptance step.
+
+**Post-deploy verification (independent, after the restart):** service active with `NRestarts=0` and contract
+1.44.0; the served client bundle is byte-for-byte the freshly built `index-CC6AHi7q.js`; the capture worklet is
+served byte-identical to the built asset (sha256 `9d4d29bf…`); `server/dist` carries `read_worker_history`,
+`worker_history_retrieved` and `validateToolArguments`; diagnostics report
+`operational.voice.live.engine = gemini-live` and `model = gemini-3.8-live`.
+
+**First CI run failed** — not on a test, but on the changed-source warning ratchet: five genuinely unused
+symbols from the iteration (`hasNoToolArguments` import, `CONTENT_HEADER`, `sizeOf`, `composeContextText`
+import, and an unused `historyTail` parameter). Removed in `c466589`; ratchet 324/326, violations 0.
 
 Plan and reasoning of record: [`docs/plans/VOICE-TALKER-FULL-SESSION-BRIEF.md`](../../../../docs/plans/VOICE-TALKER-FULL-SESSION-BRIEF.md).
 
