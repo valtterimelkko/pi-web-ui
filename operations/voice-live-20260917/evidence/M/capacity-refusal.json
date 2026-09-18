@@ -1,0 +1,7 @@
+{
+  "capturedAt": "2026-09-18T04:16:52.254Z",
+  "code": "voice_lane_capacity",
+  "serverMessage": "The voice lane table is full; try again shortly.",
+  "fatal": false,
+  "capacityCodeFromServer": true
+}

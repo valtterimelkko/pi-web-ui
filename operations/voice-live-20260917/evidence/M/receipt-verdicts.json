@@ -1,0 +1,116 @@
+{
+  "capturedAt": "2026-09-18T04:16:53.178Z",
+  "realBrowser": "chromium",
+  "verdicts": {
+    "delivered": {
+      "outcome": "delivered",
+      "dataOutcome": "delivered",
+      "dataTone": "delivered",
+      "dataReconcile": "false",
+      "text": "Delivered to the worker · via steer",
+      "chimeBadgeVisible": true,
+      "chimeVariantPlayed": "delivered",
+      "receipt": {
+        "releaseId": "rel-lab-1",
+        "proposalId": "prop-lab-1",
+        "idempotencyKey": "idem-lab-1",
+        "outcome": "delivered",
+        "atMs": 1,
+        "mechanism": "steer"
+      },
+      "laneTextMentionsDelivered": true
+    },
+    "queued": {
+      "outcome": "queued",
+      "dataOutcome": "queued",
+      "dataTone": "queued",
+      "dataReconcile": "false",
+      "text": "Accepted — not yet handed to the worker · Antigravity queues this in the worker loop.",
+      "chimeBadgeVisible": false,
+      "chimeVariantPlayed": "queued",
+      "receipt": {
+        "releaseId": "rel-lab-1",
+        "proposalId": "prop-lab-1",
+        "idempotencyKey": "idem-lab-1",
+        "outcome": "queued",
+        "atMs": 1,
+        "disclosure": "Antigravity queues this in the worker loop."
+      },
+      "laneTextMentionsDelivered": false
+    },
+    "refused": {
+      "outcome": "refused",
+      "dataOutcome": "refused",
+      "dataTone": "refused",
+      "dataReconcile": "false",
+      "text": "Refused — nothing was sent · the worker is not accepting frames",
+      "chimeBadgeVisible": false,
+      "chimeVariantPlayed": "refused",
+      "receipt": {
+        "releaseId": "rel-lab-1",
+        "proposalId": "prop-lab-1",
+        "idempotencyKey": "idem-lab-1",
+        "outcome": "refused",
+        "atMs": 1,
+        "reason": "the worker is not accepting frames"
+      },
+      "laneTextMentionsDelivered": false
+    },
+    "unknown": {
+      "outcome": "unknown",
+      "dataOutcome": "unknown",
+      "dataTone": "unknown",
+      "dataReconcile": "true",
+      "text": "Hand-over could not be confirmed · after a timeout; it will be reconciled by idempotency key",
+      "chimeBadgeVisible": false,
+      "chimeVariantPlayed": "unknown",
+      "receipt": {
+        "releaseId": "rel-lab-1",
+        "proposalId": "prop-lab-1",
+        "idempotencyKey": "idem-lab-1",
+        "outcome": "unknown",
+        "atMs": 1,
+        "unknownCause": "timeout",
+        "reconcile": true
+      },
+      "laneTextMentionsDelivered": false
+    },
+    "delivered-then-unknown-step1": {
+      "outcome": "delivered-then-unknown-step1",
+      "dataOutcome": "delivered",
+      "dataTone": "delivered",
+      "dataReconcile": "false",
+      "text": "Delivered to the worker · via prompt",
+      "chimeBadgeVisible": true,
+      "chimeVariantPlayed": "delivered",
+      "receipt": {
+        "releaseId": "rel-lab-1",
+        "proposalId": "prop-lab-1",
+        "idempotencyKey": "idem-lab-1",
+        "outcome": "delivered",
+        "atMs": 1,
+        "mechanism": "prompt"
+      },
+      "laneTextMentionsDelivered": true
+    },
+    "delivered-then-unknown": {
+      "outcome": "delivered-then-unknown",
+      "dataOutcome": "unknown",
+      "dataTone": "unknown",
+      "dataReconcile": "true",
+      "text": "Hand-over could not be confirmed · after a disconnect; it will be reconciled by idempotency key",
+      "chimeBadgeVisible": false,
+      "chimeVariantPlayed": "unknown",
+      "receipt": {
+        "releaseId": "rel-lab-1",
+        "proposalId": "prop-lab-1",
+        "idempotencyKey": "idem-lab-1",
+        "outcome": "unknown",
+        "atMs": 1,
+        "unknownCause": "disconnect",
+        "reconcile": true
+      },
+      "laneTextMentionsDelivered": false
+    }
+  }
+}

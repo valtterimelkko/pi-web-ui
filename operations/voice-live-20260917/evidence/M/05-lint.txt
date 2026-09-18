@@ -1,0 +1,588 @@
+=== npm run lint ===
+
+> pi-web-ui@0.1.0 lint
+> eslint . --ext .ts,.tsx && eslint scripts/notify-client.mjs scripts/wait-for-internal-api.mjs
+
+
+/root/pi-web-ui-wt-corr-m/client/src/components/Chat/ChatView.tsx
+  202:17  warning  Unexpected console statement  no-console
+  205:17  warning  Unexpected console statement  no-console
+
+/root/pi-web-ui-wt-corr-m/client/src/components/Session/NewSessionModal.tsx
+  359:9  warning  'handleQuickSelect' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/src/components/Tools/CollapsibleToolCard.tsx
+  124:10  warning  'formatToolActionSummary' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/src/components/Tools/SubagentToolCard.tsx
+  282:36  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  307:12  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  312:31  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/client/src/components/Tree/TreeNode.tsx
+  99:18  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  99:49  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/client/src/hooks/useSessionStream.ts
+  298:9   warning  Unexpected console statement              no-console
+  317:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  317:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/root/pi-web-ui-wt-corr-m/client/src/hooks/useWebSocket.ts
+  59:9   warning  Unexpected console statement  no-console
+  67:11  warning  Unexpected console statement  no-console
+  76:13  warning  Unexpected console statement  no-console
+
+/root/pi-web-ui-wt-corr-m/client/src/lib/jsonrpc-client.ts
+  354:7  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  376:5  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  391:5  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  575:7  warning  Unexpected console statement  no-console
+
+/root/pi-web-ui-wt-corr-m/client/src/lib/websocket.ts
+  230:9   warning  Unexpected console statement  no-console
+  242:11  warning  Unexpected console statement  no-console
+  274:9   warning  Unexpected console statement  no-console
+  507:5   warning  Unexpected console statement  no-console
+  552:7   warning  Unexpected console statement  no-console
+  562:9   warning  Unexpected console statement  no-console
+  568:7   warning  Unexpected console statement  no-console
+
+/root/pi-web-ui-wt-corr-m/client/src/main.tsx
+  22:21  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/client/src/store/sessionStore.ts
+  2688:27  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2720:22  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2721:51  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2722:47  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2723:53  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2725:23  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2750:24  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2751:60  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2752:56  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2753:62  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2778:22  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2811:30  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2819:22  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3045:28  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3080:36  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3088:28  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3425:13  warning  Unexpected console statement  no-console
+  3486:13  warning  Unexpected console statement  no-console
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/components/ChildrenStrip.test.tsx
+  2:18  warning  'screen' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/components/Sidebar/SessionItem.test.tsx
+  3:8  warning  'userEvent' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/components/Sidebar/TransferConfirmationModal.test.tsx
+  2:37  warning  'waitFor' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/components/Tools/TodoToolCard.test.tsx
+  3:32  warning  'vi' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/components/Tools/ToolProgressIndicator.test.tsx
+  2:35  warning  'waitFor' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/components/WatchStrip.test.tsx
+  2:18  warning  'screen' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/hooks/useSessionStream.test.ts
+   13:27  warning  'waitFor' is defined but never used          @typescript-eslint/no-unused-vars
+   15:15  warning  'LiveMessage' is defined but never used      @typescript-eslint/no-unused-vars
+   15:28  warning  'ContentPart' is defined but never used      @typescript-eslint/no-unused-vars
+  181:15  warning  'result' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  196:15  warning  'result' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  209:15  warning  'result' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  239:15  warning  'result' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  710:15  warning  'result' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/lib/jsonrpc-client.test.ts
+  353:13  warning  'shortMockWs' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/lib/websocket.test.ts
+  284:13  warning  'WebSocketClient' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/store/sessionStore-dual.test.ts
+  1:44  warning  'vi' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/store/sessionStore-handlemessage.test.ts
+  1:44  warning  'vi' is defined but never used         @typescript-eslint/no-unused-vars
+  1:48  warning  'afterEach' is defined but never used  @typescript-eslint/no-unused-vars
+  2:32  warning  'Message' is defined but never used    @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/client/tests/unit/store/sessionStore-step7a.test.ts
+  192:13  warning  'afterProjection' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/pi-claude-channel/server.ts
+  424:7  warning  'wsServer' is assigned a value but never used    @typescript-eslint/no-unused-vars
+  442:9  warning  Forbidden non-null assertion                     @typescript-eslint/no-non-null-assertion
+  475:7  warning  'hookServer' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/scripts/audio-lab/lib/scenarios.ts
+  30:68  warning  'ScenarioOutcome' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/scripts/p27-talker-matrix-live.ts
+  92:47  warning  'TalkerTurnResult' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/scripts/validate-claude-profiles.ts
+  228:11  warning  'modelUsageKeys' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  310:11  warning  'resultEvent' is assigned a value but never used     @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/scripts/validate-model-comprehensive.ts
+   43:29  warning  Forbidden non-null assertion                   @typescript-eslint/no-non-null-assertion
+   78:44  warning  Forbidden non-null assertion                   @typescript-eslint/no-non-null-assertion
+   80:35  warning  Forbidden non-null assertion                   @typescript-eslint/no-non-null-assertion
+   80:35  warning  Forbidden non-null assertion                   @typescript-eslint/no-non-null-assertion
+  422:7   warning  'secondOk' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/scripts/validate-model-persistence.ts
+   47:29  warning  Forbidden non-null assertion                         @typescript-eslint/no-non-null-assertion
+  289:10  warning  'modelResult' is assigned a value but never used     @typescript-eslint/no-unused-vars
+  289:23  warning  'thinkingResult' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/scripts/validation-server-child.ts
+  170:3  warning  'noiseSpawned' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  189:9  warning  'hookExit' is assigned a value but never used      @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/scripts/voice-live-lab/lib/handshake.ts
+  165:11  warning  Empty block statement  no-empty
+  244:21  warning  Empty block statement  no-empty
+  328:17  warning  Empty block statement  no-empty
+  685:15  warning  Empty block statement  no-empty
+  691:15  warning  Empty block statement  no-empty
+
+/root/pi-web-ui-wt-corr-m/server/src/claude/claude-channel-ws-client.ts
+  300:19  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/claude/claude-history-replay.ts
+  148:30  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/claude/claude-process-pool.ts
+  234:41  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/claude/claude-service.ts
+  446:14  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  670:28  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  749:14  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  765:14  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  776:14  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/claude/claude-steer-stream.ts
+  36:22  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/command-code/command-code-replay-projection.ts
+  91:25  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  92:24  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  93:16  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  94:29  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  95:28  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/index.ts
+   91:20  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  106:7   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  216:15  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/internal-api/admission-controller.ts
+  298:98  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/internal-api/routes/sessions.ts
+   842:20   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+   843:19   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+   973:9    warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2304:26   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2380:21   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2382:32   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2412:28   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2600:108  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  2725:15   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3005:18   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3005:76   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3653:15   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3968:33   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4013:19   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4047:19   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4050:19   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4076:82   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4089:26   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4098:11   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4103:19   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  4310:21   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  5799:48   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  6111:32   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  6933:16   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  6934:32   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  6935:16   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  6955:43   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  6956:56   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/internal-api/run-receipts/run-receipt-manager.ts
+  673:23  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/internal-api/run-receipts/run-receipt-store.ts
+  377:21  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/live-validation/validation-safety.ts
+  40:45  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  41:24  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/live-validation/worker-cgroup-conformance.ts
+  131:7   warning  'adapter' is never reassigned. Use 'const' instead  prefer-const
+  178:27  warning  Forbidden non-null assertion                        @typescript-eslint/no-non-null-assertion
+  373:7   warning  'adapter' is never reassigned. Use 'const' instead  prefer-const
+  414:23  warning  Forbidden non-null assertion                        @typescript-eslint/no-non-null-assertion
+  423:17  warning  Forbidden non-null assertion                        @typescript-eslint/no-non-null-assertion
+  424:14  warning  Forbidden non-null assertion                        @typescript-eslint/no-non-null-assertion
+  426:15  warning  Forbidden non-null assertion                        @typescript-eslint/no-non-null-assertion
+  683:7   warning  'adapter' is never reassigned. Use 'const' instead  prefer-const
+
+/root/pi-web-ui-wt-corr-m/server/src/opencode/opencode-config-manager.ts
+  183:18  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  187:19  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/opencode/opencode-process-manager.ts
+  154:7  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  162:7  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/opencode/opencode-service.ts
+  345:27  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/pi/event-forwarder.ts
+  352:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  359:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  360:30  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  361:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  362:35  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/root/pi-web-ui-wt-corr-m/server/src/pi/multi-session-manager.ts
+    26:23  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+    93:61  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+   634:9   warning  'sessionPath' is never reassigned. Use 'const' instead  prefer-const
+   673:45  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+   719:5   warning  Forbidden non-null assertion                            @typescript-eslint/no-non-null-assertion
+   723:12  warning  Forbidden non-null assertion                            @typescript-eslint/no-non-null-assertion
+   818:48  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+   866:5   warning  Forbidden non-null assertion                            @typescript-eslint/no-non-null-assertion
+   868:12  warning  Forbidden non-null assertion                            @typescript-eslint/no-non-null-assertion
+   903:56  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+   930:5   warning  Forbidden non-null assertion                            @typescript-eslint/no-non-null-assertion
+  1086:38  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+  1117:45  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+  1117:71  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+  1135:48  warning  Unexpected any. Specify a different type                @typescript-eslint/no-explicit-any
+
+/root/pi-web-ui-wt-corr-m/server/src/pi/parallel/plan-parser.ts
+  217:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  295:20  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  312:20  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/pi/parallel/session-orchestrator.ts
+  213:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  214:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  214:42  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  231:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  232:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  235:11  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  236:11  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  249:11  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  250:11  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  267:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  268:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  269:9   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/pi/session-broadcaster.ts
+   95:5   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  101:5   warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  106:32  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  415:20  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/routes/extensions.ts
+  33:7  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/routes/preferences.ts
+  312:82  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/session-transfer/transfer-service.ts
+  297:52  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  297:77  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  504:20  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  530:90  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  558:21  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  559:17  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  762:13  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  780:13  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  789:26  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  813:13  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  828:13  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  846:15  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/websocket/connection.ts
+  1977:20  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+  3611:25  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/workers/crash-logger.ts
+  240:22  warning  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion
+
+/root/pi-web-ui-wt-corr-m/server/src/workers/event-normalizer.ts
+  53:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/root/pi-web-ui-wt-corr-m/server/src/workers/json-rpc-to-rpc-converter.ts
+  35:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  42:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  64:34  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  93:62  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/root/pi-web-ui-wt-corr-m/server/tests/helpers/mock-opencode-server.ts
+  198:16  warning  'sessionId' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/integration/claude/channel-permission-flow.test.ts
+  180:11  warning  'shortTimeoutServer' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/integration/notifications-lifecycle.test.ts
+  85:75  warning  'fail' is assigned a value but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/integration/ws-flood.wedge.test.ts
+  152:11  warning  'CHUNK' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/antigravity/antigravity-screen-view.test.ts
+  6:8  warning  'ScreenItem' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/antigravity/antigravity-stream-finalize.test.ts
+  3:10  warning  'mkdtempSync' is defined but never used  @typescript-eslint/no-unused-vars
+  4:10  warning  'tmpdir' is defined but never used       @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-channel-service-sendprompt.test.ts
+   94:10  warning  'execSync' is defined but never used  @typescript-eslint/no-unused-vars
+  130:10  warning  'getMocks' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-event-normalizer.test.ts
+  1:44  warning  'vi' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-process-pool.test.ts
+  37:29  warning  'removeStaleSessionLock' is defined but never used    @typescript-eslint/no-unused-vars
+  37:73  warning  'resolveClaudeSessionPath' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-profiles.test.ts
+  1:55  warning  'vi' is defined but never used           @typescript-eslint/no-unused-vars
+  2:70  warning  'symlinkSync' is defined but never used  @typescript-eslint/no-unused-vars
+  3:16  warning  'resolve' is defined but never used      @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-sdk-ask-user-question.test.ts
+  61:73  warning  'opts' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-sdk-service-steer.test.ts
+    2:60  warning  'existsSync' is defined but never used   @typescript-eslint/no-unused-vars
+   18:10  warning  'scriptMock' is defined but never used   @typescript-eslint/no-unused-vars
+  157:26  warning  '_m' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  184:26  warning  '_m' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-service-ask-user-question.test.ts
+  129:13  warning  'sessionId' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-service-backward-compat.test.ts
+  1:32  warning  'vi' is defined but never used             @typescript-eslint/no-unused-vars
+  3:31  warning  'writeFileSync' is defined but never used  @typescript-eslint/no-unused-vars
+  3:46  warning  'existsSync' is defined but never used     @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-service-feature-flags.test.ts
+  1:32  warning  'vi' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/claude/claude-session-store.test.ts
+  5:35  warning  'ClaudeMessageEntry' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/child-linkage.test.ts
+  1:32  warning  'vi' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/event-filter.test.ts
+  19:8  warning  'EventCollector' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/goal/antigravity-goal.test.ts
+   10:29  warning  'writeFile' is defined but never used                                 @typescript-eslint/no-unused-vars
+  246:24  warning  'id' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/goal/claude-goal.test.ts
+  10:8  warning  'fs' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/goal/goal-routes.test.ts
+  17:10  warning  'createHash' is defined but never used         @typescript-eslint/no-unused-vars
+  18:36  warning  'SessionRoutesDeps' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/session-routes-defects-honesty.test.ts
+  59:7  warning  'commandCodeService' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/session-routes-orchestration.test.ts
+  93:10  warning  'makeClaudeSessionFile' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/internal-api/session-routes-screen-view.test.ts
+  286:11  warning  'newerStat' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  287:11  warning  'olderStat' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/logging/logger.test.ts
+  1:32  warning  'beforeEach' is defined but never used  @typescript-eslint/no-unused-vars
+  1:44  warning  'afterEach' is defined but never used   @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/middleware/compression.test.ts
+  1:32  warning  'beforeAll' is defined but never used  @typescript-eslint/no-unused-vars
+  1:43  warning  'afterAll' is defined but never used   @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/opencode/opencode-client.test.ts
+  1:48  warning  'afterEach' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/opencode/opencode-service-expanded.test.ts
+  523:24  warning  'opencodeSessionId' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/opencode/opencode-session-lifecycle.test.ts
+   33:9   warning  'callIdx' is assigned a value but never used    @typescript-eslint/no-unused-vars
+  278:11  warning  'completed' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  340:13  warning  's2' is assigned a value but never used         @typescript-eslint/no-unused-vars
+  341:13  warning  's3' is assigned a value but never used         @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/pi/event-forwarder.test.ts
+  9:52  warning  'PiEvent' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/pi/multi-session-manager-pinning.test.ts
+  5:10  warning  'captureLogRecords' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/pi/multi-session-manager.test.ts
+   913:13  warning  'result' is assigned a value but never used           @typescript-eslint/no-unused-vars
+  1261:13  warning  'originalDateNow' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/pi/parallel/plan-parser.test.ts
+  6:47  warning  'TaskNode' is defined but never used         @typescript-eslint/no-unused-vars
+  6:62  warning  'DependencyGraph' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/pi/session-broadcaster.test.ts
+  8:8  warning  'JSONRPCNotification' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/pi/session-watcher-coalescing.test.ts
+  57:38  warning  'file' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/routes/dictation.test.ts
+  1:48  warning  'afterEach' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/routes/preferences.test.ts
+  187:20  warning  'file' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/routes/sessions.test.ts
+  2:24  warning  'Request' is defined but never used   @typescript-eslint/no-unused-vars
+  2:38  warning  'Response' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/routes/terminal.test.ts
+  1:36  warning  'beforeEach' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/routes/usage.test.ts
+  5:8  warning  'fs' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/security/prompt-injection.test.ts
+  5:8  warning  'InjectionDetectionResult' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/session-cleanup.test.ts
+    5:33  warning  'DEFAULT_PIN_INACTIVITY_MS' is defined but never used     @typescript-eslint/no-unused-vars
+    5:60  warning  'DEFAULT_ARCHIVE_RETENTION_MS' is defined but never used  @typescript-eslint/no-unused-vars
+  623:11  warning  'deleteCallCount' is assigned a value but never used      @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/session-transfer/claude-source-adapter.test.ts
+  4:40  warning  'TransferScope' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/session-transfer/pi-source-adapter.test.ts
+  7:40  warning  'TransferScope' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/session-transfer/visible-transcript.test.ts
+  3:63  warning  'TransferScope' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/talker/injection-marking-projections.test.ts
+  29:7  warning  'OPERATOR_MARKER' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/talker/self-service.test.ts
+  188:11  warning  'yes' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/terminal/terminal-manager.test.ts
+  7:18  warning  'cb' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/websocket/claude-session-info-pin.test.ts
+  11:36  warning  'beforeEach' is defined but never used                @typescript-eslint/no-unused-vars
+  12:10  warning  'ClaudeSessionSubscribers' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/websocket/claude-ux-fixes.test.ts
+  11:32  warning  'vi' is defined but never used               @typescript-eslint/no-unused-vars
+  11:36  warning  'beforeEach' is defined but never used       @typescript-eslint/no-unused-vars
+  11:48  warning  'afterEach' is defined but never used        @typescript-eslint/no-unused-vars
+  13:15  warning  'NormalizedEvent' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/websocket/opencode-event-conversion.test.ts
+   1:48  warning  'afterEach' is defined but never used            @typescript-eslint/no-unused-vars
+   5:7   warning  'normEventToPiFormat' is defined but never used  @typescript-eslint/no-unused-vars
+  86:11  warning  'mod' is assigned a value but never used         @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/websocket/opencode-routing-lifecycle.test.ts
+  1:36  warning  'beforeEach' is defined but never used           @typescript-eslint/no-unused-vars
+  5:10  warning  'normEventToPiFormat' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/websocket/opencode-routing.test.ts
+    1:36  warning  'beforeEach' is defined but never used                   @typescript-eslint/no-unused-vars
+  177:13  warning  'sendMessage' is assigned a value but never used         @typescript-eslint/no-unused-vars
+  277:13  warning  'sessionId' is assigned a value but never used           @typescript-eslint/no-unused-vars
+  471:13  warning  'opencodeSessionIds' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  478:13  warning  'sendMessage' is assigned a value but never used         @typescript-eslint/no-unused-vars
+  792:13  warning  'opencodeService' is assigned a value but never used     @typescript-eslint/no-unused-vars
+  911:13  warning  'opencodeSessionIds' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/websocket/session-transfer-routing.test.ts
+  1:32  warning  'vi' is defined but never used          @typescript-eslint/no-unused-vars
+  1:36  warning  'beforeEach' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/server/tests/unit/workers/crash-logger.test.ts
+  2:23  warning  'CrashStats' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/shared/src/types/voice-messages.test.ts
+   37:3   warning  'VOICE_CLIENT_REQUIRED_FIELDS' is defined but never used  @typescript-eslint/no-unused-vars
+   59:7   warning  'CATALOGUE_ROW_RE' is assigned a value but never used     @typescript-eslint/no-unused-vars
+  378:22  warning  '_drop' is assigned a value but never used                @typescript-eslint/no-unused-vars
+  440:25  warning  '_drop' is assigned a value but never used                @typescript-eslint/no-unused-vars
+  528:21  warning  '_drop' is assigned a value but never used                @typescript-eslint/no-unused-vars
+  533:21  warning  '_dropItem' is assigned a value but never used            @typescript-eslint/no-unused-vars
+  539:26  warning  '_dropRef' is assigned a value but never used             @typescript-eslint/no-unused-vars
+  544:22  warning  '_drop' is assigned a value but never used                @typescript-eslint/no-unused-vars
+  549:22  warning  '_dropOutcome' is assigned a value but never used         @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/shared/src/types/voice-messages.ts
+  871:6  warning  '_ConfirmProposalIdIsRequired' is defined but never used           @typescript-eslint/no-unused-vars
+  874:6  warning  '_ConfirmVariantIsRequired' is defined but never used              @typescript-eslint/no-unused-vars
+  877:6  warning  '_ConfirmIdempotencyKeyIsRequired' is defined but never used       @typescript-eslint/no-unused-vars
+  882:6  warning  '_ConfirmCarriesNoInstructionText' is defined but never used       @typescript-eslint/no-unused-vars
+  885:6  warning  '_ClientMessagesCarryNoInstructionText' is defined but never used  @typescript-eslint/no-unused-vars
+  890:6  warning  '_ClientMessagesHaveEnvelope' is defined but never used            @typescript-eslint/no-unused-vars
+  891:6  warning  '_ServerMessagesHaveEnvelope' is defined but never used            @typescript-eslint/no-unused-vars
+  894:6  warning  '_ReceiptsDistinguishAllStates' is defined but never used          @typescript-eslint/no-unused-vars
+  897:6  warning  '_ReceiptsOnlyThoseStates' is defined but never used               @typescript-eslint/no-unused-vars
+  902:6  warning  '_ClientCatalogueIsExhaustive' is defined but never used           @typescript-eslint/no-unused-vars
+  905:6  warning  '_ServerCatalogueIsExhaustive' is defined but never used           @typescript-eslint/no-unused-vars
+  911:6  warning  '_LaneCapacityIsCatalogueCode' is defined but never used           @typescript-eslint/no-unused-vars
+  914:6  warning  '_LaneCodesAreStillPresent' is defined but never used              @typescript-eslint/no-unused-vars
+  921:6  warning  '_CreatedProposalPayloadIsRequired' is defined but never used      @typescript-eslint/no-unused-vars
+  924:6  warning  '_ReceiptPayloadIsRequired' is defined but never used              @typescript-eslint/no-unused-vars
+  927:6  warning  '_ErrorMessageIsRequired' is defined but never used                @typescript-eslint/no-unused-vars
+  928:6  warning  '_ProposalResolvedOutcomeIsRequired' is defined but never used     @typescript-eslint/no-unused-vars
+  933:6  warning  '_CreatedProposalVersionIsRequired' is defined but never used      @typescript-eslint/no-unused-vars
+  936:6  warning  '_CreatedProposalIsNotFlattened' is defined but never used         @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/tests/e2e/global-setup.ts
+  104:9  warning  'timeout' is never reassigned. Use 'const' instead  prefer-const
+
+/root/pi-web-ui-wt-corr-m/tests/e2e/mobile.spec.ts
+  1:24  warning  'devices' is defined but never used  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/tests/e2e/read-aloud.spec.ts
+  137:79  warning  'context' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/root/pi-web-ui-wt-corr-m/tests/e2e/session-worker.spec.ts
+   37:11  warning  'workerStatus' is assigned a value but never used           @typescript-eslint/no-unused-vars
+  109:11  warning  'initialContent' is assigned a value but never used         @typescript-eslint/no-unused-vars
+  133:13  warning  'restoredSessionId' is assigned a value but never used      @typescript-eslint/no-unused-vars
+  154:11  warning  'initialSidebarContent' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+✖ 339 problems (0 errors, 339 warnings)
+
+EXIT_LINT=0

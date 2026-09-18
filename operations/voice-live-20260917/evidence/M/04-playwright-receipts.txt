@@ -1,0 +1,20 @@
+=== npx playwright test --config playwright.voice-live-receipts.config.ts ===
+[WebServer] 
+[WebServer]   VITE v5.4.21  ready in 196 ms
+[WebServer] 
+[WebServer]   ➜  Local:   http://127.0.0.1:3461/
+
+Running 9 tests using 1 worker
+
+  ✓  1 [chromium] › tests/e2e/voice-live-receipts.spec.ts:132:7 › Track M — the receipt verdict is visible and honest (real browser) › delivered: the positive state, and the only outcome with the chime badge (631ms)
+  ✓  2 [chromium] › tests/e2e/voice-live-receipts.spec.ts:152:7 › Track M — the receipt verdict is visible and honest (real browser) › queued: accepted but not yet handed over, with the disclosure, and no chime (488ms)
+  ✓  3 [chromium] › tests/e2e/voice-live-receipts.spec.ts:172:7 › Track M — the receipt verdict is visible and honest (real browser) › refused: the server’s own reason, and nothing that reads as delivery (555ms)
+  ✓  4 [chromium] › tests/e2e/voice-live-receipts.spec.ts:190:7 › Track M — the receipt verdict is visible and honest (real browser) › unknown: unconfirmed, with its cause and the reconciliation promise (519ms)
+  ✓  5 [chromium] › tests/e2e/voice-live-receipts.spec.ts:211:7 › Track M — the receipt verdict is visible and honest (real browser) › the verdict is replaced, never left standing: delivered then unknown leaves no delivered claim (492ms)
+  ✓  6 [chromium] › tests/e2e/voice-live-receipts.spec.ts:227:7 › Track M — the receipt verdict is visible and honest (real browser) › a delivered verdict does not stand for a newer, unconfirmed proposal (467ms)
+  ✓  7 [chromium] › tests/e2e/voice-live-receipts.spec.ts:246:7 › Track M — the lane-capacity refusal is a first-class lane refusal (real browser) › renders the server’s own capacity text, tagged with the additive code (508ms)
+  ✓  8 [chromium] › tests/e2e/voice-live-receipts.spec.ts:282:7 › Track M — the lane-capacity refusal is a first-class lane refusal (real browser) › falls back to a local line when the frame carried no server message (367ms)
+  ✓  9 [chromium] › tests/e2e/voice-live-receipts.spec.ts:297:7 › Track M — the lane-capacity refusal is a first-class lane refusal (real browser) › accepts the capacity refusal on the correlated start path the server will really use (468ms)
+
+  9 passed (6.5s)
+EXIT_PLAYWRIGHT=0
