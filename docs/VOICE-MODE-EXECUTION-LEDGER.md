@@ -371,6 +371,27 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (Wave 3 DISPATCHED — H rollout + R independent review, from master `5a453b2`).**
+Briefs committed (`5a453b2`). **Structural decision:** the two deferred Wave-2
+seams (F-1 tool-ack scheduling, F-2 rate-limit consolidation) are folded into
+**H** rather than a separate correction child, because both touch files the
+rollout also needs (`server/src/voice/**`, `server/src/websocket/{connection,voice-live-mount}.ts`)
+— one writer, ordered deliverables, no cross-worktree dependency. **H**
+`01a0b232-d19a-711b-bb08-c2cb50c0a7b3` — `opencode-go/deepseek-v4.1-flash`
+(max), worktree `/root/pi-web-ui-wt-rollout`, branch `feat/voice-rollout`, lease
+`552f5a84-85e8-43c1-a64b-5835e729b453` (owner `voice-exec-20260917-h`); owned
+paths `config.ts`, `talker/session-registry.ts`, `voice/**`,
+`websocket/{connection,voice-live-mount}.ts`, `security/rate-limit.ts`,
+`observability/operational-metrics.ts`, `internal-api/routes/diagnostics.ts` +
+tests. **R** `01a0b232-d4f4-711b-bb08-c2cd095a2f80` — `zai/glm-5.3-flash` (high;
+deliberately a different model family from the authors), cwd
+`/root/voice-review-20260918` (no worktree; **read-only**, report to
+`coordination/R/complete.md` only), lease `723ff698-62b4-4634-bb4d-0341923bd591`
+(owner `voice-exec-20260917-r`). Both started on dispatch. Watches `ww_9`/`ww_10`
+(goal_end + goal_state(paused) + `PARENT-INPUT-NEEDED`); backstop
+`deadline-bba684ec` until 03:18Z. Worktree isolation applied to H before dispatch
+(resolver probe green).
+
 **2026-09-18 (WAVE 2 COMPLETE — F merged `e792c26`; Gate 5 verified twice; one security incident contained; Wave 3 next).**
 **F verified and merged.** My own verification ran the gate **twice**: once with
 the ambient `ALLOWED_ORIGINS` and once from a bare shell with
