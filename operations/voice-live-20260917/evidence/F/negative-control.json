@@ -1,0 +1,13 @@
+{
+  "attempted": true,
+  "refused": true,
+  "refusalCode": "voice_proposal_stale",
+  "deliveredNothing": true,
+  "instructionTextRefused": true,
+  "instructionTextRefusalCode": "voice_client_text_forbidden",
+  "details": [
+    "tampered confirm → voice_proposal_stale",
+    "receipts before=0 after=0",
+    "instruction-text confirm → voice_client_text_forbidden"
+  ]
+}

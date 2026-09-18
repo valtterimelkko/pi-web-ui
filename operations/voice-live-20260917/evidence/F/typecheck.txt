@@ -1,0 +1,24 @@
+
+> pi-web-ui@0.1.0 typecheck
+> npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared && npm run typecheck --workspace=@pi-web-ui/internal-api-mcp
+
+
+> @pi-web-ui/shared@0.1.0 build
+> tsc
+
+
+> @pi-web-ui/server@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @pi-web-ui/client@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @pi-web-ui/shared@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @pi-web-ui/internal-api-mcp@0.1.0 typecheck
+> tsc --noEmit
+

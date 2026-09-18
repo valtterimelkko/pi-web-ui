@@ -1,0 +1,43 @@
+
+> pi-web-ui@0.1.0 build
+> npm run build --workspace=shared && npm run build --workspace=server && npm run build --workspace=client && npm run build --workspace=@pi-web-ui/internal-api-mcp
+
+
+> @pi-web-ui/shared@0.1.0 build
+> tsc
+
+
+> @pi-web-ui/server@0.1.0 build
+> tsc --noEmitOnError
+
+
+> @pi-web-ui/server@0.1.0 postbuild
+> tsx src/build-identity/generate-manifest.ts
+
+
+> @pi-web-ui/client@0.1.0 build
+> tsc && vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 1854 modules transformed.
+rendering chunks...
+[plugin:vite:reporter] [plugin vite:reporter] 
+(!) /root/pi-web-ui-wt-integration/client/src/lib/api.ts is dynamically imported by /root/pi-web-ui-wt-integration/client/src/store/sessionStore.ts but also statically imported by /root/pi-web-ui-wt-integration/client/src/components/Chat/MessageInput.tsx, /root/pi-web-ui-wt-integration/client/src/components/Chat/SlashPalette.tsx, /root/pi-web-ui-wt-integration/client/src/components/Session/NewSessionModal.tsx, /root/pi-web-ui-wt-integration/client/src/components/Session/ResumeNativeSessionModal.tsx, /root/pi-web-ui-wt-integration/client/src/components/Settings/SettingsModal.tsx, /root/pi-web-ui-wt-integration/client/src/components/Sidebar/SessionItem.tsx, /root/pi-web-ui-wt-integration/client/src/components/Sidebar/TransferConfirmationModal.tsx, /root/pi-web-ui-wt-integration/client/src/store/sessionStore.ts, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/index.html                        0.51 kB │ gzip:   0.33 kB
+dist/assets/index-Csg_8BF-.css       101.15 kB │ gzip:  16.97 kB
+dist/assets/addon-fit-YJmn1quW.js      1.65 kB │ gzip:   0.76 kB │ map:     3.53 kB
+dist/assets/xterm-BT7tBf8A.js        332.48 kB │ gzip:  84.22 kB │ map:   693.84 kB
+dist/assets/index-BjXUzk1D.js      1,432.09 kB │ gzip: 335.72 kB │ map: 4,986.52 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 9.08s
+
+> @pi-web-ui/internal-api-mcp@0.1.0 build
+> tsc
+

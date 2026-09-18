@@ -1,0 +1,226 @@
+[
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 1,
+    "utteranceClass": "statement",
+    "text": "I keep thinking about the retry handler.",
+    "atMs": 1789692598704
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 2,
+    "utteranceClass": "statement",
+    "text": "It should not drop the session token after the third attempt.",
+    "atMs": 1789692608050
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 3,
+    "utteranceClass": "statement",
+    "text": "Maybe the back off timing is measured from the wrong point.",
+    "atMs": 1789692672031
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 4,
+    "utteranceClass": "question",
+    "text": "What would you check first?",
+    "atMs": 1789692681825
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 5,
+    "utteranceClass": "statement",
+    "text": "Tell the worker to check the tests.",
+    "atMs": 1789692685044
+  },
+  {
+    "event": "proposal_created",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "version": 1,
+    "sha256": "0cda24f07d77c7179759c62bbefca6d5cebc30c0190768602efc8827ce7bc2d3",
+    "promotionRoute": "directed",
+    "sourceUtteranceId": 5,
+    "tidied": "check the tests.",
+    "original": "Tell the worker to check the tests.",
+    "atMs": 1789692685046
+  },
+  {
+    "event": "promotion_authorised",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 5,
+    "proposalId": "prop-1",
+    "sha256": "0cda24f07d77c7179759c62bbefca6d5cebc30c0190768602efc8827ce7bc2d3",
+    "relayText": "check the tests.",
+    "relayRemovals": [
+      "Tell the worker to "
+    ],
+    "atMs": 1789692685044
+  },
+  {
+    "event": "presentation_reported",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "completed": true,
+    "presentedVariant": "tidied",
+    "atMs": 1789692688569
+  },
+  {
+    "event": "confirm_refused",
+    "source": "frame",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "code": "voice_proposal_stale",
+    "reason": "identity_echo_mismatch",
+    "atMs": 1789692688570
+  },
+  {
+    "event": "frame_refused",
+    "laneId": "voice-slice-lane",
+    "attachmentGeneration": 1,
+    "frameType": "proposal_confirm",
+    "code": "voice_proposal_stale",
+    "atMs": 1789692688571
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 6,
+    "utteranceClass": "confirm",
+    "text": "Yes, send that.",
+    "atMs": 1789692694055
+  },
+  {
+    "event": "confirm_authorised",
+    "source": "speech",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "sha256": "0cda24f07d77c7179759c62bbefca6d5cebc30c0190768602efc8827ce7bc2d3",
+    "variant": "tidied",
+    "idempotencyKey": "idem-speech-voice-slice-lane-prop-1-1",
+    "bytes": "check the tests.",
+    "atMs": 1789692694056
+  },
+  {
+    "event": "delivery_attempt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "sha256": "0cda24f07d77c7179759c62bbefca6d5cebc30c0190768602efc8827ce7bc2d3",
+    "idempotencyKey": "idem-speech-voice-slice-lane-prop-1-1",
+    "bytes": "check the tests.",
+    "atMs": 1789692694057
+  },
+  {
+    "event": "delivery_receipt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "idempotencyKey": "idem-speech-voice-slice-lane-prop-1-1",
+    "sha256": "0cda24f07d77c7179759c62bbefca6d5cebc30c0190768602efc8827ce7bc2d3",
+    "outcome": "delivered",
+    "mechanism": "steer",
+    "releaseRecorded": true,
+    "atMs": 1789692694059
+  },
+  {
+    "event": "frame_refused",
+    "laneId": "voice-slice-lane",
+    "attachmentGeneration": 1,
+    "frameType": "proposal_confirm",
+    "code": "voice_client_text_forbidden",
+    "atMs": 1789692694061
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 7,
+    "utteranceClass": "statement",
+    "text": "Tell the worker to check the logs for the retry.",
+    "atMs": 1789692739077
+  },
+  {
+    "event": "item_parked",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 7,
+    "itemId": "park-1",
+    "text": "check the logs for the retry.",
+    "original": "Tell the worker to check the logs for the retry.",
+    "workerBusy": true,
+    "atMs": 1789692739077
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 8,
+    "utteranceClass": "statement",
+    "text": "Ask it to update the changelog.",
+    "atMs": 1789692741931
+  },
+  {
+    "event": "item_parked",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 8,
+    "itemId": "park-2",
+    "text": "update the changelog.",
+    "original": "Ask it to update the changelog.",
+    "workerBusy": true,
+    "atMs": 1789692741931
+  },
+  {
+    "event": "proposal_created",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "version": 2,
+    "sha256": "31e06961449151c253f64d2f74d484c0944696d9bafc05bb8dd984ec6c33ad9c",
+    "promotionRoute": "parked_item",
+    "sourceItemId": "park-1",
+    "sourceUtteranceId": 7,
+    "tidied": "check the logs for the retry.",
+    "original": "check the logs for the retry.",
+    "atMs": 1789692785043
+  },
+  {
+    "event": "presentation_reported",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "completed": true,
+    "presentedVariant": "tidied",
+    "atMs": 1789692785043
+  },
+  {
+    "event": "confirm_authorised",
+    "source": "frame",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "sha256": "31e06961449151c253f64d2f74d484c0944696d9bafc05bb8dd984ec6c33ad9c",
+    "variant": "tidied",
+    "idempotencyKey": "slice-s3-confirm-mu68vixf",
+    "bytes": "check the logs for the retry.",
+    "atMs": 1789692785044
+  },
+  {
+    "event": "delivery_attempt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "sha256": "31e06961449151c253f64d2f74d484c0944696d9bafc05bb8dd984ec6c33ad9c",
+    "idempotencyKey": "slice-s3-confirm-mu68vixf",
+    "bytes": "check the logs for the retry.",
+    "atMs": 1789692785044
+  },
+  {
+    "event": "delivery_receipt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "idempotencyKey": "slice-s3-confirm-mu68vixf",
+    "sha256": "31e06961449151c253f64d2f74d484c0944696d9bafc05bb8dd984ec6c33ad9c",
+    "outcome": "delivered",
+    "mechanism": "prompt",
+    "releaseRecorded": true,
+    "atMs": 1789692808009
+  }
+]
