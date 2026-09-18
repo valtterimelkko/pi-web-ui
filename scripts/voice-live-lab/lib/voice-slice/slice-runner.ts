@@ -145,16 +145,31 @@ function readTextField(
   return null;
 }
 
-/** Two logged fields describe the same bytes: equal, or prefix-equal when either is truncated. */
+/**
+ * Two logged fields that describe the SAME underlying bytes:
+ *  - both truncated  → they came from one sink with one limit, so they must be
+ *    byte-identical; a truncated excerpt that merely STARTS the same way as a
+ *    longer truncated excerpt is not evidence of the same bytes (an extension
+ *    like "check the tes" + "EXTRA" must never pass — found by the independent
+ *    verifier's adversarial probe, 2026-09-18);
+ *  - both full        → equality;
+ *  - exactly one truncated → the truncated side must be a prefix of the full
+ *    side (the only mixed case a version change can legitimately produce).
+ */
 function excerptMatches(
   a: { text: string; truncated: boolean } | null,
   b: { text: string; truncated: boolean } | null
 ): boolean {
   if (a === null || b === null) return false;
   if (a.text === b.text) return true;
+  if (a.truncated && b.truncated) return false;
   if (!a.truncated && !b.truncated) return false;
-  const [shorter, longer] = a.text.length <= b.text.length ? [a.text, b.text] : [b.text, a.text];
-  return shorter.length > 0 && longer.startsWith(shorter);
+  const [truncatedSide, fullSide] = a.truncated ? [a, b] : [b, a];
+  return (
+    truncatedSide.text.length > 0 &&
+    truncatedSide.text.length <= fullSide.text.length &&
+    fullSide.text.startsWith(truncatedSide.text)
+  );
 }
 
 /**
@@ -716,7 +731,9 @@ export async function runVerticalSlice(options: VerticalSliceOptions): Promise<V
     // the one baseline this runner injects directly to make the worker busy.
     const workerStoreCoverage = auditWorkerStoreCoverage(
       workerInbox,
-      byteFidelity.verified.map((entry) => entry.deliveredBytes),
+      // The PROPOSAL's own bytes for each delivered variant (creation-derived),
+      // never the delivery frame's own claim about what it carried.
+      byteFidelity.verified.map((entry) => entry.tidied),
       [SLOW_WORKER_PROMPT]
     );
     for (const check of [...gateLeak.checks, ...byteFidelity.checks, ...workerStoreCoverage.checks]) {

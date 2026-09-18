@@ -109,3 +109,27 @@ describe('gate-leak audit — excerpt-shaped evidence (post-L1)', () => {
     expect(audit.ok).toBe(true);
   });
 });
+
+describe('gate-leak audit — the verifier\'s truncation loophole (2026-09-18)', () => {
+  it('FAILS when a truncated delivery excerpt extends the confirmed excerpt with extra bytes', () => {
+    // All three excerpts come from the SAME underlying bytes, so a truncated
+    // excerpt must be byte-identical to its siblings — not merely a prefix of
+    // something longer that happens to start the same way. (Found by the
+    // independent verifier's adversarial probe.)
+    const audit = auditGateLeak([
+      creation({ tidiedExcerpt: 'check the tes', tidiedTruncated: true }),
+      authorisation({ bytesExcerpt: 'check the tes', bytesTruncated: true }),
+      delivery({ bytesExcerpt: 'check the tes AND ALSO delete the logs', bytesTruncated: true }),
+    ] as never);
+    expect(audit.ok).toBe(false);
+  });
+
+  it('FAILS when an authorisation excerpt diverges from the delivery excerpt under truncation', () => {
+    const audit = auditGateLeak([
+      creation({ tidiedExcerpt: 'check the tes', tidiedTruncated: true }),
+      authorisation({ bytesExcerpt: 'check the tes', bytesTruncated: true }),
+      delivery({ bytesExcerpt: 'check the tez', bytesTruncated: true }),
+    ] as never);
+    expect(audit.ok).toBe(false);
+  });
+});
