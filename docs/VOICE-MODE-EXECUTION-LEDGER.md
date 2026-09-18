@@ -3,11 +3,12 @@
 > **Class:** conductor's live execution ledger — strategy, checkpoint and progression
 > record for the multi-agent execution of
 > [`VOICE-MODE-EXECUTION-PLAN.md`](./VOICE-MODE-EXECUTION-PLAN.md).
-> **Status:** READY, NOT STARTED — owner decisions recorded 2026-09-17 (§11); awaiting the owner's Goal Engine activation.
+> **Status:** EXECUTING — Waves 0–2 complete and merged; Wave 3 closeout in flight
+> (H merged; review R delivered and adjudicated; corrections **L merged** `9caa44d`,
+> **K in flight**). No production deploy/restart has been performed or authorised.
+> See §12 for the live progression log.
 > **Rule of this file:** current state, not a completion claim — read before acting.
-> **Owner start signal:** the operator initiates this session's Goal Engine; until
-> that happens this file is planning only and **no child is dispatched and no
-> worktree is created**.
+> **Owner start signal:** received 2026-09-17 (goal engine activated); owner decisions in §11.
 >
 > **Companions** (do not override them): the execution plan (authoritative plan and
 > gates), [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) (intent, N1–N9) and
@@ -17,7 +18,8 @@
 > execution).
 >
 > Conductor session: `01a0b0ef-ab27-7359-867b-6aa4a17a6d11` (pi CLI, cwd
-> `/root/pi-web-ui`). Last updated: 2026-09-17 (planning; owner decisions recorded).
+> `/root/pi-web-ui`). Last updated: 2026-09-18 (Wave 3 closeout: R adjudicated, L
+> merged, K in flight).
 
 ---
 
