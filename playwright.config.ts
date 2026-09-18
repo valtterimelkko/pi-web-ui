@@ -12,6 +12,11 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e',
+  // The voice-live-lab specs each need their own dev lab page and their own
+  // webServer, so they ship their own configs (playwright.voice-live*.config.ts)
+  // and are opt-in. Without this, a bare `npx playwright test` picks them up and
+  // runs them against this suite's server/page, where they cannot pass.
+  testIgnore: ['**/voice-live-*.spec.ts'],
   globalSetup: './tests/e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
