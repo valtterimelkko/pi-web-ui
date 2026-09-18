@@ -29,6 +29,7 @@ export const FIDELITY_CORPUS_SCHEMA = 'voice-lab.fidelity-corpus/1';
 export const FIDELITY_CORPUS_ITEM_KEYS = [
   'id',
   'utterance',
+  'recognisedText',
   'requiredWords',
   'negations',
   'conditionals',
@@ -42,6 +43,15 @@ export interface FidelityItem {
   id: string;
   /** A realistic spoken instruction: pauses, contractions, thinking aloud. */
   utterance: string;
+  /**
+   * The frozen recognised text the harness receives from the (hermetic)
+   * transcription lane. In the frozen fixture this is byte-identical to the
+   * reference `utterance` (the lab never performed a scored live capture); the
+   * provenance header records that source. Recognition WER is scored from this
+   * field to the reference utterance, and semi-verbatim byte equality is scored
+   * from this field to the delivered instruction.
+   */
+  recognisedText?: string;
   /** Terms that must survive into the composed send. */
   requiredWords: string[];
   /** Negative constraints ("do not touch the migration"). */
@@ -78,6 +88,14 @@ export interface FidelityCorpus {
   world?: string;
   description?: string;
   provenance?: FidelityCorpusProvenance;
+  /** Where the frozen recognised text came from (Phase 6 hermetic lane). */
+  recognisedProvenance?: {
+    source: string;
+    note?: string;
+    addedAt?: string;
+    addedBy?: string;
+    recognisedField?: string;
+  };
   observedGaps?: string[];
   items: FidelityItem[];
 }
@@ -405,6 +423,150 @@ export function composeCandidateText(item: FidelityItem): string {
     .replace(/\s+/g, ' ')
     .replace(/\s+([,.!?;:])/g, '$1')
     .trim();
+}
+
+// ── Recognition (WER) and the hermetic transcription lane ─────────────────
+
+/**
+ * Words for the recognition metric: lower-cased letters/digits, apostrophes
+ * folded away, punctuation a separator — the same normalisation the lab's own
+ * fixture gate uses (`scripts/voice-live-lab/lib/fixtures.ts:normaliseWords`),
+ * restated here so the regression suite stays self-contained and hermetic.
+ */
+export function recognitionWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}'\s]/gu, ' ')
+    .replace(/'/g, '')
+    .split(/\s+/)
+    .filter((word) => word !== '');
+}
+
+/**
+ * Levenshtein word error rate: (substitutions + insertions + deletions) over
+ * the reference length. 0 is perfect; 1 means every reference word was lost.
+ * Pure and deterministic, so recognition scoring is repeated identically.
+ */
+export function wordErrorRate(reference: string, hypothesis: string): number {
+  const ref = recognitionWords(reference);
+  const hyp = recognitionWords(hypothesis);
+  if (ref.length === 0) return hyp.length === 0 ? 0 : 1;
+  let previous = new Array<number>(hyp.length + 1);
+  for (let j = 0; j <= hyp.length; j += 1) previous[j] = j;
+  for (let i = 1; i <= ref.length; i += 1) {
+    const current = new Array<number>(hyp.length + 1);
+    current[0] = i;
+    for (let j = 1; j <= hyp.length; j += 1) {
+      const cost = ref[i - 1] === hyp[j - 1] ? 0 : 1;
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
+    }
+    previous = current;
+  }
+  return previous[hyp.length] / ref.length;
+}
+
+/**
+ * One item's recognition score: how faithfully the frozen recognised text
+ * carries the operator's words, and whether anything that must survive was
+ * lost at the recognition step (before any composition or relay).
+ */
+export interface RecognitionScore {
+  itemId: string;
+  referenceWords: number;
+  recognisedWords: number;
+  wer: number;
+  /** Required-word recall measured on the recognised text. */
+  recall: number;
+  missingRequired: string[];
+  /** Negation / conditional / cue / target retention on the recognised text. */
+  critical: CriticalTokenRetention;
+  /** True when recognition dropped nothing that matters (§7.1.3). */
+  intact: boolean;
+}
+
+/**
+ * Score recognition for one item: WER of the frozen recognised text against
+ * the reference utterance, plus recall and critical-token retention measured on
+ * that same recognised text.
+ */
+export function scoreRecognition(item: FidelityItem, recognisedText: string): RecognitionScore {
+  const recognised = recognisedText ?? item.utterance;
+  const recognisedTokens = tokenSet(recognised);
+  const missingRequired = item.requiredWords.filter(
+    (word) => !phrasePresent(word, recognised, recognisedTokens)
+  );
+  const critical = criticalTokenRetention(item, recognised);
+  return {
+    itemId: item.id,
+    referenceWords: recognitionWords(item.utterance).length,
+    recognisedWords: recognitionWords(recognised).length,
+    wer: wordErrorRate(item.utterance, recognised),
+    recall:
+      item.requiredWords.length === 0
+        ? 1
+        : (item.requiredWords.length - missingRequired.length) / item.requiredWords.length,
+    missingRequired,
+    critical,
+    intact: missingRequired.length === 0 && critical.intact,
+  };
+}
+
+export interface RecognitionAggregate {
+  items: number;
+  /** Mean recognition WER across items. */
+  wer: number;
+  /** Greatest per-item WER (a single bad item cannot hide behind the mean). */
+  maxWer: number;
+  recall: number;
+  /** Fraction of items that lost nothing at recognition. */
+  intactRatio: number;
+  negationCueRetention: number;
+  conditionalCueRetention: number;
+  perItem: RecognitionScore[];
+}
+
+function recognitionMean(values: number[]): number {
+  if (values.length === 0) return 1;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+export function aggregateRecognition(scores: RecognitionScore[]): RecognitionAggregate {
+  return {
+    items: scores.length,
+    wer: recognitionMean(scores.map((score) => score.wer)),
+    maxWer: scores.reduce((max, score) => Math.max(max, score.wer), 0),
+    recall: recognitionMean(scores.map((score) => score.recall)),
+    intactRatio: recognitionMean(scores.map((score) => (score.intact ? 1 : 0))),
+    negationCueRetention: recognitionMean(scores.map((score) => score.critical.negationCues.ratio)),
+    conditionalCueRetention: recognitionMean(scores.map((score) => score.critical.conditionalCues.ratio)),
+    perItem: scores,
+  };
+}
+
+/**
+ * Coverage of the frozen recognised text: every item carries it, and the
+ * provenance header names where it came from. Returns named problems, so a
+ * missing or damaged hermetic transcription lane is a failure rather than a
+ * silent WER of 0.
+ */
+export function recognisedTextProblems(corpus: FidelityCorpus): string[] {
+  const problems: string[] = [];
+  if (!corpus.recognisedProvenance) {
+    problems.push('recognisedProvenance is missing: the frozen recognised text has no recorded source');
+  } else if (
+    typeof corpus.recognisedProvenance.source !== 'string' ||
+    corpus.recognisedProvenance.source.trim() === ''
+  ) {
+    problems.push('recognisedProvenance.source must be a non-empty string');
+  }
+  for (const item of corpus.items) {
+    if (typeof item.recognisedText !== 'string' || item.recognisedText.trim() === '') {
+      problems.push(
+        `${item.id}: recognisedText is missing or empty (the suite cannot score a recognition lane it does not have)`
+      );
+    }
+  }
+  return problems;
 }
 
 // ─ Validation + loading ────────────────────────────────────────────────────

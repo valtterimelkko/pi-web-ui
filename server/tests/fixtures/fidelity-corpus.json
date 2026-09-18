@@ -15,7 +15,7 @@
     "sourceSha256": "f7d738c3ae227c60220f98ee608fdc71c953f5d035eb805caef6822ec2aafac6",
     "migratedAt": "2026-09-17",
     "migratedBy": "Wave 0 audit child D (feat/voice-audit)",
-    "note": "Verbatim migration: items[] are byte-for-byte the source item objects (same order, same values). Only provenance and observedGaps were added around the frozen corpus; nothing inside items[] was altered. The source declares version 1.0.0-frozen-2026-09-17."
+    "note": "Verbatim migration of the source items[] (same order, same values); only provenance, observedGaps and (added 2026-09-17 by child G) the additive recognisedText field plus recognisedProvenance were added around the frozen corpus. Nothing inside an item's original fields (id, utterance, requiredWords, negations, conditionals, targets, distractors, notes) was altered. The source declares version 1.0.0-frozen-2026-09-17."
   },
   "observedGaps": [
     "Plan recommendation 2026-09 §7.1.3 asks critical survival scoring to cover file paths and target agent names. The frozen corpus declares target names but contains no filesystem-path token in any utterance, requiredWord, negation, conditional or target; the fixture therefore preserves that absence rather than editing a frozen corpus. The scoring harness still implements file-path retention (see filePathsIn / criticalTokenRetention) so the gap is measurable when a corpus carries paths."
@@ -24,6 +24,7 @@
     {
       "id": "fc-01",
       "utterance": "OK so — I completely lost my thread just then — can you get the worker to add a changelog entry for the parser fix? And do not touch the auth routes while you are in there.",
+      "recognisedText": "OK so — I completely lost my thread just then — can you get the worker to add a changelog entry for the parser fix? And do not touch the auth routes while you are in there.",
       "requiredWords": [
         "changelog",
         "parser",
@@ -45,6 +46,7 @@
     {
       "id": "fc-02",
       "utterance": "Right, anyway, that is not important, forget I mentioned it — hold phase three until my review, and only un-gate it after the tests pass.",
+      "recognisedText": "Right, anyway, that is not important, forget I mentioned it — hold phase three until my review, and only un-gate it after the tests pass.",
       "requiredWords": [
         "phase three",
         "review",
@@ -66,6 +68,7 @@
     {
       "id": "fc-03",
       "utterance": "Um, just a second, my coffee went cold — right: ask the worker to rebase the branch onto main, but never commit to master.",
+      "recognisedText": "Um, just a second, my coffee went cold — right: ask the worker to rebase the branch onto main, but never commit to master.",
       "requiredWords": [
         "rebase",
         "branch",
@@ -89,6 +92,7 @@
     {
       "id": "fc-04",
       "utterance": "Where was I, oh yes, I have lost the thread — tell the worker to write the failing test first, so the reproduction exists before the patch does.",
+      "recognisedText": "Where was I, oh yes, I have lost the thread — tell the worker to write the failing test first, so the reproduction exists before the patch does.",
       "requiredWords": [
         "failing test",
         "reproduction",
@@ -109,6 +113,7 @@
     {
       "id": "fc-05",
       "utterance": "Honestly this is a long week — ask it to drop the caching work entirely and leave that module alone.",
+      "recognisedText": "Honestly this is a long week — ask it to drop the caching work entirely and leave that module alone.",
       "requiredWords": [
         "drop",
         "caching work",
@@ -129,6 +134,7 @@
     {
       "id": "fc-06",
       "utterance": "So, big picture aside, the migration is what matters — have the worker write the migration but do not run it against the staging database yet.",
+      "recognisedText": "So, big picture aside, the migration is what matters — have the worker write the migration but do not run it against the staging database yet.",
       "requiredWords": [
         "migration",
         "staging database"
@@ -149,6 +155,7 @@
     {
       "id": "fc-07",
       "utterance": "I keep going back and forth on the compression idea — compress the queue payload, only if the benchmark still passes afterwards.",
+      "recognisedText": "I keep going back and forth on the compression idea — compress the queue payload, only if the benchmark still passes afterwards.",
       "requiredWords": [
         "compress",
         "queue payload",
@@ -170,6 +177,7 @@
     {
       "id": "fc-08",
       "utterance": "Anyway, enough of that, it is water under the bridge — add a dry-run flag to the runner, and do not change the default behaviour.",
+      "recognisedText": "Anyway, enough of that, it is water under the bridge — add a dry-run flag to the runner, and do not change the default behaviour.",
       "requiredWords": [
         "dry-run flag",
         "runner",
@@ -190,6 +198,7 @@
     {
       "id": "fc-09",
       "utterance": "Bear with me, I am thinking out loud — maybe rename the parser helper to something clearer, but leave the test names untouched.",
+      "recognisedText": "Bear with me, I am thinking out loud — maybe rename the parser helper to something clearer, but leave the test names untouched.",
       "requiredWords": [
         "rename",
         "parser helper",
@@ -211,6 +220,7 @@
     {
       "id": "fc-10",
       "utterance": "That reminds me of something else entirely — run the unit tests, then push the branch if they pass.",
+      "recognisedText": "That reminds me of something else entirely — run the unit tests, then push the branch if they pass.",
       "requiredWords": [
         "run",
         "unit tests",
@@ -233,6 +243,7 @@
     {
       "id": "fc-11",
       "utterance": "Right, one thing I meant to mention earlier — ask the worker to keep the uncommitted changes somewhere safe before it aborts the run.",
+      "recognisedText": "Right, one thing I meant to mention earlier — ask the worker to keep the uncommitted changes somewhere safe before it aborts the run.",
       "requiredWords": [
         "uncommitted changes",
         "somewhere safe",
@@ -253,6 +264,7 @@
     {
       "id": "fc-12",
       "utterance": "Sorry, quick interruption, I will not take long — bump the dependency to the latest patch, but do not touch the lockfile by hand.",
+      "recognisedText": "Sorry, quick interruption, I will not take long — bump the dependency to the latest patch, but do not touch the lockfile by hand.",
       "requiredWords": [
         "bump",
         "dependency",
@@ -275,6 +287,7 @@
     {
       "id": "fc-13",
       "utterance": "I have been meaning to ask you this all morning, it keeps slipping my mind — summarise the test failures in one paragraph, and only mention the ones that are still red.",
+      "recognisedText": "I have been meaning to ask you this all morning, it keeps slipping my mind — summarise the test failures in one paragraph, and only mention the ones that are still red.",
       "requiredWords": [
         "summarise",
         "test failures",
@@ -295,6 +308,7 @@
     {
       "id": "fc-14",
       "utterance": "Well, that did not work at all, back to the drawing board — tell it to revert the last commit, but do not drop the changelog entry that came with it.",
+      "recognisedText": "Well, that did not work at all, back to the drawing board — tell it to revert the last commit, but do not drop the changelog entry that came with it.",
       "requiredWords": [
         "revert",
         "last commit",
@@ -316,6 +330,7 @@
     {
       "id": "fc-15",
       "utterance": "Let me get this straight first, then I will stop talking — write the integration test for the export path, after the unit tests are green.",
+      "recognisedText": "Let me get this straight first, then I will stop talking — write the integration test for the export path, after the unit tests are green.",
       "requiredWords": [
         "integration test",
         "export path",
@@ -338,6 +353,7 @@
     {
       "id": "fc-16",
       "utterance": "Sorry, I have completely lost the thread of that — set the timeout to thirty seconds in the client, and never hard-code the endpoint.",
+      "recognisedText": "Sorry, I have completely lost the thread of that — set the timeout to thirty seconds in the client, and never hard-code the endpoint.",
       "requiredWords": [
         "timeout",
         "thirty seconds",
@@ -360,6 +376,7 @@
     {
       "id": "fc-17",
       "utterance": "Anyway, that is by the bye, ancient history — review the diff on the parser module, and do not merge anything until I have read your summary.",
+      "recognisedText": "Anyway, that is by the bye, ancient history — review the diff on the parser module, and do not merge anything until I have read your summary.",
       "requiredWords": [
         "review",
         "diff",
@@ -383,6 +400,7 @@
     {
       "id": "fc-18",
       "utterance": "Now then, where were we, I lost the plot — get the worker to extract the retry logic into its own function, and leave the callers untouched.",
+      "recognisedText": "Now then, where were we, I lost the plot — get the worker to extract the retry logic into its own function, and leave the callers untouched.",
       "requiredWords": [
         "extract",
         "retry logic",
@@ -405,6 +423,7 @@
     {
       "id": "fc-19",
       "utterance": "I nearly forgot, remind me later about the roadmap — ask it to add structured logging to the worker bridge, but only at the debug level.",
+      "recognisedText": "I nearly forgot, remind me later about the roadmap — ask it to add structured logging to the worker bridge, but only at the debug level.",
       "requiredWords": [
         "structured logging",
         "worker bridge",
@@ -425,6 +444,7 @@
     {
       "id": "fc-20",
       "utterance": "OK, that is everything, I promise, no more requests — tell the worker to fix the flaky assertion in the parser test, and do not reorder the other tests to make it pass.",
+      "recognisedText": "OK, that is everything, I promise, no more requests — tell the worker to fix the flaky assertion in the parser test, and do not reorder the other tests to make it pass.",
       "requiredWords": [
         "flaky assertion",
         "parser test"
@@ -442,5 +462,12 @@
       ],
       "notes": "The world's own task, with an explicit anti-shortcut constraint."
     }
-  ]
+  ],
+  "recognisedProvenance": {
+    "source": "frozen-reference",
+    "note": "The recognised text is byte-identical to each item's reference utterance. The lab never performed a scored live capture (its only committed manifest is a dry run with realProviderCalls: 0) and the Phase 6 regression suite is hermetic (no live provider calls), so the transcription lane is represented by the corpus's own frozen reference text rather than an invented transcript. A future real capture replaces recognisedText with the observed transcript and updates this provenance. Recognition WER is still computed and guarded: the regression suite asserts WER 0 for this frozen artefact and mutates the text in negative controls to prove the metric detects recognition error.",
+    "addedAt": "2026-09-17",
+    "addedBy": "Wave 2 regression child G (feat/voice-regression)",
+    "recognisedField": "items[].recognisedText"
+  }
 }
