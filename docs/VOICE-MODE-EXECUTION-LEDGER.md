@@ -371,6 +371,52 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (WAVE 2 COMPLETE — F merged `e792c26`; Gate 5 verified twice; one security incident contained; Wave 3 next).**
+**F verified and merged.** My own verification ran the gate **twice**: once with
+the ambient `ALLOWED_ORIGINS` and once from a bare shell with
+`ALLOWED_ORIGINS`, `AUTH_PASSWORD` and `NODE_ENV` scrubbed — both exit 0, **3/3
+scenarios**, gate-leak clean (deliveries == authorisations, each preceded by its
+owned authorised confirmation), **100 % byte fidelity** (kernel digest
+reproduces the confirmed SHA; delivered bytes byte-identical; the worker's own
+store carries them), negative controls refused (`voice_proposal_stale`,
+`voice_client_text_forbidden`). Two bounded defects I found during verification
+were fixed by F in `a5119c6` and re-proven: **(1) gate reproducibility** — the
+runner depended on ambient `ALLOWED_ORIGINS` (bare shells got a 403 origin
+rejection at the `/ws` upgrade; the fix passes `ALLOWED_ORIGINS: SLICE_ORIGIN`
+explicitly); **(2) failure visibility** — a thrown runner error exited 1 with no
+printed reason (the completion path now prints the failing scenarios, checks and
+failure lines). Merged-tree gates: typecheck + full build clean; **server suite
+425 files / 5298 tests green**; mount unit suite 13/13.
+
+**SECURITY INCIDENT (F-6) — contained, nothing reached the remote.** F's
+*unpushed* correction commit carried live provider credentials: the disposable
+worker ran an `env`-style command whose tool result (the worker's own tool
+result, copied verbatim into the session store used as fidelity evidence) held
+the operator's Google and OpenRouter keys from the ambient environment. **GitHub
+push protection rejected the push (`OpenRouter API Key`)** — it never landed.
+Containment, verified by me independently: F added `redactSecrets` on the
+evidence-writing path and amended the commit; I scanned the whole tree at both
+pushed commits (`03c9895`, `a5119c6`) for credential shapes — clean (the only
+match is B's deliberate `AIzaSENTIN…` test sentinel, also on master); the
+unredacted commit `b14f328` was never pushed and I removed its reflog reference
+(no ref or reflog points at it; the object stays unreachable until a natural gc
+— I deliberately did **not** force a prune because the object store is shared
+with other worktrees/agents); the disposable state dirs that held raw dumps were
+deleted (19 `/tmp/voice-slice-*` dirs cleaned). The owner was informed (F sent a
+notification; conductor disclosure follows). Rotation of the OpenRouter key is
+the owner's call — assessed as optional: local-only exposure, nothing on the
+remote.
+
+**F-5 (incidental, recorded for a product decision):** the frozen normaliser only
+strips a commission frame that names its addressee, so "Ask it to update the
+changelog." was a silent no-op (safe but invisible); the scenario now uses the
+explicit "the worker" frame. Product question (clarify vs silent no-op) queued.
+
+**Durable-fix decisions queued for Wave 3 / follow-up:** F-1 (where the tool-
+acknowledgement scheduling belongs — Track B/parent), F-2 (fold the voice frame
+budget into the shared rate-limit module), F-3 (offer flow — intent §19.4
+capability decision).
+
 **2026-09-18 (Wave 2 F in flight — backstop reconciled; F has already run Gate 5 and with real findings).**
 Backstop `deadline-3950c64b` expired; **expiry ≠ completion** — F was verified
 alive and productive (goal running, session busy, 619 messages, new files:
