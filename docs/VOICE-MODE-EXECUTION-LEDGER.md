@@ -373,6 +373,28 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (M VERIFIED AND MERGED `cb929c6` — WAVE 3 CLOSEOUT COMPLETE; Phase 7 handed to the operator).**
+Conductor verification of M on its frozen commit (`e68ef39`): typecheck 0; shared+client builds 0/0;
+client 144 files / **1611** tests; shared 9 files / **246**; **Playwright 9/9 (my own run)**. Code
+inspection: `receiptVerdict()` gives each outcome its own honest wording (`delivered` is the only
+outcome worded or toned as delivery; `unknown` names the cause and the reconciliation promise); the
+delivered chime badge is gated on `lastChime === 'delivered'` **and** `receiptIsCurrent`, so no
+delivered claim can stand beside a newer unconfirmed proposal; the shared union change is purely
+additive (one member + two type-level assertions). The evidence JSON records badge visibility and
+the chime variant actually played per outcome: only `delivered` gets the delivered variant; the
+other three keep C's deliberately distinct non-delivery figures. Merged `cb929c6`. Conductor hygiene
+follow-up `4ca8262`: the default Playwright config now excludes the three voice-live-lab specs (they
+are opt-in via their own configs — CI does not run Playwright, but a bare local
+`npx playwright test` would otherwise run them against the wrong server and page). Cleanup: watch
+cancelled, lease released, worktree removed, branch deleted. **Honest process note: the merge and
+config commits were pushed before the post-merge full gate finished; the gate result is recorded in
+the next entry.** **Phase 7 handed to the operator** (Telegram question + `PHASE-7-RUNBOOK.md`):
+one-command disposable slice with the live engine, pre-tested by me (lane live, audio streamed,
+clean detach). **Wave 3 closeout summary: all eleven review findings plus M7/M8 are closed across
+K/L/M; three items are recorded as accepted LOWs rather than silently claimed — L3 (present-variant
+honesty), R's audit-converse scope limit, and the deliberate "only the latest receipt is displayed"
+choice.**
+
 **2026-09-18 (PHASE 7 SLICE SELF-TESTED — the composed browser↔server loop now proven on it).**
 `scripts/voice-mode-dogfood.sh` + `PHASE-7-RUNBOOK.md` prepared, then self-tested end to end by the
 conductor: the disposable child demonstrably carried `VOICE_MODE_ENGINE=gemini-live` and the client
