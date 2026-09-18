@@ -371,6 +371,29 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (GATE 8 CLOSED — H verified and merged `edccdbe`; R still reviewing).**
+H's 17-file diff is exactly its owned paths (config, session-registry, voice/**,
+websocket/{connection,voice-live-mount}, security/rate-limit, observability/operational-metrics,
++ tests); frozen areas untouched. Conductor verification: **Gate 8 re-run verbatim
+(`npm run typecheck && npm run test`) → exit 0**, all four workspaces green (shared
+9, server 429, client 140, internal-api-mcp 8 files) — **re-run again on the
+merged master with the same result** before pushing. The plan's fallback proof
+re-run by me: 20/20 across the fallback suite + the seam suites; the kill is real
+(the test closes the real bridge's provider socket mid-session, then asserts
+fallback engagement, drafts/parked items surviving and remaining actionable, the
+announcement frames on the wire, and the one-time registry announcement).
+Structural checks: **F-1** — the mount's `withIdleToolAcknowledgements` wrapper
+is **deleted** and the scheduling is now an engine option defaulting to
+`WHEN_IDLE` (the F-1 silence defect cannot recur by construction); **F-2** —
+`wsVoiceFrameLimiter` (1200/2 s) now lives in `security/rate-limit.ts` beside
+`wsMessageLimiter`, used by `connection.ts`, behaviour identical and the generic
+limiter unchanged; **flag** — unset/blank → `cascade`, case-insensitive, unknown
+values throw with a clear message, and a cascade-mode lane never calls the bridge
+factory. Security scan of H's commits: clean (only the known test sentinel).
+Cleanup done (watch cancelled, lease released, worktree removed, branch deleted
+local + remote). **R (independent review) is still running**; its findings will
+be adjudicated on arrival, including a second read-only pass over H's diff.
+
 **2026-09-18 (Wave 3 DISPATCHED — H rollout + R independent review, from master `5a453b2`).**
 Briefs committed (`5a453b2`). **Structural decision:** the two deferred Wave-2
 seams (F-1 tool-ack scheduling, F-2 rate-limit consolidation) are folded into
