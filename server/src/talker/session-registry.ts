@@ -243,7 +243,10 @@ const HISTORY_PROVIDER_TAIL = 200;
  * material), non-empty text only, oldest first. The renderer bounds and
  * clips; the provider's job is only to be truthful about the total.
  */
-function toHistoryEntries(list: Array<{ role?: unknown; content?: unknown }>): {
+function toHistoryEntries(
+  list: Array<{ role?: unknown; content?: unknown }>,
+  tail: number = HISTORY_PROVIDER_TAIL
+): {
   entries: WorkerHistoryEntry[];
   total: number;
 } {
@@ -255,7 +258,7 @@ function toHistoryEntries(list: Array<{ role?: unknown; content?: unknown }>): {
     entries.push({ role: m.role, text });
   }
   const total = entries.length;
-  return { entries: entries.slice(-HISTORY_PROVIDER_TAIL), total };
+  return { entries: entries.slice(-Math.max(1, tail)), total };
 }
 
 export class TalkerSessionRegistry {
@@ -300,10 +303,11 @@ export class TalkerSessionRegistry {
    */
   async workerStateSnapshot(
     workerSessionId: string,
-    runtime: TalkerRuntime = 'pi'
+    runtime: TalkerRuntime = 'pi',
+    options: { historyTail?: number } = {}
   ): Promise<WorkerStateSnapshot> {
     try {
-      return await this.buildSnapshotFor(runtime, workerSessionId);
+      return await this.buildSnapshotFor(runtime, workerSessionId, options.historyTail ?? HISTORY_PROVIDER_TAIL);
     } catch {
       return { activity: honestUnavailableActivity(runtime) };
     }
@@ -610,9 +614,13 @@ export class TalkerSessionRegistry {
    * fallback — never an accidental read of the wrong manager, never an
    * invented status.
    */
-  private buildSnapshotFor(runtime: TalkerRuntime, workerSessionId: string): WorkerStateSnapshot | Promise<WorkerStateSnapshot> {
-    if (runtime === 'claude') return this.buildClaudeSnapshot(workerSessionId);
-    if (runtime === 'pi') return this.buildSnapshot(workerSessionId);
+  private buildSnapshotFor(
+    runtime: TalkerRuntime,
+    workerSessionId: string,
+    historyTail: number = HISTORY_PROVIDER_TAIL
+  ): WorkerStateSnapshot | Promise<WorkerStateSnapshot> {
+    if (runtime === 'claude') return this.buildClaudeSnapshot(workerSessionId, historyTail);
+    if (runtime === 'pi') return this.buildSnapshot(workerSessionId, historyTail);
     return { activity: honestUnavailableActivity(runtime) };
   }
 
@@ -639,7 +647,10 @@ export class TalkerSessionRegistry {
    * as running once the live observation says otherwise. Every failure degrades
    * to a plainer, weaker view — never to an invented one.
    */
-  private async buildClaudeSnapshot(workerSessionId: string): Promise<WorkerStateSnapshot> {
+  private async buildClaudeSnapshot(
+    workerSessionId: string,
+    historyTail: number = HISTORY_PROVIDER_TAIL
+  ): Promise<WorkerStateSnapshot> {
     let source: TalkerClaudeWorkerState | null = null;
     try {
       source = await this.resolveClaudeWorkerState();
@@ -717,7 +728,7 @@ export class TalkerSessionRegistry {
    * session's earlier conversation joins the view, bounded by the renderer,
    * with a truthful total so truncation is disclosed, never hidden.
    */
-  private buildSnapshot(workerSessionId: string): WorkerStateSnapshot {
+  private buildSnapshot(workerSessionId: string, historyTail: number = HISTORY_PROVIDER_TAIL): WorkerStateSnapshot {
     const status = this.manager.getSessionStatus(workerSessionId);
     let lastAssistantText: string | undefined;
     let history: { entries: WorkerHistoryEntry[]; total: number } | undefined;
@@ -730,7 +741,7 @@ export class TalkerSessionRegistry {
           break;
         }
       }
-      const built = toHistoryEntries(messages as Array<{ role?: unknown; content?: unknown }>);
+      const built = toHistoryEntries(messages as Array<{ role?: unknown; content?: unknown }>, historyTail);
       if (built.total > 0) history = built;
     } catch {
       // Unloaded/disposed session: the status-derived view is still honest.

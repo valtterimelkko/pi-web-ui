@@ -990,7 +990,7 @@ export type VoiceContractAssertions = [
  * confirmation; neither can release, and neither can supply consent or bytes
  * (N1, N8).
  */
-export type VoiceBridgeToolName = 'mark_addressed_to_talker' | 'offer_ask_worker';
+export type VoiceBridgeToolName = 'mark_addressed_to_talker' | 'offer_ask_worker' | 'read_worker_history';
 
 /**
  * Everything the bridge emits. The union is the productised shape of the lab
@@ -1059,13 +1059,17 @@ export interface VoiceBridgeToolCallEvent extends VoiceBridgeEventBase {
   callId: string;
   name: VoiceBridgeToolName;
   /**
-   * Both declared functions are PARAMETERLESS (the lab declares an empty
-   * parameter object for each), so this is typed as an empty record on purpose:
-   * a tool call can never carry an arbitrary payload into the kernel. The bridge
-   * validates the provider's raw value with `hasNoToolArguments` before emitting,
-   * and surfaces a violation instead of forwarding it.
+   * Argument rules are PER TOOL, and deliberately narrow:
+   *   - the two gate tools (`mark_addressed_to_talker`, `offer_ask_worker`) are
+   *     PARAMETERLESS — a call can never carry an arbitrary payload into the
+   *     kernel, and the bridge validates with `hasNoToolArguments` before
+   *     emitting, surfacing a violation instead of forwarding it;
+   *   - `read_worker_history` carries exactly one bounded string, `query`, which
+   *     can only select WHICH existing history is read back. It has no path to
+   *     the gate: the retrieved text is data, and a tool response can authorise
+   *     nothing (N2/N7 untouched).
    */
-  args: Record<string, never>;
+  args: Record<string, unknown>;
   atMs: number;
 }
 
@@ -1109,7 +1113,14 @@ export interface VoiceBridgeCallbacks {
   onTranscript?(event: VoiceBridgeTranscriptEvent): void;
   onTurnComplete?(event: VoiceBridgeTurnCompleteEvent): void;
   onInterrupted?(event: VoiceBridgeInterruptedEvent): void;
-  onToolCall?(event: VoiceBridgeToolCallEvent): void;
+  /**
+   * `onToolCall` may return a payload, which becomes the tool's response. This
+   * is how a retrieval result reaches the model IN THE SAME TURN: acknowledging
+   * an empty read with `{ok:true}` would let the model answer blind, which is the
+   * failure the retrieval tool exists to prevent. Returning nothing keeps the
+   * established `{ok:true}` acknowledgement (the gate tools do exactly that).
+   */
+  onToolCall?(event: VoiceBridgeToolCallEvent): void | Record<string, unknown> | Promise<void | Record<string, unknown>>;
   onResumption?(event: VoiceBridgeResumptionEvent): void;
   onGoAway?(event: VoiceBridgeGoAwayEvent): void;
   onStateChange?(event: VoiceBridgeStateEvent): void;
@@ -1140,20 +1151,19 @@ export interface VoiceBridgeContextUpdate {
   /** One-line current activity, host-rendered. */
   activity?: string;
   /**
-   * The worker session's bounded conversation view, host-read (P20/P23).
+   * Free-form host text injected as its own block: the worker brief (the full
+   * session, a bounded recent view, a delta, or a retrieval result) — already
+   * rendered by the host's own policy (`server/src/voice/worker-brief.ts`).
    *
-   * Why it is here: the live talker's whole world used to be the status line, so
-   * "what has the worker done?" could only be answered with a refusal — the
-   * 2026-09-18 field report. The relay lane has read a bounded worker-session
-   * projection for several phases, and the intent is explicit that a question
-   * about the session's work is a question FOR the talker (P22). This is the
-   * same projection, rendered by the same rules (honest counts, disclosed
-   * truncation, hard budget), so both lanes answer from the same world.
+   * Why it exists: the live talker's whole world used to be the status line, so
+   * "what has the worker done?" could only be refused (the 2026-09-18 field
+   * report). The brief is rendered by the ONE bounded renderer and carried here;
+   * it is bounded by the host before it ever arrives.
    *
-   * Data, never authority: it is host-derived state, and nothing in it can
-   * authorise a delivery (N2/N7 unchanged).
+   * Data, never authority: host-derived state, and nothing in it can authorise a
+   * delivery (N2/N7 unchanged).
    */
-  history?: VoiceWorkerHistoryBlock;
+  note?: string;
   /** Background children with statuses, host-rendered. */
   children?: string[];
   /** Pending items, host-rendered. */
@@ -1161,14 +1171,6 @@ export interface VoiceBridgeContextUpdate {
   /** The status line injected each turn, e.g. 'CURRENT STATUS: RUNNING'. */
   statusLine: string;
   atMs: number;
-}
-
-/** The worker conversation view carried in {@link VoiceBridgeContextUpdate}. */
-export interface VoiceWorkerHistoryBlock {
-  /** Oldest first; bounded by the renderer, never by the caller. */
-  entries: Array<{ role: 'user' | 'assistant'; text: string }>;
-  /** How many conversation messages the host saw in total, for honest disclosure. */
-  total: number;
 }
 
 /** Minimum spacing between context injections, in ms (§16.2 / Phase 3). */

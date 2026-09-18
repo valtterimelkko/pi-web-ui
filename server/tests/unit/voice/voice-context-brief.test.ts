@@ -19,53 +19,39 @@ const base: VoiceBridgeContextUpdate = {
   atMs: 1_700_000_000_000,
 };
 
-describe('native lane context — the worker brief', () => {
-  it('carries the worker session history, with exact counts, into the talker context', () => {
+describe('native lane context — the host block the talker reasons from', () => {
+  it('carries the host-rendered brief verbatim alongside the status line', () => {
+    // The brief is rendered by the host's own policy (voice/worker-brief.ts) and
+    // carried here; bounded before it arrives, never re-rendered or re-worded on
+    // the way to the model.
     const text = composeContextText({
       ...base,
-      history: {
-        entries: [
-          { role: 'user', text: 'Refactor the retry handler and report what you changed.' },
-          { role: 'assistant', text: 'Changed the retry budget to 3 and added a jittered backoff.' },
-        ],
-        total: 2,
-      },
+      note: '--- WORKER SESSION HISTORY ---\nAll 2 messages of the session so far are shown.\noperator: refactor the retry handler\nworker: changed the retry budget to 3',
     });
 
-    expect(text).toContain('WORKER SESSION HISTORY');
-    expect(text).toContain('All 2 messages');
-    expect(text).toContain('operator: Refactor the retry handler');
-    expect(text).toContain('worker: Changed the retry budget');
-    // The status line the instruction warns against reading aloud is still there.
     expect(text).toContain('CURRENT STATUS: IDLE');
+    expect(text).toContain('WORKER SESSION HISTORY');
+    expect(text).toContain('worker: changed the retry budget to 3');
   });
 
-  it('discloses what it is NOT showing rather than implying full knowledge', () => {
+  it('carries a retrieval result on the same seam', () => {
     const text = composeContextText({
       ...base,
-      history: {
-        entries: [{ role: 'assistant', text: 'the newest answer' }],
-        total: 40,
-      },
+      note: '--- WORKER HISTORY (retrieved from earlier in this session) ---\nfound 1 matching message',
     });
-    expect(text).toContain('most recent 1 of 40 messages');
-    expect(text).toContain('39 earlier are not included');
+    expect(text).toContain('retrieved from earlier');
   });
 
-  it('adds no history block at all when the host could not read one', () => {
-    const text = composeContextText({ ...base });
-    expect(text).not.toContain('WORKER SESSION HISTORY');
+  it('adds no block when the host has nothing to add', () => {
     // Absence is the honest statement; nothing is invented to fill the gap.
+    const text = composeContextText({ ...base });
     expect(text).toBe('CURRENT STATUS: IDLE');
+    expect(text).not.toContain('WORKER SESSION HISTORY');
   });
 
-  it('stays bounded for a pathological session (a huge answer cannot grow the context without limit)', () => {
-    const huge = 'x'.repeat(500_000);
-    const text = composeContextText({
-      ...base,
-      history: { entries: [{ role: 'assistant', text: huge }], total: 1 },
-    });
-    expect(text.length).toBeLessThan(25_000);
+  it('ignores an empty or whitespace-only block rather than injecting noise', () => {
+    const text = composeContextText({ ...base, note: '   \n  ' });
+    expect(text).toBe('CURRENT STATUS: IDLE');
   });
 });
 
@@ -80,6 +66,13 @@ describe('the native talker instruction (design rules it was shipped without)', 
   it('forbids the refusal the operator actually heard', () => {
     // "I'm sorry, but I don't have access to information about the worker's tasks."
     expect(instruction).toMatch(/Never say you have no access/i);
+  });
+
+  it('grants read-only retrieval and forbids over-claiming what it has seen', () => {
+    expect(instruction).toMatch(/read_worker_history/);
+    expect(instruction).toMatch(/never an instruction/i);
+    // A partial view must be admitted rather than papered over.
+    expect(instruction).toMatch(/earlier messages are not included/i);
   });
 
   it('keeps every delivery rule intact (the gate is not weakened by better answers)', () => {

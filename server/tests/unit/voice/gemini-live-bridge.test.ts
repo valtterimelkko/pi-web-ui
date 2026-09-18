@@ -136,6 +136,15 @@ function createBridge(
   return { bridge, mock, events, scheduled };
 }
 
+/**
+ * Tool acknowledgements now await the kernel's answer (a retrieval result IS the
+ * tool response), so the send lands a microtask later than the emit.
+ */
+async function flushToolAcknowledgement(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 async function connectedBridge(overrides: Record<string, unknown> = {}) {
   const harness = createBridge(overrides as never);
   const connectPromise = harness.bridge.connect();
@@ -176,7 +185,7 @@ describe('GeminiLiveBridge connect/setup', () => {
     bridge.close();
   });
 
-  it('builds the tier-1 config: audio modality, both transcriptions, resumption, manual VAD and the two parameterless tools', async () => {
+  it('builds the tier-1 config: audio modality, both transcriptions, resumption, manual VAD and the two parameterless gate tools plus the one read-only retrieval tool', async () => {
     const { bridge, mock } = await connectedBridge();
     const config = mock.request(0).config;
     expect(config.responseModalities).toEqual(['AUDIO']);
@@ -187,14 +196,21 @@ describe('GeminiLiveBridge connect/setup', () => {
     expect(config.systemInstruction?.parts[0].text).toBe('You are a test talker.');
     const declarations = (config.tools?.[0].functionDeclarations ?? []) as Array<{
       name: string;
-      parameters: { properties: Record<string, never>; required: string[] };
+      parameters: { properties: Record<string, { type?: string }>; required: string[] };
       behavior: string;
     }>;
     expect(declarations.map((declaration) => declaration.name).sort()).toEqual([...VOICE_TOOL_NAMES].sort());
     for (const declaration of declarations) {
+      expect(declaration.behavior).toBe('NON_BLOCKING');
+      if (declaration.name === 'read_worker_history') {
+        // The single parameterised tool, and its exception is one bounded string.
+        expect(Object.keys(declaration.parameters.properties)).toEqual(['query']);
+        expect(declaration.parameters.properties.query.type).toBe('STRING');
+        expect(declaration.parameters.required).toEqual(['query']);
+        continue;
+      }
       expect(declaration.parameters.properties).toEqual({});
       expect(declaration.parameters.required).toEqual([]);
-      expect(declaration.behavior).toBe('NON_BLOCKING');
     }
     bridge.close();
   });
@@ -345,6 +361,7 @@ describe('GeminiLiveBridge tool calls', () => {
     const call = events.find((event) => event.kind === 'tool_call');
     expect(call?.payload.name).toBe('mark_addressed_to_talker');
     expect(call?.payload.args).toEqual({});
+    await flushToolAcknowledgement();
     const acknowledgement = mock.last().sentToolResponses[0];
     expect(acknowledgement.functionResponses[0]).toMatchObject({
       id: 'call-1',
@@ -360,6 +377,7 @@ describe('GeminiLiveBridge tool calls', () => {
     mock.emit({
       toolCall: { functionCalls: [{ name: 'offer_ask_worker', args: {}, id: 'call-silent' }] },
     });
+    await flushToolAcknowledgement();
     expect(mock.last().sentToolResponses[0].functionResponses[0]).toMatchObject({
       id: 'call-silent',
       scheduling: 'SILENT',

@@ -225,47 +225,133 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     expect(metrics.snapshot().voice.live.captureFaultTotal).toEqual({ other: 1, capture_failed: 1 });
   });
 
-  it('hands the live talker a bounded worker brief, and refreshes it when the work moves', async () => {
-    // The field report: the talker held one status line, so "what has the worker
-    // done?" could only be refused. The lane now carries the worker's own
-    // conversation window (P20/P23), rendered by the same bounded renderer.
+  it('hands the live talker the WHOLE session when it fits, then only the deltas', async () => {
+    // Measured: a full session is free on the live provider up to ~82k tokens, so
+    // the old 12k cap was not buying anything. Deltas afterwards, because a live
+    // session ACCUMULATES context and re-sending 40k tokens per change walks it
+    // into the stall (docs/plans/VOICE-TALKER-FULL-SESSION-BRIEF.md).
     const service = new FakeService();
     const evidence: Array<Record<string, unknown>> = [];
-    let total = 2;
+    const rows = Array.from({ length: 300 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      text: `message ${i} `.padEnd(400, 'x'),
+    }));
+    let entries = [...rows];
     const mount = new VoiceLiveMount({
       service,
       delivery: makeDelivery(),
       isWorkerBusy: async () => false,
       evidence: (event) => evidence.push(event),
-      workerBrief: async () => ({
-        activity: 'idle',
-        history: {
-          entries: [
-            { role: 'user', text: 'Inventory the retry paths.' },
-            { role: 'assistant', text: `Answer number ${total}.` },
-          ],
-          total,
-        },
-      }),
+      workerBrief: async () => ({ activity: 'idle', entries, total: entries.length }),
     });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
 
     await mount.refreshWorkerStatuses();
-    const first = service.contextUpdates.at(-1);
-    expect(first?.history?.total).toBe(2);
-    expect(composeContextText(first as never)).toContain('WORKER SESSION HISTORY');
-    expect(composeContextText(first as never)).toContain('Inventory the retry paths.');
+    const first = service.contextUpdates.at(-1)?.note ?? '';
+    expect(first).toContain('WORKER SESSION HISTORY');
+    expect(first).toContain('message 1 x');   // the WHOLE session, not a recent slice
+    expect(first).toContain('message 298 ');
+    expect(evidence.filter((event) => event.event === 'worker_brief_injected').at(-1)?.mode).toBe('full');
 
-    // New work appears: the brief must refresh, not freeze at lane start.
-    total = 3;
+    // New work: a delta, not another 120k characters.
+    entries = [...entries, { role: 'assistant', text: 'and finally a purple triangle' }];
     await mount.refreshWorkerStatuses();
-    const refreshed = service.contextUpdates.at(-1);
-    expect(refreshed?.history?.total).toBe(3);
+    const delta = service.contextUpdates.at(-1)?.note ?? '';
+    expect(delta).toContain('purple triangle');
+    expect(delta).not.toContain('message 1 x');
+    expect(delta.length).toBeLessThan(1_000);
+    expect(evidence.filter((event) => event.event === 'worker_brief_injected').at(-1)?.mode).toBe('delta');
+  });
 
-    // And the injection is a recorded fact, so the operator can see what it knew.
-    const briefEvent = evidence.filter((event) => event.event === 'worker_brief_injected').at(-1);
-    expect(briefEvent?.historyTotal).toBe(3);
+  it('falls back to a bounded window above the ceiling, and says what it is not showing', async () => {
+    const service = new FakeService();
+    const rows = Array.from({ length: 1_000 }, (_, i) => ({
+      role: 'assistant' as const,
+      text: `bulk ${i} `.padEnd(400, 'y'),
+    }));
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      workerBrief: async () => ({ activity: 'idle', entries: rows, total: rows.length }),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    await mount.refreshWorkerStatuses();
+
+    const note = service.contextUpdates.at(-1)?.note ?? '';
+    expect(note).toContain('WORKER SESSION HISTORY');
+    expect(note).toMatch(/earlier are not included/);
+    expect(note.length).toBeLessThan(20_000);
+  });
+
+  it('answers a read_worker_history call with the messages the window hid', async () => {
+    const service = new FakeService();
+    const rows = [
+      { role: 'user' as const, text: 'Please find out why the retry handler dropped the session token.' },
+      { role: 'assistant' as const, text: 'Traced it to the auth retry wrapper clearing the header early.' },
+      { role: 'user' as const, text: 'Unrelated: rename the parking glyph.' },
+      { role: 'assistant' as const, text: 'Renamed; it is a purple triangle now.' },
+    ];
+    const evidence: Array<Record<string, unknown>> = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+      workerBrief: async () => ({ activity: 'idle', entries: rows, total: rows.length }),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    await mount.refreshWorkerStatuses();
+
+    const payload = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'read_worker_history',
+      args: { query: 'retry handler session token' },
+      atMs: 1_700_000_000_000,
+    });
+
+    // The tool RESPONSE carries the text: the model reads it in the same turn.
+    expect(String(payload && payload.history)).toContain('auth retry wrapper');
+    expect(String(payload && payload.history)).toMatch(/searched 4 messages/);
+    expect(evidence.filter((event) => event.event === 'worker_history_retrieved').at(-1)?.matches).toBeGreaterThan(0);
+  });
+
+  it('answers retrieval for anything it cannot see with a plain "not in the session"', async () => {
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      workerBrief: async () => ({
+        activity: 'idle',
+        entries: [{ role: 'user', text: 'only a tiny bit of work here' }],
+        total: 1,
+      }),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+
+    const payload = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'read_worker_history',
+      args: { query: 'kubernetes ingress certificate rotation' },
+      atMs: 1,
+    });
+    expect(String(payload && payload.history)).toMatch(/No message in this session matches/i);
+  });
+
+  it('gives the gate tools no payload at all (they stay parameterless bookkeeping)', async () => {
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    expect(await mount.handleToolRequest({ laneId: LANE, name: 'offer_ask_worker', args: {}, atMs: 1 })).toBeUndefined();
+    expect(
+      await mount.handleToolRequest({ laneId: LANE, name: 'mark_addressed_to_talker', args: {}, atMs: 1 })
+    ).toBeUndefined();
   });
 
   it('injects the status alone when the host cannot read a brief (never an invented one)', async () => {
@@ -284,7 +370,7 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
 
     const last = service.contextUpdates.at(-1);
     expect(last?.statusLine).toBe('CURRENT STATUS: RUNNING');
-    expect(last?.history).toBeUndefined();
+    expect(last?.note).toBeUndefined();
   });
 
   it('delivers the exact retained bytes when a confirmation is authorised', async () => {

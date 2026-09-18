@@ -24,7 +24,8 @@
 > Conductor session: `01a0b0ef-ab27-7359-867b-6aa4a17a6d11` (pi CLI, cwd
 > `/root/pi-web-ui`). Last updated: 2026-09-18 (production deployed for the owner's Phase 7
 > test; CI green on master; independent verification of the Gate-5 harness completed and its
-> finding closed).
+> finding closed; the talker's full-session brief — measured ceiling, deltas, retrieval —
+> live-validated through the shipped path and awaiting the deploy step of this change).
 
 ---
 
@@ -377,6 +378,42 @@ activation.
 ---
 
 ## 12. Live progression log (append-only; newest first)
+
+**2026-09-18 (the talker's WINDOW ON THE WORK — the operator's "let it see the entire session", measured,
+built, live-validated through the shipped path).**
+
+Operator: *"I think we should enable it to see the entire session — it is capable of reading it and handling it,
+I believe — unless you disagree with this?"* The conductor disagreed with the *mechanism* and agreed with the goal,
+then settled it by measurement rather than argument (`docs/plans/VOICE-TALKER-FULL-SESSION-BRIEF.md`): on the real
+provider, with the real instruction and a fact buried at the very START of the brief, a full brief costs nothing
+up to **~82k tokens** (injection 1.6 s, answer 1.5 s, needle recalled) and the lane is **DEAD above ~100k** — the
+injection turn never completes and the talker says nothing. So the 12k-character cap bought no latency, and
+"always send everything" would brick exactly the long sessions where the question matters most.
+
+Shipped: the **whole session by default** under a measured **200k-character ceiling**; **deltas** afterwards
+(a live session accumulates context, so re-sending 40k tokens per change walks it into the stall); a **bounded
+recent view above the ceiling that says what it is not showing**, plus **read-only retrieval**
+(`read_worker_history`) — the mechanism intent §19.3 already named — so nothing is unreachable; and the
+instruction now tells the talker to disclose the reduced view and offer to read further back.
+
+N7 held by construction: argument rules are now **per tool** (`server/src/voice/tool-arguments.ts`). The two
+gate tools stay parameterless; the retrieval tool takes exactly one trimmed, length-bounded `query` that can
+only select *which* existing history is read back, and its result returns as the tool's **response** (data) —
+an `{ok:true}` ack with no payload would make the model answer blind. Pending context now **appends** rather
+than replaces, so a coalesced flush cannot silently drop a delta.
+
+**Live-validated through the shipped composition path** (`planWorkerBrief` → `composeContextText` → real
+instruction/declarations → `validateToolArguments`/`searchWorkerHistory`), 4 real sessions, 77 s, needle in the
+FIRST message (`operations/voice-live-20260917/evidence/full-session-brief-20260918/`):
+- ~7k and ~40k tokens → mode `full`, needle **recalled from the brief** (5.0 s / 10.5 s);
+- ~83k and ~165k tokens → mode `recent`, disclosure present, **no invention**, and the model **called
+  `read_worker_history` and then answered** with the needle (6.3 s / 5.8 s).
+Honest limit: text turns are driven with `sendClientContent` because the production bridge exposes no text send
+(audio only), so the audio transport is not re-validated here — the Gate-5 slice remains that evidence.
+
+Still owed before this can be called done: **the deploy step of this change** (the owner authorised a
+restart for it) and the owner's own re-test of the deployed lane, which is the acceptance step. This note is a
+record, not a completion claim.
 
 **2026-09-18 (NATIVE TALKER — "I don't have access to the worker's tasks", root-caused, fixed, live-validated, deployed).**
 

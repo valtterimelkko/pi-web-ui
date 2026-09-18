@@ -1,0 +1,44 @@
+model: gemini-3.8-live
+
+=== [median session] source ~26000 chars (~7k tokens) -> mode=full injected=26901 chars
+[open]
+[tool call] mark_addressed_to_talker {} -> accepted
+[median session] answer (5006 ms): The session codename used  at the very start  of the session is  OBSIDIAN-FERRET.
+[median session] needle recalled from the brief: true
+
+=== [large session] source ~160000 chars (~40k tokens) -> mode=full injected=164073 chars
+[open]
+[tool call] mark_addressed_to_talker {} -> accepted
+[large session] answer (10518 ms): The session codename used  at the start  of this session was  OBSIDIAN-FERRET. The session codename used  at the start  of this session was  OBSIDIAN-FERRET.
+[large session] needle recalled from the brief: true
+
+=== [very large session] source ~330000 chars (~83k tokens) -> mode=recent injected=11713 chars
+[open]
+[tool call] read_worker_history {"query":""} -> accepted
+[retrieval] query="" matches=5 searched=788 chars=1562
+[very large session] first answer (6262 ms): Based on the earliest  messages in the session  history, the session  codename used  at the very start  was OBSIDIAN-FERRET.
+[very large session] tool calls: [{"name":"read_worker_history","args":{"query":""},"validated":"accepted {\"query\":\"\"}"}]
+[very large session] brief discloses the omission: true
+[very large session] retrieved chars: 1562
+[very large session] recovered the codename: true
+
+=== [largest measured session] source ~660000 chars (~165k tokens) -> mode=recent injected=11715 chars
+[open]
+[tool call] mark_addressed_to_talker {} -> accepted
+[tool call] read_worker_history {"query":""} -> accepted
+[retrieval] query="" matches=5 searched=1574 chars=1563
+[largest measured session] first answer (5759 ms): The session codename used  at the start  of this session was  OBSIDIAN-FERRET.
+[largest measured session] tool calls: [{"name":"read_worker_history","args":{"query":""},"validated":"accepted {\"query\":\"\"}"}]
+[largest measured session] brief discloses the omission: true
+[largest measured session] retrieved chars: 1563
+[largest measured session] recovered the codename: true
+
+================ VERDICT ================
+phase 1 — the whole session under the ceiling, needle at the very start:
+  median session: mode=full (expected full), needle in brief=true, recalled=true, 5006 ms
+  large session: mode=full (expected full), needle in brief=true, recalled=true, 10518 ms
+phase 2 — above the ceiling, the needle deliberately outside the standing view:
+  very large session: mode=recent (expected recent), discloses=true, invented before reading=false, called read_worker_history=true, recovered=true
+  largest measured session: mode=recent (expected recent), discloses=true, invented before reading=false, called read_worker_history=true, recovered=true
+overall: PASS (77s)
+LIVE-CHECK-EXIT=0

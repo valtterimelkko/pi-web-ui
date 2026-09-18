@@ -35,6 +35,14 @@ import { isTransferSessionContext, isTalkerTurnMessage, isTalkerDigestMessage } 
 // the behaviour it saw before this wiring existed.
 import { VoiceLiveMount, createLogEvidenceSink, createVoiceLiveLogger, VOICE_LANE_CAPACITY_CODE, type VoiceMountRefusalCode } from './voice-live-mount.js';
 import { VOICE_PROVIDER_MODEL } from '../voice/types.js';
+
+/**
+ * How much of the worker session the live lane may read as its source. The lane's
+ * own policy decides what the MODEL holds; this is the ceiling on what the host
+ * is willing to read and search (bounded so a pathological session cannot turn a
+ * refresh into a scan of the world).
+ */
+const VOICE_BRIEF_SOURCE_TAIL = 2_000;
 import {
   isVoiceClientMessageType,
   VOICE_WIRE_VERSION,
@@ -4283,12 +4291,18 @@ export class WebSocketConnectionManager {
             // uses (P20/P23), so a question about the work is answerable in the
             // native lane instead of refused (2026-09-18 field report).
             workerBrief: async (workerSessionId) => {
-              const snapshot = await this.talkerSessionRegistry.workerStateSnapshot(workerSessionId);
+              // A deeper source than the relay lane's standing window: the voice
+              // lane decides how much the model holds (full session under the
+              // measured ceiling, a bounded window above it, deltas after that)
+              // and the retrieval tool reads further back from the same source.
+              const snapshot = await this.talkerSessionRegistry.workerStateSnapshot(workerSessionId, 'pi', {
+                historyTail: VOICE_BRIEF_SOURCE_TAIL,
+              });
               const entries = snapshot.recentHistory;
               return {
                 ...(snapshot.activity ? { activity: snapshot.activity } : {}),
                 ...(entries && entries.length > 0
-                  ? { history: { entries, total: snapshot.historyTotal ?? entries.length } }
+                  ? { entries, total: snapshot.historyTotal ?? entries.length }
                   : {}),
               };
             },

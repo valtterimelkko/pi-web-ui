@@ -294,14 +294,27 @@ curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice'
 journalctl -u pi-web-ui.service | grep -E "talker_reply|talker_tool_call|worker_brief_injected"
 #   voice-kernel {"event":"talker_reply","excerpt":"…","chars":N}        ← its actual reply
 #   voice-kernel {"event":"talker_tool_call","tool":"offer_ask_worker"}  ← why it asked to confirm
-#   voice-kernel {"event":"worker_brief_injected","historyMessages":N,
-#                 "historyTotal":M,"briefChars":C}                       ← what it held
+#   voice-kernel {"event":"worker_brief_injected","mode":"full",
+#                 "historyMessages":N,"historyTotal":M,"briefChars":C}     ← what it held
+#   `mode` is the brief policy's decision: `full` (the whole session, under the
+#   measured ceiling), `recent` (a bounded view that says what it omits),
+#   `delta` (only what the model has not been told) or `none`.
 #   Together with the existing
 #   `operator_utterance` line (what the operator said, classified), these four
 #   answer "what did I ask, what did it answer, what did it know" from the
 #   server alone — the gap the 2026-09-18 "it says it has no access" report
 #   exposed. Excerpts are single-line and length-bounded; the full transcript
 #   stays in the browser by design.
+
+# 3d. Did the talker read further back for itself, and did it find anything?
+journalctl -u pi-web-ui.service | grep -E "worker_history_retrieved|worker_brief_unavailable"
+#   voice-kernel {"event":"worker_history_retrieved","queryChars":N,
+#                 "matches":M,"searched":S,"chars":C}                 ← the read
+#   voice-kernel {"event":"worker_brief_unavailable","message":"…"}   ← the read failed
+#   `searched` is how many messages the host could see and `matches` how many
+#   matched, so "it said the session does not contain that" is checkable rather
+#   than taken on trust. `worker_brief_unavailable` is the honest degraded state:
+#   the talker then holds only the status line, and says so.
 
 # 3b. Has a client reported a capture fault (a microphone that could not start)?
 curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice.live.captureFaultTotal'

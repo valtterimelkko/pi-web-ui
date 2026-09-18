@@ -24,6 +24,10 @@ on:
       # Named by shared/src/types/voice-messages.ts (the frozen native-voice wire
       # contract module), so a change touching only it must still run the suite.
       - '!docs/plans/VOICE-LIVE-WIRE-CONTRACT.md'
+      # Named by the voice brief policy's own tests and by
+      # server/src/voice/worker-brief.ts, so a change touching only it must still
+      # run the suite.
+      - '!docs/plans/VOICE-TALKER-FULL-SESSION-BRIEF.md'
   pull_request:
     paths-ignore: *docs-only-changes
 

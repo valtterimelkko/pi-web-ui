@@ -54,19 +54,40 @@ export function clip(text: string, max: number): string {
  * The bounded WORKER SESSION HISTORY block, or null when there is no history at
  * all — absence is the honest statement that nothing earlier is visible here.
  */
-export function renderSessionHistory(history: WorkerHistoryBlockLike | null | undefined): string[] | null {
+export interface WorkerHistoryRenderOptions {
+  /** Line-count guard (default: the relay lane's `SESSION_HISTORY_LIMITS.entries`). */
+  maxEntries?: number;
+  /** Total character budget for entry lines (default: the relay lane's). */
+  maxChars?: number;
+  /** Per-message clip for the operator's messages. */
+  entryChars?: number;
+  /** Per-message clip for the worker's own messages. */
+  assistantChars?: number;
+  /** Opening line; defaults to the standing block header. */
+  header?: string;
+}
+
+export function renderSessionHistory(
+  history: WorkerHistoryBlockLike | null | undefined,
+  options: WorkerHistoryRenderOptions = {},
+): string[] | null {
   const all = history?.entries ?? [];
   if (all.length === 0) return null;
   const total = Math.max(history?.total ?? all.length, all.length);
+  const limits = {
+    entries: options.maxEntries ?? SESSION_HISTORY_LIMITS.entries,
+    maxChars: options.maxChars ?? SESSION_HISTORY_LIMITS.totalChars,
+    entryChars: options.entryChars ?? SESSION_HISTORY_LIMITS.entryChars,
+    assistantChars: options.assistantChars ?? SESSION_HISTORY_LIMITS.assistantChars,
+  };
 
   const shown: Array<{ label: string; text: string }> = [];
-  let budget = SESSION_HISTORY_LIMITS.totalChars;
+  let budget = limits.maxChars;
   let shortened = false;
-  const first = Math.max(0, all.length - SESSION_HISTORY_LIMITS.entries);
+  const first = Math.max(0, all.length - limits.entries);
   for (let i = all.length - 1; i >= first; i--) {
     const entry = all[i];
-    const allowance =
-      entry.role === 'assistant' ? SESSION_HISTORY_LIMITS.assistantChars : SESSION_HISTORY_LIMITS.entryChars;
+    const allowance = entry.role === 'assistant' ? limits.assistantChars : limits.entryChars;
     const normalisedLength = entry.text.replace(/\s+/g, ' ').trim().length;
     if (normalisedLength > allowance) shortened = true;
     const text = clip(entry.text, allowance);
@@ -77,7 +98,7 @@ export function renderSessionHistory(history: WorkerHistoryBlockLike | null | un
   }
   const hidden = Math.max(0, total - shown.length);
 
-  const lines = ['--- WORKER SESSION HISTORY ---'];
+  const lines = [options.header ?? '--- WORKER SESSION HISTORY ---'];
   lines.push(
     hidden > 0
       ? `Showing the most recent ${shown.length} of ${total} messages; ${hidden} earlier are not included.`

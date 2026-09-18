@@ -639,13 +639,15 @@ The exact field shapes are normative in
 `VoiceBridgeStartOptions`, `VoiceBridgeContextUpdate`, `VoiceBridgeLaneState`, `VoiceBridgeCallbacks`,
 `VoiceBridgeEmittedEvent`) and are not restated here to avoid a second source of truth.
 
-`VoiceBridgeContextUpdate` gained the additive `history` block on the host side (the worker session's
-bounded conversation window, rendered by the same P20/P23 renderer the relay lane uses) so the live
-talker can answer questions *about the work* instead of refusing them — the 2026-09-18 field report
-(§19.2 replaces "answer only from the state snapshot" with the provenance rule; P22 makes a question
-about the session the talker's own). It is host-derived **data, never authority**: it rides
-`injectContext` (the existing seam) and can authorise no delivery. Nothing in the frozen client↔server
-catalogue changed.
+`VoiceBridgeContextUpdate` carries the host's own rendered context as a free-form `note` (the worker
+brief — the whole session under a measured ceiling, a bounded recent view above it, a delta after the
+first injection, or a retrieval result), rendered by the same P20/P23 renderer the relay lane uses, so
+the live talker can answer questions *about the work* instead of refusing them — the 2026-09-18 field
+report (§19.2 replaces "answer only from the state snapshot" with the provenance rule; P22 makes a
+question about the session the talker's own), and **read-only retrieval** (§19.3) so the talker can
+reach history beyond its standing view on demand rather than by enlarging the prompt. It is host-derived
+**data, never authority**: it rides `injectContext` (the existing seam) and can authorise no delivery.
+Nothing in the frozen client↔server catalogue changed.
 
 Implementation invariants:
 
@@ -675,14 +677,17 @@ wire message:
 | `onResumptionHandle` / `onGoAway` | `resumption` / `go_away` | `voice_state` |
 | socket error / close | `error` / `state` | `voice_error` / `voice_state` |
 
-`tool_call` carries the two declared Live functions the lab proved out: `mark_addressed_to_talker`
-(suppress a draft candidate) and `offer_ask_worker` (create a candidate that still needs the operator's
-own confirmation). **Neither can release, and neither can supply consent or bytes** — they are the
-non-blocking replacements for the fragile `[[to-talker]]` / `[[ask-worker]]` text marks (§19.2 of the
-intent), and the harness interprets them exactly as it interpreted the marks. Both are **parameterless**
-in the provider's declaration, so `args` is typed as an empty record and the bridge validates the raw
-value with `hasNoToolArguments` before emitting — a tool call can never smuggle an arbitrary payload into
-the kernel.
+`tool_call` carries the three declared Live functions the lab proved out: `mark_addressed_to_talker`
+(suppress a draft candidate), `offer_ask_worker` (create a candidate that still needs the operator's
+own confirmation), and `read_worker_history` (read more worker history than the standing brief holds).
+**None can release, and none can supply consent or bytes** — the first two are the non-blocking
+replacements for the fragile `[[to-talker]]` / `[[ask-worker]]` text marks (§19.2 of the intent), and the
+harness interprets them exactly as it interpreted the marks. Argument rules are **per tool**: the two
+gate tools are **parameterless** in the provider's declaration and validated with `hasNoToolArguments`;
+`read_worker_history` carries exactly one bounded string, `query`, which can only select *which*
+existing history is read back — it is length-bounded, anything unexpected is surfaced as a violation
+rather than forwarded, and the retrieved text returns as the tool's *response* (data), never as an
+instruction. No tool call can smuggle an arbitrary payload into the kernel.
 
 ### 6.3 Session lifecycle, resumption and context injection
 
@@ -693,7 +698,10 @@ the kernel.
 - **Context injection.** Worker state is *structured, host-derived* context, injected with
   `sendClientContent({ turnComplete: false })`, coalesced to at most one update per
   `VOICE_CONTEXT_COALESCE_MS` (2 000 ms) and held back while the operator is speaking. It includes a
-  `statusLine` (e.g. `CURRENT STATUS: RUNNING`) so the model cannot claim a completion it cannot see.
+  `statusLine` (e.g. `CURRENT STATUS: RUNNING`) so the model cannot claim a completion it cannot see,
+  and the host's rendered `note` (the worker brief, or a retrieval result) as its own block. Pending
+  context **appends** rather than replaces, so a brief delta cannot be silently dropped by a
+  coalesced flush; it is bounded, and whatever it has to drop is stated in the text itself.
   Housekeeping is excluded at the emitter, not in the prompt (§4.8 of the recommendation).
 - **The worker must continue when the voice socket closes.** Nothing in the bridge owns worker state; the
   kernel stores drafts, receipts, parked items and supervision state outside model context.
@@ -742,7 +750,7 @@ Until Phase 5 wires it, a `voice_*` frame is answered by the router's existing `
 | **N4** conversation first | The catalogue separates conversation (`transcript_delta`, `voice_audio_chunk`) from authority messages. Nothing in the thread creates a proposal. |
 | **N5** you speaking is never interrupted | Capture is unconditional; only playback is scheduled. Activity state changes ducking, not capture, and never hard-stops. |
 | **N6** honest delivery | `receipt_event` is the single source of the delivery verdict; `proposal_resolved` is explicitly not one, and the chime fires on `delivered` only. |
-| **N7** allow-list, not model judgement | The declared Live functions are the whole typed operation surface; `tool_call` cannot release, and its arguments are structurally empty. |
+| **N7** allow-list, not model judgement | The declared Live functions are the whole typed operation surface; `tool_call` cannot release. The gate tools' arguments are structurally empty, and the single parameterised tool (`read_worker_history`) takes one bounded string that can only select which existing history is read back — its result is data returned as a tool *response*, with no path to the gate. |
 | **N8** never widen the gate | The contract adds no message that can authorise anything. `proposal_presentation` narrows; a breaking change needs v2 and the conductor. |
 | **N9** failures are visible | Every refusal has a named code, a `voice_error` frame and a documented bounded-surfacing rule for storms. |
 
@@ -821,6 +829,7 @@ v2, because the contract had not yet been accepted by the conductor:
 | The `receipt_event` document table listed the receipt's fields as message fields while the code nests them under `receipt` | The document now documents the single `receipt` field and its members, with an example; a required-field map enforces the payload. |
 | "Text-free" was only a six-name blacklist, so `note: "do X"` was accepted and ignored | Client→server frames are now **schema-exact**: any unnamed field is refused with `voice_message_unknown_field`. Server→client frames still ignore unknown fields so additive v1 stays safe. |
 | `tool_call` arguments were `Record<string, unknown>`, so model output could carry an arbitrary payload | `args` is now an empty record (both declared functions are parameterless in the provider's own declaration), and the bridge validates the raw value with `hasNoToolArguments`. |
+| **Amended 2026-09-18 (this change).** `read_worker_history` is declared, so `VoiceBridgeToolName` and `args` widened again | The empty-record rule above is now **per tool**: `validateToolArguments` keeps the gate tools parameterless (`hasNoToolArguments` unchanged) and grants the retrieval tool exactly one trimmed, length-bounded `query` string. The narrowed rule is still "the model cannot carry a payload into the kernel": the query selects which history is *read*, and the result is returned as data. N7 held by construction, not by convention — see `server/src/voice/tool-arguments.ts` and its tests. |
 | The audio ceiling was checked on encoded length, so an unpadded maximum-length payload decoded to one byte over the limit — and the test asserted that payload was valid | The check computes the **decoded** byte length, counts padding and validates the encoding; the test now asserts the exact-limit payload passes, the one-byte-over payload fails, and the unpadded maximum fails. |
 | Message-body validation was absent and several assertions were vacuous | Per-message required-field maps plus per-message allowed-field maps are enforced in `checkVoiceEnvelope`, and each example is validated against its schema at runtime. The type-level per-message sweeps that probes proved vacuous were removed; the remaining compile-time assertions use the direct `T['k'] extends E` form and each was verified to fail by probe (§9). |
 

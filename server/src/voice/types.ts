@@ -121,7 +121,16 @@ export interface GeminiLiveBridgeCallbacks {
   onOutputTranscription?(text: string, atMs: number): void;
   onTurnComplete?(atMs: number): void;
   onInterrupted?(atMs: number): void;
-  onToolCall?(call: { name: VoiceBridgeToolName; args: Record<string, never>; id: string; atMs: number }): void;
+  /**
+   * A tool call. The return value, when there is one, becomes the tool's
+   * RESPONSE — how a retrieval result reaches the model in the same turn.
+   */
+  onToolCall?(call: {
+    name: VoiceBridgeToolName;
+    args: Record<string, unknown>;
+    id: string;
+    atMs: number;
+  }): void | Record<string, unknown> | Promise<void | Record<string, unknown>>;
   onResumptionHandle?(handle: string, resumable: boolean): void;
   onGoAway?(timeLeft: string | undefined): void;
   onState?(state: VoiceWireState, detail?: string): void;
@@ -278,8 +287,19 @@ export type LiveSessionFactory = (request: LiveConnectRequest) => Promise<LiveSe
 /** The standard conversational seat (D6: no speculative escalation ladder). */
 export const VOICE_PROVIDER_MODEL = 'gemini-3.8-live';
 
-/** The provider's declared functions — both parameterless (contract §6.2). */
-export const VOICE_TOOL_NAMES = ['mark_addressed_to_talker', 'offer_ask_worker'] as const;
+/** The provider's declared functions: the two gate tools are parameterless (contract §6.2). */
+export const VOICE_TOOL_NAMES = [
+  'mark_addressed_to_talker',
+  'offer_ask_worker',
+  /**
+   * The one tool that takes an argument, and the only thing it can do is READ:
+   * it asks the host for worker history beyond the standing brief (intent
+   * §19.3 — read-only retrieval of more history than the standing view holds, or
+   * of a specific earlier turn, fixes it properly; enlarging the prompt does
+   * not). It cannot send, hold, confirm or release anything.
+   */
+  'read_worker_history',
+] as const;
 
 /**
  * Function-response scheduling for a declared tool acknowledgement.
