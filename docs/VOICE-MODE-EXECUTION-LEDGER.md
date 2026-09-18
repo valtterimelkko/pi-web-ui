@@ -373,6 +373,35 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (GATE 5 RE-PROVEN THROUGH THE CORRECTED CODE — three harness defects found and fixed; R's audit-converse limit closed on live evidence).**
+Running the Gate-5 slice after the Wave-3 merges exposed that the harness itself had not been
+exercised since the corrections, and found four real problems — **two of them integration defects
+that the merges introduced and no gate had caught**:
+1. **The slice's disposable server booted in `cascade`.** Track H's `VOICE_MODE_ENGINE` default is
+   `cascade`, and the slice never set the flag, so every lane start was refused
+   `voice_provider_unavailable` — the gate was silently misconfigured the moment the flag landed.
+2. **An early-failure return never tore the disposable server down**, leaving it running and the
+   process hung until an external kill (observed: a 25-minute stale run with a stray server).
+3. **The audits read pre-L1 field names.** Track K's L1 hygiene replaced full text with scrubbed
+   excerpts (`tidiedExcerpt`/`bytesExcerpt` + `…Truncated`), and the gate-leak/byte-fidelity audits
+   still read `tidied`/`bytes`, so a *correct* run reported digest mismatches. The audits now read
+   both shapes, **never recompute a digest from a truncated excerpt**, and say so instead of
+   guessing (SHA chain + excerpt equality still bind).
+4. **S2's spoken confirm is ASR-flaky**: the live provider transcribed "Yes, send that." as "Yes
+   and that." — a statement, so the (correct, fail-safe) classifier never treated it as a
+   confirmation. The scenario now gives one honest retry with a second phrase and reports which
+   attempt landed; a human repeats themselves.
+Plus the substantive addition: **the converse audit** (review R, Gate-5 coverage limit 2) — every
+instruction in the worker's own store must be an authorised delivery or the named harness baseline
+(`SLOW_WORKER_PROMPT`), so `store ⊆ delivered` is proven rather than implied. Its unit suite shows
+the failure direction (near-miss byte equality, wrapped text, an unauthorised instruction, an empty
+store); the live run shows it clean. **Live revalidation: exit 0 — 3/3 scenarios, gate leak clean,
+100% byte fidelity, worker-store coverage clean (`store instructions=3 unauthorised=0 wrapped=0`)**,
+evidence in `operations/voice-live-20260917/evidence/gate5-revalidation-20260918/`. Full gate after
+the change: typecheck 0; shared 9/246, server 433 files/5367 (+2 skipped), client 144/1611, mcp
+8/71 — exit 0. Committed `2900997` and pushed. **An independent verifier (runtime-validator) is
+re-running the live slice and trying to falsify the audits; its report is awaited.**
+
 **2026-09-18 (M VERIFIED AND MERGED `cb929c6` — WAVE 3 CLOSEOUT COMPLETE; Phase 7 handed to the operator).**
 Conductor verification of M on its frozen commit (`e68ef39`): typecheck 0; shared+client builds 0/0;
 client 144 files / **1611** tests; shared 9 files / **246**; **Playwright 9/9 (my own run)**. Code
