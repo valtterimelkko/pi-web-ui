@@ -34,7 +34,6 @@ import {
   VOICE_AUDIO_OUTPUT_MIME,
   VOICE_CLIENT_MESSAGE_FIELDS,
   VOICE_CLIENT_MESSAGE_TYPES,
-  VOICE_CLIENT_REQUIRED_FIELDS,
   VOICE_ENVELOPE_FIELDS,
   VOICE_INSTRUCTION_BEARING_KEYS,
   VOICE_MESSAGE_TYPES,
@@ -56,7 +55,6 @@ import {
 
 const CATALOGUE_BEGIN = '<!-- catalogue:begin -->';
 const CATALOGUE_END = '<!-- catalogue:end -->';
-const CATALOGUE_ROW_RE = /^\|\s*`([a-z0-9_]+)`\s*\|\s*(client → server|server → client)\s*\|/gm;
 
 const DOC_PATH = fileURLToPath(new URL('../../../docs/plans/VOICE-LIVE-WIRE-CONTRACT.md', import.meta.url));
 const SOURCE_PATH = fileURLToPath(new URL('./voice-messages.ts', import.meta.url));

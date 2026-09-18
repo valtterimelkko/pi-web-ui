@@ -939,6 +939,33 @@ type _CreatedProposalIsNotFlattened = AssertTrue<
     : false
 >;
 
+/**
+ * Consumes every assertion alias above so the compiler remains the only judge and
+ * a later edit cannot quietly orphan one (an orphaned alias asserts nothing, and
+ * the lint gate rightly refuses to let it pass unnoticed).
+ */
+export type VoiceContractAssertions = [
+  _ConfirmProposalIdIsRequired,
+  _ConfirmVariantIsRequired,
+  _ConfirmIdempotencyKeyIsRequired,
+  _ConfirmCarriesNoInstructionText,
+  _ClientMessagesCarryNoInstructionText,
+  _ClientMessagesHaveEnvelope,
+  _ServerMessagesHaveEnvelope,
+  _ReceiptsDistinguishAllStates,
+  _ReceiptsOnlyThoseStates,
+  _ClientCatalogueIsExhaustive,
+  _ServerCatalogueIsExhaustive,
+  _LaneCapacityIsCatalogueCode,
+  _LaneCodesAreStillPresent,
+  _CreatedProposalPayloadIsRequired,
+  _ReceiptPayloadIsRequired,
+  _ErrorMessageIsRequired,
+  _ProposalResolvedOutcomeIsRequired,
+  _CreatedProposalVersionIsRequired,
+  _CreatedProposalIsNotFlattened,
+];
+
 // ── Server service boundary (the interface Track B implements) ──────────────
 
 /**
