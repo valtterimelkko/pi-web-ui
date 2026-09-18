@@ -427,3 +427,159 @@ describe('DriveModeVoiceLive — honest reachability (M7) and transport refusals
     expect(screen.queryByTestId('voice-live-refusal')).toBeNull();
   });
 });
+
+describe('DriveModeVoiceLive — the receipt verdict is visible and honest (N6)', () => {
+  function receiptEnv(outcome: string, overrides: Record<string, unknown> = {}): VoiceReceiptEventMessage {
+    return env('receipt_event', {
+      receipt: {
+        releaseId: 'rel-9',
+        proposalId: 'prop-9',
+        idempotencyKey: 'idem-9',
+        outcome,
+        atMs: 1,
+        ...overrides,
+      },
+    }) as VoiceReceiptEventMessage;
+  }
+
+  it('renders a delivered verdict as the positive state, with the chime', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(receiptEnv('delivered', { mechanism: 'steer' }));
+
+    const verdict = await screen.findByTestId('voice-live-receipt');
+    expect(verdict.getAttribute('data-outcome')).toBe('delivered');
+    expect(verdict.textContent).toContain('Delivered to the worker');
+    expect(verdict.textContent).toContain('steer');
+    // The trusted chime accompanies delivery (contract §8.1) — and only it.
+    expect(screen.getByTestId('voice-live-chime').getAttribute('data-chime')).toBe('delivered');
+  });
+
+  it('renders queued as accepted but not yet handed over, with the disclosure', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(
+      receiptEnv('queued', { disclosure: 'Antigravity queues this in the worker loop.' }),
+    );
+
+    const verdict = await screen.findByTestId('voice-live-receipt');
+    expect(verdict.getAttribute('data-outcome')).toBe('queued');
+    expect(verdict.textContent).toContain('not yet handed to the worker');
+    expect(verdict.textContent).toContain('Antigravity queues this in the worker loop.');
+    // Queued is NOT delivery: no chime, and nothing delivered-looking.
+    expect(screen.queryByTestId('voice-live-chime')).toBeNull();
+    expect(verdict.textContent?.toLowerCase()).not.toContain('delivered');
+    expect(verdict.getAttribute('data-verdict-tone')).not.toBe('delivered');
+  });
+
+  it('renders refused with the server\u2019s own reason and never as delivery', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(receiptEnv('refused', { reason: 'the worker is not accepting frames' }));
+
+    const verdict = await screen.findByTestId('voice-live-receipt');
+    expect(verdict.getAttribute('data-outcome')).toBe('refused');
+    expect(verdict.textContent).toContain('Refused');
+    expect(verdict.textContent).toContain('the worker is not accepting frames');
+    expect(screen.queryByTestId('voice-live-chime')).toBeNull();
+    expect(verdict.textContent?.toLowerCase()).not.toContain('delivered');
+    expect(verdict.getAttribute('data-verdict-tone')).not.toBe('delivered');
+  });
+
+  it('renders unknown as unconfirmed, naming the cause and the reconciliation', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(receiptEnv('unknown', { unknownCause: 'timeout', reconcile: true }));
+
+    const verdict = await screen.findByTestId('voice-live-receipt');
+    expect(verdict.getAttribute('data-outcome')).toBe('unknown');
+    expect(verdict.getAttribute('data-reconcile')).toBe('true');
+    expect(verdict.textContent).toContain('could not be confirmed');
+    expect(verdict.textContent).toContain('timeout');
+    expect(verdict.textContent).toContain('reconciled');
+    // An unknown outcome must never look or read like a delivery.
+    expect(screen.queryByTestId('voice-live-chime')).toBeNull();
+    expect(verdict.textContent?.toLowerCase()).not.toContain('delivered');
+    expect(verdict.getAttribute('data-verdict-tone')).not.toBe('delivered');
+  });
+
+  it('does not let an earlier delivered verdict stand for a newer, unconfirmed proposal', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(receiptEnv('delivered'));
+    await screen.findByTestId('voice-live-receipt');
+
+    // A new confirmation cycle begins: that verdict is history, not the current
+    // state — a delivered figure beside a fresh confirm button would claim a
+    // delivery that has not happened.
+    surface.onWireMessage(
+      env('proposal_created', {
+        proposal: {
+          proposalId: 'prop-next',
+          version: 1,
+          sha256: 'd'.repeat(64),
+          promotionRoute: 'directed',
+          original: 'ask about the lease',
+          tidied: 'ask about the lease',
+          presentedVariant: 'tidied',
+          presentation: { completed: false },
+        },
+      }),
+    );
+    await waitFor(() => expect(screen.queryByTestId('voice-live-receipt')).toBeNull());
+    expect(screen.queryByTestId('voice-live-chime')).toBeNull();
+
+    // When the new cycle gets its own verdict, it is rendered honestly.
+    surface.onWireMessage(
+      receiptEnv('refused', { proposalId: 'prop-next', reason: 'that proposal is out of date' }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('voice-live-receipt').getAttribute('data-outcome')).toBe('refused'),
+    );
+    expect(screen.getByTestId('voice-live-receipt').textContent).toContain('that proposal is out of date');
+  });
+
+  it('replaces the verdict as each new receipt arrives, never leaving a delivered claim behind', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(receiptEnv('delivered'));
+    await waitFor(() =>
+      expect(screen.getByTestId('voice-live-receipt').getAttribute('data-outcome')).toBe('delivered'),
+    );
+    // A later, unconfirmed delivery must not leave the delivered state standing.
+    surface.onWireMessage(receiptEnv('unknown', { unknownCause: 'disconnect', reconcile: true }));
+    await waitFor(() =>
+      expect(screen.getByTestId('voice-live-receipt').getAttribute('data-outcome')).toBe('unknown'),
+    );
+    expect(screen.getByTestId('voice-live-receipt').textContent?.toLowerCase()).not.toContain('delivered');
+  });
+});
+
+describe('DriveModeVoiceLive — the honest lane-capacity refusal (N6/N9)', () => {
+  function capacityRefusal(message: string): unknown {
+    return env('voice_error', { code: 'voice_lane_capacity', message, fatal: false });
+  }
+
+  it('renders the lane-named capacity refusal with the server\u2019s own message', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(capacityRefusal('The voice lane table is full; try again shortly.'));
+
+    const line = await screen.findByTestId('voice-live-error');
+    expect(line.getAttribute('data-code')).toBe('voice_lane_capacity');
+    expect(line.textContent).toContain('The voice lane table is full; try again shortly.');
+    // It is a lane refusal, not a transport notice.
+    expect(screen.queryByTestId('voice-live-transport-refusal')).toBeNull();
+  });
+
+  it('falls back to a local line when a lane refusal carries no message', async () => {
+    const { surface } = makeSurface();
+    render(<DriveModeVoiceLive surface={surface} />);
+    surface.onWireMessage(capacityRefusal(''));
+
+    const line = await screen.findByTestId('voice-live-error');
+    expect(line.getAttribute('data-code')).toBe('voice_lane_capacity');
+    expect(line.textContent).toContain('capacity');
+    expect(line.textContent).toContain('try again');
+  });
+});

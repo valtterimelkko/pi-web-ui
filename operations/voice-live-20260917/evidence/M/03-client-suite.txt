@@ -1,0 +1,160 @@
+=== npm run test --workspace=client (full suite) ===
+
+> @pi-web-ui/client@0.1.0 test
+> vitest run
+
+
+ RUN  v1.6.1 /root/pi-web-ui-wt-corr-m/client
+
+ ✓ tests/unit/lib/jsonrpc-client.test.ts  (46 tests) 64ms
+ ✓ tests/unit/hooks/useSessionStream.test.ts  (39 tests) 243ms
+ ✓ src/lib/voiceLive/messages.test.ts  (32 tests) 24ms
+ ✓ src/lib/voiceLive/controller.test.ts  (32 tests) 26ms
+ ✓ tests/unit/store/sessionStore-handlemessage.test.ts  (32 tests) 73ms
+ ✓ tests/unit/components/DriveMode/useVoiceTurn.test.tsx  (30 tests) 196ms
+ ✓ tests/unit/store/sessionStore.test.ts  (81 tests) 174ms
+ ✓ tests/unit/store/draftStore.test.ts  (49 tests) 158ms
+ ✓ src/lib/voiceLive/surface.test.ts  (27 tests) 108ms
+ ✓ tests/unit/components/DriveMode/DriveModeOverlay.test.tsx  (19 tests) 672ms
+ ✓ tests/unit/components/Sidebar/SessionItem.test.tsx  (24 tests) 1340ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.whole-turn.test.tsx  (10 tests) 671ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.reading-levels.test.tsx  (14 tests) 721ms
+ ✓ tests/unit/lib/websocket.test.ts  (18 tests) 199ms
+ ✓ src/lib/speechArbiter.test.ts  (23 tests) 75ms
+ ✓ src/components/DriveMode/DriveModeVoiceLive.test.tsx  (25 tests) 1326ms
+ ✓ tests/unit/components/DriveMode/turnAssistantParts.test.ts  (20 tests) 22ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.test.tsx  (21 tests) 2225ms
+ ✓ tests/unit/store/filesStore.test.ts  (22 tests) 23ms
+ ✓ tests/unit/store/historyReplayBatching.test.ts  (10 tests) 40ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.focus.test.tsx  (15 tests) 504ms
+ ✓ tests/unit/components/Tools/SubagentToolCard.test.tsx  (19 tests) 581ms
+ ✓ tests/unit/components/Sidebar/SessionItem.transfer.test.tsx  (19 tests) 747ms
+ ✓ tests/unit/components/Chat/VirtualizedMessageList.test.tsx  (26 tests) 759ms
+ ✓ src/lib/voiceLive/playbackSession.test.ts  (14 tests) 342ms
+ ✓ tests/unit/store/sessionStore-step7b.test.ts  (5 tests) 1887ms
+ ✓ tests/unit/components/DriveMode/DriveModeOverlay.lanes.test.tsx  (15 tests) 2017ms
+ ✓ tests/unit/components/Sidebar/TransferConfirmationModal.test.tsx  (23 tests) 1567ms
+ ✓ tests/unit/store/sessionStore-step7a.test.ts  (2 tests) 31ms
+ ✓ tests/unit/store/transferStore.test.ts  (19 tests) 10ms
+ ✓ tests/unit/components/Session/NewSessionModal.test.tsx  (15 tests) 3051ms
+ ✓ tests/unit/components/Sidebar/SessionStatusIndicator.test.tsx  (19 tests) 232ms
+ ✓ tests/unit/hooks/useReadAloud.test.ts  (8 tests) 545ms
+ ✓ tests/unit/components/Chat/screen-view-conformance.test.tsx  (5 tests) 234ms
+ ✓ tests/unit/lib/goalModel.test.ts  (20 tests) 20ms
+ ✓ tests/unit/components/Extensions/AskUserQuestionDialog.test.tsx  (12 tests) 1851ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.stop-talker.test.tsx  (8 tests) 2306ms
+ ✓ tests/unit/components/Sidebar/SessionNotifyToggle.test.tsx  (12 tests) 1537ms
+ ✓ tests/unit/components/Tools/CollapsibleToolCard.test.tsx  (24 tests) 1574ms
+ ✓ tests/unit/lib/piExtensionControls.test.ts  (22 tests) 21ms
+ ✓ tests/unit/components/DriveMode/voiceLanes.test.ts  (14 tests) 12ms
+ ✓ tests/unit/components/DriveMode/ConfirmationCard.test.tsx  (18 tests) 2006ms
+ ✓ tests/unit/store/sessionStore-dual.test.ts  (12 tests) 33ms
+ ✓ tests/unit/components/Files/FilesTab.test.tsx  (17 tests) 1743ms
+ ✓ tests/unit/lib/talkerBus.lanes.test.ts  (13 tests) 37ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.lanes.test.tsx  (7 tests) 1296ms
+ ✓ src/lib/voiceLive/captureSession.test.ts  (11 tests) 55ms
+ ✓ tests/unit/hooks/useDriveModeDictation.test.ts  (12 tests) 45ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.speech-dedup.test.tsx  (4 tests) 1957ms
+ ✓ tests/unit/store/goalStore.test.ts  (16 tests) 22ms
+ ✓ src/lib/voiceLive/captureDsp.test.ts  (16 tests) 51ms
+ ✓ tests/unit/hooks/useDictation.test.ts  (8 tests) 113ms
+ ✓ tests/unit/components/Chat/GoalPanel.test.tsx  (15 tests) 308ms
+ ✓ tests/unit/components/Settings/SettingsModal.test.tsx  (12 tests) 1555ms
+ ✓ tests/unit/store/chatStore.test.ts  (14 tests) 48ms
+ ✓ tests/unit/components/DriveMode/voiceLayoutComponents.test.tsx  (12 tests) 279ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.lanes-speech.test.tsx  (4 tests) 934ms
+ ✓ tests/unit/components/DriveMode/useVoiceTurn.tier-split.test.tsx  (6 tests) 90ms
+ ✓ tests/unit/store/extensionUiState.test.ts  (10 tests) 22ms
+ ✓ tests/unit/components/DriveMode/LaneStrip.test.tsx  (12 tests) 1239ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.contract-hint.test.tsx  (3 tests) 312ms
+ ✓ tests/unit/store/sessionStore-create-and-pin.test.ts  (4 tests) 19ms
+ ✓ src/components/DriveMode/ProposalCard.test.tsx  (10 tests) 267ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.single-lane.test.tsx  (5 tests) 729ms
+ ✓ src/lib/voiceLive/captureWorkletSource.test.ts  (9 tests) 11ms
+ ✓ tests/unit/lib/clientDiagnosticsReporter.test.ts  (9 tests) 34ms
+ ✓ src/lib/soundEffects.test.ts  (11 tests) 21ms
+ ✓ tests/unit/components/DriveMode/readingLevel.test.ts  (15 tests) 15ms
+ ✓ tests/unit/store/driveModeStore.lanes.test.ts  (12 tests) 25ms
+ ✓ src/components/DriveMode/DriveModeDictate.native-lane.test.tsx  (3 tests) 285ms
+ ✓ src/components/DriveMode/NativeVoiceLane.test.tsx  (7 tests) 446ms
+ ✓ tests/unit/components/Chat/MessageBubble.test.tsx  (13 tests) 493ms
+ ✓ tests/unit/components/DriveMode/voiceLayout.test.ts  (13 tests) 24ms
+ ✓ tests/unit/components/Chat/MessageInput-steer.test.tsx  (13 tests) 2307ms
+ ✓ tests/unit/lib/turnDigest.test.ts  (11 tests) 16ms
+ ✓ tests/unit/components/DriveMode/DriveModeSessionPicker.test.tsx  (10 tests) 235ms
+ ✓ tests/unit/lib/fileAttachments.test.ts  (17 tests) 47ms
+ ✓ tests/unit/lib/browserDiagnostics.test.ts  (6 tests) 87ms
+ ✓ tests/unit/components/Chat/ClaudeStreamHeartbeat.test.tsx  (11 tests) 247ms
+ ✓ tests/unit/components/Files/MarkdownEditor.test.tsx  (13 tests) 1913ms
+ ✓ tests/unit/components/Tools/TodoToolCard.test.tsx  (10 tests) 631ms
+ ✓ tests/unit/components/Chat/CodeBlock.test.tsx  (8 tests) 1093ms
+ ✓ tests/unit/components/DriveMode/voiceFloor.test.ts  (10 tests) 7ms
+ ✓ tests/unit/components/DriveMode/DriveModeDictate.switch-session.test.tsx  (6 tests) 257ms
+ ✓ tests/unit/store/backgroundChildSurfacing.test.ts  (8 tests) 13ms
+ ✓ tests/unit/store/sessionStore-goal-events.test.ts  (6 tests) 32ms
+ ✓ tests/unit/lib/speechArbiter.telemetry.test.ts  (5 tests) 28ms
+ ✓ tests/unit/hooks/useDeepLinkSession.test.ts  (7 tests) 137ms
+ ✓ tests/unit/components/Sidebar/Sidebar.recentDefault.test.tsx  (3 tests) 186ms
+ ✓ src/lib/voiceLive/readBack.test.ts  (4 tests) 12ms
+ ✓ tests/unit/store/driveModeStore.test.ts  (12 tests) 23ms
+ ✓ tests/unit/lib/spokenLedger.test.ts  (9 tests) 10ms
+ ✓ tests/unit/store/sessionStore-delta-retry.test.ts  (3 tests) 45ms
+ ✓ tests/unit/components/DriveModeDictate.phase-pingpong.test.tsx  (2 tests) 363ms
+ ✓ tests/unit/components/DriveMode/DriveModeEntry.test.tsx  (8 tests) 307ms
+ ✓ src/components/DriveMode/ParkingLotDrawer.test.tsx  (8 tests) 634ms
+ ✓ src/lib/voiceLive/frameBus.test.ts  (6 tests) 9ms
+ ✓ tests/unit/store/phase-d-characterization.test.tsx  (3 tests) 310ms
+ ✓ tests/unit/components/Chat/MessageBubble-codeblock.test.tsx  (5 tests) 951ms
+ ✓ tests/unit/components/Chat/message-bubble-f2.test.tsx  (5 tests) 199ms
+ ✓ tests/unit/store/sessionStore-injection-marking.test.ts  (4 tests) 18ms
+ ✓ tests/unit/hooks/useTalkerTurn.test.ts  (4 tests) 40ms
+ ✓ tests/unit/lib/talkerBus.test.ts  (5 tests) 20ms
+ ✓ tests/unit/lib/speechTelemetry.test.ts  (4 tests) 76ms
+ ✓ tests/unit/components/Chat/ChatView.test.tsx  (3 tests) 102ms
+ ✓ tests/unit/components/Tools/ToolProgressIndicator.test.tsx  (11 tests) 294ms
+ ✓ tests/unit/components/ExtensionDialog.test.tsx  (7 tests) 252ms
+ ✓ tests/unit/components/DriveMode/ReadingLevelControl.test.tsx  (8 tests) 463ms
+ ✓ tests/unit/components/DriveMode/DriveModeModelPicker.test.tsx  (6 tests) 335ms
+ ✓ tests/unit/components/Extensions/ExtensionDialog.test.tsx  (5 tests) 1112ms
+ ✓ tests/unit/components/WatchStrip.test.tsx  (5 tests) 49ms
+ ✓ tests/unit/components/Sidebar/Sidebar.createSession.test.tsx  (1 test) 91ms
+ ✓ tests/unit/components/Settings/ThinkingLevelSelector.test.tsx  (6 tests) 414ms
+ ✓ tests/unit/lib/sidebarSessions.test.ts  (7 tests) 6ms
+ ✓ tests/unit/components/Toast.test.tsx  (6 tests) 103ms
+ ✓ tests/unit/components/NotificationTray.test.tsx  (5 tests) 95ms
+ ✓ tests/unit/components/deadman-parity.test.tsx  (2 tests) 213ms
+ ✓ tests/unit/store/sessionPersistence.test.ts  (2 tests) 1322ms
+ ✓ tests/unit/store/agyToolArgs.test.ts  (2 tests) 9ms
+ ✓ tests/unit/components/Navigation/BottomNav.test.tsx  (8 tests) 383ms
+ ✓ tests/unit/components/DriveMode/DriveModeFolderPicker.test.tsx  (5 tests) 335ms
+ ✓ tests/unit/components/StatusBar/SessionInfoModal.test.tsx  (3 tests) 437ms
+ ✓ tests/unit/components/DriveMode/focusHold.test.ts  (4 tests) 47ms
+ ✓ tests/unit/store/navigationStore.test.ts  (8 tests) 32ms
+ ✓ tests/unit/components/Usage/ContextRing.test.tsx  (9 tests) 198ms
+ ✓ tests/unit/components/Session/SessionInfoModal.test.tsx  (3 tests) 599ms
+ ✓ tests/unit/components/Chat/MessageInput-palette.test.tsx  (4 tests) 613ms
+ ✓ tests/unit/components/Navigation/IntegratedHeader.test.tsx  (5 tests) 282ms
+ ✓ tests/unit/components/DriveMode/readingLevel.lanes.test.ts  (4 tests) 24ms
+ ✓ tests/unit/components/ChildrenStrip.test.tsx  (3 tests) 136ms
+ ✓ tests/unit/store/gitStore.test.ts  (5 tests) 7ms
+ ✓ tests/unit/lib/messageAdapter.test.ts  (3 tests) 4ms
+ ✓ tests/auth.test.ts  (1 test) 9ms
+ ✓ tests/unit/components/Chat/MessageBubble-goal-label.test.tsx  (3 tests) 70ms
+ ✓ tests/unit/components/Git/GitTab.test.tsx  (2 tests) 147ms
+ ✓ tests/unit/components/Navigation/TabContent.test.tsx  (3 tests) 114ms
+ ✓ tests/performance/message-rendering.test.ts  (2 tests) 4ms
+ ✓ tests/unit/hooks/useTerminal.test.ts  (1 test) 85ms
+ ✓ tests/unit/components/ErrorBoundary.test.tsx  (2 tests) 717ms
+ ✓ tests/unit/store/sessionStore-throttle-latest.test.ts  (1 test) 220ms
+ ✓ tests/unit/components/ThinkingLevelSelector.test.tsx  (2 tests) 581ms
+ ✓ tests/unit/store/terminalStore.test.ts  (3 tests) 3ms
+ ✓ tests/unit/components/Shell/ShellTab.test.tsx  (1 test) 53ms
+ ✓ tests/unit/main-error-boundary.test.tsx  (1 test) 792ms
+
+ Test Files  144 passed (144)
+      Tests  1611 passed (1611)
+   Start at  04:15:54
+   Duration  26.18s (transform 10.57s, setup 21.70s, collect 60.11s, tests 63.73s, environment 133.76s, prepare 27.33s)
+
+JSON report written to /root/pi-web-ui-wt-corr-m/client/test-results.json
+EXIT_CLIENT_SUITE=0

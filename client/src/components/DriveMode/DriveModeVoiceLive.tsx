@@ -1,6 +1,12 @@
 import { useCallback, useSyncExternalStore } from 'react';
-import { Mic, MicOff, Radio, Keyboard, AlertTriangle, BellRing } from 'lucide-react';
-import type { VoiceCaptureMode, VoiceReadingLevel } from '@pi-web-ui/shared';
+import { Mic, MicOff, Radio, Keyboard, AlertTriangle, BellRing, Clock, HelpCircle } from 'lucide-react';
+import type {
+  VoiceCaptureMode,
+  VoiceErrorCode,
+  VoiceReadingLevel,
+  VoiceReceipt,
+  VoiceReceiptUnknownCause,
+} from '@pi-web-ui/shared';
 import type { VoiceLiveSurface, VoiceLiveSurfaceState } from '../../lib/voiceLive/surface';
 import { ProposalCard } from './ProposalCard';
 import { ParkingLotDrawer } from './ParkingLotDrawer';
@@ -31,6 +37,69 @@ const READING_LEVEL_LABELS: Record<VoiceReadingLevel, string> = {
   summary: 'Summary',
   headlines: 'Headlines',
 };
+
+/**
+ * Local fallback lines for a lane-named refusal whose frame carried no
+ * `message`. The server's own words are always preferred (N9); this is a last
+ * resort, never a replacement, and it grants nothing.
+ */
+const LANE_REFUSAL_FALLBACK: Partial<Record<VoiceErrorCode, string>> = {
+  voice_lane_capacity: 'The voice lane table is at capacity; try again shortly.',
+};
+
+/** Plain wording for an `unknown` receipt's cause (N6: name what happened). */
+const RECEIPT_UNKNOWN_CAUSE: Record<VoiceReceiptUnknownCause, string> = {
+  timeout: 'a timeout',
+  disconnect: 'a disconnect',
+  transport_error: 'a transport error',
+};
+
+/** How a receipt verdict should read. Only `delivered` may read as delivery. */
+type ReceiptTone = 'delivered' | 'queued' | 'refused' | 'unknown';
+
+const RECEIPT_TONE_CLASS: Record<ReceiptTone, string> = {
+  delivered: 'text-emerald-600 dark:text-emerald-400',
+  queued: 'text-content-muted dark:text-content-muted-dark',
+  refused: 'text-amber-600 dark:text-amber-400',
+  unknown: 'text-amber-600 dark:text-amber-400',
+};
+
+/**
+ * The one honest description of a delivery verdict (N6). Deliberately a total
+ * switch: a new outcome cannot be rendered by accident, and nothing except
+ * `delivered` is worded — or toned — as a delivery. The chime stays a
+ * delivered-only concern elsewhere in the surface.
+ */
+function receiptVerdict(receipt: VoiceReceipt): { tone: ReceiptTone; headline: string; detail: string | null } {
+  switch (receipt.outcome) {
+    case 'delivered':
+      return {
+        tone: 'delivered',
+        headline: 'Delivered to the worker',
+        detail: receipt.mechanism ? `via ${receipt.mechanism}` : null,
+      };
+    case 'queued':
+      return {
+        tone: 'queued',
+        headline: 'Accepted — not yet handed to the worker',
+        detail: receipt.disclosure ?? null,
+      };
+    case 'refused':
+      return {
+        tone: 'refused',
+        headline: 'Refused — nothing was sent',
+        detail: receipt.reason ?? 'the server gave no reason',
+      };
+    case 'unknown':
+      return {
+        tone: 'unknown',
+        headline: 'Hand-over could not be confirmed',
+        detail: `after ${
+          receipt.unknownCause ? RECEIPT_UNKNOWN_CAUSE[receipt.unknownCause] : 'an unexplained interruption'
+        }${receipt.reconcile ? '; it will be reconciled by idempotency key' : ''}`,
+      };
+  }
+}
 
 export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveProps) {
   const state = useSyncExternalStore<VoiceLiveSurfaceState>(
@@ -73,6 +142,28 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
   }, [surface]);
 
   const lastCaption = controllerSnapshot.captions[controllerSnapshot.captions.length - 1];
+  // N6: the receipt verdict is visible for ALL FOUR outcomes, not just the
+  // delivered one the chime can announce. The latest receipt is the verdict for
+  // the most recent confirmation, and it replaces its predecessor.
+  const lastReceipt = controllerSnapshot.receipts[controllerSnapshot.receipts.length - 1];
+  // A verdict belongs to the confirmation it answers. Once a NEWER proposal is
+  // live, that verdict is history: leaving a delivered figure beside a fresh
+  // confirm button would claim a delivery that has not happened. It returns as
+  // soon as the new cycle has a receipt of its own.
+  const receiptIsCurrent =
+    lastReceipt !== undefined &&
+    (controllerSnapshot.proposal === null ||
+      controllerSnapshot.proposal.proposal.proposalId === lastReceipt.proposalId);
+  const shownReceipt = receiptIsCurrent ? lastReceipt : undefined;
+  const verdict = shownReceipt ? receiptVerdict(shownReceipt) : null;
+  const VerdictIcon =
+    verdict?.tone === 'delivered'
+      ? BellRing
+      : verdict?.tone === 'queued'
+        ? Clock
+        : verdict?.tone === 'unknown'
+          ? HelpCircle
+          : AlertTriangle;
 
   return (
     <div className="flex w-full flex-col gap-3" data-testid="drive-mode-voice-live">
@@ -240,7 +331,12 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
               </button>
             ))}
           </div>
-          {state.lastChime && (
+          {/* The visual delivery signal is the chime badge, and it is
+              DELIVERED-ONLY (contract §8.1, N6): a queued/refused/unknown
+              receipt has its own honest verdict line below, and none of them may
+              borrow the delivered figure. It goes with the verdict it belongs
+              to, so a superseded delivery cannot sit beside a fresh confirm. */}
+          {state.lastChime === 'delivered' && receiptIsCurrent && (
             <span
               className="inline-flex items-center gap-1 text-[11px] text-content-muted dark:text-content-muted-dark"
               data-testid="voice-live-chime"
@@ -286,6 +382,25 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
           </p>
         )}
 
+        {/* The delivery verdict (N6). Every outcome is rendered, and only a
+            `delivered` receipt reads — or is toned — as delivery. */}
+        {shownReceipt && verdict && (
+          <p
+            className={`mt-1.5 inline-flex items-start gap-1 text-[11px] ${RECEIPT_TONE_CLASS[verdict.tone]}`}
+            data-testid="voice-live-receipt"
+            data-outcome={shownReceipt.outcome}
+            data-verdict-tone={verdict.tone}
+            data-reconcile={shownReceipt.reconcile ? 'true' : 'false'}
+            role="status"
+          >
+            <VerdictIcon size={12} aria-hidden className="mt-[1px] shrink-0" />
+            <span>
+              {verdict.headline}
+              {verdict.detail ? <span> · {verdict.detail}</span> : null}
+            </span>
+          </p>
+        )}
+
         {lastCaption && (
           <p
             className="mt-2 text-xs italic text-content-muted dark:text-content-muted-dark"
@@ -303,8 +418,16 @@ export function DriveModeVoiceLive({ surface, workerLabel }: DriveModeVoiceLiveP
           </p>
         )}
         {controllerSnapshot.lastError && (
-          <p className="mt-1.5 text-[11px] text-red-600 dark:text-red-400" data-testid="voice-live-error">
-            {controllerSnapshot.lastError.code}: {controllerSnapshot.lastError.message}
+          <p
+            className="mt-1.5 text-[11px] text-red-600 dark:text-red-400"
+            data-testid="voice-live-error"
+            data-code={controllerSnapshot.lastError.code}
+            data-fatal={controllerSnapshot.lastError.fatal ? 'true' : 'false'}
+          >
+            {controllerSnapshot.lastError.code}:{' '}
+            {controllerSnapshot.lastError.message ||
+              LANE_REFUSAL_FALLBACK[controllerSnapshot.lastError.code] ||
+              'the server gave no reason'}
           </p>
         )}
         {controllerSnapshot.refusals.length > 0 && (

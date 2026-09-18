@@ -149,6 +149,12 @@ export type VoiceErrorCode =
   | 'voice_lane_unknown'
   | 'voice_generation_stale'
   | 'voice_not_started'
+  // ADDITIVE (Wave 3 correction M): the lane table is bounded (H2), and a
+  // genuine cap must be refused as a capacity outcome rather than mislabelled
+  // `voice_internal_error`. Track K's mount emits this code on the wire; it
+  // joins the catalogue here so both consumers can name it. Nothing is renamed
+  // or removed, and no existing code changes meaning.
+  | 'voice_lane_capacity'
   // gate-adjacent refusals (all narrowing — none can authorise a release)
   | 'voice_client_text_forbidden'
   | 'voice_confirm_requires_proposal'
@@ -898,6 +904,17 @@ type _ClientCatalogueIsExhaustive = AssertTrue<
 >;
 type _ServerCatalogueIsExhaustive = AssertTrue<
   Exclude<VoiceServerMessage['type'], VoiceServerMessageType> extends never ? true : false
+>;
+
+/** The error catalogue is additive: the lane-capacity refusal (H2) is a code,
+ *  and the pre-existing lane codes keep their meaning. */
+type _LaneCapacityIsCatalogueCode = AssertTrue<
+  'voice_lane_capacity' extends VoiceErrorCode ? true : false
+>;
+type _LaneCodesAreStillPresent = AssertTrue<
+  'voice_lane_unknown' | 'voice_generation_stale' | 'voice_not_started' extends VoiceErrorCode
+    ? true
+    : false
 >;
 
 /** Payloads and verdicts that must be present for authority to exist at all. */

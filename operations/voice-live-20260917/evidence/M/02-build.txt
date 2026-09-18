@@ -1,0 +1,32 @@
+=== npm run build --workspace=shared ===
+
+> @pi-web-ui/shared@0.1.0 build
+> tsc
+
+EXIT_BUILD_SHARED=0
+
+=== npm run build --workspace=client ===
+
+> @pi-web-ui/client@0.1.0 build
+> tsc && vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 1855 modules transformed.
+rendering chunks...
+[plugin:vite:reporter] [plugin vite:reporter] 
+(!) /root/pi-web-ui-wt-corr-m/client/src/lib/api.ts is dynamically imported by /root/pi-web-ui-wt-corr-m/client/src/store/sessionStore.ts but also statically imported by /root/pi-web-ui-wt-corr-m/client/src/components/Chat/MessageInput.tsx, /root/pi-web-ui-wt-corr-m/client/src/components/Chat/SlashPalette.tsx, /root/pi-web-ui-wt-corr-m/client/src/components/Session/NewSessionModal.tsx, /root/pi-web-ui-wt-corr-m/client/src/components/Session/ResumeNativeSessionModal.tsx, /root/pi-web-ui-wt-corr-m/client/src/components/Settings/SettingsModal.tsx, /root/pi-web-ui-wt-corr-m/client/src/components/Sidebar/SessionItem.tsx, /root/pi-web-ui-wt-corr-m/client/src/components/Sidebar/TransferConfirmationModal.tsx, /root/pi-web-ui-wt-corr-m/client/src/store/sessionStore.ts, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/index.html                      0.51 kB │ gzip:   0.33 kB
+dist/assets/index-C1BoC48u.css     101.18 kB │ gzip:  16.98 kB
+dist/assets/addon-fit-YJmn1quW.js    1.65 kB │ gzip:   0.76 kB │ map:     3.55 kB
+dist/assets/xterm-BT7tBf8A.js      332.48 kB │ gzip:  84.22 kB │ map:   693.85 kB
+dist/assets/index-BwujMIir.js      976.15 kB │ gzip: 266.19 kB │ map: 3,721.58 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 7.79s
+EXIT_BUILD_CLIENT=0

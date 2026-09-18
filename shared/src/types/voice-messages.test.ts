@@ -48,6 +48,7 @@ import {
   voiceBase64DecodedByteLength,
   voicePcm16ByteLength,
   type VoiceClientMessage,
+  type VoiceErrorCode,
   type VoiceServerMessage,
 } from './voice-messages.js';
 
@@ -610,5 +611,36 @@ describe('voice wire v1 — client-neutral (D7)', () => {
     for (const pattern of forbidden) {
       expect(pattern.test(source), `voice-messages.ts must not reference ${String(pattern)}`).toBe(false);
     }
+  });
+});
+
+describe('voice wire v1 — the additive lane-capacity code (Wave 3 correction M)', () => {
+  it('accepts a lane-named voice_error carrying voice_lane_capacity', () => {
+    const frame: VoiceServerMessage = {
+      ...ENVELOPE,
+      type: 'voice_error',
+      code: 'voice_lane_capacity',
+      message: 'The voice lane table is full; try again shortly.',
+      fatal: false,
+    };
+    // The wire envelope validator constrains fields, not code membership, so an
+    // additive catalogue entry reaches the client intact — which is the whole
+    // point of adding it to the catalogue rather than minting a new frame.
+    expect(checkVoiceEnvelope(frame, 'server-to-client')).toEqual({ ok: true });
+  });
+
+  it('leaves the pre-existing lane codes meaningful (purely additive)', () => {
+    const laneCodes: VoiceErrorCode[] = [
+      'voice_lane_unknown',
+      'voice_generation_stale',
+      'voice_not_started',
+      'voice_lane_capacity',
+    ];
+    expect([...new Set(laneCodes)].sort()).toEqual([
+      'voice_generation_stale',
+      'voice_lane_capacity',
+      'voice_lane_unknown',
+      'voice_not_started',
+    ]);
   });
 });

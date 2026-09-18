@@ -387,7 +387,7 @@ function deliverProposal(overrides: Record<string, unknown> = {}): string {
   return outcome;
 }
 
-function deliverReceipt(outcome: string): string {
+function deliverReceipt(outcome: string, extra: Record<string, unknown> = {}): string {
   const result = deliver(
     serverMessage('receipt_event', {
       receipt: {
@@ -396,7 +396,31 @@ function deliverReceipt(outcome: string): string {
         idempotencyKey: 'idem-lab-1',
         outcome,
         atMs: 1,
+        ...extra,
       },
+    }),
+  );
+  render();
+  return result;
+}
+
+/**
+ * The honest capacity refusal the server sends for a lane start it cannot
+ * serve (H2, Track K): a lane-named `voice_error` carrying
+ * `voice_lane_capacity` and the server's own short text (connection.ts's
+ * `VOICE_REFUSAL_TEXT`). `message: ''` exercises the client's local fallback
+ * line — a frame the wire accepts, with no server words to prefer.
+ */
+function deliverCapacityRefusal(
+  message = 'The voice lane table is full; try again shortly.',
+  extra: Record<string, unknown> = {},
+): string {
+  const result = deliver(
+    serverMessage('voice_error', {
+      code: 'voice_lane_capacity',
+      message,
+      fatal: false,
+      ...extra,
     }),
   );
   render();
@@ -480,6 +504,7 @@ window.__voiceLiveLab = {
   events: () => [...state.events],
   deliverProposal,
   deliverReceipt,
+  deliverCapacityRefusal,
   deliverParking,
   deliverResolved,
   /** M7: open the lane on the wire (voice_session_start). */

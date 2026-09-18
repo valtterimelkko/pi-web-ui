@@ -1,0 +1,25 @@
+=== npm run test --workspace=shared ===
+
+> @pi-web-ui/shared@0.1.0 test
+> vitest run
+
+
+ RUN  v1.6.1 /root/pi-web-ui-wt-corr-m/shared
+
+ ✓ src/types-dual.test.ts  (8 tests) 8ms
+ ✓ src/protocol-types.test.ts  (4 tests) 5ms
+ ✓ tests/child-surfacing.test.ts  (11 tests) 12ms
+ ✓ src/notification-identity.test.ts  (13 tests) 11ms
+ ✓ src/session-preferences.test.ts  (3 tests) 7ms
+ ✓ src/types/voice-messages.test.ts  (28 tests) 33ms
+ ✓ src/subagent-summary.test.ts  (20 tests) 25ms
+ ✓ src/screen-view.test.ts  (61 tests) 21ms
+ ✓ src/protocol/jsonrpc.test.ts  (98 tests) 58ms
+
+ Test Files  9 passed (9)
+      Tests  246 passed (246)
+   Start at  04:16:21
+   Duration  793ms (transform 562ms, setup 1ms, collect 1.35s, tests 180ms, environment 2ms, prepare 937ms)
+
+JSON report written to /root/pi-web-ui-wt-corr-m/shared/test-results.json
+EXIT_SHARED_SUITE=0
