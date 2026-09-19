@@ -13,12 +13,21 @@
  *
  *   GET /api/v1/diagnostics?component=ClientVoice
  *
+ * P13 gap fill: the same path also carries PLAYBACK HEALTH. A crash is only
+ * half of "why didn't I hear it?"; the other half is a lane that accepted
+ * audio and never played it, which used to live only in the surface's memory.
+ * {@link reportPlaybackHealth} uploads a bounded playback fault (corrupt
+ * chunk, sequence gap, backlog overflow) and a bounded lane-end summary, so
+ * "did the lane play everything it accepted?" is answerable from server
+ * evidence alone.
+ *
  * Rules this module lives by:
  *   - Fire-and-forget: reporting must never throw into the surface that
  *     failed (observability observes; it does not alter behaviour).
  *   - Bounded: every field is length-capped, recent-event context is capped
  *     at 12 ring entries, and the module caps itself at
- *     {@link MAX_REPORTS_PER_PAGE} uploads per page load.
+ *     {@link MAX_REPORTS_PER_PAGE} error uploads and
+ *     {@link MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE} health uploads per page load.
  *   - Scrubbed client-side: no tokens, no utterance text, no transcript
  *     bodies, no cookies; the server ring scrubs again on entry.
  */
@@ -55,7 +64,67 @@ export interface ClientErrorReport {
   withContext?: boolean;
 }
 
+/** What a playback-health record is reporting. */
+export type PlaybackHealthReason =
+  | 'playback_chunk_corrupt'
+  | 'playback_seq_gap'
+  | 'playback_overflow'
+  | 'lane_end';
+
+/**
+ * The bounded numeric shape of the playback pipeline at the moment of the
+ * report. At `lane_end`, a non-zero `pendingMs` is audio the lane ACCEPTED and
+ * never played — the stranding the operator hears as a sentence that stops.
+ */
+export interface PlaybackHealthStats {
+  chunksScheduled: number;
+  chunksDropped: number;
+  pendingChunks: number;
+  pendingMs: number;
+  queuedMs: number;
+  ducked: boolean;
+}
+
+export interface PlaybackHealthReport {
+  reason: PlaybackHealthReason;
+  /** Bounded, scrubbed fault detail (never utterance or transcript text). */
+  detail?: string;
+  runtime?: string;
+  workerSessionId?: string;
+  stats: PlaybackHealthStats;
+  /** Attach the bounded ring tail as context (default true). */
+  withContext?: boolean;
+}
+
+/**
+ * Health uploads allowed per page load. Separate from the error budget so a
+ * long lane with faults cannot starve crash reporting, and so a fault storm
+ * cannot flood the server's ring: after this, the browser ring still records.
+ */
+export const MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE = 20;
+
 let uploadsUsed = 0;
+let healthUploadsUsed = 0;
+
+/** Server schema mirrors this ceiling; the client clamps so it never 400s. */
+const MAX_STAT = 1_000_000;
+const MAX_DETAIL = 300;
+
+function statNumber(value: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0;
+  return Math.min(Math.round(value), MAX_STAT);
+}
+
+function boundedStats(stats: PlaybackHealthStats): PlaybackHealthStats {
+  return {
+    chunksScheduled: statNumber(stats.chunksScheduled),
+    chunksDropped: statNumber(stats.chunksDropped),
+    pendingChunks: statNumber(stats.pendingChunks),
+    pendingMs: statNumber(stats.pendingMs),
+    queuedMs: statNumber(stats.queuedMs),
+    ducked: stats.ducked === true,
+  };
+}
 
 function bounded(value: string | undefined, max: number): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -86,6 +155,44 @@ export async function reportClientError(report: ClientErrorReport): Promise<void
       message: bounded(scrubClientText(report.message), MAX_MESSAGE) ?? 'unspecified client error',
       ...(bounded(report.errorName, MAX_NAME) ? { errorName: bounded(report.errorName, MAX_NAME) } : {}),
       ...(bounded(report.stack, MAX_STACK) ? { stack: bounded(report.stack, MAX_STACK) } : {}),
+      ...(bounded(report.runtime, 20) ? { runtime: bounded(report.runtime, 20) } : {}),
+      ...(bounded(report.workerSessionId, 80) ? { workerSessionId: bounded(report.workerSessionId, 80) } : {}),
+      ...(context ? { recentEvents: context } : {}),
+    };
+
+    await fetch(`${API_URL}/api/client-diagnostics`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // Reporting must never alter the failing surface's behaviour.
+  }
+}
+
+/**
+ * Report one playback-health observation (a fault, or the lane-end summary).
+ * Never throws; resolves when dispatched. Bounded and scrubbed exactly like an
+ * error report, but at `warn` rather than `error` on the server, and with no
+ * crash text to invent.
+ */
+export async function reportPlaybackHealth(report: PlaybackHealthReport): Promise<void> {
+  try {
+    const context = report.withContext === false ? undefined : getRecentBrowserEvents(MAX_CONTEXT_EVENTS);
+
+    // The manual bundle must carry it too — the ring is the offline story.
+    recordBrowserDiagnostic({ kind: 'speech', operation: 'playback_health', state: report.reason });
+
+    if (healthUploadsUsed >= MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE) return;
+    healthUploadsUsed += 1;
+
+    const detail = bounded(report.detail, MAX_DETAIL);
+    const payload: Record<string, unknown> = {
+      kind: 'playback_health',
+      reason: report.reason,
+      stats: boundedStats(report.stats),
+      ...(detail ? { detail: bounded(scrubClientText(detail), MAX_DETAIL) } : {}),
       ...(bounded(report.runtime, 20) ? { runtime: bounded(report.runtime, 20) } : {}),
       ...(bounded(report.workerSessionId, 80) ? { workerSessionId: bounded(report.workerSessionId, 80) } : {}),
       ...(context ? { recentEvents: context } : {}),
@@ -143,5 +250,6 @@ export function installGlobalErrorReporting(): void {
 /** Test-only reset of the per-page upload budget. */
 export function resetClientErrorReporter(): void {
   uploadsUsed = 0;
+  healthUploadsUsed = 0;
   installed = false;
 }

@@ -9,7 +9,9 @@ import {
   reportClientError,
   installGlobalErrorReporting,
   resetClientErrorReporter,
+  reportPlaybackHealth,
   MAX_REPORTS_PER_PAGE,
+  MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE,
 } from '../../../src/lib/clientDiagnosticsReporter.js';
 
 /**
@@ -140,6 +142,81 @@ describe('clientDiagnosticsReporter', () => {
       window.dispatchEvent(new ErrorEvent('error', { message: 'once', error: new Error('once') }));
       await new Promise((r) => setTimeout(r, 0));
       expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * P13 gap fill — the playback half of "why didn't I hear it?".
+   *
+   * The surface keeps playback faults and playback stats in memory, which is
+   * exactly where they died: nothing about the shape of the audio left the page.
+   * These tests pin the bounded, scrubbed upload that makes the lane's playback
+   * health answerable from the server's existing diagnostics ring.
+   */
+  describe('reportPlaybackHealth', () => {
+    const stats = {
+      chunksScheduled: 99,
+      chunksDropped: 0,
+      pendingChunks: 0,
+      pendingMs: 0,
+      queuedMs: 0,
+      ducked: false,
+    };
+
+    it('POSTs a bounded playback_health record with the reason and the stats', async () => {
+      await reportPlaybackHealth({ reason: 'playback_overflow', stats, runtime: 'pi', workerSessionId: '01a09cbd' });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('/api/client-diagnostics');
+      expect(init.method).toBe('POST');
+      const body = JSON.parse(init.body);
+      expect(body.kind).toBe('playback_health');
+      expect(body.reason).toBe('playback_overflow');
+      expect(body.stats).toMatchObject({ chunksScheduled: 99 });
+      expect(body.workerSessionId).toBe('01a09cbd');
+      // A health record carries no crash text: there is no error to invent.
+      expect(body.message).toBeUndefined();
+      expect(body.stack).toBeUndefined();
+    });
+
+    it('also records the event in the browser ring (the manual bundle must show it too)', async () => {
+      await reportPlaybackHealth({ reason: 'lane_end', stats });
+      const bundle = JSON.stringify(getRecentBrowserEvents(5));
+      expect(bundle).toContain('playback_health');
+      expect(bundle).toContain('lane_end');
+    });
+
+    it('scrubs credential-shaped detail client-side (defence in depth before the ring)', async () => {
+      await reportPlaybackHealth({ reason: 'lane_end', detail: 'stopped after token=super-secret-value', stats });
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.detail).not.toContain('super-secret-value');
+    });
+
+    it('never throws, even when the network fails', async () => {
+      fetchMock.mockRejectedValue(new Error('network down'));
+      await expect(reportPlaybackHealth({ reason: 'lane_end', stats })).resolves.toBeUndefined();
+    });
+
+    it(`caps itself at ${MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE} health uploads per page load`, async () => {
+      for (let i = 0; i < MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE + 5; i++) {
+        await reportPlaybackHealth({ reason: 'playback_seq_gap', stats });
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE);
+    });
+
+    it('does not let a health record consume the error budget (separate caps)', async () => {
+      await reportPlaybackHealth({ reason: 'lane_end', stats });
+      await reportClientError({ operation: 'uncaught_error', message: 'boom' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('is reset with the rest of the reporter (tests and SPA remounts share a window)', async () => {
+      for (let i = 0; i < MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE + 2; i++) {
+        await reportPlaybackHealth({ reason: 'lane_end', stats });
+      }
+      resetClientErrorReporter();
+      await reportPlaybackHealth({ reason: 'lane_end', stats });
+      expect(fetchMock).toHaveBeenCalledTimes(MAX_PLAYBACK_HEALTH_REPORTS_PER_PAGE + 1);
     });
   });
 });

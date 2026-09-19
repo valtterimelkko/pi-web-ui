@@ -179,11 +179,17 @@ Both rows are machine-written and committed here: `long-answer/measurement.json`
   surface on the dev-lab page; it does not click through Drive Mode and open a lane, so the app-UI path is still
   covered by the component tests and by the operator's own use.
 
-## 8. What a provider interrupt should do (found, not changed)
+## 8. What a provider interrupt should do (found, then DECIDED by the owner: do not flush)
 
 The captured lane had **no** provider interruption (three `voice_state` events, none of them
 `provider interrupted playback`), so this defect did not involve one. It is worth recording that the client's
 playback ignores that signal entirely: with the queue now played rather than stranded, an interrupted answer will play
-out (ducked) to its end. Whether an interrupt should instead flush the queue is a product decision — the contract's
-N5 rule is "duck, never stop" for *operator* speech, and the lab's own reference player has a separate
-`native-interrupt` profile that flushes — so it is flagged here rather than changed unilaterally.
+out (ducked) to its end. This was flagged rather than changed unilaterally, and the owner has since ruled on it
+(2026-09-18, ledger **D-09**): **an interrupt must NOT flush the queue** — the contract's N5 rule ("duck, never stop"
+for *operator* speech) stands as written, and the lab's separate `native-interrupt` reference profile remains a
+measurement profile, not a product decision.
+
+In the same sitting the owner directed that the **client playback observability gap** be closed: playback faults and
+the lane-end playback summary now leave the browser through the bounded `ClientVoice` record path, so "did the lane
+play everything it accepted?" is answerable from server evidence alone. See
+[`../playback-health-20260919/`](../playback-health-20260919/README.md) and [`../../../docs/OBSERVABILITY.md`](../../../../docs/OBSERVABILITY.md).

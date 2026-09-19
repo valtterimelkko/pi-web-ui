@@ -510,6 +510,13 @@ window.__voiceLiveLab = {
   /** M7: open the lane on the wire (voice_session_start). */
   startLane: () => ensureSurface().startLane(),
   /**
+   * The operator's explicit playback stop. The lab needs it because the
+   * lane-end playback-health record is measured HERE, before the queue is
+   * cleared — after `stop()` the pipeline reports zero pending, and a harness
+   * reading it afterwards would see a clean lane that in fact stranded audio.
+   */
+  stopPlayback: () => ensureSurface().stopPlayback(),
+  /**
    * Feed ONE raw server frame.
    *
    * The named `deliver*` helpers below are fixtures for the visual section; this is

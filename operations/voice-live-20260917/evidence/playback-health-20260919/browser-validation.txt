@@ -1,0 +1,10 @@
+PASS  dev lab page armed with the real surface
+PASS  a real browser uploaded the sequence-gap fault — reason=playback_seq_gap
+PASS  the fault upload carried the stats at the moment it happened — kind=playback_health chunksScheduled=1
+PASS  the upload carries the lane worker-session correlation — workerSessionId=voice-lab-worker (lane=voice-lab-worker)
+PASS  a real browser uploaded the lane-end summary — reason=lane_end
+PASS  the lane-end summary carries the STRANDED audio, measured before the queue was cleared — pendingMs=400 pendingChunks=4 (pre-stop pending=400)
+PASS  and it is genuinely pre-reset (the pipeline reports zero pending afterwards) — post-stop pendingChunks=0
+PASS  no page errors during the run
+
+8/8 checks passed

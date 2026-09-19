@@ -6,6 +6,7 @@ import {
   type VoiceReceiptEventMessage,
 } from '@pi-web-ui/shared';
 import { createSpeechArbiter } from '../speechArbiter';
+import type { PlaybackHealthReport } from '../clientDiagnosticsReporter';
 import { loadCaptureWorklet } from './captureSession';
 import { VoiceLiveSurface, type VoiceLiveSurfaceFactories } from './surface';
 import { createVoiceLane, pcm16Base64 } from './messages';
@@ -67,6 +68,8 @@ interface Harness {
   backend: FakePlaybackBackend;
   arbiter: ReturnType<typeof createSpeechArbiter>;
   speaker: FakeReadBackSpeaker;
+  /** Playback-health reports the surface uploaded (the P13 gap fill). */
+  playbackHealth: PlaybackHealthReport[];
   /** Live counters (a primitive returned by value would go stale). */
   counters: { captureStops: number; mediaRequests: number };
 }
@@ -129,6 +132,7 @@ function makeSurface(options: { failMic?: boolean; failWorklet?: boolean; captur
   const arbiter = createSpeechArbiter();
   const counters = { captureStops: 0, mediaRequests: 0 };
   const speaker = new FakeReadBackSpeaker();
+  const playbackHealth: PlaybackHealthReport[] = [];
 
   const fakeContext = {
     state: 'running',
@@ -151,6 +155,9 @@ function makeSurface(options: { failMic?: boolean; failWorklet?: boolean; captur
     createAudioContext: () => fakeContext,
     createPlaybackBackend: () => backend,
     createReadBackSpeaker: () => options.readBack ?? speaker,
+    reportPlaybackHealth: (report) => {
+      playbackHealth.push(report);
+    },
     ...(options.laneProbeTimeoutMs !== undefined ? { laneProbeTimeoutMs: options.laneProbeTimeoutMs } : {}),
     getUserMedia: async () => {
       counters.mediaRequests += 1;
@@ -190,7 +197,7 @@ function makeSurface(options: { failMic?: boolean; failWorklet?: boolean; captur
     arbiter,
     factories,
   });
-  return { surface, frames, captureOptions, activity, backend, arbiter, speaker, counters };
+  return { surface, frames, captureOptions, activity, backend, arbiter, speaker, playbackHealth, counters };
 }
 
 /** A live proposal that has NOT been read back yet (the H3 starting point). */
@@ -369,6 +376,87 @@ describe('VoiceLiveSurface — teardown', () => {
     expect(harness.backend.stops).toBe(1);
     expect(harness.counters.captureStops).toBe(0);
     expect(harness.surface.getState().capture).toBe('live');
+  });
+});
+
+/**
+ * P13 gap fill — the playback half of "why didn't I hear it?".
+ *
+ * The surface already kept playback faults and playback stats in memory, and
+ * that is exactly where they died: nothing about the shape of the audio left
+ * the page, so a lane that accepted audio and never played it was invisible
+ * from the server. These tests pin the upload: a fault leaves immediately, and
+ * the lane-end summary carries the stranded figure measured BEFORE the queue is
+ * cleared (after `stop()` there is nothing left to measure).
+ */
+describe('VoiceLiveSurface — playback health leaves the page (P13 gap fill)', () => {
+  function audioChunk(seq: number, ms = 100) {
+    const samples = new Int16Array((24_000 * ms) / 1000).fill(4000);
+    return env('voice_audio_chunk', {
+      seq,
+      mimeType: 'audio/pcm;rate=24000',
+      data: pcm16Base64(samples),
+      durationMs: ms,
+      atMs: 1,
+      state: undefined,
+    }) as unknown as VoiceAudioOutputChunkMessage;
+  }
+
+  it('reports a playback fault immediately, with the stats at the moment it happened', () => {
+    const harness = makeSurface();
+    harness.surface.onWireMessage(audioChunk(0));
+    harness.surface.onWireMessage(audioChunk(2)); // seq 1 never arrived
+    expect(harness.playbackHealth).toHaveLength(1);
+    const report = harness.playbackHealth[0];
+    expect(report.reason).toBe('playback_seq_gap');
+    expect(report.detail).toContain('expected seq 1');
+    expect(report.stats.chunksScheduled).toBeGreaterThan(0);
+    // The record joins the lane's server-side story by worker session.
+    expect(report.workerSessionId).toBe('worker-1');
+  });
+
+  it('reports a corrupt chunk as a fault too (the client is not the only listener)', () => {
+    const harness = makeSurface();
+    harness.surface.onWireMessage(
+      env('voice_audio_chunk', { seq: 0, mimeType: 'audio/ogg', data: 'not-base64-at-all', durationMs: 20, atMs: 1 }) as unknown as VoiceAudioOutputChunkMessage,
+    );
+    expect(harness.playbackHealth.map((r) => r.reason)).toContain('playback_chunk_corrupt');
+  });
+
+  it('reports the lane-end summary with the stranded audio measured BEFORE the queue is cleared', () => {
+    const harness = makeSurface();
+    // 26 x 100 ms = 2.6 s of speech; the horizon holds ~2 s, so ~0.6 s stays pending.
+    for (let seq = 0; seq < 26; seq++) harness.surface.onWireMessage(audioChunk(seq));
+    harness.surface.stopPlayback();
+    const laneEnd = harness.playbackHealth.find((r) => r.reason === 'lane_end');
+    expect(laneEnd).toBeDefined();
+    expect(laneEnd?.stats.pendingChunks).toBeGreaterThan(0);
+    expect(laneEnd?.stats.pendingMs).toBeGreaterThan(0);
+    // And it is genuinely pre-reset: after stop() the pipeline reports 0 pending.
+    expect(harness.surface.getState().playback?.pendingChunks).toBe(0);
+  });
+
+  it('does not double-report the same lane-end snapshot on dispose after an explicit stop', async () => {
+    const harness = makeSurface();
+    for (let seq = 0; seq < 26; seq++) harness.surface.onWireMessage(audioChunk(seq));
+    harness.surface.stopPlayback();
+    await harness.surface.dispose();
+    expect(harness.playbackHealth.filter((r) => r.reason === 'lane_end')).toHaveLength(1);
+  });
+
+  it('reports a lane-end summary on dispose when the lane never got an explicit stop', async () => {
+    const harness = makeSurface();
+    for (let seq = 0; seq < 26; seq++) harness.surface.onWireMessage(audioChunk(seq));
+    await harness.surface.dispose();
+    const laneEnds = harness.playbackHealth.filter((r) => r.reason === 'lane_end');
+    expect(laneEnds).toHaveLength(1);
+    expect(laneEnds[0].stats.pendingMs).toBeGreaterThan(0);
+  });
+
+  it('says nothing about a lane that never received audio', async () => {
+    const harness = makeSurface();
+    await harness.surface.dispose();
+    expect(harness.playbackHealth).toHaveLength(0);
   });
 });
 

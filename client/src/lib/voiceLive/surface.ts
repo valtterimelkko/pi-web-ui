@@ -64,6 +64,11 @@ import {
 } from './readBack';
 import type { VoiceLaneIdentity } from './messages';
 import type { VoiceProposalVariant } from '@pi-web-ui/shared';
+import {
+  reportPlaybackHealth as uploadPlaybackHealth,
+  type PlaybackHealthReport,
+  type PlaybackHealthStats,
+} from '../clientDiagnosticsReporter';
 
 export type CaptureLifecycle = 'idle' | 'starting' | 'live' | 'suspended' | 'error';
 
@@ -131,6 +136,12 @@ export interface VoiceLiveSurfaceFactories {
   createReadBackSpeaker?: () => ReadBackSpeaker;
   /** How long a lane start may stay unanswered before it is honestly unavailable. */
   laneProbeTimeoutMs?: number;
+  /**
+   * The bounded client-observability upload for playback health (P13 gap fill).
+   * Injected so the surface's reporting is testable without a network; the
+   * default is the real `reportPlaybackHealth` upload.
+   */
+  reportPlaybackHealth?: (report: PlaybackHealthReport) => void | Promise<void>;
   now?: () => number;
 }
 
@@ -161,6 +172,13 @@ export class VoiceLiveSurface {
   private readonly listeners = new Set<() => void>();
   private readonly captureFaults: CaptureFaultReport[] = [];
   private readonly playbackFaults: PlaybackFault[] = [];
+  /**
+   * Whether playback has accepted anything since the last lane-end report.
+   * One lane-end record per period of playback activity: `stop()` empties the
+   * pending queue, so a second snapshot after it would report a stranded figure
+   * of zero and read as "nothing was wrong".
+   */
+  private laneEndPending = false;
 
   private audioContext: AudioContext | null = null;
   private playback: PlaybackPipeline | null = null;
@@ -179,6 +197,8 @@ export class VoiceLiveSurface {
   /** The pending read-back's resolver, so a stop can settle it honestly. */
   private settleReadBack: ((outcome: ReadBackOutcome) => void) | null = null;
   private lane: LaneAvailability;
+  /** The lane identity frames are addressed with — kept for record correlation. */
+  private readonly laneIdentity: VoiceLaneIdentity;
   /** Set when this host cannot capture at all; the lane is then `unsupported`. */
   private readonly captureUnsupportedDetail: string | null;
   private laneProbe: ReturnType<typeof setTimeout> | null = null;
@@ -191,6 +211,7 @@ export class VoiceLiveSurface {
   constructor(options: VoiceLiveSurfaceOptions) {
     this.arbiter = options.arbiter;
     this.factories = options.factories ?? {};
+    this.laneIdentity = options.lane;
     this.onStateChange = options.onStateChange ?? (() => {});
     this.captureUnsupportedDetail = this.detectCaptureSupport();
     this.lane = this.captureUnsupportedDetail
@@ -300,6 +321,13 @@ export class VoiceLiveSurface {
       onFault: (fault) => {
         this.playbackFaults.push(fault);
         if (this.playbackFaults.length > MAX_FAULTS) this.playbackFaults.shift();
+        // A fault leaves the page IMMEDIATELY, carrying the stats at the moment
+        // it happened: a crash right after must not take the evidence with it.
+        this.reportPlaybackHealth({
+          reason: fault.reason,
+          ...(fault.detail !== undefined ? { detail: fault.detail } : {}),
+          stats: this.playbackHealthStats(),
+        });
         this.publish();
       },
     });
@@ -396,6 +424,55 @@ export class VoiceLiveSurface {
     }
   }
 
+  /** The playback numbers as the bounded health shape (never NaN/Infinity). */
+  private playbackHealthStats(): PlaybackHealthStats {
+    const stats = this.playback?.stats();
+    return {
+      chunksScheduled: stats?.chunksScheduled ?? 0,
+      chunksDropped: stats?.chunksDropped ?? 0,
+      pendingChunks: stats?.pendingChunks ?? 0,
+      pendingMs: stats?.pendingMs ?? 0,
+      queuedMs: Math.round(stats?.queuedMs ?? 0),
+      ducked: stats?.ducked ?? false,
+    };
+  }
+
+  /**
+   * Put a playback-health record on the bounded client-observability upload.
+   * Strictly best-effort, exactly like the capture fault path: observability
+   * observes, and a failed upload must never become a second failure the
+   * operator has to understand.
+   */
+  private reportPlaybackHealth(report: PlaybackHealthReport): void {
+    try {
+      const upload = this.factories.reportPlaybackHealth ?? uploadPlaybackHealth;
+      const runtime = report.runtime ?? this.laneIdentity.runtime;
+      void upload({
+        ...report,
+        // The same correlation key the server's VoiceMode records carry, so a
+        // playback record joins the lane's server-side story instead of
+        // floating free.
+        workerSessionId: report.workerSessionId ?? this.laneIdentity.workerSessionId,
+        ...(runtime ? { runtime } : {}),
+      });
+    } catch {
+      /* best effort: the operator-facing state is already correct */
+    }
+  }
+
+  /**
+   * Report the lane's playback outcome ONCE per period of playback activity,
+   * measured BEFORE the queue is cleared — after `stop()` there is nothing left
+   * to measure and the stranded figure would read as zero.
+   */
+  private reportLaneEnd(): void {
+    if (!this.laneEndPending || !this.playback) return;
+    const stats = this.playbackHealthStats();
+    if (stats.chunksScheduled === 0 && stats.chunksDropped === 0 && stats.pendingChunks === 0) return;
+    this.laneEndPending = false;
+    this.reportPlaybackHealth({ reason: 'lane_end', stats });
+  }
+
   /**
    * The operator's floor signal. One call site, two readers: the arbiter ducks
    * and the wire reports the boundary. Neither can reach capture.
@@ -439,6 +516,8 @@ export class VoiceLiveSurface {
   async dispose(): Promise<void> {
     this.stopReadBack();
     this.clearLaneProbe();
+    // Before the queue is disposed: the stranded figure is the evidence.
+    this.reportLaneEnd();
     await this.stopCapture('disposed');
     this.playback?.dispose();
     this.playback = null;
@@ -735,6 +814,7 @@ export class VoiceLiveSurface {
     const message = raw as VoiceServerMessage;
     if (message.type === 'voice_audio_chunk') {
       this.ensureAudio();
+      this.laneEndPending = true;
       this.playback?.pushChunk(message as VoiceAudioOutputChunkMessage);
     }
     this.publish();
@@ -758,6 +838,7 @@ export class VoiceLiveSurface {
 
   /** Explicit operator stop for playback only (capture is untouched, N5). */
   stopPlayback(): void {
+    this.reportLaneEnd();
     this.playback?.stop();
     this.publish();
   }

@@ -1,0 +1,13 @@
+PASS  password login returns a cookie
+PASS  lane-end playback_health accepted (204) — status=204
+PASS  fault playback_health accepted (204) — status=204
+PASS  playback_health without stats rejected (400) — status=400
+PASS  unknown field rejected, not stored (400) — status=400
+PASS  Internal API diagnostics query returns 200 — status=200
+PASS  both playback-health records landed in the ring — found=2
+PASS  lane-end record carries the stranded figure and warn level — level=warn pendingMs=4500
+PASS  lane-end record carries the worker-session correlation — workerSessionId=live-validation-worker
+PASS  fault record carries its reason and stats — chunksDropped=3
+PASS  no smuggled transcript content in the ring
+
+11/11 checks passed

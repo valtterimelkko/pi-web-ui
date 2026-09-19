@@ -1,0 +1,46 @@
+[
+  {
+    "ts": "2026-09-19T00:15:37.058Z",
+    "level": "warn",
+    "component": "ClientVoice",
+    "msg": "client playback health",
+    "operation": "playback_health",
+    "reason": "lane_end",
+    "stats": {
+      "chunksScheduled": 48,
+      "chunksDropped": 1,
+      "pendingChunks": 51,
+      "pendingMs": 4500,
+      "queuedMs": 120,
+      "ducked": false
+    },
+    "runtime": "pi",
+    "workerSessionId": "live-validation-worker",
+    "recentEvents": [
+      {
+        "kind": "speech",
+        "operation": "playback_health",
+        "state": "lane_end"
+      }
+    ]
+  },
+  {
+    "ts": "2026-09-19T00:15:37.065Z",
+    "level": "warn",
+    "component": "ClientVoice",
+    "msg": "client playback health",
+    "operation": "playback_health",
+    "reason": "playback_overflow",
+    "stats": {
+      "chunksScheduled": 99,
+      "chunksDropped": 3,
+      "pendingChunks": 0,
+      "pendingMs": 0,
+      "queuedMs": 0,
+      "ducked": false
+    },
+    "detail": "playback backlog exceeded its bound; the oldest unplayed chunk was dropped",
+    "runtime": "pi",
+    "workerSessionId": "live-validation-worker"
+  }
+]

@@ -379,6 +379,54 @@ activation.
 
 ## 12. Live progression log (append-only; newest first)
 
+**2026-09-18 (THE CLIENT PLAYBACK OBSERVABILITY GAP — closed; and the interrupt question — decided, not changed).**
+
+Owner directive, verbatim: *"fill the observability gap. no flushing the queue."* Two rulings in one message, recorded
+as **D-09** in §13.
+
+**The gap.** A crash was only half of "why didn't I hear it?". The other half — a lane that ACCEPTED audio and never
+played it — was invisible from the server: the browser diagnostic ring is manual-only and dies with the tab, and the
+playback pipeline's faults and stats never left the page at all. That is precisely why the lane-overlap defect needed
+a purpose-built lab to diagnose: `voice-kernel` records turns, briefs, receipts and capture faults, and nothing about
+the shape of the audio.
+
+**The fix (extend, do not fork).** The SAME bounded client-observability upload and the SAME `ClientVoice` component
+now carry a second, non-error record family — no second store, no new query surface. `reportPlaybackHealth` uploads
+(a) each playback FAULT the moment it happens, carrying the stats at that moment, and (b) ONE lane-end SUMMARY per
+period of playback activity, measured **before** the queue is cleared (after `stop()` the pipeline reports zero
+pending, and a snapshot taken afterwards would describe a stranded lane as clean). The server re-emits it as a
+`ClientVoice` **warn** record with `operation: playback_health`, a `reason`
+(`playback_chunk_corrupt` | `playback_seq_gap` | `playback_overflow` | `lane_end`) and the bounded `stats` attached.
+Warn, not info, deliberately: info records are namespace-filtered, and this evidence must always reach the ring. At
+`lane_end`, a non-zero `pendingMs` IS the stranded audio; `chunksDropped` is what the backlog bound discarded.
+
+**Bounded and honest by construction.** `detail` is capped at 300 characters and scrubbed client-side and again on
+entry; every statistic is clamped to a finite non-negative integer before it is sent (so a NaN can never 400 the
+report); the recent-event context stays capped at 12 allowlisted entries; the client caps itself at 20 health uploads
+per page load on a budget SEPARATE from the 10 error uploads, so a long lane with faults cannot starve crash
+reporting. The route schema is now STRICT: an unknown field is rejected rather than stored, so transcript content
+cannot be smuggled in beside a health record. The surface's upload is best-effort in the same sense as the capture
+fault path — observability observes, and a failed upload never becomes a second failure the operator has to
+understand.
+
+**Proof, three layers.** (1) Unit/route: 15 route tests (a health record lands as ONE queryable `ClientVoice` warn
+record with its reason and stats; missing stats, an unknown reason, an out-of-range statistic and an unknown field are
+all 400 with no record emitted; the error path and its scrub test are unchanged) and 50 client tests (the bounded
+upload, its separate cap, its reset, and the surface's fault/lane-end wiring including "no double report on dispose
+after an explicit stop" and "silence for a lane that never received audio"). (2) Real server, real auth: a disposable
+validation server, password login, two POSTs, then the DOCUMENTED Internal API read — 11/11 checks, including the
+lane-end record carrying `pendingMs: 4500` at `warn` with its worker-session correlation. (3) Real browser: the
+dev-lab page (the real surface on a real `AudioContext`), `window.fetch` intercepted — a sequence gap uploaded
+`playback_seq_gap` with its stats and the lane's worker-session correlation, and `stopPlayback()` uploaded `lane_end`
+with the stranded figure measured before the reset (8/8 checks). Evidence + commands:
+`operations/voice-live-20260917/evidence/playback-health-20260919/`.
+
+**The interrupt question — DECIDED, NOT CHANGED (D-09).** The client keeps ignoring `provider interrupted playback`:
+an interrupted answer plays out (ducked) to its end, and the queue is NEVER flushed. The contract's N5 rule
+(duck-never-stop for operator speech) stands as written, and the lab's separate `native-interrupt` reference profile is
+a measurement profile, not a product decision. The "found, not changed" flag below is therefore closed by owner
+decision rather than by code.
+
 **2026-09-18 ("IT STARTS TALKING ON TOP OF EACH OTHER" — the client's playback scheduler was built for a stream that
 arrives at real time; the live lane arrives 4.1x faster. Measured with a new lab, root-caused, fixed).**
 
@@ -447,11 +495,12 @@ this host), and the page-level checks have been fed by the lab's own browser run
 browser run on the operator's live page — so production page facts are pinned by a component test and by the lane
 inventory instead. The operator's ear remains the final acceptance.
 
-**FOUND, NOT CHANGED:** the captured lane had no provider interruption, so this defect did not involve one. But the
-client's playback ignores `provider interrupted playback` entirely, so with the queue now played rather than stranded
-an interrupted answer will play out (ducked) to its end. Whether an interrupt should flush the queue is a product
-decision (N5 says duck-never-stop for OPERATOR speech; the lab's reference player has a separate `native-interrupt`
-profile that flushes), so it is flagged for the owner rather than changed unilaterally.
+**FOUND, NOT CHANGED — now DECIDED by the owner (D-09, §13):** the captured lane had no provider interruption, so
+this defect did not involve one. But the client's playback ignores `provider interrupted playback` entirely, so with
+the queue now played rather than stranded an interrupted answer will play out (ducked) to its end. The owner's ruling
+is that an interrupt must NOT flush the queue — N5 (duck-never-stop for OPERATOR speech) stands as written. The lab's
+reference player keeps its separate `native-interrupt` profile as a measurement profile only. See the newer §12 entry
+for the observability gap that was closed in the same sitting.
 
 **2026-09-18 ("IT DOES NOT HAVE ACCESS TO THE SESSION" AGAIN — the worker was on disk, not in memory; root-caused
 from the journal, fixed, proven against the operator's real session).**
@@ -1209,6 +1258,12 @@ Wave 0 contract child E (§6).
 ---
 
 ## 13. Decisions log (append-only)
+
+- **D-09 (owner, 2026-09-18).** Two rulings on the lane-overlap work, given together: (a) the client playback
+observability gap must be CLOSED — playback faults and the lane-end playback summary are uploaded through the existing
+bounded client-diagnostics path into the `ClientVoice` ring, as `warn` records carrying bounded stats; and (b) a
+provider interruption must NOT flush the playback queue — an interrupted answer plays out ducked to its end, N5 stands
+as written. §12.
 
 - **D-07 (conductor, 2026-09-17).** Allocation amendment: after Track A froze,
 the conductor took ownership of the small cross-track integration correction its

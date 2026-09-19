@@ -31,9 +31,23 @@ import { createLogger } from '../logging/logger.js';
  * at a small number of reports per page load. An error-level record is
  * attention-worthy; the ring bound contains any residual flood.
  *
+ * P13 gap fill — PLAYBACK HEALTH. A crash is only half of "why didn't I hear
+ * it?". The other half is a lane that accepted audio and never played it: the
+ * surface's playback faults and its playback stats lived only in the page's
+ * memory, so "did the lane play everything?" had no server-side answer at all.
+ * The same route now also accepts a bounded `kind: 'playback_health'` report
+ * (a fault, or the lane-end summary) and re-emits it as an ordinary
+ * `ClientVoice` WARN record with the bounded stats attached — warn, not info,
+ * because info records are namespace-filtered and this evidence must always
+ * reach the ring. No new store, no new query: the same documented read returns
+ * it, and at `lane_end` a non-zero `pendingMs` is audio the operator never
+ * heard.
+ *
  * Privacy: message/stack are operator-authored crash text — scrubbed here via
  * the logger's ring scrubber on entry, and scrubbed again client-side before
  * upload. No utterance text, no transcript bodies, no cookies, no auth data.
+ * The schema is STRICT: an unknown field is rejected rather than stored, so a
+ * caller cannot smuggle transcript content in beside a health record.
  */
 
 const router = Router();
@@ -51,39 +65,99 @@ const recentEventSchema = z.object({
   errorName: z.string().max(80).optional(),
 });
 
-const reportSchema = z.object({
-  /** What on the surface reported: uncaught_error, unhandled_rejection,
-   *  react_render, playback_failed, dictation_error, talker_listener. */
-  operation: z.string().min(1).max(40),
-  /** Bounded crash text (client-side scrubbed; ring-scrubbed on entry). */
-  message: z.string().min(1).max(300),
-  errorName: z.string().max(80).optional(),
-  stack: z.string().max(1500).optional(),
-  /** Voice-surface correlation, when the surface knows it: the worker
-   *  session the talker lane is bound to (the same key VoiceMode records
-   *  carry), so a client error joins the server-side story instead of
-   *  floating free. Global-handler reports legitimately omit it. */
-  runtime: z.string().max(20).optional(),
-  workerSessionId: z.string().max(80).optional(),
-  /** Bounded tail of the browser diagnostic ring for context (the barge-in
-   *  path especially: floor_held/duck/playback events precede a crash). */
-  recentEvents: z.array(recentEventSchema).max(12).optional(),
-});
+const reportSchema = z
+  .object({
+    /** Report family. Absent means a client error report (back-compatible). */
+    kind: z.enum(['client_error', 'playback_health']).default('client_error'),
+    /** What on the surface reported: uncaught_error, unhandled_rejection,
+     *  react_render, playback_failed, dictation_error, talker_listener. */
+    operation: z.string().min(1).max(40).optional(),
+    /** Bounded crash text (client-side scrubbed; ring-scrubbed on entry). */
+    message: z.string().min(1).max(300).optional(),
+    errorName: z.string().max(80).optional(),
+    stack: z.string().max(1500).optional(),
+    /** Voice-surface correlation, when the surface knows it: the worker
+     *  session the talker lane is bound to (the same key VoiceMode records
+     *  carry), so a client error joins the server-side story instead of
+     *  floating free. Global-handler reports legitimately omit it. */
+    runtime: z.string().max(20).optional(),
+    workerSessionId: z.string().max(80).optional(),
+    /** Bounded tail of the browser diagnostic ring for context (the barge-in
+     *  path especially: floor_held/duck/playback events precede a crash). */
+    recentEvents: z.array(recentEventSchema).max(12).optional(),
+    /** playback_health only: what was observed. `lane_end` is the summary. */
+    reason: z
+      .enum(['playback_chunk_corrupt', 'playback_seq_gap', 'playback_overflow', 'lane_end'])
+      .optional(),
+    /** playback_health only: bounded, scrubbed fault detail (never speech). */
+    detail: z.string().max(300).optional(),
+    /** playback_health only: the numbers at the moment of the report. At
+     *  `lane_end`, non-zero pendingMs is audio accepted and never played. */
+    stats: z
+      .object({
+        chunksScheduled: z.number().int().min(0).max(1_000_000),
+        chunksDropped: z.number().int().min(0).max(1_000_000),
+        pendingChunks: z.number().int().min(0).max(1_000_000),
+        pendingMs: z.number().int().min(0).max(1_000_000),
+        queuedMs: z.number().int().min(0).max(1_000_000),
+        ducked: z.boolean(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.kind === 'client_error') {
+      if (!value.operation) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['operation'], message: 'operation is required' });
+      }
+      if (!value.message) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['message'], message: 'message is required' });
+      }
+      return;
+    }
+    if (!value.reason) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'reason is required for a playback_health report' });
+    }
+    if (!value.stats) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['stats'], message: 'stats are required for a playback_health report' });
+    }
+  });
 
 router.use(cookieAuthMiddleware);
 
 router.post('/', validateBody(reportSchema), (req: Request, res: Response) => {
   const report = req.body as z.infer<typeof reportSchema>;
 
-  const fields: Record<string, unknown> = {
-    operation: report.operation,
+  const correlation: Record<string, unknown> = {
     ...(report.runtime ? { runtime: report.runtime } : {}),
     ...(report.workerSessionId ? { workerSessionId: report.workerSessionId } : {}),
     ...(report.recentEvents ? { recentEvents: report.recentEvents } : {}),
   };
+
+  if (report.kind === 'playback_health') {
+    // The stats ARE the record: a reader must not have to do arithmetic on the
+    // client, and at `lane_end` a non-zero pendingMs is the stranded audio.
+    logger
+      .child({
+        operation: 'playback_health',
+        reason: report.reason,
+        stats: report.stats,
+        ...(report.detail ? { detail: report.detail } : {}),
+        ...correlation,
+      })
+      .warn('client playback health');
+    res.status(204).end();
+    return;
+  }
+
+  const fields: Record<string, unknown> = {
+    operation: report.operation ?? 'unknown',
+    ...correlation,
+  };
   const errShape = {
     name: report.errorName ?? 'Error',
-    message: report.message,
+    message: report.message ?? 'unspecified client error',
     ...(report.stack ? { stack: report.stack } : {}),
   };
 

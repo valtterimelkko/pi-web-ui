@@ -516,6 +516,56 @@ conventional `error` object carries name/message/bounded stack, and
 absent — a global-handler report legitimately carries no session
 correlation.
 
+### Playback health (P13 gap fill — the lane that never played what it accepted)
+
+A crash is only half of "why didn't I hear it?". The other half is a lane
+that **accepted audio and never played it** — stranded or dropped speech, which
+is what the operator hears as a sentence that stops or as two sentences on top
+of each other. That used to live only in the surface's memory: the browser ring
+is manual-only and dies with the tab, and the pipeline's faults and stats never
+left the page at all. They now ride the SAME bounded upload and the SAME
+`ClientVoice` component as the client error reports — no second store, no new
+query surface:
+
+```bash
+# Recent playback-health records, newest last:
+curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/diagnostics?component=ClientVoice&limit=50"
+
+# Just the lane outcomes (one record per lane that accepted any audio):
+curl -s … "http://localhost/api/v1/diagnostics?component=ClientVoice&limit=200" \
+  | jq '.recentLogs[] | select(.operation == "playback_health" and .reason == "lane_end")'
+```
+A playback-health record's `msg` is `client playback health`, `level` is
+**`warn`** (not `info`: info records are namespace-filtered, and this evidence
+must always reach the ring), `operation` is `playback_health`, and `reason` is
+one of `playback_chunk_corrupt`, `playback_seq_gap`, `playback_overflow` (a
+fault, uploaded the moment it happens) or `lane_end` (the summary, uploaded
+once per period of playback activity). `stats` carries the bounded numbers at
+that moment — `chunksScheduled`, `chunksDropped`, `pendingChunks`, `pendingMs`,
+`queuedMs`, `ducked` — and the usual `runtime` + `workerSessionId` correlation
+is attached when the surface knows it.
+
+**How to read it.** At `lane_end`, `pendingMs` is the audio the lane accepted
+and never played: a lane that played everything reports `pendingMs: 0` with a
+`chunksScheduled` matching what it received, while a non-zero `pendingMs` is
+stranded speech. `chunksDropped` counts what the backlog bound discarded.
+Before this, answering that question required the purpose-built lane lab
+([`VOICE-LANE-LAB.md`](./VOICE-LANE-LAB.md)); now the ordinary production query
+answers it, and the lab remains the instrument for the shape of the schedule
+itself.
+
+What is uploaded is bounded and scrubbed exactly like an error report: `detail`
+is capped at 300 characters and scrubbed client-side and again on entry, every
+statistic is clamped to a finite non-negative integer (the client clamps before
+it sends, so a bad number can never 400 the report), the recent-event context
+is capped at 12 allowlisted entries, and the client caps itself at 20 health
+uploads per page load (a SEPARATE budget from the 10 error uploads, so a long
+lane with faults cannot starve crash reporting). No utterance text, no
+transcript bodies, no cookies, no auth data. The route's schema is strict: an
+unknown field is rejected rather than stored, so transcript content cannot be
+smuggled in beside a health record.
+
 ## Error codes & enrichment
 
 Every Internal API error response has the stable shape `{ error, code }`. Codes
