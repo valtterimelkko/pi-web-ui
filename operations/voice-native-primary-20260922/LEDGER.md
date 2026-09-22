@@ -307,6 +307,7 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-22 22:01 | W1 | **Post-merge full server suite GREEN**: `env -u PI_MAX_SESSIONS -u OPENCODE_ENABLED npm test --workspace=server` → exit 0, **446 files / 5520 tests passed** on `59558aa9` | `/root/voice-lane-lab/w1-postmerge-server-suite.log` |
 | 2026-09-22 22:13 | W1 | Child C `goal_end` (achieved); handback FROZEN (`coordination/C/complete.md`); L still running. C verified independently on frozen `a190ed87`: scoped client suite 381 passed, client build exit 0, typecheck exit 0; **anti-cheat sound** (new suite drives the real VoiceLiveSurface over fake browser factories, asserts `voice_session_start` on the wire, capture goes live, and the cascade is NOT engaged) | C RED evidence verbatim in handback; parent re-ran gates |
 | 2026-09-22 22:16 | W1 | **C merged to master (`5fa309a9`) and pushed**; lease released, watch `ww_2` cancelled, worktree + branch removed. Post-merge client suite + typecheck + build launched in background (`bg_f1aab31a`) | `git log` |
+| 2026-09-22 22:17 | W1 | **Post-merge client gates GREEN** on `f920543e`: client suite **145 files / 1639 tests**, typecheck exit 0, client build exit 0 | `/root/voice-lane-lab/w1-postmerge-client-{suite,typecheck,client-build}.log` |
 
 ### Wave 1 dispatch record (2026-09-22 21:12Z)
 
