@@ -97,7 +97,7 @@ heavy browser/audio runner** exists at a time (conductor-owned). Cap concurrent 
 | P0 baseline + RED | **passed (G0)** | baseline `fa1eb393`; evidence commit `57efe420` | `phase0/PHASE0-RED.md` (+ raw logs), `ACCEPTANCE-MANIFEST.md` |
 | P1 instrumentation | running (Child L) | branch `task/voice-native-lab` from `57efe420` | `children/L/brief.md`; handback `/root/voice-native-20260922/coordination/L/` |
 | P2 native primary surface | running (Child C) | branch `task/voice-native-client` | `children/C/brief.md`; handback `…/C/` |
-| P3 relay/approval fidelity | running (Child H) | branch `task/voice-native-host` | `children/H/brief.md`; handback `…/H/` |
+| P3 relay/approval fidelity | **server half passed** (Child H verified + merged `8f27fd98`); full G3 pending client/browser integration | branch `task/voice-native-host` (removed) | `children/H/`; handback `/root/voice-native-20260922/coordination/H/`; PHASE0 seeds now green |
 | P4 pilot + fix loop | not started | — | — |
 | P5 comparison + verdict | not started | — | — |
 
@@ -301,6 +301,9 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-22 21:09 | W0 | Phase 0 RED probe run at baseline `fa1eb393`: 4 defects confirmed (punctuation-free strip, correction accumulation, original-wording loss, async source binding); casual-yes already green | `phase0/PHASE0-RED.md`, raw logs; commit `57efe420` |
 | 2026-09-22 21:10 | W0 | Acceptance manifest frozen; three worktrees created from `57efe420` with nested-node_modules isolation verified (zod 3.25.76; 49/49 smoke) | `ACCEPTANCE-MANIFEST.md`; `git worktree list` |
 | 2026-09-22 21:12 | W1 | Children L/C/H created goal-armed on `zai/glm-5.3-flash` high; binding verified; watches `ww_1`/`ww_2`/`ww_3` registered BEFORE dispatch; briefs delivered as `follow_up` | sessions `01a0caf6-943c-…` (L), `01a0caf6-9844-…` (C), `01a0caf6-9c9f-…` (H); leases `ee53d6a8…`, `5377dcd6…`, `4687bf27…` |
+| 2026-09-22 21:57 | W1 | Child H `goal_end` (achieved); handback FROZEN (`coordination/H/complete.md` + evidence). All three children reconciled: L and C still running. Backstop deadline fired (time-up, not failure) | H commits `2da74aae` + `1cd88013`; tree clean |
+| 2026-09-22 21:59 | W1 | **H independently verified** on the frozen commit: scoped suite 57 files/900 passed; typecheck exit 0; lint 0 errors (311 warnings); **parent probe 12/12 green** (the Phase 0 seeds, written before H started). Boundary amendment **accepted**: two integration test files under `tests/unit/voice/**` adapted to corrected semantics (assertions strengthened; M6 gained a refusal check) | gate logs in session; H evidence files |
+| 2026-09-22 22:02 | W1 | **H merged to master (`8f27fd98`) and pushed**; docs-link defect fixed first (`5d16dbb5`); lease released, watch `ww_3` cancelled, worktree + branch removed. Post-merge full server suite launched in background (`bg_e5f17332`) | `git log`; `wake_deadline` re-armed `deadline-86220e10…` for the L+C window |
 
 ### Wave 1 dispatch record (2026-09-22 21:12Z)
 

@@ -7,7 +7,7 @@
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W0 complete (G0 passed) · **W1 running** — three children active.
+**Wave:** W0 complete (G0 passed) · **W1 running** — H merged and cleaned up; L and C still active.
 
 **Active children**
 
@@ -15,31 +15,29 @@
 |---|---|---|---|---|---|
 | L lab | `01a0caf6-943c-73f0-b149-c1154832eb5d` | `wt-voice-lab` · `task/voice-native-lab` | `ee53d6a8…` | `ww_1_1790111565332` | running (goal armed) |
 | C client | `01a0caf6-9844-73f0-b149-c1177fcd57a2` | `wt-voice-client` · `task/voice-native-client` | `5377dcd6…` | `ww_2_1790111565360` | running (goal armed) |
-| H host | `01a0caf6-9c9f-73f0-b149-c118b03a5f7d` | `wt-voice-host` · `task/voice-native-host` | `4687bf27…` | `ww_3_1790111565415` | running (goal armed) |
+| ~~H host~~ | `01a0caf6-9c9f-…` | ~~`wt-voice-host`~~ | released | `ww_3` cancelled | **merged `8f27fd98`, cleaned up** |
 
 All three: `zai/glm-5.3-flash` high · briefs at `children/<X>/brief.md` · handbacks
 `/root/voice-native-20260922/coordination/<X>/complete.md`.
 
 **Current truth**
 
-- master `564efcc5` (= origin) holds Phase 0 evidence, acceptance manifest and briefs; worktrees
-  based on `57efe420`.
-- **Phase 0 RED confirmed 4 defects** (punctuation-free relay strip, correction accumulation,
-  original-wording loss, async source binding); **casual-yes already green** (regression control).
-- Sibling lineage settled (SDK bump `41c60d8a`, tree clean); merge authority granted for accepted,
-  verified lanes.
-- zai pool ample (off-peak) at preflight; contract 1.44.0; capacity healthy.
+- master `8f27fd98` (= origin): Phase 0 evidence + acceptance manifest + briefs + **H's Phase 3 server half merged**. H verified: scoped suite 900 passed, typecheck 0, lint 0 errors, parent probe 12/12.
+- Post-merge full server suite running in background (`bg_e5f17332`); completion wake will arrive.
+- L and C still working (goal running); their handbacks not yet written.
+- Sibling lineage settled; merge authority granted for accepted, verified lanes.
+- zai pool ample at preflight; contract 1.44.0.
 
 **Next sequence**
 
-1. On wake: reconcile all three children (goal state, receipts, handback), independently verify
-   gates G1/G2/G3 on frozen commits, then merge accepted lanes (Q1) and clean up.
-2. Open W2: children P (provider profiles for standard vs ET-HIGH) and J (primary-mic journey +
-   campaign runner) after W1 merges; parent integration gates between.
+1. On wake (L/C handback, bg suite completion, or deadline): reconcile L and C, independently verify
+   G1/G2 on frozen commits, merge accepted lanes, clean up.
+2. Then open W2: children P (provider profiles for standard vs ET-HIGH) and J (primary-mic journey +
+   campaign runner); parent integration gates between.
 3. Then W3 fix loop (parent-led, bounded corrections) → W4 campaign + read-only reviewer + verdict.
 
 **Open questions:** none.
-**Spend:** US$0.00 / 8 h live (GLM child tokens are inside the zai subscription allowance; counted at
-review).
+**Spend:** US$0.00 / 8 h live (GLM child tokens inside zai allowance; counted at review).
 
-**Backstop:** `wake_deadline` armed for this waiting window (recorded at arm time).
+**Backstops:** `wake_deadline` `deadline-86220e10-564d-436f-be3e-1157ceb1d47a` until 22:45:19Z;
+`bg_e5f17332` (post-merge full server suite) will wake on completion.
