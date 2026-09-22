@@ -104,7 +104,8 @@ describe('the ingress instrument', () => {
     expect(INGRESS_INSTRUMENT_SCRIPT).toContain('createMediaStreamSource');
     expect(INGRESS_INSTRUMENT_SCRIPT).toContain('onaudioprocess');
     expect(INGRESS_INSTRUMENT_SCRIPT).toContain("voice_audio_chunk");
-    expect(INGRESS_INSTRUMENT_SCRIPT).toContain('sampleRate: parsed.sampleRate');
+    expect(INGRESS_INSTRUMENT_SCRIPT).toContain('parsed.data');
+    expect(INGRESS_INSTRUMENT_SCRIPT).toContain('sampleRate: 16000');
   });
 
   it('carries the labelled synthetic-stream-source helper for adaptive steps', () => {

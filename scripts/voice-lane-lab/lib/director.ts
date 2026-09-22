@@ -44,17 +44,24 @@ export interface SlotVerdict {
   reasons: string[];
 }
 
-/** Deterministic slot/constraint check of a candidate payload against an episode's slots. */
+/** Deterministic slot/constraint check of a candidate payload against an episode's slots.
+ *  Entries may declare alternates "hotfix|hot fix" — any alternative satisfies. */
 export function checkSlots(payloadText: string, slots: EpisodeExpectedSlots): SlotVerdict {
   const payload = normaliseUtterance(payloadText);
   const reasons: string[] = [];
-  for (const required of slots.mustContain) {
-    if (!payload.includes(normaliseUtterance(required))) {
-      reasons.push(`missing required content: "${required}"`);
+  const matchesAny = (entry: string): boolean =>
+    entry
+      .split('|')
+      .some((alt) => payload.includes(normaliseUtterance(alt)));
+  for (const entry of slots.mustContain) {
+    if (!matchesAny(entry)) {
+      reasons.push(`missing required content: "${entry}"`);
     }
   }
   for (const forbidden of slots.mustNotContain) {
-    if (payload.includes(normaliseUtterance(forbidden))) {
+    if (forbidden
+      .split('|')
+      .every((alt) => payload.includes(normaliseUtterance(alt)))) {
       reasons.push(`forbidden content present: "${forbidden}"`);
     }
   }

@@ -27,7 +27,6 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSy
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   createAttempt,
@@ -603,9 +602,9 @@ export async function runCaptureProof(
       browserContext = null;
     }
     cleanup.browserClosed = true;
-    if (viteProcess) {
+    if (viteProcess?.pid) {
       try {
-        process.kill(-viteProcess.pid!, 'SIGTERM');
+        process.kill(-viteProcess.pid, 'SIGTERM');
       } catch {
         /* already gone */
       }
@@ -657,9 +656,9 @@ export async function runCaptureProof(
     // Best-effort teardown so a failed run never leaves children behind.
     if (browserContext) await browserContext.close().catch(() => {});
     cleanup.browserClosed = true;
-    if (viteProcess) {
+    if (viteProcess?.pid) {
       try {
-        process.kill(-viteProcess.pid!, 'SIGTERM');
+        process.kill(-viteProcess.pid, 'SIGTERM');
       } catch {
         /* gone */
       }

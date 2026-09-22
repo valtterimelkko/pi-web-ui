@@ -20,7 +20,7 @@
     {
       "id": "t1",
       "kind": "opening",
-      "text": "Relay to worker restart the payment service.",
+      "text": "Relay to worker, restart the payment service.",
       "requiredWords": [
         "relay",
         "worker",
@@ -40,7 +40,7 @@
     {
       "id": "t3",
       "kind": "adaptive-repeat",
-      "text": "Relay to worker restart the payment service.",
+      "text": "Relay to worker, restart the payment service.",
       "requiredWords": [
         "relay",
         "worker",

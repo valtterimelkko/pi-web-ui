@@ -33,10 +33,11 @@
     {
       "id": "t2",
       "kind": "adaptive-confirm",
-      "text": "Yes, send it.",
+      "text": "Yes, send it now.",
       "requiredWords": [
         "yes",
-        "send"
+        "send",
+        "now"
       ]
     }
   ],

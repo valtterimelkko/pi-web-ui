@@ -15,17 +15,19 @@
  * manifests and with every attempt record that uses them.
  */
 
+import { readFileSync } from 'node:fs';
+
 import {
   createWhisperAsrClient,
   synthesiseFixtures,
   verifyFixture,
-  verifyFixtureManifest,
   verifyFixtureSet,
   type AsrClient,
   type AsrResult,
   type FixtureManifest,
   type FixtureSpec,
   type FixtureSetVerification,
+  type SynthesisedFixture,
 } from '../../voice-live-lab/lib/fixtures.js';
 import type { LoadedCorpus } from './corpus.js';
 
@@ -104,23 +106,70 @@ export interface VoiceProfileBuild {
   verification: FixtureSetVerification;
 }
 
-/** Synthesise + validate one voice profile over the corpus wording. */
+/** Synthesise + validate one voice profile over the corpus wording.
+ *
+ * Supertonic sampling is not deterministic: one bad sample of a perfectly
+ * good sentence is an instrument artefact, not corpus damage. Each fixture
+ * therefore gets up to `maxAttempts` synthesis attempts (plan §10: at most
+ * two infrastructure retries per cell); a fixture still failing after that
+ * is INVALID and the build reports it honestly.
+ */
 export async function buildVoiceProfile(
   profile: VoiceProfile,
   corpus: LoadedCorpus,
-  options: { outDir: string; whisperBaseUrl: string; log?: (line: string) => void }
+  options: { outDir: string; whisperBaseUrl: string; maxAttempts?: number; log?: (line: string) => void }
 ): Promise<VoiceProfileBuild> {
   const log = options.log ?? (() => {});
+  const maxAttempts = options.maxAttempts ?? 3;
   const specs = utteranceSpecsFromCorpus(corpus);
-  const manifest = await synthesiseFixtures({
-    outDir: options.outDir,
-    specs,
-    voice: profile.supertonic.voice,
-    model: profile.supertonic.model,
-    synthesis: { speed: profile.supertonic.speed, silence: profile.supertonic.silence, steps: profile.supertonic.steps },
-    log,
-  });
   const asr = createWhisperAsrClient({ baseUrl: options.whisperBaseUrl });
-  const verification = await verifyFixtureSet(manifest, { asr });
-  return { profileId: profile.id, manifest, manifestPath: `${options.outDir}/manifest.json`, verification };
+  const synthesis = { speed: profile.supertonic.speed, silence: profile.supertonic.silence, steps: profile.supertonic.steps };
+
+  const kept = new Map<string, SynthesisedFixture>();
+  const transcripts = new Map<string, Awaited<ReturnType<AsrClient>>>();
+  let pending = specs;
+  let manifest: FixtureManifest | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts && pending.length > 0; attempt += 1) {
+    const pass = await synthesiseFixtures({
+      outDir: options.outDir,
+      specs: pending,
+      voice: profile.supertonic.voice,
+      model: profile.supertonic.model,
+      synthesis,
+      log,
+    });
+    manifest = pass;
+    const nextPending: FixtureSpec[] = [];
+    for (const spec of pending) {
+      const fixture = pass.fixtures.find((candidate) => candidate.id === spec.id);
+      if (!fixture) {
+        nextPending.push(spec);
+        continue;
+      }
+      const result: AsrResult = await asr(readFileSync(fixture.pcm16kPath));
+      const verdict = verifyFixture(
+        { id: spec.id, text: spec.text, requiredWords: spec.requiredWords ?? [] },
+        result
+      );
+      if (verdict.ok) {
+        kept.set(spec.id, fixture);
+        transcripts.set(spec.id, result);
+      } else {
+        log(`fixture ${spec.id} failed ASR on attempt ${attempt}: ${verdict.reason}`);
+        nextPending.push(spec);
+      }
+    }
+    pending = nextPending;
+  }
+
+  if (!manifest) throw new Error('no synthesis pass completed');
+  const finalManifest: FixtureManifest = {
+    ...manifest,
+    fixtures: specs
+      .map((spec) => kept.get(spec.id))
+      .filter((fixture): fixture is SynthesisedFixture => fixture !== undefined),
+  };
+  const verification = await verifyFixtureSet(finalManifest, { asr });
+  return { profileId: profile.id, manifest: finalManifest, manifestPath: `${options.outDir}/manifest.json`, verification };
 }
