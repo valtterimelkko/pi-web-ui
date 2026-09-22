@@ -944,6 +944,75 @@ describe('Phase 3 — source-turn binding (RED-5)', () => {
     expect(((created[0] as { proposal?: { sourceUtteranceId?: number } }).proposal)?.sourceUtteranceId).toBe(3);
   });
 
+  it('RACE (a): a delayed call after a correction binds the corrected utterance, not the original', async () => {
+    const service = new FakeService();
+    const sent: Sent[] = [];
+    const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
+    await startLane(mount, sent, service);
+    utterance(service, 'check the build'); // utterance 1 — superseded
+    await flush();
+    utterance(service, 'check the build but do not deploy'); // utterance 2 — the correction
+    await flush();
+    // The tool call lands AFTER the correction: provenance follows the
+    // corrected words (containment: 3/7 tokens vs u1 is below the floor).
+    const response = await relayAt(mount, 'check the build but do not deploy', 3);
+    expect(response).toMatchObject({ ok: true, status: 'awaiting_operator_approval' });
+    const created = sent.find((f) => f.type === 'proposal_created') as {
+      proposal?: { sourceUtteranceId?: number; original?: string };
+    };
+    expect(created?.proposal?.sourceUtteranceId).toBe(2);
+    expect(created?.proposal?.original).toBe('check the build but do not deploy');
+  });
+
+  it('RACE (b): an attachment-generation change strands pre-bump provenance — the relay refuses, never binds stale', async () => {
+    const service = new FakeService();
+    const sent: Sent[] = [];
+    const evidence: Array<Record<string, unknown>> = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+    });
+    await startLane(mount, sent, service);
+    utterance(service, 'check the tests.'); // generation 1 provenance
+    await flush();
+
+    // The lane rebinds at generation 2 (worker switch / reattach): a fresh
+    // lane record, an empty provenance window.
+    const code = await mount.route(
+      'client-1',
+      { send: (message) => sent.push(message as unknown as Sent) },
+      {
+        type: 'voice_session_start',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION + 1,
+        workerSessionId: 'worker-1',
+      } as never
+    );
+    expect(code).toBeNull();
+
+    // The delayed call from the OLD generation arrives: it can no longer be
+    // tied to anything the operator said on THIS attachment — it refuses.
+    const response = await relayAt(mount, 'check the tests.', 3);
+    expect(response).toMatchObject({ ok: false, reason: 'unbound_source' });
+    expect(sent.filter((f) => f.type === 'proposal_created')).toHaveLength(0);
+    const refusal = evidence.find((event) => event.event === 'relay_tool_call_refused');
+    expect(refusal?.reason).toBe('unbound_source');
+
+    // The new attachment works normally: fresh words, bound relay.
+    utterance(service, 'check the tests.', GENERATION + 1);
+    await flush();
+    const ok = await relayAt(mount, 'check the tests.', 4);
+    expect(ok).toMatchObject({ ok: true, status: 'awaiting_operator_approval' });
+    const created = sent.filter((f) => f.type === 'proposal_created');
+    expect(created).toHaveLength(1);
+    // The new attachment restarts its provenance counter: the first post-bump
+    // utterance is id 1 ON THIS GENERATION (no stale ids carried over).
+    expect(((created[0] as { proposal?: { sourceUtteranceId?: number } }).proposal)?.sourceUtteranceId).toBe(1);
+  });
+
   it('parks with the bound source and promotes carrying the operator original', async () => {
     const service = new FakeService();
     const sent: Sent[] = [];
