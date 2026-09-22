@@ -94,10 +94,10 @@ heavy browser/audio runner** exists at a time (conductor-owned). Cap concurrent 
 
 | Phase | Status | Commit/build identity | Evidence pointer |
 |---|---|---|---|
-| P0 baseline + RED | not started | — | — |
-| P1 instrumentation | not started | — | — |
-| P2 native primary surface | not started | — | — |
-| P3 relay/approval fidelity | not started | — | — |
+| P0 baseline + RED | **passed (G0)** | baseline `fa1eb393`; evidence commit `57efe420` | `phase0/PHASE0-RED.md` (+ raw logs), `ACCEPTANCE-MANIFEST.md` |
+| P1 instrumentation | running (Child L) | branch `task/voice-native-lab` from `57efe420` | `children/L/brief.md`; handback `/root/voice-native-20260922/coordination/L/` |
+| P2 native primary surface | running (Child C) | branch `task/voice-native-client` | `children/C/brief.md`; handback `…/C/` |
+| P3 relay/approval fidelity | running (Child H) | branch `task/voice-native-host` | `children/H/brief.md`; handback `…/H/` |
 | P4 pilot + fix loop | not started | — | — |
 | P5 comparison + verdict | not started | — | — |
 
@@ -298,6 +298,19 @@ _(empty — execution not started; owner goal activation is the start signal)_
 |---|---|---|---|
 | 2026-09-22 20:05 | — | Ledger authored from plan + board + quota + repo reconnaissance | `READY, NOT STARTED`; awaiting owner goal activation |
 | 2026-09-22 ~20:20 | W0 | Owner activated goal engine; Q1 merge granted, Q2 plan confirmed; ledger/STATE updated | `EXECUTING`; Phase 0 begins |
+| 2026-09-22 21:09 | W0 | Phase 0 RED probe run at baseline `fa1eb393`: 4 defects confirmed (punctuation-free strip, correction accumulation, original-wording loss, async source binding); casual-yes already green | `phase0/PHASE0-RED.md`, raw logs; commit `57efe420` |
+| 2026-09-22 21:10 | W0 | Acceptance manifest frozen; three worktrees created from `57efe420` with nested-node_modules isolation verified (zod 3.25.76; 49/49 smoke) | `ACCEPTANCE-MANIFEST.md`; `git worktree list` |
+| 2026-09-22 21:12 | W1 | Children L/C/H created goal-armed on `zai/glm-5.3-flash` high; binding verified; watches `ww_1`/`ww_2`/`ww_3` registered BEFORE dispatch; briefs delivered as `follow_up` | sessions `01a0caf6-943c-…` (L), `01a0caf6-9844-…` (C), `01a0caf6-9c9f-…` (H); leases `ee53d6a8…`, `5377dcd6…`, `4687bf27…` |
+
+### Wave 1 dispatch record (2026-09-22 21:12Z)
+
+| Child | Session id | Worktree · branch | Lease (ownerId) | Watch | Brief runId (follow_up) |
+|---|---|---|---|---|---|
+| L lab | `01a0caf6-943c-73f0-b149-c1154832eb5d` | `/root/pi-web-ui-wt-voice-lab` · `task/voice-native-lab` | `ee53d6a8-dd20-478c-9d83-1a109c2ee1e0` (`voice-native-20260922-lab`) | `ww_1_1790111565332` | `a5b222bc-7473-4823-a0eb-07f203f5b300` |
+| C client | `01a0caf6-9844-73f0-b149-c1177fcd57a2` | `/root/pi-web-ui-wt-voice-client` · `task/voice-native-client` | `5377dcd6-a992-4ee9-a980-11a5b8ee63d9` (`voice-native-20260922-client`) | `ww_2_1790111565360` | `896d8e9c-bca6-45ed-ae5b-d716de61c57f` |
+| H host | `01a0caf6-9c9f-73f0-b149-c118b03a5f7d` | `/root/pi-web-ui-wt-voice-host` · `task/voice-native-host` | `4687bf27-a4d7-412e-b3a5-93a425894f39` (`voice-native-20260922-host`) | `ww_3_1790111565415` | `e45bded5-9b5d-4707-8395-16fbf622e0a0` |
+
+Preflight snapshot: `children/preflight-model-zai-*.json`, `children/preflight-capacity-*.json`, `children/preflight-provider-usage-*.txt`.
 
 **Spend ledger:** 0 entries; running total US$0.00 / 8 h live.
 
