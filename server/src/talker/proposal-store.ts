@@ -311,6 +311,28 @@ export class UtteranceLog {
   }
 }
 
+/**
+ * Phase 3 — the mechanical correction predicate: does `newText` re-state
+ * `heldText`? True when one normalised text is the HEAD of the other — the
+ * operator re-spoke the whole instruction (extended or shortened), which is
+ * the only editing gesture voice has. Punctuation, case and spacing are
+ * ignored; a shared prefix shorter than the whole held text is NOT a
+ * restatement (that is unrelated composition, which still appends — §4.2).
+ */
+export function isDraftRestatement(heldText: string, newText: string): boolean {
+  const held = normaliseForRestatement(heldText);
+  const next = normaliseForRestatement(newText);
+  if (!held || !next) return false;
+  return held.startsWith(next) || next.startsWith(held);
+}
+
+function normaliseForRestatement(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}']+/gu, ' ')
+    .trim();
+}
+
 export class PendingProposalStore {
   /**
    * The operator's draft (§4.2). Held by object reference; never expires;
@@ -375,9 +397,15 @@ export class PendingProposalStore {
   }
 
   /**
-   * Append an operator utterance to the draft. Accumulates — never replaces:
-   * a second utterance holds both (supersession is loud, §4.2). Appending is
-   * fresh operator engagement, so it re-arms the confirmation window.
+   * Append an operator utterance to the draft. Appending is the default (§4.2
+   * supersession: an unrelated second instruction holds both). Phase 3: when
+   * the new utterance RE-STATES the held draft — its whole normalised text is
+   * the head of the new one, or vice versa — it REPLACES the draft instead
+   * (plan: corrections replace the failed attempt, never concatenate with
+   * it; corpus C17). Nothing is lost by the replacement: the old text is
+   * contained in the new. Either way this is fresh operator engagement, so it
+   * re-arms the confirmation window, and every append moves the proposal's
+   * identity — a repeat after a cancel is a NEW approval (C19).
    *
    * P25 — the single choke point of the semi-verbatim relay: the part stores
    * the RELAY text — the operator's own words minus the channel and the
@@ -396,7 +424,10 @@ export class PendingProposalStore {
       : { id: utteranceId, text, turn };
     // Every append moves the proposal: a fresh identity for the fresh bytes.
     this.nextProposalVersion += 1;
-    if (!this.draft) {
+    const held = this.draft;
+    const isCorrection =
+      held !== null && held.utterances.length > 0 && isDraftRestatement(joinDraftText(held.utterances), text);
+    if (!held || held.utterances.length === 0 || isCorrection) {
       this.draft = {
         utterances: [entry],
         createdTurn: turn,
@@ -406,11 +437,11 @@ export class PendingProposalStore {
         version: this.nextProposalVersion,
       };
     } else {
-      this.draft.utterances.push(entry);
-      this.draft.lastTouchedTurn = turn;
-      this.draft.ageTurns = 0;
-      this.draft.needsReConfirmation = false;
-      this.draft.version = this.nextProposalVersion;
+      held.utterances.push(entry);
+      held.lastTouchedTurn = turn;
+      held.ageTurns = 0;
+      held.needsReConfirmation = false;
+      held.version = this.nextProposalVersion;
     }
     return this.snapshotDraft() as DraftSnapshot;
   }

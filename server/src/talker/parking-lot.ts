@@ -21,6 +21,13 @@ export interface ParkedItem {
   createdAt: number;
   /** The verbatim-log utterance the item came from (provenance). */
   sourceUtteranceId: number;
+  /**
+   * Phase 3: the operator's own words the relay was bound to, when known —
+   * carried through promotion so the proposal's original variant preserves
+   * the words the operator actually spoke (independent original retention).
+   * Absent when the host could not bind a source.
+   */
+  original?: string;
 }
 
 /** Thrown by the bulk-promotion trap: batching would defeat per-item consent. */
@@ -62,12 +69,13 @@ export class ParkingLot {
   }
 
   /** Park one item. Returns a copy; ordering is insertion order. */
-  add(input: { text: string; sourceUtteranceId: number; createdAt?: number }): ParkedItem {
+  add(input: { text: string; sourceUtteranceId: number; original?: string; createdAt?: number }): ParkedItem {
     const item: ParkedItem = {
       id: `park-${this.nextId++}`,
       text: input.text,
       createdAt: input.createdAt ?? this.now(),
       sourceUtteranceId: input.sourceUtteranceId,
+      ...(input.original !== undefined ? { original: input.original } : {}),
     };
     this.items.push(item);
     return { ...item };

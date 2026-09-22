@@ -840,6 +840,7 @@ export class HostAuthorityKernel {
           route: input.route,
           sourceUtteranceId: input.sourceUtteranceId,
           tidied: item.text,
+          ...(item.original !== undefined ? { original: item.original } : {}),
           createdTurn: input.createdTurn,
         });
       }

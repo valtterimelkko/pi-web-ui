@@ -160,6 +160,15 @@ const ADDRESSEE = /(?:the\s+worker|it)\b/i;
  *   - anything else ('ask the worker nicely to stop') → no match. The
  *     unknown word might be the operator's real adverb.
  */
+/**
+ * The first-person continuation head: the bare, punctuation-free form speech
+ * actually produces ("ask the worker I want to find out about Podpoint").
+ * Word-bounded, so 'it' / 'is' never match; the contraction forms cover the
+ * common shapes. A first-person clause after the frame head is the operator
+ * QUOTING their own request — channel, not content.
+ */
+const FIRST_PERSON_HEAD = /^\s*i(?:'(?:m|ll|d|ve))?\b/i;
+
 function frameConsumer(verb: 'ask' | 'tell', connectorsKept: boolean): (work: string) => number | null {
   const head = new RegExp(`^${verb}\\s+${ADDRESSEE.source}`, 'i');
   return (work: string): number | null => {
@@ -185,6 +194,15 @@ function frameConsumer(verb: 'ask' | 'tell', connectorsKept: boolean): (work: st
         const ws = /^\s*/.exec(after);
         return base + (ws ? ws[0].length : 0);
       }
+    }
+    // Phase 3 (punctuation-free addressing): a bare FIRST-PERSON continuation
+    // is the operator quoting their request. Anything else ('ask the worker
+    // nicely to stop') is still left untouched — the unknown word might be
+    // the operator's real adverb.
+    const bare = /^\s+\S/.exec(after);
+    if (bare && FIRST_PERSON_HEAD.test(after)) {
+      const ws = /^\s*/.exec(after);
+      return base + (ws ? ws[0].length : 0);
     }
     return null;
   };
@@ -245,6 +263,15 @@ function consumeRelayFrame(work: string): number | null {
   const withSeparator = /^\s*[,:\u2014-]\s*/.exec(after);
   if (withSeparator && /\S/.test(after.slice(withSeparator[0].length))) {
     return headMatch[0].length + withSeparator[0].length;
+  }
+  // Phase 3 (punctuation-free addressing): 'relay to the worker' is complete
+  // addressing on its own — spoken speech has no colon, so ANY non-empty bare
+  // continuation is the content. A bare 'relay to the worker' with no content
+  // is still left untouched: it carries no instruction to relay.
+  const bare = /^\s+\S/.exec(after);
+  if (bare) {
+    const ws = /^\s*/.exec(after);
+    return headMatch[0].length + (ws ? ws[0].length : 0);
   }
   return null;
 }

@@ -75,6 +75,8 @@ import type {
 import { VoiceSessionRouter, mapBridgeEventToServerMessage, KERNEL_OWNED_CLIENT_MESSAGE_TYPES, type VoiceKernelDelegate } from '../voice/voice-router.js';
 import { HostAuthorityKernel } from '../talker/policy-core.js';
 import { classifyOperatorUtterance } from '../talker/utterance-classifier.js';
+import type { UtteranceClass } from '../talker/types.js';
+import { bindRelaySource, type SourceUtterance } from '../talker/source-binding.js';
 import type { Proposal } from '../talker/proposal-store.js';
 import type { ReleaseOutcome } from '../talker/release-store.js';
 import type { DeliveryOutcome, WorkerDelivery } from '../talker/types.js';
@@ -282,23 +284,34 @@ interface LaneRecord {
    */
   lastTalkerFinalText: string;
   /**
+   * The lane's recent FINAL operator utterances, oldest first, bounded — the
+   * candidate stream a `relay_to_worker` tool call is bound through (Phase 3
+   * source-turn binding: provenance by content over this window, never by
+   * position). Approval-channel classes (confirm/cancel) are recorded for
+   * evidence but are never relay-source candidates.
+   */
+  recentOperatorUtterances: LaneOperatorUtterance[];
+  /**
    * The last relay the model handed the host, for the bounded duplicate guard.
    * A live model can emit the same relay twice within a second (observed
    * 2026-09-22 in the vertical slice: two identical parked items 483 ms apart);
    * the harness ignores a repeated identical relay inside a short window so the
    * operator is never shown — or able to approve — the same message twice. It
-   * never changes WHAT the model decides to relay.
+   * never changes WHAT the model decides to relay. Cleared when the held
+   * proposal is cancelled, so an identical re-relay after a cancel creates a
+   * NEW identity and needs a NEW approval (C19) instead of being ignored.
    */
   lastRelay: { text: string; atMs: number } | null;
-  /**
-   * The last FINAL operator transcript. The host keeps it so a
-   * `relay_to_worker` tool call can be tied to the operator's own utterance
-   * (provenance, and the source id for the parked/proposed item). The harness
-   * no longer CLASSIFIES this text into "relay" — the model's tool call is the
-   * only relay signal (owner directive, 2026-09-22).
-   */
-  lastOperatorFinalText: string;
 }
+
+/** One recorded final operator utterance (bounded lane history). */
+interface LaneOperatorUtterance extends SourceUtterance {
+  utteranceClass: UtteranceClass;
+  atMs: number;
+}
+
+/** Hard bound on the lane's operator-utterance candidate window. */
+const MAX_OPERATOR_UTTERANCE_HISTORY = 8;
 
 interface LaneBinding {
   clientId: string;
@@ -706,7 +719,7 @@ export class VoiceLiveMount {
       operatorSpeechActive: false,
       talkerAudioUntilMs: 0,
       lastTalkerFinalText: '',
-      lastOperatorFinalText: '',
+      recentOperatorUtterances: [],
       lastRelay: null,
     });
     return null;
@@ -941,6 +954,10 @@ export class VoiceLiveMount {
     const proposal = this.kernel.proposals.get(proposalId);
     if (!proposal || proposal.laneId !== lane.laneId) return 'voice_proposal_stale';
     this.kernel.proposals.cancel(proposalId);
+    // C19: the held relay is released with the cancel — an identical re-relay
+    // after an explicit cancel must create a NEW identity, not be ignored as a
+    // duplicate emission.
+    lane.lastRelay = null;
     this.metrics.recordVoiceProposalReconciled();
     this.sendResolved(lane.laneId, proposalId, 'cancelled', undefined, requestId);
     this.evidence({
@@ -1457,10 +1474,21 @@ export class VoiceLiveMount {
       return;
     }
     try {
-      // Provenance for a model relay: the operator's own last final words. The
-      // model's `relay_to_worker` call is tied to this utterance; the harness
-      // does not decide whether it IS a relay.
-      lane.lastOperatorFinalText = text;
+      // Provenance for a model relay: every final operator utterance is
+      // recorded with its stable id and class (bounded window) BEFORE the
+      // gate sees it, so the ids the binding uses are the ids the gate logs.
+      // The model's `relay_to_worker` call is tied to one of these by content;
+      // the harness does not decide whether a transcript IS a relay.
+      const utteranceId = (lane.utteranceSeq += 1);
+      lane.recentOperatorUtterances.push({
+        id: utteranceId,
+        text,
+        utteranceClass: classifyOperatorUtterance(text),
+        atMs: event.atMs,
+      });
+      if (lane.recentOperatorUtterances.length > MAX_OPERATOR_UTTERANCE_HISTORY) {
+        lane.recentOperatorUtterances.splice(0, lane.recentOperatorUtterances.length - MAX_OPERATOR_UTTERANCE_HISTORY);
+      }
       await this.handleOperatorUtterance(event.laneId, text, event.atMs);
     } catch (error) {
       this.evidence({
@@ -1542,7 +1570,24 @@ export class VoiceLiveMount {
     const existing = lane.presentations.get(live.id);
     if (existing?.completed === true) return;
     const variant = this.readBackVariant(text, live);
-    if (variant === null) return;
+    if (variant === null) {
+      // Phase 3: an audible near-miss is recorded as a GLOSS. It completes
+      // nothing — the release gate stays shut until the exact candidate bytes
+      // have been spoken (or the typed card path reports presentation).
+      if (
+        tokenOverlap(live.tidied, text) >= SPOKEN_READBACK_OVERLAP ||
+        (live.original !== live.tidied && tokenOverlap(live.original, text) >= SPOKEN_READBACK_OVERLAP)
+      ) {
+        this.evidence({
+          event: 'spoken_read_back_gloss',
+          laneId: lane.laneId,
+          proposalId: live.id,
+          chars: text.length,
+          atMs,
+        });
+      }
+      return;
+    }
     lane.presentations.set(live.id, { completed: true, presentedVariant: variant });
     this.kernel.proposals.present(live.id, variant);
     this.evidence({
@@ -1554,12 +1599,18 @@ export class VoiceLiveMount {
     });
   }
 
-  /** Which variant (if any) a talker utterance reads back, by token overlap. */
+  /**
+   * Which variant (if any) a talker utterance reads back. Phase 3: EXACT
+   * bytes — the candidate's token sequence appears contiguously in the spoken
+   * tokens (intent §18.2: the actual bytes were spoken, not merely
+   * summarised). The old ≥0.6 token overlap let a gloss complete the
+   * presentation and release bytes the operator never heard.
+   */
   private readBackVariant(text: string, proposal: Proposal): VoiceProposalVariant | null {
-    if (tokenOverlap(proposal.tidied, text) >= SPOKEN_READBACK_OVERLAP) return 'tidied';
+    if (spokenContainsCandidate(text, proposal.tidied)) return 'tidied';
     if (
       proposal.original !== proposal.tidied &&
-      tokenOverlap(proposal.original, text) >= SPOKEN_READBACK_OVERLAP
+      spokenContainsCandidate(text, proposal.original)
     ) {
       return 'original';
     }
@@ -1641,11 +1692,44 @@ export class VoiceLiveMount {
           note: 'That exact relay is already held; nothing new was created.',
         };
       }
+      // Phase 3 — source-turn binding: the tool call is a delayed callback, so
+      // provenance is bound by CONTENT over the lane's recent final operator
+      // utterances (approval-channel classes excluded), never by position. An
+      // ambiguous or unprovable source REFUSES: no proposal, no park, an honest
+      // tool response and evidence (plan: "it never guesses a source").
+      // lastRelay is set only AFTER a successful binding, so a refused relay
+      // consumes nothing — including its slot in the duplicate window.
+      const candidates = lane.recentOperatorUtterances
+        .filter((u) => u.utteranceClass !== 'confirm' && u.utteranceClass !== 'cancel')
+        .map((u) => ({ id: u.id, text: u.text }));
+      const binding = bindRelaySource(text, candidates);
+      if (binding.kind !== 'bound') {
+        const reason = binding.kind === 'ambiguous' ? 'ambiguous_source' : 'unbound_source';
+        this.evidence({
+          event: 'relay_tool_call_refused',
+          laneId: lane.laneId,
+          reason,
+          candidateCount: candidates.length,
+          text,
+          atMs: input.atMs,
+        });
+        return {
+          ok: false,
+          reason,
+          note:
+            'The host could not tie this relay to what the operator said. Relay the operator\'s own words from this conversation, or ask them to say it again.',
+        };
+      }
+      const sourceUtteranceId = binding.utterance.id;
+      const sourceText = binding.utterance.text;
       lane.lastRelay = { text, atMs: input.atMs };
-      const sourceUtteranceId = lane.utteranceSeq;
       const busy = await this.isWorkerBusy(lane.workerSessionId).catch(() => false);
       if (busy) {
-        const item = this.kernel.ops.parkItem({ text, sourceUtteranceId });
+        const item = this.kernel.ops.parkItem({
+          text,
+          sourceUtteranceId,
+          ...(sourceText !== undefined ? { original: sourceText } : {}),
+        });
         this.sendParking(lane.laneId, 'added');
         this.evidence({
           event: 'item_parked',
@@ -1667,6 +1751,7 @@ export class VoiceLiveMount {
         route: 'direct_address',
         laneId: lane.laneId,
         tidied: text,
+        ...(sourceText !== undefined ? { original: sourceText } : {}),
         sourceUtteranceId,
         createdTurn: lane.utteranceSeq,
       });
@@ -1684,7 +1769,8 @@ export class VoiceLiveMount {
       return {
         ok: true,
         status: 'awaiting_operator_approval',
-        note: 'The host will show this to the operator for approval; nothing has been sent yet. Do not claim it was sent.',
+        note:
+          'The host will show this to the operator for approval; nothing has been sent yet. Do not claim it was sent. Read the exact text back to the operator verbatim before asking for approval.',
       };
     }
 
@@ -1841,7 +1927,7 @@ export class VoiceLiveMount {
   private async handleOperatorUtterance(laneId: string, text: string, atMs: number): Promise<void> {
     const lane = this.lanes.get(laneId);
     if (!lane) return;
-    const utteranceId = (lane.utteranceSeq += 1);
+    const utteranceId = lane.utteranceSeq;
     const utteranceClass = classifyOperatorUtterance(text);
     this.evidence({
       event: 'operator_utterance',
@@ -1883,6 +1969,9 @@ export class VoiceLiveMount {
       const live = this.kernel.proposals.live(laneId);
       if (live) {
         this.kernel.proposals.cancel(live.id);
+        // C19: the held relay is released with the cancel — an identical
+        // re-relay after an explicit cancel is a new request, not a duplicate.
+        lane.lastRelay = null;
         this.metrics.recordVoiceProposalReconciled();
         this.sendResolved(laneId, live.id, 'cancelled');
         this.evidence({ event: 'proposal_cancelled', laneId, proposalId: live.id, reason: 'spoken_cancel', atMs });
@@ -1977,13 +2066,32 @@ export function createLogEvidenceSink(
   };
 }
 
-/** Token-overlap support for the spoken read-back match (H3(c)). */
+/** Token-overlap support for echo suspicion and gloss detection (H3(c)/M6). */
 function tokenOverlap(draft: string, spoken: string): number {
   const draftTokens = tokenise(draft);
   if (draftTokens.length === 0) return 0;
   const spokenTokens = new Set(tokenise(spoken));
   const hits = draftTokens.filter((token) => spokenTokens.has(token)).length;
   return hits / draftTokens.length;
+}
+
+/**
+ * Phase 3 — the exact read-back check: the candidate's normalised token
+ * sequence appears CONTIGUOUSLY in the spoken tokens. Order- and content-exact
+ * (STT punctuation/casing variance tolerated); a paraphrase that reorders,
+ * inserts between, or substitutes never matches.
+ */
+function spokenContainsCandidate(spoken: string, candidate: string): boolean {
+  const spokenTokens = tokenise(spoken);
+  const candidateTokens = tokenise(candidate);
+  if (candidateTokens.length === 0 || candidateTokens.length > spokenTokens.length) return false;
+  outer: for (let i = 0; i + candidateTokens.length <= spokenTokens.length; i++) {
+    for (let j = 0; j < candidateTokens.length; j++) {
+      if (spokenTokens[i + j] !== candidateTokens[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
 }
 
 function tokenise(text: string): string[] {
