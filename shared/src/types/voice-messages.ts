@@ -985,12 +985,18 @@ export type VoiceContractAssertions = [
 // ── Server service boundary (the interface Track B implements) ──────────────
 
 /**
- * Declared Live functions (the lab's `TIER1_TOOL_NAMES`). Both can only SUPPRESS
- * a draft candidate or CREATE one that still needs the operator's own
- * confirmation; neither can release, and neither can supply consent or bytes
- * (N1, N8).
+ * Declared Live functions. `read_worker_history` can only READ, and its result
+ * grants nothing. `relay_to_worker` is the ONE text channel into the kernel, and
+ * it can only CREATE a proposal that still needs the operator's own approval —
+ * it cannot release, and it cannot supply consent (N1, N8).
+ *
+ * Added 2026-09-22 under the owner directive that the native talker, not a
+ * regex/classifier in the harness, decides what is a question to it, a question
+ * to the worker, or a prompt to relay. This supersedes the earlier
+ * `mark_addressed_to_talker` / `offer_ask_worker` gate tools, which existed to
+ * let the harness — not the model — make that decision.
  */
-export type VoiceBridgeToolName = 'mark_addressed_to_talker' | 'offer_ask_worker' | 'read_worker_history';
+export type VoiceBridgeToolName = 'relay_to_worker' | 'read_worker_history';
 
 /**
  * Everything the bridge emits. The union is the productised shape of the lab
@@ -1060,14 +1066,14 @@ export interface VoiceBridgeToolCallEvent extends VoiceBridgeEventBase {
   name: VoiceBridgeToolName;
   /**
    * Argument rules are PER TOOL, and deliberately narrow:
-   *   - the two gate tools (`mark_addressed_to_talker`, `offer_ask_worker`) are
-   *     PARAMETERLESS — a call can never carry an arbitrary payload into the
-   *     kernel, and the bridge validates with `hasNoToolArguments` before
-   *     emitting, surfacing a violation instead of forwarding it;
    *   - `read_worker_history` carries exactly one bounded string, `query`, which
    *     can only select WHICH existing history is read back. It has no path to
    *     the gate: the retrieved text is data, and a tool response can authorise
-   *     nothing (N2/N7 untouched).
+   *     nothing.
+   *   - `relay_to_worker` carries exactly one bounded string, `text`, the words
+   *     to place in front of the operator for approval. It creates a candidate
+   *     only: the release predicate still requires the operator's own
+   *     confirmation bound to the presented proposal (N1, N2, N8).
    */
   args: Record<string, unknown>;
   atMs: number;

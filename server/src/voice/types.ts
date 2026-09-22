@@ -287,16 +287,29 @@ export type LiveSessionFactory = (request: LiveConnectRequest) => Promise<LiveSe
 /** The standard conversational seat (D6: no speculative escalation ladder). */
 export const VOICE_PROVIDER_MODEL = 'gemini-3.8-live';
 
-/** The provider's declared functions: the two gate tools are parameterless (contract §6.2). */
+/**
+ * The provider's declared functions. `relay_to_worker` is the ONE tool that
+ * carries the operator's words toward the worker, and it can only create a
+ * proposal the operator must approve; `read_worker_history` can only read.
+ *
+ * 2026-09-22: this replaced the parameterless `mark_addressed_to_talker` /
+ * `offer_ask_worker` gate tools, because the native talker now decides for
+ * itself what is conversation and what is a relay (owner directive).
+ */
 export const VOICE_TOOL_NAMES = [
-  'mark_addressed_to_talker',
-  'offer_ask_worker',
   /**
-   * The one tool that takes an argument, and the only thing it can do is READ:
-   * it asks the host for worker history beyond the standing brief (intent
-   * §19.3 — read-only retrieval of more history than the standing view holds, or
-   * of a specific earlier turn, fixes it properly; enlarging the prompt does
-   * not). It cannot send, hold, confirm or release anything.
+   * The relay: the model hands the host the words to place in front of the
+   * operator for approval. It cannot release, confirm or deliver anything —
+   * the release predicate is unchanged and still requires the operator's own
+   * confirmation bound to the presented proposal (N1, N2, N8).
+   */
+  'relay_to_worker',
+  /**
+   * The one tool that only READS: it asks the host for worker history beyond
+   * the standing brief (intent §19.3 — read-only retrieval of more history than
+   * the standing view holds, or of a specific earlier turn, fixes it properly;
+   * enlarging the prompt does not). It cannot send, hold, confirm or release
+   * anything.
    */
   'read_worker_history',
 ] as const;

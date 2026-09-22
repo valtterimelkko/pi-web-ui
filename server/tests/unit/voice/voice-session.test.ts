@@ -518,10 +518,10 @@ describe('VoiceSessionService transcript mapping', () => {
     const { service, bridges } = createServiceHarness();
     const { events } = collect(service);
     await service.start(startOptions());
-    bridges[0].callbacks.onToolCall?.({ name: 'mark_addressed_to_talker', args: {}, id: 'call-1', atMs: 1 });
-    const toolCall = events.find((event) => event.kind === 'tool_call') as { name: string; args: Record<string, never> };
-    expect(toolCall.name).toBe('mark_addressed_to_talker');
-    expect(toolCall.args).toEqual({});
+    bridges[0].callbacks.onToolCall?.({ name: 'relay_to_worker', args: { text: 'check the tests' }, id: 'call-1', atMs: 1 });
+    const toolCall = events.find((event) => event.kind === 'tool_call') as { name: string; args: Record<string, unknown> };
+    expect(toolCall.name).toBe('relay_to_worker');
+    expect(toolCall.args).toEqual({ text: 'check the tests' });
   });
 });
 
@@ -608,7 +608,7 @@ describe('VoiceSessionService has no delivery capability', () => {
     const { events } = collect(service);
     await service.start(startOptions());
     bridges[0].callbacks.onState?.('live');
-    bridges[0].callbacks.onToolCall?.({ name: 'offer_ask_worker', args: {}, id: 'c1', atMs: 1 });
+    bridges[0].callbacks.onToolCall?.({ name: 'relay_to_worker', args: { text: 'check the tests' }, id: 'c1', atMs: 1 });
     bridges[0].callbacks.onInputTranscription?.('hello', 2);
     bridges[0].callbacks.onTurnComplete?.(3);
     bridges[0].callbacks.onAudioPcm?.(Buffer.alloc(960), 'audio/pcm;rate=24000', 4);

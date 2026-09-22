@@ -1,30 +1,26 @@
-import { useState } from 'react';
 import type { VoiceRuntime } from '@pi-web-ui/shared';
 import { useVoiceLiveLane } from '../../hooks/useVoiceLiveLane';
 import { DriveModeVoiceLive } from './DriveModeVoiceLive';
 
 /**
- * NativeVoiceLane — where the native voice lane lives in the app (M7).
+ * NativeVoiceLane — the live talker, as the main voice lane.
  *
- * The surface (`DriveModeVoiceLive`) was delivered wired to nothing but the dev
- * lab, so the operator could not reach it. This is the mount: one lane for the
- * worker session its Drive Mode surface belongs to, on the app's own socket.
+ * 2026-09-22 (owner directive): the native live model is the talker, so this is
+ * no longer an optional, collapsed second surface. It mounts expanded:
  *
- * Three deliberate choices, all about not damaging the Drive Mode that ships
- * and not lying about what the lane can do:
+ *   - the live surface is the main lane. The operator starts the microphone
+ *     with its own control; nothing is captured or started until they do, so an
+ *     unstarted lane opens no provider session and no microphone.
+ *   - the old collapse disclosure (the "free lane") was removed — it named the
+ *     same model twice.
+ *   - the legacy cascade microphone path remains rendered below as the explicit
+ *     fallback; the lane's own honest `unavailable` state names when it serves.
  *
- *   - it is CLOSED by default. Opening the native lane takes the microphone on
- *     its own explicit control, and a closed lane cannot surprise the operator
- *     with a second capture path competing with the mic they are already using.
- *     The header names what it is, so nothing is hidden behind the disclosure.
- *   - the lane only exists for a runtime the VOICE WIRE serves. The wire's
- *     runtime union is `pi | claude | antigravity` and the server defaults a
- *     missing runtime to `pi`; silently pointing an OpenCode session at the pi
- *     delivery path would mislabel the worker. When the caller knows the
- *     session's runtime is not served, the lane says so instead of guessing.
- *   - a lane that cannot start says so itself (see `DriveModeVoiceLive`): the
- *     surface's honest unavailable state names the host's or the server's own
- *     reason, and a failed start never reaches the rest of this screen.
+ * The lane only exists for a runtime the VOICE WIRE serves. The wire's runtime
+ * union is `pi | claude | antigravity` and the server defaults a missing runtime
+ * to `pi`; silently pointing an OpenCode session at the pi delivery path would
+ * mislabel the worker. When the caller knows the session's runtime is not
+ * served, the lane says so instead of guessing.
  */
 export interface NativeVoiceLaneProps {
   /** The worker session this lane attaches to. */
@@ -43,15 +39,15 @@ export function NativeVoiceLane(props: NativeVoiceLaneProps) {
       <section
         className="mt-4 w-full max-w-md"
         data-testid="native-voice-lane"
-        aria-label="Native voice lane"
+        aria-label="Voice Mode"
         data-runtime-served="false"
       >
         <p
           className="text-[11px] leading-relaxed text-content-muted dark:text-content-muted-dark"
           data-testid="native-voice-lane-runtime-unavailable"
         >
-          Native voice lane is not available for {props.sessionRuntime ?? 'this'} sessions yet. Voice Mode's
-          existing microphone path below is unaffected.
+          Voice Mode's live talker is not available for {props.sessionRuntime ?? 'this'} sessions yet. The fallback
+          dictation path below is unaffected.
         </p>
       </section>
     );
@@ -64,42 +60,27 @@ function NativeVoiceLaneMounted({
   runtime,
   workerLabel,
 }: NativeVoiceLaneProps & { runtime: VoiceRuntime }) {
-  const [open, setOpen] = useState(false);
   const { surface, laneId } = useVoiceLiveLane({ workerSessionId: sessionId, runtime });
 
   return (
     <section
-      className="mt-4 w-full max-w-md"
+      className="w-full max-w-md"
       data-testid="native-voice-lane"
       data-lane-id={laneId}
       data-runtime-served="true"
-      aria-label="Native voice lane"
+      aria-label="Voice Mode live talker"
     >
-      <button
-        type="button"
-        data-testid="native-voice-lane-toggle"
-        aria-expanded={open}
-        className="inline-flex w-full items-center gap-1.5 rounded-lg border border-outline-default dark:border-outline-default-dark px-3 py-2 text-xs font-medium text-content-muted dark:text-content-muted-dark"
-        onClick={() => setOpen((value) => !value)}
+      <DriveModeVoiceLive surface={surface} {...(workerLabel ? { workerLabel } : {})} />
+      {/* The relay contract, taught where the operator speaks (display only: it
+          changes no behaviour and grants nothing). */}
+      <p
+        data-testid="native-voice-lane-hint"
+        className="mt-2 text-center text-[11px] leading-relaxed text-content-muted dark:text-content-muted-dark"
       >
-        {open ? '▾' : '▸'}
-        Native voice lane
-        <span className="ml-auto text-[11px]">{open ? 'Hide' : 'Open'}</span>
-      </button>
-      {!open && (
-        <p
-          className="mt-1.5 text-[11px] text-content-muted dark:text-content-muted-dark"
-          data-testid="native-voice-lane-summary"
-        >
-          One lane for this worker, on this page's own voice protocol. Nothing starts until you open it and press
-          Start listening.
-        </p>
-      )}
-      {open && (
-        <div className="mt-2" data-testid="native-voice-lane-surface">
-          <DriveModeVoiceLive surface={surface} {...(workerLabel ? { workerLabel } : {})} />
-        </div>
-      )}
+        Talk to it freely and ask about the work. To send something to the worker, say{' '}
+        <span className="font-medium">“relay to worker”</span> and then your message — it shows you the words it will
+        send, and nothing goes until you approve.
+      </p>
     </section>
   );
 }

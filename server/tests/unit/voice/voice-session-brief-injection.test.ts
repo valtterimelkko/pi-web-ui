@@ -140,12 +140,12 @@ describe('tool calls the kernel answers', () => {
     expect(events.filter((event) => event.kind === 'tool_call')).toHaveLength(1);
   });
 
-  it('keeps the plain acknowledgement for the gate tools', async () => {
+  it('keeps the plain acknowledgement when the handler answers nothing', async () => {
     const ctx = await liveLane({ toolRequestHandler: () => undefined });
 
     const response = await ctx.bridge().callbacks.onToolCall?.({
-      name: 'offer_ask_worker',
-      args: {},
+      name: 'read_worker_history',
+      args: { query: 'x' },
       id: 'c2',
       atMs: 1,
     } as never);
@@ -175,8 +175,8 @@ describe('tool calls the kernel answers', () => {
     const ctx = await liveLane();
 
     const response = await ctx.bridge().callbacks.onToolCall?.({
-      name: 'mark_addressed_to_talker',
-      args: {},
+      name: 'read_worker_history',
+      args: { query: 'x' },
       id: 'c4',
       atMs: 1,
     } as never);

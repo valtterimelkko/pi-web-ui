@@ -293,7 +293,7 @@ curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice'
 # 3c. What did the live talker SAY, and why did it say it?
 journalctl -u pi-web-ui.service | grep -E "talker_reply|talker_tool_call|worker_brief_injected"
 #   voice-kernel {"event":"talker_reply","excerpt":"…","chars":N}        ← its actual reply
-#   voice-kernel {"event":"talker_tool_call","tool":"offer_ask_worker"}  ← why it asked to confirm
+#   voice-kernel {"event":"talker_tool_call","tool":"relay_to_worker"}  ← why it relayed (the model decided)
 #   voice-kernel {"event":"worker_brief_injected","mode":"full",
 #                 "historyMessages":N,"historyTotal":M,"briefChars":C}     ← what it held
 #   `mode` is the brief policy's decision: `full` (the whole session, under the
@@ -338,6 +338,19 @@ curl -s … "http://localhost/api/v1/diagnostics" | jq '.operational.voice.live.
 #   once per lane at the default log level: `voice live session ready {"model":
 #   "gemini-3.8-live"}` on the `VoiceLive` component, emitted when the provider
 #   reports `setupComplete` — the model is a recorded fact, not an inference.
+
+# 3f. The model-driven relay (2026-09-22): what did the talker relay, and was it approved?
+journalctl -u pi-web-ui.service | grep -E "talker_tool_call|promotion_authorised|item_parked"
+#   voice-kernel {"event":"talker_tool_call","tool":"relay_to_worker"}    ← the model chose to relay
+#   voice-kernel {"event":"promotion_authorised","proposalId":…,"sha256":…,
+#                 "relayTextExcerpt":…,"via":"relay_to_worker"}            ← the candidate shown to the operator
+#   voice-kernel {"event":"item_parked","workerBusy":true,
+#                 "via":"relay_to_worker"}                                  ← the worker was busy; parked
+#   A relay becomes a proposal (idle worker) or a parked item (busy worker). It
+#   reaches the worker only through an explicit operator confirmation, whose own
+#   receipt is the durable record. Ordinary conversation produces NO such line:
+#   the harness no longer classifies transcripts into relay vs conversation —
+#   the model's `relay_to_worker` call is the only relay signal.
 ```
 
 `voiceTurnId` is a plain string match and composes with the existing

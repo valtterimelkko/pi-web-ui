@@ -203,14 +203,17 @@ describe('GeminiLiveBridge connect/setup', () => {
     for (const declaration of declarations) {
       expect(declaration.behavior).toBe('NON_BLOCKING');
       if (declaration.name === 'read_worker_history') {
-        // The single parameterised tool, and its exception is one bounded string.
         expect(Object.keys(declaration.parameters.properties)).toEqual(['query']);
         expect(declaration.parameters.properties.query.type).toBe('STRING');
         expect(declaration.parameters.required).toEqual(['query']);
         continue;
       }
-      expect(declaration.parameters.properties).toEqual({});
-      expect(declaration.parameters.required).toEqual([]);
+      // relay_to_worker: one bounded string, the words to place before the
+      // operator for approval. It carries text but can only create a candidate.
+      expect(declaration.name).toBe('relay_to_worker');
+      expect(Object.keys(declaration.parameters.properties)).toEqual(['text']);
+      expect(declaration.parameters.properties.text.type).toBe('STRING');
+      expect(declaration.parameters.required).toEqual(['text']);
     }
     bridge.close();
   });
@@ -350,22 +353,22 @@ describe('GeminiLiveBridge receive', () => {
   });
 });
 
-// ── Tool calls: the two declared functions, parameterless by construction ───
+// ── Tool calls: the two declared functions, each with one bounded argument ───
 
 describe('GeminiLiveBridge tool calls', () => {
-  it('forwards a declared parameterless call and acknowledges it WHEN_IDLE by default (F-1)', async () => {
+  it('forwards a declared call and acknowledges it WHEN_IDLE by default (F-1)', async () => {
     const { bridge, mock, events } = await connectedBridge();
     mock.emit({
-      toolCall: { functionCalls: [{ name: 'mark_addressed_to_talker', args: {}, id: 'call-1' }] },
+      toolCall: { functionCalls: [{ name: 'relay_to_worker', args: { text: 'check the tests' }, id: 'call-1' }] },
     });
     const call = events.find((event) => event.kind === 'tool_call');
-    expect(call?.payload.name).toBe('mark_addressed_to_talker');
-    expect(call?.payload.args).toEqual({});
+    expect(call?.payload.name).toBe('relay_to_worker');
+    expect(call?.payload.args).toEqual({ text: 'check the tests' });
     await flushToolAcknowledgement();
     const acknowledgement = mock.last().sentToolResponses[0];
     expect(acknowledgement.functionResponses[0]).toMatchObject({
       id: 'call-1',
-      name: 'mark_addressed_to_talker',
+      name: 'relay_to_worker',
       scheduling: 'WHEN_IDLE',
     });
     expect(bridge.usage.toolCalls).toBe(1);
@@ -375,7 +378,7 @@ describe('GeminiLiveBridge tool calls', () => {
   it('honours an explicit SILENT tool-response scheduling override', async () => {
     const { bridge, mock } = await connectedBridge({ toolResponseScheduling: 'SILENT' });
     mock.emit({
-      toolCall: { functionCalls: [{ name: 'offer_ask_worker', args: {}, id: 'call-silent' }] },
+      toolCall: { functionCalls: [{ name: 'read_worker_history', args: { query: '' }, id: 'call-silent' }] },
     });
     await flushToolAcknowledgement();
     expect(mock.last().sentToolResponses[0].functionResponses[0]).toMatchObject({
@@ -396,25 +399,22 @@ describe('GeminiLiveBridge tool calls', () => {
     bridge.close();
   });
 
-  it('refuses a declared function that smuggles arguments, and never forwards or acknowledges it', async () => {
-    const { bridge, mock, events } = await connectedBridge();
-    mock.emit({
-      toolCall: {
-        functionCalls: [{ name: 'offer_ask_worker', args: { text: 'do something' }, id: 'call-3' }],
-      },
-    });
-    expect(events.some((event) => event.kind === 'tool_call')).toBe(false);
-    const error = events.find((event) => event.kind === 'error');
-    expect(error?.payload.code).toBe('voice_internal_error');
-    expect(mock.last().sentToolResponses).toHaveLength(0);
-    expect(bridge.usage.toolCallViolations).toBe(1);
-    bridge.close();
+  it('refuses a declared function whose argument is missing or malformed, and never forwards it', async () => {
+    for (const args of [{}, { text: 42 }, { text: 'x', release: true }]) {
+      const { bridge, mock, events } = await connectedBridge();
+      mock.emit({ toolCall: { functionCalls: [{ name: 'relay_to_worker', args, id: 'call-3' }] } });
+      expect(events.some((event) => event.kind === 'tool_call')).toBe(false);
+      expect(events.find((event) => event.kind === 'error')?.payload.code).toBe('voice_internal_error');
+      expect(mock.last().sentToolResponses).toHaveLength(0);
+      expect(bridge.usage.toolCallViolations).toBe(1);
+      bridge.close();
+    }
   });
 
-  it('refuses a non-empty phantom argument object and an array-shaped args value', async () => {
-    for (const args of [[], { note: 'x' }, 'text']) {
+  it('refuses a non-object argument value', async () => {
+    for (const args of [[], 'text']) {
       const { bridge, mock, events } = await connectedBridge();
-      mock.emit({ toolCall: { functionCalls: [{ name: 'mark_addressed_to_talker', args, id: 'call-x' }] } });
+      mock.emit({ toolCall: { functionCalls: [{ name: 'read_worker_history', args, id: 'call-x' }] } });
       expect(events.some((event) => event.kind === 'tool_call')).toBe(false);
       expect(events.find((event) => event.kind === 'error')?.payload.code).toBe('voice_internal_error');
       bridge.close();

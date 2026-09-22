@@ -335,7 +335,7 @@ describe('mapBridgeEventToServerMessage', () => {
     expect(mapBridgeEventToServerMessage({ kind: 'interrupted', ...base, atMs: 1 })).toMatchObject({ type: 'voice_state' });
     expect(mapBridgeEventToServerMessage({ kind: 'turn_complete', ...base, atMs: 1 })).toBeNull();
     expect(
-      mapBridgeEventToServerMessage({ kind: 'tool_call', ...base, callId: 'c1', name: 'offer_ask_worker', args: {}, atMs: 1 })
+      mapBridgeEventToServerMessage({ kind: 'tool_call', ...base, callId: 'c1', name: 'read_worker_history', args: { query: 'x' }, atMs: 1 })
     ).toBeNull();
   });
 });

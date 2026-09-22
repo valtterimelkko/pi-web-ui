@@ -483,47 +483,58 @@ recorded as a standing instruction to implementing agents.
 
 ## 18. When to relay, and when not
 
-### 18.1 Promotion is explicit, and there are exactly three routes
+### 18.1 Promotion is explicit, and the model decides
+
+> **Operator directive, 2026-09-22 — the model-driven relay.** The native talker
+> is fully conversational and decides for itself whether an utterance is a
+> question to it, a question to the worker, or a prompt to relay. It relays by
+> calling one typed tool, `relay_to_worker(text)`. The harness no longer
+> classifies the transcript into *directed speech* versus *conversation*: the old
+> `isDirectedWorkerInstruction` / commission-frame predicate is **removed**. This
+> supersedes the earlier "the harness decides the route" reading of this section.
 
 A proposal is created only when one of these happens:
 
-1. **The operator addresses the worker.** *"Ask it…"*, *"tell it…"*, *"send…"* —
-   directed speech.
-2. **The operator accepts an offer** the talker made under §18.3.
+1. **The model relays.** It calls `relay_to_worker` with the words to place in
+   front of the operator for approval. This is the only route in the native
+   (live-model) lane.
+2. **The operator accepts an offer** the talker made under §18.3 — the cascade
+   fallback lane keeps this route.
 3. **The operator promotes a parked item.**
 
 Nothing else creates a proposal. In particular, an ordinary declarative sentence
-in the thread does not.
+in the thread does not, and neither does a transcript the harness merely *reads*:
+**the model's tool call is the only relay signal.**
 
-### 18.2 Composing the question is allowed; composing the instruction is not
+### 18.2 What may be relayed, and how faithfully
 
-This is the one place Part III deliberately extends N2, and the boundary needs
-stating precisely because it is the design's most delicate point.
+> **Operator directive, 2026-09-22.** The operator triggers a relay by saying
+> **"relay to worker"** and then the message. The talker relays everything after
+> that phrase, **as close to the operator's own words as possible, and without
+> the phrase itself**. It may also relay when the operator clearly asks it to
+> tell or ask the worker something. The talker may not re-plan, expand or
+> summarise into a plan — the words are the operator's — but it now *is* the
+> thing that produces the relay text, because the harness no longer does.
 
-- **An instruction to the worker** — do this, change that, stop, proceed — is
-  **always** the operator's own words, semi-verbatim. N2 is untouched. This is the
-  fidelity clause, and re-planning here is the original sin the whole system
-  exists to prevent.
+The boundary needs stating precisely because it is the design's most delicate
+point, and because this directive deliberately changes it:
+
+- **An instruction to the worker** is still the operator's own words,
+  semi-verbatim (N2). Re-planning here remains the original sin. What changed is
+  *who extracts the words*: the model, under the trigger phrase, not a regex.
 - **A question the operator asked the talker, which the talker cannot answer**,
-  may be forwarded as the operator's own question, word for word — which is what
-  the shipped ask-worker path already does.
-- **A *harder* question that the operator and talker worked out together** may be
-  composed by the talker **only** as a clearly labelled draft that is **read back
-  in full before confirmation**, never summarised as *"shall I ask it about the
-  retry logic?"*
+  is relayed as the operator's own question, word for word.
+- **A *harder* question worked out together** may be composed by the talker, but
+  it is still only a **candidate**: it is shown to the operator in full and is
+  released only by their explicit approval.
 
-That third case is what the operator asked for — *"relay some of the harder
-questions for the worker"* — and it is safe only under the read-back rule. The
-operator hears the actual bytes before authorising them. A reassuring gloss is
-never sufficient for composed text; the gloss is not the payload.
-
-Crucially, when the talker drafts or suggests a question aloud in conversation
-(e.g. *"Should I ask the worker: 'Why did the auth retry handler drop the session token on line 42?'"*),
-**that spoken utterance itself constitutes the read-back**. A prompt confirmation
-like *"Yes, ask that"* immediately authorises release without requiring a redundant
-second read-back loop (*"I will ask... are you sure?"*). If the talker only provided
-a summary gloss (*"Shall I ask it about the auth issue?"*), then the host must read
-back the full drafted question before asking for confirmation.
+Nothing reaches the worker without the approval gate (§16.3–§16.4). The card
+shows the exact bytes; a reassuring gloss is never the payload. When the talker
+drafts a question aloud (*"Should I ask the worker: '…'?"*), that spoken
+utterance is itself the read-back and a following *"yes, ask that"* authorises
+release without a redundant second loop — provided the actual bytes were spoken,
+not merely summarised. If it only glossed the intent, the host must read the
+full draft back before asking for confirmation.
 
 ### 18.3 The offer conditions — the judgement, made explicit
 
@@ -613,10 +624,14 @@ A narrow, explicit allow-list — N7 is unchanged in principle:
 - **Park an item**, and read the parking lot back.
 - **Signal that an utterance was addressed to it** rather than to the worker,
   by source utterance id.
-- **Offer to relay**, under §18.3.
+- **Offer to relay**, under §18.3, and — from 2026-09-22 — **create a relay
+  candidate** by calling `relay_to_worker(text)`. The candidate is a
+  *proposal*: it can never release, and it reaches the worker only through the
+  operator's own approval (§16.3–§16.4).
 
-It still may **not**: send, run shell, spawn children, mutate any session, start
-or stop work, or compose the bytes of an instruction.
+It still may **not**: send, release, run shell, spawn children, mutate any
+session, or start or stop work. `relay_to_worker` is the one text-bearing
+operation in the native lane, and it can only create a candidate.
 
 ### 19.4 Typed operations replace text markers
 
@@ -627,17 +642,16 @@ approval — never an implementation convenience.
 
 ### 19.5 The prompt, in outline
 
-The result is roughly fifteen lines rather than fifty:
+The result is short, not fifty lines:
 
 - who you are, and that the worker is separate and does the real work;
 - speak like a colleague: brief, natural, no markdown, no spelled-out paths;
 - label what you know, what you derived, and what you are guessing;
 - you cannot send anything; the host does that when the operator authorises it;
-- offer to relay only when you genuinely cannot answer or the worker must act —
-  once, then let it go;
-- say little while work runs; speak when something changes the operator's
-  situation;
-- if it is unclear what they want, ask one short question.
+- **when the operator says "relay to worker", relay everything after the phrase
+  with `relay_to_worker`, as close to their exact words as possible and without
+  the phrase itself**;
+- if it is unclear what they want relayed, ask one short question.
 
 Everything else that used to be prose is now either code or structured state.
 
@@ -858,6 +872,36 @@ Read as a whole, the two weeks describe one consistent picture:
 4. **Fluency is defined by recovery behaviour** — §21.
 5. **The operator must never have to re-explain.**
 6. **The system must be inspectable.**
+
+### 23.5 The free talker — the relay decision moves to the model (2026-09-22)
+
+The operator reported that separating a question from a prompt to relay was
+"difficult and sometimes time-consuming, and there are mistakes there". With the
+native live model now the conversational seat, the harness's transcript
+classification is the wrong place for that judgement. **Owner directive:**
+
+- the talker is **fully conversational** and decides for itself what is a
+  question to it, a question to the worker, or a prompt to relay;
+- the operator triggers a relay by saying **"relay to worker"** and then the
+  message; the talker relays what follows **as verbatim as possible, without the
+  phrase**, by calling `relay_to_worker(text)`;
+- the harness's **only** remaining job is to show everything relayed to the
+  worker to the operator for **explicit approval**, and to keep **one worker per
+  lane**;
+- the separate collapsed "native voice lane" is **redundant** — the main lane is
+  the live surface; **VAD/open mic** is a first-class capture option there;
+  reading back and push-to-talk are unchanged;
+- up to **three lanes**, each a talker bound to one worker, with autonomous
+  read-back **queued** through the one shared speech arbiter.
+
+**Removed:** the mechanical relay predicate (`isDirectedWorkerInstruction`, the
+commission-frame regex), the `mark_addressed_to_talker` and `offer_ask_worker`
+gate tools, and the surface's second native-lane disclosure. **Kept:** proposal
+identity and staleness refusal, the operator approval gate (card and spoken
+confirm/cancel), delivery receipts and idempotency, busy-parking, read-only
+retrieval and the worker brief, reading levels and read-back, push-to-talk, and
+the three-lane cap. The cascade remains the automatic fallback, not a competing
+experience. Plan: [`plans/VOICE-MODE-FREE-TALKER-PLAN.md`](./plans/VOICE-MODE-FREE-TALKER-PLAN.md).
 
 ## 24. Standing model requirements
 

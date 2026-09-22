@@ -23,29 +23,29 @@
  *      refusal consumes nothing.
  *
  *   3. The operator-speech adapter. The lane's bridge events are observed; a
- *      FINAL operator transcript is mechanically classified (the talker's own
- *      classifier — never model output) and acted on:
- *        - `confirm`  → the lane's live proposal is confirmed and delivered;
- *        - `cancel`   → the lane's live proposal is cancelled;
- *        - a directed worker instruction (an explicit commission frame), while
- *          the worker is IDLE, becomes a proposal (promotion route `directed`)
- *          announced as `proposal_created`;
- *        - the same instruction while the worker is BUSY is PARKED, exactly as
- *          the parking lot defines itself (things flagged while the worker was
- *          busy), announced as `parking_updated`. Promotion later creates a
- *          proposal; nothing reaches the worker without its own confirmation.
+ *      FINAL operator transcript is mechanically classified for the RELEASE
+ *      gesture only (`confirm` releases the live proposal, `cancel` cancels
+ *      it). It is NOT classified into relay vs conversation any more: the model
+ *      decides that, and calls `relay_to_worker` (see 4a). Ordinary speech is
+ *      conversation and is held nowhere.
  *
- *   4. One release path and only one. `confirmAndDeliver` is the sole caller of
+ *   4. The model's tool calls. `read_worker_history` reads; `relay_to_worker`
+ *      (owner directive, 2026-09-22) creates the lane's live PROPOSAL when the
+ *      worker is idle, or PARKS the relay while the worker is busy — announced
+ *      as `proposal_created` / `parking_updated`. It cannot release anything.
+ *
+ *   5. One release path and only one. `confirmAndDeliver` is the sole caller of
  *      the worker delivery adapter, and it is reachable only from an
  *      authorised `HostAuthorityKernel.confirm`. Every step writes a
  *      structured evidence line (`voice-kernel {...}`) so a run can be
  *      audited afterwards: no delivery without a logged proposal id and a
  *      matching SHA.
  *
- * N1/N2/N8: the model has no path here. The only inputs to the gate are the
- * operator's own classified utterances and typed client frames that cannot
- * carry instruction text (the wire type has no text field; the contract's
- * runtime guard refuses one that tries).
+ * N1/N2/N8: the release gate is untouched. The model's `relay_to_worker` can
+ * only CREATE a candidate; the operator's own confirmation is still the only
+ * release predicate, and typed client frames still cannot carry instruction
+ * text (the wire type has no text field; the contract's runtime guard refuses
+ * one that tries).
  */
 
 import type {
@@ -74,8 +74,7 @@ import type {
 } from '../voice/types.js';
 import { VoiceSessionRouter, mapBridgeEventToServerMessage, KERNEL_OWNED_CLIENT_MESSAGE_TYPES, type VoiceKernelDelegate } from '../voice/voice-router.js';
 import { HostAuthorityKernel } from '../talker/policy-core.js';
-import { classifyOperatorUtterance, isWorkerDirectedQuestion } from '../talker/utterance-classifier.js';
-import { normaliseRelayText, type RelayNormalisation } from '../talker/relay-normalise.js';
+import { classifyOperatorUtterance } from '../talker/utterance-classifier.js';
 import type { Proposal } from '../talker/proposal-store.js';
 import type { ReleaseOutcome } from '../talker/release-store.js';
 import type { DeliveryOutcome, WorkerDelivery } from '../talker/types.js';
@@ -87,36 +86,15 @@ import { getOperationalMetrics, type OperationalMetrics } from '../observability
 import { createLogger, type Logger } from '../logging/logger.js';
 import { safeLogValue } from '../logging/safe-record.js';
 
-// ── The commission-frame predicate (machine, narrow, model-free) ─────────────
-
-/**
- * The removed fragments `normaliseRelayText` records for a commission frame —
- * "tell the worker to …", "ask it whether …", "let the worker know …",
- * "pass this to the worker: …". The frozen normaliser already decided the
- * segmentation; this only asks whether a commission frame was among the
- * fragments it removed, so the two cannot drift on what a frame IS. Anchored
- * at the fragment head so a frame-shaped phrase inside some other removal
- * cannot match.
- */
-const COMMISSION_FRAME_REMOVAL =
-  /^(?:tell|ask)\s+(?:the\s+worker|it)\b|^let\s+the\s+worker\s+know\b|^pass\s+(?:this|that|it)\s+(?:on\s+)?to\s+(?:the\s+worker|it|them)\b/i;
-
-/**
- * Whether an operator utterance is a DIRECTED worker instruction (§18.1 route
- * 1: "ask it…", "tell it…", "send…") rather than ordinary conversational
- * speech. Two mechanical signals, both host-owned:
- *   - the frozen normaliser removed a commission frame from it; or
- *   - the classifier reads it as a worker-directed question.
- * An ordinary declarative sentence is neither, and thus never creates a
- * proposal (intent §18.1).
- */
-export function isDirectedWorkerInstruction(
-  raw: string,
-  relay: RelayNormalisation = normaliseRelayText(raw)
-): boolean {
-  if (relay.removals.some((piece) => COMMISSION_FRAME_REMOVAL.test(piece))) return true;
-  return isWorkerDirectedQuestion(raw);
-}
+// ── The relay is model-driven (owner directive, 2026-09-22) ────────────────
+//
+// The native talker decides for itself what is a question to it, a question to
+// the worker, or a prompt to relay, by calling `relay_to_worker`. The mechanical
+// commission-frame predicate and `isDirectedWorkerInstruction` that used to make
+// that decision from the transcript were removed: they were the mistake-prone
+// separation the operator asked to replace with the model's own judgement. The
+// host keeps only the approval gate (`confirmAndDeliver`) and the one-worker
+// attachment rule.
 
 // ── The mount's bridge factory ──────────────────────────────────────────────
 //
@@ -303,6 +281,14 @@ interface LaneRecord {
    * as the spoken read-back (intent §18.2). Reset when a proposal is created.
    */
   lastTalkerFinalText: string;
+  /**
+   * The last FINAL operator transcript. The host keeps it so a
+   * `relay_to_worker` tool call can be tied to the operator's own utterance
+   * (provenance, and the source id for the parked/proposed item). The harness
+   * no longer CLASSIFIES this text into "relay" — the model's tool call is the
+   * only relay signal (owner directive, 2026-09-22).
+   */
+  lastOperatorFinalText: string;
 }
 
 interface LaneBinding {
@@ -703,6 +689,7 @@ export class VoiceLiveMount {
       operatorSpeechActive: false,
       talkerAudioUntilMs: 0,
       lastTalkerFinalText: '',
+      lastOperatorFinalText: '',
     });
     return null;
   }
@@ -1452,6 +1439,10 @@ export class VoiceLiveMount {
       return;
     }
     try {
+      // Provenance for a model relay: the operator's own last final words. The
+      // model's `relay_to_worker` call is tied to this utterance; the harness
+      // does not decide whether it IS a relay.
+      lane.lastOperatorFinalText = text;
       await this.handleOperatorUtterance(event.laneId, text, event.atMs);
     } catch (error) {
       this.evidence({
@@ -1579,13 +1570,18 @@ export class VoiceLiveMount {
   }
 
   /**
-   * Answer a tool call the kernel owns. Only one tool has an answer: the
-   * read-only retrieval (`read_worker_history`), whose result is returned as the
-   * tool RESPONSE so the model reads it in the same turn — acknowledging an empty
-   * read would let it answer blind, which is the failure the tool exists to stop.
+   * Answer a tool call the kernel owns.
    *
-   * The retrieved text is data, never authority: it cannot send, hold, confirm or
-   * release. Everything here is observation plus a read.
+   * `read_worker_history` returns the retrieved text as the tool RESPONSE so
+   * the model reads it in the same turn — acknowledging an empty read would let
+   * it answer blind, which is the failure the tool exists to stop. The retrieved
+   * text is data, never authority.
+   *
+   * `relay_to_worker` is the model-driven relay (owner directive, 2026-09-22).
+   * It creates the lane's live PROPOSAL when the worker is idle, or parks the
+   * relay when the worker is mid-run — exactly the disposition the harness used
+   * to make from a regex. It never releases: the release predicate still requires
+   * the operator's own confirmation bound to the presented proposal (N1, N8).
    */
   async handleToolRequest(input: {
     laneId: string;
@@ -1593,9 +1589,63 @@ export class VoiceLiveMount {
     args: Record<string, unknown>;
     atMs: number;
   }): Promise<Record<string, unknown> | void> {
-    if (input.name !== 'read_worker_history') return undefined;
     const lane = this.lanes.get(input.laneId);
     if (!lane) return undefined;
+
+    if (input.name === 'relay_to_worker') {
+      const text = typeof input.args.text === 'string' ? input.args.text.trim() : '';
+      if (text.length === 0) {
+        // Defensive: the bridge refuses an empty relay before it reaches here.
+        this.evidence({ event: 'relay_tool_call_refused', laneId: lane.laneId, reason: 'empty', atMs: input.atMs });
+        return { ok: false, reason: 'empty_relay' };
+      }
+      const sourceUtteranceId = lane.utteranceSeq;
+      const busy = await this.isWorkerBusy(lane.workerSessionId).catch(() => false);
+      if (busy) {
+        const item = this.kernel.ops.parkItem({ text, sourceUtteranceId });
+        this.sendParking(lane.laneId, 'added');
+        this.evidence({
+          event: 'item_parked',
+          laneId: lane.laneId,
+          utteranceId: sourceUtteranceId,
+          itemId: item.id,
+          text: item.text,
+          workerBusy: true,
+          via: 'relay_to_worker',
+          atMs: input.atMs,
+        });
+        return {
+          ok: true,
+          status: 'parked',
+          note: 'The worker is running. The host parked this for the operator to promote; nothing has been sent.',
+        };
+      }
+      const proposal = this.kernel.promote({
+        route: 'direct_address',
+        laneId: lane.laneId,
+        tidied: text,
+        sourceUtteranceId,
+        createdTurn: lane.utteranceSeq,
+      });
+      this.announceProposal(lane, proposal);
+      this.evidence({
+        event: 'promotion_authorised',
+        laneId: lane.laneId,
+        utteranceId: sourceUtteranceId,
+        proposalId: proposal.id,
+        sha256: proposal.sha256,
+        relayText: text,
+        via: 'relay_to_worker',
+        atMs: input.atMs,
+      });
+      return {
+        ok: true,
+        status: 'awaiting_operator_approval',
+        note: 'The host will show this to the operator for approval; nothing has been sent yet. Do not claim it was sent.',
+      };
+    }
+
+    if (input.name !== 'read_worker_history') return undefined;
     const query = typeof input.args.query === 'string' ? input.args.query : '';
     const brief = await this.readWorkerBrief(lane);
     const entries = brief?.entries ?? [];
@@ -1797,50 +1847,11 @@ export class VoiceLiveMount {
       return;
     }
 
-    const relay = normaliseRelayText(text);
-    if (!isDirectedWorkerInstruction(text, relay)) {
-      // Conversational speech: the talker may answer it; nothing is held.
-      return;
-    }
-
-    const busy = await this.isWorkerBusy(lane.workerSessionId).catch(() => false);
-    if (busy) {
-      // Flagged while the worker was busy: the parking lot holds it, and the
-      // operator promotes it when the moment is right (S3).
-      const item = this.kernel.ops.parkItem({ text: relay.text, sourceUtteranceId: utteranceId });
-      this.sendParking(laneId, 'added');
-      this.evidence({
-        event: 'item_parked',
-        laneId,
-        utteranceId,
-        itemId: item.id,
-        text: item.text,
-        original: text,
-        workerBusy: true,
-        atMs,
-      });
-      return;
-    }
-
-    const proposal = this.kernel.promote({
-      route: 'direct_address',
-      laneId,
-      tidied: relay.text,
-      ...(relay.changed ? { original: text } : {}),
-      sourceUtteranceId: utteranceId,
-      createdTurn: lane.utteranceSeq,
-    });
-    this.announceProposal(lane, proposal);
-    this.evidence({
-      event: 'promotion_authorised',
-      laneId,
-      utteranceId,
-      proposalId: proposal.id,
-      sha256: proposal.sha256,
-      relayText: relay.text,
-      relayRemovals: relay.removals,
-      atMs,
-    });
+    // Owner directive (2026-09-22): the harness no longer decides whether a
+    // transcript is a worker instruction. Any other utterance is conversation;
+    // the model relays by calling `relay_to_worker`, and nothing is held here.
+    // The old commission-frame predicate (`isDirectedWorkerInstruction`) and its
+    // `normaliseRelayText` trigger are deliberately gone.
   }
 }
 

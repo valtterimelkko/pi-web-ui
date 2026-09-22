@@ -28,9 +28,8 @@ import type {
   VoiceAudioInputChunk,
 } from '../../../src/voice/contract.js';
 import type { DeliveryOutcome, WorkerDelivery } from '../../../src/talker/types.js';
-import { VoiceLiveMount, isDirectedWorkerInstruction } from '../../../src/websocket/voice-live-mount.js';
+import { VoiceLiveMount } from '../../../src/websocket/voice-live-mount.js';
 import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
-import { composeContextText } from '../../../src/voice/voice-session.js';
 
 const LANE = 'lane-1';
 const GENERATION = 1;
@@ -145,17 +144,69 @@ function utterance(service: FakeService, text: string, generation = GENERATION):
   });
 }
 
-describe('isDirectedWorkerInstruction', () => {
-  it('recognises an explicit commission frame', () => {
-    expect(isDirectedWorkerInstruction('Tell the worker to check the tests.')).toBe(true);
-    expect(isDirectedWorkerInstruction('Ask it whether the build is green.')).toBe(true);
-    expect(isDirectedWorkerInstruction('Let the worker know the deploy is done.')).toBe(true);
+/** The model-driven relay: the native talker calls `relay_to_worker`. */
+async function relay(mount: VoiceLiveMount, text: string): Promise<void> {
+  await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text }, atMs: 1 });
+}
+
+describe('VoiceLiveMount — the relay is model-driven, not classified', () => {
+  it('creates a proposal from a relay_to_worker tool call, and sends nothing', async () => {
+    const service = new FakeService();
+    const delivery = makeDelivery();
+    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+
+    const payload = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: 'check the tests' },
+      atMs: 1,
+    });
+
+    expect(payload).toMatchObject({ ok: true, status: 'awaiting_operator_approval' });
+    const created = sent.filter((frame) => frame.type === 'proposal_created');
+    expect(created).toHaveLength(1);
+    expect((created[0].proposal as { tidied: string }).tidied).toBe('check the tests');
+    // The tool call can only propose; nothing reaches the worker without approval.
+    expect(delivery.calls).toHaveLength(0);
   });
 
-  it('does not treat ordinary conversational speech as directed', () => {
-    expect(isDirectedWorkerInstruction('I keep thinking about the retry handler.')).toBe(false);
-    expect(isDirectedWorkerInstruction('It should not drop the session token.')).toBe(false);
-    expect(isDirectedWorkerInstruction('What would you check first?')).toBe(false);
+  it('parks a relay_to_worker call while the worker is busy', async () => {
+    const service = new FakeService();
+    const delivery = makeDelivery();
+    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => true });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+
+    const payload = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: 'check the tests' },
+      atMs: 1,
+    });
+
+    expect(payload).toMatchObject({ ok: true, status: 'parked' });
+    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
+    const parking = sent.filter((frame) => frame.type === 'parking_updated');
+    expect(parking).toHaveLength(1);
+    expect((parking[0].items as Array<{ text: string }>)[0].text).toBe('check the tests');
+    expect(delivery.calls).toHaveLength(0);
+  });
+
+  it('refuses an empty relay without creating a proposal', async () => {
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    const payload = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: '   ' },
+      atMs: 1,
+    });
+    expect(payload).toMatchObject({ ok: false });
+    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
   });
 });
 
@@ -343,14 +394,13 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     expect(String(payload && payload.history)).toMatch(/No message in this session matches/i);
   });
 
-  it('gives the gate tools no payload at all (they stay parameterless bookkeeping)', async () => {
+  it('has no payload for an unknown tool (nothing is silently forwarded)', async () => {
     const service = new FakeService();
     const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
-    expect(await mount.handleToolRequest({ laneId: LANE, name: 'offer_ask_worker', args: {}, atMs: 1 })).toBeUndefined();
     expect(
-      await mount.handleToolRequest({ laneId: LANE, name: 'mark_addressed_to_talker', args: {}, atMs: 1 })
+      await mount.handleToolRequest({ laneId: LANE, name: 'not_a_tool' as never, args: {}, atMs: 1 })
     ).toBeUndefined();
   });
 
@@ -386,8 +436,7 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
-    utterance(service, 'Tell the worker to check the tests.');
-    await flush();
+    await relay(mount, 'check the tests.');
 
     const proposal = sent.find((frame) => frame.type === 'proposal_created') as Sent;
     expect(proposal).toBeDefined();
@@ -454,8 +503,7 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
-    utterance(service, 'Tell the worker to check the tests.');
-    await flush();
+    await relay(mount, 'check the tests.');
     const payload = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       proposalId: string;
       version: number;
@@ -505,8 +553,7 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
-    utterance(service, 'Tell the worker to check the tests.');
-    await flush();
+    await relay(mount, 'check the tests.');
     const payload = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       proposalId: string;
       version: number;
@@ -539,10 +586,8 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => true });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
-    utterance(service, 'Tell the worker to check the logs.');
-    await flush();
-    utterance(service, 'Ask it to update the changelog.');
-    await flush();
+    await relay(mount, 'check the logs.');
+    await relay(mount, 'update the changelog.');
 
     const parking = sent.filter((frame) => frame.type === 'parking_updated');
     expect(parking).toHaveLength(2);
@@ -575,40 +620,15 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
 });
 
 describe('VoiceLiveMount — the operator-speech adapter', () => {
-  it('proposes a directed instruction while the worker is idle and does not interrupt it', async () => {
+  it('holds nothing for ordinary conversational speech (no relay tool call)', async () => {
     const service = new FakeService();
     const delivery = makeDelivery();
     const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
+    // A commission-shaped utterance with NO `relay_to_worker` call is now just
+    // conversation: the mechanical predicate that used to hold it is gone.
     utterance(service, 'Tell the worker to check the tests.');
-    await flush();
-    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(1);
-    expect(sent.filter((frame) => frame.type === 'parking_updated')).toHaveLength(0);
-    expect(delivery.calls).toHaveLength(0);
-  });
-
-  it('parks a directed instruction while the worker is busy', async () => {
-    const service = new FakeService();
-    const delivery = makeDelivery();
-    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => true });
-    const sent: Sent[] = [];
-    await startLane(mount, sent, service);
-    utterance(service, 'Tell the worker to check the tests.');
-    await flush();
-    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
-    const parking = sent.filter((frame) => frame.type === 'parking_updated');
-    expect(parking).toHaveLength(1);
-    expect((parking[0].items as Array<{ text: string }>)[0].text).toBe('check the tests.');
-    expect(delivery.calls).toHaveLength(0);
-  });
-
-  it('holds nothing for ordinary conversational speech', async () => {
-    const service = new FakeService();
-    const delivery = makeDelivery();
-    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
-    const sent: Sent[] = [];
-    await startLane(mount, sent, service);
     utterance(service, 'I keep thinking about the retry handler.');
     utterance(service, 'What would you check first?');
     await flush();
@@ -630,8 +650,8 @@ describe('VoiceLiveMount — the operator-speech adapter', () => {
     });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
-    utterance(service, 'Tell the worker to check the tests.');
-    await flush();
+    // The relay is model-driven now: the proposal comes from the tool call.
+    await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text: 'check the tests' }, atMs: 1 });
     const proposal = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       tidied: string;
     };
@@ -667,8 +687,7 @@ describe('VoiceLiveMount — the operator-speech adapter', () => {
     const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, service);
-    utterance(service, 'Tell the worker to check the tests.');
-    await flush();
+    await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text: 'check the tests' }, atMs: 1 });
     utterance(service, 'No, forget it.');
     await flush();
     const resolved = sent.filter((frame) => frame.type === 'proposal_resolved');
@@ -729,7 +748,7 @@ describe('VoiceLiveMount — what the talker said, and why', () => {
       laneId: LANE,
       attachmentGeneration: 1,
       callId: 'c1',
-      name: 'mark_addressed_to_talker',
+      name: 'read_worker_history',
       args: {},
       atMs: 1_700_000_000_101,
     } as never);
@@ -738,6 +757,6 @@ describe('VoiceLiveMount — what the talker said, and why', () => {
     const reply = evidence.find((event) => event.event === 'talker_reply');
     expect(reply?.excerpt).toContain('rewrote the retry handler');
     expect(reply?.chars).toBeGreaterThan(20);
-    expect(evidence.find((event) => event.event === 'talker_tool_call')?.tool).toBe('mark_addressed_to_talker');
+    expect(evidence.find((event) => event.event === 'talker_tool_call')?.tool).toBe('read_worker_history');
   });
 });

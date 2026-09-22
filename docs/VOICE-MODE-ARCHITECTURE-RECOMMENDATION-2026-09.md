@@ -432,6 +432,16 @@ Keeping today's conversational rules and only replacing the cascade is the lowes
 
 ### 5.3 Why not a model-composed relay for instructions
 
+> **Superseded 2026-09-22 by owner directive.** The reasoning below was correct
+> for a harness that classified transcripts; with the native live model as the
+> conversational seat, the owner moved the relay decision to the model. The
+> model now calls `relay_to_worker(text)` — the operator's own words, minus the
+> "relay to worker" trigger — and the harness keeps only the approval gate. The
+> fidelity protection is the unchanged release predicate plus the card showing
+> the exact bytes; composition is no longer separately forbidden. See
+> [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) §18.1–§18.2 and
+> [`plans/VOICE-MODE-FREE-TALKER-PLAN.md`](./plans/VOICE-MODE-FREE-TALKER-PLAN.md).
+
 Letting the model compose what is sent would improve editing and reduce procedural turns, and it is exactly the failure the system was built to prevent: re-planning, dropped qualifiers, a conditional becoming an absolute upstream of anything the operator can correct (P25 documents this happening even to a *mechanical* normaliser). Composition is permitted for **questions only**, under read-back (§4.6).
 
 ### 5.4 Why not just improve the existing cascade

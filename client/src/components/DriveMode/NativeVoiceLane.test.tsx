@@ -54,24 +54,21 @@ function serverFrame(type: string, extra: Record<string, unknown> = {}): Record<
   };
 }
 
-describe('NativeVoiceLane — the native lane is mounted in the app (M7)', () => {
-  it('is closed by default, opens on request, and mounts the real surface', () => {
+describe('NativeVoiceLane — the live talker is the main lane (2026-09-22)', () => {
+  it('mounts the real surface directly, with no separate free-lane toggle and no frames sent', () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" workerLabel="worker-7" />);
-    // Reachable, named, and honest about what it will do...
-    expect(screen.getByTestId('native-voice-lane-summary').textContent).toContain(
-      'Nothing starts until you open it',
-    );
-    expect(screen.queryByTestId('drive-mode-voice-live')).toBeNull();
-    // ...and no frame can have been sent by a lane nobody opened.
-    expect(mocks.sent).toHaveLength(0);
-
-    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
+    // The live surface IS the lane, mounted; nothing is behind a disclosure...
     expect(screen.getByTestId('drive-mode-voice-live')).toBeTruthy();
+    expect(screen.queryByTestId('native-voice-lane-toggle')).toBeNull();
+    expect(screen.queryByTestId('native-voice-lane-summary')).toBeNull();
+    // ...and the relay contract is taught where the operator speaks.
+    expect(screen.getByTestId('native-voice-lane-hint').textContent).toContain('relay to worker');
+    // Nothing starts, and no frame can have been sent, until the operator does.
+    expect(mocks.sent).toHaveLength(0);
   });
 
   it('sends the lane frame on the app socket when the operator starts listening', async () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
-    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
     const laneId = laneIdFromDom();
     fireEvent.click(await screen.findByTestId('voice-live-start'));
 
@@ -87,7 +84,6 @@ describe('NativeVoiceLane — the native lane is mounted in the app (M7)', () =>
 
   it('routes server frames for its lane from the socket tap into the surface', async () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
-    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
     await screen.findByTestId('drive-mode-voice-live');
 
     // The app's single socket tap offers every frame; only this lane's are ours.
@@ -102,7 +98,6 @@ describe('NativeVoiceLane — the native lane is mounted in the app (M7)', () =>
 
   it('renders the honest unavailable state when the lane cannot be served', async () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
-    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
     await screen.findByTestId('drive-mode-voice-live');
 
     emitVoiceFrame(
@@ -123,9 +118,6 @@ describe('NativeVoiceLane — the native lane is mounted in the app (M7)', () =>
 
   it('registers its lane while mounted and releases it on unmount', async () => {
     const { unmount } = render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
-    expect(voiceLaneRegistrationCount()).toBe(1);
-    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
-    await screen.findByTestId('drive-mode-voice-live');
     expect(voiceLaneRegistrationCount()).toBe(1);
     unmount();
     expect(voiceLaneRegistrationCount()).toBe(0);

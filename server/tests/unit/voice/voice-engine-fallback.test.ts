@@ -244,17 +244,9 @@ async function startLane(mount: VoiceLiveMount, sent: Sent[]): Promise<void> {
   expect(code).toBeNull();
 }
 
-function utterance(service: FakeService, text: string): void {
-  service.emit({
-    kind: 'transcript',
-    laneId: LANE,
-    attachmentGeneration: GENERATION,
-    speaker: 'operator',
-    source: 'native',
-    text,
-    final: true,
-    atMs: 1,
-  });
+/** The model-driven relay: the native talker calls `relay_to_worker`. */
+async function relay(mount: VoiceLiveMount, text: string): Promise<void> {
+  await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text }, atMs: 1 });
 }
 
 // ── (a)-(d) the fallback proof ──────────────────────────────────────────────
@@ -287,8 +279,7 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     expect(harness.service.getState(LANE)?.state).toBe('live');
 
     // One active draft...
-    harness.speakOperator('Tell the worker to check the tests.');
-    await flush();
+    await relay(mount, 'check the tests.');
     const draft = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       proposalId: string;
       version: number;
@@ -299,8 +290,7 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
 
     // ...and one parked item (flagged while the worker was busy).
     busy = true;
-    harness.speakOperator('Ask it to update the changelog.');
-    await flush();
+    await relay(mount, 'update the changelog.');
     busy = false;
     const parkingFrames = sent.filter((frame) => frame.type === 'parking_updated');
     const parkedId = (parkingFrames.at(-1)?.items as Array<{ itemId: string }>)[0].itemId;
@@ -426,8 +416,7 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     };
     await startLane(mount, sent);
 
-    utterance(service, 'Tell the worker to check the tests.');
-    await flush();
+    await relay(mount, 'check the tests.');
     const draft = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       proposalId: string;
       version: number;
@@ -487,8 +476,7 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     expect(metrics.snapshot().voice?.proposals).toMatchObject({ created: 1, released: 1, refused: 1, reconciled: 0 });
 
     // A cancelled proposal reconciles its slot without a release.
-    utterance(service, 'Ask it to update the changelog.');
-    await flush();
+    await relay(mount, 'update the changelog.');
     const second = (sent.filter((frame) => frame.type === 'proposal_created') as Sent).at(-1)?.proposal as {
       proposalId: string;
     };
