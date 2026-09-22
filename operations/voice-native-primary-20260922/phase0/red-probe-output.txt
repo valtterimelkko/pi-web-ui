@@ -1,0 +1,131 @@
+
+> @pi-web-ui/server@0.1.0 test
+> vitest run tests/unit/websocket/phase0-red-probe.test.ts
+
+
+ RUN  v1.6.1 /root/pi-web-ui/server
+
+ ❯ tests/unit/websocket/phase0-red-probe.test.ts  (12 tests | 5 failed) 64ms
+   ❯ tests/unit/websocket/phase0-red-probe.test.ts > RED-1 relay addressing without a separator > strips "Relay to worker I want to find out about Podpoint"
+     → expected 'Relay to worker I want to find out ab…' to be 'I want to find out about Podpoint' // Object.is equality
+   ❯ tests/unit/websocket/phase0-red-probe.test.ts > RED-1 relay addressing without a separator > strips "Ask the worker I want to find out about Podpoint"
+     → expected 'Ask the worker I want to find out abo…' to be 'I want to find out about Podpoint' // Object.is equality
+   ❯ tests/unit/websocket/phase0-red-probe.test.ts > RED-2 casual or qualified confirmation > classifies "CONTROL yes" as confirm
+     → expected 'statement' to be 'confirm' // Object.is equality
+   ❯ tests/unit/websocket/phase0-red-probe.test.ts > RED-3 correction replaces the failed attempt > a corrected repeat does not concatenate the first attempt
+     → expected 'Investigate the alternative Investiga…' to be 'Investigate the alternative, but do n…' // Object.is equality
+   ❯ tests/unit/websocket/phase0-red-probe.test.ts > RED-4/5 native promotion provenance > RED-5 binds the relay tool call to its originating utterance, never the latest
+     → expected { bound: 2 } to deeply equal { bound: 1 }
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/unit/websocket/phase0-red-probe.test.ts > RED-1 relay addressing without a separator > strips "Relay to worker I want to find out about Podpoint"
+AssertionError: expected 'Relay to worker I want to find out ab…' to be 'I want to find out about Podpoint' // Object.is equality
+
+- Expected
++ Received
+
+- I want to find out about Podpoint
++ Relay to worker I want to find out about Podpoint
+
+ ❯ tests/unit/websocket/phase0-red-probe.test.ts:127:20
+    125|   it('strips "Relay to worker I want to find out about Podpoint"', () …
+    126|     const r = normaliseRelayText('Relay to worker I want to find out a…
+    127|     expect(r.text).toBe('I want to find out about Podpoint');
+       |                    ^
+    128|   });
+    129|   it('strips "Ask the worker I want to find out about Podpoint"', () =…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  tests/unit/websocket/phase0-red-probe.test.ts > RED-1 relay addressing without a separator > strips "Ask the worker I want to find out about Podpoint"
+AssertionError: expected 'Ask the worker I want to find out abo…' to be 'I want to find out about Podpoint' // Object.is equality
+
+- Expected
++ Received
+
+- I want to find out about Podpoint
++ Ask the worker I want to find out about Podpoint
+
+ ❯ tests/unit/websocket/phase0-red-probe.test.ts:131:20
+    129|   it('strips "Ask the worker I want to find out about Podpoint"', () =…
+    130|     const r = normaliseRelayText('Ask the worker I want to find out ab…
+    131|     expect(r.text).toBe('I want to find out about Podpoint');
+       |                    ^
+    132|   });
+    133|   it('CONTROL: strips "Relay to worker: I want to find out about Podpo…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  tests/unit/websocket/phase0-red-probe.test.ts > RED-2 casual or qualified confirmation > classifies "CONTROL yes" as confirm
+AssertionError: expected 'statement' to be 'confirm' // Object.is equality
+
+- Expected
++ Received
+
+- confirm
++ statement
+
+ ❯ tests/unit/websocket/phase0-red-probe.test.ts:154:47
+    152|   for (const [text, want] of cases) {
+    153|     it(`classifies "${text}" as ${want}`, () => {
+    154|       expect(classifyOperatorUtterance(text)).toBe(want);
+       |                                               ^
+    155|     });
+    156|   }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  tests/unit/websocket/phase0-red-probe.test.ts > RED-3 correction replaces the failed attempt > a corrected repeat does not concatenate the first attempt
+AssertionError: expected 'Investigate the alternative Investiga…' to be 'Investigate the alternative, but do n…' // Object.is equality
+
+- Expected
++ Received
+
+- Investigate the alternative, but do not change anything
++ Investigate the alternative Investigate the alternative, but do not change anything
+
+ ❯ tests/unit/websocket/phase0-red-probe.test.ts:168:20
+    166|     const joined = snap?.utterances.map((u) => u.text).join(' ') ?? '';
+    167|     // Desired: the corrected version alone is releasable.
+    168|     expect(joined).toBe('Investigate the alternative, but do not chang…
+       |                    ^
+    169|   });
+    170| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  tests/unit/websocket/phase0-red-probe.test.ts > RED-4/5 native promotion provenance > RED-5 binds the relay tool call to its originating utterance, never the latest
+AssertionError: expected { bound: 2 } to deeply equal { bound: 1 }
+
+- Expected
++ Received
+
+  Object {
+-   "bound": 1,
++   "bound": 2,
+  }
+
+ ❯ tests/unit/websocket/phase0-red-probe.test.ts:223:23
+    221|     const bound = created.length > 0 ? (created[0]?.proposal?.sourceUt…
+    222|     // Desired: bound to utterance 1, or refused as ambiguous. Never t…
+    223|     expect({ bound }).toEqual({ bound: 1 });
+       |                       ^
+    224|   });
+    225| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+ Test Files  1 failed (1)
+      Tests  5 failed | 7 passed (12)
+   Start at  21:09:43
+   Duration  1.43s (transform 595ms, setup 71ms, collect 778ms, tests 64ms, environment 0ms, prepare 92ms)
+
+JSON report written to /root/pi-web-ui/server/test-results.json
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /root/pi-web-ui/server
+npm error workspace @pi-web-ui/server@0.1.0
+npm error location /root/pi-web-ui/server
+npm error command failed
+npm error command sh -c vitest run tests/unit/websocket/phase0-red-probe.test.ts
