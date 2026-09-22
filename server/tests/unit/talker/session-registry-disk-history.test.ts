@@ -157,6 +157,22 @@ describe('an unloaded worker session is read from its file, not reported empty',
     expect(view).not.toContain('WORKER SESSION HISTORY');
   });
 
+  it('distinguishes an existing session with no messages from one it cannot resolve (2026-09-22)', async () => {
+    // The operator opened a brand-new session and pressed Start listening; the
+    // talker said it could not access the work session. An empty session that
+    // EXISTS must not be described as "not loaded".
+    const empty = sessionFile([]);
+    const withEmpty = makeHarness({ resolver: async () => ({ path: empty }) });
+    await withEmpty.ask('01a0c85e-161c-7732-83ed-b45a7eb0bf11');
+    const emptyView = withEmpty.views.at(-1)!;
+    expect(emptyView).toContain('worker session is new; it has no messages yet');
+    expect(emptyView).not.toContain('worker session is not loaded on this server');
+
+    const unresolvable = makeHarness({ resolver: async () => undefined });
+    await unresolvable.ask('never-existed');
+    expect(unresolvable.views.at(-1)!).toContain('worker session is not loaded on this server');
+  });
+
   it('does not read the file when the manager already holds the session in memory', async () => {
     const h = makeHarness({
       resolver: async () => ({ path: '/does/not/matter.jsonl' }),

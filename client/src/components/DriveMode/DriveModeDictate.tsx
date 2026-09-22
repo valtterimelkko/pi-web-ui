@@ -301,22 +301,6 @@ export function DriveModeDictate({
         )}
       </div>
 
-      {/* The live talker is the MAIN voice lane (owner directive, 2026-09-22).
-          One lane per addressed surface: a non-addressed lane of a multi-lane
-          tab is hidden, so its lane is not mounted twice (one playback chain
-          per page). A lane that cannot start explains itself in place rather
-          than breaking anything on this screen. */}
-      {(!laneEnabled || addressed) && sessionId && (
-        <div className={compact ? 'mb-3' : 'mb-5'}>
-          <NativeVoiceLane
-            sessionId={sessionId}
-            {...(talkerRuntime ? { runtime: talkerRuntime } : {})}
-            sessionRuntime={sdkType ?? null}
-            workerLabel={sessionDisplayName}
-          />
-        </div>
-      )}
-
       {/* The two modes: the existing voice-only surface, or the desktop
           arrangement that shows the live session under it. Persisted — set once. */}
       <div className={compact ? 'mb-2' : 'mb-4'}>
@@ -419,7 +403,22 @@ export function DriveModeDictate({
         voice exists.
       </p>
 
-      {/* The native voice lane is mounted above, as the main lane. */}
+      {/* The free lane (live talker), restored to the bottom of the page
+          (owner report, 2026-09-22): the bounded/gated voice mode above stays
+          the main option, and this is the free conversation where the
+          model-driven relay is reached. One lane per addressed surface (the
+          non-addressed lanes of a multi-lane tab are hidden, so their lane is
+          not mounted twice); collapsed by default, and a lane that cannot start
+          explains itself in place rather than breaking anything on this
+          screen. */}
+      {(!laneEnabled || addressed) && sessionId && (
+        <NativeVoiceLane
+          sessionId={sessionId}
+          {...(talkerRuntime ? { runtime: talkerRuntime } : {})}
+          sessionRuntime={sdkType ?? null}
+          workerLabel={sessionDisplayName}
+        />
+      )}
 
       {/* The exit recap (P18/2): everything that arrived while focus was on,
           surfaced explicitly — the thing that happened while you were away

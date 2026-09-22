@@ -903,6 +903,20 @@ retrieval and the worker brief, reading levels and read-back, push-to-talk, and
 the three-lane cap. The cascade remains the automatic fallback, not a competing
 experience. Plan: [`plans/VOICE-MODE-FREE-TALKER-PLAN.md`](./plans/VOICE-MODE-FREE-TALKER-PLAN.md).
 
+**Follow-up (2026-09-22, same day): the bounded main UI is restored.** The
+operator asked for the pre-change arrangement back — the bounded, gated voice
+controls as the main surface on top, and the free (live-model) lane collapsed at
+the bottom — so the model-driven relay is reached through the free lane rather
+than replacing the main surface. The move is a layout change only; the server
+relay is unchanged. Two real defects found while reproducing the report were
+fixed with it: the live lane's worker brief read **every** lane as `pi` (a Claude
+or Antigravity lane therefore got no history), and a session with **no messages
+yet** was described to the talker as *"not loaded on this server"*, which the
+model turned into *"I don't have access"*. An existing-but-empty session now
+reports that it is new and has no messages, and the prompt says to say so and
+carry on rather than call it inaccessible. Plan:
+[`plans/VOICE-MODE-UI-RESTORE-AND-LANE-FIX-PLAN.md`](./plans/VOICE-MODE-UI-RESTORE-AND-LANE-FIX-PLAN.md).
+
 ## 24. Standing model requirements
 
 [`TALKER-MODEL-REQUIREMENTS.md`](./TALKER-MODEL-REQUIREMENTS.md) is the canonical

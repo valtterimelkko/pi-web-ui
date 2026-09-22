@@ -66,6 +66,9 @@ describe('the native talker instruction (design rules it was shipped without)', 
   it('forbids the refusal the operator actually heard', () => {
     // "I'm sorry, but I don't have access to information about the worker's tasks."
     expect(instruction).toMatch(/Never say you have no access/i);
+    // 2026-09-22: a brand-new session was described to the operator as "not
+    // loaded on this server", which the model turned into a refusal.
+    expect(instruction).toMatch(/never describe an empty session as one you cannot access/i);
   });
 
   it('grants read-only retrieval and forbids over-claiming what it has seen', () => {
@@ -99,5 +102,7 @@ describe('the native talker instruction (design rules it was shipped without)', 
     // The live slice (2026-09-22) then over-relayed a single instruction-shaped
     // statement; the prompt must forbid INFERRING a relay from one.
     expect(instruction).toMatch(/Never INFER a relay from an instruction-shaped statement/i);
+    expect(instruction).toMatch(/I keep thinking about the retry handler/i);
+    expect(instruction).toMatch(/A relay must be ASKED for/i);
   });
 });

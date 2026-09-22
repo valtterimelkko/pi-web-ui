@@ -153,7 +153,7 @@ export interface VoiceLiveMountOptions {
    * 2026-09-18 field report. A provider that throws degrades to exactly that,
    * never to an invented brief.
    */
-  workerBrief?: (workerSessionId: string) => Promise<VoiceWorkerBrief | null>;
+  workerBrief?: (workerSessionId: string, runtime: VoiceRuntime) => Promise<VoiceWorkerBrief | null>;
   /**
    * Structured evidence line. Default is a no-op; the WebSocket mount supplies
    * `createLogEvidenceSink(logger)` so every run is auditable from the server
@@ -405,7 +405,7 @@ export class VoiceLiveMount {
   private readonly isWorkerBusy: (workerSessionId: string) => Promise<boolean>;
   private readonly now: () => number;
   private readonly evidence: (event: Record<string, unknown>) => void;
-  private readonly workerBrief: ((workerSessionId: string) => Promise<VoiceWorkerBrief | null>) | null;
+  private readonly workerBrief: ((workerSessionId: string, runtime: VoiceRuntime) => Promise<VoiceWorkerBrief | null>) | null;
   private readonly serviceValue: VoiceBridgeService;
   private readonly router: VoiceSessionRouter;
   private readonly unsubscribe: () => void;
@@ -1720,7 +1720,7 @@ export class VoiceLiveMount {
   private async readWorkerBrief(lane: LaneRecord): Promise<VoiceWorkerBrief | null> {
     if (!this.workerBrief) return null;
     try {
-      return await this.workerBrief(lane.workerSessionId);
+      return await this.workerBrief(lane.workerSessionId, lane.runtime);
     } catch (error) {
       this.evidence({
         event: 'worker_brief_unavailable',

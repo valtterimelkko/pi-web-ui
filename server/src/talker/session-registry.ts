@@ -765,9 +765,15 @@ export class TalkerSessionRegistry {
     // NOT LOADED HERE (idle, evicted, or after a restart) is not the same as EMPTY.
     // The session file holds the worker's own conversation and the UI reads it; the
     // talker must not be told it has no access to a session the operator can see
-    // (2026-09-18 operator report).
+    // (2026-09-18 operator report). `exists` distinguishes an existing session
+    // with no messages yet from one this host cannot resolve at all — the
+    // 2026-09-22 report showed a new session being described to the operator as
+    // "not loaded on this server", which the model turned into "I have no access".
+    let diskExists = false;
     if (!history) {
-      history = await this.readDiskHistory(workerSessionId, historyTail);
+      const disk = await this.readDiskHistory(workerSessionId, historyTail);
+      diskExists = disk.exists;
+      history = disk.history;
       if (!lastAssistantText && history) {
         for (let i = history.entries.length - 1; i >= 0; i--) {
           if (history.entries[i].role === 'assistant') {
@@ -781,7 +787,12 @@ export class TalkerSessionRegistry {
       ? { recentHistory: history.entries, historyTotal: history.total }
       : {};
     if (!status) {
-      return { activity: 'worker session is not loaded on this server', ...(lastAssistantText ? { lastAssistantText } : {}), ...historyFields };
+      const activity = !diskExists
+        ? 'worker session is not loaded on this server'
+        : history
+          ? 'worker status: idle (read from its session file)'
+          : 'worker session is new; it has no messages yet';
+      return { activity, ...(lastAssistantText ? { lastAssistantText } : {}), ...historyFields };
     }
     const stepSuffix = typeof status.currentStep === 'number' && status.currentStep > 0 ? `, step ${status.currentStep}` : '';
     return {
@@ -800,18 +811,18 @@ export class TalkerSessionRegistry {
   private async readDiskHistory(
     workerSessionId: string,
     historyTail: number
-  ): Promise<{ entries: WorkerHistoryEntry[]; total: number } | undefined> {
+  ): Promise<{ exists: boolean; history?: { entries: WorkerHistoryEntry[]; total: number } }> {
     const resolver = this.deps.resolveWorkerSession;
-    if (!resolver) return undefined;
+    if (!resolver) return { exists: false };
     try {
       const resolved = await resolver(workerSessionId);
-      if (!resolved?.path) return undefined;
+      if (!resolved?.path) return { exists: false };
       const history = await this.readSessionFile(resolved.path);
       return history.total > 0
-        ? { entries: history.entries.slice(-Math.max(1, historyTail)), total: history.total }
-        : undefined;
+        ? { exists: true, history: { entries: history.entries.slice(-Math.max(1, historyTail)), total: history.total } }
+        : { exists: true };
     } catch {
-      return undefined;
+      return { exists: false };
     }
   }
 

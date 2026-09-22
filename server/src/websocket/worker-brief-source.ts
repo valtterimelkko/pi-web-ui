@@ -13,6 +13,7 @@
  * hold or release anything.
  */
 import type { TalkerSessionRegistry } from '../talker/session-registry.js';
+import type { VoiceRuntime } from '@pi-web-ui/shared';
 import type { VoiceWorkerBrief } from './voice-live-mount.js';
 
 /**
@@ -40,9 +41,12 @@ export interface WorkerBriefSourceDeps {
 export function createWorkerBriefSource(
   deps: WorkerBriefSourceDeps,
   historyTail: number = WORKER_BRIEF_SOURCE_TAIL
-): (workerSessionId: string) => Promise<VoiceWorkerBrief> {
-  return async (workerSessionId: string): Promise<VoiceWorkerBrief> => {
-    const snapshot = await deps.talkerSessionRegistry.workerStateSnapshot(workerSessionId, 'pi', { historyTail });
+): (workerSessionId: string, runtime: VoiceRuntime) => Promise<VoiceWorkerBrief> {
+  return async (workerSessionId: string, runtime: VoiceRuntime): Promise<VoiceWorkerBrief> => {
+    // The LANE's runtime, not a hard-coded 'pi': a Claude or Antigravity lane read
+    // as pi gets the wrong (or no) session and the model is told it has no access
+    // (2026-09-22 report).
+    const snapshot = await deps.talkerSessionRegistry.workerStateSnapshot(workerSessionId, runtime, { historyTail });
     const entries = snapshot.recentHistory;
     return {
       ...(snapshot.activity ? { activity: snapshot.activity } : {}),

@@ -22,6 +22,28 @@ Owner directive, 2026-09-22, in-conversation. It supersedes architecture §5.3
 **unchanged**: a relay is only a proposal; the operator's own confirmation is
 the only release.
 
+## Follow-up — UI restore and lane-fix (2026-09-22, same day)
+
+Owner report: *"when I click start listening … it says it can't access the work
+session … I get a bunch of errors"*, and *"bring back the old UI"*. Reproduced in
+a real browser against a disposable live-engine server (`repro/repro.mjs`, report
+`repro/repro-report.json`):
+
+- the **production build** already started the lane in ~0.5 s (no error); the
+  **dev/StrictMode build** left the lane `connecting` while the wire was `live`,
+  and the 12 s probe falsely reported *"no answer from the voice engine"* — the
+  effect cleanup disposed the memoized surface and unsubscribed the controller
+  (`useVoiceLiveLane`); fixed with `armController()` + `teardownForUnmount()`;
+- the talker's *"can't access the work session"* came from the worker brief: for
+  an existing-but-empty session the registry reported *"worker session is not
+  loaded on this server"*, and the brief source read **every** lane as `pi`;
+- the UI now lays out the bounded main surface on top and the free lane below
+  (verified in the browser: `drive-mic` before `native-voice-lane`).
+
+Durable regression proof: `playwright.voice-live-e2e.config.ts` +
+`tests/e2e/voice-live-e2e.spec.ts` (real disposable live server + built client),
+and `evidence/run6` for the relay flow after the server change.
+
 ## Evidence
 
 The live vertical slice was run repeatedly against real Gemini Live on a

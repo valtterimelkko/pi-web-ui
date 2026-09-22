@@ -1,0 +1,130 @@
+{
+  "at": "2026-09-22T09:38:03.328Z",
+  "base": "http://localhost:3499",
+  "laneTimeline": [
+    {
+      "ms": 3,
+      "lane": "connecting",
+      "wire": "connecting",
+      "dbg": null,
+      "unavailable": null
+    },
+    {
+      "ms": 507,
+      "lane": "live",
+      "wire": "live",
+      "dbg": null,
+      "unavailable": null
+    }
+  ],
+  "voiceFrames": [
+    {
+      "dir": "out",
+      "type": "voice_session_start"
+    },
+    {
+      "dir": "in",
+      "type": "voice_state",
+      "laneId": "01a0c87a-7163-7115-b592-09079ef4f9db:vl-1-u3z731hc",
+      "state": "connecting",
+      "gen": 0
+    },
+    {
+      "dir": "in",
+      "type": "voice_state",
+      "laneId": "01a0c87a-7163-7115-b592-09079ef4f9db:vl-1-u3z731hc",
+      "state": "live",
+      "gen": 0
+    },
+    {
+      "dir": "in",
+      "type": "voice_state",
+      "laneId": "01a0c87a-7163-7115-b592-09079ef4f9db:vl-1-u3z731hc",
+      "state": "live",
+      "gen": 0
+    }
+  ],
+  "state": {
+    "url": "http://localhost:3499/",
+    "elementOrder": [
+      "drive-switch-session",
+      "voice-layout-toggle",
+      "voice-layout-mobile",
+      "voice-layout-desktop",
+      "reading-level",
+      "reading-level-verbatim",
+      "reading-level-summary",
+      "reading-level-headlines",
+      "reading-level-indicator",
+      "reading-level-hint",
+      "focus-control",
+      "focus-toggle",
+      "focus-status",
+      "focus-hint",
+      "floor-banner",
+      "floor-state-label",
+      "drive-mic",
+      "voice-contract-hint",
+      "native-voice-lane",
+      "native-voice-lane-toggle",
+      "native-voice-lane-surface",
+      "drive-mode-voice-live",
+      "voice-live-status",
+      "voice-live-wire-state",
+      "voice-live-listening-state",
+      "voice-live-stop",
+      "voice-live-mode-open-mic",
+      "voice-live-mode-push-to-talk",
+      "voice-live-level-verbatim",
+      "voice-live-level-summary",
+      "voice-live-level-headlines",
+      "native-voice-lane-hint"
+    ],
+    "liveLane": [
+      {
+        "testid": "native-voice-lane",
+        "text": "▾Free lane — live talkerHideVoice Mode — New sessionliveListening — open mic. Talking over the talker ducks it; it never stops you being heard.Pause listeningOpen micPush to talkVerbatimSummaryHeadlinesSay “relay to worker” and then your message — the talker s",
+        "attrs": {
+          "data-testid": "native-voice-lane",
+          "data-lane-id": "01a0c87a-7163-7115-b592-09079ef4f9db:vl-1-u3z731hc",
+          "data-runtime-served": "true"
+        }
+      }
+    ],
+    "liveStatus": [
+      {
+        "testid": "voice-live-status",
+        "text": "Voice Mode — New sessionliveListening — open mic. Talking over the talker ducks it; it never stops you being heard.Pause listeningOpen micPush to talkVerbatimSummaryHeadlines",
+        "attrs": {
+          "data-testid": "voice-live-status",
+          "data-lane": "live"
+        }
+      }
+    ],
+    "liveUnavailable": [],
+    "liveError": [],
+    "liveRefusal": [],
+    "liveFault": [],
+    "liveTransport": [],
+    "liveCaption": [],
+    "liveWireState": [
+      {
+        "testid": "voice-live-wire-state",
+        "text": "live",
+        "attrs": {
+          "data-testid": "voice-live-wire-state",
+          "data-state": "live"
+        }
+      }
+    ]
+  },
+  "consoleErrors": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    }
+  ],
+  "consoleWarn": [],
+  "pageErrors": [],
+  "requestFailures": []
+}

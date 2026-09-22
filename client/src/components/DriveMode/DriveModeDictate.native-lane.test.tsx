@@ -127,20 +127,21 @@ describe('DriveModeDictate — the native voice lane is reachable from the voice
     expect(screen.getByTestId('voice-contract-hint')).toBeTruthy();
   });
 
-  it('offers the live talker as the main lane without disturbing the shipped microphone surface', () => {
+  it('offers the free lane below the bounded surface without disturbing the shipped microphone surface', () => {
     renderSurface();
-    // The shipped fallback surface is exactly as before, plus the live talker
-    // mounted directly as the main lane (no separate free-lane disclosure).
+    // The shipped surface is exactly as before, plus one closed, named lane.
     expect(screen.getByTestId('drive-mic')).toBeTruthy();
     expect(screen.getByTestId('voice-contract-hint')).toBeTruthy();
-    expect(screen.getByTestId('native-voice-lane')).toBeTruthy();
-    expect(screen.queryByTestId('native-voice-lane-toggle')).toBeNull();
-    expect(screen.getByTestId('drive-mode-voice-live')).toBeTruthy();
-    expect(screen.getByTestId('native-voice-lane-hint').textContent).toContain('relay to worker');
+    const lane = screen.getByTestId('native-voice-lane');
+    expect(lane).toBeTruthy();
+    expect(screen.getByTestId('native-voice-lane-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('drive-mode-voice-live')).toBeNull();
+    expect(screen.getByTestId('native-voice-lane-summary').textContent).toContain('relay to worker');
   });
 
   it('a lane the server will not serve explains itself in place, and the drive surface survives', async () => {
     const { unmount } = renderSurface();
+    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
     await screen.findByTestId('drive-mode-voice-live');
     expect(screen.getByTestId('drive-mic')).toBeTruthy();
 

@@ -74,12 +74,17 @@ export function useVoiceLiveLane(options: UseVoiceLiveLaneOptions): VoiceLiveLan
   );
 
   useEffect(() => {
+    // The subscription is owned here, not only by the constructor: React
+    // StrictMode mounts/cleans up/re-mounts in development, and the cleanup
+    // must not leave the memoized surface deaf (2026-09-22).
+    const disarm = surface.armController();
     const unregister = registerVoiceLane(lane.laneId, (_frame, raw) => {
       surface.onWireMessage(raw);
     });
     return () => {
       unregister();
-      void surface.dispose();
+      disarm();
+      void surface.teardownForUnmount();
     };
   }, [lane.laneId, surface]);
 

@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { VOICE_WIRE_VERSION } from '@pi-web-ui/shared';
@@ -54,21 +55,24 @@ function serverFrame(type: string, extra: Record<string, unknown> = {}): Record<
   };
 }
 
-describe('NativeVoiceLane — the live talker is the main lane (2026-09-22)', () => {
-  it('mounts the real surface directly, with no separate free-lane toggle and no frames sent', () => {
+describe('NativeVoiceLane — the free lane is mounted below the bounded main UI', () => {
+  it('is closed by default, opens on request, and mounts the real surface', () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" workerLabel="worker-7" />);
-    // The live surface IS the lane, mounted; nothing is behind a disclosure...
-    expect(screen.getByTestId('drive-mode-voice-live')).toBeTruthy();
-    expect(screen.queryByTestId('native-voice-lane-toggle')).toBeNull();
-    expect(screen.queryByTestId('native-voice-lane-summary')).toBeNull();
-    // ...and the relay contract is taught where the operator speaks.
-    expect(screen.getByTestId('native-voice-lane-hint').textContent).toContain('relay to worker');
-    // Nothing starts, and no frame can have been sent, until the operator does.
+    // Reachable, named, honest about what it will do, and it teaches the one new
+    // contract: say "relay to worker".
+    expect(screen.getByTestId('native-voice-lane-summary').textContent).toContain('relay to worker');
+    expect(screen.queryByTestId('drive-mode-voice-live')).toBeNull();
+    // ...and no frame can have been sent by a lane nobody opened.
     expect(mocks.sent).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
+    expect(screen.getByTestId('drive-mode-voice-live')).toBeTruthy();
+    expect(screen.getByTestId('native-voice-lane-hint').textContent).toContain('relay to worker');
   });
 
   it('sends the lane frame on the app socket when the operator starts listening', async () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
+    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
     const laneId = laneIdFromDom();
     fireEvent.click(await screen.findByTestId('voice-live-start'));
 
@@ -84,6 +88,7 @@ describe('NativeVoiceLane — the live talker is the main lane (2026-09-22)', ()
 
   it('routes server frames for its lane from the socket tap into the surface', async () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
+    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
     await screen.findByTestId('drive-mode-voice-live');
 
     // The app's single socket tap offers every frame; only this lane's are ours.
@@ -96,8 +101,29 @@ describe('NativeVoiceLane — the live talker is the main lane (2026-09-22)', ()
     );
   });
 
+  it('survives a StrictMode mount/cleanup/remount: the lane still reports live', async () => {
+    // React StrictMode mounts, cleans up and re-mounts effects in development.
+    // The cleanup must not leave the memoized surface deaf to controller changes
+    // (2026-09-22: the lane reached `live` on the wire but the UI marked it
+    // "no answer from the voice engine" and stopped capture).
+    render(
+      <StrictMode>
+        <NativeVoiceLane sessionId="worker-strict" runtime="pi" />
+      </StrictMode>
+    );
+    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
+    await screen.findByTestId('drive-mode-voice-live');
+
+    emitVoiceFrame(serverFrame('voice_state', { state: 'live' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('voice-live-status').getAttribute('data-lane')).toBe('live');
+    });
+  });
+
   it('renders the honest unavailable state when the lane cannot be served', async () => {
     render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
+    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
     await screen.findByTestId('drive-mode-voice-live');
 
     emitVoiceFrame(
@@ -118,6 +144,9 @@ describe('NativeVoiceLane — the live talker is the main lane (2026-09-22)', ()
 
   it('registers its lane while mounted and releases it on unmount', async () => {
     const { unmount } = render(<NativeVoiceLane sessionId="worker-7" runtime="pi" />);
+    expect(voiceLaneRegistrationCount()).toBe(1);
+    fireEvent.click(screen.getByTestId('native-voice-lane-toggle'));
+    await screen.findByTestId('drive-mode-voice-live');
     expect(voiceLaneRegistrationCount()).toBe(1);
     unmount();
     expect(voiceLaneRegistrationCount()).toBe(0);

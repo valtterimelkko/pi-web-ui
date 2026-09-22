@@ -52,7 +52,7 @@ describe('createWorkerBriefSource', () => {
     ]);
     const source = createWorkerBriefSource({ talkerSessionRegistry: unloadedHarness(path) });
 
-    const brief = await source('01a0a575-7d40-7494-847d-2f42042c7759');
+    const brief = await source('01a0a575-7d40-7494-847d-2f42042c7759', 'pi');
 
     expect(brief.activity).toBe('worker status: idle');
     expect(brief.entries?.map((entry) => entry.text)).toEqual([
@@ -62,7 +62,7 @@ describe('createWorkerBriefSource', () => {
     expect(brief.total).toBe(2);
   });
 
-  it('reads as the pi runtime and from the deeper source tail, not the relay window', async () => {
+  it('reads the LANE runtime and the deeper source tail, not the relay window', async () => {
     const calls: Array<{ id: string; runtime: string; historyTail?: number }> = [];
     const source = createWorkerBriefSource({
       talkerSessionRegistry: {
@@ -73,10 +73,14 @@ describe('createWorkerBriefSource', () => {
       } as never,
     });
 
-    await source('worker-1');
+    await source('worker-1', 'pi');
+    // A Claude (or Antigravity) lane must be read as itself, not as pi: reading
+    // a Claude session as pi is the 2026-09-22 "cannot access the work session".
+    await source('worker-1', 'claude');
 
     expect(calls).toEqual([
       { id: 'worker-1', runtime: 'pi', historyTail: WORKER_BRIEF_SOURCE_TAIL },
+      { id: 'worker-1', runtime: 'claude', historyTail: WORKER_BRIEF_SOURCE_TAIL },
     ]);
     expect(WORKER_BRIEF_SOURCE_TAIL).toBeGreaterThan(200);
   });
@@ -92,7 +96,7 @@ describe('createWorkerBriefSource', () => {
       } as never,
     });
 
-    const brief = await source('worker-2');
+    const brief = await source('worker-2', 'pi');
 
     expect(brief.entries).toHaveLength(1);
     expect(brief.total).toBe(540);
@@ -106,7 +110,7 @@ describe('createWorkerBriefSource', () => {
       talkerSessionRegistry: { workerStateSnapshot: async () => ({ activity: 'worker status: idle' }) } as never,
     });
 
-    const brief = await source('worker-3');
+    const brief = await source('worker-3', 'pi');
 
     expect(brief).toEqual({ activity: 'worker status: idle' });
     expect('entries' in brief).toBe(false);
@@ -115,7 +119,7 @@ describe('createWorkerBriefSource', () => {
   it('never invents a brief for a session this server cannot resolve at all', async () => {
     const source = createWorkerBriefSource({ talkerSessionRegistry: unloadedHarness(null) });
 
-    const brief = await source('unknown-session');
+    const brief = await source('unknown-session', 'pi');
 
     expect(brief).toEqual({ activity: 'worker status: idle' });
   });
@@ -131,6 +135,6 @@ describe('createWorkerBriefSource', () => {
       } as never,
     });
 
-    await expect(source('worker-4')).rejects.toThrow('registry is down');
+    await expect(source('worker-4', 'pi')).rejects.toThrow('registry is down');
   });
 });

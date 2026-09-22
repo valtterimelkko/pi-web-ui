@@ -514,20 +514,56 @@ export class VoiceLiveSurface {
 
   /** Stop everything and release the microphone (component unmount). */
   async dispose(): Promise<void> {
+    await this.teardownForUnmount('disposed');
+    this.unsubscribeController?.();
+    this.unsubscribeController = null;
+    this.listeners.clear();
+  }
+
+  /**
+   * (Re)attach the controller subscription and return the detach function.
+   *
+   * The subscription must be owned by the EFFECT, not only by the constructor:
+   * React StrictMode mounts, cleans up and re-mounts an effect in development,
+   * and a cleanup that only disposed the memoized surface left it permanently
+   * deaf to controller changes — the lane reached `live` on the wire but the
+   * 12 s probe still marked it "no answer from the voice engine" while the
+   * talker worked (2026-09-22). Re-attaching on every mount makes the surface
+   * survive the simulated unmount.
+   */
+  armController(): () => void {
+    this.unsubscribeController?.();
+    this.unsubscribeController = this.controller.subscribe(() => this.onControllerChange());
+    return () => {
+      this.unsubscribeController?.();
+      this.unsubscribeController = null;
+    };
+  }
+
+  /**
+   * Release everything an unmount owns WITHOUT making the surface unusable:
+   * capture, playback, the audio context and the lane probe. A later mount
+   * re-arms the controller (`armController`) and lazily re-creates the audio
+   * graph, so the same memoized surface survives a StrictMode remount. The
+   * React subscribers (`listeners`) are deliberately kept.
+   */
+  async teardownForUnmount(reason = 'lane unmounted'): Promise<void> {
     this.stopReadBack();
     this.clearLaneProbe();
     // Before the queue is disposed: the stranded figure is the evidence.
     this.reportLaneEnd();
-    await this.stopCapture('disposed');
+    await this.stopCapture(reason);
     this.playback?.dispose();
     this.playback = null;
-    this.unsubscribeController?.();
-    this.unsubscribeController = null;
-    this.listeners.clear();
     if (this.audioContext && this.audioContext.state !== 'closed') {
       await this.audioContext.close().catch(() => undefined);
     }
     this.audioContext = null;
+    // No lane is open once the surface is torn down; a remount starts honest.
+    this.lane = this.captureUnsupportedDetail
+      ? { state: 'unsupported', detail: this.captureUnsupportedDetail }
+      : { state: 'unknown', detail: null };
+    this.publish();
   }
 
   // ── Lane start and availability (M7) ─────────────────────────────────────
