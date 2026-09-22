@@ -23,8 +23,8 @@ All three: `zai/glm-5.3-flash` high · briefs at `children/<X>/brief.md` · hand
 **Current truth**
 
 - master `8f27fd98` (= origin): Phase 0 evidence + acceptance manifest + briefs + **H's Phase 3 server half merged**. H verified: scoped suite 900 passed, typecheck 0, lint 0 errors, parent probe 12/12.
-- Post-merge full server suite running in background (`bg_e5f17332`); completion wake will arrive.
-- L and C still working (goal running); their handbacks not yet written.
+- Post-merge full server suite **green**: exit 0, 446 files / 5520 tests on `59558aa9` (`/root/voice-lane-lab/w1-postmerge-server-suite.log`).
+- L and C still working (goal running, actively producing); handbacks not yet written.
 - Sibling lineage settled; merge authority granted for accepted, verified lanes.
 - zai pool ample at preflight; contract 1.44.0.
 
@@ -39,5 +39,5 @@ All three: `zai/glm-5.3-flash` high · briefs at `children/<X>/brief.md` · hand
 **Open questions:** none.
 **Spend:** US$0.00 / 8 h live (GLM child tokens inside zai allowance; counted at review).
 
-**Backstops:** `wake_deadline` `deadline-86220e10-564d-436f-be3e-1157ceb1d47a` until 22:45:19Z;
-`bg_e5f17332` (post-merge full server suite) will wake on completion.
+**Backstops:** `wake_deadline` `deadline-86220e10-564d-436f-be3e-1157ceb1d47a` until 22:45:19Z (L+C
+window). Post-merge suite completed green; nothing else outstanding.

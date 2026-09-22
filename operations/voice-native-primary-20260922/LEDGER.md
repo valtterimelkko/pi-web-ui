@@ -304,6 +304,7 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-22 21:57 | W1 | Child H `goal_end` (achieved); handback FROZEN (`coordination/H/complete.md` + evidence). All three children reconciled: L and C still running. Backstop deadline fired (time-up, not failure) | H commits `2da74aae` + `1cd88013`; tree clean |
 | 2026-09-22 21:59 | W1 | **H independently verified** on the frozen commit: scoped suite 57 files/900 passed; typecheck exit 0; lint 0 errors (311 warnings); **parent probe 12/12 green** (the Phase 0 seeds, written before H started). Boundary amendment **accepted**: two integration test files under `tests/unit/voice/**` adapted to corrected semantics (assertions strengthened; M6 gained a refusal check) | gate logs in session; H evidence files |
 | 2026-09-22 22:02 | W1 | **H merged to master (`8f27fd98`) and pushed**; docs-link defect fixed first (`5d16dbb5`); lease released, watch `ww_3` cancelled, worktree + branch removed. Post-merge full server suite launched in background (`bg_e5f17332`) | `git log`; `wake_deadline` re-armed `deadline-86220e10…` for the L+C window |
+| 2026-09-22 22:01 | W1 | **Post-merge full server suite GREEN**: `env -u PI_MAX_SESSIONS -u OPENCODE_ENABLED npm test --workspace=server` → exit 0, **446 files / 5520 tests passed** on `59558aa9` | `/root/voice-lane-lab/w1-postmerge-server-suite.log` |
 
 ### Wave 1 dispatch record (2026-09-22 21:12Z)
 
