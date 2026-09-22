@@ -191,7 +191,12 @@ function utterance(service: FakeService, laneId: string, text: string, generatio
  * decides to relay and calls `relay_to_worker`; the transcript is no longer
  * mechanically classified. Tests use this instead of the removed predicate.
  */
-async function relayToWorker(mount: VoiceLiveMount, laneId: string, text: string): Promise<void> {
+async function relayToWorker(service: FakeService, mount: VoiceLiveMount, laneId: string, text: string): Promise<void> {
+  // Phase 3: a relay binds to what the operator said. Every test relay is
+  // preceded by the matching final operator utterance — the real flow — so
+  // the tool call has provenance to bind to.
+  utterance(service, laneId, text);
+  await flush();
   await mount.handleToolRequest({ laneId, name: 'relay_to_worker', args: { text }, atMs: 1 });
 }
 
@@ -274,7 +279,7 @@ async function proposalReady(
   worker = 'W1'
 ): Promise<ProposalRef> {
   await startLane(mount, sent, laneId, { worker });
-  await relayToWorker(mount, laneId, 'check the tests.');
+  await relayToWorker(service, mount, laneId, 'check the tests.');
   await flush();
   const proposal = proposalFrom(sent);
   await reportPresentation(mount, sent, laneId, proposal);
@@ -290,7 +295,7 @@ describe('H1: a same-generation worker change resolves the live proposal before 
     const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1', { worker: 'W1' });
-    await relayToWorker(mount, 'lane-1', 'check the tests.');
+    await relayToWorker(service, mount, 'lane-1', 'check the tests.');
     await flush();
     const proposal = proposalFrom(sent);
 
@@ -323,7 +328,7 @@ describe('H1: a same-generation worker change resolves the live proposal before 
     });
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1', { worker: 'W1' });
-    await relayToWorker(mount, 'lane-1', 'check the tests.');
+    await relayToWorker(service, mount, 'lane-1', 'check the tests.');
     await flush();
     await startLane(mount, sent, 'lane-1', { worker: 'W2' });
 
@@ -333,7 +338,7 @@ describe('H1: a same-generation worker change resolves the live proposal before 
     expect(retarget).toBeDefined();
 
     // A fresh proposal after the retarget delivers to W2.
-    await relayToWorker(mount, 'lane-1', 'rerun the suite.');
+    await relayToWorker(service, mount, 'lane-1', 'rerun the suite.');
     await flush();
     const second = proposalFrom(sent);
     await reportPresentation(mount, sent, 'lane-1', second);
@@ -353,7 +358,7 @@ describe('H1: a same-generation worker change resolves the live proposal before 
     });
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1', { worker: 'W1', generation: 1 });
-    await relayToWorker(mount, 'lane-1', 'check the tests.');
+    await relayToWorker(service, mount, 'lane-1', 'check the tests.');
     await flush();
     const proposal = proposalFrom(sent);
     await startLane(mount, sent, 'lane-1', { worker: 'W1', generation: 2 });
@@ -475,8 +480,8 @@ describe('M1: concurrent confirms sharing an idempotency key deliver exactly onc
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1', { worker: 'W1' });
     await startLane(mount, sent, 'lane-2', { worker: 'W2' });
-    await relayToWorker(mount, 'lane-1', 'do one.');
-    await relayToWorker(mount, 'lane-2', 'do two.');
+    await relayToWorker(service, mount, 'lane-1', 'do one.');
+    await relayToWorker(service, mount, 'lane-2', 'do two.');
     await flush();
     const p1 = proposalFrom(sent, 0);
     const p2 = proposalFrom(sent, 1);
@@ -687,7 +692,7 @@ describe('M6: talker echo never releases the gate', () => {
     });
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1');
-    await relayToWorker(mount, 'lane-1', 'check the tests.');
+    await relayToWorker(service, mount, 'lane-1', 'check the tests.');
     await flush();
     // The talker's read-back completes the presentation AND puts its audio in
     // the room.
@@ -724,13 +729,33 @@ describe('M6: talker echo never releases the gate', () => {
       atMs: 1,
     } as never);
     // A commission-shaped transcript is now just conversation: no proposal.
+    // It is ALSO echo-suspect (speech is active), so it is never recorded as a
+    // relay source — the operator's words while speech is active are dropped.
     utterance(service, 'lane-1', 'Tell the worker to check the tests.');
     await flush();
     expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
 
     // Only the model's relay tool call creates the proposal, and operator speech
-    // state is not an authority gate on it.
-    await relayToWorker(mount, 'lane-1', 'check the tests.');
+    // state is not an authority gate on it. But the relay still needs a SOURCE:
+    // the only words it could bind to were echo-suspect and never recorded, so
+    // the honest answer is a provenance refusal, not a guess.
+    await mount.handleToolRequest({ laneId: 'lane-1', name: 'relay_to_worker', args: { text: 'check the tests.' }, atMs: 1 });
+    await flush();
+    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
+
+    // Speech ends; the operator's next words are recorded, and the relay binds
+    // and creates — the speech state itself never gated anything.
+    await mount.route('c1', ctx(sent) as never, {
+      type: 'voice_activity_state',
+      version: 1,
+      laneId: 'lane-1',
+      attachmentGeneration: 1,
+      state: 'speech_end',
+      atMs: 2,
+    } as never);
+    utterance(service, 'lane-1', 'check the tests.');
+    await flush();
+    await mount.handleToolRequest({ laneId: 'lane-1', name: 'relay_to_worker', args: { text: 'check the tests.' }, atMs: 3 });
     await flush();
     expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(1);
   });
@@ -771,7 +796,7 @@ describe('H3-server: a release requires a presented proposal and a real identity
     const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1');
-    await relayToWorker(mount, 'lane-1', 'deploy to staging.');
+    await relayToWorker(service, mount, 'lane-1', 'deploy to staging.');
     await flush();
     const proposal = proposalFrom(sent);
     expect(proposal.presentation.completed).toBe(false);
@@ -809,7 +834,7 @@ describe('H3-server: a release requires a presented proposal and a real identity
     });
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1');
-    await relayToWorker(mount, 'lane-1', 'check the tests.');
+    await relayToWorker(service, mount, 'lane-1', 'check the tests.');
     await flush();
 
     utterance(service, 'lane-1', 'Yes, send that.');
@@ -829,7 +854,7 @@ describe('H3-server: a release requires a presented proposal and a real identity
     const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
     const sent: Sent[] = [];
     await startLane(mount, sent, 'lane-1');
-    await relayToWorker(mount, 'lane-1', 'check the tests.');
+    await relayToWorker(service, mount, 'lane-1', 'check the tests.');
     await flush();
     const first = proposalFrom(sent);
     // A report naming a different proposal does not present the live one.

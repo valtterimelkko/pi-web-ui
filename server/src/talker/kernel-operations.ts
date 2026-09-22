@@ -151,7 +151,7 @@ export interface KernelReadOnlyOperations {
     truncated: boolean;
   };
   retrieveFileContext(input: { relativePath: string }): FileContextResult;
-  parkItem(input: { text: string; sourceUtteranceId: number }): ParkedItem;
+  parkItem(input: { text: string; sourceUtteranceId: number; original?: string }): ParkedItem;
   readParkingLot(): ParkedItem[];
   offerAskWorker(input: {
     question: string;
@@ -200,7 +200,11 @@ export function createReadOnlyKernelOperations(sources: {
     },
 
     parkItem(input) {
-      return sources.parkingLot.add({ text: input.text, sourceUtteranceId: input.sourceUtteranceId });
+      return sources.parkingLot.add({
+        text: input.text,
+        sourceUtteranceId: input.sourceUtteranceId,
+        ...(input.original !== undefined ? { original: input.original } : {}),
+      });
     },
 
     readParkingLot() {

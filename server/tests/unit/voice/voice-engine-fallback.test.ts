@@ -245,7 +245,24 @@ async function startLane(mount: VoiceLiveMount, sent: Sent[]): Promise<void> {
 }
 
 /** The model-driven relay: the native talker calls `relay_to_worker`. */
-async function relay(mount: VoiceLiveMount, text: string): Promise<void> {
+/** Emit one final operator transcript (the relay's binding source). */
+function operatorSays(service: { emit(event: VoiceBridgeEmittedEvent): void }, text: string): void {
+  service.emit({
+    kind: 'transcript',
+    laneId: LANE,
+    attachmentGeneration: 1,
+    speaker: 'operator',
+    source: 'native',
+    text,
+    final: true,
+    atMs: 1,
+  } as never);
+}
+
+async function relay(service: { emit(event: VoiceBridgeEmittedEvent): void }, mount: VoiceLiveMount, text: string): Promise<void> {
+  // Phase 3: the relay binds to what the operator said — speak first, then call.
+  operatorSays(service, text);
+  await flush();
   await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text }, atMs: 1 });
 }
 
@@ -278,8 +295,10 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     harness.open();
     expect(harness.service.getState(LANE)?.state).toBe('live');
 
-    // One active draft...
-    await relay(mount, 'check the tests.');
+    // One active draft... (the operator speaks through the real provider path)
+    harness.speakOperator('check the tests.');
+    await flush();
+    await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text: 'check the tests.' }, atMs: 1 });
     const draft = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       proposalId: string;
       version: number;
@@ -290,7 +309,9 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
 
     // ...and one parked item (flagged while the worker was busy).
     busy = true;
-    await relay(mount, 'update the changelog.');
+    harness.speakOperator('update the changelog.');
+    await flush();
+    await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text: 'update the changelog.' }, atMs: 1 });
     busy = false;
     const parkingFrames = sent.filter((frame) => frame.type === 'parking_updated');
     const parkedId = (parkingFrames.at(-1)?.items as Array<{ itemId: string }>)[0].itemId;
@@ -416,7 +437,7 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     };
     await startLane(mount, sent);
 
-    await relay(mount, 'check the tests.');
+    await relay(service, mount, 'check the tests.');
     const draft = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
       proposalId: string;
       version: number;
@@ -476,7 +497,7 @@ describe('Phase 8 fallback: kill the live connection mid-session', () => {
     expect(metrics.snapshot().voice?.proposals).toMatchObject({ created: 1, released: 1, refused: 1, reconciled: 0 });
 
     // A cancelled proposal reconciles its slot without a release.
-    await relay(mount, 'update the changelog.');
+    await relay(service, mount, 'update the changelog.');
     const second = (sent.filter((frame) => frame.type === 'proposal_created') as Sent).at(-1)?.proposal as {
       proposalId: string;
     };
