@@ -198,6 +198,11 @@ async function voicesCommand(argv: string[]): Promise<number> {
   const failures: string[] = [];
   for (const profile of VOICE_PROFILES) {
     const outDir = path.join(VOICES_ROOT, profile.id);
+    const commitPath0 = path.join(CORPUS_DIR, 'voices', `${profile.id}.manifest.json`);
+    if (existsSync(commitPath0)) {
+      writeOut(`voice ${profile.id}: already frozen (${commitPath0}) — skipping`);
+      continue;
+    }
     writeOut(`voice ${profile.id}: ${profile.description} (${profile.supertonic.voice}, speed ${profile.supertonic.speed}, silence ${profile.supertonic.silence})`);
     try {
       const build = await buildVoiceProfile(profile, corpus, { outDir, whisperBaseUrl: whisper, log: (line) => writeOut(`  ${line}`) });

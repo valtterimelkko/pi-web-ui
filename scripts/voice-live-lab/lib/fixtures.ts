@@ -207,9 +207,18 @@ export function createWhisperAsrClient(options: {
     const url = `${base}/asr?output=json&task=transcribe&language=en&word_timestamps=true`;
     const form = new FormData();
     form.append('audio_file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'fixture.wav');
-    const response = await fetchImpl(url, { method: 'POST', body: form });
+    // 2026-09-22 (native-primary corpus): a long-lived lab process can hold a
+    // stale keep-alive socket through the container proxy, which answers every
+    // request with HTTP 500 while fresh connections work. Disable reuse so
+    // each fixture is judged on its own connection.
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      body: form,
+      headers: { Connection: 'close' },
+    });
     if (!response.ok) {
-      throw new Error(`Whisper ASR failed: HTTP ${response.status}`);
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Whisper ASR failed: HTTP ${response.status}: ${detail.slice(0, 200)}`);
     }
     const body = (await response.json()) as { text?: string };
     return { text: body.text ?? '' };
@@ -323,6 +332,10 @@ export interface SynthesiseOptions {
   model?: string;
   /** Rate/pause profile (2026-09-22: the corpus needs two voices). */
   synthesis?: SynthesisProfile;
+  /** Reuse existing raw/<id>.wav samples instead of re-synthesising them.
+   *  2026-09-22 (native-primary): the corpus voices re-validate without
+   *  re-running the (nondeterministic) synthesiser over unchanged texts. */
+  reuseRaw?: boolean;
   synthesisRunner?: SynthesisRunner;
   log?: (message: string) => void;
 }
@@ -336,7 +349,14 @@ export async function synthesiseFixtures(options: SynthesiseOptions): Promise<Fi
   mkdirSync(rawDir, { recursive: true, mode: 0o700 });
 
   const runner = options.synthesisRunner ?? runSupertonic;
-  await runner(options.specs, rawDir, voice, model, options.synthesis);
+  const reuse = options.reuseRaw ?? false;
+  const toSynthesise = reuse
+    ? options.specs.filter((spec) => !existsSync(path.join(rawDir, `${spec.id}.wav`)))
+    : options.specs;
+  if (reuse) {
+    log(`reusing ${options.specs.length - toSynthesise.length} existing raw samples; synthesising ${toSynthesise.length}`);
+  }
+  if (toSynthesise.length > 0) await runner(toSynthesise, rawDir, voice, model, options.synthesis);
 
   const fixtures: SynthesisedFixture[] = [];
   for (const spec of options.specs) {

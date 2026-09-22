@@ -20,7 +20,7 @@
     {
       "id": "t1",
       "kind": "opening",
-      "text": "Relay to worker check the lag for the retry handler.",
+      "text": "Relay to worker, check the lag for the retry handler.",
       "requiredWords": [
         "relay",
         "worker",

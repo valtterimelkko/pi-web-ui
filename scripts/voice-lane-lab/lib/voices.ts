@@ -15,13 +15,17 @@
  * manifests and with every attempt record that uses them.
  */
 
-import { readFileSync } from 'node:fs';
+"use strict";
+import { readFileSync, rmSync } from 'node:fs';
+import path from 'node:path';
 
 import {
   createWhisperAsrClient,
+  INPUT_SAMPLE_RATE,
   synthesiseFixtures,
+  wavFromPcm16,
   verifyFixture,
-  verifyFixtureSet,
+  verifyFixtureManifest,
   type AsrClient,
   type AsrResult,
   type FixtureManifest,
@@ -122,7 +126,23 @@ export async function buildVoiceProfile(
   const log = options.log ?? (() => {});
   const maxAttempts = options.maxAttempts ?? 3;
   const specs = utteranceSpecsFromCorpus(corpus);
-  const asr = createWhisperAsrClient({ baseUrl: options.whisperBaseUrl });
+  // Transport-level resilience: the shared Whisper container occasionally
+  // answers a transient HTTP 5xx. A transport retry never alters a verdict —
+  // only the verdicts' INPUT is retried, then judged once, as before.
+  const baseAsr = createWhisperAsrClient({ baseUrl: options.whisperBaseUrl });
+  const asr: AsrClient = async (wav) => {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        return await baseAsr(wav);
+      } catch (error) {
+        lastError = error;
+        log(`ASR transport retry ${attempt}: ${String(error).slice(0, 120)}`);
+        await new Promise((resolve) => setTimeout(resolve, 5_000 * attempt));
+      }
+    }
+    throw lastError;
+  };
   const synthesis = { speed: profile.supertonic.speed, silence: profile.supertonic.silence, steps: profile.supertonic.steps };
 
   const kept = new Map<string, SynthesisedFixture>();
@@ -137,6 +157,7 @@ export async function buildVoiceProfile(
       voice: profile.supertonic.voice,
       model: profile.supertonic.model,
       synthesis,
+      reuseRaw: attempt === 1,
       log,
     });
     manifest = pass;
@@ -147,7 +168,19 @@ export async function buildVoiceProfile(
         nextPending.push(spec);
         continue;
       }
-      const result: AsrResult = await asr(readFileSync(fixture.pcm16kPath));
+      let result: AsrResult;
+      try {
+        // The ASR transport expects a RIFF/WAVE container: the derived pcm16k
+        // is raw samples and MUST be wrapped first (an unwrapped upload makes
+        // the container's ffmpeg fail with "invalid data").
+        result = await asr(wavFromPcm16(readFileSync(fixture.pcm16kPath), INPUT_SAMPLE_RATE));
+      } catch (error) {
+        // Transport-level failure (shared container flake): the sample itself
+        // is unjudged, not invalid. It stays pending for the next pass.
+        log(`fixture ${spec.id}: ASR transport failed on attempt ${attempt}: ${String(error)}`);
+        nextPending.push(spec);
+        continue;
+      }
       const verdict = verifyFixture(
         { id: spec.id, text: spec.text, requiredWords: spec.requiredWords ?? [] },
         result
@@ -157,12 +190,24 @@ export async function buildVoiceProfile(
         transcripts.set(spec.id, result);
       } else {
         log(`fixture ${spec.id} failed ASR on attempt ${attempt}: ${verdict.reason}`);
+        // A failed sample must not be reused: force a fresh synthesis next pass.
+        try {
+          rmSync(path.join(options.outDir, 'raw', `${spec.id}.wav`));
+        } catch {
+          /* absence is fine */
+        }
         nextPending.push(spec);
       }
     }
     pending = nextPending;
   }
 
+  if (pending.length > 0) {
+    throw new Error(
+      `fixtures invalid after ${maxAttempts} attempts (plan \u00a75.1: disagreement invalidates until resolved): ` +
+        pending.map((spec) => spec.id).join(', ')
+    );
+  }
   if (!manifest) throw new Error('no synthesis pass completed');
   const finalManifest: FixtureManifest = {
     ...manifest,
@@ -170,6 +215,38 @@ export async function buildVoiceProfile(
       .map((spec) => kept.get(spec.id))
       .filter((fixture): fixture is SynthesisedFixture => fixture !== undefined),
   };
-  const verification = await verifyFixtureSet(finalManifest, { asr });
+  // Final verification from evidence already gathered: disk hashes re-checked,
+  // verdicts recomputed from the stored transcripts — no re-transcription, so
+  // a flaky container window cannot double-count against a fixture.
+  const hashProblems = verifyFixtureManifest(finalManifest);
+  const verdicts = specs
+    .map((spec) => {
+      const stored = transcripts.get(spec.id);
+      if (!stored) {
+        return {
+          id: spec.id,
+          text: spec.text,
+          transcript: '',
+          wer: 1,
+          missingWords: spec.requiredWords ?? [],
+          ok: false,
+          reason: 'no validated transcript (transport failures exhausted retries)',
+        };
+      }
+      return verifyFixture(
+        { id: spec.id, text: spec.text, requiredWords: spec.requiredWords ?? [] },
+        stored
+      );
+    });
+  const asrFailures = verdicts.filter((verdict) => !verdict.ok);
+  const ok = hashProblems.length === 0 && asrFailures.length === 0;
+  const verification: FixtureSetVerification = {
+    ok,
+    verdicts,
+    problems: [
+      ...hashProblems,
+      ...asrFailures.map((failure) => `fixture ${failure.id}: ${failure.reason ?? 'failed'}`),
+    ],
+  };
   return { profileId: profile.id, manifest: finalManifest, manifestPath: `${options.outDir}/manifest.json`, verification };
 }
