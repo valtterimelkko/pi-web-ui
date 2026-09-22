@@ -96,7 +96,7 @@ heavy browser/audio runner** exists at a time (conductor-owned). Cap concurrent 
 |---|---|---|---|
 | P0 baseline + RED | **passed (G0)** | baseline `fa1eb393`; evidence commit `57efe420` | `phase0/PHASE0-RED.md` (+ raw logs), `ACCEPTANCE-MANIFEST.md` |
 | P1 instrumentation | running (Child L) | branch `task/voice-native-lab` from `57efe420` | `children/L/brief.md`; handback `/root/voice-native-20260922/coordination/L/` |
-| P2 native primary surface | running (Child C) | branch `task/voice-native-client` | `children/C/brief.md`; handback `…/C/` |
+| P2 native primary surface | **client half passed** (Child C verified + merged `5fa309a9`); full G2 pending J's primary-mic browser journey | branch `task/voice-native-client` (removed) | `children/C/`; handback `/root/voice-native-20260922/coordination/C/` |
 | P3 relay/approval fidelity | **server half passed** (Child H verified + merged `8f27fd98`); full G3 pending client/browser integration | branch `task/voice-native-host` (removed) | `children/H/`; handback `/root/voice-native-20260922/coordination/H/`; PHASE0 seeds now green |
 | P4 pilot + fix loop | not started | — | — |
 | P5 comparison + verdict | not started | — | — |
@@ -305,6 +305,8 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-22 21:59 | W1 | **H independently verified** on the frozen commit: scoped suite 57 files/900 passed; typecheck exit 0; lint 0 errors (311 warnings); **parent probe 12/12 green** (the Phase 0 seeds, written before H started). Boundary amendment **accepted**: two integration test files under `tests/unit/voice/**` adapted to corrected semantics (assertions strengthened; M6 gained a refusal check) | gate logs in session; H evidence files |
 | 2026-09-22 22:02 | W1 | **H merged to master (`8f27fd98`) and pushed**; docs-link defect fixed first (`5d16dbb5`); lease released, watch `ww_3` cancelled, worktree + branch removed. Post-merge full server suite launched in background (`bg_e5f17332`) | `git log`; `wake_deadline` re-armed `deadline-86220e10…` for the L+C window |
 | 2026-09-22 22:01 | W1 | **Post-merge full server suite GREEN**: `env -u PI_MAX_SESSIONS -u OPENCODE_ENABLED npm test --workspace=server` → exit 0, **446 files / 5520 tests passed** on `59558aa9` | `/root/voice-lane-lab/w1-postmerge-server-suite.log` |
+| 2026-09-22 22:13 | W1 | Child C `goal_end` (achieved); handback FROZEN (`coordination/C/complete.md`); L still running. C verified independently on frozen `a190ed87`: scoped client suite 381 passed, client build exit 0, typecheck exit 0; **anti-cheat sound** (new suite drives the real VoiceLiveSurface over fake browser factories, asserts `voice_session_start` on the wire, capture goes live, and the cascade is NOT engaged) | C RED evidence verbatim in handback; parent re-ran gates |
+| 2026-09-22 22:16 | W1 | **C merged to master (`5fa309a9`) and pushed**; lease released, watch `ww_2` cancelled, worktree + branch removed. Post-merge client suite + typecheck + build launched in background (`bg_f1aab31a`) | `git log` |
 
 ### Wave 1 dispatch record (2026-09-22 21:12Z)
 
