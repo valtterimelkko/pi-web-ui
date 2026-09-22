@@ -17,6 +17,15 @@ import { spokenLedger } from '../../../../src/lib/spokenLedger';
 
 const sendMock = vi.fn();
 const sendPromptMock = vi.fn();
+// Native-primary (Phase 2): these pins exercise the CASCADE engine, which is
+// now the explicit fallback. Stub the native lane as unavailable and engage
+// the fallback in the render helper — the behaviour under test is then the
+// shipped fallback behaviour.
+vi.mock('../../../../src/hooks/useVoiceLiveLane', async () => {
+  const { useVoiceLiveLaneStubModule } = await import('../../../helpers/nativeLaneStub');
+  return useVoiceLiveLaneStubModule();
+});
+import { activateCascadeFallback } from '../../../helpers/nativeLaneStub';
 vi.mock('../../../../src/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(() => ({ sendMessage: sendMock, sendPrompt: sendPromptMock })),
 }));
@@ -104,7 +113,7 @@ function makeBlockedPlayer() {
 const WORKER = '/pi/worker.jsonl';
 
 function renderSurface() {
-  return render(
+  const rendered = render(
     <DriveModeDictate
       sessionId={WORKER}
       sdkType="pi"
@@ -114,6 +123,8 @@ function renderSurface() {
       onAbort={vi.fn()}
     />
   );
+  activateCascadeFallback();
+  return rendered;
 }
 
 function dictate(text: string): void {

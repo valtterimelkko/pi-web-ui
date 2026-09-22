@@ -19,6 +19,15 @@ import { useReadingLevelStore } from '../../../../src/components/DriveMode/readi
 
 const sendMock = vi.fn();
 const sendPromptMock = vi.fn();
+// Native-primary (Phase 2): these pins exercise the CASCADE engine, which is
+// now the explicit fallback. Stub the native lane as unavailable and engage
+// the fallback in the render helper — the behaviour under test is then the
+// shipped fallback behaviour.
+vi.mock('../../../../src/hooks/useVoiceLiveLane', async () => {
+  const { useVoiceLiveLaneStubModule } = await import('../../../helpers/nativeLaneStub');
+  return useVoiceLiveLaneStubModule();
+});
+import { activateCascadeFallback } from '../../../helpers/nativeLaneStub';
 vi.mock('../../../../src/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(() => ({ sendMessage: sendMock, sendPrompt: sendPromptMock })),
 }));
@@ -111,7 +120,7 @@ function renderLane(
   opts: { laneEnabled: boolean; addressed: boolean },
   key?: string
 ) {
-  return render(
+  const rendered = render(
     <DriveModeDictate
       key={key}
       sessionId={sessionId}
@@ -124,6 +133,8 @@ function renderLane(
       addressed={opts.addressed}
     />
   );
+  activateCascadeFallback();
+  return rendered;
 }
 
 function surfaceOf(sessionId: string): HTMLElement {

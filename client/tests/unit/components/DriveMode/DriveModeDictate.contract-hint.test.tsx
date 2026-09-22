@@ -26,6 +26,15 @@ import { resetReadingLevelStore } from '../../../../src/components/DriveMode/rea
 
 // --- Transport: capture outgoing socket messages ----------------------------
 const sendMock = vi.fn();
+// Native-primary (Phase 2): these pins exercise the CASCADE engine, which is
+// now the explicit fallback. Stub the native lane as unavailable and engage
+// the fallback in the render helper — the behaviour under test is then the
+// shipped fallback behaviour.
+vi.mock('../../../../src/hooks/useVoiceLiveLane', async () => {
+  const { useVoiceLiveLaneStubModule } = await import('../../../helpers/nativeLaneStub');
+  return useVoiceLiveLaneStubModule();
+});
+import { activateCascadeFallback } from '../../../helpers/nativeLaneStub';
 vi.mock('../../../../src/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(() => ({ sendMessage: sendMock })),
 }));
@@ -124,7 +133,9 @@ const surface = () => (
 );
 
 function renderSurface() {
-  return render(surface() as ReactElement);
+  const rendered = render(surface() as ReactElement);
+  activateCascadeFallback();
+  return rendered;
 }
 
 /** Feed one dictated utterance through the real capture → talker pipeline. */

@@ -6,6 +6,16 @@ import { lastSentTalkerRequestId } from '../../helpers/talkerEcho';
 import { speechArbiter, type ArbiterPlayer } from '../../../../src/lib/speechArbiter';
 import { spokenLedger } from '../../../../src/lib/spokenLedger';
 
+// Native-primary (Phase 2): these pins exercise the CASCADE engine, which is
+// now the explicit fallback. Stub the native lane as unavailable and engage
+// the fallback in the render helpers below — the cascade behaviour under test
+// is then exactly the shipped fallback behaviour.
+vi.mock('../../../../src/hooks/useVoiceLiveLane', async () => {
+  const { useVoiceLiveLaneStubModule } = await import('../../../helpers/nativeLaneStub');
+  return useVoiceLiveLaneStubModule();
+});
+import { activateCascadeFallback } from '../../../helpers/nativeLaneStub';
+
 // --- Transport: capture outgoing socket messages ----------------------------
 const sendMock = vi.fn();
 const sendPromptMock = vi.fn();
@@ -120,7 +130,7 @@ const WORKER = '/pi/worker.jsonl';
 function renderSurface(over?: { isStreaming?: boolean; messages?: Array<Record<string, unknown>> }) {
   if (over?.isStreaming !== undefined) sessionState.isStreaming = over.isStreaming;
   if (over?.messages) sessionState.messages = over.messages;
-  return render(
+  const rendered = render(
     <DriveModeDictate
       sessionId={WORKER}
       sdkType="pi"
@@ -130,6 +140,8 @@ function renderSurface(over?: { isStreaming?: boolean; messages?: Array<Record<s
       onAbort={vi.fn()}
     />
   );
+  activateCascadeFallback();
+  return rendered;
 }
 
 beforeEach(() => {
@@ -240,6 +252,7 @@ describe('DriveModeDictate — the Voice Mode surface (talking while working)', 
     // 1. You have the floor.
     capture.state = 'recording';
     const { rerender } = render(<DriveModeDictate {...props} />);
+    activateCascadeFallback();
     expect(screen.getByTestId('floor-banner').textContent).toContain('You have the floor');
 
     // 2. Talker speaking.
@@ -468,6 +481,7 @@ describe('DriveModeDictate — the Voice Mode surface (talking while working)', 
       { id: 'm1', role: 'assistant', content: 'The build is green.', timestamp: Date.now() },
     ];
     const { rerender } = render(<DriveModeDictate {...props} />);
+    activateCascadeFallback();
     sessionState.isStreaming = false;
     act(() => {
       rerender(<DriveModeDictate {...props} />);
@@ -520,6 +534,7 @@ describe('DriveModeDictate — the Voice Mode surface (talking while working)', 
   it('exit button calls onExit', () => {
     const onExit = vi.fn();
     render(<DriveModeDictate sessionId={WORKER} sdkType="pi" modelName="m" sessionDisplayName="s" onExit={onExit} onAbort={vi.fn()} />);
+    activateCascadeFallback();
     fireEvent.click(screen.getByText(/exit/i));
     expect(onExit).toHaveBeenCalled();
   });

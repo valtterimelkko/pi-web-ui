@@ -44,6 +44,13 @@ import {
 // --- Transport: capture outgoing socket messages ----------------------------
 const sendMock = vi.fn();
 const sendPromptMock = vi.fn();
+// Native-primary (Phase 2): these pins exercise the CASCADE digest path,
+// which now runs only while the explicit fallback is engaged.
+vi.mock('../../../../src/hooks/useVoiceLiveLane', async () => {
+  const { useVoiceLiveLaneStubModule } = await import('../../../helpers/nativeLaneStub');
+  return useVoiceLiveLaneStubModule();
+});
+import { activateCascadeFallback } from '../../../helpers/nativeLaneStub';
 vi.mock('../../../../src/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(() => ({ sendMessage: sendMock, sendPrompt: sendPromptMock })),
 }));
@@ -206,7 +213,9 @@ const surface = () => (
 let harness = makeControllablePlayer();
 
 function renderSurface() {
-  return render(surface() as ReactElement);
+  const rendered = render(surface() as ReactElement);
+  activateCascadeFallback();
+  return rendered;
 }
 
 /** Drive one completed worker run through the real auto-speak effect. The

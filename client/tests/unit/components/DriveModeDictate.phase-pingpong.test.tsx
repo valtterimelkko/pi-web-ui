@@ -4,6 +4,15 @@ import { DriveModeDictate } from '../../../src/components/DriveMode/DriveModeDic
 import { useDriveModeStore } from '../../../src/store/driveModeStore.js';
 import { useSessionStore, type Message } from '../../../src/store/sessionStore.js';
 
+// Native-primary (Phase 2): these pins exercise the CASCADE phase writer,
+// which now runs only while the explicit fallback is engaged (native lane
+// stubbed unavailable; the render helper engages the fallback).
+vi.mock('../../../src/hooks/useVoiceLiveLane.js', async () => {
+  const { useVoiceLiveLaneStubModule } = await import('../../helpers/nativeLaneStub');
+  return useVoiceLiveLaneStubModule();
+});
+import { activateCascadeFallback } from '../../helpers/nativeLaneStub';
+
 /**
  * P13 Phase 3 — the barge-in crash, reproduced at the unit level.
  *
@@ -47,7 +56,7 @@ const messages: Message[] = [
 ] as unknown as Message[];
 
 function renderSurface(): ReturnType<typeof render> {
-  return render(
+  const rendered = render(
     <DriveModeDictate
       sessionId="test-session"
       sdkType="pi"
@@ -57,6 +66,8 @@ function renderSurface(): ReturnType<typeof render> {
       onAbort={() => {}}
     />,
   );
+  activateCascadeFallback();
+  return rendered;
 }
 
 describe('DriveModeDictate phase bookkeeping (P13 barge-in crash)', () => {
