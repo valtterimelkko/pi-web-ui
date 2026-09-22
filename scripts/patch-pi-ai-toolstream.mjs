@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Guarded local patch for @earendil-works/pi-ai 0.85.1 — streamed tool-call
+ * Guarded local patch for @earendil-works/pi-ai 0.87.0 — streamed tool-call
  * arguments (2026-09-12 event-loop stall, Defect B / the trigger).
  *
  * WHY THIS EXISTS
@@ -46,7 +46,7 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const EXPECTED_VERSION = '0.85.1';
+const EXPECTED_VERSION = '0.87.0';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PATCH_MARKER = 'PARTIAL_ARGS_PARSE_INTERVAL_MS';
 
@@ -62,7 +62,7 @@ const MAX_STREAMING_TOOL_ARGS_CHARS = 64 * 1024;
 const lastStreamingArgsParseAt = new WeakMap();
 `;
 
-/** The original defect block (exact content in pi-ai 0.85.1). */
+/** The original defect block (exact content in pi-ai 0.87.0). */
 const ORIGINAL_BLOCK = `                            if (toolCall.function?.arguments) {
                                 delta = toolCall.function.arguments;
                                 block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
@@ -151,7 +151,7 @@ for (const copy of copies) {
   const originalCount = source.split(ORIGINAL_BLOCK).length - 1;
   if (anchorCount !== 1 || originalCount !== 1) {
     failures.push(
-      `${copy}: dist/api/openai-completions.js does not match the expected 0.85.1 content ` +
+      `${copy}: dist/api/openai-completions.js does not match the expected 0.87.0 content ` +
       `(stream anchor x${anchorCount}, defect block x${originalCount}). ` +
       'Refusing to patch unknown content — re-evaluate scripts/patch-pi-ai-toolstream.mjs.',
     );

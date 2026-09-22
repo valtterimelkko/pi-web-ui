@@ -1902,8 +1902,9 @@ export class WebSocketConnectionManager {
     // when the session is streaming: that path emits the extension `input` event
     // before queueing the message via the same _queueSteer primitive steer()
     // uses, so extensions can observe (transform/handle) Web UI mid-run input.
-    // Direct steer() bypasses emitInput entirely. While idle, steer() keeps its
-    // queue-for-next-run semantics (prompt() would start a new turn instead).
+    // While idle, steer() keeps its queue-for-next-run semantics (prompt() would
+    // start a new turn instead); since SDK 0.86.0 (#8718) steer() itself fires
+    // the extension `input` event, so extensions see idle-queued steers too.
     if (agentSession.isStreaming) {
       await agentSession.prompt(message.message, { streamingBehavior: 'steer' });
     } else {

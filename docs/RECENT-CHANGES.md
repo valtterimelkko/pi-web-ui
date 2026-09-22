@@ -4,6 +4,11 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Embedded Pi SDK family upgraded to `0.87.0` (`2026-09-22`)**
+  - `@earendil-works/pi-coding-agent`, `pi-ai`, and `pi-agent-core` moved `0.85.1 → 0.87.0` exact pins across the root/server/shared workspaces. The guarded `scripts/patch-pi-ai-toolstream.mjs` throttle/cap patch (upstream `0.87.0` still re-parses accumulated tool-call arguments on every delta) and its version guard test were re-evaluated and re-pinned; no production code change was required by the 0.86/0.87 breaking changes.
+  - Pi steering: SDK `0.86.0` (#8718) fixed direct `steer()`/`follow_up()` to fire extension `input` handlers, so an idle-session steer now emits one `input` event while keeping its queue-for-next-run semantics. The pinned steering tests were updated to that contract.
+  - `opencode-go` catalogue: unchanged in shape and fully served. `GET /api/v1/models` and the browser model picker both derive it from the SDK dynamic model store, so a restart picks up new provider models without any wire or contract change (contract stays `1.44.0`).
+
 - **Voice Mode documentation spine, and the native-voice lab (`2026-09-15…17`)**
   - **Orientation now exists.** [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md) maps the whole voice corpus — canonical intent and architecture first, then design inputs, lab execution records, plans and archived intent — with a *“superseded and disproven — do not act on these”* list and a plain statement of what the lab established. Start there instead of grepping the folder.
   - **Target architecture decided (`2026-09-17`).** [`VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](./VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md) records owner decisions D1–D7: keep the two lanes; replace the cascade with a native-audio conversational seat; move every load-bearing rule out of the prompt into code and structured state; a ~15-line prompt; open mic by default with push-to-talk retained; ambient operation **deferred to a phone client**, not a later web phase (D7), with a **client-neutral kernel** as the standing price of keeping it open. Its §2 audits the lab's evidence; its §7 is the gated build sequence. D4 was revised: the 210-attempt synthetic campaign was replaced by a lean deterministic regression suite plus real-ear dogfooding.

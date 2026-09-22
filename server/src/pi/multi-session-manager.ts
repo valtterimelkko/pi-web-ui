@@ -1526,8 +1526,9 @@ export class MultiSessionManager {
    * Requires the underlying AgentSession to have a steer method.
    *
    * Mid-run input is routed through prompt({ streamingBehavior: 'steer' }) so
-   * the extension `input` event fires (direct steer() bypasses emitInput);
-   * while idle, steer() keeps its queue-for-next-run semantics.
+   * the extension `input` event fires; while idle, steer() keeps its
+   * queue-for-next-run semantics (and, since SDK 0.86.0 #8718, also fires the
+   * extension `input` event).
    */
   async steer(sessionPath: string, message: string): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);

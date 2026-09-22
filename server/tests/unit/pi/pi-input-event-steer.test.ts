@@ -5,7 +5,12 @@
  * `AgentSession.steer()` directly, and `steer()` never emits the extension
  * `input` event (only `AgentSession.prompt()` does, via the extension runner).
  * Extensions were therefore blind to every operator message delivered as a
- * steer through the Web UI.
+ * steer through the Web UI. Pi Web UI routed the streaming case through
+ * `prompt({ streamingBehavior: 'steer' })` to emit `input` itself.
+ *
+ * SDK 0.86.0 (#8718) fixed direct `steer()`/`follow_up()` to fire extension
+ * `input` handlers, so the idle case now emits one `input` event too; the
+ * delivery semantics (queue, no turn started) are unchanged.
  *
  * These tests drive a REAL SDK `AgentSession` (real `Agent`, real
  * `ExtensionRunner`, a real extension `input` handler, and a controllable
@@ -320,17 +325,19 @@ describe('Web UI steer and the extension input event (real AgentSession)', () =>
     ]);
   });
 
-  it('pinned: steer on an idle session queues without starting a turn and fires no input event', async () => {
+  it('pinned: steer on an idle session queues without starting a turn and the extension sees the input', async () => {
     const { session, inputEvents } = harness;
 
     await (mgr as any).handleSteer('c1', { type: 'steer', message: 'queued for later' });
 
     // No turn was started...
     expect(session.isStreaming).toBe(false);
-    // ...the message is queued as steering, and the extension saw nothing
-    // (identical to today's behaviour for the idle case).
+    // ...the message is queued as steering. Since SDK 0.86.0 (#8718) direct
+    // steer()/follow_up() fire extension `input` handlers, so the extension
+    // sees the queued input even though no turn starts.
     expect(session.getSteeringMessages()).toEqual(['queued for later']);
-    expect(inputEvents).toHaveLength(0);
+    expect(inputEvents).toHaveLength(1);
+    expect(inputEvents.at(-1)?.text).toBe('queued for later');
   });
 
   it('pinned: follow_up on a busy session queues a follow-up message', async () => {
@@ -421,7 +428,7 @@ describe('MultiSessionManager steering and the extension input event (real Agent
     expect(session.isStreaming).toBe(false);
   });
 
-  it('pinned: msm.steer on an idle session queues without starting a turn', async () => {
+  it('pinned: msm.steer on an idle session queues without starting a turn and the extension sees the input', async () => {
     const { session, inputEvents } = harness;
     await msm.createAndSubscribe('client-1', '/tmp');
 
@@ -429,6 +436,8 @@ describe('MultiSessionManager steering and the extension input event (real Agent
 
     expect(session.isStreaming).toBe(false);
     expect(session.getSteeringMessages()).toEqual(['queued for later']);
-    expect(inputEvents).toHaveLength(0);
+    // SDK 0.86.0 (#8718): steer() itself now fires the extension `input` event.
+    expect(inputEvents).toHaveLength(1);
+    expect(inputEvents.at(-1)?.text).toBe('queued for later');
   });
 });

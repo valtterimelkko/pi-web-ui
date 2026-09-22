@@ -135,7 +135,7 @@ describe('pi-ai toolstream patch guard', () => {
     for (const copy of piAiCopies) {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const pkg = JSON.parse(readFileSync(resolve(copy, 'package.json'), 'utf8')) as { version: string };
-      expect(pkg.version, `${copy} version drifted`).toBe('0.85.1');
+      expect(pkg.version, `${copy} version drifted`).toBe('0.87.0');
     }
   });
 });
