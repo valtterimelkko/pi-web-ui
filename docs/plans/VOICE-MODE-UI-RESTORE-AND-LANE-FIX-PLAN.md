@@ -57,6 +57,19 @@ Reproduced against a disposable live-engine server with a real browser
 - Confirm the talker's prompt handles a new session by conversing normally,
   rather than treating an empty brief as a refusal (no "I have no access").
 
+### 3.1a Server — the "relay to the worker" trigger is stripped in BOTH lanes
+After the layout restore the operator naturally spoke *"Relay to the worker that
+it needs to summarize what it knows about Podpoint."* to the **bounded main
+(cascade) lane** (observability: a `VoiceMode` turn at 10:55Z, `phase:
+proposed`). The cascade's `normaliseRelayText` stripped "ask/tell/let/pass the
+worker" frames but not the new **"relay to the worker"** trigger, so the worker
+would have received the phrase and read "the worker" as another agent.
+
+`consumeRelayFrame` now strips *"relay to the worker that/to X"*, *"relay to
+worker: X"*, *"relay this/that to the worker – X"*, and lead-ins; a bare trigger
+with no content is left untouched. The native lane's prompt already strips it, so
+the worker can never see the trigger from either lane.
+
 ### 3.2 Client — the bounded main UI returns, the free lane returns to the bottom
 - Restore the **pre-`ff75d0c4` layout** in `DriveModeDictate`: the bounded/gated
   voice controls at the top, the collapsible **free lane** at the bottom. Keep
