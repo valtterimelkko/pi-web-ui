@@ -24,6 +24,13 @@
 
 ## 1. Read these three, in this order
 
+**Forward execution, 2026-09-22:** the owner-requested next programme is
+[`one native primary conversation + autonomous validation`](./plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md).
+It is a **plan, not implemented behaviour**: familiar controls backed by Live,
+faithful handovers, automated microphone/audio testing and a standard/ET verdict.
+Start there when dispatched to execute it; the earlier programme/status snapshots
+below do not replace its acceptance contract.
+
 | # | Document | What it gives you |
 |---|---|---|
 | 1 | [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) | **What Voice Mode is, and what ships today.** The intent, the nine non-negotiables, the shipped two-lane cascade behaviour, the renewed *thinking-together* intent, and the one known live defect (the confirmation gate). |
@@ -112,6 +119,7 @@ schema or canonical docs.
 
 | Document | Vintage | Status | Read it when |
 |---|---|---|---|
+| [`plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md`](./plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md) | 2026-09-22 | **Forward execution plan; not started** | Owner-requested next programme: familiar controls backed by native Live, source-bound faithful handovers, autonomous built-app microphone/rendered-audio lab, repeated corpus, standard/ET comparison, KPI gates and final architecture verdict. No production authority; start here when dispatched to execute this programme. |
 | [`plans/VOICE-TALKER-FULL-SESSION-BRIEF.md`](./plans/VOICE-TALKER-FULL-SESSION-BRIEF.md) | 2026-09-18 | Implemented, **live-validated** | You are changing how much worker session the live talker holds: it records the measured cliff (~82k tokens free, ~100k dead), the 200k-character ceiling, the delta rule and the read-only retrieval fallback. Policy of record is `server/src/voice/worker-brief.ts`. |
 | [`plans/VOICE-MODE-FREE-TALKER-PLAN.md`](./plans/VOICE-MODE-FREE-TALKER-PLAN.md) | 2026-09-22 | Owner directive, **implemented** | You are changing how conversation is separated from relay: the native talker decides, calling `relay_to_worker`; the harness keeps only approval and one worker per lane. Records what was stripped and kept. |
 | [`plans/VOICE-MODE-UI-RESTORE-AND-LANE-FIX-PLAN.md`](./plans/VOICE-MODE-UI-RESTORE-AND-LANE-FIX-PLAN.md) | 2026-09-22 | Owner report, **implemented** | You are working on the Voice Mode layout or the live lane's start/brief: the bounded main UI is back on top with the free lane below, and the worker-brief honesty/runtime fixes. |
