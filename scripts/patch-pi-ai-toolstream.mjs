@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 /**
- * Guarded local patch for @earendil-works/pi-ai 0.87.0 — streamed tool-call
+ * Guarded local patch for @earendil-works/pi-ai 0.87.x — streamed tool-call
  * arguments (2026-09-12 event-loop stall, Defect B / the trigger).
+ *
+ * RE-EVALUATED 2026-09-22 for 0.87.1 (frontier-models update): the 0.87.1
+ * dist/api/openai-completions.js still contains the identical per-delta
+ * parseStreamingJson block and no upstream throttle, so the patch carries
+ * forward unchanged (stream anchor x1, defect block byte-identical).
  *
  * WHY THIS EXISTS
  * pi-ai's openai-completions adapter re-parsed the accumulated tool-call
@@ -46,7 +51,7 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const EXPECTED_VERSION = '0.87.0';
+const EXPECTED_VERSION = '0.87.1';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PATCH_MARKER = 'PARTIAL_ARGS_PARSE_INTERVAL_MS';
 
@@ -151,7 +156,7 @@ for (const copy of copies) {
   const originalCount = source.split(ORIGINAL_BLOCK).length - 1;
   if (anchorCount !== 1 || originalCount !== 1) {
     failures.push(
-      `${copy}: dist/api/openai-completions.js does not match the expected 0.87.0 content ` +
+      `${copy}: dist/api/openai-completions.js does not match the expected 0.87.x content ` +
       `(stream anchor x${anchorCount}, defect block x${originalCount}). ` +
       'Refusing to patch unknown content — re-evaluate scripts/patch-pi-ai-toolstream.mjs.',
     );
