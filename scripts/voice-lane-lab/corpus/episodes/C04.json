@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "id": "C04",
+  "title": "Polite lead-in then tell-the-worker",
+  "family": "relay-addressing",
+  "tier": "E",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C04 row",
+    "rationale": "fillers removed, task constraints retained in the candidate"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Good morning. When you get a chance, tell the worker to run the failing tests and report back.",
+      "requiredWords": [
+        "tell",
+        "worker",
+        "run",
+        "failing",
+        "tests",
+        "report"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-confirm",
+      "text": "Yes, go ahead.",
+      "requiredWords": [
+        "yes",
+        "ahead"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "failing tests",
+      "report"
+    ],
+    "mustNotContain": [
+      "good morning",
+      "when you get a chance"
+    ],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t2",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "re-run plus report-back instruction delivered; no polite filler in delivered bytes"
+  }
+}

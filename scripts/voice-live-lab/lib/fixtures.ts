@@ -57,6 +57,8 @@ export interface FixtureManifest {
   provider: 'supertonic';
   model: string;
   voice: string;
+  /** Present when the corpus voice profile varies rate/pauses. */
+  synthesis?: SynthesisProfile;
   createdAt: string;
   corpusHash: string;
   fixtures: SynthesisedFixture[];
@@ -136,11 +138,39 @@ export function normaliseWords(text: string): string[] {
     .filter((word) => word !== '');
 }
 
+const NUMBER_WORDS: Record<string, string> = {
+  zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5',
+  six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11',
+  twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
+  seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20',
+};
+
+/**
+ * Fold a word into a canonical comparison form (2026-09-22, native-primary
+ * corpus): Whisper transcribes British -ise spellings as US -ize and spoken
+ * small numbers as numerals. Both sides of every comparison fold identically,
+ * so this never hides a real substitution — it only stops the CHECKER
+ * disagreeing with the microphone about spelling and numerals.
+ * 2026-09-22b: required words may declare alternates "pod point|podpoint";
+ * phrase entries match on the folded, de-spaced transcript too.
+ */
+export function foldWord(word: string): string {
+  let folded = word
+    .toLowerCase()
+    .replace(/izing$/, 'ising')
+    .replace(/ization$/, 'isation')
+    .replace(/izer$/, 'iser')
+    .replace(/ize$/, 'ise')
+    .replace(/yze$/, 'yse');
+  if (NUMBER_WORDS[folded] !== undefined) folded = NUMBER_WORDS[folded];
+  return folded;
+}
+
 /** Levenshtein word error rate: substitutions + insertions + deletions over
  *  the reference length. 0 is perfect; 1 means every reference word was lost. */
 export function wordErrorRate(reference: string, hypothesis: string): number {
-  const ref = normaliseWords(reference);
-  const hyp = normaliseWords(hypothesis);
+  const ref = normaliseWords(reference).map(foldWord);
+  const hyp = normaliseWords(hypothesis).map(foldWord);
   if (ref.length === 0) return hyp.length === 0 ? 0 : 1;
   const previous = new Array<number>(hyp.length + 1);
   for (let j = 0; j <= hyp.length; j += 1) previous[j] = j;
@@ -203,8 +233,17 @@ export function verifyFixture(
 ): FixtureVerification {
   const maxWer = options.maxWer ?? DEFAULT_MAX_WER;
   const wer = wordErrorRate(fixture.text, asr.text);
-  const spoken = new Set(normaliseWords(asr.text));
-  const missingWords = fixture.requiredWords.filter((word) => !spoken.has(word.toLowerCase()));
+  const foldedTranscript = normaliseWords(asr.text).map(foldWord).join(' ');
+  const deSpaced = foldedTranscript.replace(/\s+/g, '');
+  const missingWords = fixture.requiredWords.filter((entry) => {
+    // Alternates: "ten|10". Phrase entries match across word boundaries.
+    return !entry
+      .split('|')
+      .some((alt) => {
+        const folded = normaliseWords(alt).map(foldWord).join(' ');
+        return foldedTranscript.includes(folded) || deSpaced.includes(folded.replace(/\s+/g, ''));
+      });
+  });
   let reason: string | undefined;
   if (wer > maxWer) reason = `WER ${wer.toFixed(3)} exceeds ${maxWer}`;
   else if (missingWords.length > 0) reason = `required words missing: ${missingWords.join(', ')}`;
@@ -223,11 +262,18 @@ export function verifyFixture(
 // Synthesis and freezing
 // ---------------------------------------------------------------------------
 
+export interface SynthesisProfile {
+  speed: number;
+  silence: number;
+  steps: number;
+}
+
 export type SynthesisRunner = (
   specs: FixtureSpec[],
   outDir: string,
   voice: string,
-  model: string
+  model: string,
+  synthesis?: SynthesisProfile
 ) => Promise<void>;
 
 /** Default runner: the lab-owned Supertonic batch tool. */
@@ -235,7 +281,8 @@ async function runSupertonic(
   specs: FixtureSpec[],
   outDir: string,
   voice: string,
-  model: string
+  model: string,
+  synthesis?: SynthesisProfile
 ): Promise<void> {
   const helper = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -252,9 +299,9 @@ async function runSupertonic(
       {
         voice,
         model,
-        steps: 8,
-        speed: 1.05,
-        silence: 0.05,
+        steps: synthesis?.steps ?? 8,
+        speed: synthesis?.speed ?? 1.05,
+        silence: synthesis?.silence ?? 0.05,
         lang: 'en',
         outDir,
         texts: specs.map((spec) => ({ id: spec.id, text: spec.text })),
@@ -274,6 +321,8 @@ export interface SynthesiseOptions {
   specs: FixtureSpec[];
   voice?: string;
   model?: string;
+  /** Rate/pause profile (2026-09-22: the corpus needs two voices). */
+  synthesis?: SynthesisProfile;
   synthesisRunner?: SynthesisRunner;
   log?: (message: string) => void;
 }
@@ -287,7 +336,7 @@ export async function synthesiseFixtures(options: SynthesiseOptions): Promise<Fi
   mkdirSync(rawDir, { recursive: true, mode: 0o700 });
 
   const runner = options.synthesisRunner ?? runSupertonic;
-  await runner(options.specs, rawDir, voice, model);
+  await runner(options.specs, rawDir, voice, model, options.synthesis);
 
   const fixtures: SynthesisedFixture[] = [];
   for (const spec of options.specs) {
@@ -333,6 +382,7 @@ export async function synthesiseFixtures(options: SynthesiseOptions): Promise<Fi
     provider: 'supertonic',
     model,
     voice,
+    ...(options.synthesis ? { synthesis: options.synthesis } : {}),
     createdAt: new Date().toISOString(),
     corpusHash: corpusHash(options.specs, voice, model),
     fixtures,

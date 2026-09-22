@@ -43,11 +43,15 @@ case "${1:-boot}" in
   boot)
     mkdir -p "$STATE_DIR/pi-agent"
     printf '%s\n' "$STATE_DIR" > "$POINTER"
+    # VOICE_LAB_COMPILED=1 boots the compiled server (server/dist/index.js) —
+    # used by the lane lab's built-app mode (production-shape proof).
+    COMPILED_ARG=""
+    [ -n "${VOICE_LAB_COMPILED:-}" ] && COMPILED_ARG="--compiled"
     # PI_CODING_AGENT_DIR is the Pi SDK's own isolation variable: without it,
     # real Pi sessions would land in ~/.pi/agent/sessions.
     systemd-run --scope --collect --unit="$UNIT" \
       env PI_CODING_AGENT_DIR="$STATE_DIR/pi-agent" NODE_ENV=test \
-      npm run validate:server --prefix "$REPO" -- --dir "$STATE_DIR" --port 0 \
+      npm run validate:server --prefix "$REPO" -- --dir "$STATE_DIR" --port 0 $COMPILED_ARG \
       >"$LOG" 2>&1 &
     echo "state_dir=$STATE_DIR"
     echo "log=$LOG"

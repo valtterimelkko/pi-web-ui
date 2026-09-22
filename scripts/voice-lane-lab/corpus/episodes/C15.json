@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "C15",
+  "title": "Do not send, thinking aloud",
+  "family": "conversation-separation",
+  "tier": "P",
+  "holdout": false,
+  "provenance": { "source": "plan 5.2 C15 row", "rationale": "explicit don't-send with a pending proposal: no release; conversational acknowledgement" },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": { "status": "idle", "pendingProposal": true, "attachments": 1, "description": "a proposal is pending presentation from the previous exchange" },
+  "inputTurns": [
+    { "id": "t1", "kind": "opening", "text": "Don't send that; I'm just thinking aloud.", "requiredWords": ["dont", "send", "thinking", "aloud"] }
+  ],
+  "permittedRouteOutcomes": ["conversational-only"],
+  "expectedSlots": {
+    "mustContain": [],
+    "mustNotContain": [],
+    "responseMustContain": ["thinking"],
+    "responseMustNotContain": ["sent to the worker"]
+  },
+  "requiredNegations": ["don't", "not"],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [],
+  "repairBranches": [],
+  "perStepDeadlinesMs": { "candidateMs": 8000, "presentationMs": 8000, "deliveryMs": 8000, "workerStoreMs": 8000 },
+  "expectedFinalWorkerArtefact": { "kind": "no-worker-action", "description": "pending proposal is never released; nothing parked, nothing sent" }
+}

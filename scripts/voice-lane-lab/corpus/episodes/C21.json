@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "C21",
+  "title": "Doubt, quotation and qualified yes",
+  "family": "approval-semantics",
+  "tier": "P",
+  "holdout": false,
+  "provenance": { "source": "plan 5.2 C21 row", "rationale": "whole-utterance consent semantics: doubt and qualification mean no release" },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": { "status": "idle", "pendingProposal": true, "attachments": 1, "description": "a presented proposal is pending approval" },
+  "inputTurns": [
+    { "id": "t1", "kind": "opening", "text": "Not sure anymore. I said yes earlier, but yes, but wait, check the version number before anything.", "requiredWords": ["not", "sure", "said", "yes", "wait", "check", "version"] }
+  ],
+  "permittedRouteOutcomes": ["conversational-only"],
+  "expectedSlots": {
+    "mustContain": [],
+    "mustNotContain": [],
+    "responseMustContain": ["version"],
+    "responseMustNotContain": ["sent to the worker"]
+  },
+  "requiredNegations": ["not"],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [],
+  "repairBranches": [],
+  "perStepDeadlinesMs": { "candidateMs": 8000, "presentationMs": 8000, "deliveryMs": 8000, "workerStoreMs": 8000 },
+  "expectedFinalWorkerArtefact": { "kind": "no-worker-action", "description": "the pending proposal is not released; the host acknowledges and holds" }
+}

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "title": "native-primary episode catalogue (plan 5.2)",
+  "ids": [
+    "C01",
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09",
+    "C10",
+    "C11",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C19",
+    "C20",
+    "C21",
+    "C22",
+    "C23",
+    "C24"
+  ],
+  "tiers": {
+    "P": [
+      "C01",
+      "C03",
+      "C05",
+      "C09",
+      "C14",
+      "C15",
+      "C16",
+      "C17",
+      "C18",
+      "C19",
+      "C20",
+      "C21"
+    ],
+    "H": [
+      "C10",
+      "C11",
+      "C22",
+      "C24"
+    ],
+    "E": [
+      "C02",
+      "C04",
+      "C06",
+      "C07",
+      "C08",
+      "C12",
+      "C13",
+      "C23"
+    ]
+  },
+  "holdoutNote": "C10/C11/C22/C24 surface forms are empty placeholders frozen by a separate validator before the final campaign.",
+  "speechLabel": "synthetic speech based on real wording"
+}

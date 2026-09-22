@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "C13",
+  "title": "Ask about earlier omitted material",
+  "family": "session-retrieval",
+  "tier": "E",
+  "holdout": false,
+  "provenance": { "source": "plan 5.2 C13 row", "rationale": "real read-only retrieval with coverage honesty about what was skipped" },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": { "status": "working", "pendingProposal": false, "attachments": 1, "description": "worker previously looked at login timeout and skipped the refresh token path" },
+  "inputTurns": [
+    { "id": "t1", "kind": "opening", "text": "Earlier you looked at the login timeout but skipped the refresh token path. What did you actually find there?", "requiredWords": ["earlier", "login", "timeout", "skipped", "refresh", "token", "find"] }
+  ],
+  "permittedRouteOutcomes": ["conversational-only"],
+  "expectedSlots": {
+    "mustContain": [],
+    "mustNotContain": [],
+    "responseMustContain": ["refresh token"],
+    "responseMustNotContain": ["relay to worker"],
+    "sourceAttributionRequired": true
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [],
+  "repairBranches": [],
+  "perStepDeadlinesMs": { "candidateMs": 8000, "presentationMs": 8000, "deliveryMs": 8000, "workerStoreMs": 8000 },
+  "expectedFinalWorkerArtefact": { "kind": "no-worker-action", "description": "read-only retrieval answer; no delegation" }
+}

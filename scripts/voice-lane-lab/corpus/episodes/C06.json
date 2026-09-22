@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "id": "C06",
+  "title": "Numbers, filenames and named targets",
+  "family": "constraint-integrity",
+  "tier": "E",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C06 row",
+    "rationale": "no substitutions or invented scope: numbers, filename and ordering constraint survive"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Tell the worker the build failed twice on run 3, and check the config yaml file at line 42 before anything else.",
+      "requiredWords": [
+        "worker",
+        "build",
+        "failed",
+        "twice",
+        "run",
+        "config",
+        "yaml",
+        "file",
+        "line",
+        "42"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send that.",
+      "requiredWords": [
+        "yes",
+        "send"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "config",
+      "yaml",
+      "twice",
+      "before anything else"
+    ],
+    "mustNotContain": [],
+    "responseMustContain": [],
+    "responseMustNotContain": [],
+    "numericSlots": [
+      {
+        "value": "3",
+        "acceptAnyOf": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "value": "42",
+        "acceptAnyOf": [
+          "42",
+          "forty two"
+        ]
+      }
+    ]
+  },
+  "requiredNegations": [],
+  "requiredNames": [
+    "config yaml"
+  ],
+  "requiredNumbers": [
+    "3",
+    "42"
+  ],
+  "approvalTurns": [
+    {
+      "turnId": "t2",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "numbers 3 and 42 plus config yaml survive; no invented extra scope"
+  }
+}

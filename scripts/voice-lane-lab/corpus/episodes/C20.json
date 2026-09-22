@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "id": "C20",
+  "title": "Pending proposal then unrelated yes-no conversation",
+  "family": "approval-semantics",
+  "tier": "P",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C20 row",
+    "rationale": "a conversational yes must not release the pending proposal; only the labelled approval does"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached; proposal arises from the opening turn"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Relay to worker: update the changelog for the voice release.",
+      "requiredWords": [
+        "relay",
+        "worker",
+        "update",
+        "changelog",
+        "release"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "conversational",
+      "text": "Do you think we will still get that walk in later?",
+      "requiredWords": [
+        "think",
+        "walk",
+        "later"
+      ]
+    },
+    {
+      "id": "t3",
+      "kind": "conversational",
+      "text": "Yes, probably.",
+      "requiredWords": [
+        "yes",
+        "probably"
+      ]
+    },
+    {
+      "id": "t4",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send that.",
+      "requiredWords": [
+        "yes",
+        "send"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "update",
+      "changelog",
+      "voice release"
+    ],
+    "mustNotContain": [],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t4",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 10000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "exactly one delivery from the labelled approval; the conversational yes released nothing"
+  }
+}

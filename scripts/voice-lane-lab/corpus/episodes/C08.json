@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "id": "C08",
+  "title": "Jointly developed question then ask-that",
+  "family": "relay-addressing",
+  "tier": "E",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C08 row",
+    "rationale": "only the agreed scope is asked; source references retained; no invented work plan"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "conversational",
+      "text": "I think our real problem is that the deploy takes nearly ten minutes.",
+      "requiredWords": [
+        "problem",
+        "deploy",
+        "ten|10",
+        "minutes"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-confirm",
+      "text": "Yes, ask the worker my question.",
+      "requiredWords": [
+        "yes",
+        "ask",
+        "question"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "deploy"
+    ],
+    "mustNotContain": [
+      "step one",
+      "work plan",
+      "then i"
+    ],
+    "responseMustContain": [],
+    "responseMustNotContain": [],
+    "numericSlots": [
+      {
+        "value": "ten minutes",
+        "acceptAnyOf": [
+          "ten minutes",
+          "10 minutes"
+        ]
+      }
+    ]
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t2",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "worker receives exactly the agreed question; no invented multi-step plan"
+  }
+}

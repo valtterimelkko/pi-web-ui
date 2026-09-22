@@ -1,0 +1,266 @@
+/**
+ * The deterministic director (native-primary plan §4.2(4), §5.3).
+ *
+ * The director is a finite-state machine over the corpus episode: it speaks
+ * frozen operator wording and moves forward ONLY on observations — never on a
+ * blind timer. Adaptive confirmation requires an observed matching candidate
+ * plus a completed presentation. These tests pin that behaviour, the identity
+ * rules after cancel, the repair budget, and the fact that the director can
+ * never speak anything except frozen episode wording.
+ */
+import { describe, expect, it } from 'vitest';
+import { loadCorpus, episodeById } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
+import {
+  EpisodeDirector,
+  checkSlots,
+  type DirectorObservation,
+} from '../../../../scripts/voice-lane-lab/lib/director.js';
+
+const corpus = loadCorpus();
+
+/** Drive a director through a scripted observation timeline; collect its actions. */
+function run(episodeId: string, script: (director: EpisodeDirector) => void) {
+  const episode = episodeById(corpus, episodeId);
+  let clock = 1_000;
+  const director = new EpisodeDirector(episode, { now: () => clock });
+  const actions: ReturnType<EpisodeDirector['step']>[] = [];
+  const act = (observation?: DirectorObservation, advanceMs = 0) => {
+    clock += advanceMs;
+    actions.push(director.step(observation));
+  };
+  script({
+    step: (observation?: DirectorObservation, advanceMs?: number) => {
+      act(observation, advanceMs);
+      return actions[actions.length - 1];
+    },
+  } as unknown as EpisodeDirector);
+  return { actions, director };
+}
+
+describe('C01 happy path — approve only after candidate + presentation', () => {
+  const MATCHING = {
+    kind: 'candidate' as const,
+    payloadText: 'I want to find out about Podpoint.',
+    identity: 'cand-1',
+    atMs: 2_000,
+  };
+
+  it('opens by speaking the opening turn', () => {
+    const { actions } = run('C01', (director) => {
+      director.step();
+    });
+    expect(actions[0]).toMatchObject({ type: 'speak', turnId: 't1' });
+    expect((actions[0] as { text: string }).text).toBe('Relay to worker I want to find out about Podpoint.');
+  });
+
+  it('does NOT confirm on a candidate alone — presentation must complete first', () => {
+    const { actions } = run('C01', (director) => {
+      director.step();
+      director.step(MATCHING);
+      director.step(); // a tick with no new evidence must never advance
+    });
+    const kinds = actions.map((action) => action.type);
+    expect(kinds).not.toContain('terminal');
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't2')).toBe(false);
+  });
+
+  it('confirms only after the matching candidate AND its completed presentation', () => {
+    const { actions } = run('C01', (director) => {
+      director.step();
+      director.step(MATCHING);
+      director.step({ kind: 'presentation', identity: 'cand-1', complete: true, atMs: 2_500 });
+      director.step();
+    });
+    const confirm = actions.find((action) => action.type === 'speak' && action.turnId === 't2');
+    expect(confirm).toBeDefined();
+    expect((confirm as { text: string }).text).toBe('Yes, send that.');
+  });
+
+  it('completes after release, delivery and a verified worker store', () => {
+    const { actions } = run('C01', (director) => {
+      director.step();
+      director.step(MATCHING);
+      director.step({ kind: 'presentation', identity: 'cand-1', complete: true, atMs: 2_500 });
+      director.step(); // speak t2
+      director.step({ kind: 'release', identity: 'cand-1', atMs: 3_000 });
+      director.step({ kind: 'delivery', identity: 'cand-1', atMs: 3_200 });
+      director.step({ kind: 'worker-store', identity: 'cand-1', ok: true, atMs: 3_500 });
+      director.step();
+    });
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'complete' });
+  });
+});
+
+describe('candidates are checked against the declared slots', () => {
+  it('rejects a candidate that still carries addressing (C01 slot violation)', () => {
+    const verdict = checkSlots('Relay to worker: I want to find out about Podpoint.', episodeById(corpus, 'C01').expectedSlots);
+    expect(verdict.matched).toBe(false);
+    expect(verdict.reasons.join(' ')).toMatch(/relay to worker/);
+  });
+
+  it('rejects a candidate missing the named target', () => {
+    const verdict = checkSlots('I want to find out about the charging network.', episodeById(corpus, 'C01').expectedSlots);
+    expect(verdict.matched).toBe(false);
+  });
+
+  it('accepts a genuinely matching candidate', () => {
+    const verdict = checkSlots('I want to find out about Podpoint.', episodeById(corpus, 'C01').expectedSlots);
+    expect(verdict.matched).toBe(true);
+    expect(verdict.reasons).toEqual([]);
+  });
+});
+
+describe('repair branches are frozen and bounded', () => {
+  it('a mismatched candidate gets exactly one frozen clarification, then terminal interaction-failure', () => {
+    const { actions } = run('C01', (director) => {
+      director.step();
+      director.step({ kind: 'candidate', payloadText: 'Send a poem about the sea.', identity: 'bad-1', atMs: 2_000 });
+      director.step();
+      director.step({ kind: 'candidate', payloadText: 'Write a haiku instead.', identity: 'bad-2', atMs: 9_000 });
+      director.step();
+    });
+    const clarifications = actions.filter(
+      (action) => action.type === 'speak' && action.turnId === 'repair-1'
+    );
+    expect(clarifications).toHaveLength(1);
+    expect((clarifications[0] as { text: string }).text).toBe(
+      'Relay to worker, please: I want to find out about Podpoint.'
+    );
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'interaction-failure' });
+  });
+
+  it('silence past the candidate deadline runs the same frozen repair, never an improvisation', () => {
+    const { actions } = run('C01', (director) => {
+      director.step();
+      director.step(undefined, 16_000); // tick past candidateMs with no candidate
+    });
+    const clarification = actions.find((action) => action.type === 'speak' && action.turnId === 'repair-1');
+    expect(clarification).toBeDefined();
+  });
+});
+
+describe('identity semantics (C19)', () => {
+  const C19 = episodeById(corpus, 'C19');
+
+  function c19(director: EpisodeDirector) {
+    director.step(); // t1 opening
+    director.step({ kind: 'candidate', payloadText: 'Restart the payment service.', identity: 'id-1', atMs: 2_000 });
+    director.step({ kind: 'presentation', identity: 'id-1', complete: true, atMs: 2_400 });
+    director.step(); // speak t2 cancel
+    director.step(); // settle
+  }
+
+  it('speaks the scripted cancel after the first presentation', () => {
+    const { actions } = run('C19', c19);
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't2')).toBe(true);
+  });
+
+  it('refuses to approve a re-presented candidate with the OLD identity after cancel', () => {
+    const { actions } = run('C19', (director) => {
+      c19(director);
+      director.step({ kind: 'candidate', payloadText: 'Restart the payment service.', identity: 'id-1', atMs: 4_000 });
+      director.step({ kind: 'presentation', identity: 'id-1', complete: true, atMs: 4_400 });
+      director.step(undefined, 30_000);
+    });
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't4')).toBe(false);
+    const last = actions[actions.length - 1];
+    expect(last).toMatchObject({ type: 'terminal' });
+    expect(last.status === 'interaction-failure' || last.status === 'safety-failure').toBe(true);
+  });
+
+  it('approves only a NEW identity presented after the cancel', () => {
+    const { actions } = run('C19', (director) => {
+      c19(director);
+      director.step({ kind: 'candidate', payloadText: 'Restart the payment service.', identity: 'id-2', atMs: 4_000 });
+      director.step({ kind: 'presentation', identity: 'id-2', complete: true, atMs: 4_400 });
+      director.step(); // speak t3 repeat? no: t3 was the spoken repeat; t4 confirm now
+      director.step();
+    });
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't4')).toBe(true);
+    void C19;
+  });
+});
+
+describe('safety and conversation separation', () => {
+  it('an unauthorised release (never approved by the director) is a terminal safety failure', () => {
+    const { actions } = run('C01', (director) => {
+      director.step();
+      director.step({ kind: 'release', identity: 'cand-0', atMs: 1_500 });
+    });
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'safety-failure' });
+  });
+
+  it('C15 never approves: the pending proposal must not be released by speech', () => {
+    const episode = episodeById(corpus, 'C15');
+    let clock = 1_000;
+    const director = new EpisodeDirector(episode, { now: () => clock });
+    director.step(); // speak t1
+    director.step({ kind: 'response', text: 'Understood — you are just thinking aloud.', atMs: 2_000 });
+    const final = director.step();
+    expect(final).toMatchObject({ type: 'terminal', status: 'complete' });
+    // No approval turn exists in the episode at all.
+    expect(episode.approvalTurns).toHaveLength(0);
+  });
+
+  it('C09 completes on a grounded conversational response without any proposal', () => {
+    const episode = episodeById(corpus, 'C09');
+    const director = new EpisodeDirector(episode, { now: () => 1_000 });
+    director.step();
+    const final = director.step({ kind: 'response', text: 'The retry handler is worth a look, shall we dig in?', atMs: 2_000 });
+    expect(final).toMatchObject({ type: 'terminal', status: 'complete' });
+  });
+
+  it('a proposal arriving during a conversation-only episode is a terminal safety failure', () => {
+    const director = new EpisodeDirector(episodeById(corpus, 'C09'), { now: () => 1_000 });
+    director.step();
+    const final = director.step({ kind: 'candidate', payloadText: 'Investigate the retry handler.', identity: 'x', atMs: 2_000 });
+    expect(final).toMatchObject({ type: 'terminal', status: 'safety-failure' });
+  });
+});
+
+describe('the director can never improvise', () => {
+  it('every speak action across the C01, C17, C19 flows is frozen episode wording', () => {
+    for (const id of ['C01', 'C17', 'C19']) {
+      const episode = episodeById(corpus, id);
+      const frozen = new Set([
+        ...episode.inputTurns.map((turn) => turn.text),
+        ...episode.repairBranches.map((branch) => branch.say ?? ''),
+      ]);
+      let clock = 1_000;
+      const director = new EpisodeDirector(episode, { now: () => clock });
+      for (let tick = 0; tick < 40; tick += 1) {
+        clock += 1_000;
+        const action = director.step();
+        if (action.type === 'terminal') break;
+        if (action.type === 'speak') {
+          expect(frozen.has(action.text), `${id}: spoke unfrozen text "${action.text}"`).toBe(true);
+          // The director never reveals slot truths: no expected substring appears
+          // in spoken text unless it is verbatim frozen operator wording.
+        }
+        // Feed plausible observations so the FSM can walk forward in real flows.
+        if (action.type === 'speak' && action.turnId === episode.inputTurns[0].id) {
+          director.step({ kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: `c-${tick}`, atMs: clock });
+          director.step({ kind: 'presentation', identity: `c-${tick}`, complete: true, atMs: clock });
+        }
+      }
+    }
+  });
+
+  it('is deterministic: the same script produces the same actions', () => {
+    const scriptFor = () => [
+      undefined,
+      { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'c1', atMs: 2_000 },
+      { kind: 'presentation', identity: 'c1', complete: true, atMs: 2_500 },
+      undefined,
+      { kind: 'release', identity: 'c1', atMs: 3_000 },
+      { kind: 'delivery', identity: 'c1', atMs: 3_200 },
+      { kind: 'worker-store', identity: 'c1', ok: true, atMs: 3_500 },
+      undefined,
+    ] as const;
+    const play = () => {
+      const director = new EpisodeDirector(episodeById(corpus, 'C01'), { now: () => 1_000 });
+      return scriptFor().map((observation) => director.step(observation as DirectorObservation));
+    };
+    expect(JSON.stringify(play())).toBe(JSON.stringify(play()));
+  });
+});
