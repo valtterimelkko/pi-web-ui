@@ -346,11 +346,15 @@ journalctl -u pi-web-ui.service | grep -E "talker_tool_call|promotion_authorised
 #                 "relayTextExcerpt":…,"via":"relay_to_worker"}            ← the candidate shown to the operator
 #   voice-kernel {"event":"item_parked","workerBusy":true,
 #                 "via":"relay_to_worker"}                                  ← the worker was busy; parked
+#   voice-kernel {"event":"relay_duplicate_ignored","sinceLastRelayMs":N}   ← the model repeated one relay
 #   A relay becomes a proposal (idle worker) or a parked item (busy worker). It
 #   reaches the worker only through an explicit operator confirmation, whose own
-#   receipt is the durable record. Ordinary conversation produces NO such line:
-#   the harness no longer classifies transcripts into relay vs conversation —
-#   the model's `relay_to_worker` call is the only relay signal.
+#   receipt is the durable record. `relay_duplicate_ignored` is the bounded
+#   integrity guard: an identical relay repeated within 5 s is dropped so the
+#   operator can never approve the same message twice. Ordinary conversation
+#   produces NO such line: the harness no longer classifies transcripts into
+#   relay vs conversation — the model's `relay_to_worker` call is the only relay
+#   signal.
 ```
 
 `voiceTurnId` is a plain string match and composes with the existing

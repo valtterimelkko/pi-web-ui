@@ -36,7 +36,10 @@ export const SLICE_UTTERANCES: Record<string, string> = {
   's1-turn2': 'It should not drop the session token after the third attempt.',
   's1-turn3': 'Maybe the backoff timing is measured from the wrong point.',
   's1-turn4': 'What would you check first?',
-  's2-direct': 'Tell the worker to check the tests.',
+  // 2026-09-22 (owner directive): the relay is MODEL-DRIVEN. The harness no
+  // longer classifies transcripts, so the operator reaches the worker by
+  // saying the trigger phrase and the talker calls `relay_to_worker`.
+  's2-direct': 'Relay to worker: check the tests.',
   's2-confirm': 'Yes, send that.',
   // ASR robustness (2026-09-18): the live provider transcribed the first
   // fixture as "Yes and that." — a statement, so the (correct) classifier
@@ -44,8 +47,8 @@ export const SLICE_UTTERANCES: Record<string, string> = {
   // fault. A human repeats themselves; the scenario now gets one repeat with
   // a different phrase, and EVERY attempt is reported by the check.
   's2-confirm-retry': 'Yes, go ahead.',
-  's3-flag1': 'Tell the worker to check the logs for the retry.',
-  's3-flag2': 'Tell the worker to update the changelog.',
+  's3-flag1': 'Relay to worker: check the logs for the retry.',
+  's3-flag2': 'Relay to worker: update the changelog.',
   's3-confirm': 'Yes, send that.',
 };
 

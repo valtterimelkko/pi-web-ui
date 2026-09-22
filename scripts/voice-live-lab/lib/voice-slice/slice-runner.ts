@@ -11,13 +11,16 @@
  *     genuine speech (Supertonic), streamed as the contract's `voice_audio_chunk`
  *     frames over the authenticated `/ws` path, and the server's replies,
  *     proposals, parking updates and receipts are read off the same wire;
- *   - the talker's own mechanical classifier (server side), the four-object
- *     kernel (server side) and the real Pi delivery adapter.
+ *   - the talker's own MODEL-DRIVEN relay (server side): the native live model
+ *     decides to relay and calls `relay_to_worker`; the harness keeps only the
+ *     approval gate. The four-object kernel (server side) and the real Pi
+ *     delivery adapter are exercised end to end.
  *
  * The three Phase-5 scenarios:
  *   S1 Thinking together — four conversational turns, no proposal/offer/steer,
  *                          worker never interrupted;
- *   S2 Directed steer     — a directed instruction becomes a proposal, a
+ *   S2 Model-driven relay — the operator says "relay to worker"; the model
+ *                          calls `relay_to_worker`, creating a proposal; a
  *                          tampered confirmation is refused (negative control),
  *                          a spoken "yes" delivers the exact bytes and the
  *                          `receipt_event { outcome: "delivered" }` fires;
@@ -56,7 +59,7 @@ const WORKER_MODEL_DEFAULT = 'google/gemini-3.8-flash';
  * delivered and persisted — only the worker's reaction is bounded.
  */
 const SLOW_WORKER_PROMPT =
-  'Use the bash tool to run exactly this command and wait for it to finish: sleep 45. ' +
+  'Use the bash tool to run exactly this command and wait for it to finish: sleep 90. ' +
   'If other messages arrive while it runs, acknowledge them but do not act on them yet. ' +
   'When the command finishes, reply with exactly: WORKER-SLOW-DONE and then stop.';
 
@@ -1072,7 +1075,8 @@ async function runScenario2(
     details: [],
   };
 
-  // 1. The directed instruction becomes a proposal while the worker is idle.
+  // 1. The operator's "relay to worker" utterance makes the MODEL call
+  //    `relay_to_worker`, which creates a proposal while the worker is idle.
   const directMark = wire.client.mark();
   await wire.speak('s2-direct');
   await wire.waitForTalkerReply(directMark, 60_000, 'talker reply to the directed instruction');
@@ -1087,13 +1091,18 @@ async function runScenario2(
     proposalFrame = null;
   }
   const proposal = (proposalFrame as { proposal?: Record<string, unknown> } | null)?.proposal ?? null;
-  checks.check('a proposal appears for the directed instruction', proposal !== null, proposal === null ? 'no proposal_created frame' : 'proposal received');
+  checks.check('a proposal appears after the model relays', proposal !== null, proposal === null ? 'no proposal_created frame' : 'proposal received');
 
   const tidied = typeof proposal?.tidied === 'string' ? proposal.tidied : '';
   const normalisedTidied = normaliseRelayText(tidied).text.toLowerCase();
   checks.check(
     'the proposal carries the operator instruction (tidied bytes)',
     /check/.test(normalisedTidied) && /test/.test(normalisedTidied),
+    `tidied="${tidied}"`
+  );
+  checks.check(
+    'the relayed bytes have the trigger phrase removed (owner directive)',
+    !/relay\s+to\s+worker/i.test(tidied),
     `tidied="${tidied}"`
   );
   checks.check(
@@ -1108,7 +1117,7 @@ async function runScenario2(
     return {
       record: {
         id: 'S2',
-        name: 'Directed steer (proposal → tampered refusal → spoken confirm → exact bytes)',
+        name: 'Model-driven relay (relay_to_worker → tampered refusal → spoken confirm → exact bytes)',
         passed: false,
         checks: checks.checks,
         notes: checks.notes,
@@ -1251,7 +1260,7 @@ async function runScenario2(
   // 6. The worker store must hold exactly the confirmed bytes. A mid-run steer
   //    is persisted by the runtime at the next turn boundary, so the store is
   //    polled briefly rather than read once.
-  const store = await waitForWorkerStoreText(api, stateDir, workerSessionId, tidied, 45_000);
+  const store = await waitForWorkerStoreText(api, stateDir, workerSessionId, tidied, 150_000);
   checks.check(
     'the worker received the exact proposal bytes',
     tidied.length > 0 && store.text.includes(tidied),

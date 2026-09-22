@@ -1,0 +1,425 @@
+[
+  {
+    "event": "worker_status_injected",
+    "laneId": "voice-slice-lane",
+    "workerActivity": "idle",
+    "atMs": 1790063567404
+  },
+  {
+    "event": "worker_brief_empty",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "conversationEntries": 0,
+    "historyTotal": 0,
+    "atMs": 1790063567405
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 1,
+    "utteranceClass": "statement",
+    "atMs": 1790063572900,
+    "textExcerpt": "I keep thinking about the Retri handler.",
+    "textChars": 40,
+    "textTruncated": false
+  },
+  {
+    "event": "talker_reply",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "chars": 84,
+    "excerpt": "What are your thoughts on it? We can discuss any changes or issues you have in mind.",
+    "atMs": 1790063572900
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 2,
+    "utteranceClass": "statement",
+    "atMs": 1790063583719,
+    "textExcerpt": "It should not drop the session token after the third attempt.",
+    "textChars": 61,
+    "textTruncated": false
+  },
+  {
+    "event": "talker_reply",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "chars": 102,
+    "excerpt": "I agree, dropping the token could cause issues. Would you like me to relay that to the worker session?",
+    "atMs": 1790063583719
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 3,
+    "utteranceClass": "statement",
+    "atMs": 1790063595574,
+    "textExcerpt": "Maybe the back off timing is measured from the wrong point.",
+    "textChars": 59,
+    "textTruncated": false
+  },
+  {
+    "event": "talker_reply",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "chars": 136,
+    "excerpt": "That's a valid point. If the timer is starting too early, it would throw off the sequence. Would you like me to send that to the worker?",
+    "atMs": 1790063595574
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 4,
+    "utteranceClass": "question",
+    "atMs": 1790063605163,
+    "textExcerpt": "What would you check first?",
+    "textChars": 27,
+    "textTruncated": false
+  },
+  {
+    "event": "talker_reply",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "chars": 126,
+    "excerpt": "I would check the exact point where the backoff timer starts relative to the failed attempt to see if the timing logic is off.",
+    "atMs": 1790063605163
+  },
+  {
+    "event": "talker_tool_call",
+    "laneId": "voice-slice-lane",
+    "tool": "relay_to_worker",
+    "atMs": 1790063608511
+  },
+  {
+    "event": "proposal_created",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "version": 1,
+    "sha256": "54ad73f261e944346b9121daf182b47c8bcb62c62c46830f63b4a03ac096fc01",
+    "promotionRoute": "directed",
+    "sourceUtteranceId": 4,
+    "atMs": 1790063608513,
+    "originalExcerpt": "check the tests",
+    "originalChars": 15,
+    "originalTruncated": false,
+    "tidiedExcerpt": "check the tests",
+    "tidiedChars": 15,
+    "tidiedTruncated": false
+  },
+  {
+    "event": "promotion_authorised",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 4,
+    "proposalId": "prop-1",
+    "sha256": "54ad73f261e944346b9121daf182b47c8bcb62c62c46830f63b4a03ac096fc01",
+    "via": "relay_to_worker",
+    "atMs": 1790063608511,
+    "relayTextExcerpt": "check the tests",
+    "relayTextChars": 15,
+    "relayTextTruncated": false
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 5,
+    "utteranceClass": "statement",
+    "atMs": 1790063608514,
+    "textExcerpt": "Relay to worker, check the tests.",
+    "textChars": 33,
+    "textTruncated": false
+  },
+  {
+    "event": "spoken_read_back_presented",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "presentedVariant": "tidied",
+    "atMs": 1790063612423
+  },
+  {
+    "event": "talker_reply",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "chars": 58,
+    "excerpt": "The message to check the tests is ready for your approval.",
+    "atMs": 1790063612423
+  },
+  {
+    "event": "presentation_reported",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "completed": true,
+    "presentedVariant": "tidied",
+    "atMs": 1790063612430
+  },
+  {
+    "event": "confirm_refused",
+    "source": "frame",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "code": "voice_proposal_stale",
+    "reason": "identity_echo_mismatch",
+    "atMs": 1790063612432
+  },
+  {
+    "event": "frame_refused",
+    "laneId": "voice-slice-lane",
+    "attachmentGeneration": 1,
+    "frameType": "proposal_confirm",
+    "code": "voice_proposal_stale",
+    "atMs": 1790063612432
+  },
+  {
+    "event": "worker_status_injected",
+    "laneId": "voice-slice-lane",
+    "workerActivity": "busy",
+    "atMs": 1790063614257
+  },
+  {
+    "event": "worker_brief_injected",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "mode": "full",
+    "historyMessages": 1,
+    "historyTotal": 1,
+    "briefChars": 335,
+    "atMs": 1790063614257
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 6,
+    "utteranceClass": "confirm",
+    "atMs": 1790063618417,
+    "textExcerpt": "Yes, send that.",
+    "textChars": 15,
+    "textTruncated": false
+  },
+  {
+    "event": "confirm_authorised",
+    "source": "speech",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "sha256": "54ad73f261e944346b9121daf182b47c8bcb62c62c46830f63b4a03ac096fc01",
+    "variant": "tidied",
+    "idempotencyKey": "idem-speech-voice-slice-lane-prop-1-1",
+    "atMs": 1790063618419,
+    "bytesExcerpt": "check the tests",
+    "bytesChars": 15,
+    "bytesTruncated": false
+  },
+  {
+    "event": "delivery_attempt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "sha256": "54ad73f261e944346b9121daf182b47c8bcb62c62c46830f63b4a03ac096fc01",
+    "idempotencyKey": "idem-speech-voice-slice-lane-prop-1-1",
+    "atMs": 1790063618419,
+    "bytesExcerpt": "check the tests",
+    "bytesChars": 15,
+    "bytesTruncated": false
+  },
+  {
+    "event": "talker_reply",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "chars": 63,
+    "excerpt": "I have submitted it for your approval to be sent to the worker.",
+    "atMs": 1790063618417
+  },
+  {
+    "event": "delivery_receipt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-1",
+    "idempotencyKey": "idem-speech-voice-slice-lane-prop-1-1",
+    "sha256": "54ad73f261e944346b9121daf182b47c8bcb62c62c46830f63b4a03ac096fc01",
+    "outcome": "delivered",
+    "mechanism": "steer",
+    "unknownCause": null,
+    "reconcile": false,
+    "releaseRecorded": true,
+    "atMs": 1790063618422
+  },
+  {
+    "event": "frame_refused",
+    "laneId": "voice-slice-lane",
+    "attachmentGeneration": 1,
+    "frameType": "proposal_confirm",
+    "code": "voice_client_text_forbidden",
+    "atMs": 1790063618423
+  },
+  {
+    "event": "talker_tool_call",
+    "laneId": "voice-slice-lane",
+    "tool": "relay_to_worker",
+    "atMs": 1790063668009
+  },
+  {
+    "event": "item_parked",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 6,
+    "itemId": "park-1",
+    "workerBusy": true,
+    "via": "relay_to_worker",
+    "atMs": 1790063668009,
+    "textExcerpt": "check the logs for the retry",
+    "textChars": 28,
+    "textTruncated": false
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 7,
+    "utteranceClass": "statement",
+    "atMs": 1790063668011,
+    "textExcerpt": "Relay to worker, check the logs for the retry.",
+    "textChars": 46,
+    "textTruncated": false
+  },
+  {
+    "event": "talker_tool_call",
+    "laneId": "voice-slice-lane",
+    "tool": "relay_to_worker",
+    "atMs": 1790063671676
+  },
+  {
+    "event": "item_parked",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 7,
+    "itemId": "park-2",
+    "workerBusy": true,
+    "via": "relay_to_worker",
+    "atMs": 1790063671676,
+    "textExcerpt": "update the change log",
+    "textChars": 21,
+    "textTruncated": false
+  },
+  {
+    "event": "operator_utterance",
+    "laneId": "voice-slice-lane",
+    "utteranceId": 8,
+    "utteranceClass": "statement",
+    "atMs": 1790063671678,
+    "textExcerpt": "Relay to worker update the change log.",
+    "textChars": 38,
+    "textTruncated": false
+  },
+  {
+    "event": "talker_reply",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "chars": 65,
+    "excerpt": "The message to update the change log is parked for your approval.",
+    "atMs": 1790063676022
+  },
+  {
+    "event": "worker_status_injected",
+    "laneId": "voice-slice-lane",
+    "workerActivity": "busy",
+    "atMs": 1790063707741
+  },
+  {
+    "event": "worker_brief_injected",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "mode": "delta",
+    "historyMessages": 2,
+    "historyTotal": 2,
+    "briefChars": 154,
+    "atMs": 1790063707741
+  },
+  {
+    "event": "worker_status_injected",
+    "laneId": "voice-slice-lane",
+    "workerActivity": "busy",
+    "atMs": 1790063710742
+  },
+  {
+    "event": "worker_brief_injected",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "mode": "delta",
+    "historyMessages": 3,
+    "historyTotal": 3,
+    "briefChars": 153,
+    "atMs": 1790063710742
+  },
+  {
+    "event": "proposal_created",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "version": 2,
+    "sha256": "8e2a5305975b9043cf949b10cd0a4c8c8add970d5430a11c383f89c96e0ebe04",
+    "promotionRoute": "parked_item",
+    "sourceItemId": "park-1",
+    "sourceUtteranceId": 6,
+    "atMs": 1790063710791,
+    "originalExcerpt": "check the logs for the retry",
+    "originalChars": 28,
+    "originalTruncated": false,
+    "tidiedExcerpt": "check the logs for the retry",
+    "tidiedChars": 28,
+    "tidiedTruncated": false
+  },
+  {
+    "event": "presentation_reported",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "completed": true,
+    "presentedVariant": "tidied",
+    "atMs": 1790063710792
+  },
+  {
+    "event": "confirm_authorised",
+    "source": "frame",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "sha256": "8e2a5305975b9043cf949b10cd0a4c8c8add970d5430a11c383f89c96e0ebe04",
+    "variant": "tidied",
+    "idempotencyKey": "slice-s3-confirm-mucdpr2f",
+    "atMs": 1790063710793,
+    "bytesExcerpt": "check the logs for the retry",
+    "bytesChars": 28,
+    "bytesTruncated": false
+  },
+  {
+    "event": "delivery_attempt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "sha256": "8e2a5305975b9043cf949b10cd0a4c8c8add970d5430a11c383f89c96e0ebe04",
+    "idempotencyKey": "slice-s3-confirm-mucdpr2f",
+    "atMs": 1790063710793,
+    "bytesExcerpt": "check the logs for the retry",
+    "bytesChars": 28,
+    "bytesTruncated": false
+  },
+  {
+    "event": "delivery_receipt",
+    "laneId": "voice-slice-lane",
+    "proposalId": "prop-2",
+    "idempotencyKey": "slice-s3-confirm-mucdpr2f",
+    "sha256": "8e2a5305975b9043cf949b10cd0a4c8c8add970d5430a11c383f89c96e0ebe04",
+    "outcome": "delivered",
+    "mechanism": "steer",
+    "unknownCause": null,
+    "reconcile": false,
+    "releaseRecorded": true,
+    "atMs": 1790063710795
+  },
+  {
+    "event": "worker_status_injected",
+    "laneId": "voice-slice-lane",
+    "workerActivity": "busy",
+    "atMs": 1790063714747
+  },
+  {
+    "event": "worker_brief_injected",
+    "laneId": "voice-slice-lane",
+    "workerSessionId": "01a0c81a-5101-769e-b2fe-62611bcba768",
+    "mode": "delta",
+    "historyMessages": 4,
+    "historyTotal": 4,
+    "briefChars": 167,
+    "atMs": 1790063714747
+  }
+]

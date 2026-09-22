@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "the kernel digest over the retained bytes reproduces the confirmed SHA",
+      "passed": true,
+      "details": "proposals delivered=2 mismatches=0"
+    },
+    {
+      "name": "delivered bytes are byte-identical to the confirmed proposal bytes",
+      "passed": true,
+      "details": "mismatches=0"
+    },
+    {
+      "name": "the worker session store contains the exact delivered bytes",
+      "passed": true,
+      "details": "delivered proposals not found in the worker store=0"
+    }
+  ],
+  "verified": [
+    {
+      "proposalId": "prop-1",
+      "sha256": "54ad73f261e944346b9121daf182b47c8bcb62c62c46830f63b4a03ac096fc01",
+      "tidied": "check the tests",
+      "deliveredBytes": "check the tests",
+      "workerReceived": true
+    },
+    {
+      "proposalId": "prop-2",
+      "sha256": "8e2a5305975b9043cf949b10cd0a4c8c8add970d5430a11c383f89c96e0ebe04",
+      "tidied": "check the logs for the retry",
+      "deliveredBytes": "check the logs for the retry",
+      "workerReceived": true
+    }
+  ]
+}

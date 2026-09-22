@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "every instruction in the worker store is an authorised delivery (or the named harness baseline)",
+      "passed": true,
+      "details": "store instructions=2 unauthorised=0 wrapped=0"
+    }
+  ],
+  "unauthorised": [],
+  "wrapped": [],
+  "allowlisted": [
+    "SLOW_WORKER_PROMPT (injected directly to make the worker genuinely busy)"
+  ]
+}

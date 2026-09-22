@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "delivery count equals authorised count",
+      "passed": true,
+      "details": "deliveries=1 authorisations=1"
+    },
+    {
+      "name": "every delivery carries a proposal id and a SHA matching its authorised bytes",
+      "passed": true,
+      "details": "1 deliveries verified"
+    },
+    {
+      "name": "each delivery is preceded by its own authorised confirmation",
+      "passed": true,
+      "details": "log order verified"
+    }
+  ]
+}

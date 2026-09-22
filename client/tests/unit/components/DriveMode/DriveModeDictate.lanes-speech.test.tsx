@@ -77,6 +77,12 @@ vi.mock('lucide-react', () => ({
   Eye: () => <span />,
   EyeOff: () => <span />,
   Inbox: () => <span />,
+  Radio: () => <span />,
+  Keyboard: () => <span />,
+  AlertTriangle: () => <span />,
+  BellRing: () => <span />,
+  Clock: () => <span />,
+  HelpCircle: () => <span />,
 }));
 
 class StubAudioContext {

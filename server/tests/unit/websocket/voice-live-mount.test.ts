@@ -208,6 +208,46 @@ describe('VoiceLiveMount — the relay is model-driven, not classified', () => {
     expect(payload).toMatchObject({ ok: false });
     expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
   });
+
+  it('ignores an identical relay tool call inside the duplicate window', async () => {
+    // Observed live 2026-09-22: the model emitted the same relay twice 483 ms
+    // apart and the operator was shown two identical parked items.
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    const first = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: 'check the tests' },
+      atMs: 1_000,
+    });
+    const repeat = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: 'check the tests' },
+      atMs: 1_483,
+    });
+    expect(first).toMatchObject({ status: 'awaiting_operator_approval' });
+    expect(repeat).toMatchObject({ status: 'duplicate_ignored' });
+    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(1);
+  });
+
+  it('honours the same relay again once the duplicate window has passed', async () => {
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text: 'check the tests' }, atMs: 1_000 });
+    const later = await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: 'check the tests' },
+      atMs: 10_000,
+    });
+    expect(later).toMatchObject({ status: 'awaiting_operator_approval' });
+    expect(sent.filter((frame) => frame.type === 'proposal_created').length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('VoiceLiveMount — frame routing and the release predicate', () => {

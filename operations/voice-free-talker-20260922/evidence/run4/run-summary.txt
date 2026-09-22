@@ -1,0 +1,45 @@
+Vertical slice: 2/3 scenarios passed
+  [PASS] S1 Thinking together (4 turns, no offer/steer, worker untouched)
+      ✓ four operator turns produced talker replies — replies=4/4
+      ✓ the talker actually spoke (audio out) during S1 — voice_audio_chunk frames=418
+      ✓ thinking together generated no proposal — proposal_created before=0 after=0
+      ✓ thinking together generated no parking update — parking_updated before=0 after=0
+      ✓ thinking together generated no delivery receipt — receipt_event before=0 after=0
+      ✓ the worker was never interrupted (idle, no turn) — busy=false status=idle
+      ✓ the worker session has received no message at all — messageCount=0 storeMessages=0 transcriptLines=0
+  [PASS] S2 Directed steer (proposal → tampered refusal → spoken confirm → exact bytes)
+      ✓ a proposal appears after the model relays — proposal received
+      ✓ the proposal carries the operator instruction (tidied bytes) — tidied="Check the tests."
+      ✓ the relayed bytes have the trigger phrase removed (owner directive) — tidied="Check the tests."
+      ✓ the proposal is a directed promotion with an identity — route=directed sha256len=64
+      ✓ negative control: a tampered confirmation is refused with voice_proposal_stale — code=voice_proposal_stale
+      ✓ negative control: the tampered confirmation delivered nothing — receipts 0→0
+      ✓ the worker is mid-run when the operator confirms — busy=true
+      ✓ the spoken confirmation produced a delivery receipt — receipt received (s2-confirm)
+      ✓ the receipt says delivered (the out-of-band chime condition) — outcome=delivered reason=
+      ✓ the delivered receipt names the same proposal — receipt.proposalId=prop-1 proposalId=prop-1
+      ✓ the delivery was a mid-run steer — mechanism=steer disclosure=delivered via the existing steer path; the extension input-event bridge (H2) is not wired yet
+      ✓ negative control: a confirm frame carrying instruction text is refused — code=voice_client_text_forbidden
+      ✓ the worker received the exact proposal bytes — looking for "Check the tests." in the worker store (/tmp/voice-slice-ByF6NX/pi-sessions/2026-09-22T07-56-36-529Z_01a0c81d-e130-765c-9479-51f69d9e1d7e.jsonl, 0 transcript lines)
+  [FAIL] S3 Parking & surface (two parked while busy, one promoted after the turn, one still parked)
+      ✓ the worker is mid-run while the two items are flagged — busy=true
+      ✓ the first flagged item parks — items=1
+      ✓ the second flagged item parks as well — items=2 (last operator utterance: "Relay to worker, check the logs for the retry.")
+      ✓ both parked items carry the operator instruction text — parked="check the logs for the retry | update the changelog"
+      ✓ the worker turn completes before the promotion — fired=true timedOut=false wasBusy=true
+      ✓ promoting the parked item creates a proposal — proposal_created received
+      ✓ the promoted proposal is a parked-item promotion of that item, carrying its bytes — route=parked_item sourceItemId=park-1 tidied="check the logs for the retry"
+      ✓ the promoted item is delivered on confirmation — outcome=delivered
+      ✗ the second item remains safely parked — remaining=park-2,park-3 expected=park-2
+      ✓ the worker received the exact promoted bytes — looking for "check the logs for the retry" in the worker store (/tmp/voice-slice-ByF6NX/pi-sessions/2026-09-22T07-56-36-529Z_01a0c81d-e130-765c-9479-51f69d9e1d7e.jsonl, 0 transcript lines)
+  negative control: attempted=true refused=true code=voice_proposal_stale deliveredNothing=true
+  gate leak: clean
+      ✓ delivery count equals authorised count — deliveries=2 authorisations=2
+      ✓ every delivery carries a proposal id and a SHA matching its authorised bytes — 2 deliveries verified
+      ✓ each delivery is preceded by its own authorised confirmation — log order verified
+  byte fidelity: 100%
+      ✓ the kernel digest over the retained bytes reproduces the confirmed SHA — proposals delivered=2 mismatches=0
+      ✓ delivered bytes are byte-identical to the confirmed proposal bytes — mismatches=0
+      ✓ the worker session store contains the exact delivered bytes — delivered proposals not found in the worker store=0
+  worker-store coverage (store ⊆ delivered): clean
+      ✓ every instruction in the worker store is an authorised delivery (or the named harness baseline) — store instructions=3 unauthorised=0 wrapped=0

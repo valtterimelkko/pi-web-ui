@@ -282,6 +282,15 @@ interface LaneRecord {
    */
   lastTalkerFinalText: string;
   /**
+   * The last relay the model handed the host, for the bounded duplicate guard.
+   * A live model can emit the same relay twice within a second (observed
+   * 2026-09-22 in the vertical slice: two identical parked items 483 ms apart);
+   * the harness ignores a repeated identical relay inside a short window so the
+   * operator is never shown — or able to approve — the same message twice. It
+   * never changes WHAT the model decides to relay.
+   */
+  lastRelay: { text: string; atMs: number } | null;
+  /**
    * The last FINAL operator transcript. The host keeps it so a
    * `relay_to_worker` tool call can be tied to the operator's own utterance
    * (provenance, and the source id for the parked/proposed item). The harness
@@ -317,6 +326,14 @@ const DEFAULT_LANE_REAP_GRACE_MS = 30_000;
  * surfaced as echo-suspect evidence rather than silently dropped.
  */
 const DEFAULT_ECHO_SUPPRESSION_WINDOW_MS = 1_000;
+
+/**
+ * How long an identical repeat of the same relay is treated as a duplicate tool
+ * call and ignored. A live model can emit one relay twice within a second; the
+ * window is short enough that an operator asking for the same thing again a
+ * moment later still gets a second item.
+ */
+const RELAY_DUPLICATE_WINDOW_MS = 5_000;
 
 /** H3(c): minimum token overlap for a talker utterance to count as a read-back. */
 const SPOKEN_READBACK_OVERLAP = 0.6;
@@ -690,6 +707,7 @@ export class VoiceLiveMount {
       talkerAudioUntilMs: 0,
       lastTalkerFinalText: '',
       lastOperatorFinalText: '',
+      lastRelay: null,
     });
     return null;
   }
@@ -1599,6 +1617,31 @@ export class VoiceLiveMount {
         this.evidence({ event: 'relay_tool_call_refused', laneId: lane.laneId, reason: 'empty', atMs: input.atMs });
         return { ok: false, reason: 'empty_relay' };
       }
+      // A live model can emit the same relay twice within a second (observed
+      // 2026-09-22: two identical parked items 483 ms apart). Ignoring the
+      // repeat keeps the operator from being shown — and able to approve — the
+      // same message twice. It never changes WHAT the model relays.
+      const lastRelay = lane.lastRelay;
+      if (
+        lastRelay !== null &&
+        lastRelay.text === text &&
+        input.atMs - lastRelay.atMs >= 0 &&
+        input.atMs - lastRelay.atMs <= RELAY_DUPLICATE_WINDOW_MS
+      ) {
+        this.evidence({
+          event: 'relay_duplicate_ignored',
+          laneId: lane.laneId,
+          text,
+          sinceLastRelayMs: input.atMs - lastRelay.atMs,
+          atMs: input.atMs,
+        });
+        return {
+          ok: true,
+          status: 'duplicate_ignored',
+          note: 'That exact relay is already held; nothing new was created.',
+        };
+      }
+      lane.lastRelay = { text, atMs: input.atMs };
       const sourceUtteranceId = lane.utteranceSeq;
       const busy = await this.isWorkerBusy(lane.workerSessionId).catch(() => false);
       if (busy) {

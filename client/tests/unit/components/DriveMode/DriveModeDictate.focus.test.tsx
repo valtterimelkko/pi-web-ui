@@ -98,6 +98,13 @@ vi.mock('lucide-react', () => ({
   Eye: () => <span data-testid="icon-eye" />,
   EyeOff: () => <span data-testid="icon-eyeoff" />,
   Inbox: () => <span data-testid="icon-inbox" />,
+  RefreshCw: () => <span data-testid="icon-refresh" />,
+  Radio: () => <span data-testid="icon-radio" />,
+  Keyboard: () => <span data-testid="icon-keyboard" />,
+  AlertTriangle: () => <span data-testid="icon-warning" />,
+  BellRing: () => <span data-testid="icon-bell" />,
+  Clock: () => <span data-testid="icon-clock" />,
+  HelpCircle: () => <span data-testid="icon-help" />,
 }));
 
 class StubAudioContext {
