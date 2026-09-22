@@ -3,7 +3,7 @@
 > Conductor evidence record. Raw logs: `red-probe-output.txt` (first run),
 > `red-probe-output2.txt` (tightened run). Probe source: `red-probe.ts` (temporary,
 > executed as a vitest file at baseline, then removed from the test tree).
-> Canonical defects and intent: plan [`§2`](../../docs/plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md).
+> Canonical defects and intent: plan [`§2`](../../../docs/plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md).
 
 **Baseline:** master `fa1eb393` (= plan revision `a97ca060` + sibling SDK bump `41c60d8a`
 + ledger commits). Command: `npm test --workspace=server -- tests/unit/websocket/phase0-red-probe.test.ts`
