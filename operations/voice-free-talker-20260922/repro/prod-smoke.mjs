@@ -1,0 +1,10 @@
+import { chromium } from '@playwright/test';
+const b = await chromium.launch({ headless: true, args: ['--no-sandbox','--disable-dev-shm-usage'] });
+const p = await (await b.newContext()).newPage();
+const errs = []; p.on('pageerror', e => errs.push(String(e)));
+const res = await p.goto('http://localhost:3456/', { waitUntil: 'networkidle', timeout: 30000 }).catch(e => ({ status: () => 'ERR ' + e.message }));
+await p.waitForTimeout(1500);
+const hasLogin = await p.locator('input[type="password"]').count();
+const root = await p.locator('#root, #app').count();
+console.log(JSON.stringify({ status: res && res.status && res.status(), hasPasswordInput: hasLogin, rootNodes: root, pageErrors: errs.slice(0,5) }));
+await b.close();

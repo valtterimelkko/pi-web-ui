@@ -122,7 +122,7 @@ const POLITENESS = /^(?:could|can|would|will)\s+you\s+(?:please\s+)?(?:be\s+able
  * when a commission verb follows (optionally behind a politeness prelude), so an
  * ordinary "yeah, the tests are green" keeps its particle byte-for-byte.
  */
-const COMMISSION_VERB = '(?:ask|tell|let|pass)\\b';
+const COMMISSION_VERB = '(?:ask|tell|let|pass|relay)\\b';
 const COMMISSION_LEAD_IN = new RegExp(
   '^(?:(?:all\\s+right|yeah|yep|yup|okay|ok|alright|right|so|well|um|uh|er|erm|please)\\b[\\s,;:]*)+' +
     `(?=(?:(?:could|can|would|will)\\s+you\\s+(?:please\\s+)?(?:be\\s+able\\s+to\\s+)?)?${COMMISSION_VERB})`,
@@ -225,6 +225,31 @@ function consumePassFrame(work: string): number | null {
 }
 
 /**
+ * 'relay to the worker that X' / 'relay to worker: X' — the explicit trigger
+ * phrase the operator uses to address the worker, and the one the native lane's
+ * prompt teaches. It must be stripped in BOTH lanes: on 2026-09-22 the operator
+ * spoke it to the bounded main (cascade) lane, whose normaliser did not know
+ * the phrase, so the worker was shown "relay to the worker that it needs to …"
+ * and would have parsed "the worker" as some other agent.
+ *
+ * The content keeps its force (the 'that'/'to' connector is consumed with the
+ * frame); a bare 'relay to the worker' with no content is left untouched — it
+ * carries no instruction to relay.
+ */
+function consumeRelayFrame(work: string): number | null {
+  const headMatch = /^relay\s+(?:(?:this|that)\s+)?(?:on\s+)?to\s+(?:the\s+worker|worker)\b/i.exec(work);
+  if (!headMatch) return null;
+  const after = work.slice(headMatch[0].length);
+  const withConnector = /^\s*(?:that|to)\b[\s,;:]+/i.exec(after);
+  if (withConnector) return headMatch[0].length + withConnector[0].length;
+  const withSeparator = /^\s*[,:\u2014-]\s*/.exec(after);
+  if (withSeparator && /\S/.test(after.slice(withSeparator[0].length))) {
+    return headMatch[0].length + withSeparator[0].length;
+  }
+  return null;
+}
+
+/**
  * Trailing courtesy padding — a CLOSED list of phrases that carry no
  * instruction. Conditionals that DO carry instruction ('if possible',
  * 'if needed', 'if that works') are deliberately absent: removing them would
@@ -294,13 +319,13 @@ export function normaliseRelayText(raw: string): RelayNormalisation {
     // frame ('also tell the worker to …') is channel chaining, not content:
     // leaving it would leak the frame to the worker. Stripped ONLY when a
     // commission verb follows — a bare 'also …' is left alone.
-    const chained = /^also\s+(?=(?:ask|tell|let|pass)\b)/i.exec(work);
+    const chained = /^also\s+(?=(?:ask|tell|let|pass|relay)\b)/i.exec(work);
     if (chained?.[0]) {
       record(chained[0]);
       work = work.slice(chained[0].length);
       continue;
     }
-    for (const consumeFrame of [consumeAskFrame, consumeTellFrame, consumeLetKnowFrame, consumePassFrame]) {
+    for (const consumeFrame of [consumeAskFrame, consumeTellFrame, consumeLetKnowFrame, consumePassFrame, consumeRelayFrame]) {
       consumed = consumeFrame(work);
       if (consumed !== null) {
         record(work.slice(0, consumed));

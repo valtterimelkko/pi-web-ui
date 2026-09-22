@@ -49,6 +49,40 @@ describe('P25: the operator-reported failure case', () => {
   });
 });
 
+describe('2026-09-22: the "relay to the worker" trigger is stripped in BOTH lanes', () => {
+  it('strips the trigger and its connector, keeping the operator\'s words', () => {
+    // The operator's exact utterance, spoken to the bounded main (cascade) lane.
+    expect(relay('Relay to the worker that it needs to summarize what it knows about Podpoint.')).toBe(
+      'it needs to summarize what it knows about Podpoint.'
+    );
+  });
+
+  it('handles the "relay to worker" and colon forms', () => {
+    expect(relay('relay to worker: check the tests')).toBe('check the tests');
+    expect(relay('Relay to worker, please check the tests.')).toBe('please check the tests.');
+  });
+
+  it('handles "relay that/this to the worker"', () => {
+    expect(relay('Relay that to the worker - rerun the suite.')).toBe('rerun the suite.');
+    expect(relay('relay this to the worker: hold phase three')).toBe('hold phase three');
+  });
+
+  it('strips a lead-in before the trigger', () => {
+    const result = normaliseRelayText('yeah, relay to the worker that the build is green');
+    expect(result.text).toBe('the build is green');
+  });
+
+  it('never empties the relay: a bare trigger with no content stays untouched', () => {
+    expect(relay('relay to the worker')).toBe('relay to the worker');
+  });
+
+  it('leaves ordinary uses of "relay" alone', () => {
+    expect(relay('relay the message to the worker when it is free')).toBe(
+      'relay the message to the worker when it is free'
+    );
+  });
+});
+
 describe('P25: commission / addressing frames (the channel, not the instruction)', () => {
   it.each([
     ['ask the worker to rebase the branch', 'rebase the branch'],
