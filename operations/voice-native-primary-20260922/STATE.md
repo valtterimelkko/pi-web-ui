@@ -25,10 +25,10 @@ All three: `zai/glm-5.3-flash` high · briefs at `children/<X>/brief.md` · hand
 - master `5fa309a9` (= origin): Phase 0 evidence + **H (Phase 3 server half)** + **C (Phase 2 client surface)** merged.
 - C verified: scoped client suite 381 passed, build 0, typecheck 0; new suite non-vacuous. H verified: 900 passed, parent probe 12/12. Post-merge server suite green (5520).
 - Post-merge client gates **green** on `f920543e`: client suite 145 files / 1639 tests, typecheck 0, client build 0 (`/root/voice-lane-lab/w1-postmerge-client-*.log`).
-- L still working (goal running, 522 messages at 22:45, active). Progress evidence: commits
-  `537bef27` (Phase 1 instrumentation: corpus, director, verifier, negative controls, built-app
-  capture mode) and `c890ecc3` (bounded synthesis retries, slot alternates, ASR-robust wording);
-  currently iterating on `voices.ts`/`fixtures.ts` (uncommitted, expected mid-work). No handback yet.
+- L still working (goal running, 681 messages at 23:29, active). Commits now
+  `537bef27`, `c890ecc3`, `00e3c6fb` (two validated corpus voices frozen; resilient ASR transport);
+  currently editing `cli.ts` + `built-app.ts` (built-app capture mode). No handback yet; continuous
+  progress, no stall.
 - Sibling lineage settled; merge authority granted for accepted, verified lanes.
 - zai pool ample at preflight; contract 1.44.0.
 
@@ -43,5 +43,5 @@ All three: `zai/glm-5.3-flash` high · briefs at `children/<X>/brief.md` · hand
 **Open questions:** none.
 **Spend:** US$0.00 / 8 h live (GLM child tokens inside zai allowance; counted at review).
 
-**Backstops:** `wake_deadline` re-armed for the L window after the 22:45 expiry (still running,
-healthy). Post-merge server and client suites both green; only L outstanding.
+**Backstops:** third L window armed after the 23:30 expiry (still running, healthy, commit
+`00e3c6fb`). Post-merge server and client suites green; only L outstanding.
