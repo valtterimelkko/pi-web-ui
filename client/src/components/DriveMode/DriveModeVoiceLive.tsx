@@ -56,7 +56,7 @@ const RECEIPT_UNKNOWN_CAUSE: Record<VoiceReceiptUnknownCause, string> = {
 };
 
 /** How a receipt verdict should read. Only `delivered` may read as delivery. */
-type ReceiptTone = 'delivered' | 'queued' | 'refused' | 'unknown';
+export type ReceiptTone = 'delivered' | 'queued' | 'refused' | 'unknown';
 
 const RECEIPT_TONE_CLASS: Record<ReceiptTone, string> = {
   delivered: 'text-emerald-600 dark:text-emerald-400',
@@ -70,8 +70,12 @@ const RECEIPT_TONE_CLASS: Record<ReceiptTone, string> = {
  * switch: a new outcome cannot be rendered by accident, and nothing except
  * `delivered` is worded — or toned — as a delivery. The chime stays a
  * delivered-only concern elsewhere in the surface.
+ *
+ * Exported since the native-primary binding (Phase 2): the main Drive Mode
+ * surface renders the same verdicts for the same receipts, and the wording
+ * must not fork between the two places one engine is rendered.
  */
-function receiptVerdict(receipt: VoiceReceipt): { tone: ReceiptTone; headline: string; detail: string | null } {
+export function receiptVerdict(receipt: VoiceReceipt): { tone: ReceiptTone; headline: string; detail: string | null } {
   switch (receipt.outcome) {
     case 'delivered':
       return {

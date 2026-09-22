@@ -243,7 +243,12 @@ export function useVoiceTurn(
    *  signal then flows through the lane coordinator (one writer for the whole
    *  tab) and taking the mic hands the floor over from a capturing lane.
    *  Undefined = the shipped single-lane behaviour, byte for byte. */
-  laneId?: string
+  laneId?: string,
+  /** Native-primary (Phase 2): when another engine (the native voice lane)
+   *  owns capture, this hook owns NO floor — it registers with neither the
+   *  lane coordinator nor the arbiter, so the two engines can never fight over
+   *  the operator's floor signal. Default true = today's behaviour untouched. */
+  floorEnabled = true,
 ): UseVoiceTurnResult {
   const runtime = talkerRuntimeFor(sdkType ?? undefined);
   // The lane identity: results are correlated on requestId plus THIS identity
@@ -454,16 +459,18 @@ export function useVoiceTurn(
   // Multi-lane: register this lane with the in-page floor coordinator so the
   // tab has ONE writer for the arbiter's floor and capture can be handed over
   // between lanes. Undefined laneId = today's single-lane path, untouched.
+  // floorEnabled=false (native-primary): the native lane is the capture owner;
+  // this hook stays mounted only for an explicit fallback and claims nothing.
   useEffect(() => {
-    if (!laneId) return;
+    if (!laneId || !floorEnabled) return;
     laneFloor.registerLane(laneId);
     return () => laneFloor.unregisterLane(laneId);
-  }, [laneId]);
+  }, [laneId, floorEnabled]);
 
   useEffect(() => {
-    if (!laneId) return;
+    if (!laneId || !floorEnabled) return;
     return laneFloor.setCaptureControls(laneId, { stopCapture: dictation.stopRecording });
-  }, [laneId, dictation.stopRecording]);
+  }, [laneId, floorEnabled, dictation.stopRecording]);
 
   /** §4.1 rule 1 — the operator's floor. Flows INTO the arbiter only. In
    *  lane mode it flows through the coordinator (one writer per tab: no
@@ -471,6 +478,7 @@ export function useVoiceTurn(
   const operatorSpeaking = dictation.state === 'recording';
 
   useEffect(() => {
+    if (!floorEnabled) return;
     if (!laneId) {
       speechArbiter.setOperatorSpeaking(operatorSpeaking);
       return () => {
@@ -481,17 +489,17 @@ export function useVoiceTurn(
     return () => {
       laneFloor.setLaneCapture(laneId, false);
     };
-  }, [operatorSpeaking, laneId]);
+  }, [operatorSpeaking, laneId, floorEnabled]);
 
   /** The mic toggle. In lane mode, taking the mic while ANOTHER lane captures
    *  is the floor-handoff gesture (§4.4): the capturing lane's words are
    *  finalised into its own talker (never dropped), then capture starts here. */
   const handleToggle = useCallback(() => {
-    if (laneId && (dictation.state === 'idle' || dictation.state === 'error')) {
+    if (floorEnabled && laneId && (dictation.state === 'idle' || dictation.state === 'error')) {
       laneFloor.yieldFloorTo(laneId);
     }
     dictation.toggle();
-  }, [laneId, dictation.state, dictation.toggle]);
+  }, [floorEnabled, laneId, dictation.state, dictation.toggle]);
 
   return {
     state: dictation.state,

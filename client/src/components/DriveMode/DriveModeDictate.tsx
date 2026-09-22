@@ -1,5 +1,5 @@
-import { useEffect, useCallback, useState } from 'react';
-import { Mic, MicOff, RefreshCw, Square, VolumeX } from 'lucide-react';
+import { useEffect, useCallback, useState, useSyncExternalStore } from 'react';
+import { Mic, MicOff, RefreshCw, Square, VolumeX, Radio, Keyboard, AlertTriangle, BellRing, Clock, HelpCircle } from 'lucide-react';
 import { useDriveModeStore } from '../../store/driveModeStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useReadAloud } from '../../hooks/useReadAloud';
@@ -16,11 +16,22 @@ import {
 } from './readingLevel';
 import { deriveFloorState, arbiterFloorSignals, type FloorView } from './voiceFloor';
 import { VoiceLayoutToggle } from './VoiceLayoutToggle';
-import { NativeVoiceLane } from './NativeVoiceLane';
 import { useVoiceLayout } from './useVoiceLayout';
 import { speechArbiter } from '../../lib/speechArbiter';
 import { getTurnAssistantText, useAnswerReader } from './useAnswerReader';
 import { contentScopeFor } from '../../lib/spokenLedger';
+import { useVoiceLiveLane } from '../../hooks/useVoiceLiveLane';
+import { ProposalCard } from './ProposalCard';
+import { ParkingLotDrawer } from './ParkingLotDrawer';
+import { captureUnavailableMessage } from '../../lib/voiceLive/captureFaultCopy';
+import { receiptVerdict, type ReceiptTone } from './DriveModeVoiceLive';
+import { laneFloor } from './voiceLanes';
+import type {
+  VoiceCaptureMode,
+  VoiceErrorCode,
+  VoiceReceipt,
+} from '@pi-web-ui/shared';
+import type { VoiceLiveSurfaceState } from '../../lib/voiceLive/surface';
 
 export interface DriveModeDictateProps {
   sessionId: string;
@@ -47,7 +58,8 @@ export interface DriveModeDictateProps {
 }
 
 /**
- * The Voice Mode surface — talking while working (plan Phase 4).
+ * The Voice Mode surface — talking while working (plan Phase 4; native-primary
+ * engine binding since Phase 2, 2026-09-22).
  *
  * Two lanes, one floor:
  *   - Capture never stops: the mic is always one tap away, including while
@@ -56,9 +68,18 @@ export interface DriveModeDictateProps {
  *     boundary). There is deliberately no state in which the mic control is
  *     disabled because the surface is speaking.
  *   - Everything the operator hears goes through the speech arbiter (§4.1
- *     ladder); everything the operator says goes to the talker verbatim.
- *     NOTHING in this component sends to the worker except through the
- *     talker's confirm-gated release path.
+ *     ladder); everything the operator says goes to the ACTIVE ENGINE. NOTHING
+ *     in this component sends to the worker except through a confirm-gated
+ *     release path (the native proposal card, or the cascade talker's card —
+ *     whichever engine is actually operating).
+ *
+ * NATIVE PRIMARY (plan §3.1): the familiar controls are bound to the NATIVE
+ * Live engine (the VoiceLiveSurface lane). There is no separate default lane
+ * selector: the engine badge reports which engine is actually operating, with
+ * evidence from the lane itself — never a configured label. The cascade talker
+ * remains as an EXPLICIT fallback only: it never engages silently, it never
+ * receives a live-voice candidate automatically, and a forced failure degrades
+ * visibly with the draft preserved and still pending.
  */
 export function DriveModeDictate({
   sessionId,
@@ -77,7 +98,36 @@ export function DriveModeDictate({
   // held; on exit what arrived is surfaced explicitly. The talker is TOLD (so
   // it can suggest leaving focus) but has no way to switch it.
   const focus = useFocusHold();
-  const voice = useVoiceTurn(sessionId, sdkType, focus.focused, laneEnabled ? sessionId : undefined);
+
+  // ── NATIVE PRIMARY ENGINE BINDING (Phase 2) ─────────────────────────────
+  // The native voice lane owns the main controls. The cascade talker hook
+  // stays mounted ONLY as the explicit fallback (floorEnabled=false while the
+  // native engine is primary, so the two engines never fight over the floor).
+  const voiceRuntime = talkerRuntimeFor(sdkType ?? undefined);
+  const nativeLane = useVoiceLiveLane({
+    workerSessionId: sessionId,
+    ...(voiceRuntime ? { runtime: voiceRuntime } : {}),
+  });
+  const nativeSurface = nativeLane.surface;
+  const nativeState = useSyncExternalStore<VoiceLiveSurfaceState>(
+    useCallback((onChange) => nativeSurface.subscribe(onChange), [nativeSurface]),
+    useCallback(() => nativeSurface.getState(), [nativeSurface]),
+    useCallback(() => nativeSurface.getState(), [nativeSurface]),
+  );
+  // The explicit fallback gesture's record. It is ONLY ever set by the
+  // operator pressing the fallback control — never derived from a failure.
+  const [fallbackActive, setFallbackActive] = useState(false);
+  const engine: 'native' | 'cascade-fallback' = fallbackActive ? 'cascade-fallback' : 'native';
+  const nativePrimary = engine === 'native';
+
+  const voice = useVoiceTurn(
+    sessionId,
+    sdkType,
+    focus.focused,
+    laneEnabled ? sessionId : undefined,
+    // The cascade engine owns the floor ONLY while it is the explicit fallback.
+    !nativePrimary,
+  );
   // The layout mode is the operator's persisted preference; the surface only
   // offers the switch (the overlay decides whether a split is rendered, and a
   // narrow window degrades the desktop mode back to this layout).
@@ -111,10 +161,20 @@ export function DriveModeDictate({
   // operator's last message, interim updates included. The answer reader scans
   // the conversation itself, so its accounted-turn boundary lives in one place.
   const turnAssistantText = getTurnAssistantText(messages);
-  const isRecording = voice.state === 'recording';
+  // ── ACTIVE-ENGINE capture state (drives the familiar visuals) ───────────
+  const nativeCapture = nativeState.capture;
+  const nativeCtl = nativeState.controller;
+  const nativeListening = nativeCapture === 'live';
+  // Push-to-talk is RETAINED on the main control: in PTT mode the familiar
+  // round mic becomes the hold-to-talk control (open mic stays the default).
+  const nativePtt = nativePrimary && nativeCtl.captureMode === 'push-to-talk';
+  const isRecording = nativePrimary ? nativeListening : voice.state === 'recording';
   // The acquisition window: the browser can already be capturing while the
   // recorder is still being set up. Shown, never silently reported as idle.
-  const isStarting = voice.state === 'starting';
+  const isStarting = nativePrimary ? nativeCapture === 'starting' : voice.state === 'starting';
+  // Who holds the floor, per the ACTIVE engine (native: the VAD boundary that
+  // also feeds the arbiter; cascade: the dictation recording state).
+  const activeOperatorSpeaking = nativePrimary ? nativeCtl.operatorSpeaking : voice.operatorSpeaking;
 
   // The talker in the reading path (P17): how much of the worker's output is
   // spoken is the operator's choice, applied at turn end and — when they change
@@ -134,6 +194,21 @@ export function DriveModeDictate({
   const handleReadingLevel = useCallback(
     (level: ReadingLevel) => (laneEnabled ? setLevelFor(sessionId, level) : setReadingLevel(level)),
     [laneEnabled, sessionId, setLevelFor, setReadingLevel]
+  );
+  // The familiar control binds to whichever engine is actually operating: in
+  // native mode the level rides the voice wire (the live engine speaks the
+  // talker's replies at this verbosity); in cascade fallback it keeps today's
+  // store behaviour. Same control, same position — the active binding.
+  const activeReadingLevel: ReadingLevel = nativePrimary ? nativeCtl.readingLevel : readingLevel;
+  const handleActiveReadingLevel = useCallback(
+    (level: ReadingLevel) => {
+      if (nativePrimary) {
+        nativeSurface.controller.setReadingLevel(level);
+        return;
+      }
+      handleReadingLevel(level);
+    },
+    [nativePrimary, nativeSurface, handleReadingLevel]
   );
   const { spokenKind, fallbackNote, heldWhileFocused, exitRecap, dismissRecap } = useAnswerReader({
     isStreaming,
@@ -172,7 +247,7 @@ export function DriveModeDictate({
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (laneEnabled) return;
-    if (isStarting || isRecording || voice.state === 'processing') {
+    if (isStarting || isRecording || (!nativePrimary && voice.state === 'processing')) {
       if (phase !== 'dictate') setPhase('dictate');
     } else if (isStreaming) {
       if (phase !== 'agent-working') setPhase('agent-working');
@@ -181,14 +256,14 @@ export function DriveModeDictate({
     } else if (phase === 'audio-playing' && readAloud.state === 'idle') {
       setPhase('dictate');
     }
-  }, [laneEnabled, voice.state, isStarting, isRecording, isStreaming, readAloud.state, phase, setPhase]);
+  }, [laneEnabled, voice.state, nativePrimary, isStarting, isRecording, isStreaming, readAloud.state, phase, setPhase]);
 
   // ---------------------------------------------------------------------------
   // The four states, derived from what the surface receives (§4.1).
   // ---------------------------------------------------------------------------
   const [floorView, setFloorView] = useState<FloorView>(() =>
     deriveFloorState({
-      operatorSpeaking: voice.operatorSpeaking,
+      operatorSpeaking: activeOperatorSpeaking,
       arbiter: arbiterFloorSignals(speechArbiter.getState()),
       workerStreaming: isStreaming,
     })
@@ -197,7 +272,7 @@ export function DriveModeDictate({
     const sync = () => {
       setFloorView(
         deriveFloorState({
-          operatorSpeaking: voice.operatorSpeaking,
+          operatorSpeaking: activeOperatorSpeaking,
           arbiter: arbiterFloorSignals(speechArbiter.getState()),
           workerStreaming: isStreaming,
         })
@@ -205,7 +280,7 @@ export function DriveModeDictate({
     };
     sync();
     return speechArbiter.subscribe(sync);
-  }, [voice.operatorSpeaking, isStreaming]);
+  }, [activeOperatorSpeaking, isStreaming]);
 
   // Is there speech to stop? Playing, waiting (queued / held), or ducked under
   // the operator's floor all count — the control is offered whenever a hard
@@ -225,12 +300,153 @@ export function DriveModeDictate({
   // (P15) and read-aloud never collides with it (P16).
   // ---------------------------------------------------------------------------
 
+  // ── Native-primary engine actions ──────────────────────────────────────────
+  // The native start sequence (identical to the lane surface's own start
+  // control): open the lane on the wire FIRST, then start capture — a lane
+  // that is never opened server-side is not a lane at all.
+  const startNativeListening = useCallback(async () => {
+    const lane = nativeSurface.startLane();
+    if (lane === 'unsupported') return;
+    await nativeSurface.startCapture();
+    const after = nativeSurface.getState();
+    if (
+      after.capture === 'live' &&
+      (after.lane.state === 'unavailable' || after.lane.state === 'unsupported')
+    ) {
+      await nativeSurface.stopCapture('the voice lane is unavailable');
+    }
+  }, [nativeSurface]);
+
+  // Multi-lane floor participation for the NATIVE capture: the same handoff
+  // contract the cascade lane honours (one capturing lane per tab; taking the
+  // mic elsewhere finalises this lane's words into ITS engine — never drops).
+  useEffect(() => {
+    if (!laneEnabled || !nativePrimary) return;
+    laneFloor.registerLane(sessionId);
+    return () => laneFloor.unregisterLane(sessionId);
+  }, [laneEnabled, nativePrimary, sessionId]);
+
+  useEffect(() => {
+    if (!laneEnabled || !nativePrimary) return;
+    return laneFloor.setCaptureControls(sessionId, {
+      stopCapture: () => {
+        void nativeSurface.stopCapture('lane handoff');
+      },
+    });
+  }, [laneEnabled, nativePrimary, sessionId, nativeSurface]);
+
+  useEffect(() => {
+    if (!laneEnabled || !nativePrimary) return;
+    laneFloor.setLaneCapture(sessionId, nativeListening);
+    return () => {
+      laneFloor.setLaneCapture(sessionId, false);
+    };
+  }, [laneEnabled, nativePrimary, sessionId, nativeListening]);
+
+  // The mic can START the native engine only when the lane can be served at
+  // all. A runtime the voice wire does not serve, a browser that cannot
+  // capture, and a server-refused lane are the visible degraded states below
+  // — the mic does nothing there, and the explanation names the cause.
+  const nativeStartable =
+    nativePrimary && !!voiceRuntime &&
+    nativeState.lane.state !== 'unavailable' &&
+    nativeState.lane.state !== 'unsupported';
+
   const handleMicClick = useCallback(() => {
     // Taking the floor is ALWAYS available — including while speech plays.
-    // Barge-in ducks via the arbiter and restores at the next chunk boundary;
-    // there is deliberately NO hard stop here (that was the old behaviour).
-    voice.toggle();
-  }, [voice]);
+    // Barge-in ducks via the arbiter and restores at the next chunk boundary.
+    if (!nativePrimary) {
+      voice.toggle();
+      return;
+    }
+    if (!nativeStartable || nativePtt) return; // PTT: the hold gesture talks; a click is inert
+    if (laneEnabled) laneFloor.yieldFloorTo(sessionId);
+    if (nativeListening) {
+      void nativeSurface.stopCapture('operator paused listening');
+    } else if (nativeCapture !== 'starting') {
+      void startNativeListening();
+    }
+  }, [nativePrimary, nativeStartable, nativePtt, nativeListening, nativeCapture, nativeSurface, startNativeListening, voice, laneEnabled, sessionId]);
+
+  const handleMicHoldStart = useCallback(() => {
+    if (!nativePrimary || !nativePtt || !nativeStartable) return;
+    if (laneEnabled) laneFloor.yieldFloorTo(sessionId);
+    void nativeSurface.beginPushToTalk();
+  }, [nativePrimary, nativePtt, nativeStartable, nativeSurface, laneEnabled, sessionId]);
+
+  const handleMicHoldEnd = useCallback(() => {
+    if (!nativePrimary || !nativePtt) return;
+    void nativeSurface.endPushToTalk();
+  }, [nativePrimary, nativePtt, nativeSurface]);
+
+  const handleCaptureMode = useCallback(
+    (mode: VoiceCaptureMode) => {
+      nativeSurface.controller.setCaptureMode(mode);
+    },
+    [nativeSurface],
+  );
+
+  const activateFallback = useCallback(() => {
+    // The EXPLICIT degradation. Nothing is sent by this transition: the
+    // cascade engine starts empty, and any live-voice candidate stays exactly
+    // where it was — pending in the native lane, awaiting a fresh operator.
+    setFallbackActive(true);
+  }, []);
+
+  const returnToNative = useCallback(() => {
+    // The explicit way back: a fresh lane attempt. If the engine is still
+    // unavailable, the surface degrades again — visibly, with the reason.
+    nativeSurface.retryLane();
+    setFallbackActive(false);
+  }, [nativeSurface]);
+
+  // ── Native readout derivations (evidence-first, mirrors the lane surface) ──
+  const nativeProposal = nativeCtl.proposal;
+  const nativeProposalStatus = nativeProposal
+    ? nativeProposal.superseded
+      ? 'stale'
+      : nativeProposal.proposal.presentation.completed
+        ? 'presented'
+        : 'pending'
+    : 'stale';
+  const lastNativeReceipt: VoiceReceipt | undefined =
+    nativeCtl.receipts[nativeCtl.receipts.length - 1];
+  // A verdict belongs to the confirmation it answers: a NEWER proposal makes
+  // the old receipt history (a delivered figure must not sit beside a fresh
+  // confirm button claiming a delivery that has not happened).
+  const nativeReceiptIsCurrent =
+    lastNativeReceipt !== undefined &&
+    (nativeProposal === null || nativeProposal.proposal.proposalId === lastNativeReceipt.proposalId);
+  const shownNativeReceipt = nativeReceiptIsCurrent ? lastNativeReceipt : undefined;
+  const nativeVerdict = shownNativeReceipt ? receiptVerdict(shownNativeReceipt) : null;
+  const NativeVerdictIcon =
+    nativeVerdict?.tone === 'delivered'
+      ? BellRing
+      : nativeVerdict?.tone === 'queued'
+        ? Clock
+        : nativeVerdict?.tone === 'unknown'
+          ? HelpCircle
+          : AlertTriangle;
+  const lastNativeCaption = nativeCtl.captions[nativeCtl.captions.length - 1];
+  const lastNativeTransportRefusal = nativeCtl.transportRefusals[nativeCtl.transportRefusals.length - 1];
+  const nativeLaneUnavailable = nativePrimary && !nativeStartable;
+  // Mic busy/disabled semantics per engine: capture acquisition is the only
+  // busy window; an unservable native lane disables the click (the degraded
+  // banner explains and offers the explicit fallback); push-to-talk NEVER
+  // disables mid-hold — a disabled button would strand the capture open.
+  const micBusy = isStarting || (!nativePrimary && voice.state === 'processing');
+  const micDisabled = nativePtt
+    ? !nativeStartable
+    : micBusy || (nativePrimary && !nativeStartable);
+  const RECEIPT_TONE_CLASS: Record<ReceiptTone, string> = {
+    delivered: 'text-emerald-600 dark:text-emerald-400',
+    queued: 'text-content-muted dark:text-content-muted-dark',
+    refused: 'text-amber-600 dark:text-amber-400',
+    unknown: 'text-amber-600 dark:text-amber-400',
+  };
+  const LANE_REFUSAL_FALLBACK: Partial<Record<VoiceErrorCode, string>> = {
+    voice_lane_capacity: 'The voice lane table is at capacity; try again shortly.',
+  };
 
   const handleReadAloud = useCallback(() => {
     if (readAloud.state === 'playing') {
@@ -263,6 +479,8 @@ export function DriveModeDictate({
   return (
     <div
       data-testid="drive-mode-surface"
+      data-engine={engine}
+      data-capture-mode={nativePrimary ? nativeCtl.captureMode : undefined}
       data-compact={compact ? 'true' : undefined}
       data-drive-session={laneEnabled ? sessionId : undefined}
       hidden={laneEnabled && !addressed ? true : undefined}
@@ -301,6 +519,43 @@ export function DriveModeDictate({
         )}
       </div>
 
+      {/* WHICH ENGINE IS OPERATING — with evidence from the lane itself, never
+          a configured label (plan §3.1). The native engine is the primary; the
+          cascade appears here only as the explicit fallback. */}
+      <div
+        data-testid="voice-engine-badge"
+        data-engine={engine}
+        data-lane-state={nativeState.lane.state}
+        data-capture={nativeCapture}
+        data-wire-state={nativeCtl.wireState}
+        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium ${
+          nativePrimary
+            ? nativeState.lane.state === 'live'
+              ? 'border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950'
+              : 'border-outline-default dark:border-outline-default-dark text-content-muted dark:text-content-muted-dark'
+            : 'border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950'
+        }`}
+      >
+        {nativePrimary ? (
+          <>
+            <Radio size={12} aria-hidden className={nativeListening ? 'text-pi-primary animate-pulse' : undefined} />
+            {voiceRuntime === undefined
+              ? `Live voice — not served for ${sdkType ?? 'this'} sessions`
+              : nativeState.lane.state === 'live'
+                ? `Live voice — connected${nativeListening ? ' · listening' : ''}`
+                : nativeState.lane.state === 'connecting'
+                  ? 'Live voice — connecting'
+                  : nativeState.lane.state === 'unavailable'
+                    ? 'Live voice — unavailable'
+                    : nativeState.lane.state === 'unsupported'
+                      ? 'Live voice — unavailable on this browser'
+                      : 'Live voice'}
+          </>
+        ) : (
+          'Cascade fallback — the live engine is not serving this lane'
+        )}
+      </div>
+
       {/* The two modes: the existing voice-only surface, or the desktop
           arrangement that shows the live session under it. Persisted — set once. */}
       <div className={compact ? 'mb-2' : 'mb-4'}>
@@ -311,13 +566,14 @@ export function DriveModeDictate({
         />
       </div>
 
-      {/* The reading level — how much of the worker's output is spoken, and
-          which level the answer in flight is being read at. Persisted as the
-          operator's default (P17). */}
+      {/* The reading level — how much of what the voice says is spoken, and
+          which level the answer in flight is being read at. Bound to the
+          ACTIVE engine: native mode rides the voice wire; cascade fallback
+          keeps the persisted store behaviour (P17). */}
       <div className={compact ? 'mb-2' : 'mb-4'}>
         <ReadingLevelControl
-          level={readingLevel}
-          onSelect={handleReadingLevel}
+          level={activeReadingLevel}
+          onSelect={handleActiveReadingLevel}
           spokenKind={spokenKind}
           fallbackNote={fallbackNote}
         />
@@ -341,16 +597,24 @@ export function DriveModeDictate({
 
       {/* Mic button — never disabled because the surface is speaking. It IS
           disabled while the device is being acquired: at that point the lane
-          already exists and a second tap must not open a second one. */}
+          already exists and a second tap must not open a second one — and
+          while the native lane cannot be served at all (refused, unsupported
+          runtime/browser): the degraded state below explains, and the
+          fallback is one explicit gesture away. In push-to-talk mode the
+          familiar round control IS the hold-to-talk button. */}
       <button
         onClick={handleMicClick}
-        disabled={voice.state === 'processing' || isStarting}
-        aria-busy={isStarting || undefined}
+        onPointerDown={nativePtt ? (e) => { e.preventDefault(); handleMicHoldStart(); } : undefined}
+        onPointerUp={nativePtt ? () => handleMicHoldEnd() : undefined}
+        onPointerLeave={nativePtt ? () => handleMicHoldEnd() : undefined}
+        disabled={micDisabled}
+        aria-busy={micBusy || undefined}
         data-testid="drive-mic"
+        data-mode={nativePrimary ? nativeCtl.captureMode : undefined}
         className={`rounded-full flex items-center justify-center transition-all duration-200 select-none touch-manipulation ${
           compact ? 'w-20 h-20' : 'w-28 h-28'
         } ${
-          voice.state === 'processing' || isStarting ? 'cursor-wait' : 'active:scale-95'
+          micBusy && !nativePtt ? 'cursor-wait' : 'active:scale-95'
         } ${
           isRecording
             ? 'bg-red-50 dark:bg-red-950 border-4 border-red-500 animate-pulse'
@@ -358,10 +622,20 @@ export function DriveModeDictate({
             ? 'bg-amber-50 dark:bg-amber-950 border-4 border-amber-400'
             : 'bg-gray-100 dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700'
         }`}
-        aria-label={isStarting ? 'Starting microphone' : isRecording ? 'Stop recording' : 'Start recording'}
+        aria-label={
+          isStarting
+            ? 'Starting microphone'
+            : nativePtt
+              ? isRecording
+                ? 'Release to stop talking'
+                : 'Hold to talk'
+              : isRecording
+                ? 'Stop recording'
+                : 'Start recording'
+        }
         type="button"
       >
-        {voice.state === 'error' ? (
+        {voice.state === 'error' || (nativePrimary && nativeCapture === 'error') ? (
           <MicOff
             className={`${compact ? 'w-7 h-7' : 'w-10 h-10'} ${
               isRecording ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'
@@ -389,35 +663,251 @@ export function DriveModeDictate({
         </p>
       )}
 
+      {/* NATIVE PRIMARY: capture-mode choice (open mic default, push-to-talk
+          retained) and the honest listening line, bound to the active engine. */}
+      {nativePrimary && (
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+          <div className="flex items-center gap-1" role="radiogroup" aria-label="Capture mode">
+            {(['open-mic', 'push-to-talk'] as VoiceCaptureMode[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={nativeCtl.captureMode === mode}
+                data-testid={`drive-capture-mode-${mode}`}
+                className={`rounded-full border px-2.5 py-0.5 text-[11px] ${
+                  nativeCtl.captureMode === mode
+                    ? 'border-pi-primary text-pi-primary'
+                    : 'border-outline-default dark:border-outline-default-dark text-content-muted dark:text-content-muted-dark'
+                }`}
+                onClick={() => handleCaptureMode(mode)}
+              >
+                {mode === 'open-mic' ? 'Open mic' : 'Push to talk'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {nativePrimary && (
+        <p
+          data-testid="drive-native-listening-state"
+          data-listening={nativeListening ? 'true' : 'false'}
+          data-capture={nativeCapture}
+          className={`mt-1.5 text-xs ${
+            nativeListening ? 'text-content-muted dark:text-content-muted-dark' : 'text-amber-600 dark:text-amber-400'
+          }`}
+        >
+          {nativeListening
+            ? nativePtt
+              ? 'Listening while you hold the button.'
+              : 'Listening — open mic. Talking over the voice ducks it; it never stops you being heard.'
+            : nativeCapture === 'error'
+              ? captureUnavailableMessage({
+                  detail: nativeState.captureDetail,
+                  reason: nativeState.captureFaultReason,
+                  mode: nativeCtl.captureMode,
+                })
+              : nativeCapture === 'suspended'
+                ? `Listening suspended${nativeState.captureDetail ? ` — ${nativeState.captureDetail}` : ''}. Nothing is being heard until you start it again.`
+                : 'Not listening yet. Tap the microphone to talk to the live voice.'}
+        </p>
+      )}
+
       {/* The contract, taught where the operator speaks (P26). Display and
-          teaching only — it changes no behaviour: capture, the send path and
-          the confirm gate are exactly as before. The three facts it must
-          convey: the words are passed on (not re-invented); they may be
-          tidied; the worker never knows this lane exists. */}
+          teaching only — it changes no behaviour. Worded per ACTIVE engine: */}
       <p
         data-testid="voice-contract-hint"
         className="mt-3 max-w-md text-center text-xs leading-relaxed text-content-muted dark:text-content-muted-dark"
       >
-        Say it however you like — your words are passed on as spoken, tidied
-        only when they ramble, never rewritten. The worker never knows this
-        voice exists.
+        {nativePrimary
+          ? 'Talk naturally. Say “relay to worker” and then your message — the live voice shows you the words it will send, and nothing goes until you approve.'
+          : 'Say it however you like — your words are passed on as spoken, tidied only when they ramble, never rewritten. The worker never knows this voice exists.'}
       </p>
 
-      {/* The free lane (live talker), restored to the bottom of the page
-          (owner report, 2026-09-22): the bounded/gated voice mode above stays
-          the main option, and this is the free conversation where the
-          model-driven relay is reached. One lane per addressed surface (the
-          non-addressed lanes of a multi-lane tab are hidden, so their lane is
-          not mounted twice); collapsed by default, and a lane that cannot start
-          explains itself in place rather than breaking anything on this
-          screen. */}
-      {(!laneEnabled || addressed) && sessionId && (
-        <NativeVoiceLane
-          sessionId={sessionId}
-          {...(talkerRuntime ? { runtime: talkerRuntime } : {})}
-          sessionRuntime={sdkType ?? null}
-          workerLabel={sessionDisplayName}
-        />
+      {/* ── NATIVE PRIMARY READOUT (replaces the old competing free-lane
+          selector): the native engine's own evidence surfaces — availability,
+          candidates, read-back, receipts, captions — rendered where the main
+          surface has always shown approval state. */}
+      {nativeLaneUnavailable && (
+        <div
+          data-testid="voice-engine-fallback-banner"
+          data-lane-state={nativeState.lane.state}
+          className="mt-4 w-full max-w-md rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-3"
+          role="status"
+        >
+          <p className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-200">
+            <AlertTriangle size={14} aria-hidden />
+            {voiceRuntime === undefined
+              ? `Live voice is not available for ${sdkType ?? 'this'} sessions yet`
+              : nativeState.lane.state === 'unsupported'
+                ? 'Live voice is unavailable on this browser'
+                : 'Live voice is unavailable'}
+          </p>
+          <p className="mt-1 text-xs text-amber-800 dark:text-amber-200" data-testid="voice-engine-fallback-detail">
+            {voiceRuntime === undefined
+              ? 'The voice wire does not serve this session type. The cascade fallback below is explicit and always yours to choose.'
+              : (nativeState.lane.detail ?? 'no reason was reported')}
+          </p>
+          <p className="mt-1 text-xs text-content-muted dark:text-content-muted-dark">
+            Nothing was sent to the worker by this failure. Any live-voice draft stays where it is, still awaiting your
+            approval.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              data-testid="voice-engine-fallback-activate"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400 dark:border-amber-700 bg-amber-100 dark:bg-amber-900 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors select-none touch-manipulation"
+              onClick={activateFallback}
+            >
+              <Keyboard size={13} aria-hidden />
+              Use the cascade microphone (fallback)
+            </button>
+            {nativeState.lane.state === 'unavailable' && (
+              <button
+                type="button"
+                data-testid="voice-engine-retry"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-outline-default dark:border-outline-default-dark px-3 py-1.5 text-xs font-medium text-content-primary dark:text-content-primary-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle transition-colors select-none touch-manipulation"
+                onClick={returnToNative}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Try live voice again
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* The native candidate — the host's proposal, presented through the
+          same approval contract as the lane surface: read-back first, exact
+          variants, version-bound confirmation. Survives engine failures
+          untouched: a failed lane never releases, retargets or rewrites it. */}
+      {nativePrimary && nativeProposal && (
+        <div className="mt-4 w-full flex justify-center">
+          <ProposalCard
+            proposal={nativeProposal.proposal}
+            status={nativeProposalStatus}
+            staleDetail={nativeProposal.superseded ? 'a newer proposal replaced this one' : undefined}
+            readingBack={
+              nativeState.readBack.state === 'reading' &&
+              nativeState.readBack.proposalId === nativeProposal.proposal.proposalId
+            }
+            readBackSupported={nativeState.readBack.supported}
+            onConfirm={(variant) => nativeSurface.controller.confirmProposal({ variant })}
+            onCancel={() => nativeSurface.controller.cancelProposal()}
+            onReadBack={(variant) => void nativeSurface.readBackProposal(variant)}
+          />
+        </div>
+      )}
+
+      {/* PRESERVED DRAFT (fallback mode): a live-voice candidate the operator
+          never approved stays visible — and unmistakably UNSENT — while the
+          cascade fallback is active. It is read-only here: the native engine
+          still owns it; the operator re-dictates or returns to live voice. */}
+      {!nativePrimary && nativeProposal && (
+        <div
+          data-testid="voice-engine-preserved-draft"
+          className="mt-4 w-full max-w-md rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-3"
+          role="status"
+        >
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+            Live-voice draft preserved — not sent
+          </p>
+          <p className="mt-1 text-sm text-gray-700 dark:text-gray-200 break-words">
+            “{nativeProposal.proposal.presentedVariant === 'original'
+              ? nativeProposal.proposal.original
+              : nativeProposal.proposal.tidied}”
+          </p>
+          <p className="mt-1 text-xs text-content-muted dark:text-content-muted-dark">
+            Still awaiting your approval on the live engine; nothing went to the worker. Say it again here, or try
+            live voice again.
+          </p>
+        </div>
+      )}
+      {nativePrimary && nativeProposal && nativeState.readBack.state === 'interrupted' && (
+        <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400" data-testid="drive-native-readback-interrupted">
+          Read-back stopped early
+          {nativeState.readBack.stoppedAtChar !== undefined ? ` at character ${nativeState.readBack.stoppedAtChar}` : ''}
+          {nativeState.readBack.detail ? ` — ${nativeState.readBack.detail}` : ''}. Confirm stays refused until it is
+          read in full.
+        </p>
+      )}
+      {nativePrimary && nativeProposal && nativeState.readBack.state === 'unsupported' && (
+        <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400" data-testid="drive-native-readback-unsupported">
+          {nativeState.readBack.detail ?? 'This browser cannot read it back aloud'} — the confirmation stays refused
+          until the read-back rule is satisfied.
+        </p>
+      )}
+
+      {/* The native delivery verdict: every outcome rendered honestly, only
+          `delivered` toned as delivery (N6). */}
+      {nativePrimary && shownNativeReceipt && nativeVerdict && (
+        <p
+          className={`mt-1.5 inline-flex items-start gap-1 text-[11px] ${RECEIPT_TONE_CLASS[nativeVerdict.tone]}`}
+          data-testid="drive-native-receipt"
+          data-outcome={shownNativeReceipt.outcome}
+          data-verdict-tone={nativeVerdict.tone}
+          role="status"
+        >
+          <NativeVerdictIcon size={12} aria-hidden className="mt-[1px] shrink-0" />
+          <span>
+            {nativeVerdict.headline}
+            {nativeVerdict.detail ? <span> · {nativeVerdict.detail}</span> : null}
+          </span>
+        </p>
+      )}
+
+      {/* Native captions — the live conversation, visible where the operator
+          is already looking (the last exchange; the full record stays on the
+          wire/controller ring). */}
+      {nativePrimary && lastNativeCaption && (
+        <p className="mt-2 text-xs italic text-content-muted dark:text-content-muted-dark" data-testid="drive-native-caption">
+          {lastNativeCaption.speaker === 'operator' ? 'You' : 'Talker'}: {lastNativeCaption.text}
+          {lastNativeCaption.final ? '' : ' …'}
+        </p>
+      )}
+
+      {/* Native refusals and faults — rendered, never swallowed (M7/M8). */}
+      {nativePrimary && lastNativeTransportRefusal && (
+        <p
+          className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400"
+          data-testid="drive-native-transport-refusal"
+          data-code={lastNativeTransportRefusal.code}
+          data-fatal={lastNativeTransportRefusal.fatal ? 'true' : 'false'}
+        >
+          Voice transport {lastNativeTransportRefusal.fatal ? 'stopped' : 'refused a frame'}: {lastNativeTransportRefusal.code}
+          {lastNativeTransportRefusal.message ? ` — ${lastNativeTransportRefusal.message}` : ''}
+        </p>
+      )}
+      {nativePrimary && nativeState.captureFaults.length > 0 && (
+        <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400" data-testid="drive-native-fault">
+          <AlertTriangle size={12} aria-hidden />
+          {nativeState.captureFaults[nativeState.captureFaults.length - 1].detail}
+        </p>
+      )}
+      {nativePrimary && nativeCtl.lastError && (
+        <p
+          className="mt-1.5 text-[11px] text-red-600 dark:text-red-400"
+          data-testid="drive-native-error"
+          data-code={nativeCtl.lastError.code}
+          data-fatal={nativeCtl.lastError.fatal ? 'true' : 'false'}
+        >
+          {nativeCtl.lastError.code}: {nativeCtl.lastError.message || LANE_REFUSAL_FALLBACK[nativeCtl.lastError.code] || 'the server gave no reason'}
+        </p>
+      )}
+      {nativePrimary && nativeCtl.parking.items.length > 0 && (
+        <div className="mt-4 w-full flex justify-center">
+          <ParkingLotDrawer
+            items={nativeCtl.parking.items}
+            onPromote={(itemId) => nativeSurface.controller.promoteParkedItem(itemId)}
+            onRequestList={() => nativeSurface.controller.requestParkingList()}
+          />
+        </div>
+      )}
+      {nativePrimary && !nativeListening && (
+        <p className="mt-1.5 inline-flex items-center gap-1.5 text-[11px] text-content-muted dark:text-content-muted-dark" data-testid="drive-native-typed-fallback">
+          <Keyboard size={12} aria-hidden />
+          Typed input stays in the composer — the voice lane never carries your words to the worker.
+        </p>
       )}
 
       {/* The exit recap (P18/2): everything that arrived while focus was on,
