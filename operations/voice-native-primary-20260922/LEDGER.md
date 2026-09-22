@@ -5,8 +5,11 @@
 > (scaled-down revision, 2026-09-22, baseline `a97ca060`). The **plan is the contract**; this
 > ledger is the execution organisation and record. Where this ledger and the plan disagree, the
 > plan wins and the ledger is amended.
-> **Status:** `READY, NOT STARTED` — planning complete; execution begins only when the owner
-> activates the conductor's goal engine.
+> **Status:** `EXECUTING` — owner activated the conductor's goal engine 2026-09-22 (goal
+> running); **Q1 answered: merge authority GRANTED** (feature/docs merges to `master` + push;
+> production deploy/restart remains separately gated); **Q2 answered: plan §10 ceilings
+> confirmed** (fix loop ≤US$8/20 live episodes; campaign ≤US$12; hard all-in US$25; 8 h live
+> wall-clock; real bounded Gemini Live calls from disposable servers).
 > **Rule of this file:** current state, not a completion claim — read before acting. Sections 1–10
 > are stable strategy (amend in place with dated amendments). §11 (owner questions), §12
 > (progression), §13 (decisions) are live and updated as execution proceeds.
@@ -275,12 +278,12 @@ under the private lab root). Summary:
 
 ---
 
-## 11. Owner questions — resolve before first dispatch
+## 11. Owner questions — answered 2026-09-22 (goal activation message)
 
-| # | Question | Conductor's default if unanswered |
+| # | Question | Answer |
 |---|---|---|
-| Q1 | **Merge authority.** Children work on lane branches in isolated worktrees. May the conductor merge accepted lanes into `master` and push (feature merges only, docs included), as was granted for the 2026-09-17 programme? Production deploy/restart stays separately gated regardless. | Do not merge; hold accepted lanes as branches and hand back for review |
-| Q2 | **Budget confirmation.** Plan §10 ceilings (fix loop ≤$8 / ≤20 live episodes; campaign ≤$12; hard all-in US$25, 8 h live wall-clock) standby-approved on dispatch, plus real bounded Gemini Live calls with the existing server-side `GEMINI_API_KEY` from disposable servers? | Treat ceilings as approved (plan says a dispatch accepts them); stop and ask if measured spend approaches 80% |
+| Q1 | **Merge authority.** May the conductor merge accepted lanes into `master` and push (feature merges only, docs included)? Production deploy/restart stays separately gated. | **GRANTED — “You may merge.”** Merge accepted, independently verified lanes; production remains untouched. |
+| Q2 | **Budget confirmation.** Plan §10 ceilings and real bounded Gemini Live calls? | **CONFIRMED — “I confirm plan.”** Proceed inside §10; stop and ask if measured spend approaches 80% of any ceiling. |
 
 Everything else — parallelisation shape, correction cycles, holdout construction, evaluator model,
 cleanup — is conductor-autonomous under this strategy and the plan's boundaries.
@@ -294,6 +297,7 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | Date/time (UTC) | Wave | Action | Outcome / evidence |
 |---|---|---|---|
 | 2026-09-22 20:05 | — | Ledger authored from plan + board + quota + repo reconnaissance | `READY, NOT STARTED`; awaiting owner goal activation |
+| 2026-09-22 ~20:20 | W0 | Owner activated goal engine; Q1 merge granted, Q2 plan confirmed; ledger/STATE updated | `EXECUTING`; Phase 0 begins |
 
 **Spend ledger:** 0 entries; running total US$0.00 / 8 h live.
 
@@ -308,6 +312,7 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | D-03 | 2026-09-22 | Wave model: W0 parent → W1 L/C/H parallel → W2 P/J parallel → W3 fix loop (bounded corrections) → W4 campaign + read-only reviewer | This ledger §3 |
 | D-04 | 2026-09-22 | Merge into `master` only on Q1 grant; production never | Plan §0 + in-conversation gate |
 | D-05 | 2026-09-22 | Private evidence root `/root/voice-lane-lab/campaigns/<campaign-id>/` (outside git) with sanitised summaries in `operations/voice-native-primary-20260922/`; coordination at `/root/voice-native-20260922/coordination/` | Plan §9 + multi-phase practice |
+| D-06 | 2026-09-22 | Owner answers: **Q1 merge authority granted** (“You may merge”); **Q2 plan confirmed** (ceilings and live calls approved) | Owner goal-activation message |
 
 ---
 
