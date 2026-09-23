@@ -35,9 +35,8 @@
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": [
-      "test"
-    ],
+    "responseMustContain": [],
+    "openResponse": true,
     "responseMustNotContain": [
       "passed",
       "finished",

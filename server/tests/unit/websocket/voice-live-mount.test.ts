@@ -313,6 +313,36 @@ describe('VoiceLiveMount — the relay is model-driven, not classified', () => {
     expect(later).toMatchObject({ status: 'awaiting_operator_approval' });
     expect(sent.filter((frame) => frame.type === 'proposal_created').length).toBeGreaterThanOrEqual(2);
   });
+
+  it('a relay call while a proposal is live carries the correction guidance (C18, pass-9)', async () => {
+    // The model relayed only the correction clause and lost the deploy
+    // instruction. The tool response now tells it, at the moment of the call,
+    // that a correction must be the FULL amended instruction.
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    utterance(service, 'Relay to worker, deploy the hot fix to staging.');
+    await flush();
+    const first = (await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: 'deploy the hot fix to staging' },
+      atMs: 1_000,
+    })) as { note?: string };
+    expect(first.note ?? '').not.toMatch(/CORRECTS that relay/);
+
+    utterance(service, 'Wait, do not deploy anything until I approve it in the ticket first.');
+    await flush();
+    const second = (await mount.handleToolRequest({
+      laneId: LANE,
+      name: 'relay_to_worker',
+      args: { text: 'do not deploy anything until I approve it in the ticket first' },
+      atMs: 2_000,
+    })) as { note?: string };
+    expect(second.note ?? '').toMatch(/CORRECTS that relay/);
+    expect(second.note ?? '').toMatch(/FULL corrected instruction/);
+  });
 });
 
 describe('VoiceLiveMount — frame routing and the release predicate', () => {

@@ -1794,6 +1794,7 @@ export class VoiceLiveMount {
           note: 'The worker is running. The host parked this for the operator to promote; nothing has been sent.',
         };
       }
+      const hadLiveProposal = lane.presentations.size > 0;
       const proposal = this.kernel.promote({
         route: 'direct_address',
         laneId: lane.laneId,
@@ -1817,7 +1818,10 @@ export class VoiceLiveMount {
         ok: true,
         status: 'awaiting_operator_approval',
         note:
-          'The host will show this to the operator for approval; nothing has been sent yet. Do not claim it was sent. The host reads the proposal aloud to the operator — do not read it back yourself. Tell the operator it is prepared, and after they hear it, ask them to confirm it or tell you what to change.',
+          'The host will show this to the operator for approval; nothing has been sent yet. Do not claim it was sent. The host reads the proposal aloud to the operator — do not read it back yourself. Tell the operator it is prepared, and after they hear it, ask them to confirm it or tell you what to change.' +
+          (hadLiveProposal
+            ? ' A relay was already awaiting approval when this call arrived: if this text CORRECTS that relay, it must be the FULL corrected instruction (the earlier text as amended) — never only the change. If it is not the whole amended instruction, call relay_to_worker again with the full text.'
+            : ''),
       };
     }
 
