@@ -656,6 +656,13 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
 
     const startedAtMs = Date.now();
     let executed = false;
+    // Adaptive await cadence: observations must be seen BEFORE the phase
+    // deadline fires, so polls tighten when the deadline is close (the first
+    // real run lost a presentation that landed inside one 500 ms poll window).
+    let awaitStartedAtMs: number | null = null;
+    let awaitDeadlineMs = 0;
+    let awaitReason = '';
+    let sleepMs = 300;
     for (;;) {
       if (Date.now() > deadlineAt) {
         abortedAtDeadline = true;
@@ -680,9 +687,20 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         if (action.text !== turn.text) throw new Error(`director/plan wording drift on turn ${action.turnId}`);
         await speakTurn(turn);
         executed = true;
+        awaitStartedAtMs = null;
+        sleepMs = 300;
+      } else if (action.type === 'await') {
+        // A NEW await phase restarts its clock; an unchanged one is ticking.
+        if (action.reason !== awaitReason || awaitStartedAtMs === null) {
+          awaitReason = action.reason;
+          awaitDeadlineMs = action.deadlineMs;
+          awaitStartedAtMs = observedAt;
+        }
+        const remaining = awaitDeadlineMs - (Date.now() - awaitStartedAtMs);
+        sleepMs = remaining <= 2_500 ? 100 : 300;
       }
-      // 'await': brief sleep, then loop (observations arrive by polling).
-      await page.waitForTimeout(observation ? 120 : 500);
+      // Observations arrive by polling; feed consecutive observations back-to-back.
+      await page.waitForTimeout(observation ? 60 : sleepMs);
     }
     void executed;
     void startedAtMs;
