@@ -1,3 +1,4 @@
+import { talkerActivityCount } from './talker-quiescence.js';
 /**
  * The `primary-mic` browser journey runner (child J; plan §4.2, §11 Phase 2).
  *
@@ -106,14 +107,20 @@ interface LabDump {
  * from the lab's own egress counter — the model audio the server sent the lane,
  * a signal independent of the child's cooperation — never from a fixed sleep.
  */
-async function waitForTalkerQuiet(labPage: LabPage, quietMs = 1_200, timeoutMs = 8_000): Promise<void> {
+async function waitForTalkerQuiet(labPage: LabPage, quietMs = 2_000, timeoutMs = 25_000): Promise<void> {
   if (!labPage.current) return;
   const started = Date.now();
   let lastCount = -1;
   let lastChangeAt = Date.now();
   for (;;) {
     const dump = await dumpLab(labPage.current).catch(() => null);
-    const count = dump?.egressCount ?? lastCount;
+    // W4: the talker's TEXT counts too. The et-high model emits whole text
+    // turns with no audio (C01-et-high/attempt-04: transcripts 17.7-25.1 s, no
+    // egress chunks 12.4-34.1 s), so an audio-only counter said "quiet" while
+    // the model was still mid-turn and the confirm was dropped as echo.
+    const count = dump
+      ? talkerActivityCount({ egressCount: dump.egressCount, wireFrames: dump.wireFrames })
+      : lastCount;
     if (count !== lastCount) {
       lastCount = count;
       lastChangeAt = Date.now();
