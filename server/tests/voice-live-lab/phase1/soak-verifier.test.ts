@@ -137,25 +137,30 @@ const committedEpisode = (): Episode => soakEpisodeFromPlan(loadSoakPlan(REPO), 
  */
 function compliantScript(): ScriptEntry[] {
   const pace = 150_000;
+  // L5 plan revision IN PROGRAM ORDER, matching the committed plan's phases:
+  // candidate + presentation BEFORE the reconnect, the confirm immediately
+  // after it, cycle 1's resolution frames recorded while later turns speak,
+  // four pace waits (the session clock clears 600 s), and the tail resolving
+  // cycle 2 from the stored trio.
   return [
     { advanceMs: 2_000 }, // speak s01: relay 1
-    { observation: { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'p1', atMs: 0 }, advanceMs: 8_000 }, // stored in the speak window; speak s02
-    { observation: { kind: 'presentation', identity: 'p1', complete: true, atMs: 0 }, advanceMs: 4_000 }, // stored; pace s03 action
-    { advanceMs: pace }, // the pace wait; reconnect s04 action
-    { advanceMs: 2_000 }, // the reconnect wait; speak s05: confirm p1
-    { observation: { kind: 'release', identity: 'p1', atMs: 0 }, advanceMs: pace }, // recorded; pace s06 action
-    { observation: { kind: 'delivery', identity: 'p1', atMs: 0 }, advanceMs: 3_000 }, // recorded; speak s07: relay 2
-    { observation: { kind: 'worker-store', identity: 'p1', ok: true, atMs: 0 }, advanceMs: 2_000 }, // recorded; speak s08: conversation
-    { observation: { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'p2', atMs: 0 }, advanceMs: pace }, // stored; pace s09 action
-    { advanceMs: 4_000 }, // the pace wait; await-candidate consumes p2
-    { observation: { kind: 'presentation', identity: 'p2', complete: true, atMs: 0 }, advanceMs: 2_000 }, // consumed; speak s10: confirm p2
-    { advanceMs: 2_000 }, // speak s11: conversation
-    { observation: { kind: 'response', text: 'Still holding.', atMs: 0 }, advanceMs: pace }, // pace s12 action
-    { advanceMs: 2_000 }, // the pace wait; speak s13: conversation closer
-    { observation: { kind: 'response', text: 'Session remains live.', atMs: 0 }, advanceMs: 3_000 },
-    { observation: { kind: 'release', identity: 'p2', atMs: 0 }, advanceMs: 5_000 },
-    { observation: { kind: 'delivery', identity: 'p2', atMs: 0 }, advanceMs: 3_000 },
-    { observation: { kind: 'worker-store', identity: 'p2', ok: true, atMs: 0 }, advanceMs: 2_000 }, // terminal complete
+    { observation: { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'p1', atMs: 0 }, advanceMs: 8_000 }, // reconnect s02 action
+    { observation: { kind: 'presentation', identity: 'p1', complete: true, atMs: 0 }, advanceMs: 4_000 }, // await-candidate consumed p1; speak s03: confirm p1
+    { observation: { kind: 'release', identity: 'p1', atMs: 0 }, advanceMs: 3_000 }, // recorded after the reconnect; speak s04: conversation
+    { observation: { kind: 'delivery', identity: 'p1', atMs: 0 }, advanceMs: 3_000 }, // recorded; pace s05 action
+    { observation: { kind: 'worker-store', identity: 'p1', ok: true, atMs: 0 }, advanceMs: 2_000 }, // recorded; speak s06: relay 2
+    { observation: { kind: 'response', text: 'Noted — the deploy takes nearly ten minutes.', atMs: 0 }, advanceMs: 2_000 }, // await-candidate armed (s07)
+    { observation: { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'p2', atMs: 0 }, advanceMs: pace }, // the pace wait; the candidate lands mid-window and is consumed; await-presentation armed
+    { observation: { kind: 'presentation', identity: 'p2', complete: true, atMs: 0 }, advanceMs: 4_000 }, // consumed; speak s07: confirm p2
+    { observation: { kind: 'release', identity: 'p2', atMs: 0 }, advanceMs: 3_000 }, // recorded; speak s08: conversation
+    { observation: { kind: 'delivery', identity: 'p2', atMs: 0 }, advanceMs: 3_000 }, // recorded; pace s09 action
+    { observation: { kind: 'worker-store', identity: 'p2', ok: true, atMs: 0 }, advanceMs: 2_000 }, // recorded; speak s10: conversation
+    { observation: { kind: 'response', text: 'Still holding.', atMs: 0 }, advanceMs: 2_000 }, // speak s11: conversation
+    { advanceMs: pace }, // pace s12 action
+    { observation: { kind: 'response', text: 'Session remains live.', atMs: 0 }, advanceMs: 2_000 }, // speak s13: conversation closer
+    { advanceMs: pace }, // pace s14 action
+    { advanceMs: 400_000 }, // the s14 pace wait elapses — the session clock clears the 600 s bar
+    { observation: { kind: 'response', text: 'Fin.', atMs: 0 }, advanceMs: 2_000 }, // the tail resolves cycle 2 from the stored trio → terminal complete
   ];
 }
 

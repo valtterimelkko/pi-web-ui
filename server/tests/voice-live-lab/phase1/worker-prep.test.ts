@@ -30,7 +30,7 @@ const corpus = loadCorpus();
 const dirs: string[] = [];
 afterEach(() => dirs.splice(0));
 
-const planWith = (kinds: string[]): { turns: Array<{ kind: string }> } => ({ turns: kinds.map((kind) => ({ kind })) });
+const turnsWith = (kinds: string[]): Array<{ kind: string }> => kinds.map((kind) => ({ kind }));
 
 /** A scripted Internal API caller over an in-memory session table. */
 function scriptedCall(initialRows: SessionListRow[], handler?: (apiPath: string, options?: { method?: string; body?: unknown }) => { status: number; body: string } | null): { call: InternalApiCall; rows: SessionListRow[]; posts: Array<{ apiPath: string; body: unknown }> } {
@@ -52,18 +52,18 @@ function scriptedCall(initialRows: SessionListRow[], handler?: (apiPath: string,
 
 describe('journey requirement detection from the merged plan', () => {
   it('requires the busy drive exactly when the plan carries an adaptive-promote turn (C22 shape)', () => {
-    expect(journeyRequiresBusyDrive(planWith(['opening', 'adaptive-promote', 'adaptive-confirm']))).toBe(true);
-    expect(journeyRequiresBusyDrive(planWith(['opening', 'adaptive-confirm']))).toBe(false);
+    expect(journeyRequiresBusyDrive(turnsWith(['opening', 'adaptive-promote', 'adaptive-confirm']))).toBe(true);
+    expect(journeyRequiresBusyDrive(turnsWith(['opening', 'adaptive-confirm']))).toBe(false);
   });
 
   it('requires a second worker exactly when the plan carries an adaptive-switch turn (C24 shape)', () => {
-    expect(journeyRequiresSecondWorker(planWith(['opening', 'adaptive-switch']))).toBe(true);
-    expect(journeyRequiresSecondWorker(planWith(['opening', 'adaptive-confirm']))).toBe(false);
+    expect(journeyRequiresSecondWorker(turnsWith(['opening', 'adaptive-switch']))).toBe(true);
+    expect(journeyRequiresSecondWorker(turnsWith(['opening', 'adaptive-confirm']))).toBe(false);
   });
 });
 
 describe('the busy drive (C22 prerequisite)', () => {
-  it('prompts the journey\'s NEW worker session through the Internal API and waits until it reports busy', async () => {
+  it('prompts the journey\'s NEW worker session through the Internal API and waits until it reports busy AND holds', async () => {
     const before = [{ sessionId: 'older-1', busy: false }];
     const { call, rows, posts } = scriptedCall([...before, { sessionId: 'journey-worker', busy: false }], (apiPath) => {
       if (apiPath === '/api/v1/sessions/journey-worker/prompt') {
@@ -74,15 +74,69 @@ describe('the busy drive (C22 prerequisite)', () => {
       }
       return { status: 404, body: '{}' };
     });
-    const record = await driveWorkerBusy(call, before.map((row) => String(row.sessionId)));
-    expect(record).toMatchObject({ workerSessionId: 'journey-worker', promptSent: true, busyObserved: true });
+    const record = await driveWorkerBusy(call, before.map((row) => String(row.sessionId)), { holdWatchMs: 2_200 });
+    expect(record).toMatchObject({ workerSessionId: 'journey-worker', promptsSent: 1, busyObserved: true });
     expect(posts).toHaveLength(1);
     expect(posts[0]!.apiPath).toBe('/api/v1/sessions/journey-worker/prompt');
     // The busy state is genuine work: the prompt makes the runtime execute a
-    // real command, it does not touch any busy flag.
-    expect(posts[0]!.body).toMatchObject({ message: BUSY_DRIVE_PROMPT });
-    expect(BUSY_DRIVE_PROMPT).toContain('sleep 120');
+    // real command; it is detached so the journey never waits on the sleep.
+    expect(posts[0]!.body).toMatchObject({ message: BUSY_DRIVE_PROMPT, detach: true });
+    expect(BUSY_DRIVE_PROMPT).toContain('sleep 90');
+    expect(BUSY_DRIVE_PROMPT).toContain('shell tool');
     expect(BUSY_HOLD_MS).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('re-prompts when the busy state collapses — a model that answers without running the command ends its turn in ~1 s (the attempt-02 failure)', async () => {
+    const before = [{ sessionId: 'older-1' }];
+    let busyObservations = 0;
+    const { call, rows, posts } = scriptedCall([...before, { sessionId: 'w', busy: false }], () => {
+      // First prompt: the runtime flips busy, then ends the turn immediately
+      // (agent_end → idle). The second prompt holds.
+      const row = rows.find((candidate) => candidate.sessionId === 'w');
+      if (posts.length === 2 && row) row.busy = true;
+      else if (row) row.busy = true;
+      return { status: 202, body: '{"accepted":true}' };
+    });
+    // Collapse the first busy state right after phase 1 first observes it.
+    const wrapped: InternalApiCall = async (apiPath, options) => {
+      const result = await call(apiPath, options);
+      if (apiPath === '/api/v1/sessions' && (options?.method ?? 'GET') === 'GET') {
+        const row = rows.find((candidate) => candidate.sessionId === 'w');
+        if (row?.busy) {
+          busyObservations += 1;
+          if (busyObservations === 1) row.busy = false;
+        }
+      }
+      return result;
+    };
+    const record = await driveWorkerBusy(wrapped, before.map((row) => String(row.sessionId)), { holdWatchMs: 2_200 });
+    expect(record.promptsSent).toBe(2);
+    expect(posts.filter((post) => post.apiPath.endsWith('/prompt'))).toHaveLength(2);
+  });
+
+  it('refuses when the busy state keeps collapsing and the prompt budget is exhausted', async () => {
+    const before = [{ sessionId: 'older-1' }];
+    let calls = 0;
+    const { call, rows } = scriptedCall([...before, { sessionId: 'w', busy: false }], () => {
+      calls += 1;
+      const row = rows.find((candidate) => candidate.sessionId === 'w');
+      if (row) row.busy = true;
+      return { status: 202, body: '{}' };
+    });
+    // busy flips to idle right after each busy poll observes it.
+    const originalCall = call;
+    const flaky: InternalApiCall = async (apiPath, options) => {
+      const result = await originalCall(apiPath, options);
+      if (apiPath === '/api/v1/sessions' && (options?.method ?? 'GET') === 'GET') {
+        const row = rows.find((candidate) => candidate.sessionId === 'w');
+        if (row && row.busy) {
+          // hold collapses immediately after being observed once per prompt
+          if (calls > 0) row.busy = false;
+        }
+      }
+      return result;
+    };
+    await expect(driveWorkerBusy(flaky, before.map((row) => String(row.sessionId)), { holdWatchMs: 2_000, maxPrompts: 2 })).rejects.toThrow(/prompt budget/);
   });
 
   it('refuses to prompt when the session diff is not exactly one new session', async () => {

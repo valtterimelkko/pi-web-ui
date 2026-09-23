@@ -46,44 +46,33 @@ describe('the soak director program', () => {
     const presentation = { kind: 'presentation', identity: 'p1', complete: true, atMs: 9_000 } as const;
     const candidate2 = { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'p2', atMs: 400_000 } as const;
     const presentation2 = { kind: 'presentation', identity: 'p2', complete: true, atMs: 404_000 } as const;
+    // L5 revision: the reconnect sits IMMEDIATELY after the first relay (the
+    // pending proposal crosses it with the smallest possible gap), the first
+    // confirm follows it, and the second relay cycle rides C05's DISTINCT
+    // frozen wording. Paces hold the session open to the duration bar.
+    // The same program order the verifier's compliant record uses (L5): the
+    // reconnect sits immediately after the first relay, the confirm follows
+    // it, cycle resolutions are recorded while later turns speak, and the
+    // tail resolves cycle 2.
     const { rows } = drive(episode, [
-      // s01: opening relay instruction
-      { advanceMs: 2_000 },
-      { observation: candidate, advanceMs: 3_000 },
-      { observation: presentation, advanceMs: 4_000 },
-      // s02: conversational turn + its response
-      { advanceMs: 2_000 },
-      { observation: { kind: 'response', text: 'Noted — the deploy takes nearly ten minutes.', atMs: 20_000 }, advanceMs: 1_000 },
-      // soak-pace
-      { advanceMs: 1_000 },
-      // soak-reconnect
-      { advanceMs: 1_000 },
-      // s04: confirm P1 — pending work survives the reconnect
-      { advanceMs: 2_000 },
-      { observation: { kind: 'release', identity: 'p1', atMs: 40_000 }, advanceMs: 2_000 },
-      { observation: { kind: 'delivery', identity: 'p1', atMs: 42_000 }, advanceMs: 2_000 },
-      { observation: { kind: 'worker-store', identity: 'p1', ok: true, atMs: 44_000 }, advanceMs: 1_000 },
-      // soak-pace
-      { advanceMs: 1_000 },
-      // s06: second relay cycle
-      { advanceMs: 2_000 },
-      { observation: candidate2, advanceMs: 3_000 },
-      { observation: presentation2, advanceMs: 4_000 },
-      // s07 conversational + response
-      { advanceMs: 2_000 },
-      { observation: { kind: 'response', text: 'Still holding.', atMs: 410_000 }, advanceMs: 1_000 },
-      // soak-pace
-      { advanceMs: 1_000 },
-      // s09: confirm P2
-      { advanceMs: 2_000 },
-      { observation: { kind: 'release', identity: 'p2', atMs: 420_000 }, advanceMs: 2_000 },
-      { observation: { kind: 'delivery', identity: 'p2', atMs: 422_000 }, advanceMs: 2_000 },
-      { observation: { kind: 'worker-store', identity: 'p2', ok: true, atMs: 424_000 }, advanceMs: 1_000 },
-      // s10 conversational closer + response
-      { advanceMs: 2_000 },
-      { observation: { kind: 'response', text: 'Session remains live.', atMs: 430_000 }, advanceMs: 1_000 },
-      // soak-pace, then the trailing release/delivery/store tail is already consumed
-      { advanceMs: 1_000 },
+      { advanceMs: 2_000 }, // speak s01: relay 1
+      { observation: candidate, advanceMs: 8_000 }, // reconnect s02 action
+      { observation: presentation, advanceMs: 4_000 }, // speak s03: confirm p1
+      { observation: { kind: 'release', identity: 'p1', atMs: 30_000 }, advanceMs: 3_000 }, // speak s04: conversation
+      { observation: { kind: 'delivery', identity: 'p1', atMs: 32_000 }, advanceMs: 3_000 }, // pace s05 action
+      { observation: { kind: 'worker-store', identity: 'p1', ok: true, atMs: 34_000 }, advanceMs: 2_000 }, // speak s06: relay 2
+      { observation: { kind: 'response', text: 'Noted — the deploy takes nearly ten minutes.', atMs: 40_000 }, advanceMs: 2_000 }, // await-candidate armed (s07)
+      { observation: candidate2, advanceMs: 150_000 }, // the pace wait; the candidate lands mid-window; await-presentation armed
+      { observation: presentation2, advanceMs: 4_000 }, // speak s07: confirm p2
+      { observation: { kind: 'release', identity: 'p2', atMs: 420_000 }, advanceMs: 3_000 }, // speak s08: conversation
+      { observation: { kind: 'delivery', identity: 'p2', atMs: 422_000 }, advanceMs: 3_000 }, // pace s09 action
+      { observation: { kind: 'worker-store', identity: 'p2', ok: true, atMs: 424_000 }, advanceMs: 2_000 }, // speak s10: conversation
+      { observation: { kind: 'response', text: 'Still holding.', atMs: 430_000 }, advanceMs: 2_000 }, // speak s11: conversation
+      { advanceMs: 150_000 }, // pace s12 action
+      { observation: { kind: 'response', text: 'Session remains live.', atMs: 440_000 }, advanceMs: 2_000 }, // speak s13: conversation closer
+      { advanceMs: 150_000 }, // pace s14 action
+      { observation: { kind: 'response', text: 'Fin.', atMs: 460_000 }, advanceMs: 2_000 }, // the tail resolves cycle 2
+      { advanceMs: 150_000 },
     ]);
 
     const actions = rows.map((row) => row.action);
@@ -93,16 +82,23 @@ describe('the soak director program', () => {
     expect(paces.length).toBeGreaterThanOrEqual(4);
     expect(paces.every((action) => action.type === 'pace' && action.ms >= 60_000)).toBe(true);
     const speaks = actions.filter((action) => action.type === 'speak');
-    expect(speaks.length).toBe(8); // the committed plan's eight operator turns
+    expect(speaks.length).toBe(9); // the committed plan's nine operator turns (bar: 8)
     // no pace/reconnect action ever fabricates speech
     expect(actions.every((action) => action.type !== 'pace' || !('text' in action))).toBe(true);
     // the flow completes
     expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'complete' });
-    // the confirm for p1 came AFTER the reconnect action
+    // the confirm for p1 came AFTER the reconnect action (L5: immediately after)
     const reconnectAt = rows[rows.findIndex((row) => row.action.type === 'reconnect-transport')].atMs;
-    const confirmP1 = rows.find((row) => row.action.type === 'speak' && row.action.turnId === 's05');
+    const confirmP1 = rows.find((row) => row.action.type === 'speak' && row.action.turnId === 's03');
     expect(confirmP1).toBeDefined();
     expect(confirmP1!.atMs).toBeGreaterThan(reconnectAt);
+    // the second relay cycle REPEATS the C01 wording deliberately (the C19
+    // repeat row commits the product to accepting repeated relay wording; the
+    // L4 attempt's second-cycle silence is explained by the dead lane).
+    const speakTexts = rows
+      .filter((row) => row.action.type === 'speak')
+      .map((row) => String((row.action as { text?: string }).text ?? ''));
+    expect(speakTexts.filter((text) => text.startsWith('Relay to worker'))).toHaveLength(2);
   });
 });
 

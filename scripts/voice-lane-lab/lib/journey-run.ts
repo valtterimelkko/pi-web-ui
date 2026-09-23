@@ -685,7 +685,7 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     // prepared BEFORE the journey attaches to the first — created through the
     // Internal API's real creation path, labelled through the app's own
     // display-name preference so the product's picker rows are unambiguous.
-    const needsTwoSessions = journeyRequiresSecondWorker(plan);
+    const needsTwoSessions = journeyRequiresSecondWorker(episode.inputTurns);
     let preparedWorkers: PreparedWorkerSession[] = [];
     if (needsTwoSessions) {
       preparedWorkers = await prepareTwoWorkerSessions((apiPath, options) =>
@@ -781,7 +781,7 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     // parking decision sees the session mid-run. Nothing here touches the
     // product's busy flag; the runtime executes the sleep itself.
     let busyDriveRecord: BusyDriveRecord | null = null;
-    if (journeyRequiresBusyDrive(plan)) {
+    if (journeyRequiresBusyDrive(episode.inputTurns)) {
       busyDriveRecord = await driveWorkerBusy((apiPath, options) =>
         internalApiRequest(path.join(stateDir, 'internal-api.sock'), path.join(stateDir, 'internal-api-token'), apiPath, options),
         sessionIdsBefore
@@ -791,10 +791,11 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         detail: `worker prompted through the Internal API; the runtime executes: ${BUSY_DRIVE_PROMPT.slice(0, 60)}…`,
         workerSessionId: busyDriveRecord.workerSessionId,
         busyObserved: busyDriveRecord.busyObserved,
-        busyPollMs: busyDriveRecord.busyPollMs,
+        promptsSent: busyDriveRecord.promptsSent,
+        busyHeldMs: busyDriveRecord.busyHeldMs,
       });
       await screenshot(page, 'worker-busy-drive');
-      log(`busy drive: worker ${busyDriveRecord.workerSessionId} busy after ${busyDriveRecord.busyPollMs} ms`);
+      log(`busy drive: worker ${busyDriveRecord.workerSessionId} busy (held ${busyDriveRecord.busyHeldMs} ms, ${busyDriveRecord.promptsSent} prompt(s))`);
     }
 
     // ── The director loop ─────────────────────────────────────────────────
@@ -840,17 +841,35 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         }
       })
       .catch(() => {});
-    // 2. the product's own session-stream reconnect (exponential backoff)
+    // 2. the product's own session-stream reconnect (exponential backoff).
+    // The grace clock is running server-side (the lane detached and its
+    // provider session closed at the drop; the kernel keeps pending work only
+    // until the reap), so every step from here stays tight.
     let transportBack = false;
     for (let index = 0; index < 60 && !transportBack; index += 1) {
       await page.waitForTimeout(500);
       transportBack = wsLog.slice(wsBefore).some((line) => line.startsWith('WS open'));
     }
-    // 3. re-open the lane through the REAL main control (same lane identity)
-    await ensureCapture(false).catch(() => {});
-    await ensureCapture(true).catch(() => {});
-    laneWentLive = true;
+    // 3. revive the lane through a REAL product control. startLane() no-ops
+    // while the client's wireState is stale-'live' (the drop is silent to the
+    // client), so the lane restart goes through the capture-mode radios:
+    // controller.setCaptureMode on a 'live' lane sends voice_session_stop + a
+    // fresh voice_session_start — same lane id, same attachment generation —
+    // which the mount answers by clearing the detach and minting a new
+    // provider session WITHOUT touching the kernel's pending work. Toggle
+    // open-mic → push-to-talk → open-mic so the lane ends back in open-mic.
+    let modeRestarted = false;
+    try {
+      await page.locator('[data-testid="drive-capture-mode-push-to-talk"]').first().click({ timeout: 10_000 });
+      await page.waitForTimeout(1_200);
+      await page.locator('[data-testid="drive-capture-mode-open-mic"]').first().click({ timeout: 10_000 });
+      await page.waitForTimeout(1_200);
+      modeRestarted = true;
+    } catch {
+      // The controls were not reachable — the probe below reports the truth.
+    }
     // 4. the lane must come back live: poll the wire for a live voice_state
+    // frame that arrived AFTER the drop (seq beyond the pre-drop count).
     let laneBack = false;
     for (let index = 0; index < 60 && !laneBack; index += 1) {
       await page.waitForTimeout(500);
@@ -862,9 +881,12 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     }
     recordSoakEvent({
       kind: 'transport-reconnect',
-      detail: 'session socket dropped and reopened; lane re-opened through the main control',
+      detail: modeRestarted
+        ? 'session socket dropped; lane restarted through the capture-mode controls (stop + fresh start, same lane identity)'
+        : 'session socket dropped and reopened; capture-mode controls unreachable — the lane restart was not driven',
       transportBack,
       laneBack,
+      modeRestarted,
       socketsSeenBefore: wsBefore,
       socketsSeenAfter: wsLog.length,
     });

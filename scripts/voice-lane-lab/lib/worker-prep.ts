@@ -37,22 +37,27 @@ export interface SessionListRow {
  * The busy drive's real prompt. The runtime genuinely executes the sleep, so
  * the session status is busy/streaming for the hold window — the product's own
  * busy detection (`isWorkerSessionBusy`) reads that status; nothing here
- * touches it. 120 s covers the relay window yet expires before the promoted
- * confirmation needs the worker reachable again.
+ * touches it. The wording forces the shell TOOL: a model that merely replies
+ * ends its turn in about a second and the busy state collapses (the C22
+ * attempt-02 failure), so the drive re-prompts whenever that happens.
  */
 export const BUSY_DRIVE_PROMPT =
-  'Run this exact shell command and wait for it to finish before you reply: sleep 120. Reply with the single word done afterwards.';
-export const BUSY_HOLD_MS = 120_000;
+  'Use the shell tool to run this exact command, and wait for it to finish before you reply: sleep 90. After it finishes, reply with the single word done.';
+export const BUSY_HOLD_MS = 90_000;
 
-/** How long the drive waits for the session to report busy (bounded, 1 s poll). */
+/** How long the drive waits for the FIRST busy report (bounded, 1 s poll). */
 export const BUSY_POLL_TIMEOUT_MS = 20_000;
+/** How long the busy state must HOLD (the relay lands inside this window). */
+export const BUSY_HOLD_WATCH_MS = 15_000;
+/** Maximum detached prompts the drive may send while holding busy. */
+export const BUSY_MAX_PROMPTS = 3;
 
 export interface BusyDriveRecord {
   workerSessionId: string;
-  promptSent: boolean;
+  promptsSent: number;
   busyObserved: boolean;
-  promptStatus: number | null;
-  busyPollMs: number;
+  busyHeldMs: number;
+  lastPromptStatus: number | null;
 }
 
 export interface PreparedWorkerSession {
@@ -62,14 +67,17 @@ export interface PreparedWorkerSession {
   model: string | null;
 }
 
-/** A journey whose plan carries an adaptive-promote turn needs the busy drive. */
-export function journeyRequiresBusyDrive(plan: { turns: Array<{ kind: string }> }): boolean {
-  return plan.turns.some((turn) => turn.kind === 'adaptive-promote');
+/** A journey whose EPISODE carries an adaptive-promote turn needs the busy drive.
+ *  Takes the episode's inputTurns — the plan's speakable turns have the
+ *  promote/switch gestures filtered out (they are director-driven gestures,
+ *  never spoken), so the plan alone cannot see the requirement. */
+export function journeyRequiresBusyDrive(turns: Array<{ kind: string }>): boolean {
+  return turns.some((turn) => turn.kind === 'adaptive-promote');
 }
 
-/** A journey whose plan carries an adaptive-switch turn needs a second worker. */
-export function journeyRequiresSecondWorker(plan: { turns: Array<{ kind: string }> }): boolean {
-  return plan.turns.some((turn) => turn.kind === 'adaptive-switch');
+/** A journey whose EPISODE carries an adaptive-switch turn needs a second worker. */
+export function journeyRequiresSecondWorker(turns: Array<{ kind: string }>): boolean {
+  return turns.some((turn) => turn.kind === 'adaptive-switch');
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -100,10 +108,12 @@ const rowBusy = (row: SessionListRow): boolean => row.busy === true || row.statu
 export async function driveWorkerBusy(
   call: InternalApiCall,
   sessionIdsBefore: string[],
-  options: { prompt?: string; pollTimeoutMs?: number } = {}
+  options: { prompt?: string; pollTimeoutMs?: number; holdWatchMs?: number; maxPrompts?: number } = {}
 ): Promise<BusyDriveRecord> {
   const prompt = options.prompt ?? BUSY_DRIVE_PROMPT;
   const pollTimeoutMs = options.pollTimeoutMs ?? BUSY_POLL_TIMEOUT_MS;
+  const holdWatchMs = options.holdWatchMs ?? BUSY_HOLD_WATCH_MS;
+  const maxPrompts = options.maxPrompts ?? BUSY_MAX_PROMPTS;
 
   const after = await listSessions(call);
   const fresh = after.map(rowId).filter((id): id is string => id !== null && !sessionIdsBefore.includes(id));
@@ -114,28 +124,78 @@ export async function driveWorkerBusy(
   }
   const workerSessionId = fresh[0]!;
 
-  const promptResponse = await call(`/api/v1/sessions/${encodeURIComponent(workerSessionId)}/prompt`, {
-    method: 'POST',
-    body: { message: prompt },
-  });
-  if (!promptResponse || promptResponse.status >= 300) {
+  let promptsSent = 0;
+  let lastPromptStatus: number | null = null;
+  const sendPrompt = async (): Promise<boolean> => {
+    if (promptsSent >= maxPrompts) return false;
+    promptsSent += 1;
+    const promptResponse = await call(`/api/v1/sessions/${encodeURIComponent(workerSessionId)}/prompt`, {
+      method: 'POST',
+      // Detached: the request returns as soon as the runtime dispatches the
+      // turn — the sleep keeps the session busy while the journey proceeds.
+      body: { message: prompt, detach: true },
+    });
+    lastPromptStatus = promptResponse?.status ?? null;
+    return promptResponse !== null && promptResponse.status < 300;
+  };
+
+  if (!(await sendPrompt())) {
     throw new Error(
-      `busy drive: the Internal API prompt to worker ${workerSessionId} failed (HTTP ${promptResponse?.status ?? 'no response'}) — the worker is not busy`
+      `busy drive: the Internal API prompt to worker ${workerSessionId} failed (HTTP ${lastPromptStatus ?? 'no response'}) — the worker is not busy`
     );
   }
 
+  // Phase 1: wait for the FIRST busy report.
+  let busySince: number | null = null;
   const startedAt = Date.now();
   while (Date.now() - startedAt < pollTimeoutMs) {
     const rows = await listSessions(call);
     const row = rows.find((candidate) => rowId(candidate) === workerSessionId);
     if (row && rowBusy(row)) {
-      return { workerSessionId, promptSent: true, busyObserved: true, promptStatus: promptResponse.status, busyPollMs: Date.now() - startedAt };
+      busySince = Date.now();
+      break;
     }
     await sleep(1_000);
   }
-  throw new Error(
-    `busy drive: worker ${workerSessionId} never reported busy within ${pollTimeoutMs} ms — the relay would not park, so the journey is refused`
-  );
+  if (busySince === null) {
+    throw new Error(
+      `busy drive: worker ${workerSessionId} never reported busy within ${pollTimeoutMs} ms — the relay would not park, so the journey is refused`
+    );
+  }
+
+  // Phase 2: the busy state must HOLD across the relay window. A model that
+  // answered without running the command ends its turn in ~1 s (the C22
+  // attempt-02 failure); re-prompt — real work each time, bounded — instead
+  // of pretending the state held.
+  while (Date.now() - busySince < holdWatchMs) {
+    await sleep(1_000);
+    const rows = await listSessions(call);
+    const row = rows.find((candidate) => rowId(candidate) === workerSessionId);
+    if (row && rowBusy(row)) continue;
+    if (!(await sendPrompt())) {
+      throw new Error(
+        `busy drive: worker ${workerSessionId} left busy and the prompt budget (${maxPrompts}) is exhausted — the relay would not park`
+      );
+    }
+    busySince = null;
+    const reBusyAt = Date.now();
+    while (Date.now() - reBusyAt < pollTimeoutMs) {
+      const retryRows = await listSessions(call);
+      const retryRow = retryRows.find((candidate) => rowId(candidate) === workerSessionId);
+      if (retryRow && rowBusy(retryRow)) {
+        busySince = Date.now();
+        break;
+      }
+      await sleep(1_000);
+    }
+    if (busySince === null) {
+      throw new Error(
+        `busy drive: worker ${workerSessionId} never returned to busy after a re-prompt — the relay would not park, so the journey is refused`
+      );
+    }
+  }
+
+  return { workerSessionId, promptsSent, busyObserved: true, busyHeldMs: Date.now() - busySince, lastPromptStatus };
 }
 
 export const SECOND_WORKER_DISPLAY_NAMES = ['Voice Lab Worker A', 'Voice Lab Worker B'] as const;
