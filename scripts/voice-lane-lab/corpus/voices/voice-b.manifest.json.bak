@@ -663,15 +663,15 @@
     },
     {
       "id": "C22-t1",
-      "text": "Relay to worker, tidy up the logging in the sign-in module — no rush at all.",
-      "pcm16kSha256": "d5930ea90cb5e7726576e8a74a62d3226b8b589928f357cf419675c8fc1419a4",
+      "text": "Relay to worker, tidy up the logging in the auth module — no rush at all.",
+      "pcm16kSha256": "893f376ac96428ec72afd346fc45c014945e2a019caea902cde7e5a19b6a58bc",
       "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C22-t1.pcm16k",
       "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C22-t1.master.wav",
-      "durationMs": 5642.458333333333,
+      "durationMs": 5363.791666666667,
       "asr": {
         "id": "C22-t1",
-        "text": "Relay to worker, tidy up the logging in the sign-in module — no rush at all.",
-        "transcript": " Relay to worker, tidy up the logging in the sign in module, no rush at all.",
+        "text": "Relay to worker, tidy up the logging in the auth module — no rush at all.",
+        "transcript": " Relay to worker, tidy up the logging in the auth module, no rush at all.",
         "wer": 0,
         "missingWords": [],
         "ok": true
@@ -736,70 +736,6 @@
         "id": "C24-t2",
         "text": "Switch to the other worker.",
         "transcript": " Switch to the other worker.",
-        "wer": 0,
-        "missingWords": [],
-        "ok": true
-      }
-    },
-    {
-      "id": "C10-t1",
-      "text": "The session token keeps getting dropped on the third retry — I want to understand why before we change anything.",
-      "pcm16kSha256": "eb8649ee95e37c293a7700695e255ca18d5d06f54052af71b8963babfaa7a652",
-      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C10-t1.pcm16k",
-      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C10-t1.master.wav",
-      "durationMs": 8010.875,
-      "asr": {
-        "id": "C10-t1",
-        "text": "The session token keeps getting dropped on the third retry — I want to understand why before we change anything.",
-        "transcript": " The session token keeps getting dropped on the third retry. I want to understand why before we change anything.",
-        "wer": 0,
-        "missingWords": [],
-        "ok": true
-      }
-    },
-    {
-      "id": "C11-t1",
-      "text": "Relay to worker, change the retry backoff to exponential.",
-      "pcm16kSha256": "3afbb535ad6d6358ff7c92db8a921f65d228b90f1492fcaa7067b2ffba46ed85",
-      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C11-t1.pcm16k",
-      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C11-t1.master.wav",
-      "durationMs": 4458.25,
-      "asr": {
-        "id": "C11-t1",
-        "text": "Relay to worker, change the retry backoff to exponential.",
-        "transcript": " Relay to worker, change the retry back off to exponential.",
-        "wer": 0,
-        "missingWords": [],
-        "ok": true
-      }
-    },
-    {
-      "id": "C11-t2",
-      "text": "Actually no — exponential backoff with jitter, and cap it at thirty seconds.",
-      "pcm16kSha256": "e1f961b1e2c03a2a334d1107472804e7a3d6fe6e9d509d560c230e71ca35be4d",
-      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C11-t2.pcm16k",
-      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C11-t2.master.wav",
-      "durationMs": 5990.75,
-      "asr": {
-        "id": "C11-t2",
-        "text": "Actually no — exponential backoff with jitter, and cap it at thirty seconds.",
-        "transcript": " Actually no, exponential back off with jitter and cap it at 30 seconds.",
-        "wer": 0,
-        "missingWords": [],
-        "ok": true
-      }
-    },
-    {
-      "id": "C11-t3",
-      "text": "Yes, send it.",
-      "pcm16kSha256": "9b4d11b85eea5346af96edf7083f0b5975540dc84399e766b31be2a6996632e1",
-      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C11-t3.pcm16k",
-      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C11-t3.master.wav",
-      "durationMs": 1602.1666666666667,
-      "asr": {
-        "id": "C11-t3",
-        "text": "Yes, send it.",
-        "transcript": " Yes, send it.",
         "wer": 0,
         "missingWords": [],
         "ok": true
