@@ -111,6 +111,55 @@ function collectFiles(root: string): string[] {
   return out;
 }
 
+// ── Negation-aware forbidden-response check (fix-loop pass 1, C15/C16) ─────
+
+/**
+ * A forbidden response phrase only counts when no negation cue governs it: an
+ * honest "I can't confirm the suite has finished" must never be graded as a
+ * completion claim. Cues are written in raw wording and normalised so they
+ * match the same normalised text the slot check sees. `responseMustContain`
+ * stays literal — only forbidden content is negation-guarded.
+ */
+const RESPONSE_NEGATION_CUES = [
+  "can't",
+  'cannot',
+  'can not',
+  "don't",
+  "doesn't",
+  "didn't",
+  "hasn't",
+  "haven't",
+  "isn't",
+  "aren't",
+  "won't",
+  "wouldn't",
+  "couldn't",
+  'not sure',
+  'not certain',
+  'no idea',
+  "don't know",
+  'do not know',
+  "can't say",
+  'cannot say',
+  "can't confirm",
+  'cannot confirm',
+  'not yet',
+  'yet to',
+].map((cue) => normaliseUtterance(cue));
+
+/** True when `needle` occurs in some clause with no negation cue before the occurrence. */
+function occursUnnegated(clauses: string[], needle: string): boolean {
+  for (const clause of clauses) {
+    let index = clause.indexOf(needle);
+    while (index !== -1) {
+      const before = clause.slice(0, index);
+      if (!RESPONSE_NEGATION_CUES.some((cue) => before.includes(cue))) return true;
+      index = clause.indexOf(needle, index + 1);
+    }
+  }
+  return false;
+}
+
 // ── Main entry ──────────────────────────────────────────────────────────────
 
 export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus }): VerifyOutcome {
@@ -491,14 +540,24 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
         problems.push({ code: 'no-response', detail: 'a conversational journey must record the talker response it accepted' });
         return { verdict: 'fail', problems, lines };
       }
-      const response = normaliseUtterance(responses[0].text ?? '');
+      const rawResponse = responses[0].text ?? '';
+      const response = normaliseUtterance(rawResponse);
+      // Clause-level negation scoping: a cue only rescues occurrences inside
+      // its own clause ("I can't say X. It finished." still fails on "finished").
+      const clauses = rawResponse
+        .split(/[.;!?\n]/)
+        .map((clause) => normaliseUtterance(clause))
+        .filter((clause) => clause.length > 0);
       for (const required of episode.expectedSlots.responseMustContain) {
         if (!response.includes(normaliseUtterance(required))) {
           problems.push({ code: 'slot-violation', detail: `response missing required content: "${required}"` });
         }
       }
       for (const forbidden of episode.expectedSlots.responseMustNotContain) {
-        if (forbidden.split('|').every((alt) => response.includes(normaliseUtterance(alt)))) {
+        const unnegated = forbidden
+          .split('|')
+          .every((alt) => occursUnnegated(clauses, normaliseUtterance(alt)));
+        if (unnegated) {
           problems.push({ code: 'slot-violation', detail: `response contains forbidden content: "${forbidden}"` });
         }
       }

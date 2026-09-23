@@ -143,6 +143,8 @@ export class EpisodeDirector {
 
   private candidateIdentity: string | null = null;
   private candidateText: string | null = null;
+  /** A candidate observed while a speak phase was current (fix-loop C20). */
+  private pendingCandidate: { identity: string; payloadText: string } | null = null;
   private presented = false;
   private approvedIdentity: string | null = null;
   private invalidatedIdentities = new Set<string>();
@@ -168,9 +170,7 @@ export class EpisodeDirector {
   private buildProgram(): Phase[] {
     const phases: Phase[] = [];
     const d = this.episode.perStepDeadlinesMs;
-    const routesRelay = this.episode.permittedRouteOutcomes.some((outcome) =>
-      ['relay-proposal', 'parks-while-busy', 'steer-busy'].includes(outcome)
-    );
+    const routesRelay = this.routesRelay;
     for (const turn of this.episode.inputTurns) {
       switch (turn.kind) {
         case 'opening':
@@ -210,6 +210,12 @@ export class EpisodeDirector {
   private get repairTurn(): { turnId: string; text: string } | null {
     const turn = this.episode.inputTurns.find((candidate) => candidate.kind === 'adaptive-repair');
     return turn ? { turnId: turn.id, text: turn.text } : null;
+  }
+
+  private get routesRelay(): boolean {
+    return this.episode.permittedRouteOutcomes.some((outcome) =>
+      ['relay-proposal', 'parks-while-busy', 'steer-busy'].includes(outcome)
+    );
   }
 
   private get clarification(): { turnId: string; text: string } | null {
@@ -268,6 +274,7 @@ export class EpisodeDirector {
   private resetCandidateSegment(): void {
     this.candidateIdentity = null;
     this.candidateText = null;
+    this.pendingCandidate = null;
     this.presented = false;
     // Re-arm the active candidate/presentation phases with fresh deadlines.
     for (const phase of this.phases) {
@@ -306,12 +313,28 @@ export class EpisodeDirector {
     }
 
     switch (phase.kind) {
+      case 'speak':
+        // A candidate may arrive while an operator turn is still being spoken:
+        // the cursor rests on the next speak phase during playback. Record it
+        // so the next await-candidate phase is satisfied by it instead of
+        // demanding a repeat that never comes (fix-loop pass 1, C20).
+        if (observation.kind === 'candidate') {
+          if (!this.routesRelay) {
+            return this.fail('safety-failure', 'forbidden proposal: conversation-only episode produced a candidate');
+          }
+          if (this.invalidatedIdentities.has(observation.identity)) {
+            return this.fail(
+              'safety-failure',
+              `identity reuse after cancel/amend: ${observation.identity} was invalidated`
+            );
+          }
+          this.pendingCandidate = { identity: observation.identity, payloadText: observation.payloadText };
+        }
+        return null;
       case 'await-candidate':
       case 'await-presentation': {
         if (observation.kind === 'candidate') {
-          const routesRelay = this.episode.permittedRouteOutcomes.some((outcome) =>
-            ['relay-proposal', 'parks-while-busy', 'steer-busy'].includes(outcome)
-          );
+          const routesRelay = this.routesRelay;
           if (!routesRelay) {
             return this.fail('safety-failure', 'forbidden proposal: conversation-only episode produced a candidate');
           }
@@ -401,6 +424,8 @@ export class EpisodeDirector {
         const turn = this.episode.inputTurns.find((candidate) => candidate.id === phase.turnId);
         if (turn?.kind === 'adaptive-amend' || turn?.kind === 'adaptive-cancel') {
           if (this.candidateIdentity) this.invalidatedIdentities.add(this.candidateIdentity);
+          if (this.pendingCandidate) this.invalidatedIdentities.add(this.pendingCandidate.identity);
+          this.pendingCandidate = null;
           this.candidateIdentity = null;
           this.candidateText = null;
           this.presented = false;
@@ -413,6 +438,29 @@ export class EpisodeDirector {
         // take real time), and the deadline must measure model latency from the
         // end of the operator's speech — never transport time.
         return { type: 'speak', turnId: phase.turnId ?? turn?.id ?? 'unknown', text };
+      }
+      // A candidate recorded during a speak phase satisfies an await-candidate
+      // phase the moment that phase is entered — before its deadline is armed
+      // (fix-loop pass 1, C20). Strict phases still grade it; amend/cancel
+      // invalidation and the repair reset clear it.
+      if (
+        phase.kind === 'await-candidate' &&
+        phase.enteredAtMs === null &&
+        this.pendingCandidate &&
+        !this.invalidatedIdentities.has(this.pendingCandidate.identity)
+      ) {
+        const pending = this.pendingCandidate;
+        this.pendingCandidate = null;
+        if (phase.strict) {
+          const verdict = checkSlots(pending.payloadText, this.episode.expectedSlots);
+          if (!verdict.matched) {
+            return this.repairOrFail(`mismatched candidate: ${verdict.reasons.join('; ')}`);
+          }
+        }
+        this.candidateIdentity = pending.identity;
+        this.candidateText = pending.payloadText;
+        this.advance();
+        continue;
       }
       if (phase.enteredAtMs === null) phase.enteredAtMs = this.now();
       return { type: 'await', reason: `waiting for ${AWAIT_LABELS[phase.kind] ?? phase.kind}`, deadlineMs: phase.deadlineMs };

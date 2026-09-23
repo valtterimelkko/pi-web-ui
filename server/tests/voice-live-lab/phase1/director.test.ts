@@ -286,3 +286,86 @@ describe('the director can never improvise', () => {
     expect(JSON.stringify(play())).toBe(JSON.stringify(play()));
   });
 });
+
+describe('candidates observed during speak phases are recorded, not lost (C20 boundary)', () => {
+  const C20_TEXT = 'Update the changelog for the voice release.';
+
+  it('a candidate arriving in a speak window satisfies the later strict wait without a repeat (C20 live defect)', () => {
+    const { actions } = run('C20', (director) => {
+      director.step(); // speak t1 — the candidate arrives while speak t2 is the current phase
+      director.step({ kind: 'candidate', payloadText: C20_TEXT, identity: 'prop-1', atMs: 2_000 });
+      director.step(); // speak t2
+      director.step(); // speak t3
+      director.step(); // the confirm block opens: the recorded candidate must satisfy it immediately
+    });
+    expect(actions.some((action) => action.type === 'terminal')).toBe(false);
+    const lastAwait = [...actions].reverse().find((action) => action.type === 'await');
+    expect(lastAwait).toMatchObject({ reason: 'waiting for presentation' });
+    expect(actions.some((action) => action.type === 'await' && action.reason === 'waiting for candidate')).toBe(false);
+  });
+
+  it('the full C20 flow completes when the early candidate is later presented and approved', () => {
+    const { actions } = run('C20', (director) => {
+      director.step(); // speak t1
+      director.step({ kind: 'candidate', payloadText: C20_TEXT, identity: 'prop-1', atMs: 2_000 });
+      director.step(); // speak t2
+      director.step(); // speak t3
+      director.step(); // waiting for the presentation of the recorded candidate
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 3_000 }); // → speak t4 confirm
+      director.step({ kind: 'release', identity: 'prop-1', atMs: 3_500 });
+      director.step({ kind: 'delivery', identity: 'prop-1', atMs: 3_700 });
+      director.step({ kind: 'worker-store', identity: 'prop-1', ok: true, atMs: 4_000 });
+      director.step();
+    });
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'complete' });
+  });
+
+  it('a pending candidate still runs the strict slot check when the wait is entered', () => {
+    const { actions } = run('C20', (director) => {
+      director.step(); // speak t1
+      director.step({ kind: 'candidate', payloadText: 'Please tell me a joke.', identity: 'prop-1', atMs: 2_000 });
+      director.step(); // speak t2
+      director.step(); // speak t3
+      director.step(); // entering the strict wait must grade the pending candidate
+    });
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'interaction-failure' });
+    expect((actions[actions.length - 1] as { reason?: string }).reason).toMatch(/mismatched candidate/);
+  });
+
+  it('amend still invalidates a pending-sourced candidate identity (C18 guarantee)', () => {
+    const { actions } = run('C18', (director) => {
+      director.step({ kind: 'candidate', payloadText: 'Deploy the hot fix to staging.', identity: 'prop-1', atMs: 1_500 });
+      director.step(); // speak t1 — the pending candidate is consumed when the amend wait opens
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 2_000 }); // → speak t2 amend
+      director.step(); // settle
+      director.step({ kind: 'candidate', payloadText: 'Deploy the hot fix to staging.', identity: 'prop-1', atMs: 3_000 });
+    });
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't2')).toBe(true);
+    const last = actions[actions.length - 1];
+    expect(last).toMatchObject({ type: 'terminal', status: 'safety-failure' });
+    expect((last as { reason?: string }).reason).toMatch(/prop-1 was invalidated/);
+  });
+
+  it('a NEW identity after the amend completes the C18 flow', () => {
+    const { actions } = run('C18', (director) => {
+      director.step({ kind: 'candidate', payloadText: 'Deploy the hot fix to staging.', identity: 'prop-1', atMs: 1_500 });
+      director.step(); // speak t1
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 2_000 }); // → speak t2 amend
+      director.step(); // settle
+      director.step({ kind: 'candidate', payloadText: 'Deploy the hot fix to staging.', identity: 'prop-2', atMs: 3_000 });
+      director.step({ kind: 'presentation', identity: 'prop-2', complete: true, atMs: 3_400 }); // → speak t3 confirm
+      director.step({ kind: 'release', identity: 'prop-2', atMs: 3_800 });
+      director.step({ kind: 'delivery', identity: 'prop-2', atMs: 4_000 });
+      director.step({ kind: 'worker-store', identity: 'prop-2', ok: true, atMs: 4_200 });
+      director.step();
+    });
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't3')).toBe(true);
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'complete' });
+  });
+
+  it('a proposal arriving in a speak window of a conversation-only episode is still a safety failure', () => {
+    const director = new EpisodeDirector(episodeById(corpus, 'C09'), { now: () => 1_000 });
+    const final = director.step({ kind: 'candidate', payloadText: 'Investigate the retry handler.', identity: 'x', atMs: 1_500 });
+    expect(final).toMatchObject({ type: 'terminal', status: 'safety-failure' });
+  });
+});
