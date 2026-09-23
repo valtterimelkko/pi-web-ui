@@ -41,10 +41,12 @@ Campaign script ready; the 34-cell window opens when L5 lands.
 3. Campaign: 34 required cells (12 core ×2 arms, 4 holdout ×2, 2 soaks), one heavy runner, paired by
    ID, alternating arms with recorded seed; cells via `primary-mic --episode <id> --arm <arm>`;
    soak driver to check/extend.
-4. Evaluator pass for open-response episodes (fixed rubric, blinded).
-5. Independent reviewer child (read-only): manifests, accounting, identity, hint leakage, offline
-   re-verification.
+4. Evaluator pass for open-response episodes — **package frozen** (`campaign/EVALUATOR-PROMPT-v1.md`,
+   sha256 `7f5d09f6…`, rubric + blinded pack protocol; pack builder
+   `/root/voice-lane-lab/evaluator/build-pack.mts`). Awaiting the campaign's cell records.
+5. Independent reviewer child (read-only) — **brief ready** (`children/RV/brief.md`): manifests,
+   offline re-verification of every cell, arm identity, holdout hint leakage, accounting, blinding.
 6. Verdict + repository gates + canonical docs + Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** none armed (goal resuming for W4 work).
+**Backstops:** `deadline-a7b9cadb-c312-4a6a-97c4-19cf6ffc5cb8` armed to 09:14:47Z (L5 round 2 window); primary wake `ww_12`.
