@@ -116,10 +116,37 @@ const RepairBranchSchema = z.object({
   say: z.string().optional(),
 });
 
+/** The declared semantic-slot set an episode's candidate must satisfy. Shared with the validator overlay schema. */
+export const ExpectedSlotsSchema = z.object({
+  /** Substrings (normalised) the delivered candidate MUST contain. */
+  mustContain: z.array(z.string().min(2)),
+  mustNotContain: z.array(z.string().min(2)),
+  mustNotStartWith: z.array(z.string().min(2)).optional(),
+  /** Substrings the final spoken/grounded response MUST contain. */
+  responseMustContain: z.array(z.string().min(2)),
+  responseMustNotContain: z.array(z.string().min(2)),
+  /**
+   * Open-response grading (fix-loop pass 4, C09/C14/C15): the episode's
+   * conversational answer is graded without deterministic required words —
+   * one independent evaluator pass owns the wording — while the
+   * forbidden-claim check (negation-aware) and the routing/no-release
+   * evidence checks still apply. Exclusive with a non-empty
+   * `responseMustContain`.
+   */
+  openResponse: z.boolean().optional(),
+  /** Response must cite where its claim came from (worker evidence). */
+  sourceAttributionRequired: z.boolean().optional(),
+  numericSlots: z
+    .array(z.object({ value: z.string().min(1), acceptAnyOf: z.array(z.string().min(1)) }))
+    .optional(),
+});
+
 export const EpisodeSchema = z
   .object({
     schemaVersion: z.literal(CORPUS_SCHEMA_VERSION),
-    id: z.string().regex(/^C\d{2}$/),
+    // The 24 catalogue ids, plus the continuity-soak episode the W4 soak
+    // runner constructs in code (never a file in episodes/).
+    id: z.string().regex(/^(?:C\d{2}|SOAK-10MIN)$/),
     title: z.string().min(3),
     family: z.enum(FAMILIES),
     tier: z.enum(TIERS),
@@ -138,29 +165,7 @@ export const EpisodeSchema = z
     }),
     inputTurns: z.array(TurnSchema).min(1),
     permittedRouteOutcomes: z.array(z.enum(ROUTE_OUTCOMES)).min(1),
-    expectedSlots: z.object({
-      /** Substrings (normalised) the delivered candidate MUST contain. */
-      mustContain: z.array(z.string().min(2)),
-      mustNotContain: z.array(z.string().min(2)),
-      mustNotStartWith: z.array(z.string().min(2)).optional(),
-      /** Substrings the final spoken/grounded response MUST contain. */
-      responseMustContain: z.array(z.string().min(2)),
-      responseMustNotContain: z.array(z.string().min(2)),
-      /**
-       * Open-response grading (fix-loop pass 4, C09/C14/C15): the episode's
-       * conversational answer is graded without deterministic required words —
-       * one independent evaluator pass owns the wording — while the
-       * forbidden-claim check (negation-aware) and the routing/no-release
-       * evidence checks still apply. Exclusive with a non-empty
-       * `responseMustContain`.
-       */
-      openResponse: z.boolean().optional(),
-      /** Response must cite where its claim came from (worker evidence). */
-      sourceAttributionRequired: z.boolean().optional(),
-      numericSlots: z
-        .array(z.object({ value: z.string().min(1), acceptAnyOf: z.array(z.string().min(1)) }))
-        .optional(),
-    }),
+    expectedSlots: ExpectedSlotsSchema,
     requiredNegations: z.array(z.string().min(2)),
     requiredNames: z.array(z.string().min(2)),
     requiredNumbers: z.array(z.string().min(1)),
@@ -267,6 +272,13 @@ export interface LoadedCorpus {
   episodes: Episode[];
   index: CorpusIndex;
   corpusDir: string;
+  /**
+   * Present only on the product of {@link withValidatorOverlays}: the holdout
+   * ids that were merged from validator overlays, with each overlay's freeze
+   * timestamp (provenance; the merged episodes are drivable copies whose
+   * `holdout` flag is false — the corpus FILES stay empty, always).
+   */
+  validatorOverlays?: Record<string, { validatorFrozenAtIso: string }>;
 }
 
 export class CorpusError extends Error {
@@ -354,6 +366,146 @@ export function episodeById(corpus: LoadedCorpus, id: string): Episode {
   const episode = corpus.episodes.find((candidate) => candidate.id === id);
   if (!episode) throw new CorpusError(`unknown episode ${id}`);
   return episode;
+}
+
+// ── Holdout validator overlays (Wave 4 conductor scope) ──────────────────
+
+/**
+ * The validator overlay: the separate validator's FROZEN surface form and
+ * expected facts for one holdout episode, stored OUTSIDE the corpus files at
+ * `corpus/holdout/<ID>.validator.json`. The episode files themselves stay
+ * empty, always — the overlay is the only place holdout wording may live.
+ * Strict shape: an unknown field is a malformed overlay, and a malformed or
+ * missing overlay fails closed (it never degrades to empty wording).
+ */
+const ValidatorOverlayTurnSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(TURN_KINDS),
+    text: z.string().min(1),
+    requiredWords: z.array(z.string().min(1)),
+  })
+  .strict();
+
+export const ValidatorOverlaySchema = z
+  .object({
+    schemaVersion: z.literal(CORPUS_SCHEMA_VERSION),
+    id: z.string().regex(/^C\d{2}$/),
+    validatorFrozenAtIso: z.string().min(8),
+    note: z.string().min(4),
+    inputTurns: z.array(ValidatorOverlayTurnSchema).min(1),
+    expectedSlots: ExpectedSlotsSchema,
+    approvalTurns: z.array(ApprovalTurnSchema),
+    repairBranches: z.array(RepairBranchSchema),
+  })
+  .strict();
+
+export type ValidatorOverlay = z.infer<typeof ValidatorOverlaySchema>;
+
+/**
+ * Merge every holdout episode's validator overlay into a drivable copy.
+ *
+ * Fails closed (CorpusError) when: a holdout episode's overlay file is
+ * missing; it is not valid JSON; it violates the strict overlay schema; its
+ * id disagrees with the file/episode; a turn id does not exist in the episode
+ * structure or its kind disagrees; any episode turn is left without wording;
+ * the merged episode fails episode-schema validation (approval references,
+ * holdout rules); or an overlay file names a NON-holdout episode.
+ *
+ * The merged episode carries `holdout: false` — the surface form is now
+ * frozen by the overlay, so the existing holdout refusals (director,
+ * journeyPlan) correctly stop refusing it. The RAW corpus object and the
+ * corpus FILES are never mutated; the committed episodes stay empty.
+ */
+export function withValidatorOverlays(corpus: LoadedCorpus, corpusDir: string): LoadedCorpus {
+  const holdouts = corpus.episodes.filter((episode) => episode.holdout);
+  const holdoutIds = new Set(holdouts.map((episode) => episode.id));
+  const overlayDir = path.join(corpusDir, 'holdout');
+  let overlayFiles: string[] = [];
+  try {
+    overlayFiles = readdirSync(overlayDir).filter((name) => name.endsWith('.validator.json'));
+  } catch {
+    overlayFiles = [];
+  }
+  for (const name of overlayFiles) {
+    const id = name.replace(/\.validator\.json$/, '');
+    if (!holdoutIds.has(id)) {
+      throw new CorpusError(`holdout overlay ${name} names "${id}", which is not a holdout episode`);
+    }
+  }
+  if (holdouts.length === 0) return corpus;
+
+  const overlays: Record<string, { validatorFrozenAtIso: string }> = {};
+  const mergedById = new Map<string, Episode>();
+  for (const episode of holdouts) {
+    const file = path.join(overlayDir, `${episode.id}.validator.json`);
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf8');
+    } catch {
+      throw new CorpusError(
+        `${episode.id}: holdout overlay missing (${file}) — the validator must freeze the surface form before holdout cells may run`
+      );
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch (error) {
+      throw new CorpusError(`${episode.id}: holdout overlay is not valid JSON (${String(error)})`);
+    }
+    const overlay = ValidatorOverlaySchema.safeParse(json);
+    if (!overlay.success) {
+      throw new CorpusError(
+        `${episode.id}: holdout overlay malformed: ${overlay.error.issues
+          .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+          .join('; ')}`
+      );
+    }
+    if (overlay.data.id !== episode.id) {
+      throw new CorpusError(`${episode.id}: overlay file declares id ${overlay.data.id}`);
+    }
+    const baseById = new Map(episode.inputTurns.map((turn) => [turn.id, turn]));
+    for (const turn of overlay.data.inputTurns) {
+      const base = baseById.get(turn.id);
+      if (!base) {
+        throw new CorpusError(`${episode.id}: overlay turn ${turn.id} does not exist in the episode structure`);
+      }
+      if (base.kind !== turn.kind) {
+        throw new CorpusError(
+          `${episode.id}: overlay turn ${turn.id} is kind ${turn.kind}, episode declares ${base.kind}`
+        );
+      }
+    }
+    const inputTurns = episode.inputTurns.map((baseTurn) => {
+      const overlayTurn = overlay.data.inputTurns.find((candidate) => candidate.id === baseTurn.id);
+      if (!overlayTurn) {
+        throw new CorpusError(`${episode.id}: overlay carries no wording for turn ${baseTurn.id}`);
+      }
+      return { id: baseTurn.id, kind: baseTurn.kind, text: overlayTurn.text, requiredWords: overlayTurn.requiredWords };
+    });
+    const revalidated = EpisodeSchema.safeParse({
+      ...episode,
+      holdout: false,
+      inputTurns,
+      expectedSlots: overlay.data.expectedSlots,
+      approvalTurns: overlay.data.approvalTurns,
+      repairBranches: overlay.data.repairBranches,
+    });
+    if (!revalidated.success) {
+      throw new CorpusError(
+        `${episode.id}: merged holdout episode failed schema validation: ${revalidated.error.issues
+          .map((issue) => issue.message)
+          .join('; ')}`
+      );
+    }
+    mergedById.set(episode.id, revalidated.data);
+    overlays[episode.id] = { validatorFrozenAtIso: overlay.data.validatorFrozenAtIso };
+  }
+  return {
+    ...corpus,
+    episodes: corpus.episodes.map((episode) => mergedById.get(episode.id) ?? episode),
+    validatorOverlays: overlays,
+  };
 }
 
 function stableStringify(value: unknown): string {
