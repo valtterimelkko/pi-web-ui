@@ -149,7 +149,46 @@ async function relay(mount: VoiceLiveMount, text: string): Promise<void> {
   await mount.handleToolRequest({ laneId: LANE, name: 'relay_to_worker', args: { text }, atMs: 1 });
 }
 
+/** The same call, but capturing the tool payload the bridge hands the model. */
+async function relayResponse(
+  mount: VoiceLiveMount,
+  text: string,
+): Promise<Record<string, unknown>> {
+  const response = await mount.handleToolRequest({
+    laneId: LANE,
+    name: 'relay_to_worker',
+    args: { text },
+    atMs: 1,
+  });
+  expect(response).toBeDefined();
+  return response as Record<string, unknown>;
+}
+
 describe('VoiceLiveMount — the relay is model-driven, not classified', () => {
+  it('tells the model the HOST reads the proposal back — it does not recite it (H2)', async () => {
+    // Fix-loop pass 1: the tool response asked the model to "Read the exact
+    // text back to the operator verbatim"; the models usually did not, and
+    // presentation stalled before anything could be confirmed.
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({ service, delivery: makeDelivery(), isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    utterance(service, 'check the tests.');
+    await flush();
+    const response = await relayResponse(mount, 'check the tests.');
+    const note = response.note as string;
+    expect(typeof note).toBe('string');
+    expect(note).toMatch(/The host reads the proposal aloud to the operator/i);
+    expect(note).toMatch(/do not read it back yourself/i);
+    expect(note).toMatch(/prepared/i);
+    expect(note).toMatch(/after they hear it/i);
+    // The falsified verbatim-recital instruction is gone.
+    expect(note).not.toMatch(/read the exact text back to the operator verbatim/i);
+    // The delivery-honesty language is kept byte-intact.
+    expect(note).toMatch(/nothing has been sent yet/);
+    expect(note).toMatch(/Do not claim it was sent/);
+  });
+
   it('creates a proposal from a relay_to_worker tool call, and sends nothing', async () => {
     const service = new FakeService();
     const delivery = makeDelivery();

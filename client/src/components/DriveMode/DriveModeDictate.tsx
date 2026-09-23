@@ -343,6 +343,15 @@ export function DriveModeDictate({
     };
   }, [laneEnabled, nativePrimary, sessionId, nativeListening]);
 
+  // Eyes-free presentation (H2): the surface that is actually mounted AND
+  // addressed reads a fresh proposal back by itself. A background lane's
+  // proposal must never speak over the addressed one, and the cascade
+  // fallback's own card flow owns presentation while IT holds the floor.
+  useEffect(() => {
+    nativeSurface.setAutoReadBackActive(addressed && nativePrimary);
+    return () => nativeSurface.setAutoReadBackActive(false);
+  }, [addressed, nativePrimary, nativeSurface]);
+
   // The mic can START the native engine only when the lane can be served at
   // all. A runtime the voice wire does not serve, a browser that cannot
   // capture, and a server-refused lane are the visible degraded states below
