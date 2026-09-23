@@ -8,15 +8,10 @@
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
 **Wave:** W1 · W2 complete · **W3 fix loop RUNNING** — passes: 1 → 1/12; 2 INVALID (stale build,
-runner fixed); 3 → 5/12; **4 → 4 clean/8 not** (binding grace + read-back seam proven; new lab/prompt
-classes found); **correction child K in flight** (presentation persistence, seam completeness,
-open-response design, C18 amendment prompt); C05 data fix committed.
+runner fixed); 3 → 5/12; 4 → 4 clean/8 not; **correction K merged** (presentation persistence, seam
+completeness, open-response, C18 prompt); **pass 5 running** (`bg_9e828e06`).
 
-**Active children**
-
-| Child | Session | Worktree · branch | Lease | Watch | Scope |
-|---|---|---|---|---|---|
-| K pass-4 fixes | `01a0cc7f-bb75-73f0-b149-c13be95a7210` | `wt-voice-pass4` · `task/voice-native-pass4` | `579137c0…` | `ww_10_1790137337569` | lab semantics + C18 prompt |
+**Active children:** none — K verified, merged and cleaned up.
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -31,11 +26,11 @@ current target.
 
 **Current truth**
 
-- master `d9baaa9d`: H3 + J3 merged; C05 confirmation data fix; K brief.
-- Passes: 1 → 1/12 · 2 INVALID (fixed) · 3 → 5/12 · **4 → 4 clean** (C01/C03/C17/C19) — the two big
-  seams (binding race, read-back environment) are now proven; remaining failures are lab semantics
-  (C20/C16/C21/C09/C14/C15) and one prompt item (C18), all in K's round; C05 fixed in data.
-- Live accounting: passes 1–4 (~50 min) + probes; inside §10.
+- master `51604ee4`: all W1/W2 lanes + correction rounds (H2/J2/H3/J3/K) + runner freshness fix + corpus
+  data (C05 confirm, C09/C14/C15 openResponse). Lab 647; voice 261; repo lint 0 errors.
+- Passes: 1 → 1/12 · 2 INVALID (fixed) · 3 → 5/12 · 4 → 4 clean · **5 running** — the two big seams
+  are proven; this pass tests the lab-semantics + prompt round.
+- Live accounting: passes 1–5 (~60 min) + probes; inside §10.
 
 **Next sequence**
 
@@ -45,4 +40,4 @@ current target.
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** watch `ww_10` (K) primary; `wake_deadline` armed for the round-4 window.
+**Backstops:** pass 5's `backstop_s` covers this window; no child watches armed.
