@@ -592,7 +592,12 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     for (const row of readServerEvidence(serverLogPath, serverLogOffset)) {
       evidenceRows.push(row);
       const observation = observeEvidence(row);
-      if (observation) pendingObservations.push(observation);
+      if (observation) {
+        pendingObservations.push(observation);
+        if (observation.kind === 'delivery' && plan.episodeId.startsWith('SOAK')) {
+          probeWorkerStoreFor(observation.identity);
+        }
+      }
     }
   };
 
@@ -636,6 +641,28 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       { mode: 0o600 }
     );
     return response.body.includes(approvedText.slice(0, Math.min(40, approvedText.length)));
+  };
+
+  // Soak F-1: the tail worker-store await covers only the LAST approved
+  // identity, but the soak's acceptance contract requires worker-store
+  // evidence for the PRE-reconnect pending proposal too. Probe each released
+  // identity once, when its delivery receipt is observed.
+  const storeProbedIdentities = new Set<string>();
+  const probeWorkerStoreFor = (identity: string): void => {
+    if (storeProbedIdentities.has(identity)) return;
+    storeProbedIdentities.add(identity);
+    void (async () => {
+      for (let attempt = 0; attempt < 20 && !terminalAction; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const stored = await checkWorkerStore(identity).catch(() => false);
+        if (stored) {
+          pendingObservations.push({ kind: 'worker-store', identity, ok: true, atMs: Date.now() });
+          return;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    })();
   };
 
   const screenshot = async (page: import('playwright').Page, name: string): Promise<void> => {
