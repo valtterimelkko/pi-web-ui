@@ -14,12 +14,16 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| L5 W4 seams | `01a0cd4e-d532-…` | `wt-voice-w5` · `task/voice-native-w5` | `89705e73…` | `ww_13` | auth-store seed fix + 1 real C22 run + 1 real soak run, then freeze handback |
-| M product fix | `01a0cddb-1612-…` | `wt-voice-m` · `task/voice-native-m` | `9b1b21a7…` | `ww_14` | worker-switch proposal resolution (server/client, RED-first) |
+| M2 soak re-bind | `01a0ce05-110f-…` | `wt-voice-m2` · `task/voice-native-m2` | `45087040…` | `ww_15` | kernel utterance re-bind after a same-lane restart (server, RED-first) |
 
-**W4 status:** holdout freeze complete (`8c4ed67e`); evaluator package (`ba88bcdd`) + reviewer brief
-(`18e2b4c5`) ready; campaign script ready. L5 handback received and its two blockers grounded +
-answered (auth store for the worker; product seam for C24).
+**Settled and merged this round:** M (`e3e9e0b5` — worker-switch proposal resolution, RED reproduced at the
+parent and re-verified), L5 (`a8ccf2ed` — busy drive with a real C22 PASS at attempt-09, two-session
+prep, soak reconnect v2, holdout fixtures; gates re-run by the conductor: lab 705/705, voice-lab tsc 0).
+**Holdout freeze now complete** (`9eaaf891`): all nine turns (C10, C11, C22, C24) frozen for both voices,
+49 fixtures each, zero drift, ASR green; the obsolete voice-a C22-t1 homophone skip removed (`e8724669`).
+L5's soak attempt-02 is an honest FAIL with a NEW product finding (kernel utterance pipeline does not
+re-bind after a same-lane provider restart) — M2 owns that fix; the campaign's soak cells are its
+end-to-end confirmation.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
@@ -48,5 +52,5 @@ answered (auth store for the worker; product seam for C24).
 5. Independent reviewer child (read-only) — **brief ready** (`children/RV/brief.md`).
 6. Verdict + repository gates + canonical docs + Agent OS capture.
 
-**Watching (zero-token):** primary wakes `ww_13` (L5) and `ww_14` (M), fresh conditions each.
-Model-free backstop: armed below. No independent process backstop (background-task cap saturated).
+**Watching (zero-token):** primary wake `ww_15` (M2). Model-free backstop: armed below. No independent
+process backstop (background-task cap saturated).
