@@ -14,17 +14,18 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| M3 delivery receipt | `01a0ce36-5eb3-…` | `wt-voice-m3` · `task/voice-native-m3` | `1a7424af…` | `ww_16` | receipt at submission, not turn completion (talker delivery, RED-first) |
+| M4 echo guard | `01a0ce64-ddc7-…` | `wt-voice-m4` · `task/voice-native-m4` | `0907388c…` | `ww_17` | echo guard must not discard genuine operator utterances (et-high confound) |
 
 **Settled and merged this round:** M (`e3e9e0b5` — worker-switch proposal resolution, RED reproduced at the
 parent and re-verified), L5 (`a8ccf2ed` — busy drive with a real C22 PASS at attempt-09, two-session
 prep, soak reconnect v2, holdout fixtures; gates re-run by the conductor: lab 705/705, voice-lab tsc 0).
 **Holdout freeze now complete** (`9eaaf891`): all nine turns (C10, C11, C22, C24) frozen for both voices,
 49 fixtures each, zero drift, ASR green; the obsolete voice-a C22-t1 homophone skip removed (`e8724669`).
-L5's soak attempt-02 finding is fixed and merged (M2, `958d9370`). **Campaign chunk 1 halted the
-campaign**: C09 both arms passed, C01/C03/C05 both arms failed on a newly exposed product defect —
-the delivery receipt awaits the worker's whole turn (the contract's receipt is about *bytes
-delivered*). M3 owns the fix; the failed cells will be re-run and the remaining cells follow.
+M2 (`958d9370`), M3 (`fcef1718`) merged: soak re-bind and delivery-at-submission both fixed and
+RED-verified. Campaign: C09 both arms pass; **standard arm now passes C01/C03/C05** after M3; the
+**et-high arm fails C01/C03/C05 on an echo-guard confound** (late final transcript suppressed inside
+the talker's audio window → relay `unbound_source`). M4 owns that fix; the et-high cells re-run after
+it lands, then the remaining campaign cells.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
@@ -53,5 +54,5 @@ delivered*). M3 owns the fix; the failed cells will be re-run and the remaining 
 5. Independent reviewer child (read-only) — **brief ready** (`children/RV/brief.md`).
 6. Verdict + repository gates + canonical docs + Agent OS capture.
 
-**Watching (zero-token):** primary wake `ww_16` (M3). Model-free backstop: armed below. No independent
+**Watching (zero-token):** primary wake `ww_17` (M4). Model-free backstop: armed below. No independent
 process backstop (background-task cap saturated).
