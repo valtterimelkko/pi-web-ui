@@ -7,15 +7,10 @@
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W1 complete (3/3) · W2 complete (2/2) · **W3 fix loop RUNNING** — pass 1 done (**1 pass / 11 fail**,
-all boundary-diagnosed); correction round: **H2 merged**, J2 in flight.
+**Wave:** W1 complete (3/3) · W2 complete (2/2) · **W3 fix loop RUNNING** — pass 1 diagnosed; correction
+round **complete** (H2 + J2 merged, corpus + integration fixes in); **pass 2 running** (`bg_bc65df93`).
 
-**Active children**
-
-| Child | Session | Worktree · branch | Lease | Watch | Scope |
-|---|---|---|---|---|---|
-| ~~H2 readback/prompt~~ | `01a0cc12-…` | ~~`wt-voice-readback`~~ | released | `ww_6` cancelled | **merged `195012a6`, cleaned up** |
-| J2 lab fixes | `01a0cc13-f359-73f0-b149-c130edfea3f9` | `wt-voice-lab-fix` · `task/voice-native-lab-fix` | `01cf8aca…` | `ww_7_1790130264826` | director candidate persistence; negation-aware forbidden check (HEAD `1c159ca3`) |
+**Active children:** none — all correction lanes verified, merged and cleaned up.
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -30,19 +25,19 @@ current target.
 
 **Current truth**
 
-- master `195012a6`: W1/W2 merges + corpus corrections + **H2 merged** (host read-back, prompt
-  hardening). Repo lint carries 15 pre-existing errors in J2-owned phase1 tests — to clear with the
-  deadline-bump commit.
-- **Pass 1 (12 real journeys): 1 pass / 11 fail** — diagnosis in `fix-loop/PASS-1-DIAGNOSIS.md`.
-  H2 closed; J2 in flight; deadline bump deferred until J2 merges.
-- Live accounting: pass-1 journeys (~8 min live) + probes; inside §10.
+- master `20eb75f1`: W1/W2 + corpus corrections + **H2** (host read-back, prompt) + **J2** (director
+  persistence, negation awareness) + deadline bump/test derivation/lint cleanup. Repo lint 0 errors;
+  full server suite 5714 green; phase1 144; voice-live-lab 608.
+- **Pass 1: 1 pass / 11 fail**, all boundary-diagnosed and corrected (`fix-loop/PASS-1-DIAGNOSIS.md`).
+- **Pass 2 running**; live accounting: pass-1+2 journeys (~16 min) + probes; inside §10.
 
 **Next sequence**
 
-1. On H2/J2 handbacks: independent verification, merge, cleanup; apply the deadline bump with its
-   test updates; re-run the dev set (pass 2) and iterate until two consecutive clean passes.
-2. Freeze code/prompt/corpus/scorer; cost the §8 matrix (adapt rule).
+1. On pass-2 completion: analyse by boundary. If clean, run pass 3 for the second consecutive clean
+   full pass; if failures remain, correct and re-run.
+2. On two consecutive clean passes: freeze code/prompt/corpus/scorer (hash and record), then cost the
+   §8 matrix (adapt rule).
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** watch `ww_7` (J2) primary; `wake_deadline` `deadline-82db3b0e-…` until 03:11:09Z.
+**Backstops:** pass 2's `backstop_s` covers this window; no child watches armed.
