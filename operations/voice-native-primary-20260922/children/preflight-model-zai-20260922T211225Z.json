@@ -1,0 +1,15 @@
+[
+  {
+    "id": "glm-5.3-flash",
+    "selector": "zai/glm-5.3-flash",
+    "displayName": "GLM-5.3-Flash",
+    "provider": "zai",
+    "contextWindow": 1000000,
+    "reasoning": true,
+    "thinkingLevels": [
+      "low",
+      "high",
+      "max"
+    ]
+  }
+]

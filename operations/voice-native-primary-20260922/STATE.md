@@ -7,11 +7,15 @@
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W1 complete (3/3) · W2 complete (2/2) · **W3 fix loop RUNNING** — pass 1 (12 P-tier
-episodes, standard arm) launched in background (`bg_*`, log
-`/root/voice-lane-lab/fix-loop/pass-1/summary.txt`).
+**Wave:** W1 complete (3/3) · W2 complete (2/2) · **W3 fix loop RUNNING** — pass 1 done (**1 pass / 11 fail**,
+all boundary-diagnosed), correction round in flight (H2 + J2).
 
-**Active children:** none. All five W1/W2 lanes verified, merged and cleaned up:
+**Active children**
+
+| Child | Session | Worktree · branch | Lease | Watch | Scope |
+|---|---|---|---|---|---|
+| H2 readback/prompt | `01a0cc12-73b3-73f0-b149-c12ecd942353` | `wt-voice-readback` · `task/voice-native-readback` | `ff606738…` | `ww_6_1790130165876` | host auto read-back; amendment re-relay; doubt/qualification non-relay |
+| J2 lab fixes | `01a0cc13-f359-73f0-b149-c130edfea3f9` | `wt-voice-lab-fix` · `task/voice-native-lab-fix` | `01cf8aca…` | `ww_7_1790130264826` | director candidate persistence; negation-aware forbidden check |
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -26,21 +30,19 @@ current target.
 
 **Current truth**
 
-- master `c50eca93` (= origin after the docs commit that follows); no worktrees, no leases, no watches.
-- Real provider accounting has begun: 4 probe sessions + 2 J journeys + 1 parent journey + fix-loop
-  pass 1 (12 episodes) — all inside the §10 ceilings; the live clock is running.
-- Holdout wording still unfrozen (validator step) — required only before the final campaign.
-- Campaign live execution remains conductor-gated by design (only `--plan --dry-run` enabled).
+- master `99b9e273`: W1/W2 merges + corpus corrections (C05 frame, C15/C16 slots).
+- **Pass 1 (12 real journeys): 1 pass / 11 fail** — diagnosis in `fix-loop/PASS-1-DIAGNOSIS.md`:
+  presentation read-back ×4 (product), amendment re-relay (prompt), doubt/qualification proposal
+  (prompt), candidate persistence (lab), tight deadlines (data), negation-blind slots (lab), C05
+  frame (data). H2/J2 corrections in flight; deadline bump deferred until they merge.
+- Live accounting: 12 journeys (~8 min live) + probe sessions; inside §10.
 
 **Next sequence**
 
-1. On pass-1 completion: read `/root/voice-lane-lab/fix-loop/pass-1/summary.txt`, diagnose every
-   failure **by boundary** (fixture → ASR → relay selection → payload meaning → approval → delivery →
-   worker result → audible output), fix (RED→GREEN; bounded correction children if code changes are
-   needed), re-run affected episodes + family neighbours.
-2. Loop until two consecutive clean full dev-set passes (or a named §10 blocked outcome); measure
-   per-episode cost/time; then freeze and cost the §8 matrix (adapt rule).
+1. On H2/J2 handbacks: independent verification, merge, cleanup; apply the deadline bump with its
+   test updates; re-run the dev set (pass 2) and iterate until two consecutive clean passes.
+2. Freeze code/prompt/corpus/scorer; cost the §8 matrix (adapt rule).
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** pass-1 background task carries `backstop_s`; no child watches armed (none dispatched).
+**Backstops:** watches `ww_6`/`ww_7` primary; `wake_deadline` armed for the correction window.
