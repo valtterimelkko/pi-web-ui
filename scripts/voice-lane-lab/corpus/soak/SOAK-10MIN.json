@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "SOAK-10MIN",
+  "title": "Continuity soak: 10 minutes, 8 operator turns, one mid-session voice-transport reconnect",
+  "description": "The plan \u00a78 soak cell. A small honest script re-using ONLY the corpus' frozen operator wording and frozen fixtures: two full relay cycles (instruction \u2192 candidate \u2192 presentation \u2192 confirm \u2192 release \u2192 delivery \u2192 worker store), three conversational turns, explicit pace steps holding the session open for at least ten minutes, and exactly one mid-session voice-transport reconnect. The first relay's proposal is created and presented BEFORE the reconnect and confirmed, released and stored AFTER it, so pending-work survival is proven from the record; if the product's design retires the pending proposal instead, the verifier adjudicates that truthfully. No new product behaviour and no new audio is introduced.",
+  "minDurationMs": 600000,
+  "minOperatorTurns": 8,
+  "attemptDeadlineMs": 1500000,
+  "expectedSlots": {
+    "mustContain": ["i want to find out", "pod", "point"],
+    "mustNotContain": ["relay to worker"],
+    "mustNotStartWith": ["relay"],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": ["Podpoint"],
+  "requiredNumbers": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 25000,
+    "presentationMs": 15000,
+    "deliveryMs": 20000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "each relay cycle's approved first-person request reaches the worker store; the pre-reconnect proposal is confirmed after the reconnect"
+  },
+  "steps": [
+    { "kind": "turn", "ref": { "episodeId": "C01", "turnId": "t1" } },
+    { "kind": "turn", "ref": { "episodeId": "C08", "turnId": "t1" } },
+    { "kind": "pace", "ms": 150000 },
+    { "kind": "reconnect" },
+    { "kind": "turn", "ref": { "episodeId": "C01", "turnId": "t2" } },
+    { "kind": "pace", "ms": 150000 },
+    { "kind": "turn", "ref": { "episodeId": "C01", "turnId": "t1" } },
+    { "kind": "turn", "ref": { "episodeId": "C08", "turnId": "t1" } },
+    { "kind": "pace", "ms": 150000 },
+    { "kind": "turn", "ref": { "episodeId": "C01", "turnId": "t2" } },
+    { "kind": "turn", "ref": { "episodeId": "C08", "turnId": "t1" } },
+    { "kind": "pace", "ms": 150000 },
+    { "kind": "turn", "ref": { "episodeId": "C08", "turnId": "t1" } }
+  ]
+}

@@ -183,6 +183,10 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
     // text frames only, newest last, bounded.
     wireFrames: [],
     speakLog: [],  // synthetic-stream-source injections: {turnMs, sampleRate, frames}
+    // Live sockets this page created (bounded): the soak runner's transport
+    // reconnect closes the SESSION socket(s) through them — a real transport
+    // drop as far as every product reconnect path is concerned.
+    sockets: [],
     synthQueue: [], // {pcm16kB64, sampleRate} — synthetic-stream-source mode
     synthGain: null,
     synthContext: null,
@@ -204,6 +208,11 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
   const NativeWebSocket = window.WebSocket;
   const LabWebSocket = function (...args) {
     const ws = new NativeWebSocket(...args);
+    try {
+      lab.sockets.push(ws);
+      if (lab.sockets.length > 20) lab.sockets.shift();
+      ws.addEventListener('close', () => { lab.sockets = lab.sockets.filter((s) => s !== ws); });
+    } catch {}
     try {
       ws.addEventListener('message', (event) => {
         try {

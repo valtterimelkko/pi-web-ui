@@ -503,6 +503,7 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
   const observeEvidence = (row: EvidenceRow): DirectorObservation | null => observationFromEvidence(row);
 
   /** Poll the instrument + the server evidence log; queue new observations. */
+  const seenParkedItemIds = new Set<string>();
   const collectObservations = async (): Promise<void> => {
     if (!labPage.current) await findLabPage(browserContext!, labPage);
     if (labPage.current) {
@@ -511,6 +512,22 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         const fresh = dump.wireFrames.slice(wireFramesSeen);
         wireFramesSeen = dump.wireFrames.length;
         for (const row of fresh) {
+          // parking_updated carries the lot snapshot: each NEW parked item
+          // becomes one `parked` observation (W4 busy parking). Promotions and
+          // removals are the product's business; the FSM never re-parks.
+          if (row.type === 'parking_updated') {
+            const items = Array.isArray((row.frame as { items?: unknown }).items)
+              ? ((row.frame as { items: Array<{ itemId?: unknown }> }).items)
+              : [];
+            for (const item of items) {
+              const itemId = typeof item?.itemId === 'string' ? item.itemId : '';
+              if (itemId && !seenParkedItemIds.has(itemId)) {
+                seenParkedItemIds.add(itemId);
+                pendingObservations.push({ kind: 'parked', itemId, atMs: row.atMs });
+              }
+            }
+            continue;
+          }
           const observation = observeWireFrame(row);
           if (observation) pendingObservations.push(observation);
         }
@@ -522,6 +539,13 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       if (observation) pendingObservations.push(observation);
     }
   };
+
+  // ── W4 continuity-soak: the mid-session voice-transport reconnect ──────
+  const soakEventsPath = path.join(attemptLayout.attemptDir, 'provider', 'soak-events.jsonl');
+  const recordSoakEvent = (event: Record<string, unknown>): void => {
+    writeFileSync(soakEventsPath, `${JSON.stringify({ atMs: Date.now(), ...event })}\n`, { flag: 'a', mode: 0o600 });
+  };
+
 
   /** The worker store check: approved bytes must appear in the worker's persisted input. */
   const checkWorkerStore = async (approvedIdentity: string): Promise<boolean> => {
@@ -673,6 +697,62 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       await waitForListening(listening, 60_000);
       if (!listening) await page.waitForTimeout(800); // the stop gesture settles
     };
+  /**
+   * Drop the page's session transport and let the PRODUCT recover: the
+   * client's session stream reconnects on its own, and the lane is re-opened
+   * through the REAL main control (same lane identity → the mount revives it
+   * and reopens the provider session). The reconnect is recorded, never
+   * simulated: no state is rewritten and no frame is fabricated.
+   */
+  const executeTransportReconnect = async (): Promise<void> => {
+    const wireBefore = wireFramesSeen;
+    const wsBefore = wsLog.length;
+    recordSoakEvent({ kind: 'transport-drop-started', detail: 'closing the page session socket(s) — a real transport drop' });
+    await page
+      .evaluate(() => {
+        const lab = window as unknown as { __voiceLaneLab?: { sockets?: Array<{ url?: string; close?: () => void }> } };
+        for (const socket of lab.__voiceLaneLab?.sockets ?? []) {
+          // only the app's session socket(s) — never tooling sockets
+          if (socket.url?.includes('/ws')) {
+            try {
+              socket.close?.();
+            } catch {
+              /* already closing */
+            }
+          }
+        }
+      })
+      .catch(() => {});
+    // 2. the product's own session-stream reconnect (exponential backoff)
+    let transportBack = false;
+    for (let index = 0; index < 60 && !transportBack; index += 1) {
+      await page.waitForTimeout(500);
+      transportBack = wsLog.slice(wsBefore).some((line) => line.startsWith('WS open'));
+    }
+    // 3. re-open the lane through the REAL main control (same lane identity)
+    await ensureCapture(false).catch(() => {});
+    await ensureCapture(true).catch(() => {});
+    laneWentLive = true;
+    // 4. the lane must come back live: poll the wire for a live voice_state
+    let laneBack = false;
+    for (let index = 0; index < 60 && !laneBack; index += 1) {
+      await page.waitForTimeout(500);
+      await collectObservations();
+      const dump = await dumpLab(labPage.current!).catch(() => null);
+      laneBack = (dump?.wireFrames ?? []).some(
+        (row) => row.type === 'voice_state' && (row.frame as { state?: unknown }).state === 'live' && row.seq >= wireBefore
+      );
+    }
+    recordSoakEvent({
+      kind: 'transport-reconnect',
+      detail: 'session socket dropped and reopened; lane re-opened through the main control',
+      transportBack,
+      laneBack,
+      socketsSeenBefore: wsBefore,
+      socketsSeenAfter: wsLog.length,
+    });
+    await screenshot(page, 'soak-reconnect');
+  };
 
     const speakTurn = async (turn: JourneyTurn): Promise<void> => {
       if (turn.inputMode === 'fake-file') {
@@ -781,6 +861,30 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         // the FSM's interaction deadlines measure model latency from the end of
         // the operator's speech, not transport time (device padding + playback).
         await page.waitForTimeout((turn.inputMode === 'fake-file' ? OPENING_PADDING_MS : 0) + turn.durationMs + 300);
+        awaitStartedAtMs = null;
+        sleepMs = 300;
+      } else if (action.type === 'pace') {
+        // Soak pacing: the operator stays silent for the planned interval.
+        // The attempt deadline still governs — never sleep past it.
+        const remaining = Math.max(0, deadlineAt - Date.now());
+        await page.waitForTimeout(Math.min(action.ms, remaining));
+        awaitStartedAtMs = null;
+        sleepMs = 300;
+      } else if (action.type === 'reconnect-transport') {
+        await executeTransportReconnect();
+        awaitStartedAtMs = null;
+        sleepMs = 300;
+      } else if (action.type === 'promote') {
+        // W4 busy parking: the product's OWN promote path — the parking-lot
+        // drawer's per-item promote control. No candidate is fabricated here;
+        // the promoted proposal arrives as a proposal_created wire frame.
+        const collapsed = page.locator('[data-testid="parking-lot-open"]');
+        if (await collapsed.isVisible().catch(() => false)) await collapsed.click();
+        const promoteButton = page.locator(`[data-testid="parking-promote-${action.itemId}"]`);
+        await promoteButton.waitFor({ timeout: 15_000 });
+        await promoteButton.click();
+        await screenshot(page, `promote-${action.itemId}`);
+        recordSoakEvent({ kind: 'promote', itemId: action.itemId, detail: 'promoted through the parking-lot drawer control' });
         awaitStartedAtMs = null;
         sleepMs = 300;
       } else if (action.type === 'await') {
@@ -1020,6 +1124,9 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       cleanup,
       terminal: terminalAction,
       turnModes: plan.turns.map((turn) => ({ turnId: turn.turnId, inputMode: turn.inputMode, fixtureId: turn.fixtureId })),
+      // W4 soak: the record declares its soak contract for the verifier, which
+      // adjudicates against its own FIXED bars (the manifest can only tighten).
+      ...(plan.soak ? { soak: plan.soak } : {}),
       // Child J3: the manifest carries the shim marker (captureMode already
       // does, from the plan) plus the honest seam description. evidenceLevel
       // stays E2 — a shim read-back is never a rendered-audio claim.

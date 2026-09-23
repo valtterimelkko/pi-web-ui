@@ -43,10 +43,11 @@ export const FAMILIES = [
   'approval-semantics',
   'busy-parking',
   'attachment-switch',
+  'continuity-soak',
 ] as const;
 export type Family = (typeof FAMILIES)[number];
 
-export const TIERS = ['P', 'H', 'E'] as const;
+export const TIERS = ['P', 'H', 'E', 'SOAK'] as const;
 export type Tier = (typeof TIERS)[number];
 
 export const ROUTE_OUTCOMES = [
@@ -66,6 +67,13 @@ export const TURN_KINDS = [
   'adaptive-repeat',
   'adaptive-repair',
   'adaptive-steer',
+  // W4 harness capabilities. `adaptive-promote` drives the product's own
+  // one-item promote path for the busy-parking family; `soak-pace` and
+  // `soak-reconnect` exist ONLY in the constructed continuity-soak episode —
+  // the loader refuses them in committed episode FILES.
+  'adaptive-promote',
+  'soak-pace',
+  'soak-reconnect',
 ] as const;
 export type TurnKind = (typeof TURN_KINDS)[number];
 
@@ -95,12 +103,14 @@ export const ARTEFACT_KINDS = [
 const TurnSchema = z.object({
   id: z.string().min(1),
   kind: z.enum(TURN_KINDS),
-  /** Empty ONLY for a validator-frozen holdout turn. */
+  /** Empty ONLY for a validator-frozen holdout turn or a soak pace/reconnect step. */
   text: z.string(),
   /** Words that must survive synthesis + ASR (known-word check). */
   requiredWords: z.array(z.string().min(1)),
   /** True only in holdout files whose surface form the validator owns. */
   validatorFrozen: z.boolean().optional(),
+  /** soak-pace only: how long the operator stays silent, in milliseconds. */
+  paceMs: z.number().int().positive().optional(),
 });
 
 const ApprovalTurnSchema = z.object({
@@ -340,6 +350,10 @@ export function loadCorpusFromDir(corpusDir: string): LoadedCorpus {
     const parsed = EpisodeSchema.safeParse(raw);
     if (!parsed.success) {
       problems.push(`${file}: ${parsed.error.issues.map((issue) => issue.message).join('; ')}`);
+      continue;
+    }
+    if (parsed.data.inputTurns.some((turn) => turn.kind === 'soak-pace' || turn.kind === 'soak-reconnect')) {
+      problems.push(`${file}: soak turn kinds belong to the soak plan, never a committed episode file`);
       continue;
     }
     episodes.push(parsed.data);

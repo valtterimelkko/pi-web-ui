@@ -93,6 +93,12 @@ export interface JourneyPlan {
   attemptDeadlineMs: number;
   routesRelay: boolean;
   expectedArtefact: Episode['expectedFinalWorkerArtefact'];
+  /**
+   * Present ONLY on the W4 continuity-soak plan: the soak contract the runner
+   * records verbatim into the attempt manifest for the verifier to adjudicate
+   * against its own fixed bars.
+   */
+  soak?: { minDurationMs: number; minOperatorTurns: number; reconnects: number };
   voiceProfileId: string;
   server: { engine: string; compiled: true };
   browserArgs: string[];
