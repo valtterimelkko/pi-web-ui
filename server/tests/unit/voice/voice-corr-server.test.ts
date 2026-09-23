@@ -787,6 +787,245 @@ describe('M6: talker echo never releases the gate', () => {
   });
 });
 
+// ── M6-fix (W4 campaign M4): the echo guard must not discard a genuine late final ─
+
+/**
+ * The W4 `*-et-high` failure (C01/C03/C05): the extended-thinking talker
+ * starts speaking before the operator's transcript finalises, so the final
+ * lands inside the talker's audio window and the guard suppressed it with
+ * `talker_audio_window` — no kernel utterance, the relay bound to zero
+ * candidates, `unbound_source`, cell dead. The discriminator the guard was
+ * missing is WHEN the operator actually spoke: the client already reports
+ * its own VAD boundaries (`voice_activity_state`). The time window alone may
+ * suppress only when the operator's speech window OVERLAPS the talker's
+ * audio; a speech window that ended before the talker's audio began is a
+ * genuine utterance whose transcript finalised late.
+ */
+describe('M6-fix: a final whose speech window precedes the talker audio is genuine, not echo', () => {
+  const OPERATOR_TEXT = 'I want to find out about Pod Point.';
+
+  /** One talker audio chunk: the mechanical fact that put TTS in the room. */
+  function talkerAudio(service: FakeService, laneId: string, seq: number): void {
+    service.emit({
+      kind: 'audio_out',
+      laneId,
+      attachmentGeneration: 1,
+      seq,
+      mimeType: 'audio/pcm;rate=24000',
+      data: '',
+      durationMs: 200,
+      atMs: 1,
+    });
+  }
+
+  async function speech(
+    mount: VoiceLiveMount,
+    sent: Sent[],
+    laneId: string,
+    state: 'speech_start' | 'speech_end'
+  ): Promise<void> {
+    await mount.route('c1', ctx(sent) as never, {
+      type: 'voice_activity_state',
+      version: 1,
+      laneId,
+      attachmentGeneration: 1,
+      state,
+      atMs: 1,
+    } as never);
+  }
+
+  function echoSuspect(events: Record<string, unknown>[], reason: string): Record<string, unknown>[] {
+    return events.filter((event) => event.event === 'operator_utterance_echo_suspect' && event.reason === reason);
+  }
+
+  it('(the defect) accepts a late final whose speech ended before the talker audio began, binds the relay, and releases through the ordinary gate', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const delivery = recordingDelivery();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery,
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    // The operator speaks and stops (the client's local VAD boundaries).
+    await speech(mount, sent, 'lane-1', 'speech_start');
+    clock.advance(150);
+    await speech(mount, sent, 'lane-1', 'speech_end');
+
+    // The et-high model answers BEFORE the operator's transcript finalises:
+    // talker audio is in the room from t+450 onward and keeps the window alive.
+    clock.advance(300);
+    talkerAudio(service, 'lane-1', 0);
+    clock.advance(250);
+    talkerAudio(service, 'lane-1', 1);
+
+    // The final transcript lands INSIDE the talker's audio window — but the
+    // operator's own speech window had already closed.
+    clock.advance(250);
+    utterance(service, 'lane-1', OPERATOR_TEXT);
+    await flush();
+
+    expect(echoSuspect(events, 'talker_audio_window')).toHaveLength(0);
+    expect(events.filter((event) => event.event === 'operator_utterance_late_final_accepted')).toHaveLength(1);
+
+    // The relay binds to the accepted utterance and the ordinary gate runs.
+    await mount.handleToolRequest({ laneId: 'lane-1', name: 'relay_to_worker', args: { text: OPERATOR_TEXT }, atMs: 2 });
+    await flush();
+    const proposal = proposalFrom(sent);
+    await reportPresentation(mount, sent, 'lane-1', proposal);
+    expect(await confirm(mount, sent, 'lane-1', proposal, 'k-late-final')).toBeNull();
+    expect(delivery.calls).toEqual([{ workerSessionId: 'W1', text: proposal.tidied }]);
+  });
+
+  it('still suppresses when the operator VAD fires inside the talker audio (the true echo shape)', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const delivery = recordingDelivery();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery,
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    // The talker is speaking.
+    talkerAudio(service, 'lane-1', 0);
+    clock.advance(400);
+    talkerAudio(service, 'lane-1', 1);
+
+    // The operator's VAD opens and closes INSIDE the talker's audio: the mic
+    // plausibly holds the talker's voice, so the transcript is echo-suspect.
+    await speech(mount, sent, 'lane-1', 'speech_start');
+    clock.advance(200);
+    await speech(mount, sent, 'lane-1', 'speech_end');
+    utterance(service, 'lane-1', 'Yes, send that.');
+    await flush();
+
+    const suspect = echoSuspect(events, 'talker_audio_window');
+    expect(suspect).toHaveLength(1);
+    expect(suspect[0].speechOverlap).toBe('overlaps');
+    expect(events.some((event) => event.event === 'operator_utterance_late_final_accepted')).toBe(false);
+
+    // Never gate input: the relay it would have fed has no source (the honest
+    // refusal the campaign records — but here it is the CORRECT outcome).
+    await mount.handleToolRequest({ laneId: 'lane-1', name: 'relay_to_worker', args: { text: 'Yes, send that.' }, atMs: 2 });
+    await flush();
+    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
+    expect(delivery.calls).toHaveLength(0);
+  });
+
+  it('keeps the conservative suppression when no activity frames were ever sent', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: recordingDelivery(),
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    talkerAudio(service, 'lane-1', 0);
+    clock.advance(400);
+    talkerAudio(service, 'lane-1', 1);
+    clock.advance(200);
+    utterance(service, 'lane-1', 'Yes, send that.');
+    await flush();
+
+    const suspect = echoSuspect(events, 'talker_audio_window');
+    expect(suspect).toHaveLength(1);
+    expect(suspect[0].speechOverlap).toBe('unknown');
+  });
+
+  it('still suppresses an otherwise-accepted late final that reproduces the talker output (content backstop stays armed)', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: recordingDelivery(),
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    // Speech ended before the talker audio began — the time rule would accept.
+    await speech(mount, sent, 'lane-1', 'speech_start');
+    clock.advance(150);
+    await speech(mount, sent, 'lane-1', 'speech_end');
+    clock.advance(300);
+    talkerAudio(service, 'lane-1', 0);
+    talkerSays(service, 'lane-1', 'I have asked the worker to check the retry handler.');
+    clock.advance(300);
+
+    // …but the bytes are the talker's own last output: the time-independent
+    // content rule suppresses regardless of the window arithmetic.
+    utterance(service, 'lane-1', 'I have asked the worker to check the retry handler.');
+    await flush();
+
+    expect(echoSuspect(events, 'talker_output_overlap')).toHaveLength(1);
+    expect(events.some((event) => event.event === 'operator_utterance_late_final_accepted')).toBe(false);
+  });
+
+  it('consumes the accepted speech window, so a later window-less final inside the talker audio stays conservative', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: recordingDelivery(),
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    await speech(mount, sent, 'lane-1', 'speech_start');
+    clock.advance(150);
+    await speech(mount, sent, 'lane-1', 'speech_end');
+    clock.advance(300);
+    talkerAudio(service, 'lane-1', 0);
+    clock.advance(400);
+    talkerAudio(service, 'lane-1', 1);
+    clock.advance(250);
+    utterance(service, 'lane-1', OPERATOR_TEXT);
+    await flush();
+    expect(events.filter((event) => event.event === 'operator_utterance_late_final_accepted')).toHaveLength(1);
+
+    // The talker keeps speaking; a further final arrives with NO new VAD
+    // frames. The accepted window was consumed, so this one is unknown and
+    // keeps today's conservative suppression.
+    talkerAudio(service, 'lane-1', 2);
+    utterance(service, 'lane-1', 'Yes, send that.');
+    await flush();
+
+    const suspect = echoSuspect(events, 'talker_audio_window');
+    expect(suspect).toHaveLength(1);
+    expect(suspect[0].speechOverlap).toBe('unknown');
+  });
+});
+
 // ── H3-server: presentation enforcement ─────────────────────────────────────
 
 describe('H3-server: a release requires a presented proposal and a real identity', () => {
