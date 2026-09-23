@@ -14,18 +14,19 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| M4 echo guard | `01a0ce64-ddc7-…` | `wt-voice-m4` · `task/voice-native-m4` | `0907388c…` | `ww_17` | echo guard must not discard genuine operator utterances (et-high confound) |
+| M5 echo arming | `01a0ce9c-ca8c-…` | `wt-voice-m5` · `task/voice-native-m5` | `49bd1c70…` | `ww_18` | echo window armed by audio, not text (et-high confirm confound) |
 
 **Settled and merged this round:** M (`e3e9e0b5` — worker-switch proposal resolution, RED reproduced at the
 parent and re-verified), L5 (`a8ccf2ed` — busy drive with a real C22 PASS at attempt-09, two-session
 prep, soak reconnect v2, holdout fixtures; gates re-run by the conductor: lab 705/705, voice-lab tsc 0).
 **Holdout freeze now complete** (`9eaaf891`): all nine turns (C10, C11, C22, C24) frozen for both voices,
 49 fixtures each, zero drift, ASR green; the obsolete voice-a C22-t1 homophone skip removed (`e8724669`).
-M2 (`958d9370`), M3 (`fcef1718`) merged: soak re-bind and delivery-at-submission both fixed and
-RED-verified. Campaign: C09 both arms pass; **standard arm now passes C01/C03/C05** after M3; the
-**et-high arm fails C01/C03/C05 on an echo-guard confound** (late final transcript suppressed inside
-the talker's audio window → relay `unbound_source`). M4 owns that fix; the et-high cells re-run after
-it lands, then the remaining campaign cells.
+M2 (`958d9370`), M3 (`fcef1718`), M4 (`9987ebb1`) merged — soak re-bind, delivery-at-submission and
+the speech-window-aware echo guard all fixed and RED-verified. Campaign: C09 both arms pass;
+**standard arm passes C01/C03/C05**; the **et-high arm advanced from 'waiting for candidate' to
+'waiting for release'**: the confirm is dropped as echo because the echo window is armed by talker
+*transcripts* as well as audio (`voice-live-mount.ts:1514`). M5 owns that arming fix; the et-high
+cells re-run after it lands, then the remaining campaign cells.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
@@ -54,5 +55,5 @@ it lands, then the remaining campaign cells.
 5. Independent reviewer child (read-only) — **brief ready** (`children/RV/brief.md`).
 6. Verdict + repository gates + canonical docs + Agent OS capture.
 
-**Watching (zero-token):** primary wake `ww_17` (M4). Model-free backstop: armed below. No independent
+**Watching (zero-token):** primary wake `ww_18` (M5). Model-free backstop: armed below. No independent
 process backstop (background-task cap saturated).
