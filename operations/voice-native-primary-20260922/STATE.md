@@ -8,14 +8,14 @@
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
 **Wave:** W1 complete (3/3) · W2 complete (2/2) · **W3 fix loop RUNNING** — pass 1 done (**1 pass / 11 fail**,
-all boundary-diagnosed), correction round in flight (H2 + J2).
+all boundary-diagnosed); correction round: **H2 merged**, J2 in flight.
 
 **Active children**
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| H2 readback/prompt | `01a0cc12-73b3-73f0-b149-c12ecd942353` | `wt-voice-readback` · `task/voice-native-readback` | `ff606738…` | `ww_6_1790130165876` | host auto read-back; amendment re-relay; doubt/qualification non-relay |
-| J2 lab fixes | `01a0cc13-f359-73f0-b149-c130edfea3f9` | `wt-voice-lab-fix` · `task/voice-native-lab-fix` | `01cf8aca…` | `ww_7_1790130264826` | director candidate persistence; negation-aware forbidden check |
+| ~~H2 readback/prompt~~ | `01a0cc12-…` | ~~`wt-voice-readback`~~ | released | `ww_6` cancelled | **merged `195012a6`, cleaned up** |
+| J2 lab fixes | `01a0cc13-f359-73f0-b149-c130edfea3f9` | `wt-voice-lab-fix` · `task/voice-native-lab-fix` | `01cf8aca…` | `ww_7_1790130264826` | director candidate persistence; negation-aware forbidden check (HEAD `1c159ca3`) |
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -30,12 +30,12 @@ current target.
 
 **Current truth**
 
-- master `99b9e273`: W1/W2 merges + corpus corrections (C05 frame, C15/C16 slots).
-- **Pass 1 (12 real journeys): 1 pass / 11 fail** — diagnosis in `fix-loop/PASS-1-DIAGNOSIS.md`:
-  presentation read-back ×4 (product), amendment re-relay (prompt), doubt/qualification proposal
-  (prompt), candidate persistence (lab), tight deadlines (data), negation-blind slots (lab), C05
-  frame (data). H2/J2 corrections in flight; deadline bump deferred until they merge.
-- Live accounting: 12 journeys (~8 min live) + probe sessions; inside §10.
+- master `195012a6`: W1/W2 merges + corpus corrections + **H2 merged** (host read-back, prompt
+  hardening). Repo lint carries 15 pre-existing errors in J2-owned phase1 tests — to clear with the
+  deadline-bump commit.
+- **Pass 1 (12 real journeys): 1 pass / 11 fail** — diagnosis in `fix-loop/PASS-1-DIAGNOSIS.md`.
+  H2 closed; J2 in flight; deadline bump deferred until J2 merges.
+- Live accounting: pass-1 journeys (~8 min live) + probes; inside §10.
 
 **Next sequence**
 
@@ -45,4 +45,4 @@ current target.
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** watches `ww_6`/`ww_7` primary; `wake_deadline` armed for the correction window.
+**Backstops:** watch `ww_7` (J2) primary; `wake_deadline` `deadline-82db3b0e-…` until 03:11:09Z.
