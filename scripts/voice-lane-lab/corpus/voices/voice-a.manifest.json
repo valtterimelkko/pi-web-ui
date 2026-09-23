@@ -18,7 +18,7 @@
     "silence": 0.05,
     "steps": 8
   },
-  "corpusHash": "1322eecdcf956790451a1fb83cccb5c3a2d125aa81f29950702e284863a8f316",
+  "corpusHash": "788d654c98a9facc214b71fbd83283f25ed3521d4bfce699f51872565b15a5ad",
   "audioRoot": "/root/voice-lane-lab/fixtures/voice-a",
   "fixtures": [
     {
@@ -471,15 +471,15 @@
     },
     {
       "id": "C18-t3",
-      "text": "Yes, send the amended version.",
-      "pcm16kSha256": "a4c52b679d86befa96ac2c2244c46a0d51e3a5bc57aaabc2af16aa3e9d572e66",
+      "text": "Yes, send it.",
+      "pcm16kSha256": "d5689ce2253e6fc1889417e241b2d587fec01559e1bec7c899ae5fc108be0724",
       "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-a/C18-t3.pcm16k",
       "masterWavPath": "/root/voice-lane-lab/fixtures/voice-a/C18-t3.master.wav",
-      "durationMs": 2298.791666666667,
+      "durationMs": 1462.875,
       "asr": {
         "id": "C18-t3",
-        "text": "Yes, send the amended version.",
-        "transcript": " Yes, send the amended version.",
+        "text": "Yes, send it.",
+        "transcript": " Yes, send it.",
         "wer": 0,
         "missingWords": [],
         "ok": true
