@@ -54,7 +54,14 @@ import { fileURLToPath } from 'node:url';
 // other command runs on plain tsx.
 import type { CapturedAudioChunk, PageFacts } from './lib/oracle.js';
 import { captureLane, DEFAULT_QUESTION } from './lib/capture.js';
-import { loadCorpus } from './lib/corpus.js';
+import { HOLDOUT_IDS, loadCorpus, withValidatorOverlays } from './lib/corpus.js';
+import {
+  SOAK_EPISODE_ID,
+  loadSoakPlan,
+  soakEpisodeFromPlan,
+  soakJourneyPlan,
+  withSoakEpisode,
+} from './lib/soak-plan.js';
 import {
   VOICE_PROFILES,
   buildVoiceProfile,
@@ -350,11 +357,28 @@ async function primaryMicCommand(argv: string[]): Promise<number> {
     return 2;
   }
   const tts = ttsArg === 'synthetic' ? 'synthetic' : undefined;
-  const corpus = loadCorpus();
+  // A holdout episode is plannable ONLY through its validator overlay: merge
+  // first (fail closed) so journeyPlan sees the frozen surface form. The
+  // episode files themselves stay empty.
+  const mergedCorpus =
+    episodeId && HOLDOUT_IDS.includes(episodeId)
+      ? withValidatorOverlays(loadCorpus(), CORPUS_DIR)
+      : loadCorpus();
   let plan;
   try {
     if (!episodeId) throw new Error('--episode <id> is required (a corpus episode, not a holdout)');
-    plan = journeyPlan(episodeId, { corpus, corpusDir: CORPUS_DIR, arm, tts });
+    if (episodeId === SOAK_EPISODE_ID) {
+      // W4 continuity soak: the plan + constructed episode + joined corpus.
+      const soakPlan = loadSoakPlan(CORPUS_DIR);
+      const soakEpisode = soakEpisodeFromPlan(soakPlan, mergedCorpus);
+      plan = soakJourneyPlan(soakPlan, withSoakEpisode(mergedCorpus, soakEpisode), {
+        corpusDir: CORPUS_DIR,
+        arm,
+        tts,
+      });
+    } else {
+      plan = journeyPlan(episodeId, { corpus: mergedCorpus, corpusDir: CORPUS_DIR, arm, tts });
+    }
   } catch (error) {
     writeErr(String(error instanceof Error ? error.message : error));
     return 2;
@@ -368,7 +392,10 @@ async function primaryMicCommand(argv: string[]): Promise<number> {
   }
   const result = await runJourney(plan, {
     repoRoot: process.cwd(),
-    corpus,
+    corpus:
+      plan.episodeId === SOAK_EPISODE_ID
+        ? withSoakEpisode(mergedCorpus, soakEpisodeFromPlan(loadSoakPlan(CORPUS_DIR), mergedCorpus))
+        : mergedCorpus,
     corpusDir: CORPUS_DIR,
     recordsRoot: RECORDS_ROOT,
     campaignId: 'primary-mic-journeys',
@@ -379,7 +406,12 @@ async function primaryMicCommand(argv: string[]): Promise<number> {
   writeOut(`journey: ${result.outcome} — ${result.detail}`);
   // The VERDICT is the offline verifier's, from the raw record — never the
   // runner's own word.
-  const outcome = verifyRecord(result.attemptDir, { corpus });
+  const outcome = verifyRecord(result.attemptDir, {
+    corpus:
+      plan.episodeId === SOAK_EPISODE_ID
+        ? withSoakEpisode(mergedCorpus, soakEpisodeFromPlan(loadSoakPlan(CORPUS_DIR), mergedCorpus))
+        : mergedCorpus,
+  });
   for (const line of outcome.lines) writeOut(`  ${line}`);
   for (const problem of outcome.problems) writeOut(`  PROBLEM ${problem.code}: ${problem.detail}`);
   writeOut(`verifier verdict: ${outcome.verdict}`);
@@ -398,7 +430,25 @@ function verifyCommand(argv: string[]): number {
     writeErr('verify needs an attempt directory');
     return 2;
   }
-  const outcome = verifyRecord(dir, { corpus: loadCorpus() });
+  let corpus = loadCorpus();
+  // A holdout record grades against the validator overlay's frozen expected
+  // facts: merge first (fail closed — an unfrozen holdout record is never a
+  // silent pass-through of empty slots). A soak record needs the constructed
+  // SOAK-10MIN episode joined for the deterministic director replay.
+  try {
+    const manifestPath = path.join(dir, 'manifest.json');
+    if (existsSync(manifestPath)) {
+      const episodeId = (JSON.parse(readFileSync(manifestPath, 'utf8')) as { episodeId?: string }).episodeId;
+      if (episodeId && HOLDOUT_IDS.includes(episodeId)) corpus = withValidatorOverlays(corpus, CORPUS_DIR);
+      if (episodeId === SOAK_EPISODE_ID) {
+        corpus = withSoakEpisode(corpus, soakEpisodeFromPlan(loadSoakPlan(CORPUS_DIR), corpus));
+      }
+    }
+  } catch (error) {
+    writeErr(String(error instanceof Error ? error.message : error));
+    return 2;
+  }
+  const outcome = verifyRecord(dir, { corpus });
   for (const line of outcome.lines) writeOut(`  ${line}`);
   for (const problem of outcome.problems) writeOut(`  PROBLEM ${problem.code}: ${problem.detail}`);
   writeOut(`verdict: ${outcome.verdict}`);

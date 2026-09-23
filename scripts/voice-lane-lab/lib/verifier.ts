@@ -721,6 +721,172 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
     } else if (journeyLaneStop.finalState === 'live') {
       problems.push({ code: 'lane-stop-unverified', detail: `lane still live after the stop control (state: ${journeyLaneStop.finalState})` });
     }
+    // 10j-s. W4 continuity soak: a record that declares a soak is adjudicated
+    // against the soak contract with FIXED programme bars (≥ 10 minutes,
+    // ≥ 8 operator turns, exactly one mid-session voice-transport reconnect,
+    // honest pending-work disposition). The record's own soak block may only
+    // declare STRICTER bars; it can never loosen these. The bars here mirror
+    // the plan-level bars enforced by the soak plan schema (soak-plan.ts).
+    const soak = (manifest.soak ?? null) as { minDurationMs?: number; minOperatorTurns?: number; reconnects?: number } | null;
+    if (soak) {
+      const SOAK_FIXED_MIN_DURATION_MS = 600_000;
+      const SOAK_FIXED_MIN_TURNS = 8;
+      const durationMs = (capture.stoppedAtMs ?? 0) - (capture.startedAtMs ?? 0);
+      const requiredDurationMs = Math.max(SOAK_FIXED_MIN_DURATION_MS, soak.minDurationMs ?? 0);
+      if (durationMs < requiredDurationMs) {
+        problems.push({ code: 'soak-duration', detail: `soak session lasted ${(durationMs / 1000).toFixed(0)} s — below the ${(requiredDurationMs / 1000).toFixed(0)} s bar` });
+      } else {
+        lines.push(`soak duration verified: ${(durationMs / 60000).toFixed(1)} min ≥ ${(requiredDurationMs / 60000).toFixed(0)} min`);
+      }
+      const speaks = steps.filter((step) => (step.action as { type?: string }).type === 'speak');
+      const requiredTurns = Math.max(SOAK_FIXED_MIN_TURNS, soak.minOperatorTurns ?? 0);
+      if (speaks.length < requiredTurns) {
+        problems.push({ code: 'soak-turn-count', detail: `soak recorded ${speaks.length} operator turns — below the ${requiredTurns} bar` });
+      } else {
+        lines.push(`soak operator turns verified: ${speaks.length} ≥ ${requiredTurns}`);
+      }
+      const reconnectSteps = steps.filter((step) => (step.action as { type?: string }).type === 'reconnect-transport');
+      if (reconnectSteps.length !== 1) {
+        problems.push({ code: 'soak-reconnect-count', detail: `soak recorded ${reconnectSteps.length} reconnect actions — exactly one mid-session voice-transport reconnect is required` });
+      } else {
+        lines.push('soak reconnect recorded: exactly one mid-session voice-transport reconnect action');
+      }
+      // Corroboration: the runner's own reconnect evidence file and a wire
+      // record showing the lane came back.
+      const eventsText = readText(attemptDir, path.join('provider', 'soak-events.jsonl'));
+      const soakEvents = (eventsText ?? '')
+        .split('\n')
+        .filter((line) => line.trim() !== '')
+        .map((line) => {
+          try {
+            return JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        })
+        .filter((event): event is Record<string, unknown> => event !== null);
+      const reconnectEvents = soakEvents.filter((event) => event.kind === 'transport-reconnect');
+      const wireRowsSoak = readJson<Array<{ type?: string; frame?: Record<string, unknown> }>>(attemptDir, path.join('capture', 'wire-frames.json'), problems) ?? [];
+      const liveStates = wireRowsSoak.filter((row) => row.type === 'voice_state' && row.frame?.state === 'live');
+      if (reconnectSteps.length === 1) {
+        if (reconnectEvents.length !== 1) {
+          problems.push({ code: 'soak-reconnect-evidence', detail: `the runner recorded ${reconnectEvents.length} transport-reconnect events for one reconnect action — the reconnect is not evidenced` });
+        } else if (liveStates.length === 0) {
+          problems.push({ code: 'soak-reconnect-evidence', detail: 'no voice_state live frame in the wire record — the lane never came back after the reconnect' });
+        } else {
+          lines.push('soak reconnect evidence present: soak-events.jsonl + wire voice_state live');
+        }
+      }
+      // Pending-work disposition: the proposal created before the reconnect and
+      // still unreleased at it must be released, delivered and stored AFTER it.
+      // A product-side retirement is graded truthfully — never faked survival.
+      if (reconnectSteps.length === 1) {
+        const reconnectStep = reconnectSteps[0]!;
+        const asIdentity = (row: StepRow): string | null => {
+          const observation = row.observation as { identity?: unknown } | undefined;
+          return typeof observation?.identity === 'string' ? observation.identity : null;
+        };
+        const releases = steps.filter((step) => step.observation?.kind === 'release');
+        const candidates = steps.filter((step) => step.observation?.kind === 'candidate');
+        // `<=`: an observation landing during the reconnect GESTURE is recorded
+        // at the reconnect step itself (feed precedes activate within a step).
+        const pending = [...candidates]
+          .reverse()
+          .find(
+            (step) =>
+              step.seq <= reconnectStep.seq &&
+              !releases.some((release) => asIdentity(release) === asIdentity(step) && release.seq <= reconnectStep.seq)
+          );
+        if (!pending) {
+          problems.push({ code: 'soak-pending-work-missing', detail: 'no proposal was pending at the reconnect — the soak proves nothing about pending-work survival' });
+        } else {
+          const identity = asIdentity(pending)!;
+          const releaseAfter = releases.find((release) => asIdentity(release) === identity && release.seq > reconnectStep.seq);
+          const retired = wireRowsSoak.some(
+            (row) =>
+              row.type === 'proposal_resolved' &&
+              ['replaced', 'cancelled'].includes(String(row.frame?.outcome ?? '')) &&
+              String(row.frame?.proposalId ?? '') === identity
+          );
+          const deliveredAfter = steps.some(
+            (step) => step.observation?.kind === 'delivery' && asIdentity(step) === identity && step.seq > reconnectStep.seq
+          );
+          const storedAfter = steps.some(
+            (step) =>
+              step.observation?.kind === 'worker-store' && asIdentity(step) === identity && (step.observation as { ok?: unknown }).ok === true && step.seq > reconnectStep.seq
+          );
+          if (retired) {
+            problems.push({ code: 'soak-pending-work-retired', detail: `the product resolved the pending proposal ${identity} as replaced/cancelled across the reconnect — pending work did NOT survive; recorded truthfully, never faked` });
+          } else if (!releaseAfter) {
+            problems.push({ code: 'soak-pending-work-unresolved', detail: `pending proposal ${identity} was never released after the reconnect` });
+          } else if (!deliveredAfter || !storedAfter) {
+            problems.push({ code: 'soak-pending-work-unresolved', detail: `pending proposal ${identity} was released after the reconnect but delivery/store evidence is missing` });
+          } else {
+            lines.push(`soak pending-work survival verified: proposal ${identity} was pending at the reconnect and released, delivered and stored after it`);
+          }
+        }
+      }
+    }
+    // 10j-t. W4 attachment switch: a record that declares a switch is
+    // adjudicated against the C24 contract — the old proposal is retired by
+    // the product (cancel-before-retarget) and NEVER released/delivered to
+    // the new attachment, and the switch is acknowledged audibly.
+    const attachmentSwitch = (manifest.attachmentSwitch ?? null) as { fromWorkerSessionId?: string; toWorkerSessionId?: string } | null;
+    if (attachmentSwitch) {
+      const asIdentity = (row: StepRow): string | null => {
+        const observation = row.observation as { identity?: unknown } | undefined;
+        return typeof observation?.identity === 'string' ? observation.identity : null;
+      };
+      const switchSteps = steps.filter((step) => (step.action as { type?: string }).type === 'switch-attachment');
+      if (switchSteps.length !== 1) {
+        problems.push({ code: 'switch-step-count', detail: `attachment switch recorded ${switchSteps.length} switch actions — exactly one is required` });
+      } else {
+        const switchStep = switchSteps[0]!;
+        const releases = steps.filter((step) => step.observation?.kind === 'release');
+        const candidates = steps.filter((step) => step.observation?.kind === 'candidate');
+        // `<=`: an observation landing during the switch GESTURE is recorded at
+        // the switch step itself (feed precedes activate within one step).
+        const pending = [...candidates]
+          .reverse()
+          .find(
+            (step) =>
+              step.seq <= switchStep.seq &&
+              !releases.some((release) => asIdentity(release) === asIdentity(step) && release.seq <= switchStep.seq)
+          );
+        const wireRowsSwitch = readJson<Array<{ type?: string; frame?: Record<string, unknown> }>>(attemptDir, path.join('capture', 'wire-frames.json'), problems) ?? [];
+        if (!pending) {
+          problems.push({ code: 'switch-no-pending-proposal', detail: 'no proposal was pending at the switch — the C24 requirement (a proposal against the FIRST attachment) is not evidenced' });
+        } else {
+          const identity = asIdentity(pending)!;
+          const retired = wireRowsSwitch.some(
+            (row) =>
+              row.type === 'proposal_resolved' &&
+              ['replaced', 'cancelled'].includes(String(row.frame?.outcome ?? '')) &&
+              String(row.frame?.proposalId ?? '') === identity
+          );
+          if (!retired) {
+            problems.push({ code: 'switch-retirement-unrecorded', detail: `pending proposal ${identity} shows no proposal_resolved replaced/cancelled — the product's cancel-before-retarget is not evidenced` });
+          } else {
+            lines.push(`attachment switch: the pending proposal ${identity} was retired by the product before the retarget (proposal_resolved replaced)`);
+          }
+          const releasedAfter = releases.some((release) => asIdentity(release) === identity && release.seq > switchStep.seq);
+          const deliveredAfter = steps.some(
+            (step) => step.observation?.kind === 'delivery' && asIdentity(step) === identity && step.seq > switchStep.seq
+          );
+          if (releasedAfter || deliveredAfter) {
+            problems.push({ code: 'switch-retargeted', detail: `the OLD proposal ${identity} was released/delivered AFTER the switch — a pending proposal must never be retargeted to the new attachment` });
+          } else {
+            lines.push(`attachment switch: the old proposal ${identity} was never released or delivered after the switch (never retargeted)`);
+          }
+        }
+        const acknowledged = steps.some((step) => step.observation?.kind === 'response' && step.seq > switchStep.seq);
+        if (!acknowledged) {
+          problems.push({ code: 'switch-unacknowledged', detail: 'no talker response was recorded after the switch — the switch was not acknowledged audibly' });
+        } else {
+          lines.push('attachment switch: acknowledged audibly (a talker response followed the switch)');
+        }
+      }
+    }
     if (integrityBreached) return { verdict: 'indeterminate', problems, lines };
     const journeyFinal = steps[steps.length - 1].action as { type: string; status?: string; reason?: string };
     if (journeyFinal.type !== 'terminal') {

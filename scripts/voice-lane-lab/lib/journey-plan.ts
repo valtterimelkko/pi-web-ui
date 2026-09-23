@@ -23,7 +23,7 @@
 import { createHash } from 'node:crypto';
 
 import type { Episode, LoadedCorpus } from './corpus.js';
-import { episodeById } from './corpus.js';
+import { NON_SPEAKABLE_TURN_KINDS, episodeById } from './corpus.js';
 import {
   readFrozenVoiceManifest,
   INSTRUMENT_ID,
@@ -93,6 +93,12 @@ export interface JourneyPlan {
   attemptDeadlineMs: number;
   routesRelay: boolean;
   expectedArtefact: Episode['expectedFinalWorkerArtefact'];
+  /**
+   * Present ONLY on the W4 continuity-soak plan: the soak contract the runner
+   * records verbatim into the attempt manifest for the verifier to adjudicate
+   * against its own fixed bars.
+   */
+  soak?: { minDurationMs: number; minOperatorTurns: number; reconnects: number };
   voiceProfileId: string;
   server: { engine: string; compiled: true };
   browserArgs: string[];
@@ -139,7 +145,9 @@ export function armServerEnv(arm: string, serverEnvEntries: string[]): Record<st
 
 /** All director-speakable turn ids for an episode: input turns + the frozen repair saying. */
 function directorTurnIds(episode: Episode): string[] {
-  const ids = episode.inputTurns.map((turn) => turn.id);
+  const ids = episode.inputTurns
+    .filter((turn) => !NON_SPEAKABLE_TURN_KINDS.includes(turn.kind))
+    .map((turn) => turn.id);
   const clarification = episode.repairBranches.find((branch) => branch.action === 'one-clarification');
   if (clarification?.say) ids.push('repair-1');
   return ids;

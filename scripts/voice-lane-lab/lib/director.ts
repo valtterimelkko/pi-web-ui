@@ -85,11 +85,21 @@ export type DirectorObservation =
   | { kind: 'release'; identity: string; atMs: number }
   | { kind: 'delivery'; identity: string; atMs: number }
   | { kind: 'worker-store'; identity: string; ok: boolean; atMs: number }
-  | { kind: 'response'; text: string; atMs: number };
+  | { kind: 'response'; text: string; atMs: number }
+  /** The mount parked the relay while the worker was busy (W4 busy parking). */
+  | { kind: 'parked'; itemId: string; atMs: number };
 
 export type DirectorAction =
   | { type: 'speak'; turnId: string; text: string }
   | { type: 'await'; reason: string; deadlineMs: number }
+  /** Soak: the operator stays silent for a fixed, recorded interval. */
+  | { type: 'pace'; ms: number }
+  /** Soak: drop the voice transport; the product must reconnect through its own paths. */
+  | { type: 'reconnect-transport' }
+  /** Busy parking: promote EXACTLY ONE observed parked item via the product's own control. */
+  | { type: 'promote'; itemId: string }
+  /** Attachment switch: swap the attached worker through the product's own control. */
+  | { type: 'switch-attachment' }
   | {
       type: 'terminal';
       status: 'complete' | 'interaction-failure' | 'safety-failure';
@@ -103,7 +113,12 @@ type PhaseKind =
   | 'await-response'
   | 'await-release'
   | 'await-delivery'
-  | 'await-worker-store';
+  | 'await-worker-store'
+  | 'await-parked'
+  | 'promote'
+  | 'switch'
+  | 'pace'
+  | 'reconnect';
 
 interface Phase {
   kind: PhaseKind;
@@ -112,6 +127,8 @@ interface Phase {
   text?: string;
   /** Strict phases require slot-matched candidates (confirm/steer); relaxed accept any presentation (amend/cancel). */
   strict?: boolean;
+  /** For pace phases. */
+  paceMs?: number;
   deadlineMs: number;
   enteredAtMs: number | null;
 }
@@ -133,6 +150,7 @@ const AWAIT_LABELS: Record<string, string> = {
   'await-release': 'release',
   'await-delivery': 'delivery',
   'await-worker-store': 'worker store',
+  'await-parked': 'parked item',
 };
 
 export class EpisodeDirector {
@@ -147,6 +165,10 @@ export class EpisodeDirector {
   private pendingCandidate: { identity: string; payloadText: string } | null = null;
   /** A COMPLETED presentation observed while a speak phase was current (fix-loop pass 4, C20). */
   private pendingPresentation: { identity: string; complete: boolean } | null = null;
+  /** A parked item observed while a speak phase was current (W4 busy parking). */
+  private pendingParked: { itemId: string } | null = null;
+  /** The ONE observed parked item this journey promotes (W4). */
+  private parkedItemId: string | null = null;
   private presented = false;
   private approvedIdentity: string | null = null;
   private invalidatedIdentities = new Set<string>();
@@ -196,6 +218,27 @@ export class EpisodeDirector {
           phases.push({ kind: 'await-candidate', strict: true, deadlineMs: d.candidateMs, enteredAtMs: null });
           phases.push({ kind: 'await-presentation', deadlineMs: d.presentationMs, enteredAtMs: null });
           phases.push({ kind: 'speak', turnId: turn.id, text: turn.text, deadlineMs: 0, enteredAtMs: null });
+          break;
+        case 'adaptive-promote':
+          // The operator promotes exactly one parked item through the
+          // product's own path (W4): the FSM waits for the OBSERVED parked
+          // item, then emits the promote action. The promoted proposal and its
+          // presentation are consumed by the NEXT confirm turn's phases.
+          phases.push({ kind: 'await-parked', deadlineMs: d.candidateMs, enteredAtMs: null });
+          phases.push({ kind: 'promote', deadlineMs: 0, enteredAtMs: null });
+          break;
+        case 'soak-pace':
+          phases.push({ kind: 'pace', paceMs: turn.paceMs ?? 0, deadlineMs: 0, enteredAtMs: null });
+          break;
+        case 'soak-reconnect':
+          phases.push({ kind: 'reconnect', deadlineMs: 0, enteredAtMs: null });
+          break;
+        case 'adaptive-switch':
+          // W4 attachment switch: the operator switches the attached worker
+          // through the product's own switch control. The pending proposal's
+          // retirement (H1 cancel-before-retarget) is OBSERVED on the wire,
+          // never assumed here.
+          phases.push({ kind: 'switch', deadlineMs: 0, enteredAtMs: null });
           break;
       }
     }
@@ -279,9 +322,9 @@ export class EpisodeDirector {
     this.pendingCandidate = null;
     this.pendingPresentation = null;
     this.presented = false;
-    // Re-arm the active candidate/presentation phases with fresh deadlines.
+    // Re-arm the active candidate/presentation/parked phases with fresh deadlines.
     for (const phase of this.phases) {
-      if (phase.kind === 'await-candidate' || phase.kind === 'await-presentation') {
+      if (phase.kind === 'await-candidate' || phase.kind === 'await-presentation' || phase.kind === 'await-parked') {
         if (phase.enteredAtMs !== null) phase.enteredAtMs = this.now();
       }
     }
@@ -317,10 +360,15 @@ export class EpisodeDirector {
 
     switch (phase.kind) {
       case 'speak':
-        // A candidate may arrive while an operator turn is still being spoken:
-        // the cursor rests on the next speak phase during playback. Record it
-        // so the next await-candidate phase is satisfied by it instead of
-        // demanding a repeat that never comes (fix-loop pass 1, C20).
+      case 'pace':
+      case 'reconnect':
+      case 'switch':
+        // A candidate may arrive while the operator turn is still being spoken
+        // (fix-loop pass 1, C20) — while a soak pace/reconnect window is in
+        // progress (for a 150-second pace step this is the NORM, not a race) —
+        // or while a promote/switch gesture runs (the pending proposal exists
+        // across the gesture). Record it so the next await-candidate phase is
+        // satisfied by it instead of demanding a repeat that never comes.
         if (observation.kind === 'candidate') {
           if (!this.routesRelay) {
             return this.fail('safety-failure', 'forbidden proposal: conversation-only episode produced a candidate');
@@ -343,6 +391,11 @@ export class EpisodeDirector {
           if (!this.invalidatedIdentities.has(observation.identity)) {
             this.pendingPresentation = { identity: observation.identity, complete: true };
           }
+        }
+        // A parked announcement may also land inside a speak window: record it
+        // so the later await-parked phase is satisfied without a repeat.
+        if (observation.kind === 'parked' && this.pendingParked === null) {
+          this.pendingParked = { itemId: observation.itemId };
         }
         return null;
       case 'await-candidate':
@@ -384,6 +437,14 @@ export class EpisodeDirector {
           this.presented = true;
           this.advance();
           return null;
+        }
+        return null;
+      }
+      case 'await-parked': {
+        if (observation.kind === 'parked' && this.parkedItemId === null) {
+          // Exactly one item is ever promoted; the first observed park wins.
+          this.parkedItemId = observation.itemId;
+          this.advance();
         }
         return null;
       }
@@ -496,6 +557,36 @@ export class EpisodeDirector {
         this.advance();
         continue;
       }
+      // A parked item recorded during a speak phase satisfies the await-parked
+      // phase the moment it is entered (W4 busy parking).
+      if (phase.kind === 'await-parked' && phase.enteredAtMs === null && this.pendingParked) {
+        if (this.parkedItemId === null) this.parkedItemId = this.pendingParked.itemId;
+        this.pendingParked = null;
+        this.advance();
+        continue;
+      }
+      if (phase.kind === 'pace') {
+        this.cursor += 1;
+        return { type: 'pace', ms: phase.paceMs ?? 0 };
+      }
+      if (phase.kind === 'reconnect') {
+        this.cursor += 1;
+        return { type: 'reconnect-transport' };
+      }
+      if (phase.kind === 'switch') {
+        this.cursor += 1;
+        return { type: 'switch-attachment' };
+      }
+      if (phase.kind === 'promote') {
+        this.cursor += 1;
+        if (this.parkedItemId === null) {
+          // Unreachable in a well-formed program (promote only follows a
+          // satisfied await-parked); if it ever happens, it is an honest
+          // interaction failure — never a fabricated promote.
+          return this.repairOrFail('no parked item was observed to promote');
+        }
+        return { type: 'promote', itemId: this.parkedItemId };
+      }
       if (phase.enteredAtMs === null) phase.enteredAtMs = this.now();
       return { type: 'await', reason: `waiting for ${AWAIT_LABELS[phase.kind] ?? phase.kind}`, deadlineMs: phase.deadlineMs };
     }
@@ -510,6 +601,7 @@ export class EpisodeDirector {
     presented: boolean;
     approvedIdentity: string | null;
     responseText: string | null;
+    parkedItemId: string | null;
   } {
     return {
       candidateIdentity: this.candidateIdentity,
@@ -517,6 +609,7 @@ export class EpisodeDirector {
       presented: this.presented,
       approvedIdentity: this.approvedIdentity,
       responseText: this.responseText,
+      parkedItemId: this.parkedItemId,
     };
   }
 }
