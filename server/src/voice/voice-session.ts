@@ -520,6 +520,17 @@ export class VoiceSessionService implements VoiceBridgeService {
       lane.bridge?.activityStart();
     } else {
       lane.bridge?.activityEnd();
+      // The host's OWN utterance boundary. The client's local VAD is what
+      // drives the manual-VAD provider profile, so `speech_end` is a
+      // deterministic statement that the operator's utterance ended — one
+      // that survives a same-lane restart (SOAK-10MIN-standard/attempt-02:
+      // after a capture-mode restart the revived provider session never
+      // delivered its turn boundary, so every post-revive utterance stayed
+      // an unflushed partial and the kernel utterance pipeline went silent).
+      // Finalising here re-binds the transcript → kernel pipeline to the
+      // boundary the host controls; when the provider boundary arrives too,
+      // the partial is already empty and nothing is emitted twice.
+      this.flushFinalTranscripts(lane, note.atMs);
       this.flushContext(lane, false);
     }
   }
