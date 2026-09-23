@@ -312,3 +312,51 @@ describe('the remint marker resets the mount context ledger', () => {
     expect(String(service.contexts[1].update.note)).toContain('deploy the hot fix to staging');
   });
 });
+
+describe('the remint retires stale relay-source candidates', () => {
+  it('binds a post-remint relay whose identical words were also spoken before the wedge', async () => {
+    const { service, mount, sent } = await mountWithBrief();
+    const relayText = 'Relay to worker I want to find out about Podpoint.';
+
+    // Before the wedge: the operator's first relay is accepted as a candidate.
+    service.emit({
+      kind: 'transcript',
+      laneId: 'lane-1',
+      attachmentGeneration: 1,
+      speaker: 'operator',
+      source: 'native',
+      text: relayText,
+      final: true,
+      atMs: 1,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The wedge is recovered: the service remints and announces it.
+    service.emit({
+      kind: 'state',
+      laneId: 'lane-1',
+      attachmentGeneration: 1,
+      state: 'connecting',
+      detail: 'provider_unresponsive_remint (fresh provider session)',
+    } as never);
+
+    // After the remint the operator repeats the very same relay words (the
+    // soak does this by design) and the fresh model relays them.
+    service.emit({
+      kind: 'transcript',
+      laneId: 'lane-1',
+      attachmentGeneration: 1,
+      speaker: 'operator',
+      source: 'native',
+      text: relayText,
+      final: true,
+      atMs: 2,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await mount.handleToolRequest({ laneId: 'lane-1', name: 'relay_to_worker', args: { text: 'I want to find out about Podpoint.' }, atMs: 2 });
+
+    // RED before the fix: the stale pre-wedge candidate makes the binder
+    // refuse `ambiguous_source` and no proposal is created.
+    expect(sent.some((message) => (message as { type: string }).type === 'proposal_created')).toBe(true);
+  });
+});

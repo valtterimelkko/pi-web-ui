@@ -1584,9 +1584,19 @@ export class VoiceLiveMount {
       lane.pendingBrief = null;
       lane.briefSignature = null;
       lane.acknowledgedEntries = 0;
+      // The stale relay-source candidates died with the wedged session — the
+      // service replayed the unanswered utterances to the fresh one, so an
+      // identical post-remint relay must bind to the FRESH copy alone, not be
+      // refused ambiguous against words the current model never saw
+      // (SOAK-10MIN attempt-06: the model relayed correctly and was refused
+      // three times). `lastRelay` goes too: a post-remint identical relay is a
+      // NEW relay (the C19 principle).
+      lane.recentOperatorUtterances = [];
+      lane.lastRelay = null;
       this.evidence({
         event: 'provider_unresponsive_remint',
         laneId: lane.laneId,
+        clearedSourceCandidates: true,
         atMs: this.now(),
       });
     }
