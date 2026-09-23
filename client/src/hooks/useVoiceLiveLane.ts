@@ -26,6 +26,29 @@ import { VoiceLiveSurface, type VoiceLiveSurfaceFactories } from '../lib/voiceLi
  *  same lane in another tab, while remaining stable across re-mounts. */
 const PAGE_LANE_NONCE = mintLaneNonce();
 
+/** The native-voice surfaces this page currently holds, by laneId. Lane ids
+ *  are minted only by `createVoiceLane` in this module, so a mounted worker
+ *  session's lane is found deterministically — which is what lets the Drive
+ *  Mode picker stop a lane by worker session id when it hands that lane to
+ *  another worker (C24). */
+const mountedSurfaces = new Map<string, VoiceLiveSurface>();
+
+/**
+ * The Drive Mode picker is handing `workerSessionId`'s lane to another worker
+ * (contract §3.2, step 1): stop that lane's native session with reason
+ * `worker_switch` so the server resolves any live proposal
+ * (`proposal_resolved {replaced}`) and closes the provider session BEFORE the
+ * swap. Must be called while the old lane's surface is still mounted — the
+ * picker commits do exactly that. Returns false (and sends nothing) when the
+ * lane is not mounted or its wire session was never opened.
+ */
+export function stopVoiceLaneForWorkerSwitch(workerSessionId: string): boolean {
+  const laneId = createVoiceLane({ workerSessionId, nonce: PAGE_LANE_NONCE }).laneId;
+  const surface = mountedSurfaces.get(laneId);
+  if (!surface) return false;
+  return surface.stopForWorkerSwitch();
+}
+
 export interface UseVoiceLiveLaneOptions {
   /** The worker session this lane is attached to. Must be non-empty. */
   workerSessionId: string;
@@ -78,12 +101,14 @@ export function useVoiceLiveLane(options: UseVoiceLiveLaneOptions): VoiceLiveLan
     // StrictMode mounts/cleans up/re-mounts in development, and the cleanup
     // must not leave the memoized surface deaf (2026-09-22).
     const disarm = surface.armController();
+    mountedSurfaces.set(lane.laneId, surface);
     const unregister = registerVoiceLane(lane.laneId, (_frame, raw) => {
       surface.onWireMessage(raw);
     });
     return () => {
       unregister();
       disarm();
+      if (mountedSurfaces.get(lane.laneId) === surface) mountedSurfaces.delete(lane.laneId);
       void surface.teardownForUnmount();
     };
   }, [lane.laneId, surface]);
