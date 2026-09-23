@@ -15,6 +15,7 @@ import { loadCorpus, withValidatorOverlays } from '../../../../scripts/voice-lan
 import {
   BUSY_DRIVE_PROMPT,
   BUSY_HOLD_MS,
+  BUSY_MAX_PROMPTS,
   SECOND_WORKER_DISPLAY_NAMES,
   driveWorkerBusy,
   journeyRequiresBusyDrive,
@@ -81,9 +82,10 @@ describe('the busy drive (C22 prerequisite)', () => {
     // The busy state is genuine work: the prompt makes the runtime execute a
     // real command; it is detached so the journey never waits on the sleep.
     expect(posts[0]!.body).toMatchObject({ message: BUSY_DRIVE_PROMPT, detach: true });
-    expect(BUSY_DRIVE_PROMPT).toContain('sleep 90');
+    expect(BUSY_DRIVE_PROMPT).toContain('sleep 75');
     expect(BUSY_DRIVE_PROMPT).toContain('shell tool');
     expect(BUSY_HOLD_MS).toBeGreaterThanOrEqual(60_000);
+    expect(BUSY_MAX_PROMPTS).toBeGreaterThanOrEqual(4);
   });
 
   it('re-prompts when the busy state collapses — a model that answers without running the command ends its turn in ~1 s (the attempt-02 failure)', async () => {

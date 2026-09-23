@@ -42,15 +42,15 @@ export interface SessionListRow {
  * attempt-02 failure), so the drive re-prompts whenever that happens.
  */
 export const BUSY_DRIVE_PROMPT =
-  'Use the shell tool to run this exact command, and wait for it to finish before you reply: sleep 90. After it finishes, reply with the single word done.';
-export const BUSY_HOLD_MS = 90_000;
+  'Automation needs a timed pause. Use your shell tool to run exactly this command and wait for the real command to finish — do not simulate or shortcut it: sleep 75 && echo pause-complete. Reply with only pause-complete once the command has actually finished.';
+export const BUSY_HOLD_MS = 75_000;
 
 /** How long the drive waits for the FIRST busy report (bounded, 1 s poll). */
 export const BUSY_POLL_TIMEOUT_MS = 20_000;
 /** How long the busy state must HOLD (the relay lands inside this window). */
 export const BUSY_HOLD_WATCH_MS = 15_000;
 /** Maximum detached prompts the drive may send while holding busy. */
-export const BUSY_MAX_PROMPTS = 3;
+export const BUSY_MAX_PROMPTS = 4;
 
 export interface BusyDriveRecord {
   workerSessionId: string;
@@ -172,9 +172,14 @@ export async function driveWorkerBusy(
     const rows = await listSessions(call);
     const row = rows.find((candidate) => rowId(candidate) === workerSessionId);
     if (row && rowBusy(row)) continue;
+    // Honest diagnostics: capture the worker's own last words so the record
+    // shows WHY the busy state collapsed (e.g. the model answered without
+    // running the command).
+    const collapseReply = await call(`/api/v1/sessions/${encodeURIComponent(workerSessionId)}/transcript?view=screen`);
+    const replyExcerpt = collapseReply?.status === 200 ? collapseReply.body.slice(-300) : `HTTP ${collapseReply?.status ?? 'none'}`;
     if (!(await sendPrompt())) {
       throw new Error(
-        `busy drive: worker ${workerSessionId} left busy and the prompt budget (${maxPrompts}) is exhausted — the relay would not park`
+        `busy drive: worker ${workerSessionId} left busy and the prompt budget (${maxPrompts}) is exhausted — the relay would not park; worker said: ${replyExcerpt}`
       );
     }
     busySince = null;
