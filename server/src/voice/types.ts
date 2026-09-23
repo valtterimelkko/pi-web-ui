@@ -13,6 +13,8 @@
  */
 
 import type { VoiceBridgeToolName, VoiceErrorCode, VoiceWireState } from './contract.js';
+import { defaultProviderModelFromEnv } from './voice-profiles.js';
+import type { VoiceLiveProfileId } from './voice-profiles.js';
 
 // ── PCM framing ─────────────────────────────────────────────────────────────
 
@@ -159,6 +161,14 @@ export interface GeminiLiveBridgeUsage {
   reconnects: number;
   errors: number;
   usageMetadataSamples: number;
+  /** Provider-reported thinking tokens (the ET arm's actual-effort evidence). */
+  thoughtTokens: number;
+  /** Provider-reported total tokens, accumulated across usage samples. */
+  totalTokens: number;
+  /** A provider tool call whose id was already dispatched (never re-executed). */
+  toolCallDuplicates: number;
+  /** An accepted tool call that arrived after the turn boundary (both arms). */
+  lateToolCalls: number;
 }
 
 export interface GeminiLiveBridgeOptions {
@@ -192,6 +202,12 @@ export interface GeminiLiveBridgeOptions {
   resumptionHandle?: string | null;
   /** Provider input rate. Default 16 kHz (proven live); 24 kHz supported. */
   providerInputSampleRateHz?: number;
+  /**
+   * The provider-profile arm this bridge runs (plan §7). Resolved from
+   * `VOICE_LIVE_PROFILE` when omitted. Explicit `toolResponseScheduling` and
+   * `model` options must agree with the profile or construction refuses.
+   */
+  profile?: VoiceLiveProfileId;
 }
 
 /**
@@ -228,6 +244,16 @@ export interface LiveConnectConfigShape {
   };
   tools?: Array<{ functionDeclarations?: unknown[] }>;
   systemInstruction?: { parts: Array<{ text: string }> };
+  /**
+   * Thinking configuration. Present ONLY on profiles that support it (the
+   * provider rejects the field on models without thinking); assembled by the
+   * profile adapter in `voice-profiles.ts`, never hand-crafted at call sites.
+   */
+  thinkingConfig?: {
+    includeThoughts?: boolean;
+    thinkingBudget?: number;
+    thinkingLevel?: string;
+  };
 }
 
 export interface LiveServerMessageShape {
@@ -284,8 +310,16 @@ export type LiveSessionFactory = (request: LiveConnectRequest) => Promise<LiveSe
 
 // ── Provider defaults (the live probe proved these) ────────────────────────
 
-/** The standard conversational seat (D6: no speculative escalation ladder). */
-export const VOICE_PROVIDER_MODEL = 'gemini-3.8-live';
+/**
+ * The provider seat the live engine opens sessions on: the resolved
+ * provider-profile arm's model (plan §7). Resolved ONCE per process from
+ * `VOICE_LIVE_PROFILE` (default `standard`) so every consumer of this
+ * constant — including the diagnostics gauge — states the same seat the
+ * bridge will actually request. An unknown profile value fails here, at
+ * boot, rather than running the wrong arm. The live per-arm capability probe
+ * re-resolves the real model names before either arm is declared supported.
+ */
+export const VOICE_PROVIDER_MODEL = defaultProviderModelFromEnv(process.env);
 
 /**
  * The provider's declared functions. `relay_to_worker` is the ONE tool that
