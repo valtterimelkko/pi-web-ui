@@ -129,7 +129,7 @@ describe('holdout validator overlays', () => {
     const corpusDir = buildSyntheticCorpus({ overlay: VALID_OVERLAY, fixtureText: C10_TEXT });
     // the other holdouts need their overlays too (fail closed without them)
     mkdirSync(path.join(corpusDir, 'holdout'), { recursive: true });
-    writeFileSync(path.join(corpusDir, 'holdout', 'C11.validator.json'), JSON.stringify(minimalOverlay('C11', [{ id: 't1', kind: 'opening' }, { id: 't2', kind: 'adaptive-repair' }])));
+    writeFileSync(path.join(corpusDir, 'holdout', 'C11.validator.json'), JSON.stringify(minimalOverlay('C11', [{ id: 't1', kind: 'opening' }])));
     writeFileSync(path.join(corpusDir, 'holdout', 'C22.validator.json'), JSON.stringify(minimalOverlay('C22', [{ id: 't1', kind: 'opening' }, { id: 't2', kind: 'adaptive-confirm' }])));
     writeFileSync(path.join(corpusDir, 'holdout', 'C24.validator.json'), JSON.stringify(minimalOverlay('C24', [{ id: 't1', kind: 'opening' }])));
     const raw = loadCorpusFromDir(corpusDir);
@@ -177,16 +177,54 @@ describe('holdout validator overlays', () => {
     expect(() => withValidatorOverlays(raw, corpusDir)).toThrow(CorpusError);
   });
 
-  it('a malformed overlay fails closed: overlay turn kind disagrees with the episode structure', () => {
+  it('a malformed overlay fails closed: approval references a turn the overlay does not declare', () => {
     const corpusDir = buildSyntheticCorpus({
       overlay: {
         ...VALID_OVERLAY,
-        inputTurns: [{ ...VALID_OVERLAY.inputTurns[0], kind: 'conversational' }],
+        approvalTurns: [{ turnId: 't9', precondition: 'candidate-matched+presentation-complete' }],
       },
       fixtureText: C10_TEXT,
     });
     const raw = loadCorpusFromDir(corpusDir);
     expect(() => withValidatorOverlays(raw, corpusDir)).toThrow(CorpusError);
+  });
+
+  it('the overlay OWNS the frozen structure: it may restructure turns (the conductor C11 shape)', () => {
+    // base C11 is [t1 opening, t2 adaptive-repair]; the validator freezes a
+    // different structure: amend + a NEW confirm turn. The merge must accept
+    // it (fail-closed revalidation still applies).
+    const corpusDir = buildSyntheticCorpus({});
+    mkdirSync(path.join(corpusDir, 'holdout'), { recursive: true });
+    writeFileSync(path.join(corpusDir, 'holdout', 'C10.validator.json'), JSON.stringify(VALID_OVERLAY));
+    writeFileSync(
+      path.join(corpusDir, 'holdout', 'C11.validator.json'),
+      JSON.stringify(minimalOverlay('C11', [{ id: 't1', kind: 'opening' }]))
+        .replace('"kind": "opening"', '"kind": "opening"')
+    );
+    // rewrite C11's overlay with the conductor's real shape
+    const c11 = {
+      schemaVersion: 1,
+      id: 'C11',
+      validatorFrozenAtIso: '2026-09-23T00:00:00Z',
+      note: 'conductor C11 shape',
+      inputTurns: [
+        { id: 't1', kind: 'opening', text: 'Relay to worker, change the retry backoff to exponential.', requiredWords: ['relay', 'worker'] },
+        { id: 't2', kind: 'adaptive-amend', text: 'Actually no — exponential backoff with jitter.', requiredWords: ['jitter'] },
+        { id: 't3', kind: 'adaptive-confirm', text: 'Yes, send it.', requiredWords: ['yes'] },
+      ],
+      expectedSlots: { mustContain: ['backoff', 'jitter'], mustNotContain: [], responseMustContain: [], responseMustNotContain: [] },
+      approvalTurns: [{ turnId: 't3', precondition: 'candidate-matched+presentation-complete' }],
+      repairBranches: [],
+    };
+    writeFileSync(path.join(corpusDir, 'holdout', 'C11.validator.json'), JSON.stringify(c11));
+    writeFileSync(path.join(corpusDir, 'holdout', 'C22.validator.json'), JSON.stringify(minimalOverlay('C22', [{ id: 't1', kind: 'opening' }, { id: 't2', kind: 'adaptive-confirm' }])));
+    writeFileSync(path.join(corpusDir, 'holdout', 'C24.validator.json'), JSON.stringify(minimalOverlay('C24', [{ id: 't1', kind: 'opening' }])));
+    const raw = loadCorpusFromDir(corpusDir);
+    const merged = withValidatorOverlays(raw, corpusDir);
+    const c11merged = merged.episodes.find((episode) => episode.id === 'C11');
+    expect(c11merged?.holdout).toBe(false);
+    expect(c11merged?.inputTurns.map((turn) => turn.kind)).toEqual(['opening', 'adaptive-amend', 'adaptive-confirm']);
+    expect(c11merged?.approvalTurns).toEqual([{ turnId: 't3', precondition: 'candidate-matched+presentation-complete' }]);
   });
 
   it('a malformed overlay fails closed: id mismatch', () => {

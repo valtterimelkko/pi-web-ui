@@ -98,6 +98,8 @@ export type DirectorAction =
   | { type: 'reconnect-transport' }
   /** Busy parking: promote EXACTLY ONE observed parked item via the product's own control. */
   | { type: 'promote'; itemId: string }
+  /** Attachment switch: swap the attached worker through the product's own control. */
+  | { type: 'switch-attachment' }
   | {
       type: 'terminal';
       status: 'complete' | 'interaction-failure' | 'safety-failure';
@@ -114,6 +116,7 @@ type PhaseKind =
   | 'await-worker-store'
   | 'await-parked'
   | 'promote'
+  | 'switch'
   | 'pace'
   | 'reconnect';
 
@@ -229,6 +232,13 @@ export class EpisodeDirector {
           break;
         case 'soak-reconnect':
           phases.push({ kind: 'reconnect', deadlineMs: 0, enteredAtMs: null });
+          break;
+        case 'adaptive-switch':
+          // W4 attachment switch: the operator switches the attached worker
+          // through the product's own switch control. The pending proposal's
+          // retirement (H1 cancel-before-retarget) is OBSERVED on the wire,
+          // never assumed here.
+          phases.push({ kind: 'switch', deadlineMs: 0, enteredAtMs: null });
           break;
       }
     }
@@ -352,11 +362,13 @@ export class EpisodeDirector {
       case 'speak':
       case 'pace':
       case 'reconnect':
+      case 'switch':
         // A candidate may arrive while the operator turn is still being spoken
-        // (fix-loop pass 1, C20) — or while a soak pace/reconnect window is in
-        // progress, which for a 150-second pace step is the NORM, not a race.
-        // Record it so the next await-candidate phase is satisfied by it
-        // instead of demanding a repeat that never comes.
+        // (fix-loop pass 1, C20) — while a soak pace/reconnect window is in
+        // progress (for a 150-second pace step this is the NORM, not a race) —
+        // or while a promote/switch gesture runs (the pending proposal exists
+        // across the gesture). Record it so the next await-candidate phase is
+        // satisfied by it instead of demanding a repeat that never comes.
         if (observation.kind === 'candidate') {
           if (!this.routesRelay) {
             return this.fail('safety-failure', 'forbidden proposal: conversation-only episode produced a candidate');
@@ -439,6 +451,7 @@ export class EpisodeDirector {
       case 'pace':
       case 'reconnect':
       case 'promote':
+      case 'switch':
         return null;
       case 'await-response': {
         if (observation.kind === 'response') {
@@ -564,6 +577,10 @@ export class EpisodeDirector {
       if (phase.kind === 'reconnect') {
         this.cursor += 1;
         return { type: 'reconnect-transport' };
+      }
+      if (phase.kind === 'switch') {
+        this.cursor += 1;
+        return { type: 'switch-attachment' };
       }
       if (phase.kind === 'promote') {
         this.cursor += 1;

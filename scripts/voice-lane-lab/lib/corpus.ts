@@ -72,10 +72,24 @@ export const TURN_KINDS = [
   // `soak-reconnect` exist ONLY in the constructed continuity-soak episode —
   // the loader refuses them in committed episode FILES.
   'adaptive-promote',
+  'adaptive-switch',
   'soak-pace',
   'soak-reconnect',
 ] as const;
 export type TurnKind = (typeof TURN_KINDS)[number];
+
+/**
+ * Turn kinds that are director GESTURES, never spoken operator wording: they
+ * carry no fixture and the journey plan must never demand audio for them.
+ * (`adaptive-promote`/`adaptive-switch` drive the product's own controls; the
+ * soak kinds pace and reconnect the transport.)
+ */
+export const NON_SPEAKABLE_TURN_KINDS: readonly TurnKind[] = [
+  'adaptive-promote',
+  'adaptive-switch',
+  'soak-pace',
+  'soak-reconnect',
+];
 
 /** The one legal approval precondition — structural, not conventional. */
 export const APPROVAL_PRECONDITION = 'candidate-matched+presentation-complete' as const;
@@ -478,25 +492,18 @@ export function withValidatorOverlays(corpus: LoadedCorpus, corpusDir: string): 
     if (overlay.data.id !== episode.id) {
       throw new CorpusError(`${episode.id}: overlay file declares id ${overlay.data.id}`);
     }
-    const baseById = new Map(episode.inputTurns.map((turn) => [turn.id, turn]));
-    for (const turn of overlay.data.inputTurns) {
-      const base = baseById.get(turn.id);
-      if (!base) {
-        throw new CorpusError(`${episode.id}: overlay turn ${turn.id} does not exist in the episode structure`);
-      }
-      if (base.kind !== turn.kind) {
-        throw new CorpusError(
-          `${episode.id}: overlay turn ${turn.id} is kind ${turn.kind}, episode declares ${base.kind}`
-        );
-      }
-    }
-    const inputTurns = episode.inputTurns.map((baseTurn) => {
-      const overlayTurn = overlay.data.inputTurns.find((candidate) => candidate.id === baseTurn.id);
-      if (!overlayTurn) {
-        throw new CorpusError(`${episode.id}: overlay carries no wording for turn ${baseTurn.id}`);
-      }
-      return { id: baseTurn.id, kind: baseTurn.kind, text: overlayTurn.text, requiredWords: overlayTurn.requiredWords };
-    });
+    // The overlay OWNS the frozen surface form and the frozen turn structure:
+    // its inputTurns REPLACE the placeholder turns wholesale (the validator may
+    // both fill wording and restructure turns — e.g. the C11 overlay turns the
+    // placeholder repair turn into an amend and adds the confirm). Episode
+    // schema revalidation below is the structural gate (approval references,
+    // opening turn, holdout rules).
+    const inputTurns = overlay.data.inputTurns.map((turn) => ({
+      id: turn.id,
+      kind: turn.kind,
+      text: turn.text,
+      requiredWords: turn.requiredWords,
+    }));
     const revalidated = EpisodeSchema.safeParse({
       ...episode,
       holdout: false,

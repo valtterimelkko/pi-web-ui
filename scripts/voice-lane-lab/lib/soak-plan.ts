@@ -20,6 +20,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import {
+  NON_SPEAKABLE_TURN_KINDS,
   EpisodeSchema,
   type Episode,
   type LoadedCorpus,
@@ -241,7 +242,7 @@ export function soakJourneyPlan(
   const voice = readFrozenVoiceManifest(options.corpusDir, profileId);
   const sourceRefs = plan.steps.filter((step): step is SoakTurnStep => step.kind === 'turn');
   const turns: JourneyTurn[] = episode.inputTurns
-    .filter((turn) => !['soak-pace', 'soak-reconnect'].includes(turn.kind))
+    .filter((turn) => !NON_SPEAKABLE_TURN_KINDS.includes(turn.kind))
     .map((turn, index) => {
       const ref = sourceRefs[index]?.ref;
       if (!ref) throw new SoakPlanError(`soak turn ${turn.id} lost its source ref`);

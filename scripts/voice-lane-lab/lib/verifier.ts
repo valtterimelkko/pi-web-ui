@@ -788,12 +788,14 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
         };
         const releases = steps.filter((step) => step.observation?.kind === 'release');
         const candidates = steps.filter((step) => step.observation?.kind === 'candidate');
+        // `<=`: an observation landing during the reconnect GESTURE is recorded
+        // at the reconnect step itself (feed precedes activate within a step).
         const pending = [...candidates]
           .reverse()
           .find(
             (step) =>
-              step.seq < reconnectStep.seq &&
-              !releases.some((release) => asIdentity(release) === asIdentity(step) && release.seq < reconnectStep.seq)
+              step.seq <= reconnectStep.seq &&
+              !releases.some((release) => asIdentity(release) === asIdentity(step) && release.seq <= reconnectStep.seq)
           );
         if (!pending) {
           problems.push({ code: 'soak-pending-work-missing', detail: 'no proposal was pending at the reconnect — the soak proves nothing about pending-work survival' });
@@ -822,6 +824,66 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
           } else {
             lines.push(`soak pending-work survival verified: proposal ${identity} was pending at the reconnect and released, delivered and stored after it`);
           }
+        }
+      }
+    }
+    // 10j-t. W4 attachment switch: a record that declares a switch is
+    // adjudicated against the C24 contract — the old proposal is retired by
+    // the product (cancel-before-retarget) and NEVER released/delivered to
+    // the new attachment, and the switch is acknowledged audibly.
+    const attachmentSwitch = (manifest.attachmentSwitch ?? null) as { fromWorkerSessionId?: string; toWorkerSessionId?: string } | null;
+    if (attachmentSwitch) {
+      const asIdentity = (row: StepRow): string | null => {
+        const observation = row.observation as { identity?: unknown } | undefined;
+        return typeof observation?.identity === 'string' ? observation.identity : null;
+      };
+      const switchSteps = steps.filter((step) => (step.action as { type?: string }).type === 'switch-attachment');
+      if (switchSteps.length !== 1) {
+        problems.push({ code: 'switch-step-count', detail: `attachment switch recorded ${switchSteps.length} switch actions — exactly one is required` });
+      } else {
+        const switchStep = switchSteps[0]!;
+        const releases = steps.filter((step) => step.observation?.kind === 'release');
+        const candidates = steps.filter((step) => step.observation?.kind === 'candidate');
+        // `<=`: an observation landing during the switch GESTURE is recorded at
+        // the switch step itself (feed precedes activate within one step).
+        const pending = [...candidates]
+          .reverse()
+          .find(
+            (step) =>
+              step.seq <= switchStep.seq &&
+              !releases.some((release) => asIdentity(release) === asIdentity(step) && release.seq <= switchStep.seq)
+          );
+        const wireRowsSwitch = readJson<Array<{ type?: string; frame?: Record<string, unknown> }>>(attemptDir, path.join('capture', 'wire-frames.json'), problems) ?? [];
+        if (!pending) {
+          problems.push({ code: 'switch-no-pending-proposal', detail: 'no proposal was pending at the switch — the C24 requirement (a proposal against the FIRST attachment) is not evidenced' });
+        } else {
+          const identity = asIdentity(pending)!;
+          const retired = wireRowsSwitch.some(
+            (row) =>
+              row.type === 'proposal_resolved' &&
+              ['replaced', 'cancelled'].includes(String(row.frame?.outcome ?? '')) &&
+              String(row.frame?.proposalId ?? '') === identity
+          );
+          if (!retired) {
+            problems.push({ code: 'switch-retirement-unrecorded', detail: `pending proposal ${identity} shows no proposal_resolved replaced/cancelled — the product's cancel-before-retarget is not evidenced` });
+          } else {
+            lines.push(`attachment switch: the pending proposal ${identity} was retired by the product before the retarget (proposal_resolved replaced)`);
+          }
+          const releasedAfter = releases.some((release) => asIdentity(release) === identity && release.seq > switchStep.seq);
+          const deliveredAfter = steps.some(
+            (step) => step.observation?.kind === 'delivery' && asIdentity(step) === identity && step.seq > switchStep.seq
+          );
+          if (releasedAfter || deliveredAfter) {
+            problems.push({ code: 'switch-retargeted', detail: `the OLD proposal ${identity} was released/delivered AFTER the switch — a pending proposal must never be retargeted to the new attachment` });
+          } else {
+            lines.push(`attachment switch: the old proposal ${identity} was never released or delivered after the switch (never retargeted)`);
+          }
+        }
+        const acknowledged = steps.some((step) => step.observation?.kind === 'response' && step.seq > switchStep.seq);
+        if (!acknowledged) {
+          problems.push({ code: 'switch-unacknowledged', detail: 'no talker response was recorded after the switch — the switch was not acknowledged audibly' });
+        } else {
+          lines.push('attachment switch: acknowledged audibly (a talker response followed the switch)');
         }
       }
     }

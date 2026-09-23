@@ -546,6 +546,9 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     writeFileSync(soakEventsPath, `${JSON.stringify({ atMs: Date.now(), ...event })}\n`, { flag: 'a', mode: 0o600 });
   };
 
+  /** The attachment-switch record the manifest freezes (W4 attachment switch). */
+  let attachmentSwitchRecord: { fromWorkerSessionId: string; toWorkerSessionId: string; switchedAtMs: number } | null = null;
+
 
   /** The worker store check: approved bytes must appear in the worker's persisted input. */
   const checkWorkerStore = async (approvedIdentity: string): Promise<boolean> => {
@@ -887,6 +890,49 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         recordSoakEvent({ kind: 'promote', itemId: action.itemId, detail: 'promoted through the parking-lot drawer control' });
         awaitStartedAtMs = null;
         sleepMs = 300;
+      } else if (action.type === 'switch-attachment') {
+        // W4 attachment switch: the product's OWN switch control — the labelled
+        // "Switch session" button, then the real session picker. The target is
+        // a real session resolved from the Internal API (never fabricated).
+        const fromWorkerSessionId = evidenceRows
+          .slice()
+          .reverse()
+          .map((row) => row.workerSessionId)
+          .find((value): value is string => typeof value === 'string') ?? 'unknown';
+        const listResponse = await internalApiGet(
+          path.join(stateDir, 'internal-api.sock'),
+          path.join(stateDir, 'internal-api-token'),
+          '/api/v1/sessions',
+          8_000
+        );
+        let targetSessionId: string | null = null;
+        let targetSessionName: string | null = null;
+        try {
+          const sessions = (JSON.parse(listResponse?.body ?? '{}') as { sessions?: Array<{ id?: unknown; name?: unknown }> }).sessions ?? [];
+          const candidateSession = sessions.find(
+            (session) => typeof session.id === 'string' && session.id !== fromWorkerSessionId
+          );
+          if (candidateSession) {
+            targetSessionId = candidateSession.id as string;
+            targetSessionName = typeof candidateSession.name === 'string' ? candidateSession.name : null;
+          }
+        } catch {
+          /* no session list: the switch below fails honestly */
+        }
+        if (!targetSessionId || !targetSessionName) {
+          throw new Error(
+            'attachment switch: no second worker session exists to switch to — the harness must prepare two real worker attachments before the journey'
+          );
+        }
+        await page.locator('[data-testid="drive-switch-session"]').first().click();
+        const pickerRow = page.getByRole('button', { name: targetSessionName }).first();
+        await pickerRow.waitFor({ timeout: 20_000 });
+        await pickerRow.click();
+        attachmentSwitchRecord = { fromWorkerSessionId, toWorkerSessionId: targetSessionId, switchedAtMs: Date.now() };
+        recordSoakEvent({ kind: 'attachment-switch', fromWorkerSessionId, toWorkerSessionId: targetSessionId });
+        await screenshot(page, 'attachment-switch');
+        awaitStartedAtMs = null;
+        sleepMs = 300;
       } else if (action.type === 'await') {
         // A NEW await phase restarts its clock; an unchanged one is ticking.
         if (action.reason !== awaitReason || awaitStartedAtMs === null) {
@@ -1127,6 +1173,8 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       // W4 soak: the record declares its soak contract for the verifier, which
       // adjudicates against its own FIXED bars (the manifest can only tighten).
       ...(plan.soak ? { soak: plan.soak } : {}),
+      // W4 attachment switch: freeze the observed from/to worker identities.
+      ...(attachmentSwitchRecord ? { attachmentSwitch: attachmentSwitchRecord } : {}),
       // Child J3: the manifest carries the shim marker (captureMode already
       // does, from the plan) plus the honest seam description. evidenceLevel
       // stays E2 — a shim read-back is never a rendered-audio claim.
