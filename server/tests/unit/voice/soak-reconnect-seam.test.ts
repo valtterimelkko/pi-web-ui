@@ -241,28 +241,28 @@ async function startLane(mount: VoiceLiveMount, sent: Sent[], laneId: string): P
   } as never);
 }
 
+const brief: VoiceWorkerBrief = {
+  entries: [{ role: 'user', text: 'deploy the hot fix to staging' }],
+  total: 1,
+};
+
+async function mountWithBrief() {
+  const service = new FakeService();
+  const mount = new VoiceLiveMount({
+    service,
+    delivery: {
+      describe: () => 'test delivery',
+      deliver: async () => ({ outcome: 'delivered', mechanism: 'prompt' }),
+    } as never,
+    isWorkerBusy: async () => false,
+    workerBrief: async () => brief,
+  } as never);
+  const sent: Sent[] = [];
+  await startLane(mount, sent, 'lane-1');
+  return { service, mount, sent };
+}
+
 describe('a same-generation restart hands the fresh provider session a clean context ledger', () => {
-  const brief: VoiceWorkerBrief = {
-    entries: [{ role: 'user', text: 'deploy the hot fix to staging' }],
-    total: 1,
-  };
-
-  async function mountWithBrief() {
-    const service = new FakeService();
-    const mount = new VoiceLiveMount({
-      service,
-      delivery: {
-        describe: () => 'test delivery',
-        deliver: async () => ({ outcome: 'delivered', mechanism: 'prompt' }),
-      } as never,
-      isWorkerBusy: async () => false,
-      workerBrief: async () => brief,
-    } as never);
-    const sent: Sent[] = [];
-    await startLane(mount, sent, 'lane-1');
-    return { service, mount, sent };
-  }
-
   it('re-injects the FULL brief after a stop+start on the same lane and generation', async () => {
     const { service, mount, sent } = await mountWithBrief();
 
@@ -285,6 +285,28 @@ describe('a same-generation restart hands the fresh provider session a clean con
 
     // The fresh provider session has seen nothing: the next refresh must
     // re-inject the FULL brief, not delta — and not nothing.
+    await mount.refreshWorkerStatuses();
+    expect(service.contexts.length).toBe(2);
+    expect(String(service.contexts[1].update.note)).toContain('deploy the hot fix to staging');
+  });
+});
+
+describe('the remint marker resets the mount context ledger', () => {
+  it('re-injects the FULL brief after a provider_unresponsive_remint state event', async () => {
+    const { service, mount, sent } = await mountWithBrief();
+
+    await mount.refreshWorkerStatuses();
+    expect(service.contexts).toHaveLength(1);
+
+    // The service's internal remint announces itself with a marked state event.
+    service.emit({
+      kind: 'state',
+      laneId: 'lane-1',
+      attachmentGeneration: 1,
+      state: 'connecting',
+      detail: 'provider_unresponsive_remint (fresh provider session)',
+    } as never);
+
     await mount.refreshWorkerStatuses();
     expect(service.contexts.length).toBe(2);
     expect(String(service.contexts[1].update.note)).toContain('deploy the hot fix to staging');

@@ -70,6 +70,11 @@ class MockBridge implements VoiceBridgeLike {
     return this.sendContextResult;
   }
 
+  replayUserTurn(text: string): boolean {
+    this.sentContext.push(text);
+    return this.sendContextResult;
+  }
+
   activityStart(): void {
     this.activity.push('start');
   }

@@ -503,6 +503,11 @@ export class VoiceLiveMount {
   private readonly evidence: (event: Record<string, unknown>) => void;
   private readonly workerBrief: ((workerSessionId: string, runtime: VoiceRuntime) => Promise<VoiceWorkerBrief | null>) | null;
   private readonly serviceValue: VoiceBridgeService;
+  /** The concrete service when THIS mount constructed it — the stall-watch
+   *  arm (soak F-1 seam) is host-internal plumbing on the concrete class,
+   *  deliberately absent from the frozen VoiceBridgeService interface. An
+   *  injected test double leaves this null and the watch stays inert. */
+  private readonly concreteVoiceSession: VoiceSessionService | null;
   private readonly router: VoiceSessionRouter;
   private readonly unsubscribe: () => void;
   private readonly engine: VoiceModeEngine;
@@ -532,15 +537,17 @@ export class VoiceLiveMount {
     this.relaySourceGraceMs = options.relaySourceGraceMs ?? DEFAULT_RELAY_SOURCE_GRACE_MS;
     this.relaySourceGracePollMs = options.relaySourceGracePollMs ?? DEFAULT_RELAY_SOURCE_GRACE_POLL_MS;
     this.kernel = new HostAuthorityKernel({ now: this.now });
-    this.serviceValue =
-      options.service ??
-      new VoiceSessionService({
+    const constructed = options.service
+      ? null
+      : new VoiceSessionService({
         bridgeFactory: createVoiceMountBridgeFactory(),
         ...(options.serviceLog ? { log: options.serviceLog } : {}),
         // The kernel answers tool calls: the retrieval tool's result is returned
         // as the tool's response so the model reads it in the SAME turn.
         toolRequestHandler: (input) => this.handleToolRequest(input),
       });
+    this.concreteVoiceSession = constructed;
+    this.serviceValue = constructed ?? (options.service as VoiceBridgeService);
     this.router = new VoiceSessionRouter({
       service: this.serviceValue,
       kernel: this.createKernelDelegate(),
@@ -1566,6 +1573,24 @@ export class VoiceLiveMount {
       });
     }
 
+    // Soak F-1 seam: the service reminted an unresponsive provider session.
+    // The fresh session has seen none of the conversation, so the lane's
+    // injection ledger must reset — the next worker-status refresh re-injects
+    // the FULL brief (the same reset a client-driven same-generation start
+    // performs in registerLane).
+    if (event.kind === 'state' && typeof event.detail === 'string' && event.detail.includes('provider_unresponsive_remint')) {
+      lane.workerActivity = 'unknown';
+      lane.pendingWorkerActivity = null;
+      lane.pendingBrief = null;
+      lane.briefSignature = null;
+      lane.acknowledgedEntries = 0;
+      this.evidence({
+        event: 'provider_unresponsive_remint',
+        laneId: lane.laneId,
+        atMs: this.now(),
+      });
+    }
+
     // 1. Relay the wire-visible half of the event (audio, transcripts, state,
     //    errors). `tool_call` deliberately has no wire form — it is how the
     //    kernel is driven, and the model has no send path.
@@ -2282,6 +2307,14 @@ export class VoiceLiveMount {
     // the model relays by calling `relay_to_worker`, and nothing is held here.
     // The old commission-frame predicate (`isDirectedWorkerInstruction`) and its
     // `normaliseRelayText` trigger are deliberately gone.
+    // Soak F-1 seam: a model-judged utterance arms the service's
+    // unresponsive-provider watch — the wedge (barge-in interrupted read-back,
+    // then a session that transcribes forever and never answers) must end in a
+    // remint + replay, not in a silent soak failure. Mechanical classes never
+    // arm it (they need no model reply).
+    if (utteranceClass === 'statement' || utteranceClass === 'question') {
+      this.concreteVoiceSession?.noteOperatorUtteranceForStallWatch(laneId, text);
+    }
   }
 }
 

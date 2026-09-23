@@ -174,6 +174,8 @@ export interface GeminiLiveBridgeUsage {
    *  same-lane restart) — the wedge behind the soak's post-reconnect silence
    *  (SOAK-10MIN-standard/attempt-04). */
   unmatchedActivityEndsSuppressed: number;
+  /** User turns replayed by the unresponsive-provider remint. */
+  replayTurns: number;
 }
 
 export interface GeminiLiveBridgeOptions {
@@ -223,6 +225,10 @@ export interface VoiceBridgeLike {
   connect(): Promise<void>;
   sendAudio(pcm: Buffer): boolean;
   sendContextText(text: string): boolean;
+  /** Host replay of an operator utterance as a user turn that ELICITS a reply
+   *  (turnComplete: true — unlike sendContextText). Used only by the
+   *  unresponsive-provider remint (soak F-1 seam). */
+  replayUserTurn(text: string): boolean;
   activityStart(): void;
   activityEnd(): void;
   close(): void;
