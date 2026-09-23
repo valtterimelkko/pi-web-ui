@@ -106,28 +106,6 @@ describe('the soak director program', () => {
   });
 });
 
-function loadSoakPlanFromRepo() {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  return loadSoakPlanViaRepoPath();
-}
-function loadSoakPlanViaRepoPath() {
-  // direct import is fine here; the indirection only keeps the diff small
-  return loadSoakPlan(REPO_CORPUS_DIR_SOAK);
-}
-const REPO_CORPUS_DIR_SOAK = pathToRepoCorpus();
-function pathToRepoCorpus(): string {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-  return require('node:path').join(
-    require('node:path').dirname(fileURLToPathLocal()),
-    '../../../..',
-    'scripts/voice-lane-lab/corpus'
-  );
-}
-function fileURLToPathLocal(): string {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-  return require('node:url').pathToFileURL(__filename).href;
-}
-
 describe('the busy-parking promote path', () => {
   /** A minimal busy-parking episode in the C22 family shape (t1 opening relayed while busy, t2 promote, t3 confirm). */
   function parkingEpisode(): Episode {

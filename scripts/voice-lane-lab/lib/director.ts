@@ -448,11 +448,6 @@ export class EpisodeDirector {
         }
         return null;
       }
-      case 'pace':
-      case 'reconnect':
-      case 'promote':
-      case 'switch':
-        return null;
       case 'await-response': {
         if (observation.kind === 'response') {
           this.responseText = observation.text;
