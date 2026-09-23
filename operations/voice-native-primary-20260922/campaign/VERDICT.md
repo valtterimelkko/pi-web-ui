@@ -4,7 +4,13 @@
 boundary is named below with the smallest next experiment. Under the rule-4 tie-break, **standard**
 is the recommended arm if that boundary is closed (ET shows no paired advantage).
 
-Revision: `5fc3f1bb` (all fixes merged). Live wall-clock and spend remain far inside §10's 8 h / US$25.
+Revision: `5fc3f1bb` (all fixes merged). **Budget, stated honestly:** the campaign loop + campaign
+elapsed ≈7 h 47 m against §10's 8 h live wall-clock ceiling (~97% — inside, not "far inside"; it
+exceeds 8 h if W4 harness-development live runs are counted). **Monetary spend is not verifiable:**
+every manifest records `budget.meteredUsage: "not exposed by this server build"` and the ledger's
+spend ledger was never kept, so the US$12 campaign / US$25 all-in ceilings cannot be confirmed or
+refuted from the records. Wall-clock and kernel call counts (70 provider-call events across the 34
+authoritative attempts) are the evidenced quantities.
 
 ## Planned vs completed matrix (34 required cells)
 
@@ -46,8 +52,10 @@ never widened by any of the campaign's fixes.
 Both soak cells fail on the same boundary: **after the mid-session voice-transport reconnect the
 repeat relay produces no candidate within the deadline** (`deadline exceeded waiting for candidate`),
 so the run terminates early and the duration/turn bars (≥10 min, ≥8 turns) fail with it. The
-pre-reconnect pending proposal is released and delivered correctly; the reconnect itself revives the
-lane (~3.6 s, M2's utterance re-bind fix in place). Smallest next experiment: one focused
+pre-reconnect pending proposal is **released** (the record carries `confirm_authorised` +
+`delivery_attempt` + `delivery_receipt`), but the reviewer correctly notes the record does not carry a
+`delivered` outcome for it, so no delivery claim is made here. The reconnect itself revives the lane
+(~3.6 s, M2's utterance re-bind fix in place). Smallest next experiment: one focused
 investigation of the post-reconnect relay path (is the second relay refused `unbound_source`, or does
 the model not relay?), then a single soak re-run per arm — the harness, corpus and both arms are
 otherwise ready.
@@ -70,6 +78,31 @@ otherwise ready.
 - Audio proof level: E2 (labelled synthetic TTS seam, byte-equality enforced); E3/E4 not claimed.
 - The worker-conductor demonstration proves voice can initiate and supervise through the existing
   worker — not Live-as-conductor superiority.
+
+## Independent reviewer (read-only, `coordination/RV/`)
+
+Verdict: **`supported-with-findings`** — all 34 cell verdicts were independently reproduced offline
+(34/34, zero divergences; 24,382 artefacts re-hashed with zero mismatches), arm identity and
+blinding were checked, and the campaign's central claims hold. Three **material** findings are
+carried forward rather than smoothed:
+
+1. **Holdout wording disclosure (F1).** The exact C10 t1 and C11 t1/t3 sentences were embedded in
+   `server/tests/voice-live-lab/holdout-overlay.test.ts`, committed on the implementer lineage before
+   the corpus freeze — so the ledger's earlier claim that the implementer lineage never saw the
+   wording is **corrected here**: the wording reached that lineage, though the evaluated models never
+   saw it, the episode files stayed empty, and no runtime path or non-holdout cell record contains it.
+   C22/C24 wording is not in the test.
+2. **C24 bar change mid-campaign (F2).** After C24 failed both arms, the audible-ack expectation was
+   retired (director `79c0daed`, verifier `5fc3f1bb`) because M's merged product fix stops the lane on
+   a switch, making an ack unreachable. The C24-standard pass exists only under the relaxed bar; both
+   arms were graded under it, the rationale is in the commit messages and matches contract §3.2, and
+   the reviewer reproduced both verdicts — but the decision is recorded here as a **post-hoc,
+   explicitly-flagged** change, not a contemporaneous one.
+3. **Spend unverifiable (F3).** See the budget paragraph above.
+
+Minor findings (corpusHash is an ID-list hash not a content hash; the generic confirm wording is not
+holdout-unique; one unfinalised L4-era attempt dir; STATE/ledger staleness) are recorded in
+`coordination/RV/review.md` with their mitigations.
 
 ## Open items folded in at reconciliation
 
