@@ -371,3 +371,60 @@ describe('candidates observed during speak phases are recorded, not lost (C20 bo
     expect(final).toMatchObject({ type: 'terminal', status: 'safety-failure' });
   });
 });
+
+describe('presentations observed during speak phases are recorded, not lost (C20 pass-4 boundary)', () => {
+  const C20_TEXT = 'Update the changelog for the voice release.';
+
+  it('a completed presentation arriving in a speak window satisfies the later presentation wait without a repeat (the C20 live stall)', () => {
+    const { actions } = run('C20', (director) => {
+      director.step(); // speak t1
+      director.step({ kind: 'candidate', payloadText: C20_TEXT, identity: 'prop-1', atMs: 2_000 }); // → speak t2 (candidate pending)
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 2_500 }); // → speak t3 (presentation observed in a speak window)
+      director.step(); // the confirm block opens: BOTH pending facts must satisfy it → speak t4
+    });
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't4')).toBe(true);
+    expect(actions.some((action) => action.type === 'await' && action.reason === 'waiting for presentation')).toBe(false);
+    expect(actions.some((action) => action.type === 'terminal')).toBe(false);
+  });
+
+  it('the full C20 flow completes when the candidate and its presentation both arrived inside speak windows', () => {
+    const { actions } = run('C20', (director) => {
+      director.step(); // speak t1
+      director.step({ kind: 'candidate', payloadText: C20_TEXT, identity: 'prop-1', atMs: 2_000 }); // → speak t2
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 2_500 }); // → speak t3
+      director.step(); // → speak t4 confirm (no presentation wait in between)
+      director.step({ kind: 'release', identity: 'prop-1', atMs: 3_000 });
+      director.step({ kind: 'delivery', identity: 'prop-1', atMs: 3_200 });
+      director.step({ kind: 'worker-store', identity: 'prop-1', ok: true, atMs: 3_500 });
+      director.step();
+    });
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'complete' });
+  });
+
+  it('a REVISED candidate still requires a fresh presentation: the old identity\'s speak-window presentation never satisfies it', () => {
+    run('C20', (director) => {
+      director.step(); // speak t1
+      director.step({ kind: 'candidate', payloadText: C20_TEXT, identity: 'prop-1', atMs: 2_000 }); // → speak t2
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 2_500 }); // → speak t3 (pending presentation for prop-1)
+      const afterRevision = director.step({ kind: 'candidate', payloadText: C20_TEXT, identity: 'prop-2', atMs: 2_800 }); // revised candidate (arrives while await-candidate is current)
+      expect(afterRevision).toMatchObject({ type: 'await', reason: 'waiting for presentation' });
+      const afterOldIdentity = director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 3_000 }); // the OLD identity must not satisfy
+      expect(afterOldIdentity.type).toBe('await');
+      const afterNewIdentity = director.step({ kind: 'presentation', identity: 'prop-2', complete: true, atMs: 3_200 }); // the NEW identity satisfies
+      expect(afterNewIdentity).toMatchObject({ type: 'speak', turnId: 't4' });
+    });
+  });
+
+  it('an INCOMPLETE presentation in a speak window is never recorded as satisfiable; the wait arms and a later completion satisfies it', () => {
+    const { actions } = run('C20', (director) => {
+      director.step(); // speak t1
+      director.step({ kind: 'candidate', payloadText: C20_TEXT, identity: 'prop-1', atMs: 2_000 }); // → speak t2
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: false, atMs: 2_500 }); // → speak t3 — incomplete
+      director.step(); // the confirm block must ARM the wait, not pretend it is satisfied
+      director.step({ kind: 'presentation', identity: 'prop-1', complete: true, atMs: 3_000 }); // the real completion satisfies
+    });
+    const armed = actions.filter((action) => action.type === 'await' && action.reason === 'waiting for presentation');
+    expect(armed).toHaveLength(1);
+    expect(actions.some((action) => action.type === 'speak' && action.turnId === 't4')).toBe(true);
+  });
+});

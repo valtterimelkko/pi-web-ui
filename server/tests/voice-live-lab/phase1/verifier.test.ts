@@ -600,6 +600,70 @@ describe('responseMustNotContain is negation-aware (C15/C16 boundary)', () => {
   });
 });
 
+describe('openResponse episodes skip the required-word check but keep the forbidden-claim check (C09/C14/C15)', () => {
+  /** The corpus the conductor will ship: C09 declares open-response grading. */
+  const corpusWithOpenC09 = () => ({
+    ...corpus,
+    episodes: corpus.episodes.map((episode) =>
+      episode.id === 'C09'
+        ? { ...episode, expectedSlots: { ...episode.expectedSlots, openResponse: true, responseMustContain: [] } }
+        : episode
+    ),
+  });
+
+  it('a correct conversational answer that omits the old required word passes (the deterministic check is skipped)', () => {
+    // The conductor's real shape: C09 declares openResponse: true and an empty
+    // responseMustContain. The live defect: the model's right answer omitted the
+    // literal slot word and failed deterministically.
+    const outcome = verifyRecord(
+      conversationJourneyRecord('Something entirely unrelated happened today.').write(),
+      { corpus: corpusWithOpenC09() }
+    );
+    expect(outcome.verdict).toBe('pass');
+    expect(exitCodeFor(outcome)).toBe(0);
+    expect(outcome.problems).toEqual([]);
+  });
+
+  it('the flag itself decides the skip: openResponse with required words declared still skips the required-word check', () => {
+    // Schema-impossible from files (the schema refuses the combination), but
+    // this pins WHAT the verifier keys on — the episode's flag, not the array's
+    // accident of being empty.
+    const flaggedCorpus = () => ({
+      ...corpus,
+      episodes: corpus.episodes.map((episode) =>
+        episode.id === 'C09'
+          ? { ...episode, expectedSlots: { ...episode.expectedSlots, openResponse: true } }
+          : episode
+      ),
+    });
+    const outcome = verifyRecord(
+      conversationJourneyRecord('Something entirely unrelated happened today.').write(),
+      { corpus: flaggedCorpus() }
+    );
+    expect(outcome.verdict).toBe('pass');
+    expect(outcome.problems).toEqual([]);
+  });
+
+  it('forbidden claims still fail under openResponse — the negation-aware check stays armed', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('The retry handler issue has been sent to the worker already.').write(),
+      { corpus: corpusWithOpenC09() }
+    );
+    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.code === 'slot-violation')).toBe(true);
+    expect(exitCodeFor(outcome)).toBe(1);
+  });
+
+  it('without the flag the required words are still enforced (the boundary does not move)', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('Something entirely unrelated happened today.').write(),
+      { corpus }
+    );
+    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.detail.includes('retry handler'))).toBe(true);
+  });
+});
+
 describe('journey records: cleanup and lane stop fail closed', () => {
   it('an unverified cleanup is indeterminate, never a pass', () => {
     const builder = conversationJourneyRecord('The retry handler is the cause.');

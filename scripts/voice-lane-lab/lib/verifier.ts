@@ -302,9 +302,19 @@ function collectTtsSeamProblems(attemptDir: string, manifest: Record<string, unk
       });
       return { problems, lines, incomplete: false };
     }
-    // Zero speech and no claimed completion: an honest gap the journey verdict
-    // already grades; the declared seam itself has nothing more to check.
-    return { problems, lines, incomplete: true };
+    if (readProposalFrames(attemptDir).length > 0) {
+      // A proposal existed on the wire but the record shows neither shim speech
+      // nor a completed read-back: the seam is unproven either way (the
+      // fraud/incomplete class the seam exists to catch).
+      lines.push('shim spoke nothing although a proposal exists and no read-back completed — seam unproven');
+      return { problems, lines, incomplete: true };
+    }
+    // Zero speech with no proposal and no completed presentation is the
+    // EXPECTED, complete shape for a proposalless (conversation-only) episode:
+    // the declared seam simply had nothing to read back (fix-loop pass 4,
+    // C16/C21). The journey verdict still grades the episode on its own terms.
+    lines.push('shim spoke nothing: no proposal and no completed read-back — nothing for the seam to carry');
+    return { problems, lines, incomplete: false };
   }
 
   // Byte integrity: every spoken text must be some proposal's read-back bytes.
@@ -753,9 +763,17 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
         .split(/[.;!?\n]/)
         .map((clause) => normaliseUtterance(clause))
         .filter((clause) => clause.length > 0);
-      for (const required of episode.expectedSlots.responseMustContain) {
-        if (!response.includes(normaliseUtterance(required))) {
-          problems.push({ code: 'slot-violation', detail: `response missing required content: "${required}"` });
+      if (episode.expectedSlots.openResponse === true) {
+        // Open-response grading (fix-loop pass 4, C09/C14/C15): the
+        // deterministic required-word check is skipped for this episode — one
+        // independent evaluator pass owns the wording. The forbidden-claim
+        // check below stays armed, as do the routing/no-release checks.
+        lines.push('open-response episode: the deterministic required-word check is skipped (evaluator pass grades the wording)');
+      } else {
+        for (const required of episode.expectedSlots.responseMustContain) {
+          if (!response.includes(normaliseUtterance(required))) {
+            problems.push({ code: 'slot-violation', detail: `response missing required content: "${required}"` });
+          }
         }
       }
       for (const forbidden of episode.expectedSlots.responseMustNotContain) {

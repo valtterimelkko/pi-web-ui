@@ -145,6 +145,8 @@ export class EpisodeDirector {
   private candidateText: string | null = null;
   /** A candidate observed while a speak phase was current (fix-loop C20). */
   private pendingCandidate: { identity: string; payloadText: string } | null = null;
+  /** A COMPLETED presentation observed while a speak phase was current (fix-loop pass 4, C20). */
+  private pendingPresentation: { identity: string; complete: boolean } | null = null;
   private presented = false;
   private approvedIdentity: string | null = null;
   private invalidatedIdentities = new Set<string>();
@@ -275,6 +277,7 @@ export class EpisodeDirector {
     this.candidateIdentity = null;
     this.candidateText = null;
     this.pendingCandidate = null;
+    this.pendingPresentation = null;
     this.presented = false;
     // Re-arm the active candidate/presentation phases with fresh deadlines.
     for (const phase of this.phases) {
@@ -330,6 +333,17 @@ export class EpisodeDirector {
           }
           this.pendingCandidate = { identity: observation.identity, payloadText: observation.payloadText };
         }
+        // The presentation-side analogue (fix-loop pass 4, C20): a COMPLETED
+        // presentation may also land inside a speak window (the client renders
+        // the read-back while the next operator turn is playing). Record it so
+        // the later await-presentation phase is satisfied by it instead of
+        // waiting for a repeat that never comes. Incomplete presentations carry
+        // no satisfiable fact and are dropped, exactly as the await path does.
+        if (observation.kind === 'presentation' && observation.complete) {
+          if (!this.invalidatedIdentities.has(observation.identity)) {
+            this.pendingPresentation = { identity: observation.identity, complete: true };
+          }
+        }
         return null;
       case 'await-candidate':
       case 'await-presentation': {
@@ -354,6 +368,9 @@ export class EpisodeDirector {
           }
           this.candidateIdentity = observation.identity;
           this.candidateText = observation.payloadText;
+          // The revised candidate's presentation must be observed afresh: a
+          // stored presentation belongs to the OLD identity (fix-loop pass 4).
+          this.pendingPresentation = null;
           // A revised candidate restarts the presentation requirement.
           if (phase.kind === 'await-presentation') {
             phase.enteredAtMs = this.now();
@@ -426,6 +443,7 @@ export class EpisodeDirector {
           if (this.candidateIdentity) this.invalidatedIdentities.add(this.candidateIdentity);
           if (this.pendingCandidate) this.invalidatedIdentities.add(this.pendingCandidate.identity);
           this.pendingCandidate = null;
+          this.pendingPresentation = null;
           this.candidateIdentity = null;
           this.candidateText = null;
           this.presented = false;
@@ -459,6 +477,22 @@ export class EpisodeDirector {
         }
         this.candidateIdentity = pending.identity;
         this.candidateText = pending.payloadText;
+        this.advance();
+        continue;
+      }
+      // A completed presentation recorded during a speak phase satisfies an
+      // await-presentation phase the moment that phase is entered — before its
+      // deadline is armed — when it carries the CURRENT candidate's identity
+      // (fix-loop pass 4, C20). A revised candidate's identity never matches a
+      // stale store, so a fresh presentation is still required there.
+      if (
+        phase.kind === 'await-presentation' &&
+        phase.enteredAtMs === null &&
+        this.pendingPresentation?.complete === true &&
+        this.pendingPresentation.identity === this.candidateIdentity
+      ) {
+        this.presented = true;
+        this.pendingPresentation = null;
         this.advance();
         continue;
       }
