@@ -712,6 +712,10 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         if (action.text !== turn.text) throw new Error(`director/plan wording drift on turn ${action.turnId}`);
         await speakTurn(turn);
         executed = true;
+        // Let the utterance FINISH entering the pipeline before the next step:
+        // the FSM's interaction deadlines measure model latency from the end of
+        // the operator's speech, not transport time (device padding + playback).
+        await page.waitForTimeout((turn.inputMode === 'fake-file' ? OPENING_PADDING_MS : 0) + turn.durationMs + 300);
         awaitStartedAtMs = null;
         sleepMs = 300;
       } else if (action.type === 'await') {
