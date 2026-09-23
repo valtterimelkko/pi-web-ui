@@ -10,28 +10,38 @@ import {
 } from '../../../src/talker/delivery.js';
 
 describe('Pi delivery (existing path until H2 lands)', () => {
-  it('steers a busy worker via the existing path and discloses that H2 is not wired', async () => {
+  it('steers a busy worker into the running turn and discloses that H2 is not wired', async () => {
     const calls: string[] = [];
     const delivery = createPiDelivery({
       isBusy: () => true,
-      steer: async (_id, text) => { calls.push(`steer:${text}`); },
-      prompt: async () => { calls.push('prompt'); },
+      submitSteer: async (_id, text) => {
+        calls.push(`steer:${text}`);
+        return { joinedRunningTurn: true };
+      },
+      submitPrompt: async () => {
+        calls.push('prompt');
+      },
     });
     const result = await delivery.deliver({ workerSessionId: 'pi-1', text: 'hold phase 3' });
     expect(result).toEqual({
       outcome: 'delivered',
       mechanism: 'steer',
-      disclosure: expect.stringContaining('existing steer path'),
+      disclosure: expect.stringContaining('running turn via steer'),
     });
     expect(calls).toEqual(['steer:hold phase 3']);
   });
 
-  it('prompts an idle worker through the existing prompt path', async () => {
+  it('prompts an idle worker through the submission-shaped prompt path', async () => {
     const calls: string[] = [];
     const delivery = createPiDelivery({
       isBusy: () => false,
-      steer: async () => { calls.push('steer'); },
-      prompt: async (_id, text) => { calls.push(`prompt:${text}`); },
+      submitSteer: async () => {
+        calls.push('steer');
+        return { joinedRunningTurn: false };
+      },
+      submitPrompt: async (_id, text) => {
+        calls.push(`prompt:${text}`);
+      },
     });
     const result = await delivery.deliver({ workerSessionId: 'pi-1', text: 'hold phase 3' });
     expect(result.outcome).toBe('delivered');
@@ -42,12 +52,66 @@ describe('Pi delivery (existing path until H2 lands)', () => {
   it('refuses honestly when the underlying path throws (never claims success)', async () => {
     const delivery = createPiDelivery({
       isBusy: () => true,
-      steer: async () => { throw new Error('session gone'); },
-      prompt: async () => { throw new Error('unreachable'); },
+      submitSteer: async () => {
+        throw new Error('session gone');
+      },
+      submitPrompt: async () => {
+        throw new Error('unreachable');
+      },
     });
     const result = await delivery.deliver({ workerSessionId: 'pi-1', text: 'x' });
     expect(result.outcome).toBe('refused');
     expect((result as { reason: string }).reason).toContain('session gone');
+  });
+});
+
+describe('Pi delivery — the receipt is about bytes delivered, not turn completion (M3)', () => {
+  const waitMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('a delivery to an idle worker whose turn runs long settles at SUBMISSION, not at turn end (attempt-28)', async () => {
+    let releaseTurn: () => void = () => {};
+    const turnSettled = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    let turnEnded = false;
+    const delivery = createPiDelivery({
+      isBusy: () => false,
+      submitSteer: async () => ({ joinedRunningTurn: false }),
+      // The manager's submission shape: resolves once the turn STARTS; the
+      // turn itself keeps running in the background and settles much later.
+      submitPrompt: async () => {
+        void turnSettled.then(() => {
+          turnEnded = true;
+        });
+      },
+    });
+
+    const submission = delivery.deliver({ workerSessionId: 'pi-1', text: 'hold phase 3' });
+    const verdict = await Promise.race([
+      submission.then(() => 'settled' as const),
+      waitMs(250).then(() => 'stuck-waiting-for-turn-end' as const),
+    ]);
+
+    // THE DEFECT (C01-standard/attempt-28, RED against the old adapter):
+    // the delivery awaited the whole worker turn, so no receipt ever beat
+    // the journey deadline. The submission settles while the turn runs.
+    expect(verdict).toBe('settled');
+    expect(turnEnded).toBe(false);
+    releaseTurn();
+    await submission;
+  });
+
+  it('RED: a busy worker that cannot join its running turn is honest (queued), never delivered', async () => {
+    const delivery = createPiDelivery({
+      isBusy: () => true,
+      // Submission-shaped steer: resolves once queued and reports whether it
+      // actually joined a RUNNING turn. Here it did not (status divergence or
+      // queue-for-next-run), so the honest receipt is `queued`.
+      submitSteer: async () => ({ joinedRunningTurn: false }),
+      submitPrompt: async () => {},
+    });
+    const result = await delivery.deliver({ workerSessionId: 'pi-1', text: 'hold phase 3' });
+    expect(result.outcome).toBe('queued');
+    expect((result as { mechanism: string }).mechanism).toBe('steer');
+    expect((result as { disclosure: string }).disclosure).toBeTruthy();
   });
 });
 
@@ -134,8 +198,8 @@ describe('Pi delivery — the worker is loaded on demand (restart robustness)', 
     const calls: string[] = [];
     const delivery = createPiDelivery({
       isBusy: (path) => { calls.push(`isBusy:${path}`); return false; },
-      steer: async () => { calls.push('steer'); },
-      prompt: async (path, text) => { calls.push(`prompt:${path}:${text}`); },
+      submitSteer: async () => { calls.push('steer'); return { joinedRunningTurn: false }; },
+      submitPrompt: async (path, text) => { calls.push(`prompt:${path}:${text}`); },
       ensureReady: async (ref) => {
         calls.push(`ensureReady:${ref}`);
         return { path: '/sessions/w.jsonl', loadedHere: true };
@@ -158,8 +222,8 @@ describe('Pi delivery — the worker is loaded on demand (restart robustness)', 
     const calls: string[] = [];
     const delivery = createPiDelivery({
       isBusy: () => false,
-      steer: async () => {},
-      prompt: async (path) => { calls.push(`prompt:${path}`); },
+      submitSteer: async () => ({ joinedRunningTurn: false }),
+      submitPrompt: async (path) => { calls.push(`prompt:${path}`); },
       ensureReady: async () => { calls.push('ensureReady'); return { path: '/sessions/w.jsonl', loadedHere: false }; },
       release: () => { calls.push('release'); },
     });
@@ -172,8 +236,11 @@ describe('Pi delivery — the worker is loaded on demand (restart robustness)', 
     const calls: string[] = [];
     const delivery = createPiDelivery({
       isBusy: () => true,
-      steer: async (path, text) => { calls.push(`steer:${path}:${text}`); },
-      prompt: async () => { calls.push('prompt'); },
+      submitSteer: async (path, text) => {
+        calls.push(`steer:${path}:${text}`);
+        return { joinedRunningTurn: true };
+      },
+      submitPrompt: async () => { calls.push('prompt'); },
       ensureReady: async () => { calls.push('ensureReady'); return { path: '/sessions/w.jsonl', loadedHere: false }; },
       release: () => { calls.push('release'); },
     });
@@ -186,8 +253,8 @@ describe('Pi delivery — the worker is loaded on demand (restart robustness)', 
   it('refuses honestly, naming the load failure, when the worker cannot be loaded', async () => {
     const delivery = createPiDelivery({
       isBusy: () => false,
-      steer: async () => {},
-      prompt: async () => { throw new Error('unreachable'); },
+      submitSteer: async () => ({ joinedRunningTurn: false }),
+      submitPrompt: async () => { throw new Error('unreachable'); },
       ensureReady: async () => { throw new Error('session id not in the registry'); },
     });
 
@@ -200,8 +267,8 @@ describe('Pi delivery — the worker is loaded on demand (restart robustness)', 
     const calls: string[] = [];
     const delivery = createPiDelivery({
       isBusy: () => false,
-      steer: async () => {},
-      prompt: async () => { calls.push('prompt'); throw new Error('turn blew up'); },
+      submitSteer: async () => ({ joinedRunningTurn: false }),
+      submitPrompt: async () => { calls.push('prompt'); throw new Error('turn blew up'); },
       ensureReady: async () => ({ path: '/sessions/w.jsonl', loadedHere: true }),
       release: (path) => { calls.push(`release:${path}`); },
     });
@@ -226,8 +293,8 @@ describe('Pi delivery wiring — relay load-on-demand against a real manager sha
         return { sessionPath: path, status: 'idle' };
       },
       unsubscribeClient: (_clientId: string, path: string) => { calls.push(`unsubscribe:${path}`); },
-      steer: async () => { calls.push('steer'); },
-      prompt: async (path: string, text: string) => { calls.push(`prompt:${path}:${text}`); },
+      submitSteer: async () => { calls.push('steer'); return { joinedRunningTurn: false }; },
+      submitPrompt: async (path: string, text: string) => { calls.push(`prompt:${path}:${text}`); },
       ...overrides,
     };
     return { manager, calls };

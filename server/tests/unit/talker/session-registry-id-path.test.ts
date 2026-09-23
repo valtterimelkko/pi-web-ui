@@ -45,24 +45,25 @@ const SESSION_PATH = `/tmp/p12-workdir/pi-sessions/2026-09-13T18-00-00-000Z_${SE
 
 /**
  * Faithful double of the REAL MultiSessionManager contract: sessions are keyed
- * by session PATH; prompt/steer throw the production refusal for anything that
- * is not an active session's path; resolveSessionRef is the manager's own
- * id→path index (the P12 resolution helper, mirrored here so this suite pins
- * the registry against the manager's contract, not against a loose fake).
+ * by session PATH; submitPrompt/submitSteer throw the production refusal for
+ * anything that is not an active session's path; resolveSessionRef is the
+ * manager's own id→path index (the P12 resolution helper, mirrored here so
+ * this suite pins the registry against the manager's contract, not against a
+ * loose fake). M3: the delivery uses the SUBMISSION-shaped seams.
  */
 function pathKeyedManager() {
   const prompted: Array<{ ref: string; text: string }> = [];
   const steered: Array<{ ref: string; text: string }> = [];
   const manager = {
-    prompt(ref: string, text: string): Promise<void> {
+    submitPrompt(ref: string, text: string): Promise<void> {
       if (ref !== SESSION_PATH) return Promise.reject(new Error(`Session ${ref} does not exist`));
       prompted.push({ ref, text });
       return Promise.resolve();
     },
-    steer(ref: string, text: string): Promise<void> {
+    submitSteer(ref: string, text: string): Promise<{ joinedRunningTurn: boolean }> {
       if (ref !== SESSION_PATH) return Promise.reject(new Error(`Session ${ref} does not exist`));
       steered.push({ ref, text });
-      return Promise.resolve();
+      return Promise.resolve({ joinedRunningTurn: true });
     },
     getSessionStatus(ref: string) {
       // Path-keyed lookup, exactly like MultiSessionManager.getSessionStatus.
@@ -105,8 +106,8 @@ function makeRegistry() {
   const deliveries: DefaultDeliveries = {
     pi: createPiDelivery({
       isBusy: (ref) => manager.getSessionStatus(ref)?.status === 'busy' || manager.getSessionStatus(ref)?.status === 'streaming',
-      steer: (ref, text) => manager.steer(ref, text),
-      prompt: (ref, text) => manager.prompt(ref, text),
+      submitSteer: (ref, text) => manager.submitSteer(ref, text),
+      submitPrompt: (ref, text) => manager.submitPrompt(ref, text),
     }),
     claude: createNullDelivery(),
     antigravity: createNullDelivery(),

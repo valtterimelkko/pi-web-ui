@@ -423,7 +423,8 @@ export type TalkerUtteranceClass = 'confirm' | 'cancel' | 'question' | 'statemen
 /** Wire shape of the talker library's DeliveryOutcome (JSON-safe passthrough). */
 export type TalkerDeliveryOutcome =
   | { outcome: 'delivered'; mechanism: 'steer' | 'prompt'; disclosure?: string }
-  | { outcome: 'queued'; mechanism: 'follow_up'; disclosure: string }
+  /** M3: a steer that could not join a running turn is honestly `queued`. */
+  | { outcome: 'queued'; mechanism: 'follow_up' | 'steer'; disclosure: string }
   | { outcome: 'refused'; reason: string }
   /**
    * M2 (review R): the harness's first-class ambiguous state (§4.4/§7.3) — a
