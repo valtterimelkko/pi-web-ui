@@ -146,16 +146,23 @@ interface EvidenceRow {
 
 /** Read new `voice-kernel {…}` evidence lines appended to the server log. */
 function readServerEvidence(serverLogPath: string, offset: { bytes: number }): EvidenceRow[] {
-  let text: string;
+  let buf: Buffer;
   try {
-    text = readFileSync(serverLogPath, 'utf8');
+    buf = readFileSync(serverLogPath);
   } catch {
     return [];
   }
-  const fresh = text.slice(offset.bytes);
-  offset.bytes = Buffer.byteLength(text, 'utf8');
+  if (buf.byteLength <= offset.bytes) return [];
+  // Byte-accurate tail-follow: slice by BYTES, never by character indices —
+  // talker excerpts carry multi-byte UTF-8, which desynced a String.slice
+  // offset and silently skipped whole evidence lines (run 3, attempt-06).
+  const fresh = buf.subarray(offset.bytes).toString('utf8');
+  const lastNewline = fresh.lastIndexOf('\n');
+  if (lastNewline < 0) return []; // no complete line yet; keep the offset
+  const complete = fresh.slice(0, lastNewline + 1);
+  offset.bytes += Buffer.byteLength(complete, 'utf8');
   const rows: EvidenceRow[] = [];
-  for (const line of fresh.split('\n')) {
+  for (const line of complete.split('\n')) {
     if (!line.includes('voice-kernel ')) continue;
     const row = parseServerEvidenceLine(line);
     if (row) rows.push(row);
