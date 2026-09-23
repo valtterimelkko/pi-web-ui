@@ -660,6 +660,70 @@
         "missingWords": [],
         "ok": true
       }
+    },
+    {
+      "id": "C22-t2",
+      "text": "Yes, promote that one.",
+      "pcm16kSha256": "94c6cdab4c538b2746a719a4f42a0833d030f793dddc7b9b075e3e56f5bcd6c2",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-a/C22-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-a/C22-t2.master.wav",
+      "durationMs": 1811.1666666666665,
+      "asr": {
+        "id": "C22-t2",
+        "text": "Yes, promote that one.",
+        "transcript": " Yes, promote that one.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C22-t3",
+      "text": "Yes, send it.",
+      "pcm16kSha256": "ffd4443911573f1c1b427301eea17fdc722d95da5b985e28af471bd1d52e7142",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-a/C22-t3.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-a/C22-t3.master.wav",
+      "durationMs": 1462.875,
+      "asr": {
+        "id": "C22-t3",
+        "text": "Yes, send it.",
+        "transcript": " Yes, send it.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C24-t1",
+      "text": "Relay to worker, run the linter across the whole repo.",
+      "pcm16kSha256": "62a2b455a1dc97fa48741d30b811eb4103e41888b46f1bf13812602402fe4213",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-a/C24-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-a/C24-t1.master.wav",
+      "durationMs": 3761.625,
+      "asr": {
+        "id": "C24-t1",
+        "text": "Relay to worker, run the linter across the whole repo.",
+        "transcript": " Relay to worker, run the linter across the whole repo.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C24-t2",
+      "text": "Switch to the other worker.",
+      "pcm16kSha256": "9c9c551580f9446cb04f8de641ffd9967ca7f11f404b7df8f393cb5a1c011ede",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-a/C24-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-a/C24-t2.master.wav",
+      "durationMs": 2020.1250000000002,
+      "asr": {
+        "id": "C24-t2",
+        "text": "Switch to the other worker.",
+        "transcript": " Switch to the other worker.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
     }
   ]
 }

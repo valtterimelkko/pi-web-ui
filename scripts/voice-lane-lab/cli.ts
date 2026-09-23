@@ -65,6 +65,7 @@ import {
 import {
   VOICE_PROFILES,
   buildVoiceProfile,
+  utteranceSpecsFromEpisodes,
 } from './lib/voices.js';
 import {
   planCaptureProof,
@@ -85,7 +86,7 @@ import {
   newCampaignIndex,
 } from './lib/campaign.js';
 import { verifyRecord, exitCodeFor } from './lib/verifier.js';
-import { freezeFixtureManifest } from '../voice-live-lab/lib/fixtures.js';
+import { freezeFixtureManifest, readFixtureManifest, verifyFixtureManifest, type SynthesisedFixture } from '../voice-live-lab/lib/fixtures.js';
 
 const CAPTURE_VERSION = 'voice-lane-lab.capture/1';
 
@@ -246,6 +247,100 @@ async function voicesCommand(argv: string[]): Promise<number> {
   const whisper = flag(argv, '--whisper') ?? 'http://localhost:9000';
   const corpus = loadCorpus();
   const failures: string[] = [];
+
+  // W4 extension: the holdout overlays are now frozen by the validator, so the
+  // journeys need REAL voice fixtures for that wording. This synthesises ONLY
+  // the overlay turns that are missing from the already-frozen manifests,
+  // validates them through the same Whisper gate, and appends them — after
+  // re-checking that every existing frozen byte is unchanged. Existing
+  // fixtures are never re-synthesised, never re-judged, never touched.
+  if (argv.includes('--extend-holdout')) {
+    const ids = (flag(argv, '--holdout-ids') ?? 'C22,C24')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+    // A spec may be unpronounceable-distinctly for ONE voice profile (e.g. the
+    // C22-t1 'auth'/'oath' homophone: Supertonic M1 deterministically produces
+    // audio the ASR gate can only hear as 'oath'). A --skip names that
+    // exception explicitly, with the reason recorded in the output — an
+    // intentional, documented absence, never a silent gap.
+    const skips = (flag(argv, '--skip') ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const skipReason = flag(argv, '--skip-reason') ?? 'documented exception';
+    const merged = withValidatorOverlays(corpus, CORPUS_DIR);
+    const specs = utteranceSpecsFromEpisodes(merged, ids).filter((spec) => !skips.includes(spec.id));
+    if (specs.length === 0) throw new Error(`--extend-holdout: no drivable wording found for ${ids.join(', ')} (overlays missing?)`);
+    for (const profile of VOICE_PROFILES) {
+      const outDir = path.join(VOICES_ROOT, profile.id);
+      const commitPath = path.join(CORPUS_DIR, 'voices', `${profile.id}.manifest.json`);
+      const commit = JSON.parse(readFileSync(commitPath, 'utf8')) as {
+        fixtures: Array<{ id: string; text: string; asr: { ok: boolean } | null }>;
+      };
+      const existingIds = new Set(commit.fixtures.map((fixture) => fixture.id));
+      const missing = specs.filter((spec) => !existingIds.has(spec.id));
+      if (missing.length === 0) {
+        writeOut(`voice ${profile.id}: holdout fixtures already present — skipping`);
+        continue;
+      }
+      if (skips.length > 0) writeOut(`voice ${profile.id}: intentionally skipping ${skips.join(', ')} — ${skipReason}`);
+      writeOut(`voice ${profile.id}: extending with ${missing.map((spec) => spec.id).join(', ')}`);
+      try {
+        const build = await buildVoiceProfile(profile, merged, {
+          outDir,
+          whisperBaseUrl: whisper,
+          specsOverride: missing,
+          maxAttempts: 6,
+          log: (line) => writeOut(`  ${line}`),
+        });
+        if (!build.verification.ok) {
+          failures.push(`${profile.id}: ${build.verification.problems.join('; ')}`);
+          continue;
+        }
+        const working = readFixtureManifest(outDir);
+        const newFixtures: SynthesisedFixture[] = build.manifest.fixtures;
+        const collisions = newFixtures.filter((fixture) => working.fixtures.some((existing) => existing.id === fixture.id));
+        if (collisions.length > 0) {
+          failures.push(`${profile.id}: refusing to append frozen fixtures that already exist: ${collisions.map((fixture) => fixture.id).join(', ')}`);
+          continue;
+        }
+        // Byte-check the APPENDED fixtures (a pre-existing divergence inside
+        // the working manifest is reported, never silently repaired here —
+        // the commit copy under corpus/voices is the journeys' authority).
+        const appendedCheck = verifyFixtureManifest({ ...working, fixtures: newFixtures });
+        if (appendedCheck.length > 0) {
+          failures.push(`${profile.id}: appended fixtures failed their byte check: ${appendedCheck.join('; ')}`);
+          continue;
+        }
+        const stale = verifyFixtureManifest(working);
+        if (stale.length > 0) writeOut(`  note: pre-existing working-manifest divergence (not repaired here): ${stale.join('; ')}`);
+        const mergedWorking = { ...working, fixtures: [...working.fixtures, ...newFixtures] };
+        writeFileSync(path.join(outDir, 'manifest.json'), `${JSON.stringify(mergedWorking, null, 2)}\n`, { mode: 0o600 });
+        const commitRows = newFixtures.map((fixture) => ({
+          id: fixture.id,
+          text: fixture.text,
+          pcm16kSha256: fixture.pcm16kSha256,
+          pcm16kPath: fixture.pcm16kPath,
+          masterWavPath: fixture.masterWavPath,
+          durationMs: fixture.durationMs,
+          asr: build.verification.verdicts.find((verdict) => verdict.id === fixture.id) ?? null,
+        }));
+        const mergedCommit = { ...commit, fixtures: [...commit.fixtures, ...commitRows] };
+        writeFileSync(commitPath, `${JSON.stringify(mergedCommit, null, 2)}\n`, { mode: 0o644 });
+        writeOut(`  frozen: ${commitPath} (now ${mergedCommit.fixtures.length} fixtures)`);
+      } catch (error) {
+        failures.push(`${profile.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length > 0) {
+      writeErr(`holdout voice extension FAILED:\n  ${failures.join('\n  ')}`);
+      return 2;
+    }
+    writeOut('holdout voice fixtures validated (WER ≤ 0.08, required words present) and appended');
+    return 0;
+  }
+
   for (const profile of VOICE_PROFILES) {
     const outDir = path.join(VOICES_ROOT, profile.id);
     const commitPath0 = path.join(CORPUS_DIR, 'voices', `${profile.id}.manifest.json`);
@@ -357,6 +452,7 @@ async function primaryMicCommand(argv: string[]): Promise<number> {
     return 2;
   }
   const tts = ttsArg === 'synthetic' ? 'synthetic' : undefined;
+  const profileId = flag(argv, '--voice') ?? 'voice-a';
   // A holdout episode is plannable ONLY through its validator overlay: merge
   // first (fail closed) so journeyPlan sees the frozen surface form. The
   // episode files themselves stay empty.
@@ -377,7 +473,7 @@ async function primaryMicCommand(argv: string[]): Promise<number> {
         tts,
       });
     } else {
-      plan = journeyPlan(episodeId, { corpus: mergedCorpus, corpusDir: CORPUS_DIR, arm, tts });
+      plan = journeyPlan(episodeId, { corpus: mergedCorpus, corpusDir: CORPUS_DIR, arm, tts, profileId });
     }
   } catch (error) {
     writeErr(String(error instanceof Error ? error.message : error));

@@ -35,6 +35,16 @@ import { createAttempt, finaliseAttempt, type AttemptManifest } from './records.
 import { episodeById, type LoadedCorpus } from './corpus.js';
 import { EpisodeDirector, type DirectorObservation, type DirectorAction } from './director.js';
 import { journeyPlanHash, type JourneyPlan, type JourneyTurn } from './journey-plan.js';
+import {
+  BUSY_DRIVE_PROMPT,
+  driveWorkerBusy,
+  journeyRequiresBusyDrive,
+  journeyRequiresSecondWorker,
+  prepareTwoWorkerSessions,
+  setSessionDisplayName,
+  type BusyDriveRecord,
+  type PreparedWorkerSession,
+} from './worker-prep.js';
 import { decodeWav, encodeWavPcm16 } from '../../audio-lab/lib/wav.js';
 
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
@@ -200,24 +210,36 @@ function readServerEvidence(serverLogPath: string, offset: { bytes: number }): E
   return rows;
 }
 
-// ── Internal API (worker store check) ───────────────────────────────────────
+// ── Internal API (worker store check, worker-session prep) ───────────────
 
-/** GET a path on the disposable server's Internal API over its unix socket. */
-function internalApiGet(socketPath: string, tokenPath: string, apiPath: string, timeoutMs: number): Promise<{ status: number; body: string } | null> {
+/** One request to the disposable server's Internal API over its unix socket. */
+function internalApiRequest(
+  socketPath: string,
+  tokenPath: string,
+  apiPath: string,
+  options: { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number } = {}
+): Promise<{ status: number; body: string } | null> {
   let token: string;
   try {
     token = readFileSync(tokenPath, 'utf8').trim();
   } catch {
     return Promise.resolve(null);
   }
+  const method = options.method ?? 'GET';
+  const payload = options.body !== undefined ? JSON.stringify(options.body) : null;
   return new Promise((resolve) => {
     const request = http.request(
       {
         socketPath,
         path: apiPath,
-        method: 'GET',
-        headers: { authorization: `Bearer ${token}` },
-        timeout: timeoutMs,
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(payload !== null
+            ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload).toString() }
+            : {}),
+        },
+        timeout: options.timeoutMs ?? 8_000,
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -230,8 +252,14 @@ function internalApiGet(socketPath: string, tokenPath: string, apiPath: string, 
       resolve(null);
     });
     request.on('error', () => resolve(null));
+    if (payload !== null) request.write(payload);
     request.end();
   });
+}
+
+/** GET a path on the disposable server's Internal API over its unix socket. */
+function internalApiGet(socketPath: string, tokenPath: string, apiPath: string, timeoutMs: number): Promise<{ status: number; body: string } | null> {
+  return internalApiRequest(socketPath, tokenPath, apiPath, { method: 'GET', timeoutMs });
 }
 
 
@@ -652,12 +680,77 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1_200);
+
+    // ── W4 two-session preparation (C24): BOTH worker sessions are real and
+    // prepared BEFORE the journey attaches to the first — created through the
+    // Internal API's real creation path, labelled through the app's own
+    // display-name preference so the product's picker rows are unambiguous.
+    const needsTwoSessions = journeyRequiresSecondWorker(plan);
+    let preparedWorkers: PreparedWorkerSession[] = [];
+    if (needsTwoSessions) {
+      preparedWorkers = await prepareTwoWorkerSessions((apiPath, options) =>
+        internalApiRequest(path.join(stateDir, 'internal-api.sock'), path.join(stateDir, 'internal-api-token'), apiPath, options)
+      );
+      for (const worker of preparedWorkers) {
+        const labelled = await page.evaluate(
+          async (args: { apiPath: string; body: unknown }) => {
+            const response = await fetch(args.apiPath, {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(args.body),
+            });
+            return response.ok;
+          },
+          { apiPath: '/api/preferences/display-name', body: { sessionPath: worker.sessionPath, name: worker.displayName, updatedAt: Date.now() } }
+        );
+        if (!labelled) throw new Error(`worker prep: the display-name preference for ${worker.sessionPath} was refused by the server`);
+      }
+      // The store hydrates display names at boot: reload so the product's own
+      // picker renders the prepared labels.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(1_200);
+      if (await password.isVisible().catch(() => false)) {
+        await password.fill(options.authPassword);
+        await page.locator('button[type="submit"]').click();
+        await page.waitForTimeout(3_000);
+      }
+      log(`worker prep: two real worker sessions prepared (${preparedWorkers.map((worker) => worker.displayName).join(', ')})`);
+    }
+
+    // Session ids BEFORE the UI creates the journey's worker session: the
+    // busy drive (C22) identifies the worker by this diff — never by guessing.
+    const sessionIdsBefore: string[] = [];
+    if (!needsTwoSessions) {
+      const listResponse = await internalApiRequest(
+        path.join(stateDir, 'internal-api.sock'),
+        path.join(stateDir, 'internal-api-token'),
+        '/api/v1/sessions'
+      );
+      if (!listResponse || listResponse.status !== 200) {
+        throw new Error(`busy-drive prerequisite: the Internal API session list was unavailable (HTTP ${listResponse?.status ?? 'no response'})`);
+      }
+      const parsed = JSON.parse(listResponse.body) as { sessions?: Array<{ sessionId?: unknown }> };
+      for (const row of parsed.sessions ?? []) {
+        if (typeof row.sessionId === 'string' && row.sessionId) sessionIdsBefore.push(row.sessionId);
+      }
+    }
+
     await page.locator('button[aria-label="Enter Voice Mode"]').first().click();
-    await page.getByRole('button', { name: 'Start a new session' }).click();
-    const modelRow = page.getByText('Kimi for Coding', { exact: true }).first();
-    await modelRow.waitFor({ timeout: 45_000 });
-    await modelRow.click();
-    await page.locator('button').filter({ hasText: '/tmp' }).first().click();
+    if (needsTwoSessions) {
+      // The first prepared worker is the journey's opening attachment: chosen
+      // through the product's own continue-session picker, never fabricated.
+      await page.getByRole('button', { name: 'Continue an existing session' }).click();
+      const firstRow = page.getByRole('button', { name: preparedWorkers[0]!.displayName }).first();
+      await firstRow.waitFor({ timeout: 30_000 });
+      await firstRow.click();
+    } else {
+      await page.getByRole('button', { name: 'Start a new session' }).click();
+      const modelRow = page.getByText('Kimi for Coding', { exact: true }).first();
+      await modelRow.waitFor({ timeout: 45_000 });
+      await modelRow.click();
+      await page.locator('button').filter({ hasText: '/tmp' }).first().click();
+    }
     await page.waitForSelector('[data-testid="drive-mode-surface"]', { timeout: 90_000 });
     await screenshot(page, '1-drive-mode');
     const engineBadge = await page
@@ -683,7 +776,28 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       log(`labelled ${SYNTHETIC_TTS_LABEL} shim installed: speechSynthesis replaced, spoken log armed`);
     }
 
-    // ── The director loop ────────────────────────────────────────────────
+    // ── W4 busy drive (C22): the worker is made GENUINELY busy through a real
+    // Internal API prompt BEFORE the relay is spoken, so the product's own
+    // parking decision sees the session mid-run. Nothing here touches the
+    // product's busy flag; the runtime executes the sleep itself.
+    let busyDriveRecord: BusyDriveRecord | null = null;
+    if (journeyRequiresBusyDrive(plan)) {
+      busyDriveRecord = await driveWorkerBusy((apiPath, options) =>
+        internalApiRequest(path.join(stateDir, 'internal-api.sock'), path.join(stateDir, 'internal-api-token'), apiPath, options),
+        sessionIdsBefore
+      );
+      recordSoakEvent({
+        kind: 'worker-busy-drive',
+        detail: `worker prompted through the Internal API; the runtime executes: ${BUSY_DRIVE_PROMPT.slice(0, 60)}…`,
+        workerSessionId: busyDriveRecord.workerSessionId,
+        busyObserved: busyDriveRecord.busyObserved,
+        busyPollMs: busyDriveRecord.busyPollMs,
+      });
+      await screenshot(page, 'worker-busy-drive');
+      log(`busy drive: worker ${busyDriveRecord.workerSessionId} busy after ${busyDriveRecord.busyPollMs} ms`);
+    }
+
+    // ── The director loop ─────────────────────────────────────────────────
     const waitForListening = async (listening: boolean, timeoutMs: number): Promise<boolean> => {
       return page
         .waitForSelector(`[data-testid="drive-native-listening-state"][data-listening="${listening ? 'true' : 'false'}"]`, { timeout: timeoutMs })
@@ -907,14 +1021,23 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         );
         let targetSessionId: string | null = null;
         let targetSessionName: string | null = null;
+        // The prepared second worker (C24 prep) is the target: matched by its
+        // REAL session id from the Internal API list, labelled by the display
+        // name the app's own preference route set.
+        const preparedSecond = preparedWorkers.find((worker) => worker.sessionId !== fromWorkerSessionId) ?? null;
         try {
-          const sessions = (JSON.parse(listResponse?.body ?? '{}') as { sessions?: Array<{ id?: unknown; name?: unknown }> }).sessions ?? [];
-          const candidateSession = sessions.find(
-            (session) => typeof session.id === 'string' && session.id !== fromWorkerSessionId
-          );
+          const sessions = (JSON.parse(listResponse?.body ?? '{}') as { sessions?: Array<{ sessionId?: unknown; sessionPath?: unknown }> }).sessions ?? [];
+          const candidateSession =
+            sessions.find((session) => typeof session.sessionId === 'string' && session.sessionId === preparedSecond?.sessionId) ??
+            sessions.find(
+              (session) =>
+                typeof session.sessionId === 'string' &&
+                session.sessionId !== fromWorkerSessionId &&
+                !preparedWorkers.some((worker) => worker.sessionId === session.sessionId)
+            );
           if (candidateSession) {
-            targetSessionId = candidateSession.id as string;
-            targetSessionName = typeof candidateSession.name === 'string' ? candidateSession.name : null;
+            targetSessionId = candidateSession.sessionId as string;
+            targetSessionName = preparedSecond?.sessionId === targetSessionId ? preparedSecond.displayName : null;
           }
         } catch {
           /* no session list: the switch below fails honestly */
@@ -1173,6 +1296,13 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       // W4 soak: the record declares its soak contract for the verifier, which
       // adjudicates against its own FIXED bars (the manifest can only tighten).
       ...(plan.soak ? { soak: plan.soak } : {}),
+      // W4 busy drive (C22): the real Internal API prompt that made the worker
+      // genuinely busy before the relay — recorded, never implied.
+      ...(busyDriveRecord ? { workerBusyDrive: { ...busyDriveRecord, prompt: BUSY_DRIVE_PROMPT } } : {}),
+      // W4 two-session prep (C24): the real sessions created before the journey.
+      ...(preparedWorkers.length > 0
+        ? { preparedWorkers: preparedWorkers.map((worker) => ({ sessionId: worker.sessionId, sessionPath: worker.sessionPath, displayName: worker.displayName })) }
+        : {}),
       // W4 attachment switch: freeze the observed from/to worker identities.
       ...(attachmentSwitchRecord ? { attachmentSwitch: attachmentSwitchRecord } : {}),
       // Child J3: the manifest carries the shim marker (captureMode already

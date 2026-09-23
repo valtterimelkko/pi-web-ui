@@ -59,9 +59,22 @@ export const VOICE_PROFILES: VoiceProfile[] = [
 
 /** Every spoken utterance the corpus commits to, as synthesis specs. */
 export function utteranceSpecsFromCorpus(corpus: LoadedCorpus): FixtureSpec[] {
+  return utteranceSpecsFromEpisodes(
+    corpus,
+    corpus.episodes.filter((episode) => !episode.holdout).map((episode) => episode.id)
+  );
+}
+
+/**
+ * Synthesis specs for a SUBSET of episodes — the extension path for holdout
+ * overlays: the merged copies carry the validator's frozen wording, so their
+ * fixtures are synthesised from exactly that text and no other.
+ */
+export function utteranceSpecsFromEpisodes(corpus: LoadedCorpus, episodeIds: string[]): FixtureSpec[] {
   const specs: FixtureSpec[] = [];
-  for (const episode of corpus.episodes) {
-    if (episode.holdout) continue; // no wording exists yet — the validator owns it
+  for (const episodeId of episodeIds) {
+    const episode = corpus.episodes.find((candidate) => candidate.id === episodeId);
+    if (!episode) throw new Error(`utteranceSpecsFromEpisodes: unknown episode ${episodeId}`);
     for (const turn of episode.inputTurns) {
       if (turn.text.trim() === '') continue;
       specs.push({ id: `${episode.id}-${turn.id}`, text: turn.text, requiredWords: turn.requiredWords });
@@ -121,11 +134,11 @@ export interface VoiceProfileBuild {
 export async function buildVoiceProfile(
   profile: VoiceProfile,
   corpus: LoadedCorpus,
-  options: { outDir: string; whisperBaseUrl: string; maxAttempts?: number; log?: (line: string) => void }
+  options: { outDir: string; whisperBaseUrl: string; maxAttempts?: number; log?: (line: string) => void; specsOverride?: FixtureSpec[] }
 ): Promise<VoiceProfileBuild> {
   const log = options.log ?? (() => {});
   const maxAttempts = options.maxAttempts ?? 3;
-  const specs = utteranceSpecsFromCorpus(corpus);
+  const specs = options.specsOverride ?? utteranceSpecsFromCorpus(corpus);
   // Transport-level resilience: the shared Whisper container occasionally
   // answers a transient HTTP 5xx. A transport retry never alters a verdict —
   // only the verdicts' INPUT is retried, then judged once, as before.
