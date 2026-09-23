@@ -146,6 +146,15 @@ export const EpisodeSchema = z
       /** Substrings the final spoken/grounded response MUST contain. */
       responseMustContain: z.array(z.string().min(2)),
       responseMustNotContain: z.array(z.string().min(2)),
+      /**
+       * Open-response grading (fix-loop pass 4, C09/C14/C15): the episode's
+       * conversational answer is graded without deterministic required words —
+       * one independent evaluator pass owns the wording — while the
+       * forbidden-claim check (negation-aware) and the routing/no-release
+       * evidence checks still apply. Exclusive with a non-empty
+       * `responseMustContain`.
+       */
+      openResponse: z.boolean().optional(),
       /** Response must cite where its claim came from (worker evidence). */
       sourceAttributionRequired: z.boolean().optional(),
       numericSlots: z
@@ -200,6 +209,12 @@ export const EpisodeSchema = z
       }
     }
     const turnsById = new Map(episode.inputTurns.map((turn) => [turn.id, turn]));
+    if (episode.expectedSlots.openResponse === true && episode.expectedSlots.responseMustContain.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${episode.id}: an open-response episode declares no deterministic required words (the evaluator pass grades the wording)`,
+      });
+    }
     for (const approval of episode.approvalTurns) {
       const turn = turnsById.get(approval.turnId);
       if (!turn || !['adaptive-confirm', 'adaptive-steer'].includes(turn.kind)) {

@@ -29,8 +29,7 @@ import path from 'node:path';
 
 import { describe, expect, it, afterEach } from 'vitest';
 import { loadCorpus } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
-import { journeyPlan } from '../../../../scripts/voice-lane-lab/lib/journey-plan.js';
-import { SYNTHETIC_TTS_LABEL, TTS_SHIM_SCRIPT } from '../../../../scripts/voice-lane-lab/lib/built-app.js';
+import { journeyPlan } from '../../../../scripts/voice-lane-lab/lib/journey-plan.js';import { SYNTHETIC_TTS_LABEL, TTS_SHIM_SCRIPT } from '../../../../scripts/voice-lane-lab/lib/built-app.js';
 import { verifyRecord, exitCodeFor, type VerifyOutcome } from '../../../../scripts/voice-lane-lab/lib/verifier.js';
 
 const corpus = loadCorpus();
@@ -299,11 +298,13 @@ interface StepRow { seq: number; atMs: number; observation?: Record<string, unkn
 
 class JourneyRecordBuilder {
   readonly dir: string;
+  readonly episodeId: string;
   private steps: StepRow[] = [];
   private extraFiles = new Map<string, string>();
   private manifest: Record<string, unknown>;
 
-  constructor() {
+  constructor(episodeId = 'C01') {
+    this.episodeId = episodeId;
     this.dir = path.join(tmpdir(), `voice-lab-jtts-verify-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(path.join(this.dir, 'capture'), { recursive: true });
     mkdirSync(path.join(this.dir, 'director'), { recursive: true });
@@ -314,7 +315,7 @@ class JourneyRecordBuilder {
       lab: 'voice-lane-lab',
       attemptId: 'attempt-01',
       runId: 'run-test',
-      episodeId: 'C01',
+      episodeId,
       kind: 'primary-mic-journey',
       evidenceLevel: 'E2',
       captureMode: 'fake-file+synthetic-stream-source+synthetic-tts-source',
@@ -349,6 +350,20 @@ class JourneyRecordBuilder {
     } else {
       this.manifest = { ...this.manifest, tts: { mode: 'synthetic', label: 'synthetic-tts-source', shimVerified: true, spokenCount: 1, spokenLog: 'capture/tts-spoken.json', readBackAttribution: 'synthetic-tts-source', renderedAudioClaimed: false, ...patch } };
     }
+    return this;
+  }
+
+  /** A conversation-only journey: speak t1, await the response, complete on it. */
+  conversationalFlow(responseText: string): this {
+    const episode = corpus.episodes.find((row) => row.id === this.episodeId);
+    if (!episode) throw new Error(`unknown episode ${this.episodeId}`);
+    this.manifest = {
+      ...this.manifest,
+      turnModes: [{ turnId: 't1', inputMode: 'fake-file', fixtureId: `${this.episodeId}-t1` }],
+    };
+    this.steps.push({ seq: this.steps.length + 1, atMs: 1_000, action: { type: 'speak', turnId: 't1', text: episode.inputTurns[0].text } });
+    this.steps.push({ seq: this.steps.length + 1, atMs: 1_500, action: { type: 'await', reason: 'waiting for response', deadlineMs: episode.perStepDeadlinesMs.candidateMs } });
+    this.steps.push({ seq: this.steps.length + 1, atMs: 4_000, action: { type: 'terminal', status: 'complete', reason: 'episode flow completed' }, observation: { kind: 'response', text: responseText, atMs: 4_000 } });
     return this;
   }
 
@@ -566,6 +581,49 @@ describe('verifier: the synthetic-tts seam', () => {
     const outcome = verify(builder);
     expect(codesOf(outcome).filter((code) => code.startsWith('tts-'))).toEqual([]);
     expect(outcome.verdict).toBe('pass');
+  });
+});
+
+describe('verifier: zero shim speech in a proposalless episode is complete, not incomplete (C16/C21)', () => {
+  it('a declared seam that spoke nothing, in a record with no proposal and no completed presentation, is complete and passes', () => {
+    // The C16/C21 live shape: a conversation-only journey with the seam
+    // declared; the shim had nothing to read back because no proposal was ever
+    // created and no presentation ever completed. That is the EXPECTED record.
+    const outcome = verify(
+      new JourneyRecordBuilder('C16')
+        .conversationalFlow(
+          "The worker session is new and has no messages yet, so I can't confirm if the test suite has finished running. The plan is still to run the suite."
+        )
+        .spokenLog([])
+        .audioAndFixture()
+    );
+    expect(codesOf(outcome).filter((code) => code.startsWith('tts-'))).toEqual([]);
+    expect(outcome.verdict).toBe('pass');
+    expect(exitCodeFor(outcome)).toBe(0);
+  });
+
+  it('zero speech with a claimed completed read-back is still unattributed (unchanged guard)', () => {
+    const outcome = verify(
+      new JourneyRecordBuilder('C01').canonicalFlow().proposalWireFrames().spokenLog([]).audioAndFixture()
+    );
+    expect(outcome.verdict).toBe('fail');
+    expect(codesOf(outcome)).toContain('tts-shim-readback-unattributed');
+    expect(exitCodeFor(outcome)).toBe(1);
+  });
+
+  it('zero speech with a proposal on the wire but no completed read-back keeps the seam unproven (indeterminate)', () => {
+    // A conversational record cannot honestly carry a proposal; this damaged
+    // shape must stay incomplete/indeterminate — never upgraded to a pass.
+    const builder = new JourneyRecordBuilder('C16')
+      .conversationalFlow(
+        "The worker session is new and has no messages yet, so I can't confirm if the test suite has finished running. The plan is still to run the suite."
+      )
+      .spokenLog([])
+      .audioAndFixture();
+    builder.proposalWireFrames();
+    const outcome = verify(builder);
+    expect(outcome.verdict).toBe('indeterminate');
+    expect(exitCodeFor(outcome)).toBe(2);
   });
 });
 

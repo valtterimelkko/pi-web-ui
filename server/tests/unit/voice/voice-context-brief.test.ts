@@ -137,4 +137,19 @@ describe('the native talker instruction (design rules it was shipped without)', 
     expect(instruction).toMatch(/Not sure anymore/i);
     expect(instruction).toMatch(/check the version number before anything/i);
   });
+
+  it('carries the exact C18 live example: an acknowledged amendment is a NEW relay_to_worker call, and a false cancellation claim is forbidden (K)', () => {
+    // Pass-4 C18: the operator amended a pending relay ("Wait, do not deploy
+    // anything until I approve it in the ticket first."); the model said it had
+    // cancelled the relay and waited — the corrected relay never happened. The
+    // prompt must carry that exact example and name both failures.
+    expect(instruction).toMatch(/Wait, do not deploy anything until I approve it in the ticket first/);
+    // The corrected relay carries the corrected text alone, new restriction included.
+    expect(instruction).toMatch(/new restriction/);
+    // Acknowledging the amendment without a new relay_to_worker call is the named failure.
+    expect(instruction).toMatch(/Acknowledging the amendment without a new relay_to_worker call/i);
+    // The model's false report is named and forbidden.
+    expect(instruction).toMatch(/I have cancelled that relay/);
+    expect(instruction).toMatch(/never say you cancelled, sent or held anything you did not/i);
+  });
 });

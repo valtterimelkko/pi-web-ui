@@ -12,6 +12,7 @@ import {
   CORPUS_SCHEMA_VERSION,
   HOLDOUT_IDS,
   P_TIER_DEV_SET,
+  EpisodeSchema,
   loadCorpus,
   corpusHash,
   episodeById,
@@ -69,11 +70,12 @@ describe('every episode carries what the director and verifier consume', () => {
     }
   });
 
-  it('declares semantic slots with at least one positive slot per episode', () => {
+  it('declares semantic slots with at least one positive slot per episode — or openResponse grading', () => {
     for (const episode of corpus.episodes) {
       const positive =
         episode.expectedSlots.mustContain.length > 0 ||
-        episode.expectedSlots.responseMustContain.length > 0;
+        episode.expectedSlots.responseMustContain.length > 0 ||
+        episode.expectedSlots.openResponse === true;
       expect(positive, `${episode.id} needs a checkable slot`).toBe(true);
     }
   });
@@ -145,6 +147,38 @@ describe('corpus integrity', () => {
   it('labels fixture speech as synthetic based on real wording', () => {
     for (const episode of corpus.episodes) {
       expect(episode.speechLabel).toBe('synthetic speech based on real wording');
+    }
+  });
+});
+
+describe('openResponse episodes (fix-loop pass 4, C09/C14/C15)', () => {
+  const patchC09 = (slots: Record<string, unknown>) => {
+    const c09 = JSON.parse(JSON.stringify(episodeById(corpus, 'C09'))) as Record<string, unknown>;
+    return { ...c09, expectedSlots: { ...(c09.expectedSlots as Record<string, unknown>), ...slots } };
+  };
+
+  it('accepts an episode that declares openResponse: true with an empty responseMustContain — and RETAINS the flag', () => {
+    // zod strips unknown keys: without the schema field the conductor's
+    // declaration would be silently dropped before the verifier ever saw it.
+    const parsed = EpisodeSchema.safeParse(patchC09({ openResponse: true, responseMustContain: [] }));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.expectedSlots.openResponse).toBe(true);
+      expect(parsed.data.expectedSlots.responseMustContain).toEqual([]);
+    }
+  });
+
+  it('accepts an openResponse flag absent (the schema change is optional, not breaking)', () => {
+    expect(EpisodeSchema.safeParse(episodeById(corpus, 'C09')).success).toBe(true);
+  });
+
+  it('refuses openResponse: true alongside deterministic required words (the two grading modes are exclusive)', () => {
+    const parsed = EpisodeSchema.safeParse(
+      patchC09({ openResponse: true, responseMustContain: ['retry handler'] })
+    );
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.message.includes('open-response'))).toBe(true);
     }
   });
 });
