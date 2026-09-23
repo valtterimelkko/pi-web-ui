@@ -7,11 +7,16 @@
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W1 · W2 complete · **W3 fix loop RUNNING** — pass 1 diagnosed; pass 2 INVALID (stale served
-build; runner fixed); pass 3: 5/12; **correction round 3 complete (H3 + J3 merged)**; **pass 4
-running** (`bg_89145ea9`, first pass with the labelled `--tts synthetic` seam).
+**Wave:** W1 · W2 complete · **W3 fix loop RUNNING** — passes: 1 → 1/12; 2 INVALID (stale build,
+runner fixed); 3 → 5/12; **4 → 4 clean/8 not** (binding grace + read-back seam proven; new lab/prompt
+classes found); **correction child K in flight** (presentation persistence, seam completeness,
+open-response design, C18 amendment prompt); C05 data fix committed.
 
-**Active children:** none — all correction lanes verified, merged and cleaned up.
+**Active children**
+
+| Child | Session | Worktree · branch | Lease | Watch | Scope |
+|---|---|---|---|---|---|
+| K pass-4 fixes | `01a0cc7f-bb75-73f0-b149-c13be95a7210` | `wt-voice-pass4` · `task/voice-native-pass4` | `579137c0…` | `ww_10_1790137337569` | lab semantics + C18 prompt |
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -26,12 +31,11 @@ current target.
 
 **Current truth**
 
-- master `299276b1`: W1/W2 + H2 + J2 + runner freshness fix + **H3 (binding grace)** + **J3 (labelled
-  synthetic-TTS seam)** merged. All worktrees/leases/watches released.
-- Passes: 1 → 1/12 · 2 → INVALID (stale build; fixed) · 3 → 5/12 · **4 running** — first pass with
-  every correction in the served build and the labelled read-back seam.
-- Live accounting: passes 1–4 (~40 min) + probes; inside §10. Audio-output claims remain scoped to E2
-  (a shim read-back is never an E2R/E3 pass — enforced by the verifier).
+- master `d9baaa9d`: H3 + J3 merged; C05 confirmation data fix; K brief.
+- Passes: 1 → 1/12 · 2 INVALID (fixed) · 3 → 5/12 · **4 → 4 clean** (C01/C03/C17/C19) — the two big
+  seams (binding race, read-back environment) are now proven; remaining failures are lab semantics
+  (C20/C16/C21/C09/C14/C15) and one prompt item (C18), all in K's round; C05 fixed in data.
+- Live accounting: passes 1–4 (~50 min) + probes; inside §10.
 
 **Next sequence**
 
@@ -41,4 +45,4 @@ current target.
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** pass 4's `backstop_s` covers this window; no child watches armed.
+**Backstops:** watch `ww_10` (K) primary; `wake_deadline` armed for the round-4 window.
