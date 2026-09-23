@@ -176,7 +176,16 @@ export async function driveWorkerBusy(
     // shows WHY the busy state collapsed (e.g. the model answered without
     // running the command).
     const collapseReply = await call(`/api/v1/sessions/${encodeURIComponent(workerSessionId)}/transcript?view=screen`);
-    const replyExcerpt = collapseReply?.status === 200 ? collapseReply.body.slice(-300) : `HTTP ${collapseReply?.status ?? 'none'}`;
+    let replyExcerpt = `HTTP ${collapseReply?.status ?? 'none'}`;
+    if (collapseReply?.status === 200) {
+      try {
+        const parsed = JSON.parse(collapseReply.body) as { markdown?: unknown };
+        const markdown = typeof parsed.markdown === 'string' ? parsed.markdown : collapseReply.body;
+        replyExcerpt = markdown.slice(-400).replace(/\s+/g, ' ');
+      } catch {
+        replyExcerpt = collapseReply.body.slice(-200);
+      }
+    }
     if (!(await sendPrompt())) {
       throw new Error(
         `busy drive: worker ${workerSessionId} left busy and the prompt budget (${maxPrompts}) is exhausted — the relay would not park; worker said: ${replyExcerpt}`
