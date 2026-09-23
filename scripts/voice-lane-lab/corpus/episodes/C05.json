@@ -38,8 +38,7 @@
       "text": "Yes, send it.",
       "requiredWords": [
         "yes",
-        "send",
-        "exactly"
+        "send"
       ]
     }
   ],

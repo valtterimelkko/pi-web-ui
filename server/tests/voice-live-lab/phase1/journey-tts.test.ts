@@ -28,7 +28,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { loadCorpus } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
+import { loadCorpus, episodeById } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
 import { journeyPlan } from '../../../../scripts/voice-lane-lab/lib/journey-plan.js';import { SYNTHETIC_TTS_LABEL, TTS_SHIM_SCRIPT } from '../../../../scripts/voice-lane-lab/lib/built-app.js';
 import { verifyRecord, exitCodeFor, type VerifyOutcome } from '../../../../scripts/voice-lane-lab/lib/verifier.js';
 
@@ -36,6 +36,23 @@ const corpus = loadCorpus();
 const C01_D = corpus.episodes.find((episode) => episode.id === 'C01')!.perStepDeadlinesMs;
 
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
+/** The corpus wording a fixture id stands for (the plan fails closed on text drift). */
+function wordingForFixture(id: string): string {
+  const turn = /^([A-Z]\d+)-t(\d+)$/.exec(id);
+  if (turn) {
+    const episode = episodeById(corpus, turn[1]);
+    const text = episode.inputTurns[Number(turn[2]) - 1]?.text;
+    if (text) return text;
+  }
+  const repair = /^([A-Z]\d+)-repair-1$/.exec(id);
+  if (repair) {
+    const episode = episodeById(corpus, repair[1]);
+    const branch = episode.repairBranches.find((candidate) => candidate.action === 'one-clarification');
+    if (branch?.say) return branch.say;
+  }
+  return `fixture words for ${id}`;
+}
+
 
 // ── Plan-level seam data ─────────────────────────────────────────────────────
 
@@ -47,7 +64,7 @@ const fakeVoiceManifest = (corpusDir: string, ids: string[]): string => {
     speechLabel: 'synthetic speech based on real wording',
     fixtures: ids.map((id) => ({
       id,
-      text: `fixture words for ${id}`,
+      text: wordingForFixture(id),
       pcm16kSha256: 'b'.repeat(64),
       pcm16kPath: `/root/voice-lane-lab/fixtures/voice-a/${id}.pcm16k`,
       masterWavPath: `/root/voice-lane-lab/fixtures/voice-a/${id}.master.wav`,

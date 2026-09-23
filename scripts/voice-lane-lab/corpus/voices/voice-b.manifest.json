@@ -18,7 +18,7 @@
     "silence": 0.14,
     "steps": 8
   },
-  "corpusHash": "46f4ba5404b62a4232b6db1a1c481f1b6b850990cfc8c680fc713e0b616da089",
+  "corpusHash": "156f94f67da58cd1405e5458482ad2cbd8924d691fa1483bdcc228214ced5e67",
   "audioRoot": "/root/voice-lane-lab/fixtures/voice-b",
   "fixtures": [
     {
@@ -183,15 +183,15 @@
     },
     {
       "id": "C05-t2",
-      "text": "Yes, send that exactly as written.",
-      "pcm16kSha256": "c31135b2675a3f856a58712e30b9c5107c3b492dba25d44dfa0d2cc13561761c",
+      "text": "Yes, send it.",
+      "pcm16kSha256": "838b70e5b661e23a817029633af1857178655b6d5a0ee6c512abbc22e8b44776",
       "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t2.pcm16k",
       "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t2.master.wav",
-      "durationMs": 2786.375,
+      "durationMs": 1602.1666666666667,
       "asr": {
         "id": "C05-t2",
-        "text": "Yes, send that exactly as written.",
-        "transcript": " Yes, send that exactly as written.",
+        "text": "Yes, send it.",
+        "transcript": " Yes, send it.",
         "wer": 0,
         "missingWords": [],
         "ok": true

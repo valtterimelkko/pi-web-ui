@@ -183,6 +183,15 @@ export function journeyPlan(
     if (!fixture) {
       throw new Error(`frozen voice manifest ${profileId} has no fixture ${fixtureId} (turn ${turnId})`);
     }
+    // Freshness guard (fix-loop pass 5, C05): a corpus wording change must never
+    // silently reuse audio frozen for the OLD text — the operator would hear a
+    // sentence the episode no longer declares. Fail closed; re-freeze the voices.
+    if (fixture.text !== text) {
+      throw new Error(
+        `fixture ${fixtureId} was frozen for different wording than the episode now declares — re-freeze the corpus voices ` +
+          `(manifest: ${JSON.stringify(fixture.text)}, episode: ${JSON.stringify(text)})`
+      );
+    }
     if (!fixture.asr.ok) throw new Error(`fixture ${fixtureId} failed ASR validation — refusing to plan`);
     if ((fixture.asr.wer ?? 1) > 0.08 || (fixture.asr.missingWords ?? []).length > 0) {
       throw new Error(`fixture ${fixtureId} failed WER/known-word checks — refusing to plan`);

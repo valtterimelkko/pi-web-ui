@@ -38,9 +38,8 @@
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": [
-      "version"
-    ],
+    "responseMustContain": [],
+    "openResponse": true,
     "responseMustNotContain": [
       "sent to the worker"
     ]

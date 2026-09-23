@@ -8,7 +8,7 @@
  * microphone; every later director utterance uses the labelled
  * `synthetic-stream-source` helper feeding the unchanged product pipeline.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -31,7 +31,9 @@ const fakeVoiceManifest = (corpusDir: string, ids: string[]): string => {
     speechLabel: 'synthetic speech based on real wording',
     fixtures: ids.map((id) => ({
       id,
-      text: `fixture words for ${id}`,
+      // The real episode wording: the plan now fails closed on text drift, so a
+      // faithful fake manifest must carry the wording the corpus declares.
+      text: wordingForFixture(id),
       pcm16kSha256: 'b'.repeat(64),
       pcm16kPath: `/root/voice-lane-lab/fixtures/voice-a/${id}.pcm16k`,
       masterWavPath: `/root/voice-lane-lab/fixtures/voice-a/${id}.master.wav`,
@@ -42,6 +44,23 @@ const fakeVoiceManifest = (corpusDir: string, ids: string[]): string => {
   writeFileSync(path.join(dir, 'voice-a.manifest.json'), JSON.stringify(manifest, null, 2));
   return corpusDir;
 };
+
+/** The corpus wording a fixture id stands for (turns and the one-clarification repair). */
+function wordingForFixture(id: string): string {
+  const turn = /^([A-Z]\d+)-t(\d+)$/.exec(id);
+  if (turn) {
+    const episode = episodeById(corpus, turn[1]);
+    const text = episode.inputTurns[Number(turn[2]) - 1]?.text;
+    if (text) return text;
+  }
+  const repair = /^([A-Z]\d+)-repair-1$/.exec(id);
+  if (repair) {
+    const episode = episodeById(corpus, repair[1]);
+    const branch = episode.repairBranches.find((candidate) => candidate.action === 'one-clarification');
+    if (branch?.say) return branch.say;
+  }
+  return `fixture words for ${id}`;
+}
 
 function withFakeVoices(turnIds: string[], run: (corpusDir: string) => void): void {
   const corpusDir = path.join(tmpdir(), `voice-lab-jplan-${Math.random().toString(36).slice(2)}`);
@@ -123,6 +142,18 @@ describe('the primary-mic journey plan', () => {
     });
   });
 
+  it('fails closed when a frozen fixture was made for different wording than the episode declares', () => {
+    const corpusDir = path.join(tmpdir(), `voice-lab-jplan-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(corpusDir, { recursive: true });
+    fakeVoiceManifest(corpusDir, C01_TURNS);
+    const manifestPath = path.join(corpusDir, 'voices', 'voice-a.manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const entry = manifest.fixtures.find((fixture: { id: string }) => fixture.id === 'C01-t2');
+    entry.text = 'Yes, send that exactly as written.';
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    expect(() => journeyPlan('C01', { corpus, corpusDir, arm: 'standard' })).toThrow(/different wording|re-freeze/);
+  });
+
   it('refuses to plan when a fixture failed ASR validation', () => {
     const corpusDir = path.join(tmpdir(), `voice-lab-jplan-${Math.random().toString(36).slice(2)}`);
     mkdirSync(corpusDir, { recursive: true });
@@ -133,7 +164,7 @@ describe('the primary-mic journey plan', () => {
       speechLabel: 'synthetic speech based on real wording',
       fixtures: C01_TURNS.map((id) => ({
         id,
-        text: `words for ${id}`,
+        text: wordingForFixture(id),
         pcm16kSha256: 'c'.repeat(64),
         pcm16kPath: `/x/${id}.pcm16k`,
         masterWavPath: `/x/${id}.master.wav`,
