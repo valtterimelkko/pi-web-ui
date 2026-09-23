@@ -32,6 +32,7 @@ import { createAttempt, finaliseAttempt, type AttemptManifest } from './records.
 import { episodeById, type LoadedCorpus } from './corpus.js';
 import { EpisodeDirector, type DirectorObservation, type DirectorAction } from './director.js';
 import { journeyPlanHash, type JourneyPlan, type JourneyTurn } from './journey-plan.js';
+import { decodeWav, encodeWavPcm16 } from '../../audio-lab/lib/wav.js';
 
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
 
@@ -155,16 +156,9 @@ function readServerEvidence(serverLogPath: string, offset: { bytes: number }): E
   offset.bytes = Buffer.byteLength(text, 'utf8');
   const rows: EvidenceRow[] = [];
   for (const line of fresh.split('\n')) {
-    const marker = line.indexOf('voice-kernel ');
-    if (marker < 0) continue;
-    const jsonStart = line.indexOf('{', marker);
-    if (jsonStart < 0) continue;
-    try {
-      const parsed = JSON.parse(line.slice(jsonStart)) as Record<string, unknown>;
-      rows.push({ ...(parsed as EvidenceRow), event: String(parsed.event ?? 'unknown') });
-    } catch {
-      /* a partial line is not evidence */
-    }
+    if (!line.includes('voice-kernel ')) continue;
+    const row = parseServerEvidenceLine(line);
+    if (row) rows.push(row);
   }
   return rows;
 }
@@ -243,6 +237,62 @@ export function observationFromWireFrame(
 export function observationFromEvidence(row: EvidenceRow): DirectorObservation | null {
   if (row.event === 'spoken_read_back_presented' && typeof row.proposalId === 'string') {
     return { kind: 'presentation', identity: row.proposalId, complete: true, atMs: row.atMs ?? Date.now() };
+  }
+  return null;
+}
+
+// ── Transport padding (from the first real run: the fake device starts
+// playing at device-open, the page's capture graph consumes ~2–3 s later) ────
+
+/**
+ * Silence prepended to the opening fixture in the file-backed fake device.
+ * The frozen utterance bytes are untouched and remain the provenance anchor;
+ * only the DEVICE TIMELINE shifts so the production capture pipeline is
+ * actually running before the words arrive.
+ */
+export const OPENING_PADDING_MS = 5_000;
+
+/** Mono 16-bit PCM WAV: `paddingMs` of silence, then every fixture sample. */
+export function composePaddedOpeningWav(fixtureWav: Buffer, paddingMs: number): Buffer {
+  const audio = decodeWav(new Uint8Array(fixtureWav));
+  const padFrames = Math.round((paddingMs / 1_000) * audio.sampleRate);
+  const mono = audio.channels[0];
+  const padded = new Float32Array(padFrames + mono.length);
+  padded.set(mono, padFrames);
+  return encodeWavPcm16({ channels: [padded], sampleRate: audio.sampleRate, frames: padded.length });
+}
+
+/**
+ * One server-log line → a kernel evidence row. The production evidence sink
+ * writes `voice-kernel {…}` through the central logger, so under
+ * LOG_FORMAT=json the line is JSON whose `msg` embeds the JSON payload —
+ * decode the outer line first, then the inner one.
+ */
+export function parseServerEvidenceLine(line: string): EvidenceRow | null {
+  const marker = line.indexOf('voice-kernel ');
+  if (marker < 0) return null;
+  // Shape 1: LOG_FORMAT=json — the whole line is JSON and the payload is
+  // embedded (escaped) inside the `msg` string.
+  try {
+    const outer = JSON.parse(line) as { msg?: unknown };
+    if (typeof outer.msg === 'string') {
+      const jsonStart = outer.msg.indexOf('{');
+      if (jsonStart >= 0) {
+        const parsed = JSON.parse(outer.msg.slice(jsonStart)) as Record<string, unknown>;
+        if (parsed && typeof parsed.event === 'string') return parsed as EvidenceRow;
+      }
+    }
+  } catch {
+    /* not a JSON line: fall through */
+  }
+  // Shape 2: plain text logs — the payload follows the prefix verbatim.
+  const jsonStart = line.indexOf('{', marker);
+  if (jsonStart < 0) return null;
+  try {
+    const parsed = JSON.parse(line.slice(jsonStart)) as Record<string, unknown>;
+    if (parsed && typeof parsed.event === 'string') return parsed as EvidenceRow;
+  } catch {
+    return null;
   }
   return null;
 }
@@ -469,12 +519,23 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     await waitForHttp(`http://127.0.0.1:${clientPort}/`, 90_000);
     log(`built client served: http://127.0.0.1:${clientPort} (proxying to ${serverPort})`);
 
-    // 4. Browser: private profile, fake mic bound to the opening WAV.
+    // 4. Browser: private profile, fake mic bound to the TRANSPORT-PADDED
+    // opening WAV. The frozen fixture bytes are unchanged; the silence prefix
+    // only shifts the device timeline so the production capture graph is
+    // consuming before the words arrive (the first real run showed the page's
+    // AudioContext starts ~2–3 s after device-open).
+    const opening = plan.turns[0];
+    const paddedWav = composePaddedOpeningWav(readFileSync(opening.masterWavPath), OPENING_PADDING_MS);
+    const paddedWavPath = path.join(attemptLayout.attemptDir, 'capture', 'opening-padded.wav');
+    writeFileSync(paddedWavPath, paddedWav, { mode: 0o600 });
+    const browserArgs = plan.browserArgs.map((arg) =>
+      arg.startsWith('--use-file-for-fake-audio-capture=') ? `--use-file-for-fake-audio-capture=${paddedWavPath}%noloop` : arg
+    );
     const { chromium } = await import('playwright');
     browserContext = await chromium.launchPersistentContext(userDataDir, {
       viewport: { width: 1440, height: 900 },
       permissions: ['microphone'],
-      args: plan.browserArgs,
+      args: browserArgs,
     });
     const page = await browserContext.newPage();
     page.on('pageerror', (error) => consoleErrors.push(String(error)));
@@ -798,6 +859,14 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         sourceLabel: dump.sourceLabel,
         ingressChunks: ingressRows.length,
         egressChunks: egressRows.length,
+        openingTransport: {
+          fixturePcm16kSha256: opening.pcm16kSha256,
+          fixtureMasterWav: path.basename(opening.masterWavPath),
+          paddingMs: OPENING_PADDING_MS,
+          paddedWavSha256: sha256(paddedWav),
+          paddedWavFile: 'capture/opening-padded.wav',
+          note: 'device-timeline shift only; utterance bytes unchanged',
+        },
       },
       laneStop: { finalState: stopObserved ? 'stopped-start-control-back' : 'live' },
       budget: {
