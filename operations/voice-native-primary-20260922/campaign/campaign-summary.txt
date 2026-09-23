@@ -1,0 +1,110 @@
+campaign seed: 20260923 | episodes: C01 C03 C05 C09 | arms: standard et-high
+C01 standard exit=1 :: journey: fail — deadline exceeded waiting for delivery; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C01 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C03 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C03 standard exit=1 :: journey: fail — deadline exceeded waiting for delivery; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C05 standard exit=1 :: journey: fail — deadline exceeded waiting for delivery; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C05 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C09 et-high exit=0 :: journey: pass — ingress 197, egress 105 chunks; terminal complete verifier verdict: pass 
+C09 standard exit=0 :: journey: pass — ingress 217, egress 105 chunks; terminal complete verifier verdict: pass 
+CAMPAIGN-COMPLETE
+--- rerun C01 C03 C05 (post-M3) ---
+campaign seed: 20260923 | episodes: C01 C03 C05 | arms: standard et-high
+C01 standard exit=0 :: journey: pass — ingress 336, egress 193 chunks; terminal complete verifier verdict: pass 
+C01 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C03 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C03 standard exit=0 :: journey: pass — ingress 342, egress 292 chunks; terminal complete verifier verdict: pass 
+C05 standard exit=0 :: journey: pass — ingress 405, egress 350 chunks; terminal complete verifier verdict: pass 
+C05 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+--- rerun et-high C01 C03 C05 (post-M4) ---
+campaign seed: 20260923 | episodes: C01 C03 C05 | arms: et-high
+C01 et-high exit=1 :: journey: fail — deadline exceeded waiting for release; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C03 et-high exit=1 :: journey: fail — deadline exceeded waiting for release; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C05 et-high exit=1 :: journey: fail — deadline exceeded waiting for release; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+--- rerun et-high C01 C03 C05 (post-M5) ---
+campaign seed: 20260923 | episodes: C01 C03 C05 | arms: et-high
+C01 et-high exit=1 :: journey: fail — deadline exceeded waiting for release; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C03 et-high exit=1 :: journey: fail — deadline exceeded waiting for release; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C05 et-high exit=1 :: journey: fail — deadline exceeded waiting for release; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+--- rerun et-high C01 C03 C05 (post-M5 + talker-text quiescence) ---
+campaign seed: 20260923 | episodes: C01 C03 C05 | arms: et-high
+C01 et-high exit=0 :: journey: pass — ingress 511, egress 194 chunks; terminal complete verifier verdict: pass 
+C03 et-high exit=0 :: journey: pass — ingress 397, egress 291 chunks; terminal complete verifier verdict: pass 
+C05 et-high exit=1 :: journey: fail — deadline exceeded waiting for release; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+--- C05 et-high retry (same revision; flakiness check) ---
+campaign seed: 20260923 | episodes: C05 | arms: et-high
+C05 et-high exit=0 :: journey: pass — ingress 533, egress 351 chunks; terminal complete verifier verdict: pass 
+CAMPAIGN-COMPLETE
+--- revision bb61cc1f: chunk1 re-run + C14-C17 (12 cells) ---
+campaign seed: 20260923 | episodes: C01 C03 C05 C09 C14 C15 C16 C17 | arms: standard et-high
+C01 standard exit=0 :: journey: pass — ingress 353, egress 193 chunks; terminal complete verifier verdict: pass 
+C01 et-high exit=0 :: journey: pass — ingress 476, egress 194 chunks; terminal complete verifier verdict: pass 
+C03 et-high exit=0 :: journey: pass — ingress 456, egress 291 chunks; terminal complete verifier verdict: pass 
+C03 standard exit=0 :: journey: pass — ingress 401, egress 292 chunks; terminal complete verifier verdict: pass 
+C05 standard exit=0 :: journey: pass — ingress 406, egress 351 chunks; terminal complete verifier verdict: pass 
+C05 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C09 et-high exit=0 :: journey: pass — ingress 172, egress 105 chunks; terminal complete verifier verdict: pass 
+C09 standard exit=0 :: journey: pass — ingress 197, egress 106 chunks; terminal complete verifier verdict: pass 
+C14 standard exit=0 :: journey: pass — ingress 245, egress 168 chunks; terminal complete verifier verdict: pass 
+C14 et-high exit=0 :: journey: pass — ingress 194, egress 168 chunks; terminal complete verifier verdict: pass 
+C15 et-high exit=0 :: journey: pass — ingress 147, egress 104 chunks; terminal complete verifier verdict: pass 
+C15 standard exit=0 :: journey: pass — ingress 185, egress 103 chunks; terminal complete verifier verdict: pass 
+C16 standard exit=0 :: journey: pass — ingress 236, egress 209 chunks; terminal complete verifier verdict: pass 
+C16 et-high exit=0 :: journey: pass — ingress 173, egress 209 chunks; terminal complete verifier verdict: pass 
+C17 et-high exit=0 :: journey: pass — ingress 768, egress 352 chunks; terminal complete verifier verdict: pass 
+C17 standard exit=0 :: journey: pass — ingress 478, egress 351 chunks; terminal complete verifier verdict: pass 
+CAMPAIGN-COMPLETE
+--- C18-C21 both arms (8 cells) ---
+campaign seed: 20260923 | episodes: C18 C19 C20 C21 | arms: standard et-high
+C18 standard exit=0 :: journey: pass — ingress 574, egress 383 chunks; terminal complete verifier verdict: pass 
+C18 et-high exit=0 :: journey: pass — ingress 920, egress 385 chunks; terminal complete verifier verdict: pass 
+C19 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C19 standard exit=0 :: journey: pass — ingress 531, egress 356 chunks; terminal complete verifier verdict: pass 
+C20 standard exit=0 :: journey: pass — ingress 560, egress 419 chunks; terminal complete verifier verdict: pass 
+C20 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C21 et-high exit=0 :: journey: pass — ingress 227, egress 283 chunks; terminal complete verifier verdict: pass 
+C21 standard exit=0 :: journey: pass — ingress 259, egress 283 chunks; terminal complete verifier verdict: pass 
+CAMPAIGN-COMPLETE
+--- C19/C20 et-high retry + holdout C10 C11 C22 C24 both arms (10 cells) ---
+campaign seed: 20260923 | episodes: C19 C20 | arms: et-high
+C19 et-high exit=0 :: journey: pass — ingress 993, egress 357 chunks; terminal complete verifier verdict: pass 
+C20 et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+campaign seed: 20260923 | episodes: C10 C11 C22 C24 | arms: standard et-high
+C10 standard exit=0 :: journey: pass — ingress 292, egress 320 chunks; terminal complete verifier verdict: pass 
+C10 et-high exit=0 :: journey: pass — ingress 233, egress 319 chunks; terminal complete verifier verdict: pass 
+C11 et-high exit=0 :: journey: pass — ingress 923, egress 453 chunks; terminal complete verifier verdict: pass 
+C11 standard exit=1 :: journey: fail — deadline exceeded waiting for presentation; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C22 standard exit=0 :: journey: pass — ingress 544, egress 292 chunks; terminal complete verifier verdict: pass 
+C22 et-high exit=0 :: journey: pass — ingress 709, egress 293 chunks; terminal complete verifier verdict: pass 
+C24 et-high exit=1 :: journey: fail — deadline exceeded waiting for switch-retirement; repair budget exhausted (plan §5.3) verifier verdict: fail 
+C24 standard exit=1 :: journey: fail — deadline exceeded waiting for switch-ack; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+--- C24 both arms + soak both arms ---
+campaign seed: 20260923 | episodes: C24 | arms: standard et-high
+C24 standard exit=1 :: journey: pass — ingress 105, egress 162 chunks; terminal complete verifier verdict: fail 
+C24 et-high exit=1 :: journey: fail — deadline exceeded waiting for switch-retirement; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+campaign seed: 20260923 | episodes: SOAK-10MIN | arms: standard et-high
+SOAK-10MIN standard exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+SOAK-10MIN et-high exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+--- C24 both arms (verifier fixed) ---
+campaign seed: 20260923 | episodes: C24 | arms: standard et-high
+C24 standard exit=0 :: journey: pass — ingress 104, egress 162 chunks; terminal complete verifier verdict: pass 
+C24 et-high exit=1 :: journey: fail — deadline exceeded waiting for switch-retirement; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+--- retries: C11 standard, C20 et-high, SOAK standard ---
+campaign seed: 20260923 | episodes: C11 | arms: standard
+C11 standard exit=1 :: journey: fail — deadline exceeded waiting for presentation; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE
+campaign seed: 20260923 | episodes: C20 | arms: et-high
+C20 et-high exit=0 :: journey: pass — ingress 723, egress 420 chunks; terminal complete verifier verdict: pass 
+CAMPAIGN-COMPLETE
+campaign seed: 20260923 | episodes: SOAK-10MIN | arms: standard
+SOAK-10MIN standard exit=1 :: journey: fail — deadline exceeded waiting for candidate; repair budget exhausted (plan §5.3) verifier verdict: fail 
+CAMPAIGN-COMPLETE

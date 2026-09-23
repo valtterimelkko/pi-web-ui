@@ -28,8 +28,10 @@ anything" precondition is never addressed; the reply substitutes monitoring talk
 indeterminate** (a promise to check, no answer in the record). Per the plan, an evaluator fail or an
 indeterminate is never an auto-pass, so those cells are not accepted.
 
-Per-cell outcomes and every attempt: `CAMPAIGN-INDEX.json` + `campaign-summary.txt`; raw records under
-`/root/voice-lane-lab/campaigns/primary-mic-journeys/runs/<EPISODE>-<arm>/attempt-*`.
+Per-cell outcomes and every attempt: `CAMPAIGN-INDEX.json` + `campaign-summary.txt` (copied into this
+directory; the raw attempt records — the authority — live outside the repo under
+`/root/voice-lane-lab/campaigns/primary-mic-journeys/runs/<EPISODE>-<arm>/attempt-*`, and the
+reviewer's reproduction of every one of them is in `../coordination/RV/`).
 
 ## Paired (discordant) comparison — the rule-4 test
 

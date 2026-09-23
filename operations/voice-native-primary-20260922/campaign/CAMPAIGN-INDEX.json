@@ -1,0 +1,244 @@
+{
+ "campaignRevision": "5fc3f1bbdc40cc02b97ae0b5e334a8686af6d211",
+ "requiredCells": 34,
+ "cells": {
+  "C01-standard": {
+   "episode": "C01",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C01 standard exit=0 :: journey: pass \u2014 ingress 353, egress 193 chunks; terminal complete verifier verdict: pass "
+  },
+  "C01-et-high": {
+   "episode": "C01",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C01 et-high exit=0 :: journey: pass \u2014 ingress 476, egress 194 chunks; terminal complete verifier verdict: pass "
+  },
+  "C03-et-high": {
+   "episode": "C03",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C03 et-high exit=0 :: journey: pass \u2014 ingress 456, egress 291 chunks; terminal complete verifier verdict: pass "
+  },
+  "C03-standard": {
+   "episode": "C03",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C03 standard exit=0 :: journey: pass \u2014 ingress 401, egress 292 chunks; terminal complete verifier verdict: pass "
+  },
+  "C05-standard": {
+   "episode": "C05",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C05 standard exit=0 :: journey: pass \u2014 ingress 406, egress 351 chunks; terminal complete verifier verdict: pass "
+  },
+  "C05-et-high": {
+   "episode": "C05",
+   "arm": "et-high",
+   "exit": "1",
+   "verdict": "fail",
+   "line": "C05 et-high exit=1 :: journey: fail \u2014 deadline exceeded waiting for candidate; repair budget exhausted (plan \u00a75.3) verifier verdict: fail "
+  },
+  "C09-et-high": {
+   "episode": "C09",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C09 et-high exit=0 :: journey: pass \u2014 ingress 172, egress 105 chunks; terminal complete verifier verdict: pass "
+  },
+  "C09-standard": {
+   "episode": "C09",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C09 standard exit=0 :: journey: pass \u2014 ingress 197, egress 106 chunks; terminal complete verifier verdict: pass "
+  },
+  "C14-standard": {
+   "episode": "C14",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C14 standard exit=0 :: journey: pass \u2014 ingress 245, egress 168 chunks; terminal complete verifier verdict: pass "
+  },
+  "C14-et-high": {
+   "episode": "C14",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C14 et-high exit=0 :: journey: pass \u2014 ingress 194, egress 168 chunks; terminal complete verifier verdict: pass "
+  },
+  "C15-et-high": {
+   "episode": "C15",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C15 et-high exit=0 :: journey: pass \u2014 ingress 147, egress 104 chunks; terminal complete verifier verdict: pass "
+  },
+  "C15-standard": {
+   "episode": "C15",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C15 standard exit=0 :: journey: pass \u2014 ingress 185, egress 103 chunks; terminal complete verifier verdict: pass "
+  },
+  "C16-standard": {
+   "episode": "C16",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C16 standard exit=0 :: journey: pass \u2014 ingress 236, egress 209 chunks; terminal complete verifier verdict: pass "
+  },
+  "C16-et-high": {
+   "episode": "C16",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C16 et-high exit=0 :: journey: pass \u2014 ingress 173, egress 209 chunks; terminal complete verifier verdict: pass "
+  },
+  "C17-et-high": {
+   "episode": "C17",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C17 et-high exit=0 :: journey: pass \u2014 ingress 768, egress 352 chunks; terminal complete verifier verdict: pass "
+  },
+  "C17-standard": {
+   "episode": "C17",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C17 standard exit=0 :: journey: pass \u2014 ingress 478, egress 351 chunks; terminal complete verifier verdict: pass "
+  },
+  "C18-standard": {
+   "episode": "C18",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C18 standard exit=0 :: journey: pass \u2014 ingress 574, egress 383 chunks; terminal complete verifier verdict: pass "
+  },
+  "C18-et-high": {
+   "episode": "C18",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C18 et-high exit=0 :: journey: pass \u2014 ingress 920, egress 385 chunks; terminal complete verifier verdict: pass "
+  },
+  "C19-et-high": {
+   "episode": "C19",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C19 et-high exit=0 :: journey: pass \u2014 ingress 993, egress 357 chunks; terminal complete verifier verdict: pass "
+  },
+  "C19-standard": {
+   "episode": "C19",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C19 standard exit=0 :: journey: pass \u2014 ingress 531, egress 356 chunks; terminal complete verifier verdict: pass "
+  },
+  "C20-standard": {
+   "episode": "C20",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C20 standard exit=0 :: journey: pass \u2014 ingress 560, egress 419 chunks; terminal complete verifier verdict: pass "
+  },
+  "C20-et-high": {
+   "episode": "C20",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C20 et-high exit=0 :: journey: pass \u2014 ingress 723, egress 420 chunks; terminal complete verifier verdict: pass "
+  },
+  "C21-et-high": {
+   "episode": "C21",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C21 et-high exit=0 :: journey: pass \u2014 ingress 227, egress 283 chunks; terminal complete verifier verdict: pass "
+  },
+  "C21-standard": {
+   "episode": "C21",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C21 standard exit=0 :: journey: pass \u2014 ingress 259, egress 283 chunks; terminal complete verifier verdict: pass "
+  },
+  "C10-standard": {
+   "episode": "C10",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C10 standard exit=0 :: journey: pass \u2014 ingress 292, egress 320 chunks; terminal complete verifier verdict: pass "
+  },
+  "C10-et-high": {
+   "episode": "C10",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C10 et-high exit=0 :: journey: pass \u2014 ingress 233, egress 319 chunks; terminal complete verifier verdict: pass "
+  },
+  "C11-et-high": {
+   "episode": "C11",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C11 et-high exit=0 :: journey: pass \u2014 ingress 923, egress 453 chunks; terminal complete verifier verdict: pass "
+  },
+  "C11-standard": {
+   "episode": "C11",
+   "arm": "standard",
+   "exit": "1",
+   "verdict": "fail",
+   "line": "C11 standard exit=1 :: journey: fail \u2014 deadline exceeded waiting for presentation; repair budget exhausted (plan \u00a75.3) verifier verdict: fail "
+  },
+  "C22-standard": {
+   "episode": "C22",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C22 standard exit=0 :: journey: pass \u2014 ingress 544, egress 292 chunks; terminal complete verifier verdict: pass "
+  },
+  "C22-et-high": {
+   "episode": "C22",
+   "arm": "et-high",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C22 et-high exit=0 :: journey: pass \u2014 ingress 709, egress 293 chunks; terminal complete verifier verdict: pass "
+  },
+  "C24-et-high": {
+   "episode": "C24",
+   "arm": "et-high",
+   "exit": "1",
+   "verdict": "fail",
+   "line": "C24 et-high exit=1 :: journey: fail \u2014 deadline exceeded waiting for switch-retirement; repair budget exhausted (plan \u00a75.3) verifier verdict: fail "
+  },
+  "C24-standard": {
+   "episode": "C24",
+   "arm": "standard",
+   "exit": "0",
+   "verdict": "pass",
+   "line": "C24 standard exit=0 :: journey: pass \u2014 ingress 104, egress 162 chunks; terminal complete verifier verdict: pass "
+  },
+  "SOAK-10MIN-standard": {
+   "episode": "SOAK-10MIN",
+   "arm": "standard",
+   "exit": "1",
+   "verdict": "fail",
+   "line": "SOAK-10MIN standard exit=1 :: journey: fail \u2014 deadline exceeded waiting for candidate; repair budget exhausted (plan \u00a75.3) verifier verdict: fail "
+  },
+  "SOAK-10MIN-et-high": {
+   "episode": "SOAK-10MIN",
+   "arm": "et-high",
+   "exit": "1",
+   "verdict": "fail",
+   "line": "SOAK-10MIN et-high exit=1 :: journey: fail \u2014 deadline exceeded waiting for candidate; repair budget exhausted (plan \u00a75.3) verifier verdict: fail "
+  }
+ }
+}
