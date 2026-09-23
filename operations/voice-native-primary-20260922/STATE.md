@@ -14,14 +14,13 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| L4 W4 harness | `01a0ccea-8c88-73f0-b149-c143c6b54a60` | `wt-voice-w4` · `task/voice-native-w4` | `abb1634d…` | `ww_11_1790144328455` | soak runner + parking + attachment switch + holdout overlay mechanism |
+| L5 W4 seams | `01a0cd4e-d532-73f0-b149-c147c1964c0e` | `wt-voice-w5` · `task/voice-native-w5` | `89705e73…` | `ww_12_1790150904079` | soak debug, busy drive (C22), two-session prep (C24) |
 
-**W4 status:** validator overlays authored for C10/C11 (`corpus/holdout/*.validator.json`); C22/C24
-overlays await L4's mechanism; the 24 core cells are ready to run on the frozen revision once the
-heavy-runner window is free (one heavy runner at a time).
-
-**L4 progress (07:27Z):** commit `757c93fe` — holdout validator overlays (fail-closed merge, drivable
-merged episodes); mid-work on soak/parking/attachment (5 lab files modified); no handback yet.
+**W4 status:** L4 merged (`2ed17321`: overlays, soak runner, parking/attachment mechanisms).
+**Holdout validator freeze complete** (`8c4ed67e`): C10/C11/C22/C24 overlays + fixtures (both voices,
+WER 0, zero drift) after instrument fixes (compound join; tens fold; C22 wording). Campaign script ready
+at `/root/voice-lane-lab/campaigns/native-primary-20260922/run-campaign.sh` (paired by ID, alternating
+arms, seed 20260923); the 34-cell window opens when L5 lands (one heavy runner at a time).
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
