@@ -14,13 +14,11 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| L5 W4 seams | `01a0cd4e-d532-73f0-b149-c147c1964c0e` | `wt-voice-w5` · `task/voice-native-w5` | `89705e73…` | `ww_12_1790150904079` | soak debug, busy drive (C22), two-session prep (C24) |
+| L5 W4 seams (round 2) | `01a0cd4e-d532-73f0-b149-c147c1964c0e` | `wt-voice-w5` · `task/voice-native-w5` | (expired) | `ww_12` | C22 → C24 → soak, tighter goal `349ca0c3` running |
 
-**W4 status:** L4 merged (`2ed17321`: overlays, soak runner, parking/attachment mechanisms).
-**Holdout validator freeze complete** (`8c4ed67e`): C10/C11/C22/C24 overlays + fixtures (both voices,
-WER 0, zero drift) after instrument fixes (compound join; tens fold; C22 wording). Campaign script ready
-at `/root/voice-lane-lab/campaigns/native-primary-20260922/run-campaign.sh` (paired by ID, alternating
-arms, seed 20260923); the 34-cell window opens when L5 lands (one heavy runner at a time).
+**W4 status:** L4 merged (`2ed17321`). Holdout validator freeze complete (`8c4ed67e`).
+**L5 round 1 failed (hang, nothing on disk)** — recovered with a tighter goal on the same session.
+Campaign script ready; the 34-cell window opens when L5 lands.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
