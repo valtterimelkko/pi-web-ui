@@ -22,8 +22,20 @@
  *   doctor                          what this host can and cannot do
  *   run [--out <dir>] [--question "…"] [--listen-ms N] [--json]
  *   analyse <dir>                    re-analyse a recorded capture (no network)
+ *   built-app [--episode C01] …      Phase 1 capture proof (L)
+ *   primary-mic --episode C01 --arm standard [--server-env K=V]…
+ *                                    the built-app main-control journey: real
+ *                                    fake-file mic speech + labelled
+ *                                    synthetic-stream-source steps, immutable
+ *                                    E2 record, offline-verifiable (J)
+ *   campaign --plan --arms standard,et-high [--dry-run] [--server-env K=V]…
+ *                                    resume-safe §8 matrix runner with a full
+ *                                    scheduled-cell index (J)
+ *   verify <attemptDir>              offline verification of one record
  *
- * Exit codes: 0 clean, 1 defect demonstrated, 2 no proof (refused/incomplete).
+ * Exit codes: 0 pass/clean, 1 defect demonstrated, 2 no proof
+ * (refused/incomplete/invalid). Missing credentials or absent ingress
+ * evidence on the primary-mic journey is 2 — never a green skip.
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -47,6 +59,17 @@ import {
   planHash,
   runCaptureProof,
 } from './lib/built-app.js';
+import {
+  journeyPlan,
+  journeyPlanHash,
+  armServerEnv,
+  ARM_LABELS,
+  type ArmLabel,
+} from './lib/journey-plan.js';
+import { runJourney } from './lib/journey-run.js';
+import {
+  newCampaignIndex,
+} from './lib/campaign.js';
 import { verifyRecord, exitCodeFor } from './lib/verifier.js';
 import { freezeFixtureManifest } from '../voice-live-lab/lib/fixtures.js';
 
@@ -169,6 +192,19 @@ function sha256Of(relativePath: string): string {
   }
 }
 
+
+/** Collect repeated --server-env KEY=VALUE entries. */
+function collectServerEnv(argv: string[]): string[] {
+  const entries: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '--server-env') {
+      const value = argv[index + 1];
+      if (value && !value.startsWith('--')) entries.push(value);
+    }
+  }
+  return entries;
+}
+
 function doctor(): number {
   const lines: string[] = ['# Voice Lane Lab doctor', ''];
   let ok = true;
@@ -288,6 +324,57 @@ async function builtAppCommand(argv: string[]): Promise<number> {
   return result.ok ? 0 : 2;
 }
 
+/**
+ * The named `primary-mic` browser journey (child J; plan §11 Phase 2).
+ * Exit: 0 pass, 1 demonstrated failure (verifier), 2 incomplete/invalid —
+ * including missing child-server credentials and absent ingress evidence.
+ */
+async function primaryMicCommand(argv: string[]): Promise<number> {
+  const episodeId = flag(argv, '--episode');
+  const arm = flag(argv, '--arm') ?? 'standard';
+  const dryRun = argv.includes('--dry-run');
+  const serverEnvEntries = collectServerEnv(argv);
+  const corpus = loadCorpus();
+  let plan;
+  try {
+    if (!episodeId) throw new Error('--episode <id> is required (a corpus episode, not a holdout)');
+    plan = journeyPlan(episodeId, { corpus, corpusDir: CORPUS_DIR, arm });
+  } catch (error) {
+    writeErr(String(error instanceof Error ? error.message : error));
+    return 2;
+  }
+  if (dryRun) {
+    writeOut(JSON.stringify({ ...plan, planHash: journeyPlanHash(plan) }, null, 2));
+    writeOut('');
+    writeOut(`dry-run journey plan OK: ${plan.episodeId} arm=${plan.arm} turns=${plan.turns.length} modes=${plan.turns.map((turn) => turn.inputMode).join(',')}`);
+    writeOut('no browser, no server, no network — a dry run proves the plan, not the journey');
+    return 0;
+  }
+  const result = await runJourney(plan, {
+    repoRoot: process.cwd(),
+    corpus,
+    corpusDir: CORPUS_DIR,
+    recordsRoot: RECORDS_ROOT,
+    campaignId: 'primary-mic-journeys',
+    authPassword: process.env.VOICE_LAB_AUTH_PASSWORD ?? 'voice-lab-disposable',
+    serverEnv: armServerEnv(arm, serverEnvEntries),
+    log: writeOut,
+  });
+  writeOut(`journey: ${result.outcome} — ${result.detail}`);
+  // The VERDICT is the offline verifier's, from the raw record — never the
+  // runner's own word.
+  const outcome = verifyRecord(result.attemptDir, { corpus });
+  for (const line of outcome.lines) writeOut(`  ${line}`);
+  for (const problem of outcome.problems) writeOut(`  PROBLEM ${problem.code}: ${problem.detail}`);
+  writeOut(`verifier verdict: ${outcome.verdict}`);
+  const code = exitCodeFor(outcome);
+  if (result.outcome === 'incomplete' && code === 0) {
+    writeErr('the runner reported incomplete evidence but the verifier passed — refusing to exit 0');
+    return 2;
+  }
+  return code;
+}
+
 /** Offline verification of an attempt record (exit 0/1/2). */
 function verifyCommand(argv: string[]): number {
   const dir = argv[1];
@@ -300,6 +387,65 @@ function verifyCommand(argv: string[]): number {
   for (const problem of outcome.problems) writeOut(`  PROBLEM ${problem.code}: ${problem.detail}`);
   writeOut(`verdict: ${outcome.verdict}`);
   return exitCodeFor(outcome);
+}
+
+/**
+ * Campaign runner CLI (child J; plan §8/§9). `--plan --dry-run` enumerates
+ * the §8 matrix and validates the index shape with no server and no provider
+ * calls. Real execution walks the paired execution order one heavy runner at
+ * a time, resume-safe via the campaign index.
+ */
+function campaignCommand(argv: string[]): number {
+  const armsArg = flag(argv, '--arms') ?? 'standard,et-high';
+  const arms = armsArg.split(',').map((arm) => arm.trim()).filter(Boolean) as ArmLabel[];
+  for (const arm of arms) {
+    if (!ARM_LABELS.includes(arm)) {
+      writeErr(`unknown arm "${arm}" — expected one of ${ARM_LABELS.join(', ')}`);
+      return 2;
+    }
+  }
+  const serverEnvEntries = collectServerEnv(argv);
+  let serverEnv: Record<string, string>;
+  try {
+    serverEnv = armServerEnv(arms[0], serverEnvEntries);
+    void serverEnv;
+  } catch (error) {
+    writeErr(String(error instanceof Error ? error.message : error));
+    return 2;
+  }
+  const corpus = loadCorpus();
+  const campaignId = flag(argv, '--campaign-id') ?? `matrix-${arms.join('-')}`;
+  const seed = Number(flag(argv, '--seed') ?? 20260922);
+  const includeExtend = argv.includes('--include-extend');
+  const includeNoise = argv.includes('--include-noise');
+  const budgetExhausted = argv.includes('--budget-exhausted') || process.env.VOICE_LAB_BUDGET_EXHAUSTED === '1';
+  const maxCells = Number(flag(argv, '--max-cells') ?? 0);
+
+  if (argv.includes('--plan') && argv.includes('--dry-run')) {
+    const index = newCampaignIndex({ campaignId, corpus, arms, seed });
+    const byStratum = (stratum: string) => index.cells.filter((cell) => cell.stratum === stratum);
+    writeOut(`campaign ${campaignId}: seed ${seed}, arms ${arms.join('+')}`);
+    for (const stratum of ['core', 'holdout', 'soak', 'extend', 'noise']) {
+      const cells = byStratum(stratum);
+      writeOut(`  ${stratum.padEnd(8)} ${String(cells.length).padStart(3)} cells (${arms.map((arm) => cells.filter((cell) => cell.arm === arm).length).join(' + ')} per arm)`);
+    }
+    writeOut(`  total    ${String(index.cells.length).padStart(3)} cells; required (core+holdout+soak): ${index.requiredCellCount}`);
+    const gated = index.cells.filter((cell) => cell.gate !== null);
+    writeOut(`  validator/runner-gated cells: ${gated.length}`);
+    for (const cell of gated.slice(0, 12)) writeOut(`    ${cell.cellId}${cell.gate === 'validator-frozen' ? ' [validator-gated]' : ` [${cell.gate}]`}`);
+    if (gated.length > 12) writeOut(`    … and ${gated.length - 12} more`);
+    writeOut(`  execution order (first 8): ${index.executionOrderCellIds.slice(0, 8).join(' → ')}`);
+    writeOut('dry-run: no index written, no server, no provider calls');
+    return 0;
+  }
+
+  if (argv.includes('--plan') || argv.includes('--dry-run')) {
+    writeErr('combine --plan with --dry-run for the no-network validation, or drop both to execute');
+    return 2;
+  }
+
+  writeErr('live campaign execution is conductor-gated (plan §11 Phase 5): only --plan --dry-run is enabled in this build');
+  return 2;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -411,6 +557,12 @@ async function main(argv: string[]): Promise<number> {
   }
   if (command === 'built-app') {
     return await builtAppCommand(argv);
+  }
+  if (command === 'primary-mic') {
+    return await primaryMicCommand(argv);
+  }
+  if (command === 'campaign') {
+    return campaignCommand(argv);
   }
   if (command === 'verify') {
     return verifyCommand(argv.slice(0));

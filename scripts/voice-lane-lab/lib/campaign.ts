@@ -117,12 +117,15 @@ export function newCampaignIndex(options: {
  * the two arms alternate, the first block's order decided by the seed. The
  * same seed always produces the same order (plan §6.2).
  */
-export function executionOrder(cells: Array<Pick<MatrixCell, 'cellId' | 'episodeId' | 'arm' | 'stratum' | 'profile' | 'gate'>>, seed: number): Array<MatrixCell & { gate: CellGate }> {
+/** A minimal structural view of a scheduled cell (arm is a plain label here). */
+export type OrderableCell = Omit<MatrixCell, 'arm'> & { arm: string };
+
+export function executionOrder(cells: OrderableCell[], seed: number): OrderableCell[] {
   const episodeOrder: string[] = [];
   for (const cell of cells) {
     if (!episodeOrder.includes(cell.episodeId)) episodeOrder.push(cell.episodeId);
   }
-  const out: Array<MatrixCell & { gate: CellGate }> = [];
+  const out: OrderableCell[] = [];
   episodeOrder.forEach((episodeId, blockIndex) => {
     const block = cells.filter((cell) => cell.episodeId === episodeId);
     const standardFirst = (blockIndex + seed) % 2 === 0;
