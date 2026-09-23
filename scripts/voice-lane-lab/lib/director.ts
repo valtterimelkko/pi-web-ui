@@ -87,7 +87,9 @@ export type DirectorObservation =
   | { kind: 'worker-store'; identity: string; ok: boolean; atMs: number }
   | { kind: 'response'; text: string; atMs: number }
   /** The mount parked the relay while the worker was busy (W4 busy parking). */
-  | { kind: 'parked'; itemId: string; atMs: number };
+  | { kind: 'parked'; itemId: string; atMs: number }
+  /** The pending proposal was retired (replaced/cancelled) on a worker switch (W4 attachment switch, L5). */
+  | { kind: 'retirement'; identity: string; outcome: string; atMs: number };
 
 export type DirectorAction =
   | { type: 'speak'; turnId: string; text: string }
@@ -115,6 +117,8 @@ type PhaseKind =
   | 'await-delivery'
   | 'await-worker-store'
   | 'await-parked'
+  | 'await-switch-retirement'
+  | 'await-switch-ack'
   | 'promote'
   | 'switch'
   | 'pace'
@@ -151,6 +155,8 @@ const AWAIT_LABELS: Record<string, string> = {
   'await-delivery': 'delivery',
   'await-worker-store': 'worker store',
   'await-parked': 'parked item',
+  'await-switch-retirement': 'switch retirement',
+  'await-switch-ack': 'switch acknowledgement',
 };
 
 export class EpisodeDirector {
@@ -167,6 +173,18 @@ export class EpisodeDirector {
   private pendingPresentation: { identity: string; complete: boolean } | null = null;
   /** A parked item observed while a speak phase was current (W4 busy parking). */
   private pendingParked: { itemId: string } | null = null;
+  /**
+   * The latest resolution trio observed while a non-tail phase was current
+   * (L5 multi-cycle soak): an intermediate relay cycle's release, delivery
+   * and worker-store land while later turns are still speaking. The tail
+   * consumes the trio matching the CURRENT approved identity; an older
+   * cycle's trio is already recorded in the runner's steps for the verifier.
+   */
+  private pendingRelease: { identity: string } | null = null;
+  private pendingDelivery: { identity: string } | null = null;
+  private pendingWorkerStore: { identity: string | null; ok: boolean } | null = null;
+  /** A retirement observed while a non-tail phase was current (W4 attachment switch, L5). */
+  private pendingRetirement: { identity: string } | null = null;
   /** The ONE observed parked item this journey promotes (W4). */
   private parkedItemId: string | null = null;
   private presented = false;
@@ -242,7 +260,20 @@ export class EpisodeDirector {
           break;
       }
     }
-    if (routesRelay) {
+    // The switch tail applies only when the switch is the episode's LAST
+    // turn: the real C24 overlay ends on the switch (nothing follows it), so
+    // the flow must resolve through retirement + acknowledgement. An episode
+    // that CONTINUES after a switch (L4's unit shape: post-switch relay +
+    // confirm) keeps the standard release/delivery/store tail.
+    const endsWithSwitch = this.episode.inputTurns[this.episode.inputTurns.length - 1]?.kind === 'adaptive-switch';
+    if (endsWithSwitch) {
+      // W4 attachment switch (L5): after the switch the pending proposal is
+      // RETIRED by the product (cancel-before-retarget) and the switch is
+      // acknowledged audibly — a release/delivery/store tail can never
+      // complete, because a retired proposal is never released.
+      phases.push({ kind: 'await-switch-retirement', deadlineMs: d.deliveryMs, enteredAtMs: null });
+      phases.push({ kind: 'await-switch-ack', deadlineMs: d.presentationMs, enteredAtMs: null });
+    } else if (routesRelay) {
       phases.push({ kind: 'await-release', deadlineMs: d.deliveryMs, enteredAtMs: null });
       phases.push({ kind: 'await-delivery', deadlineMs: d.deliveryMs, enteredAtMs: null });
       phases.push({ kind: 'await-worker-store', deadlineMs: d.workerStoreMs, enteredAtMs: null });
@@ -276,13 +307,17 @@ export class EpisodeDirector {
   step(observation?: DirectorObservation): DirectorAction {
     if (this.done && this.terminal) return this.terminal;
 
-    const timedOut = this.checkTimeout();
-    if (timedOut) return timedOut;
-
+    // The observation is fed BEFORE the deadline sweep: an await whose
+    // satisfying evidence arrives in the same step as (or after) its expiry is
+    // served, not repaired — the repair exists for SILENCE, not for a candidate
+    // that landed mid-pace-window and is only polled late (L5 soak pacing).
     if (observation) {
       const handled = this.feed(observation);
       if (handled) return handled;
     }
+
+    const timedOut = this.checkTimeout();
+    if (timedOut) return timedOut;
     return this.activate();
   }
 
@@ -397,6 +432,22 @@ export class EpisodeDirector {
         if (observation.kind === 'parked' && this.pendingParked === null) {
           this.pendingParked = { itemId: observation.itemId };
         }
+        // The resolution trio of an INTERMEDIATE relay cycle lands while later
+        // turns are speaking (L5 multi-cycle soak): record the latest one per
+        // kind — the tail resolves the CURRENT approved identity, and an older
+        // cycle's resolution already lives in the runner's steps record.
+        if (observation.kind === 'release') {
+          this.pendingRelease = { identity: observation.identity };
+        }
+        if (observation.kind === 'delivery') {
+          this.pendingDelivery = { identity: observation.identity };
+        }
+        if (observation.kind === 'worker-store') {
+          this.pendingWorkerStore = { identity: (observation as { identity?: string | null }).identity ?? null, ok: observation.ok === true };
+        }
+        if (observation.kind === 'retirement') {
+          this.pendingRetirement = { identity: observation.identity };
+        }
         return null;
       case 'await-candidate':
       case 'await-presentation': {
@@ -421,10 +472,14 @@ export class EpisodeDirector {
           }
           this.candidateIdentity = observation.identity;
           this.candidateText = observation.payloadText;
-          // The revised candidate's presentation must be observed afresh: a
-          // stored presentation belongs to the OLD identity (fix-loop pass 4).
-          this.pendingPresentation = null;
-          // A revised candidate restarts the presentation requirement.
+          // A stored presentation PAIRED with this same identity stays valid:
+          // the soak's reconnect lands between the candidate and its confirm,
+          // and the paired presentation was observed before the gesture (L5).
+          // A DIFFERENT identity's presentation is stale by definition — the
+          // revised candidate must be presented afresh (fix-loop pass 4).
+          if (this.pendingPresentation && this.pendingPresentation.identity !== observation.identity) {
+            this.pendingPresentation = null;
+          }
           if (phase.kind === 'await-presentation') {
             phase.enteredAtMs = this.now();
             return { type: 'await', reason: 'candidate revised; presentation required again', deadlineMs: phase.deadlineMs };
@@ -436,6 +491,17 @@ export class EpisodeDirector {
           if (!observation.complete || observation.identity !== this.candidateIdentity) return null;
           this.presented = true;
           this.advance();
+          return null;
+        }
+        if (observation.kind === 'presentation' && observation.complete) {
+          // The presentation landed while the relay's await-candidate phase was
+          // still active — the soak's reconnect sits between the candidate and
+          // its confirm, so the paired presentation arrives one phase early
+          // (L5). Store it: the paired await-presentation phase is satisfied
+          // by identity, exactly as the speak-window storage does.
+          if (!this.invalidatedIdentities.has(observation.identity)) {
+            this.pendingPresentation = { identity: observation.identity, complete: true };
+          }
           return null;
         }
         return null;
@@ -481,6 +547,26 @@ export class EpisodeDirector {
         }
         return null;
       }
+      case 'await-switch-retirement': {
+        if (observation.kind === 'retirement') {
+          const target = this.approvedIdentity ?? this.candidateIdentity ?? this.pendingCandidate?.identity ?? null;
+          if (target !== null && observation.identity === target) {
+            this.advance();
+          }
+          // A retirement for a different identity is not the switch's
+          // retirement; the deadline governs.
+        }
+        return null;
+      }
+      case 'await-switch-ack': {
+        if (observation.kind === 'response') {
+          this.responseText = observation.text;
+          return this.complete();
+        }
+        return null;
+      }
+      // The stored-trio consumption for the tail phases happens at activation
+      // (below): the observation already arrived, so there is nothing to feed.
       default:
         return null;
     }
@@ -562,6 +648,41 @@ export class EpisodeDirector {
       if (phase.kind === 'await-parked' && phase.enteredAtMs === null && this.pendingParked) {
         if (this.parkedItemId === null) this.parkedItemId = this.pendingParked.itemId;
         this.pendingParked = null;
+        this.advance();
+        continue;
+      }
+      // The tail resolves the CURRENT approved identity from the stored trio
+      // (L5): an intermediate cycle's resolution was recorded while later
+      // turns were speaking and is already in the runner's steps record.
+      if (phase.kind === 'await-release' && phase.enteredAtMs === null && this.pendingRelease) {
+        if (this.pendingRelease.identity === this.approvedIdentity) {
+          this.pendingRelease = null;
+          this.advance();
+          continue;
+        }
+      }
+      if (phase.kind === 'await-delivery' && phase.enteredAtMs === null && this.pendingDelivery) {
+        if (this.pendingDelivery.identity === this.approvedIdentity) {
+          this.pendingDelivery = null;
+          this.advance();
+          continue;
+        }
+      }
+      if (phase.kind === 'await-worker-store' && phase.enteredAtMs === null && this.pendingWorkerStore) {
+        if (this.pendingWorkerStore.identity === this.approvedIdentity && this.pendingWorkerStore.ok) {
+          this.pendingWorkerStore = null;
+          return this.complete();
+        }
+      }
+      // A retirement recorded during the switch gesture satisfies the
+      // await-switch-retirement phase the moment it is entered (L5).
+      if (
+        phase.kind === 'await-switch-retirement' &&
+        phase.enteredAtMs === null &&
+        this.pendingRetirement &&
+        (this.pendingRetirement.identity === (this.approvedIdentity ?? this.candidateIdentity ?? this.pendingCandidate?.identity ?? null))
+      ) {
+        this.pendingRetirement = null;
         this.advance();
         continue;
       }

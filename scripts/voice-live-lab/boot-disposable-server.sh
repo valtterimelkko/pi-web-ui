@@ -39,9 +39,31 @@ SOCKET="$STATE_DIR/internal-api.sock"
 TOKEN="$STATE_DIR/internal-api-token"
 WAIT_SECONDS="${VOICE_LAB_WAIT_SECONDS:-120}"
 
+# Seed the isolated agent dir with the HOST credential store (L5, W4): the
+# fresh PI_CODING_AGENT_DIR would otherwise leave every provider
+# unauthenticated and the worker session's model turn would die in ~1 s with
+# no assistant output. Only the credential STORE is seeded — session
+# isolation is preserved. A missing host store is surfaced honestly (never
+# silently skipped, never invented).
+seed_agent_auth() {
+  if [ -f "${HOME}/.pi/agent/auth.json" ]; then
+    mkdir -p "$STATE_DIR/pi-agent"
+    cp "${HOME}/.pi/agent/auth.json" "$STATE_DIR/pi-agent/auth.json"
+    chmod 600 "$STATE_DIR/pi-agent/auth.json"
+    echo "auth-store=seeded (from ${HOME}/.pi/agent/auth.json)"
+  else
+    echo "auth-store=missing (no ${HOME}/.pi/agent/auth.json — provider-authenticated models will fail in this disposable server)" >&2
+    echo "auth-store=missing"
+  fi
+}
+
 case "${1:-boot}" in
+  seed-auth)
+    seed_agent_auth
+    ;;
   boot)
     mkdir -p "$STATE_DIR/pi-agent"
+    seed_agent_auth
     printf '%s\n' "$STATE_DIR" > "$POINTER"
     # VOICE_LAB_COMPILED=1 boots the compiled server (server/dist/index.js) —
     # used by the lane lab's built-app mode (production-shape proof).
