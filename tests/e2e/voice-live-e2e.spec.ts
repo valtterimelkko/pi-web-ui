@@ -1,6 +1,14 @@
 import { test, expect } from '@playwright/test';
 
 /**
+ * SUPERSEDED (2026-09-23, child J): this connection-only spec is superseded by
+ * the named `primary-mic` browser journey —
+ * `npx tsx scripts/voice-lane-lab/cli.ts primary-mic --episode <id> --arm
+ * standard` — which drives the built app's MAIN controls with observed
+ * microphone speech, records immutable E2 attempt records, and exits 2 on
+ * missing credentials or absent ingress evidence (plan §11 Phase 2). Kept for
+ * its config and history; a connection-only pass no longer closes gate G2.
+ *
  * Voice Mode end to end against a REAL disposable live-engine server and the
  * BUILT client (2026-09-22). See `playwright.voice-live-e2e.config.ts`.
  *
