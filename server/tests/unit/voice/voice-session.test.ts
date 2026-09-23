@@ -461,6 +461,29 @@ describe('VoiceSessionService transcript mapping', () => {
     expect(events.some((event) => event.kind === 'turn_complete')).toBe(true);
   });
 
+  it("finalises held operator partials on the host's own speech_end boundary (the soak re-bind seam)", async () => {
+    const { service, bridges } = createServiceHarness();
+    const { events } = collect(service);
+    await service.start(startOptions());
+    bridges[0].callbacks.onState?.('live');
+    bridges[0].callbacks.onInputTranscription?.('Yes, send it. ', 10);
+    // The provider never completes the turn (the recorded soak shape: after a
+    // same-lane restart the revived provider session delivered partials but no
+    // turn boundary). The host's own VAD boundary is the utterance end.
+    service.noteActivity({ laneId: 'lane-1:probe', attachmentGeneration: 3, state: 'speech_end', atMs: 30 });
+    const finalOperator = () =>
+      events.filter((event) => event.kind === 'transcript' && event.speaker === 'operator' && event.final) as Array<{
+        text: string;
+        atMs: number;
+      }>;
+    expect(finalOperator().map((event) => event.text)).toEqual(['Yes, send it. ']);
+    expect(finalOperator()[0]?.atMs).toBe(30);
+    // A provider turn boundary arriving afterwards flushes an EMPTY partial:
+    // the utterance is finalised exactly once.
+    bridges[0].callbacks.onTurnComplete?.(40);
+    expect(finalOperator()).toHaveLength(1);
+  });
+
   it('emits a final talker delta and an interrupted event on interruption', async () => {
     const { service, bridges } = createServiceHarness();
     const { events } = collect(service);
