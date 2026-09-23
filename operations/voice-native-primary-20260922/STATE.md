@@ -3,48 +3,44 @@
 > **Current state, not a completion claim — read before acting.** Rewritten at every fan-in/dispatch.
 > Authority and strategy live in [`LEDGER.md`](./LEDGER.md); the plan is the contract.
 > Conductor session `01a0caac-7dbe-73fd-809a-f3eb3c6b0b6b` (bare-CLI pi; primary wake
-> `watch_wake_register`, backstop `wake_deadline`).
+> `watch_wake_register`, backstop `wake_deadline`/`bg_run`).
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W1 COMPLETE (3/3 merged and verified) · **W2 RUNNING** — P (provider profiles) and J (primary-mic journey + campaign runner) dispatched.
+**Wave:** W1 complete (3/3) · W2 complete (2/2) · **W3 fix loop RUNNING** — pass 1 (12 P-tier
+episodes, standard arm) launched in background (`bg_*`, log
+`/root/voice-lane-lab/fix-loop/pass-1/summary.txt`).
 
-**Active children**
+**Active children:** none. All five W1/W2 lanes verified, merged and cleaned up:
 
-| Child | Session | Worktree · branch | Lease | Watch | Status |
-|---|---|---|---|---|---|
-| ~~P provider~~ | `01a0cbb6-f85a-…` | ~~`wt-voice-provider`~~ | released | `ww_4` cancelled | **merged `cf003f13`, cleaned up** |
-| J journey | `01a0cbb6-fc3c-73f0-b149-c12630857a5f` | `wt-voice-journey` · `task/voice-native-journey` | `73063c95…` | `ww_5_1790124169077` | running (goal armed; HEAD advanced to `e3ea7694`) |
-
-P: verified by parent (voice 257, typecheck 0, eslint 0, both real arm probes re-run: standard 337 ms /
-ET-HIGH 389 ms, transcript 100%). J: `zai/glm-5.3-flash` high · brief `children/J/brief.md` · handback
-`/root/voice-native-20260922/coordination/J/complete.md`.
-
-**W1 outcomes (all merged, all independently verified)**
-
-| Child | Merge | Verification |
+| Lane | Merge | Verified by parent |
 |---|---|---|
-| H host (Phase 3 server) | `8f27fd98` | scoped 900 passed; parent probe 12/12; exact read-back + source binding + correction/original fixes |
-| C client (Phase 2 surface) | `5fa309a9` | scoped client 381; build/typecheck 0; anti-cheat sound (real surface + wire frames) |
-| L lab (Phase 1 instrumentation) | `301331d1` | phase1 87 / voice-live-lab 551 / lane-lab 14; scripts compile 0; **parent-reproduced real capture proof** (attempt-10: ingress 111 / egress 132); verifier fail-closed (raw exit 2 on parent damage probes) |
+| H host (P3) | `8f27fd98` | 900 tests; parent probe 12/12; source binding + original + correction + exact read-back |
+| C client (P2) | `5fa309a9` | client 381; build/typecheck 0; anti-cheat sound |
+| L lab (P1) | `301331d1` | phase1 87 / lab 551 / lane 14 / compile 0; **parent-reproduced capture proof**; verifier fail-closed |
+| P provider (§7) | `cf003f13` | voice 257; typecheck/eslint 0; **parent re-ran both real arm probes** (standard 337 ms, ET-HIGH 389 ms, transcript 100%) |
+| J journey/runner | `c50eca93` | voice-live-lab 597; compile 0; campaign dry 54 cells; credential-missing exit 2; **parent-run real journey attempt-14 pass** (727/366 chunks, 71 steps replayed, cleanup verified) |
 
-Post-merge gates: server suite 446 files / 5520 tests; client suite 145 files / 1639 tests — both green.
-No worktrees or leases remain; all three watches cancelled.
+**Gates:** G0–G3 passed with evidence. G4 (dev set clean ×2; both arms reachable; cost fits) is the
+current target.
 
 **Current truth**
 
-- master `cf003f13` (= origin): W1 merges + W2 briefs + **P merged** (provider-profile boundary).
-- Real provider calls have begun: 4 probe sessions total (P's two + parent re-runs of both arms) — the
-  first counted live activity; §10 fix-loop budget now applies.
-- J still working (goal running, HEAD `e3ea7694`, no handback yet).
+- master `c50eca93` (= origin after the docs commit that follows); no worktrees, no leases, no watches.
+- Real provider accounting has begun: 4 probe sessions + 2 J journeys + 1 parent journey + fix-loop
+  pass 1 (12 episodes) — all inside the §10 ceilings; the live clock is running.
+- Holdout wording still unfrozen (validator step) — required only before the final campaign.
+- Campaign live execution remains conductor-gated by design (only `--plan --dry-run` enabled).
 
 **Next sequence**
 
-1. On J's handback: independent verification (real browser journey + runner dry index; no
-   green-skip paths), merge accepted lane, cleanup.
-2. Then W3 fix loop (parent-led, bounded correction children) → W4 campaign + read-only reviewer +
-   verdict.
+1. On pass-1 completion: read `/root/voice-lane-lab/fix-loop/pass-1/summary.txt`, diagnose every
+   failure **by boundary** (fixture → ASR → relay selection → payload meaning → approval → delivery →
+   worker result → audible output), fix (RED→GREEN; bounded correction children if code changes are
+   needed), re-run affected episodes + family neighbours.
+2. Loop until two consecutive clean full dev-set passes (or a named §10 blocked outcome); measure
+   per-episode cost/time; then freeze and cost the §8 matrix (adapt rule).
+3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** `deadline-e43f805c-2817-4db6-a5fb-f847bee73570` until 02:14:14Z (J window); watch
-`ww_5` primary. P is settled and cleaned up.
+**Backstops:** pass-1 background task carries `backstop_s`; no child watches armed (none dispatched).

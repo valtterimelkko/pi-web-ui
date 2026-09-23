@@ -95,9 +95,10 @@ heavy browser/audio runner** exists at a time (conductor-owned). Cap concurrent 
 | Phase | Status | Commit/build identity | Evidence pointer |
 |---|---|---|---|
 | P0 baseline + RED | **passed (G0)** | baseline `fa1eb393`; evidence commit `57efe420` | `phase0/PHASE0-RED.md` (+ raw logs), `ACCEPTANCE-MANIFEST.md` |
-| P1 instrumentation | **passed (G1)** — merged `301331d1` | branch `task/voice-native-lab` (removed) | `children/L/brief.md`; handback `/root/voice-native-20260922/coordination/L/`; parent verification logs `/root/voice-lane-lab/parent-verification/` |
-| P2 native primary surface | **client half passed** (Child C verified + merged `5fa309a9`); full G2 pending J's primary-mic browser journey | branch `task/voice-native-client` (removed) | `children/C/`; handback `/root/voice-native-20260922/coordination/C/` |
-| P3 relay/approval fidelity | **server half passed** (Child H verified + merged `8f27fd98`); full G3 pending client/browser integration | branch `task/voice-native-host` (removed) | `children/H/`; handback `/root/voice-native-20260922/coordination/H/`; PHASE0 seeds now green |
+| P1 instrumentation | **passed (G1)** — merged `301331d1` | branch `task/voice-native-lab` (removed) | `children/L/`; handback `/root/voice-native-20260922/coordination/L/`; parent verification logs `/root/voice-lane-lab/parent-verification/` |
+| P2 native primary surface | **passed (G2)** — C `5fa309a9` + J `c50eca93`; parent-run real journey attempt-14 pass | branches removed | `children/{C,J}/`; journey evidence `/root/voice-lane-lab/campaigns/primary-mic-journeys/` |
+| P3 relay/approval fidelity | **passed (G3)** — H `8f27fd98`; journey director replay (71 steps) + approval identity in records | branch removed | `children/H/`; PHASE0 seeds green |
+| P4 pilot + fix loop | **running** (parent-led dev-set pass 1) | master `c50eca93` | `/root/voice-lane-lab/fix-loop/pass-1/` |
 | P4 pilot + fix loop | not started | — | — |
 | P5 comparison + verdict | not started | — | — |
 
@@ -313,6 +314,9 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-23 00:42 | W2 | W2 briefs committed (`df9f9590`); worktrees created (provider, journey) with node_modules isolation; preflight green (zai 78% off-peak; capacity 1/16). Children created goal-armed on `zai/glm-5.3-flash` high; watches `ww_4`/`ww_5` registered BEFORE brief delivery; briefs delivered as `follow_up`; both confirmed busy/running | P `01a0cbb6-f85a-…` lease `94637b2a…` run `4ffa8ead…`; J `01a0cbb6-fc3c-…` lease `73063c95…` run `e146d889…` |
 | 2026-09-23 01:34 | W2 | Child P `goal_end` (achieved); handback FROZEN at `b2631a76`. **Parent verification**: voice suite 257 passed, typecheck 0, eslint 0; **both real arm probes re-run by the parent** — standard: setup 337 ms, transcript 100%, model `gemini-3.8-live`; et-high: setup 389 ms, 100%, `gemini-3.8-live-extended-thinking` + `thinkingConfig HIGH`; redacted configs + usage ack recorded. SILENT-override refusal adjudicated as a legitimate boundary-tightening (profile owns reply shape). | `/root/voice-lane-lab/parent-verification/p-probe-*.txt`; `coordination/P/complete.md` |
 | 2026-09-23 01:39 | W2 | **P merged to master (`cf003f13`) and pushed**; lease released, watch `ww_4` cancelled, worktree + branch removed. Post-merge voice suite 257 green. J still running (HEAD advanced to `e3ea7694`). | `git log` |
+| 2026-09-23 02:04 | W2 | Child J `goal_end` (achieved); handback FROZEN at `d80de263`. **Parent verification**: voice-live-lab 597 passed, compile check 0, campaign dry index **54 cells** (core 24 / validator-gated holdout 8 / soak 2 / extend 16 / noise 4), credential-missing exit 2, holdout dry-run exit 2; **parent-run real journey attempt-14: pass** (727 ingress / 366 egress chunks, 1110 artifacts hash-verified, 71 director steps replayed, cleanup verified). | `/root/voice-lane-lab/parent-verification/journey-C01-parent.log`; `coordination/J/complete.md` |
+| 2026-09-23 02:12 | W2 | **J merged to master (`c50eca93`) and pushed**; lease released, watch `ww_5` cancelled, worktree + branch removed — no worktrees remain. **WAVE 2 COMPLETE** (P `cf003f13`, J `c50eca93`). Post-merge gates green (voice 257 / voice-live-lab 597 / compile 0). | `git log` |
+| 2026-09-23 02:13 | W3 | Fix loop pass 1 launched (parent-led): 12 P-tier episodes on the standard arm through the real built app, background task, one heavy runner. | `/root/voice-lane-lab/fix-loop/pass-1/` |
 
 ### Wave 2 dispatch record (2026-09-23 00:43Z)
 
