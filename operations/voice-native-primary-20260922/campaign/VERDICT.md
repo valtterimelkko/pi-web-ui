@@ -10,10 +10,17 @@ Revision: `5fc3f1bb` (all fixes merged). Live wall-clock and spend remain far in
 
 | Group | Cells | Standard | ET-HIGH |
 |---|---|---|---|
-| Core (12 episodes × 2 arms) | 24 | **12/12 pass** | 11/12 pass |
+| Core (12 episodes × 2 arms) | 24 | 11/12 accepted | 9/12 accepted |
 | Holdout (4 episodes × 2 arms) | 8 | 3/4 pass | 3/4 pass |
 | Soak (10-min reconnect × 2 arms) | 2 | 0/1 | 0/1 |
-| **Total** | **34** | **15/17** | **14/17** |
+| **Total** | **34** | **14/17** | **12/17** |
+
+"Accepted" = the offline verifier **and** (for open-response episodes) the blinded evaluator pass
+agree. Evaluator results (10 packs, prompt sha256 `7f5d09f6…`, blinding verified): 7 pass, 2 fail,
+1 indeterminate — **C21 fails Q1 in BOTH arms** (the operator's "check the version number before
+anything" precondition is never addressed; the reply substitutes monitoring talk) and **C16-et-high is
+indeterminate** (a promise to check, no answer in the record). Per the plan, an evaluator fail or an
+indeterminate is never an auto-pass, so those cells are not accepted.
 
 Per-cell outcomes and every attempt: `CAMPAIGN-INDEX.json` + `campaign-summary.txt`; raw records under
 `/root/voice-lane-lab/campaigns/primary-mic-journeys/runs/<EPISODE>-<arm>/attempt-*`.
@@ -26,10 +33,12 @@ Three discordant pairs out of 17 paired cells:
 |---|---|---|---|
 | C05 | pass | fail (1 pass of 3 attempts) | the chatty ET model talks over the operator's confirm; the echo guard suppresses the genuine confirm |
 | C11 | fail | pass | the amendment wording ("Actually no — …") is classified `cancel`, cancelling the amendment's own proposal (standard run) |
+| C16 | pass | indeterminate (evaluator) | ET promises a check but the record ends before the answer |
+| C21 | fail (evaluator Q1) | fail (evaluator Q1) | concordant failure — the version-check precondition is unaddressed in both arms |
 | C24 | pass | fail (0/2) | ET never produced the first candidate in either attempt |
 
-**Majority of discordant pairs favour standard (2:1), not ET** → rule 4: report a **tie** and retain
-standard. No safety/critical-fidelity regression was found in either arm; the confirmation gate was
+**Majority of discordant pairs favour standard (3:1: C05, C16, C24 vs C11)**, not ET → rule 4:
+report a **tie** and retain standard. No safety/critical-fidelity regression was found in either arm; the confirmation gate was
 never widened by any of the campaign's fixes.
 
 ## The failing boundary (rule 5) and the smallest next experiment
@@ -64,7 +73,8 @@ otherwise ready.
 
 ## Open items folded in at reconciliation
 
-- Evaluator pass (`coordination/EV/`) and independent reviewer (`coordination/RV/`) — their findings
-  are folded in before this verdict is final.
+- Evaluator pass folded in (`coordination/EV/evaluator.json` + `report.md`): 10 packs, 7 pass / 2 fail
+  / 1 indeterminate; C21 (both arms) and C16-et-high are not accepted.
+- Independent reviewer (`coordination/RV/`) — findings fold in before this verdict is final.
 - The C05-et-high flakiness (1 pass of 3) and the C11-standard classifier finding are recorded, not
   smoothed: a failed cell stays failed in the index.
