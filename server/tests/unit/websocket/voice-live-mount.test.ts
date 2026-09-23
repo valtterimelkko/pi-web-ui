@@ -110,6 +110,23 @@ function makeDelivery(outcome: DeliveryOutcome = { outcome: 'delivered', mechani
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** A real bounded wait (the transcription-race tests stage late arrivals). */
+const waitMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A relay whose tool payload the test keeps a handle on, without awaiting yet. */
+function startRelay(
+  mount: VoiceLiveMount,
+  text: string,
+  atMs: number,
+): Promise<Record<string, unknown>> {
+  return mount.handleToolRequest({
+    laneId: LANE,
+    name: 'relay_to_worker',
+    args: { text },
+    atMs,
+  }) as Promise<Record<string, unknown>>;
+}
+
 async function startLane(
   mount: VoiceLiveMount,
   sent: Sent[],
@@ -1211,6 +1228,146 @@ describe('Phase 3 — repeated identical requests after a cancel (C19)', () => {
     await relayAt(mount, 'check the build', 1);
     const response = await relayAt(mount, 'check the build', 400);
     expect(response).toMatchObject({ ok: true, status: 'duplicate_ignored' });
+    expect(sent.filter((f) => f.type === 'proposal_created')).toHaveLength(1);
+  });
+});
+
+describe('H3 — transcription grace for the relay source binding', () => {
+  const RELAY = 'restart the payment service';
+
+  it('GRACE (a): a relay issued before the final transcript lands waits for it and binds', async () => {
+    // Fix-loop pass 3 (C03/C19/C20): the model relays from its audio
+    // understanding BEFORE the host's final operator transcript lands, so the
+    // binding window is still empty at call time. The host must wait a bounded
+    // grace for the late final transcript instead of refusing an honest relay.
+    const service = new FakeService();
+    const sent: Sent[] = [];
+    const evidence: Array<Record<string, unknown>> = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+      relaySourceGraceMs: 2_000,
+      relaySourceGracePollMs: 10,
+    });
+    await startLane(mount, sent, service);
+    // The tool call arrives against an EMPTY window…
+    const pending = startRelay(mount, RELAY, 1);
+    // …and the operator's final transcript lands during the grace period.
+    await waitMs(30);
+    utterance(service, RELAY);
+    const response = await pending;
+
+    expect(response).toMatchObject({ ok: true, status: 'awaiting_operator_approval' });
+    const created = sent.filter((f) => f.type === 'proposal_created');
+    expect(created).toHaveLength(1);
+    // The late-arriving utterance was recorded, is eligible, and is the source.
+    expect((created[0] as { proposal?: { sourceUtteranceId?: number } }).proposal?.sourceUtteranceId).toBe(1);
+    // The journal shows the race being absorbed.
+    const waited = evidence.find((event) => event.event === 'relay_binding_waited');
+    expect(waited?.arrived).toBe(true);
+    expect(Number(waited?.waitedMs)).toBeGreaterThan(0);
+  });
+
+  it('GRACE (b): nothing arrives inside the grace — refused exactly as before, and the refusal consumes nothing', async () => {
+    const service = new FakeService();
+    const sent: Sent[] = [];
+    const evidence: Array<Record<string, unknown>> = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+      relaySourceGraceMs: 80,
+      relaySourceGracePollMs: 10,
+    });
+    await startLane(mount, sent, service);
+
+    const response = await startRelay(mount, RELAY, 1);
+
+    expect(response).toMatchObject({ ok: false, reason: 'unbound_source' });
+    expect(sent.filter((f) => f.type === 'proposal_created')).toHaveLength(0);
+    expect(sent.filter((f) => f.type === 'parking_updated')).toHaveLength(0);
+    // The wait is recorded honestly: bounded, and nothing arrived.
+    const waited = evidence.find((event) => event.event === 'relay_binding_waited');
+    expect(waited?.arrived).toBe(false);
+    const waitedMs = Number(waited?.waitedMs);
+    expect(waitedMs).toBeGreaterThanOrEqual(70);
+    expect(waitedMs).toBeLessThan(1_000);
+    // A refused relay never held the duplicate slot: the same words again go
+    // through the whole binding path again (and are refused again, still
+    // against an empty window), never `duplicate_ignored`.
+    const repeat = await startRelay(mount, RELAY, 2_000);
+    expect(repeat).toMatchObject({ ok: false, reason: 'unbound_source' });
+    expect(evidence.filter((event) => event.event === 'relay_binding_waited').length).toBeGreaterThanOrEqual(2);
+    // And the next legitimate relay — after the operator speaks — binds fine.
+    utterance(service, RELAY);
+    await flush();
+    const bound = await startRelay(mount, RELAY, 4_000);
+    expect(bound).toMatchObject({ ok: true, status: 'awaiting_operator_approval' });
+  });
+
+  it('GRACE (c): with candidates present the binding never waits — ambiguity semantics unchanged', async () => {
+    const service = new FakeService();
+    const sent: Sent[] = [];
+    const evidence: Array<Record<string, unknown>> = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      evidence: (event) => evidence.push(event),
+      relaySourceGraceMs: 400,
+      relaySourceGracePollMs: 10,
+    });
+    await startLane(mount, sent, service);
+    utterance(service, 'Investigate the alternative');
+    await flush();
+    utterance(service, 'Also, what is the largest file in the repo');
+    await flush();
+
+    const response = await startRelay(mount, 'Deploy the staging branch', 3);
+
+    // Two candidates, neither matches: ambiguous, refused — with NO grace
+    // wait (the wait exists only for an empty window).
+    expect(response).toMatchObject({ ok: false, reason: 'ambiguous_source' });
+    expect(evidence.filter((event) => event.event === 'relay_binding_waited')).toHaveLength(0);
+    const refusal = evidence.find((event) => event.event === 'relay_tool_call_refused');
+    expect(refusal?.reason).toBe('ambiguous_source');
+  });
+
+  it('GRACE (d): two identical relays racing on an empty window create ONE proposal, not two', async () => {
+    // Both calls enter the grace wait; the transcript arrives; the first to
+    // wake binds and takes the duplicate slot, so the second must be told
+    // `duplicate_ignored` — the guard still holds across the new await.
+    const service = new FakeService();
+    const sent: Sent[] = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: makeDelivery(),
+      isWorkerBusy: async () => false,
+      relaySourceGraceMs: 2_000,
+      relaySourceGracePollMs: 10,
+    });
+    await startLane(mount, sent, service);
+
+    const first = startRelay(mount, RELAY, 1);
+    await waitMs(20); // both calls are now polling an empty window
+    const second = startRelay(mount, RELAY, 2);
+    await waitMs(20);
+    utterance(service, RELAY);
+
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    // Exactly one binds and one is duplicate-ignored — WHICH one binds depends
+    // on the polling wake order (real timers), and is not part of the
+    // contract. That one proposal exists, and the duplicate slot was taken
+    // before the second binding, is.
+    expect(firstResponse).toMatchObject({ ok: true });
+    expect(secondResponse).toMatchObject({ ok: true });
+    expect([firstResponse.status, secondResponse.status].sort()).toEqual([
+      'awaiting_operator_approval',
+      'duplicate_ignored',
+    ]);
     expect(sent.filter((f) => f.type === 'proposal_created')).toHaveLength(1);
   });
 });
