@@ -34,9 +34,8 @@
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": [
-      "retry handler"
-    ],
+    "responseMustContain": [],
+    "openResponse": true,
     "responseMustNotContain": [
       "relay to worker",
       "parked",

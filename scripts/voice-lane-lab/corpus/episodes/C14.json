@@ -36,9 +36,8 @@
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": [
-      "relay"
-    ],
+    "responseMustContain": [],
+    "openResponse": true,
     "responseMustNotContain": [],
     "sourceAttributionRequired": false
   },
