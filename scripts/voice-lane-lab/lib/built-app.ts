@@ -23,7 +23,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, openSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -447,6 +447,82 @@ export interface CaptureProofResult {
   detail: string;
 }
 
+/**
+ * Newest mtime under `root` (bounded walk; skips build/dependency trees).
+ * Exported for the freshness unit tests.
+ */
+export function newestMtimeMs(root: string): number {
+  if (!existsSync(root)) return 0;
+  const st = statSync(root);
+  if (st.isFile()) return st.mtimeMs;
+  if (!st.isDirectory()) return 0;
+  let newest = 0;
+  for (const entry of readdirSync(root)) {
+    if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
+    newest = Math.max(newest, newestMtimeMs(path.join(root, entry)));
+  }
+  return newest;
+}
+
+/** Source roots + manifests whose mtime decides whether the served app is stale. */
+export const BUILD_SOURCE_ROOTS = [
+  'client/src',
+  'server/src',
+  'shared/src',
+  'client/index.html',
+  'client/vite.config.ts',
+  'client/tsconfig.json',
+  'server/tsconfig.json',
+  'shared/tsconfig.json',
+  'package.json',
+  'package-lock.json',
+  'client/package.json',
+  'server/package.json',
+  'shared/package.json',
+] as const;
+
+/**
+ * Measurement integrity (fix-loop pass 2 defect, 2026-09-23): the runner used to
+ * build only when a dist file was MISSING, so it served a stale client/server
+ * and graded old code — H2's host read-back was never in the served bundle and
+ * the C21 prompt hardening was absent, yet attempts recorded as current. Rebuild
+ * whenever any source is newer than the OLDER dist; the ROOT build keeps
+ * shared → server → client in dependency order.
+ */
+/** True when a dist is missing or any source/manifest is newer than the older dist. */
+export function builtAppIsStale(repoRoot: string): boolean {
+  const root = path.resolve(repoRoot);
+  const serverDist = path.join(root, 'server', 'dist', 'index.js');
+  const clientDist = path.join(root, 'client', 'dist', 'index.html');
+  if (!existsSync(serverDist) || !existsSync(clientDist)) return true;
+  const newestSource = Math.max(
+    ...BUILD_SOURCE_ROOTS.map((rel) => newestMtimeMs(path.join(root, rel)))
+  );
+  const oldestDist = Math.min(statSync(serverDist).mtimeMs, statSync(clientDist).mtimeMs);
+  return newestSource > oldestDist;
+}
+
+export function ensureBuiltAppFresh(input: {
+  repoRoot: string;
+  log?: (line: string) => void;
+}): { ok: true; rebuilt: boolean } | { ok: false; detail: string } {
+  const log = input.log ?? (() => {});
+  const repoRoot = path.resolve(input.repoRoot);
+  const serverDist = path.join(repoRoot, 'server', 'dist', 'index.js');
+  const clientDist = path.join(repoRoot, 'client', 'dist', 'index.html');
+  const missing = !existsSync(serverDist) || !existsSync(clientDist);
+  if (!builtAppIsStale(repoRoot)) {
+    log('served build is fresh (sources older than dists)');
+    return { ok: true, rebuilt: false };
+  }
+  log(missing ? 'building app (dist missing)…' : 'building app (sources newer than dist)…');
+  const build = spawnSync('npm', ['run', 'build'], { cwd: repoRoot, timeout: 900_000, encoding: 'utf8' });
+  if (build.status !== 0) {
+    return { ok: false, detail: `build failed (exit ${build.status}): ${(build.stderr ?? '').slice(-800)}` };
+  }
+  return { ok: true, rebuilt: true };
+}
+
 export async function runCaptureProof(
   plan: EpisodePlan,
   options: {
@@ -461,19 +537,10 @@ export async function runCaptureProof(
   const log = options.log ?? (() => {});
   const repoRoot = path.resolve(options.repoRoot);
 
-  // 1. Build prerequisites (compiled server + built client).
-  const serverDist = path.join(repoRoot, 'server', 'dist', 'index.js');
-  if (!existsSync(serverDist)) {
-    log('building server (compiled shape)…');
-    const build = run('npm', ['run', 'build', '--workspace=server'], { cwd: repoRoot, timeoutMs: 600_000 });
-    if (build.code !== 0) return { attemptDir: '', ok: false, detail: `server build failed (exit ${build.code}): ${build.stderr.slice(-800)}` };
-  }
-  const clientDist = path.join(repoRoot, 'client', 'dist', 'index.html');
-  if (!existsSync(clientDist)) {
-    log('building client (production shape)…');
-    const build = run('npm', ['run', 'build', '--workspace=client'], { cwd: repoRoot, timeoutMs: 600_000 });
-    if (build.code !== 0) return { attemptDir: '', ok: false, detail: `client build failed (exit ${build.code}): ${build.stderr.slice(-800)}` };
-  }
+  // 1. Build prerequisites (compiled server + built client). Rebuilt whenever
+  //    sources are newer than the dists, so the served app can never be stale.
+  const freshness = ensureBuiltAppFresh({ repoRoot, log });
+  if (!freshness.ok) return { attemptDir: '', ok: false, detail: freshness.detail };
   const clientBuildSha = sha256(readFileSync(path.join(repoRoot, 'client', 'dist', 'index.html')));
 
   // The client port must exist before the server boots: the disposable

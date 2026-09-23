@@ -24,6 +24,7 @@ import path from 'node:path';
 
 import {
   INGRESS_INSTRUMENT_SCRIPT,
+  ensureBuiltAppFresh,
   freePort,
   run,
   waitForHttp,
@@ -356,32 +357,17 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
   const deadlineAt = Date.now() + attemptDeadlineMs;
   const problems: string[] = [];
 
-  // 2. Builds (compiled server + built client, production shape).
-  const serverDist = path.join(repoRoot, 'server', 'dist', 'index.js');
-  if (!existsSync(serverDist)) {
-    log('building server (compiled shape)…');
-    const build = run('npm', ['run', 'build', '--workspace=server'], { cwd: repoRoot, timeoutMs: 600_000 });
-    if (build.code !== 0) {
-      finaliseAttempt(attemptLayout.attemptDir, {
-        episodeId: plan.episodeId, arm: plan.arm, kind: 'primary-mic-journey', evidenceLevel: 'E2',
-        captureMode: plan.captureMode, startedAtIso, status: 'invalid', reason: 'server-build-failed',
-        cleanup,
-      } satisfies AttemptManifest);
-      return { attemptDir: attemptLayout.attemptDir, outcome: 'incomplete', detail: `server build failed (exit ${build.code})` };
-    }
-  }
-  const clientDist = path.join(repoRoot, 'client', 'dist', 'index.html');
-  if (!existsSync(clientDist)) {
-    log('building client (production shape)…');
-    const build = run('npm', ['run', 'build', '--workspace=client'], { cwd: repoRoot, timeoutMs: 600_000 });
-    if (build.code !== 0) {
-      finaliseAttempt(attemptLayout.attemptDir, {
-        episodeId: plan.episodeId, arm: plan.arm, kind: 'primary-mic-journey', evidenceLevel: 'E2',
-        captureMode: plan.captureMode, startedAtIso, status: 'invalid', reason: 'client-build-failed',
-        cleanup,
-      } satisfies AttemptManifest);
-      return { attemptDir: attemptLayout.attemptDir, outcome: 'incomplete', detail: `client build failed (exit ${build.code})` };
-    }
+  // 2. Builds (compiled server + built client, production shape). Rebuilt
+  //    whenever sources are newer than the dists — a stale served bundle would
+  //    grade old code (fix-loop pass 2 defect).
+  const freshness = ensureBuiltAppFresh({ repoRoot, log });
+  if (!freshness.ok) {
+    finaliseAttempt(attemptLayout.attemptDir, {
+      episodeId: plan.episodeId, arm: plan.arm, kind: 'primary-mic-journey', evidenceLevel: 'E2',
+      captureMode: plan.captureMode, startedAtIso, status: 'invalid', reason: 'build-failed',
+      cleanup,
+    } satisfies AttemptManifest);
+    return { attemptDir: attemptLayout.attemptDir, outcome: 'incomplete', detail: freshness.detail };
   }
   const clientBuildSha = sha256(readFileSync(path.join(repoRoot, 'client', 'dist', 'index.html')));
 
