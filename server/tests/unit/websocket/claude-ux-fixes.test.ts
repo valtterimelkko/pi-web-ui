@@ -8,9 +8,8 @@
  * These tests verify the WebSocket connection manager's Claude-specific
  * broadcasting behavior without requiring a real Claude CLI or WebSocket server.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { ClaudeSessionSubscribers } from '../../../src/claude/claude-session-subscribers.js';
-import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 // ─── Fix 2 & 3: Unit tests for subscriber broadcasting patterns ────────────
 //

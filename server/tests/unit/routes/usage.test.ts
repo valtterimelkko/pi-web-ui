@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import usageRoutes from '../../../src/routes/usage.js';
-import fs from 'fs/promises';
 
 // Mock auth middleware
 vi.mock('../../../src/middleware/auth.js', () => ({

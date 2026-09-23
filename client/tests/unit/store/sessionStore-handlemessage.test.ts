@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { useSessionStore, type Message, type Session } from '../../../src/store/sessionStore';
 import { useUIStore } from '../../../src/store/uiStore';
 import { useTransferStore } from '../../../src/store/transferStore';

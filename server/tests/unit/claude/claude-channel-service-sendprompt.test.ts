@@ -91,7 +91,6 @@ import { ClaudeChannelWsClient } from '../../../src/claude/claude-channel-ws-cli
 import { ClaudeChannelHooksConfig } from '../../../src/claude/claude-channel-hooks-config.js';
 import { ClaudeSessionStore } from '../../../src/claude/claude-session-store.js';
 import { getSessionRegistry } from '../../../src/session-registry.js';
-import { execSync } from 'node:child_process';
 
 function createService() {
   return new ClaudeChannelService({

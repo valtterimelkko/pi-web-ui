@@ -16,7 +16,7 @@ import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it, afterEach, beforeEach } from 'vitest';
+import { describe, expect, it, afterEach } from 'vitest';
 import { loadCorpus, episodeById } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
 import {
   verifyRecord,

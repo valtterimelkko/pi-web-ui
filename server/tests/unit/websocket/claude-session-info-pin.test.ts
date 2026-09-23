@@ -8,8 +8,7 @@
  * 4. ClaudeService.getSessionStats builds correct stats from JSONL history
  * 5. Error handling for missing/invalid sessions
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ClaudeSessionSubscribers } from '../../../src/claude/claude-session-subscribers.js';
+import { describe, it, expect, vi } from 'vitest';
 import type { ClaudeMessageEntry } from '../../../src/claude/claude-session-store.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

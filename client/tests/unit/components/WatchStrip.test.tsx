@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { useWatchSurfacingStore } from '../../../src/store/watchSurfacingStore';
 import { useSessionStore } from '../../../src/store/sessionStore';
 import { WatchStrip } from '../../../src/components/Chat/WatchStrip';

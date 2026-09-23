@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { SessionCleanupService, DEFAULT_PIN_INACTIVITY_MS, DEFAULT_ARCHIVE_RETENTION_MS } from '../../src/session-cleanup.js';
+import { SessionCleanupService } from '../../src/session-cleanup.js';
 import { migrateV1ToV2, deriveLegacyArrays, isV2, type V1Preferences } from '../../src/routes/session-meta.js';
 
 const mockRegistryEntries: Map<string, any> = new Map();

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { CrashLogger, CrashStats, getCrashLogger, resetCrashLogger } from '../../../src/workers/crash-logger.js';
+import { CrashLogger, getCrashLogger, resetCrashLogger } from '../../../src/workers/crash-logger.js';
 import type { WorkerStatus } from '@pi-web-ui/shared';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { TransferConfirmationModal } from '../../../../src/components/Sidebar/TransferConfirmationModal';
 import { useTransferStore } from '../../../../src/store/transferStore';
 import { useSessionStore } from '../../../../src/store';

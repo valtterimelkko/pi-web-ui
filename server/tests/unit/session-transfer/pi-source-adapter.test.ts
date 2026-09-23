@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { extractPiTranscript, piSessionToReplayEvents } from '../../../src/session-transfer/pi-source-adapter.js';
 import { projectDefaultViewFromEvents } from '@pi-web-ui/shared';
-import type { VisibleTranscriptSource, TransferScope } from '../../../src/session-transfer/types.js';
+import type { VisibleTranscriptSource } from '../../../src/session-transfer/types.js';
 
 const TS = 1700000000000;
 

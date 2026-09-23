@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 describe('normEventToPiFormat — OpenCode event conversion', () => {

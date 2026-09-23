@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { SessionItem } from '../../../../src/components/Sidebar/SessionItem';
 import { useSessionStore, useUIStore } from '../../../../src/store';
 import { useWebSocket } from '../../../../src/hooks/useWebSocket';

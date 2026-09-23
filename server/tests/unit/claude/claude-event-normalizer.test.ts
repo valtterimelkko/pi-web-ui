@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ClaudeEventNormalizer } from '../../../src/claude/claude-event-normalizer.js';

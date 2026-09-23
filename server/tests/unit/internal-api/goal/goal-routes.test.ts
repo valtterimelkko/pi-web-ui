@@ -14,7 +14,6 @@ import { PassThrough, Writable } from 'node:stream';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { createSessionRoutes, type SessionRoutesDeps } from '../../../../src/internal-api/routes/sessions.js';
 import { RunReceiptManager } from '../../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../../src/internal-api/run-receipts/run-receipt-store.js';

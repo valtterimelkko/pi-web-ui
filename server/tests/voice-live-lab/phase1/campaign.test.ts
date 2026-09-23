@@ -4,7 +4,7 @@
  * paired alternating execution order. These tests are pure — no browser, no
  * server, no provider calls.
  */
-import { existsSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 

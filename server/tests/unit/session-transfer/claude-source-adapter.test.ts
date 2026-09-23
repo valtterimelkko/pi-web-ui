@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { extractClaudeTranscript } from '../../../src/session-transfer/claude-source-adapter.js';
 import type { ClaudeMessageEntry } from '../../../src/claude/claude-session-store.js';
-import type { VisibleTranscriptSource, TransferScope } from '../../../src/session-transfer/types.js';
+import type { VisibleTranscriptSource } from '../../../src/session-transfer/types.js';
 
 const TS = 1700000000000;
 

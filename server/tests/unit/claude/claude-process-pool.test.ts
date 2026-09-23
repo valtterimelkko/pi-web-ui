@@ -34,7 +34,7 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { ClaudeProcessPool, removeStaleSessionLock, removeLockFromFile, resolveClaudeSessionPath } from '../../../src/claude/claude-process-pool.js';
+import { ClaudeProcessPool, removeLockFromFile } from '../../../src/claude/claude-process-pool.js';
 import { spawn } from 'child_process';
 
 const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;

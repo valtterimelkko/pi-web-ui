@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**

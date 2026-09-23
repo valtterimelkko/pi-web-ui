@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { replayEventsToVisibleItems, applyScope, buildVisibleTranscript } from '../../../src/session-transfer/visible-transcript.js';
-import type { VisibleTranscriptItem, VisibleTranscriptSource, TransferScope } from '../../../src/session-transfer/types.js';
+import type { VisibleTranscriptItem, VisibleTranscriptSource } from '../../../src/session-transfer/types.js';
 
 const TS = 1700000000000;
 

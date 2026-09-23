@@ -7,7 +7,6 @@
  * map the attachment grammar into the canonical vocabulary honestly.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';

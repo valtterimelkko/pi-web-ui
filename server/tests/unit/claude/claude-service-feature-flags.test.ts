@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ClaudeService } from '../../../src/claude/claude-service.js';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';

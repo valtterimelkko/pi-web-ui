@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { ChildrenStrip } from '../../../src/components/Chat/ChildrenStrip';
 import { useBackgroundChildrenStore } from '../../../src/store/backgroundChildrenStore';
 import { useSessionStore } from '../../../src/store/sessionStore';

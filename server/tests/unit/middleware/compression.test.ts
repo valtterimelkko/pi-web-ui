@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import express, { Express } from 'express';
 import request from 'supertest';
 import { compressionMiddleware } from '../../../src/middleware/compression.js';

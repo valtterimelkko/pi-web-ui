@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OpenCodeSessionSubscribers } from '../../../src/opencode/opencode-session-subscribers.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
