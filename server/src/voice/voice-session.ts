@@ -65,6 +65,12 @@ import {
   type VoiceLogSink,
   type VoiceScheduler,
 } from './types.js';
+import {
+  profileFor,
+  resolveVoiceLiveProfileId,
+  type VoiceLiveProfile,
+  type VoiceLiveProfileId,
+} from './voice-profiles.js';
 
 /** At most one non-fatal error surfaced per lane per interval (contract §5.3). */
 const ERROR_SURFACE_INTERVAL_MS = 1_000;
@@ -128,6 +134,12 @@ export interface VoiceSessionServiceDeps {
   toolResponseScheduling?: VoiceFunctionResponseScheduling;
   /** Operational metrics sink (Phase 8); default the process-wide registry. */
   metrics?: OperationalMetrics;
+  /**
+   * The provider-profile arm for every lane this service opens (plan §7).
+   * Resolved from `VOICE_LIVE_PROFILE` when omitted. An explicit `model` that
+   * contradicts the profile's seat is refused — no silent identity mixing.
+   */
+  profile?: VoiceLiveProfileId;
 }
 
 interface LaneRecord {
@@ -174,6 +186,8 @@ export class VoiceSessionService implements VoiceBridgeService {
   private readonly contextCoalesceMs: number;
   private readonly providerInputSampleRateHz: number;
   private readonly toolResponseScheduling: VoiceFunctionResponseScheduling | undefined;
+  private readonly profileIdValue: VoiceLiveProfileId;
+  private readonly profileValue: VoiceLiveProfile;
   private readonly apiKeyProvider: (() => string | undefined) | undefined;
   private readonly toolRequestHandler: VoiceSessionServiceDeps['toolRequestHandler'];
 
@@ -185,6 +199,13 @@ export class VoiceSessionService implements VoiceBridgeService {
     this.contextCoalesceMs = deps.contextCoalesceMs ?? VOICE_CONTEXT_COALESCE_MS;
     this.providerInputSampleRateHz = deps.providerInputSampleRateHz ?? VOICE_PROVIDER_INPUT_FORMAT.sampleRateHz;
     this.toolResponseScheduling = deps.toolResponseScheduling;
+    this.profileIdValue = deps.profile ?? resolveVoiceLiveProfileId();
+    this.profileValue = profileFor(this.profileIdValue);
+    if (deps.model !== undefined && deps.model !== this.profileValue.model) {
+      throw new Error(
+        `voice session model ${deps.model} contradicts the ${this.profileValue.id} profile seat ${this.profileValue.model}; refusing to mix identities`
+      );
+    }
     this.model = deps.model;
     this.toolRequestHandler = deps.toolRequestHandler;
     this.apiKeyProvider = deps.apiKeyProvider;
@@ -262,6 +283,27 @@ export class VoiceSessionService implements VoiceBridgeService {
     };
   }
 
+  /**
+   * Describe the active provider-profile arm (plan §7; the campaign runner's
+   * read-only verification surface). Facts only: the resolved arm, its seat,
+   * and the semantics the boundary will apply.
+   */
+  describeVoiceLiveProfile(): {
+    profile: VoiceLiveProfileId;
+    model: string;
+    thinking: VoiceLiveProfile['thinking'];
+    toolReplyScheduling: VoiceLiveProfile['toolReplyScheduling'];
+    idle: VoiceLiveProfile['idle'];
+  } {
+    return {
+      profile: this.profileValue.id,
+      model: this.profileValue.model,
+      thinking: this.profileValue.thinking,
+      toolReplyScheduling: this.profileValue.toolReplyScheduling,
+      idle: this.profileValue.idle,
+    };
+  }
+
   private createLane(options: VoiceBridgeStartOptions): LaneRecord {
     return {
       laneId: options.laneId,
@@ -319,6 +361,7 @@ export class VoiceSessionService implements VoiceBridgeService {
       scheduler: this.scheduler,
       log: this.log,
       resumptionHandle,
+      profile: this.profileIdValue,
       ...(this.toolResponseScheduling ? { toolResponseScheduling: this.toolResponseScheduling } : {}),
     });
     lane.bridge = bridge;

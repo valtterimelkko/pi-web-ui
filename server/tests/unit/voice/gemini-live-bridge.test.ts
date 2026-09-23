@@ -375,17 +375,23 @@ describe('GeminiLiveBridge tool calls', () => {
     bridge.close();
   });
 
-  it('honours an explicit SILENT tool-response scheduling override', async () => {
-    const { bridge, mock } = await connectedBridge({ toolResponseScheduling: 'SILENT' });
-    mock.emit({
-      toolCall: { functionCalls: [{ name: 'read_worker_history', args: { query: '' }, id: 'call-silent' }] },
-    });
-    await flushToolAcknowledgement();
-    expect(mock.last().sentToolResponses[0].functionResponses[0]).toMatchObject({
-      id: 'call-silent',
-      scheduling: 'SILENT',
-    });
-    bridge.close();
+  it('refuses a SILENT tool-response override: the profile owns the reply shape', () => {
+    // Plan §7 boundary (Phase 4): the standard arm's acknowledgement carries
+    // WHEN_IDLE (finding F-1). A raw SILENT override would bypass the profile,
+    // so construction refuses it instead of honouring it.
+    expect(
+      () =>
+        new GeminiLiveBridge({
+          laneId: 'lane-1:probe',
+          attachmentGeneration: 3,
+          systemInstruction: 'You are a test talker.',
+          callbacks: {},
+          sessionFactory: (async () => {
+            throw new Error('not reached');
+          }) as never,
+          toolResponseScheduling: 'SILENT',
+        })
+    ).toThrow(/scheduling/i);
   });
 
   it('refuses an undeclared function name and never forwards it', async () => {
