@@ -7,11 +7,11 @@
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W1 · W2 complete · **W3 fix loop RUNNING** — passes: 1 → 1/12; 2 INVALID (stale build,
-runner fixed); 3 → 5/12; 4 → 4 clean/8 not; **correction K merged** (presentation persistence, seam
-completeness, open-response, C18 prompt); **pass 5 running** (`bg_9e828e06`).
+**Wave:** W1 · W2 complete · **W3 fix loop RUNNING** — passes: 1 → 1/12; 2 INVALID; 3 → 5/12;
+4 → 4 clean; **5 → 9 clean/3 not**; conductor corrections (`d53a0a2d`: C05 re-freeze + drift guard,
+C18 full-instruction prompt, C21 openResponse); **pass 6 running** (`bg_8ffe47aa`).
 
-**Active children:** none — K verified, merged and cleaned up.
+**Active children:** none — all correction lanes verified, merged and cleaned up.
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -26,11 +26,11 @@ current target.
 
 **Current truth**
 
-- master `51604ee4`: all W1/W2 lanes + correction rounds (H2/J2/H3/J3/K) + runner freshness fix + corpus
-  data (C05 confirm, C09/C14/C15 openResponse). Lab 647; voice 261; repo lint 0 errors.
-- Passes: 1 → 1/12 · 2 INVALID (fixed) · 3 → 5/12 · 4 → 4 clean · **5 running** — the two big seams
-  are proven; this pass tests the lab-semantics + prompt round.
-- Live accounting: passes 1–5 (~60 min) + probes; inside §10.
+- master `d53a0a2d`: all W1/W2 lanes + correction rounds (H2/J2/H3/J3/K) + conductor pass-5 corrections
+  (C05 fixture re-freeze + text-drift guard, C18 full-instruction prompt, C21 openResponse). Lab 909;
+  compile 0; repo lint 0 errors.
+- Passes: 1 → 1/12 · 2 INVALID · 3 → 5/12 · 4 → 4 clean · **5 → 9 clean** · **6 running**.
+- Live accounting: passes 1–6 (~70 min) + probes; inside §10.
 
 **Next sequence**
 
@@ -40,4 +40,4 @@ current target.
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** pass 5's `backstop_s` covers this window; no child watches armed.
+**Backstops:** pass 6's `backstop_s` covers this window; no child watches armed.
