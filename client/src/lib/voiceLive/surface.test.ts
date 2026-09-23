@@ -561,6 +561,92 @@ describe('VoiceLiveSurface — presentation is reported only after the read-back
   });
 });
 
+describe('VoiceLiveSurface — the host reads a fresh proposal back by itself (H2)', () => {
+  it('auto-reads the tidied bytes the moment a proposal is created on the addressed surface', async () => {
+    const harness = makeSurface();
+    harness.surface.setAutoReadBackActive(true);
+    harness.surface.onWireMessage(proposalFrame());
+    // The HOST speaks the exact retained bytes — presentation no longer waits
+    // for the model to volunteer a verbatim read-back (pass-1 C01/C03/C17/C19).
+    expect(harness.speaker.spoken).toEqual(['ask whether the retry handler drops the token']);
+    expect(harness.surface.getState().readBack.state).toBe('reading');
+    // A start is not a presentation: the wire has heard nothing yet.
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+    expect(harness.surface.controller.presentationStatus()).toBe('pending');
+
+    harness.speaker.finish();
+    expect(harness.surface.getState().readBack.state).toBe('completed');
+    const reported = presentationFrames(harness.frames);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({
+      type: 'proposal_presentation',
+      proposalId: 'prop-1',
+      presentedVariant: 'tidied',
+      completed: true,
+    });
+    expect(harness.surface.controller.presentationStatus()).toBe('presented');
+  });
+
+  it('never auto-reads on a surface the operator is not addressing (multi-lane safety)', () => {
+    const harness = makeSurface();
+    // Default: NOT the addressed surface — arming is the component's explicit act.
+    harness.surface.onWireMessage(proposalFrame());
+    expect(harness.speaker.spoken).toHaveLength(0);
+    expect(harness.surface.getState().readBack.state).toBe('idle');
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+    expect(harness.surface.controller.presentationStatus()).toBe('pending');
+  });
+
+  it('is single-flight per proposal identity: a repeat announcement does not restart the read', () => {
+    const harness = makeSurface();
+    harness.surface.setAutoReadBackActive(true);
+    harness.surface.onWireMessage(proposalFrame());
+    expect(harness.speaker.spoken).toHaveLength(1);
+    // The same proposal announced again must not cancel and restart the utterance.
+    harness.surface.onWireMessage(proposalFrame());
+    expect(harness.speaker.spoken).toHaveLength(1);
+    expect(harness.speaker.cancellations).toBe(0);
+    expect(harness.surface.getState().readBack.state).toBe('reading');
+  });
+
+  it('a newer proposal cancels the in-flight auto read-back and reads the new bytes instead', () => {
+    const harness = makeSurface();
+    harness.surface.setAutoReadBackActive(true);
+    harness.surface.onWireMessage(proposalFrame());
+    harness.surface.onWireMessage(
+      proposalFrame({ proposalId: 'prop-2', version: 4, sha256: 'b'.repeat(64) }),
+    );
+    // The replaced read reported nothing; the CURRENT proposal's bytes are the
+    // ones being spoken now.
+    expect(harness.speaker.spoken).toEqual([
+      'ask whether the retry handler drops the token',
+      'ask whether the retry handler drops the token',
+    ]);
+    expect(harness.speaker.cancellations).toBeGreaterThan(0);
+    expect(harness.surface.getState().readBack.proposalId).toBe('prop-2');
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+  });
+
+  it('an unsupported host stays honestly incomplete: presentation is never faked', () => {
+    const harness = makeSurface({ readBack: new FakeReadBackSpeaker(false) });
+    harness.surface.setAutoReadBackActive(true);
+    harness.surface.onWireMessage(proposalFrame());
+    expect(harness.surface.getState().readBack.state).toBe('unsupported');
+    expect(harness.surface.getState().readBack.supported).toBe(false);
+    expect(presentationFrames(harness.frames)).toHaveLength(0);
+    expect(harness.surface.controller.presentationStatus()).toBe('pending');
+  });
+
+  it('disarming (unmount, lane switch) stops the surface from auto-reading', () => {
+    const harness = makeSurface();
+    harness.surface.setAutoReadBackActive(true);
+    harness.surface.setAutoReadBackActive(false);
+    harness.surface.onWireMessage(proposalFrame());
+    expect(harness.speaker.spoken).toHaveLength(0);
+    expect(harness.surface.getState().readBack.state).toBe('idle');
+  });
+});
+
 describe('VoiceLiveSurface — lane reachability is honest (M7)', () => {
   it('opens the lane on the wire, then reports live when the engine says so', () => {
     const harness = makeSurface();

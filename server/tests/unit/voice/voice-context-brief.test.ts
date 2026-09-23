@@ -105,4 +105,36 @@ describe('the native talker instruction (design rules it was shipped without)', 
     expect(instruction).toMatch(/I keep thinking about the retry handler/i);
     expect(instruction).toMatch(/A relay must be ASKED for/i);
   });
+
+  it('delegates read-back to the host instead of asking the model to recite (H2)', () => {
+    // Fix-loop pass 1 (C01/C03/C17/C19): the model was told to read the exact
+    // text back verbatim and usually did not, so presentation stalled and
+    // nothing could be confirmed. The prompt must make the HOST the reader.
+    expect(instruction).toMatch(/host reads the proposal aloud/i);
+    expect(instruction).toMatch(/do not read it back yourself/i);
+    expect(instruction).toMatch(/prepared/i);
+    expect(instruction).toMatch(/after they hear it/i);
+    // The falsified verbatim-recital instruction must not return.
+    expect(instruction).not.toMatch(/read the exact text back.*verbatim/i);
+  });
+
+  it('a correction of a pending relay is a NEW relay, never a forbidden repeat (H2, C18)', () => {
+    // C18: the model acknowledged the operator's amendment but never re-relayed
+    // the corrected text — the "at most once" guidance read as a ban on a
+    // second call.
+    expect(instruction).toMatch(/that limit is for REPEATS of the same relay, never for corrections/i);
+    expect(instruction).toMatch(/corrects, amends or replaces/i);
+    expect(instruction).toMatch(/relay_to_worker again/i);
+    // The corrected relay carries the corrected text alone.
+    expect(instruction).toMatch(/corrected text alone/i);
+    expect(instruction).toMatch(/nothing accumulated/i);
+  });
+
+  it('doubt or qualification is never a relay, even with an instruction-shaped clause (H2, C21)', () => {
+    // C21 (conversation-only): the model relayed "check the version number
+    // before anything" out of the middle of the operator's second thoughts.
+    expect(instruction).toMatch(/Doubt, qualification or second thoughts are conversation, never a relay/i);
+    expect(instruction).toMatch(/Not sure anymore/i);
+    expect(instruction).toMatch(/check the version number before anything/i);
+  });
 });

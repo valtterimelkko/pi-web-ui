@@ -105,13 +105,45 @@ const native = vi.hoisted(() => {
     surface: import('../../lib/voiceLive/surface').VoiceLiveSurface | null;
     lane: import('../../lib/voiceLive/messages').VoiceLaneIdentity | null;
     frames: import('@pi-web-ui/shared').VoiceClientMessage[];
-  } = { surface: null, lane: null, frames: [] };
+    speaker:
+      | (import('../../lib/voiceLive/readBack').ReadBackSpeaker & {
+          spoken: string[];
+          finish(): void;
+        })
+      | null;
+  } = { surface: null, lane: null, frames: [], speaker: null };
   return holder;
 });
+
+/** A read-back speaker whose utterances end only when the test says so — the
+ *  same contract the surface tests use, so the H2 auto read-back is observed
+ *  through genuine surface behaviour. */
+function makeFakeReadBackSpeaker(): NonNullable<typeof native.speaker> {
+  let pending: import('../../lib/voiceLive/readBack').ReadBackSpeech | null = null;
+  const speaker = {
+    supported: true,
+    spoken: [] as string[],
+    speak(speech: import('../../lib/voiceLive/readBack').ReadBackSpeech): boolean {
+      speaker.spoken.push(speech.text);
+      pending = speech;
+      return true;
+    },
+    cancel(): void {
+      pending = null;
+    },
+    finish(): void {
+      const speech = pending;
+      pending = null;
+      speech?.onEnd();
+    },
+  };
+  return speaker;
+}
 
 function buildNativeSurface(options: { failMic?: boolean } = {}): VoiceLiveSurface {
   const frames: VoiceClientMessage[] = [];
   native.frames = frames;
+  native.speaker = makeFakeReadBackSpeaker();
   const activity: Array<(report: CaptureActivityReport) => void> = [];
   const counters = { captureStops: 0 };
   const backend: PlaybackBackend = {
@@ -142,6 +174,7 @@ function buildNativeSurface(options: { failMic?: boolean } = {}): VoiceLiveSurfa
   const factories: VoiceLiveSurfaceFactories = {
     createAudioContext: () => fakeContext,
     createPlaybackBackend: () => backend,
+    createReadBackSpeaker: () => native.speaker as NonNullable<typeof native.speaker>,
     getUserMedia: async () => {
       if (options.failMic) throw new Error('NotAllowedError: permission denied');
       return { getAudioTracks: () => [{ stop() {} }] } as unknown as MediaStream;
@@ -215,6 +248,7 @@ beforeEach(() => {
   native.surface = null;
   native.lane = null;
   native.frames = [];
+  native.speaker = null;
   capture.state = 'idle';
   Object.defineProperty(navigator, 'mediaDevices', {
     configurable: true,
@@ -233,6 +267,70 @@ describe('DriveModeDictate — native primary (Phase 2)', () => {
     await waitFor(() => expect(native.surface?.getState().capture).toBe('live'));
     expect(capture.toggle).not.toHaveBeenCalled();
     expect(capture.startRecording).not.toHaveBeenCalled();
+  });
+
+  it('H2: the host reads a fresh proposal back on the ADDRESSED surface — presentation completes from the host', async () => {
+    renderSurface();
+    native.surface?.onWireMessage(
+      env('proposal_created', {
+        proposal: {
+          proposalId: 'prop-h2',
+          version: 1,
+          sha256: 'd'.repeat(64),
+          promotionRoute: 'directed',
+          original: 'relay to worker: I want to find out about Podpoint.',
+          tidied: 'I want to find out about Podpoint.',
+          presentedVariant: 'tidied',
+          presentation: { completed: false },
+        },
+      }),
+    );
+    // The HOST spoke the exact retained bytes — not the model, not a summary.
+    expect(native.speaker?.spoken).toEqual(['I want to find out about Podpoint.']);
+    // The playback's own end is the completion report (H3, unchanged).
+    native.speaker?.finish();
+    await waitFor(() =>
+      expect(
+        native.frames.some(
+          (f) =>
+            f.type === 'proposal_presentation' &&
+            (f as unknown as { proposalId: string }).proposalId === 'prop-h2' &&
+            (f as unknown as { completed: boolean }).completed === true,
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('H2: a NON-addressed lane never auto-reads a fresh proposal (multi-lane safety)', () => {
+    buildNativeSurface();
+    render(
+      <DriveModeDictate
+        sessionId={WORKER}
+        sdkType="pi"
+        modelName="test-model"
+        sessionDisplayName="Worker"
+        onExit={vi.fn()}
+        onAbort={vi.fn()}
+        laneEnabled
+        addressed={false}
+      />,
+    );
+    native.surface?.onWireMessage(
+      env('proposal_created', {
+        proposal: {
+          proposalId: 'prop-quiet',
+          version: 1,
+          sha256: 'e'.repeat(64),
+          promotionRoute: 'directed',
+          original: 'ask about the token',
+          tidied: 'ask about the token',
+          presentedVariant: 'tidied',
+          presentation: { completed: false },
+        },
+      }),
+    );
+    expect(native.speaker?.spoken).toHaveLength(0);
+    expect(native.surface?.getState().readBack.state).toBe('idle');
   });
 
   it('no competing default lane selector remains on the main surface', () => {

@@ -194,6 +194,13 @@ export class VoiceLiveSurface {
   private readBackSpeaker: ReadBackSpeaker | null = null;
   private readBackToken = 0;
   private readBack: ReadBackState;
+  /**
+   * Whether THIS surface is the one the operator is addressing (H2). Only an
+   * active surface may read a fresh proposal back by itself — a background
+   * lane's proposal must never speak over the addressed lane. Arming is the
+   * mounting component's explicit act; the surface never infers it.
+   */
+  private autoReadBackActive = false;
   /** The pending read-back's resolver, so a stop can settle it honestly. */
   private settleReadBack: ((outcome: ReadBackOutcome) => void) | null = null;
   private lane: LaneAvailability;
@@ -548,6 +555,7 @@ export class VoiceLiveSurface {
    * React subscribers (`listeners`) are deliberately kept.
    */
   async teardownForUnmount(reason = 'lane unmounted'): Promise<void> {
+    this.autoReadBackActive = false;
     this.stopReadBack();
     this.clearLaneProbe();
     // Before the queue is disposed: the stranded figure is the evidence.
@@ -689,7 +697,45 @@ export class VoiceLiveSurface {
     if (this.capture) void this.stopCapture('the voice lane is unavailable');
   }
 
-  // ── Read-back (H3) ───────────────────────────────────────────────────────
+  // ── Read-back (H3; auto-arming H2) ─────────────────────────────────────
+
+  /**
+   * Declare whether THIS surface is the one the operator is addressing. The
+   * mounting component (DriveModeDictate) derives this from the addressed lane
+   * and the active engine; a surface that is hidden behind another lane never
+   * speaks a proposal by itself.
+   */
+  setAutoReadBackActive(active: boolean): void {
+    this.autoReadBackActive = active;
+  }
+
+  /**
+   * Eyes-free presentation (plan §3.3): the HOST reads a fresh proposal back
+   * the moment it is created, instead of waiting for the model to volunteer a
+   * verbatim read-back it demonstrably does not give (fix-loop pass 1:
+   * C01/C03/C17/C19 stalled before any presentation).
+   *
+   * It is the same `readBackProposal` playback the re-read button uses — the
+   * exact retained bytes, the outcome reported from the playback's own
+   * lifecycle — so there is exactly one speech authority and one completion
+   * path. A host with no speech synthesis stays honestly `unsupported`: the
+   * presentation is incomplete and the existing affordance says so; nothing is
+   * faked. Floor/ducking semantics are untouched (`speechArbiter` is not read
+   * or written here).
+   */
+  private maybeAutoReadBack(): void {
+    if (!this.autoReadBackActive) return;
+    const live = this.controller.snapshot().proposal;
+    if (!live || live.superseded) return;
+    // Single-flight per proposal identity: a repeat announcement of the SAME
+    // proposal must not cancel and restart the utterance that is already
+    // reading it. A DIFFERENT (newer) proposal falls through to
+    // `readBackProposal`, whose first act is to stop the stale read.
+    if (this.readBack.state === 'reading' && this.readBack.proposalId === live.proposal.proposalId) {
+      return;
+    }
+    void this.readBackProposal();
+  }
 
   /**
    * Read the live proposal's composed bytes aloud and report what happened.
@@ -852,6 +898,11 @@ export class VoiceLiveSurface {
       this.ensureAudio();
       this.laneEndPending = true;
       this.playback?.pushChunk(message as VoiceAudioOutputChunkMessage);
+    }
+    // A proposal that has just been created is presented by the HOST (H2):
+    // the exact bytes go out over the local speaker immediately.
+    if (message.type === 'proposal_created') {
+      this.maybeAutoReadBack();
     }
     this.publish();
     return outcome;

@@ -1770,7 +1770,7 @@ export class VoiceLiveMount {
         ok: true,
         status: 'awaiting_operator_approval',
         note:
-          'The host will show this to the operator for approval; nothing has been sent yet. Do not claim it was sent. Read the exact text back to the operator verbatim before asking for approval.',
+          'The host will show this to the operator for approval; nothing has been sent yet. Do not claim it was sent. The host reads the proposal aloud to the operator — do not read it back yourself. Tell the operator it is prepared, and after they hear it, ask them to confirm it or tell you what to change.',
       };
     }
 
