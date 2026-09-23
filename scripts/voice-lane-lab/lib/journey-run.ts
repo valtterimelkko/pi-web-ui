@@ -586,18 +586,18 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
             continue;
           }
           const observation = observeWireFrame(row);
-          if (observation) pendingObservations.push(observation);
+          if (observation) {
+            pendingObservations.push(observation);
+            if (observation.kind === 'delivery' && plan.episodeId.startsWith('SOAK')) {
+              probeWorkerStoreFor(observation.identity);
+            }
+          }
       }
     }
     for (const row of readServerEvidence(serverLogPath, serverLogOffset)) {
       evidenceRows.push(row);
       const observation = observeEvidence(row);
-      if (observation) {
-        pendingObservations.push(observation);
-        if (observation.kind === 'delivery' && plan.episodeId.startsWith('SOAK')) {
-          probeWorkerStoreFor(observation.identity);
-        }
-      }
+      if (observation) pendingObservations.push(observation);
     }
   };
 
