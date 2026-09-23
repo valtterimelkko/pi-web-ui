@@ -167,15 +167,15 @@
     },
     {
       "id": "C05-t1",
-      "text": "Investigate the flaky checkout test, but do not change anything until I approve.",
-      "pcm16kSha256": "634c57078f35c6b6d7437f19d3329f2a1d5162dfdcc747ed789ca8de4e81baad",
+      "text": "Relay to worker: investigate the flaky checkout test, but do not change anything until I approve.",
+      "pcm16kSha256": "b709f190137049a5e79def18a5ea651af9ba55376a73c2ba4cbbcf18d354d219",
       "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t1.pcm16k",
       "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t1.master.wav",
-      "durationMs": 5851.416666666666,
+      "durationMs": 7383.958333333333,
       "asr": {
         "id": "C05-t1",
-        "text": "Investigate the flaky checkout test, but do not change anything until I approve.",
-        "transcript": " Investigate the flaky checkout test, but do not change anything until I approve.",
+        "text": "Relay to worker: investigate the flaky checkout test, but do not change anything until I approve.",
+        "transcript": " Relay to worker, investigate the flaky checkout test, but do not change anything until I approve.",
         "wer": 0,
         "missingWords": [],
         "ok": true

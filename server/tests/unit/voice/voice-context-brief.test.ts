@@ -151,5 +151,8 @@ describe('the native talker instruction (design rules it was shipped without)', 
     // The model's false report is named and forbidden.
     expect(instruction).toMatch(/I have cancelled that relay/);
     expect(instruction).toMatch(/never say you cancelled, sent or held anything you did not/i);
+    // The corrected text is modelled explicitly: the WHOLE amended instruction, not the restriction alone (pass-6).
+    expect(instruction).toMatch(/Deploy the hot fix to staging, but do not deploy anything until I approve it in the ticket first\./);
+    expect(instruction).toMatch(/never the restriction alone/i);
   });
 });

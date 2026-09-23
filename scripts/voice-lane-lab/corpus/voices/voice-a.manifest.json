@@ -167,15 +167,15 @@
     },
     {
       "id": "C05-t1",
-      "text": "Investigate the flaky checkout test, but do not change anything until I approve.",
-      "pcm16kSha256": "80e850c82c0d53c94b7096df1edc24521d7dda0f9d548c67c2521d8288f5051e",
+      "text": "Relay to worker: investigate the flaky checkout test, but do not change anything until I approve.",
+      "pcm16kSha256": "ac95b6326fe0e105578dfb61caac9ae9b13075caa02460f229e8b88dce456442",
       "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-a/C05-t1.pcm16k",
       "masterWavPath": "/root/voice-lane-lab/fixtures/voice-a/C05-t1.master.wav",
-      "durationMs": 5294.166666666666,
+      "durationMs": 6687.333333333333,
       "asr": {
         "id": "C05-t1",
-        "text": "Investigate the flaky checkout test, but do not change anything until I approve.",
-        "transcript": " Investigate the flaky checkout test, but do not change anything until I approve.",
+        "text": "Relay to worker: investigate the flaky checkout test, but do not change anything until I approve.",
+        "transcript": " Relay to worker, investigate the flaky checkout test, but do not change anything until I approve.",
         "wer": 0,
         "missingWords": [],
         "ok": true
@@ -391,15 +391,15 @@
     },
     {
       "id": "C17-t1",
-      "text": "Relay to worker check the lag for the retry handler.",
-      "pcm16kSha256": "698107c55b57d8cfed1e6e9e7673f9b89b207ee136cfaba60f136194a6a68b02",
+      "text": "Relay to worker, check the lag for the retry handler.",
+      "pcm16kSha256": "ba1da107ecdc33a7b90cdf280bb032661ad792bda4b5cbe53bd6397f58ce9ded",
       "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-a/C17-t1.pcm16k",
       "masterWavPath": "/root/voice-lane-lab/fixtures/voice-a/C17-t1.master.wav",
-      "durationMs": 3413.3333333333335,
+      "durationMs": 3552.6666666666665,
       "asr": {
         "id": "C17-t1",
-        "text": "Relay to worker check the lag for the retry handler.",
-        "transcript": " Relay to worker check the lag for the retry handler.",
+        "text": "Relay to worker, check the lag for the retry handler.",
+        "transcript": " Relay to worker, check the lag for the retry handler.",
         "wer": 0,
         "missingWords": [],
         "ok": true
