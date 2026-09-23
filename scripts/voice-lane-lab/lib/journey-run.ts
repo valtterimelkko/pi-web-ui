@@ -677,6 +677,7 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     let awaitDeadlineMs = 0;
     let awaitReason = '';
     let sleepMs = 300;
+    let lastStoreProbeMs = 0;
     for (;;) {
       if (Date.now() > deadlineAt) {
         abortedAtDeadline = true;
@@ -684,6 +685,16 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         break;
       }
       await collectObservations();
+      // While the FSM awaits the worker store, poll the worker's persisted
+      // input (read-only Internal API) and feed the observation when the
+      // approved bytes appear. The FSM's own workerStoreMs deadline governs.
+      if (awaitReason === 'waiting for worker store' && plan.routesRelay && director.state.approvedIdentity && Date.now() - lastStoreProbeMs >= 1_000) {
+        lastStoreProbeMs = Date.now();
+        const stored = await checkWorkerStore(director.state.approvedIdentity);
+        if (stored) {
+          pendingObservations.push({ kind: 'worker-store', identity: director.state.approvedIdentity, ok: true, atMs: Date.now() });
+        }
+      }
       const observation = pendingObservations.shift();
       const observedAt = Date.now();
       const action = director.step(observation ?? undefined);
@@ -723,27 +734,6 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     await page.waitForTimeout(1_500);
     await collectObservations();
     await screenshot(page, '4-terminal');
-
-    // The worker store check for relay episodes: the approved bytes must be
-    // persisted in the worker's own session (a delivery ack is not enough).
-    const approved = director.state.approvedIdentity;
-    if (plan.routesRelay && approved && terminalAction?.type === 'terminal' && terminalAction.status === 'complete') {
-      const storeDeadline = Date.now() + plan.deadlines.workerStoreMs;
-      let stored = false;
-      while (Date.now() < storeDeadline && !stored) {
-        stored = await checkWorkerStore(approved);
-        if (!stored) await page.waitForTimeout(1_000);
-      }
-      if (!stored) {
-        steps.push({
-          seq: steps.length + 1,
-          atMs: Date.now(),
-          observation: { kind: 'worker-store', identity: approved, ok: false, atMs: Date.now() },
-          action: { type: 'terminal', status: 'interaction-failure', reason: 'worker store check failed: approved input was not persisted' },
-        });
-        terminalAction = { type: 'terminal', status: 'interaction-failure', reason: 'worker store check failed: approved input was not persisted' };
-      }
-    }
 
     // ── Stop through the main control; stop the instrument; dump. ────────
     await ensureCapture(false);
