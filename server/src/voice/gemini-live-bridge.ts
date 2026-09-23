@@ -128,6 +128,7 @@ function emptyUsage(): GeminiLiveBridgeUsage {
     totalTokens: 0,
     toolCallDuplicates: 0,
     lateToolCalls: 0,
+    unmatchedActivityEndsSuppressed: 0,
   };
 }
 
@@ -359,25 +360,48 @@ export class GeminiLiveBridge {
     }
   }
 
+  /** Whether an activityStart was DELIVERED to this provider session and not
+   *  yet closed. A speech span that crosses a same-lane restart otherwise
+   *  delivers an `activityEnd` into a session that never saw the matching
+   *  `activityStart` (markers are dropped while the session is still
+   *  connecting), and a provider that receives an unmatched end never
+   *  completes a turn again — it keeps transcribing but the model never
+   *  answers and never calls `relay_to_worker`
+   *  (SOAK-10MIN-standard/attempt-04). The host owns the marker pair, so the
+   *  unmatched end is suppressed rather than delivered. */
+  private activityOpen = false;
+
   /** Explicit activity boundary for the manual-VAD profile. Never throws. */
   activityStart(): void {
     // The operator is speaking again: the previous turn boundary no longer
     // describes the interaction on either arm.
     this.turnCompleteSinceSpeech = false;
     this.toolWorkPendingSinceTurnComplete = false;
-    if (this.manualActivityDetection) this.sendMarker('activityStart');
+    if (!this.manualActivityDetection) return;
+    // Open only when the marker actually reached the provider: a start dropped
+    // while connecting leaves the span closed, so the matching end is
+    // suppressed too and the next spoken span opens clean.
+    this.activityOpen = this.sendMarker('activityStart');
   }
 
   activityEnd(): void {
-    if (this.manualActivityDetection) this.sendMarker('activityEnd');
+    if (!this.manualActivityDetection) return;
+    if (!this.activityOpen) {
+      this.usageValue.unmatchedActivityEndsSuppressed += 1;
+      return;
+    }
+    this.activityOpen = false;
+    this.sendMarker('activityEnd');
   }
 
-  private sendMarker(kind: 'activityStart' | 'activityEnd'): void {
-    if (!this.isLive || !this.session) return;
+  private sendMarker(kind: 'activityStart' | 'activityEnd'): boolean {
+    if (!this.isLive || !this.session) return false;
     try {
       this.session.sendRealtimeInput(kind === 'activityStart' ? { activityStart: {} } : { activityEnd: {} });
+      return true;
     } catch (error) {
       this.emitError('voice_provider_unavailable', errorMessage(error), false);
+      return false;
     }
   }
 

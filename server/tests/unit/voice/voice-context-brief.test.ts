@@ -138,6 +138,17 @@ describe('the native talker instruction (design rules it was shipped without)', 
     expect(instruction).toMatch(/check the version number before anything/i);
   });
 
+  it('the talker addresses an operator precondition instead of substituting its own activity (plan §15.2 finding 6, F-3)', () => {
+    // The W4 evaluator found C21 failing Q1 on BOTH arms: the operator's
+    // "check the version number before anything" was never addressed — the
+    // talker acknowledged vaguely and moved to its own agenda. The prompt
+    // must make a stated condition the thing the reply answers.
+    expect(instruction).toMatch(/When the operator attaches a condition or asks you to check something first/i);
+    expect(instruction).toMatch(/that condition is the thing to answer/i);
+    expect(instruction).toMatch(/never skip past a stated condition/i);
+    expect(instruction).toMatch(/never substitute a different topic/i);
+  });
+
   it('carries the exact C18 live example: an acknowledged amendment is a NEW relay_to_worker call, and a false cancellation claim is forbidden (K)', () => {
     // Pass-4 C18: the operator amended a pending relay ("Wait, do not deploy
     // anything until I approve it in the ticket first."); the model said it had

@@ -47,6 +47,7 @@
 
 import {
   classifyOperatorUtterance,
+  extractAmendmentInstruction,
   extractPostCancelInstruction,
   isMetaSendQuestion,
   isWorkerDirectedQuestion,
@@ -559,6 +560,26 @@ function decideFromState(state: PolicyStateView, input: PolicyTurnInput): Policy
   // operator's verbatim words join the draft and the batch this utterance
   // opened still owes its one receipt; marked, nothing is held and no batch
   // opened — no receipt either.
+  // D15-3 (plan §15.3): an amendment — a withdrawal boundary followed by a
+  // replacement instruction — keeps the F1 disposition on this path: the
+  // held draft ends mechanically and the replacement composes fresh. The
+  // classification now routes the shape here (so the native lane can leave
+  // the same utterance to the model), so the residue handling moved with it.
+  const amendment = extractAmendmentInstruction(utterance);
+  if (amendment !== null) {
+    return {
+      ...base,
+      kind: 'cancel',
+      plan: {
+        path: 'residue',
+        cancelled: state.draft !== null,
+        cancelResidue: { text: amendment, draftable: true },
+        draftCandidate: { text: amendment, source: 'residue' },
+        offerCandidate: null,
+        opensBatchWhenKept: true,
+      },
+    };
+  }
   return {
     ...base,
     kind: 'conversational',

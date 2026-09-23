@@ -45,10 +45,11 @@
     {
       "id": "t3",
       "kind": "adaptive-confirm",
-      "text": "Yes, send it.",
+      "text": "Yes, send the amended version.",
       "requiredWords": [
         "yes",
-        "send"
+        "send",
+        "amended"
       ]
     }
   ],

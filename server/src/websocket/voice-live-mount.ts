@@ -787,6 +787,19 @@ export class VoiceLiveMount {
       existing.workerSessionId = workerSessionId;
       existing.runtime = runtime;
       existing.detachedAtMs = null;
+      // SOAK-10MIN F-1 seam: a same-generation restart MINTS A FRESH PROVIDER
+      // SESSION (capture-mode stop + start). The old session's context died
+      // with it, so the lane's injection ledger must be reset — otherwise the
+      // fresh session is treated as if it had already seen the conversation
+      // and receives only deltas (or nothing at all while nothing changed),
+      // and `workerActivity` staying put suppresses even the status line.
+      // The next `refreshWorkerStatuses` then re-injects the FULL brief and
+      // the status line into the session that actually holds them.
+      existing.workerActivity = 'unknown';
+      existing.pendingWorkerActivity = null;
+      existing.pendingBrief = null;
+      existing.briefSignature = null;
+      existing.acknowledgedEntries = 0;
       return null;
     }
     if (existing) {

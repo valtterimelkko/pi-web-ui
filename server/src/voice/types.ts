@@ -169,6 +169,11 @@ export interface GeminiLiveBridgeUsage {
   toolCallDuplicates: number;
   /** An accepted tool call that arrived after the turn boundary (both arms). */
   lateToolCalls: number;
+  /** An `activityEnd` suppressed because this session never received its
+   *  `activityStart` (dropped while connecting, or a speech span crossing a
+   *  same-lane restart) — the wedge behind the soak's post-reconnect silence
+   *  (SOAK-10MIN-standard/attempt-04). */
+  unmatchedActivityEndsSuppressed: number;
 }
 
 export interface GeminiLiveBridgeOptions {

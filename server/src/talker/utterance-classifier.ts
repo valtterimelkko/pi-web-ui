@@ -187,7 +187,21 @@ export function classifyOperatorUtterance(raw: string): UtteranceClass {
   if (!text) return 'statement';
 
   for (const pattern of CANCEL_PATTERNS) {
-    if (pattern.test(text)) return 'cancel';
+    if (pattern.test(text)) {
+      // D15-3 (plan §15.3): an utterance that withdraws AND carries a
+      // replacement instruction ("actually no — make it thirty seconds")
+      // AMENDS rather than silently cancelling. The classification falls
+      // through to the shapes below so the native lane can leave it to the
+      // model (the model re-relays the full amended text and the live
+      // proposal is replaced), and policy-core composes the replacement
+      // fresh on the talker path. A residue that is only the cancel's own
+      // object ("the amended version") is not a replacement: bare
+      // withdrawals keep cancelling exactly as before.
+      if (extractAmendmentInstruction(text) === null) {
+        return 'cancel';
+      }
+      break;
+    }
   }
 
   const isTrailingQuestion = QUESTION_TRAILING.test(text);
@@ -215,7 +229,63 @@ export function classifyOperatorUtterance(raw: string): UtteranceClass {
   // quote, a delay, or a post-affirmation instruction — is a statement.
   if (isWholeUtteranceConfirmation(text)) return 'confirm';
 
+  // D15-3 (plan §15.3): a confirmation that explicitly refers to the pending
+  // candidate ("yes, send the amended version") counts — natural speech,
+  // still candidate-bound. The reference must name the candidate shape and an
+  // atom or send verb must be present; negation/uncertainty above has already
+  // disqualified, and questions never reach this line.
+  if ((CONFIRM_ATOM_PRESENCE.test(text) || CONFIRM_SEND_VERB.test(text)) && CANDIDATE_REFERRING.test(text)) {
+    return 'confirm';
+  }
+
   return 'statement';
+}
+
+/** The closed candidate-reference vocabulary (D15-3): the demonstrable
+ *  shapes in which an operator explicitly refers to the version currently
+ *  presented for approval. Anything else falls through to statement. */
+const CANDIDATE_REFERRING =
+  /\b(?:amended|new|updated|corrected|revised|fixed)\s+(?:one|version|draft|text|wording|instruction|message|amendment)s?\b/i;
+
+/** Send-shaped verbs that, with a candidate reference, read as an approval
+ *  ("send the updated version") even without a bare affirmation atom. */
+const CONFIRM_SEND_VERB = /\b(?:send|send it|relay|deliver|release|submit)\b/i;
+
+/** A residue made only of these words is the cancel's own OBJECT, not a
+ *  replacement instruction ("don't send the amended version" withdraws; it
+ *  does not amend). Closed by construction, like the rest of the
+ *  vocabulary here. */
+const OBJECT_PHRASE_WORDS = new Set([
+  'the', 'a', 'an', 'that', 'this', 'it', 'one', 'version', 'versions', 'draft', 'drafts',
+  'text', 'message', 'instruction', 'amended', 'new', 'updated', 'corrected', 'revised',
+  'original', 'whole', 'thing', 'amendment', 'proposal',
+]);
+
+function isBareObjectPhrase(residue: string | null): boolean {
+  if (!residue) return true;
+  const words = residue
+    .toLowerCase()
+    .replace(EDGE_PUNCTUATION, '')
+    .split(WORD_SEPARATORS)
+    .filter(Boolean);
+  return words.length > 0 && words.every((word) => OBJECT_PHRASE_WORDS.has(word));
+}
+
+/**
+ * The replacement half of an AMENDMENT (D15-3, plan §15.3): the text after
+ * the cancel boundary of an utterance that withdraws AND replaces — or null
+ * when there is no cancel boundary, or nothing (only the cancel's own
+ * object) after it. Unlike extractPostCancelInstruction — which presumes a
+ * cancel-classified utterance and would return the whole text of a plain
+ * statement — this requires the boundary to exist, so it is safe to call on
+ * any utterance shape.
+ */
+export function extractAmendmentInstruction(raw: string): string | null {
+  const text = raw.trim();
+  if (!text) return null;
+  if (!CANCEL_PATTERNS.some((pattern) => pattern.test(text))) return null;
+  const residue = extractPostCancelInstruction(text);
+  return residue !== null && !isBareObjectPhrase(residue) ? residue : null;
 }
 
 /** A residue that is nothing but the tail of a cancel phrase is not an
