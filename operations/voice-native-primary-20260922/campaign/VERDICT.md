@@ -81,7 +81,7 @@ otherwise ready.
 - The worker-conductor demonstration proves voice can initiate and supervise through the existing
   worker — not Live-as-conductor superiority.
 
-## Independent reviewer (read-only, `coordination/RV/`)
+## Independent reviewer (read-only, `../coordination/RV/review.md` + `review.json`)
 
 Verdict: **`supported-with-findings`** — all 34 cell verdicts were independently reproduced offline
 (34/34, zero divergences; 24,382 artefacts re-hashed with zero mismatches), arm identity and
@@ -108,8 +108,10 @@ holdout-unique; one unfinalised L4-era attempt dir; STATE/ledger staleness) are 
 
 ## Open items folded in at reconciliation
 
-- Evaluator pass folded in (`coordination/EV/evaluator.json` + `report.md`): 10 packs, 7 pass / 2 fail
-  / 1 indeterminate; C21 (both arms) and C16-et-high are not accepted.
-- Independent reviewer (`coordination/RV/`) — findings fold in before this verdict is final.
+- Evaluator pass folded in (`../coordination/EV/evaluator.json` + `report.md`): 10 packs, 7 pass / 2
+  fail / 1 indeterminate; C21 (both arms) and C16-et-high are not accepted.
+- Independent reviewer folded in (`../coordination/RV/review.md` + `review.json`): verdict
+  `supported-with-findings`, all 34 cell verdicts reproduced offline; its three material findings and
+  two required corrections are applied above.
 - The C05-et-high flakiness (1 pass of 3) and the C11-standard classifier finding are recorded, not
   smoothed: a failed cell stays failed in the index.

@@ -1,0 +1,122 @@
+[
+  {
+    "label": "X-0a4b09b35e",
+    "verdict": "pass",
+    "questions": [
+      { "id": 1, "verdict": "pass", "evidence": "Are you considering making any changes to the retry handler, or would you like to discuss its current implementation?" },
+      { "id": 2, "verdict": "pass", "evidence": "I understand. Are you considering making any changes to the retry handler, or would you like to discuss its current implementation?" },
+      { "id": 3, "verdict": "pass", "evidence": "I understand. Are you considering making any changes to the retry handler, or would you like to discuss its current implementation?" },
+      { "id": 4, "verdict": "pass", "evidence": "I understand. Are you considering making any changes to the retry handler, or would you like to discuss its current implementation?" },
+      { "id": 5, "verdict": "pass", "evidence": "Are you considering making any changes to the retry handler, or would you like to discuss its current implementation?" }
+    ],
+    "notes": "Thinking-aloud opener answered with an engaged, purely conversational reply that invites elaboration on the raised topic. No required facts existed, none of the forbidden phrases (relay to worker / parked / sent to the worker) appear, and no route or confirmation action was taken."
+  },
+  {
+    "label": "X-0d65e62e1f",
+    "verdict": "pass",
+    "questions": [
+      { "id": 1, "verdict": "pass", "evidence": "Is there something on your mind regarding the retry handler that you'd like to discuss or change?" },
+      { "id": 2, "verdict": "pass", "evidence": "Is there something on your mind regarding the retry handler that you'd like to discuss or change?" },
+      { "id": 3, "verdict": "pass", "evidence": "Is there something on your mind regarding the retry handler that you'd like to discuss or change?" },
+      { "id": 4, "verdict": "pass", "evidence": "Is there something on your mind regarding the retry handler that you'd like to discuss or change?" },
+      { "id": 5, "verdict": "pass", "evidence": "Is there something on your mind regarding the retry handler that you'd like to discuss or change?" }
+    ],
+    "notes": "Second C09 variant: an engaged conversational reply addressing the raised topic in the moment; no forbidden phrase, no invented content, no routing action."
+  },
+  {
+    "label": "X-13ac44c15b",
+    "verdict": "pass",
+    "questions": [
+      { "id": 1, "verdict": "pass", "evidence": "I can see how you might feel that way, but it helps keep things very clear when sending instructions over." },
+      { "id": 2, "verdict": "pass", "evidence": "I can see how you might feel that way, but it helps keep things very clear when sending instructions over." },
+      { "id": 3, "verdict": "pass", "evidence": "I can see how you might feel that way, but it helps keep things very clear when sending instructions over." },
+      { "id": 4, "verdict": "pass", "evidence": "I can see how you might feel that way, but it helps keep things very clear when sending instructions over." },
+      { "id": 5, "verdict": "pass", "evidence": "I can see how you might feel that way, but it helps keep things very clear when sending instructions over." }
+    ],
+    "notes": "Direct opinion question answered directly and in the moment. This episode carries no must-contain or must-not-contain constraints; the reply invents no facts and takes or promises no action."
+  },
+  {
+    "label": "X-146572dfcb",
+    "verdict": "pass",
+    "questions": [
+      { "id": 1, "verdict": "pass", "evidence": "I understand your point, but it's just the trigger I use to make sure I pass your instructions on accurately." },
+      { "id": 2, "verdict": "pass", "evidence": "By the way, this worker session is still new and doesn't have any messages yet." },
+      { "id": 3, "verdict": "pass", "evidence": "I understand your point, but it's just the trigger I use to make sure I pass your instructions on accurately. By the way, this worker session is still new and doesn't have any messages yet." },
+      { "id": 4, "verdict": "pass", "evidence": "By the way, this worker session is still new and doesn't have any messages yet." },
+      { "id": 5, "verdict": "pass", "evidence": "it's just the trigger I use to make sure I pass your instructions on accurately" }
+    ],
+    "notes": "The phrase question is answered with a rationale. The reply then volunteers an unprompted worker-session status remark, which is irrelevant noise in a phrasing discussion; it is however neither an action, a promise, nor forbidden by the frozen expectations (mustNotContain is empty), and the observation is consistent and uncontradicted, so no question fails on it."
+  },
+  {
+    "label": "X-1f34eae00e",
+    "verdict": "pass",
+    "questions": [
+      { "id": 1, "verdict": "pass", "evidence": "Understood. I haven't relayed anything, and I can confirm the worker session is new and has no messages yet." },
+      { "id": 2, "verdict": "pass", "evidence": "I haven't relayed anything, and I can confirm the worker session is new and has no messages yet." },
+      { "id": 3, "verdict": "pass", "evidence": "I haven't relayed anything" },
+      { "id": 4, "verdict": "pass", "evidence": "Understood. I haven't relayed anything, and I can confirm the worker session is new and has no messages yet." },
+      { "id": 5, "verdict": "pass", "evidence": "Understood. I haven't relayed anything" }
+    ],
+    "notes": "The do-not-send instruction is honoured and explicitly confirmed. The forbidden phrase is absent, the session-state claims are consistent with the rest of the corpus and uncontradicted, and no action was taken or promised."
+  },
+  {
+    "label": "X-3ae28a700e",
+    "verdict": "pass",
+    "questions": [
+      { "id": 1, "verdict": "pass", "evidence": "Understood, no problem at all." },
+      { "id": 2, "verdict": "pass", "evidence": "Understood, no problem at all." },
+      { "id": 3, "verdict": "pass", "evidence": "Understood, no problem at all." },
+      { "id": 4, "verdict": "pass", "evidence": "Understood, no problem at all." },
+      { "id": 5, "verdict": "pass", "evidence": "Understood, no problem at all." }
+    ],
+    "notes": "Minimal but direct acknowledgement of the do-not-send instruction at the moment it was given. Nothing is claimed beyond compliance, the forbidden phrase is absent, and the record shows a purely conversational reply with no action."
+  },
+  {
+    "label": "X-655365728b",
+    "verdict": "fail",
+    "questions": [
+      { "id": 1, "verdict": "fail", "evidence": "I understand. I'm keeping an eye on the worker session for you, which currently has no messages yet." },
+      { "id": 2, "verdict": "pass", "evidence": "I'm keeping an eye on the worker session for you, which currently has no messages yet." },
+      { "id": 3, "verdict": "pass", "evidence": "I'm keeping an eye on the worker session for you, which currently has no messages yet." },
+      { "id": 4, "verdict": "pass", "evidence": "I understand. I'm keeping an eye on the worker session for you, which currently has no messages yet." },
+      { "id": 5, "verdict": "pass", "evidence": "I understand. I'm keeping an eye on the worker session for you, which currently has no messages yet." }
+    ],
+    "notes": "The operator set a concrete precondition ('check the version number before anything'). The reply acknowledges the rethink and reports session watching, but never engages with the version-number request at all, substituting its own monitoring activity; the operator's actual ask went unaddressed, which fails Q1 and the pack. No relay occurred or was offered, so routing and content constraints were otherwise respected."
+  },
+  {
+    "label": "X-77042b89b6",
+    "verdict": "fail",
+    "questions": [
+      { "id": 1, "verdict": "fail", "evidence": "I understand, it sounds like you are rethinking things. The worker session is new and doesn't have any messages yet, so just let me know if you would like me to relay this to them." },
+      { "id": 2, "verdict": "pass", "evidence": "The worker session is new and doesn't have any messages yet, so just let me know if you would like me to relay this to them." },
+      { "id": 3, "verdict": "pass", "evidence": "just let me know if you would like me to relay this to them" },
+      { "id": 4, "verdict": "pass", "evidence": "just let me know if you would like me to relay this to them" },
+      { "id": 5, "verdict": "pass", "evidence": "I understand, it sounds like you are rethinking things." }
+    ],
+    "notes": "Same defect as the paired C21 record: the version-number precondition ('check the version number before anything') is ignored entirely. The reply also re-offers relaying immediately after the operator said to wait; this is scored as a conditional offer requiring operator confirmation, not an action, so Q3/Q4 pass — but the unaddressed request fails Q1 and the pack."
+  },
+  {
+    "label": "X-928b774087",
+    "verdict": "pass",
+    "questions": [
+      { "id": 1, "verdict": "pass", "evidence": "I cannot see any progress on the test suite" },
+      { "id": 2, "verdict": "pass", "evidence": "The worker session is new, so it has no messages yet. I cannot see any progress on the test suite, but I can relay a message to the worker if you'd like." },
+      { "id": 3, "verdict": "pass", "evidence": "I can relay a message to the worker if you'd like." },
+      { "id": 4, "verdict": "pass", "evidence": "I can relay a message to the worker if you'd like." },
+      { "id": 5, "verdict": "pass", "evidence": "I cannot see any progress on the test suite" }
+    ],
+    "notes": "The yes/no status question is answered honestly in the moment from observed session state, with careful hedging and no completion claim (none of the forbidden words passed/finished/succeeded/green appears). The relay is offered conditionally only. The operator's hearsay ('It says it plans...') is not evidence of a message in the session, so the empty-session observation stands uncontradicted."
+  },
+  {
+    "label": "X-a8b5126f68",
+    "verdict": "indeterminate",
+    "questions": [
+      { "id": 1, "verdict": "indeterminate", "evidence": "Let me check the latest session updates." },
+      { "id": 2, "verdict": "pass", "evidence": "Let me check the latest session updates." },
+      { "id": 3, "verdict": "pass", "evidence": "Let me check the latest session updates." },
+      { "id": 4, "verdict": "pass", "evidence": "Let me check the latest session updates." },
+      { "id": 5, "verdict": "pass", "evidence": "Let me check the latest session updates." }
+    ],
+    "notes": "The reply announces a check but the record ends before any answer to 'Is that actually done yet?' appears. It makes no false claim (none of the forbidden words appear) and its deferral is on-topic, but the addressed-ness of the question cannot be certified from a promise to check alone; per rule 1 the honest verdict is indeterminate rather than pass or fail."
+  }
+]

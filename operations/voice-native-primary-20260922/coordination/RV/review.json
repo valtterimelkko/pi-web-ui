@@ -1,0 +1,209 @@
+{
+  "reviewer": "RV (independent read-only reviewer, W4 native-primary campaign)",
+  "reviewedAt": "2026-09-23",
+  "revalidatedAt": "2026-09-23T16:2xZ (second dispatch): campaign inputs re-checked unchanged (worktree still 5fc3f1bb, clean; CAMPAIGN-INDEX.json unmodified, mtime 15:51Z); all original checks stand; conductor docs commits 73a20ff9..ce1d25b0 (verdict draft + evaluator fold-in) reviewed and folded into postReviewValidation and findings F8/F9",
+  "worktree": "/root/pi-web-ui-wt-voice-rv",
+  "campaignRevision": "5fc3f1bbdc40cc02b97ae0b5e334a8686af6d211",
+  "indexRevisionMatch": true,
+  "campaignIndex": "/root/voice-lane-lab/campaigns/native-primary-20260922/CAMPAIGN-INDEX.json",
+  "verdict": "supported-with-findings",
+  "verdictRationale": "Every one of the 34 required cells has an intact, finalised, hash-verified attempt record; the repository's own offline verifier reproduced all 34 recorded verdicts and exit codes exactly; arm identity is confirmed for all 34 cells not only from the recorded armSelection env but from independent server-side logs recording the resolved VoiceLive model inside each attempt's time window; holdout wording appears in no non-holdout cell record; evaluator packs are blinded and bound to the authoritative attempts. The recorded campaign table is therefore supported by the raw records. It is 'with findings' because (a) real holdout wording entered implementer-lineage code before the freeze, contradicting the ledger's no-disclosure claim; (b) the C24 holdout's expected semantics were relaxed mid-campaign without a ledger entry, and the C24-standard pass exists only under the relaxed bar; (c) monetary spend cannot be verified from any record and the ledger's spend ledger was never kept.",
+  "checks": {
+    "integrity": {
+      "result": "pass",
+      "detail": "For all 34 LAST (authoritative) attempts: recomputed sha256(manifest.json) matches manifest.sha256; FINALISED marker present and parseable; all artifacts[] entries re-hashed and byte-counted (24,382 files total) with zero mismatches, zero missing files, zero unlisted extra files. Across all 230 attempt dirs, 229 carry FINALISED (exception: C22-standard/attempt-01, an L4-era hang, never finalised - honest incomplete history)."
+    },
+    "offlineReverification": {
+      "result": "pass",
+      "detail": "npx tsx scripts/voice-lane-lab/cli.ts verify <attempt-dir> run for all 34 last attempts at revision 5fc3f1bb. All 34 verdicts and exit codes reproduce the campaign index exactly (29 pass/exit-0, 5 fail/exit-1: C05-et-high, C11-standard, C24-et-high, SOAK-10MIN-standard, SOAK-10MIN-et-high). Holdout cells were graded with the frozen validator overlays; the soak with the constructed SOAK-10MIN episode."
+    },
+    "armIdentity": {
+      "result": "pass",
+      "detail": "For all 34 cells: manifest.arm == index arm == manifest.armSelection.env.VOICE_LIVE_PROFILE == armSelection.requested. Beyond the recorded env, the disposable servers' stateDir server.log files (referenced by each manifest's server.stateDir) independently record 'voice live session ready { model: ... }': standard cells logged gemini-3.8-live, et-high cells logged gemini-3.8-live-extended-thinking, 34/34 matching, with each log line's timestamp inside its attempt's manifest-recorded start/finish window. Caveat: these /tmp logs are outside the hash-covered record set (mutable, not immutable evidence); they are corroboration, and no provider-side usage/model metadata is captured inside the records themselves."
+    },
+    "hintLeakage": {
+      "result": "pass-with-finding",
+      "detail": "The four holdout surface sentences appear in exactly the allowed places (corpus/holdout/*.validator.json, corpus/voices/*.manifest.json frozen fixture manifests) plus one disallowed location: server/tests/voice-live-lab/holdout-overlay.test.ts (finding F1). Committed holdout episode files have empty text and validatorFrozen:true. A text search of every JSON/JSONL/TXT/MD file in all 34 cell record trees (all attempts, not just last) found holdout wording ONLY in the four holdout cells' own records - zero leakage into any non-holdout cell. Generic confirm 'Yes, send it.' is shared between holdout overlays and non-holdout C05/C18 (minor, F5)."
+    },
+    "accounting": {
+      "result": "pass-with-finding",
+      "detail": "34/34 required cells present with records (24 core + 8 holdout + 2 soak per plan section 8); no missing or skipped cells. All 67 campaign-window attempts finalised; all superseded/flaky attempts retained in the records (230 total across the runs tree). Fails honestly recorded. Wall-clock: campaign window 12:08-15:51Z (3h43m elapsed; 71.7 min active attempt time), fix loop 02:10-06:15Z (4h04m), loop+campaign ~7h47m inside the 8h ceiling; additional W4 harness-development live runs (07:31-07:48 soak, 09:23-11:01 L5-era C22/C24/soak) bring whole-programme elapsed live time to ~9h35m if counted. Spend: NOT VERIFIABLE from records (F3)."
+    },
+    "blinding": {
+      "result": "pass",
+      "detail": "10 evaluator packs (C09/C14/C15/C16/C21 x 2 arms). No pack contains any arm label or arm-revealing string (et-high, standard, gemini-3.8-live-extended-thinking, gemini-3.8-live, VOICE_LIVE_PROFILE all absent). The label->arm mapping lives only in /root/voice-lane-lab/evaluator/mapping.json (5/5 balanced). Every pack binds to the cell's authoritative LAST attempt. EVALUATOR-PROMPT-v1.md sha256 7f5d09f6337caf6fee06f84d7f8ef436adc1dff504a36bbca3ac77716d9928bb matches the hash claimed in STATE.md."
+    },
+    "extras": {
+      "result": "pass-with-findings",
+      "detail": "Fixture-vs-episode text: 86 turns checked across the 34 last attempts against episode files (holdout overlays merged for holdouts) - zero drift. Index lines match the per-cell campaign logs and the raw records. The recorded 15:05 ledger row ('11 of 12 cells pass' on bb61cc1f) is accurate for that chunk. C05-et-high flakiness (fail a05, pass a06, fail a07) is real and honestly retained. Findings F2 (C24 semantics relaxed mid-campaign), F4 (corpusHash is an ID-list hash, not a content hash)."
+    }
+  },
+  "findings": [
+    {
+      "severity": "material",
+      "check": "hint-leakage",
+      "cell": "(repository; affects holdout discipline claim)",
+      "detail": "Real holdout wording embedded in implementer-lineage test code before the freeze: server/tests/voice-live-lab/holdout-overlay.test.ts contains the exact C10 t1 sentence and the real C11 t1/t3 sentences (its C11 t2 is a shorter draft variant lacking ', and cap it at thirty seconds'). Committed 06:50Z (757c93fe) on L4's implementer branch and merged 08:07Z, while the corpus freeze commit (8c4ed67e) landed 08:24Z and the branch base predated the 06:26Z overlay commit - so the wording reached the implementer lineage via prompt/steer, not git. This contradicts the LEDGER's W4 plan claim 'The implementer lineage never saw this wording'. C22/C24 wording does NOT appear in the test (fake overlay text used). Mitigation: the evaluated models never had the wording; episode files are empty; runtime paths (runner/verifier) contain no holdout sentences; no non-holdout cell record contains them.",
+      "evidence": "server/tests/voice-live-lab/holdout-overlay.test.ts (C10_TEXT const, 'conductor C11 shape' case); git 757c93fe 06:50:35Z, 691f1aa4 07:48:37Z; overlays committed 75fc4277 06:26:44Z; freeze 8c4ed67e 08:24:46Z; LEDGER.md 'W4 plan' item 1"
+    },
+    {
+      "severity": "material",
+      "check": "falsification-extras / mid-campaign scorer change",
+      "cell": "C24-et-high, C24-standard",
+      "detail": "The C24 holdout's expected semantics were relaxed mid-campaign, after its failures were observed: 79c0daed (15:29Z) removed the await-switch-ack director phase and dropped responseMustContain ['switched'] from the frozen C24 overlay; 5fc3f1bb (15:42Z, the campaign revision) retired the verifier's switch-unacknowledged check. (Bookkeeping update at re-validation: a completion-row mention of both commits was added to the LEDGER at 16:06Z, after this review's record snapshot; it names the commits but still carries no decision rationale or contemporaneous row.) The C24-standard pass (attempt-05, 15:43Z) exists only under the relaxed bar - attempt-04 (15:30Z) of the same, unchanged product behaviour honestly recorded verifier fail under the old bar. The passing flow is 3 director steps (speak t1 -> harness switch-attachment -> complete on retirement); the spoken switch wording (t2 'Switch to the other worker.') is never spoken in any C24 attempt - the switch is a harness action - so the cell evidences the switch/retirement product mechanism, not spoken-switch understanding, and no delivery/store tail is exercised. Mitigations: the product change (M, e3e9e0b5 11:16Z) that made the ack unreachable preceded both re-runs; both arms were graded under the same relaxed bar, so the arm comparison at C24 remains internally fair; the rationale is documented in the commit messages and consistent with contract section 3.2; the old-bar fail is honestly recorded; my re-verification at 5fc3f1bb reproduces both verdicts. At the original review snapshot the LEDGER contained no row recording this decision; the completion row added at 16:06Z names the commits post-hoc but still gives no rationale.",
+      "evidence": "git show 79c0daed, 5fc3f1bb; runs/C24-standard/attempt-04 (interaction-failure) vs attempt-05 (complete, 3 steps); campaign-summary.txt 'C24 both arms (verifier fixed)' chunk; LEDGER.md progression table (no 15:29/15:42 row)"
+    },
+    {
+      "severity": "material",
+      "check": "accounting / spend",
+      "cell": "(campaign-wide)",
+      "detail": "Monetary spend cannot be verified from the records. Every manifest records budget.meteredUsage as 'not exposed by this server build; wall-clock and kernel call counts recorded'; the LEDGER's spend ledger reads '0 entries; running total US$0.00 / 8 h live' despite plan section 9 requiring dated rates and per-cell usage. The US$12 campaign / US$25 all-in ceilings therefore cannot be independently confirmed or refuted - only wall-clock and kernel call counts (70 provider-call events across the 34 authoritative attempts) are evidenced. The ledger's 'cost far inside ceilings' statements are plausible but unevidenced.",
+      "evidence": "all 34 manifests budget.meteredUsage; LEDGER.md 'Spend ledger: 0 entries'; plan section 9/10 ceilings (US$12 campaign, US$25 hard)"
+    },
+    {
+      "severity": "minor",
+      "check": "manifest integrity semantics",
+      "cell": "(all cells)",
+      "detail": "The manifest field corpusHash is not a corpus content hash: journey-plan.ts:255 computes schemaVersion + '-' + sha256(episode-ID list) truncated to 16 hex chars. All non-soak cells therefore record the same corpusHash (1-4232ac64f7e51f79) regardless of corpus wording/slot changes, and the mid-campaign C24 overlay edit did not change any recorded corpusHash. Corpus content freeze is actually carried by git history, per-attempt planHash, and the verifier's re-grading against the current corpus (which this review re-ran for all 34 cells). The field name overstates what it binds.",
+      "evidence": "scripts/voice-lane-lab/lib/journey-plan.ts:255; identical corpusHash across all episode cells before and after the 15:29Z overlay change"
+    },
+    {
+      "severity": "minor",
+      "check": "hint-leakage / wording uniqueness",
+      "cell": "C11, C22 (vs C05, C18)",
+      "detail": "The generic confirmation 'Yes, send it.' is shared between the holdout overlays (C11 t3, C22 t3) and non-holdout episodes C05/C18, and also appears in LEDGER.md, children/M2/brief.md, and two server unit tests. It is a generic approval phrase carrying no holdout-specific content, but it means the holdout confirm turns are not wording-unique.",
+      "evidence": "grep hits: corpus/episodes/C05.json, C18.json, holdout/C11.validator.json, C22.validator.json, LEDGER.md, children/M2/brief.md, server tests"
+    },
+    {
+      "severity": "material",
+      "check": "falsification-extras / verdict-draft claim",
+      "cell": "SOAK-10MIN (verdict document)",
+      "detail": "VERDICT.md claims the soak's pre-reconnect pending proposal 'is released and delivered correctly'. The recorded evidence does not carry 'delivered': the verifier PROBLEM soak-pending-work-unresolved records that pending proposal prop-1 'was released after the reconnect but delivery/store evidence is missing'. Released is supported; delivered is not. This is an unsupported success claim inside the terminal verdict document. It does not change the NO_CANDIDATE_MEETS_TARGET status (both soak cells fail regardless), but the sentence must be corrected to match the record.",
+      "evidence": "campaign/VERDICT.md (07a47c49, soak boundary section); runs/SOAK-10MIN-standard/attempt-04 verifier lines reproduced in this review (verify-parsed.json): 'PROBLEM soak-pending-work-unresolved: pending proposal prop-1 was released after the reconnect but delivery/store evidence is missing'"
+    },
+    {
+      "severity": "minor",
+      "check": "accounting / verdict-draft claim",
+      "cell": "(verdict document)",
+      "detail": "VERDICT.md claims 'Live wall-clock and spend remain far inside section 10's 8 h / US$25'. Wall-clock is inside but not 'far inside': loop+campaign elapsed is ~7h47m of the 8h ceiling (~97%), and it exceeds 8h if W4 harness-development live runs are counted. Spend remains entirely unverifiable (finding F3). The claim should be stated as 'wall-clock inside the ceiling with ~13 minutes of headroom; spend not measurable from records'.",
+      "evidence": "campaign/VERDICT.md (07a47c49); accounting block in this review; finding F3"
+    },
+    {
+      "severity": "minor",
+      "check": "ledger / state currency",
+      "cell": "(docs)",
+      "detail": "STATE.md still describes W4 as 'opening' with M5 as the active child and the campaign not yet run, and the LEDGER progression table's last campaign row is 15:05Z - both predate the final campaign chunks (C18-C21, holdouts, C24/soak retries), the C24 verifier change, and the completed 34-cell table. The ledger's own rule ('current state, read before acting') is currently violated for W4.",
+      "evidence": "STATE.md; LEDGER.md progression table"
+    },
+    {
+      "severity": "minor",
+      "check": "attempt history",
+      "cell": "C22-standard",
+      "detail": "C22-standard/attempt-01 has no FINALISED marker (a hard crash/hang during the L4 era before finalisation). It is superseded by attempts 02-10 and is honest incomplete history; all 67 campaign-window attempts across all cells are finalised.",
+      "evidence": "runs/C22-standard/attempt-01 (no FINALISED); inventory"
+    }
+  ],
+  "cellResults": [
+    {"episode": "C01", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-30 (14:56Z); manifest+565 artifact hashes verified; server log model gemini-3.8-live"},
+    {"episode": "C01", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-06 (14:57Z); 6 campaign attempts (chunk1 fail, post-M3 fail, post-M4 fail, post-M5 fail a04, pass a05, pass a06); server log model gemini-3.8-live-extended-thinking"},
+    {"episode": "C03", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-14 (14:59Z); 14 attempts incl. fix-loop history"},
+    {"episode": "C03", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-06 (14:58Z); 6 campaign attempts, fail x4 under pre-M4/M5 builds then pass"},
+    {"episode": "C05", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-13 (15:00Z); pass"},
+    {"episode": "C05", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-07 (15:01Z) FAIL 'waiting for candidate'; flaky a05 fail / a06 pass / a07 fail - honestly retained"},
+    {"episode": "C09", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-16 (15:02Z); passed in every chunk incl. 12:15 (pre-M3)"},
+    {"episode": "C09", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-02 (15:02Z); passed 12:15 and 15:02"},
+    {"episode": "C14", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-12 (15:03Z)"},
+    {"episode": "C14", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-01 (15:04Z)"},
+    {"episode": "C15", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-12 (15:05Z)"},
+    {"episode": "C15", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-01 (15:04Z)"},
+    {"episode": "C16", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-12 (15:06Z)"},
+    {"episode": "C16", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-01 (15:07Z)"},
+    {"episode": "C17", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-11 (15:08Z)"},
+    {"episode": "C17", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-01 (15:08Z)"},
+    {"episode": "C18", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-13 (15:10Z)"},
+    {"episode": "C18", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-01 (15:11Z)"},
+    {"episode": "C19", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-12 (15:13Z)"},
+    {"episode": "C19", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-02 (15:18Z); attempt-01 failed, retry passed"},
+    {"episode": "C20", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-12 (15:14Z)"},
+    {"episode": "C20", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-03 (15:46Z); fail a01, fail a02, pass a03"},
+    {"episode": "C21", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-12 (15:16Z)"},
+    {"episode": "C21", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-01 (15:15Z)"},
+    {"episode": "C10", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; validator overlay merged; own wording present only in this cell's records"},
+    {"episode": "C10", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; validator overlay merged"},
+    {"episode": "C11", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; last attempt-02 (15:45Z) FAIL 'waiting for presentation' - honest fail"},
+    {"episode": "C11", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; pass"},
+    {"episode": "C22", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; last attempt-10 (15:23Z); campaign attempt after L5-era pass at attempt-09"},
+    {"episode": "C22", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; pass (15:24Z)"},
+    {"episode": "C24", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; last attempt-05 (15:43Z) pass ONLY under the post-15:42 relaxed verifier (see finding F2); a04 same product behaviour failed old verifier"},
+    {"episode": "C24", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "holdout; last attempt-03 (15:43Z) FAIL 'no proposal pending at switch' under relaxed bar - honest fail"},
+    {"episode": "SOAK-10MIN", "arm": "standard", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-04 (15:50Z) FAIL: 240s < 600s bar, 5 < 8 turns, pending-work unresolved; soak bar never met by any attempt"},
+    {"episode": "SOAK-10MIN", "arm": "et-high", "verifierReproduced": true, "armIdentity": "ok", "notes": "last attempt-01 (15:40Z) FAIL, same soak bars"}
+  ],
+  "missingCells": [],
+  "accounting": {
+    "requiredCells": 34,
+    "cellsWithRecords": 34,
+    "cellsMissing": 0,
+    "cellsSkipped": 0,
+    "recordedVerdicts": {"pass": 29, "fail": 5},
+    "failedCells": ["C05-et-high", "C11-standard", "C24-et-high", "SOAK-10MIN-standard", "SOAK-10MIN-et-high"],
+    "totalAttemptDirs": 230,
+    "finalisedAttemptDirs": 229,
+    "campaignWindowAttempts": 67,
+    "campaignWindowAllFinalised": true,
+    "attemptHistoryPreserved": true,
+    "wallClock": {
+      "campaignWindowElapsed": "12:08:00Z-15:50:54Z (3h43m)",
+      "campaignActiveAttemptTimeMinutes": 71.7,
+      "fixLoopWindowElapsed": "02:10:44Z-06:15Z (~4h04m)",
+      "preCampaignActiveAttemptTimeMinutes": 131.4,
+      "loopPlusCampaignElapsed": "~7h47m (inside the 8h ceiling)",
+      "wholeProgrammeLiveElapsedIfHarnessDevRunsCounted": "~9h35m (07:31-07:48 soak, 09:23-11:01 L5-era runs; exceeds 8h under this interpretation)"
+    },
+    "spend": {
+      "verifiable": false,
+      "detail": "No metered provider usage in any record (budget.meteredUsage 'not exposed by this server build'); ledger spend ledger has 0 entries. Kernel call events: 70 across the 34 authoritative attempts. US$12/US$25 ceilings cannot be confirmed or refuted from evidence.",
+      "ledgerSpendEntries": 0
+    },
+    "infraRetryRuleNote": "C05-et-high consumed 7 campaign attempts and C01/C03-et-high 6 each; these were deliberate re-runs after product/harness fixes plus a flakiness check (each documented in the ledger), not silent infra retries."
+  },
+  "couldNotVerify": [
+    "Monetary spend against the US$12 campaign / US$25 all-in ceilings - no metered usage exists in any record and the ledger's spend ledger was never kept.",
+    "Per-attempt server build identity - manifests pin clientBuildSha256 (uniform fb0f4685... across all 34) but no server-dist hash; uniformity of the served server is inferred from the freshness mechanism (rebuild when sources are newer) and from no server-source commits inside the 14:56-15:51Z authoritative window, not from a recorded hash.",
+    "Immutability of the /tmp stateDir server logs used for arm-identity corroboration - they live outside the hash-covered record set and are mutable; their model lines are timestamp-consistent with each attempt's manifest window, but they are corroboration, not tamper-proof evidence. No provider-side model/usage metadata is captured inside the records themselves.",
+    "That the profile model strings ('gemini-3.8-live', 'gemini-3.8-live-extended-thinking') name genuinely distinct live provider models - this rests on child P's live probe (ledgered at 01:34Z); this review did not re-probe the provider.",
+    "Whether the constructed SOAK-10MIN turn texts byte-match the soak plan's intent beyond what the verifier checks (the verifier reproduces the fail verdicts; the soak cells failed, so no pass rests on them)."
+  ],
+  "postReviewValidation": {
+    "scope": "At the second dispatch the campaign inputs were re-checked and the conductor's post-review docs commits (73a20ff9, 12191b8f, 07a47c49, ae0b0417, ce1d25b0 - verdict draft, STATE update, evaluator fold-in) were reviewed against the evidence. The repo/worktree was not modified by this reviewer.",
+    "inputsUnchanged": true,
+    "verdictDraftCrossCheck": {
+      "matrixNumbersCorrect": true,
+      "detail": "The draft's 34-cell table (core 12/12 vs 11/12, holdout 3/4 each, soak 0/1 each; totals 15/17 vs 14/17) matches the index and this review's verified cell results exactly. 29 pass / 5 fail confirmed.",
+      "discordantPairLogicCorrect": true,
+      "detail": "Three discordant pairs (C05, C11, C24) at 2:1 against ET -> rule-4 tie -> retain standard; NO_CANDIDATE_MEETS_TARGET via rule 5 (soak boundary) is consistent with plan section 12 as summarised in LEDGER section 10.",
+      "c11DiagnosisCarriedByEvidence": true,
+      "detail": "Raw record: the amendment utterance was classified utteranceClass 'cancel' and proposal_cancelled {reason: spoken_cancel} fired on the amendment's own proposal prop-2 - the verdict's diagnosis is evidence-carried.",
+      "c24RetirementWireEvidenceCarried": true,
+      "detail": "C24-standard attempt-05 director steps record the retirement observation {identity: prop-1, outcome: replaced}; the old proposal never released after the switch (verifier line).",
+      "correctedClaims": ["soak pending proposal 'released and delivered correctly' - delivered is NOT evidenced (finding F8)", "wall-clock/spend 'far inside' ceilings - overstated/unverifiable (finding F9, F3)"]
+    },
+    "evaluatorFoldInCrossCheck": {
+      "artefactMatchesClaims": true,
+      "detail": "coordination/EV/evaluator.json: 10 label-keyed outcomes, 7 pass / 2 fail / 1 indeterminate; C21 fails Q1 in both arms; C16-et-high indeterminate on Q1 - exactly as folded into VERDICT.md. Accepted-matrix arithmetic (14/17 vs 12/17) and the 3:1 discordant set (C05, C16, C24 vs C11) both recompute correctly under 'accepted = verifier AND evaluator'.",
+      "blindingPreservedInEvArtefact": true,
+      "detail": "The EV artefact is keyed by blinded labels only; this reviewer decoded the labels against mapping.json and confirms the arm attributions in the verdict are correct (C21-standard X-77042b89b6, C21-et-high X-655365728b, C16-et-high X-a8b5126f68).",
+      "notIndependentlyRegraded": "This reviewer verified the EV artefact's internal consistency and the conductor's fold-in accuracy, but did not re-grade the 10 packs independently (the packs are open-response qualitative judgements; no second evaluator run was in scope)."
+    }
+  },
+  "supportsLedgerClaims": {
+    "campaignIndexVerdictsAccurate": true,
+    "flakinessHonestlyRecorded": true,
+    "failsPreservedNotHidden": true,
+    "ledgerClaimImplementerNeverSawHoldoutWording": false,
+    "ledgerRowForC24VerifierChangeExists": "post-hoc only (completion row 16:06Z names the commits; no contemporaneous decision row or rationale)",
+    "verdictDraftMatrixAndRuleLogicCorrect": true,
+    "verdictDraftSoakDeliveryClaimSupported": false,
+    "spendLedgerMaintained": false
+  }
+}
