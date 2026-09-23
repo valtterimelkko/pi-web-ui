@@ -1157,6 +1157,9 @@ export class MultiSessionManager {
     switch (event.type) {
       case 'agent_start':
         activeSession.status = 'streaming';
+        // M3: a parked submission-shaped prompt (submitPrompt) resolves here —
+        // the turn has genuinely started.
+        this.resolveTurnStartWaiters(sessionPath);
         break;
 
       case 'agent_end':
@@ -1494,6 +1497,47 @@ export class MultiSessionManager {
   }
 
   /**
+   * M3: parked turn-start waiters for submitPrompt(), keyed by session path.
+   * Resolved by the `agent_start` event; see armTurnStartWaiter().
+   */
+  private turnStartWaiters = new Map<string, Set<{ resolve: () => void; cancel: () => void }>>();
+
+  /**
+   * Park a waiter that resolves when THIS session's turn has genuinely
+   * started: the `agent_start` event flips the status to 'streaming', or the
+   * session is already streaming when the waiter is armed (events are
+   * asynchronous, so an already-live run IS a started turn).
+   */
+  private armTurnStartWaiter(activeSession: ActiveSession): { promise: Promise<void>; cancel: () => void } {
+    let resolveFn: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+      resolveFn = resolve;
+    });
+    let set = this.turnStartWaiters.get(activeSession.sessionPath);
+    if (!set) {
+      set = new Set();
+      this.turnStartWaiters.set(activeSession.sessionPath, set);
+    }
+    const entry = {
+      resolve: resolveFn,
+      cancel: () => {
+        set.delete(entry);
+        if (set.size === 0) this.turnStartWaiters.delete(activeSession.sessionPath);
+      },
+    };
+    set.add(entry);
+    if (activeSession.agentSession.isStreaming) entry.resolve();
+    return { promise, cancel: entry.cancel };
+  }
+
+  private resolveTurnStartWaiters(sessionPath: string): void {
+    const set = this.turnStartWaiters.get(sessionPath);
+    if (!set) return;
+    this.turnStartWaiters.delete(sessionPath);
+    for (const entry of set) entry.resolve();
+  }
+
+  /**
    * Send a prompt to a session.
    * Requires the underlying AgentSession to have a prompt method.
    */
@@ -1522,6 +1566,93 @@ export class MultiSessionManager {
   }
 
   /**
+   * Submission-shaped prompt (M3, W4 campaign C01-standard/attempt-28):
+   * resolves once the worker has genuinely STARTED the turn — the
+   * `agent_start` event has arrived (status 'streaming') or the prompt
+   * promise itself settled for a turn short enough to finish first — and
+   * NEVER waits for the turn to complete.
+   *
+   * The contract keeps three artefacts distinct (VOICE-LIVE-WIRE-CONTRACT.md
+   * §4.4/§4.6): audio received, words recognised, BYTES DELIVERED. The
+   * trusted chime fires on a `delivered` receipt and nothing else, so the
+   * voice delivery path must resolve at submission; a receipt that waits for
+   * the whole turn makes it mean "the worker finished" and misses every
+   * journey deadline on a genuinely running worker.
+   *
+   * prompt() above keeps its whole-turn semantics for existing callers (the
+   * Internal API and the Web UI prompt path depend on them) — this method is
+   * additive and changes nothing for them.
+   *
+   * Throws BEFORE the turn starts when the submission fails (unresolvable
+   * session, already busy, preflight refusal such as missing auth/model) —
+   * callers surface those as honest refusals. A turn that fails AFTER a
+   * genuine start is the worker's own business: it is logged here and
+   * reflected in the session status by the SDK events, not rethrown at the
+   * submitter (the bytes were delivered).
+   */
+  async submitPrompt(sessionPath: string, message: string): Promise<void> {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) {
+      throw new Error(`Session ${sessionPath} does not exist`);
+    }
+
+    if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
+      throw new Error(`Session ${sessionPath} is already busy`);
+    }
+
+    // Update status synchronously before the first await so concurrent
+    // prompts cannot both enter the same AgentSession (same guard as
+    // prompt()).
+    activeSession.status = 'busy';
+    activeSession.lastActivity = new Date();
+
+    // Arm BEFORE prompting so no agent_start can slip past unobserved.
+    const turnStart = this.armTurnStartWaiter(activeSession);
+    let turnStarted = false;
+    void turnStart.promise.then(
+      () => {
+        turnStarted = true;
+      },
+      () => {},
+    );
+
+    // promptPromise propagates rejection into the race; the continuation
+    // beside it guarantees the rejection is always handled even when this
+    // method has already returned (no unhandled rejections), and mirrors
+    // prompt()'s bookkeeping for the background tail of the turn.
+    const promptPromise = activeSession.agentSession.prompt(message);
+    void promptPromise.then(
+      () => {
+        if (activeSession.status === 'busy') activeSession.status = 'idle';
+      },
+      (error) => {
+        logger.error(
+          `[MultiSessionManager] Submitted prompt for ${sessionPath} failed:`,
+          error instanceof Error ? error.message : String(error)
+        );
+        if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
+          activeSession.status = 'error';
+        }
+      },
+    );
+
+    try {
+      await Promise.race([turnStart.promise, promptPromise]);
+    } catch (error) {
+      activeSession.status = 'error';
+      if (turnStarted) {
+        // The turn had genuinely started; what failed now is the worker's
+        // turn, not the submission. The bytes were delivered.
+        logger.warn(`[MultiSessionManager] Turn for ${sessionPath} failed immediately after a submitted prompt started it; the delivery already completed`);
+        return;
+      }
+      throw error;
+    } finally {
+      turnStart.cancel();
+    }
+  }
+
+  /**
    * Steer/abort the current operation in a session.
    * Requires the underlying AgentSession to have a steer method.
    *
@@ -1531,6 +1662,20 @@ export class MultiSessionManager {
    * extension `input` event).
    */
   async steer(sessionPath: string, message: string): Promise<void> {
+    await this.submitSteer(sessionPath, message);
+  }
+
+  /**
+   * Submission-shaped steer (M3): queues the message via the EXISTING steer
+   * path and resolves once the runtime has accepted it — never waiting for
+   * any turn. Reports honestly whether the message joined a RUNNING turn
+   * (steer semantics: delivered before the next model call of the current
+   * run) or was queued for the worker's NEXT turn (no turn was running —
+   * including a `busy` manager status that is not backed by a live run).
+   * Delivery receipts use that report to emit `delivered`/steer only when the
+   * message truly joined the running turn, and `queued`/steer otherwise.
+   */
+  async submitSteer(sessionPath: string, message: string): Promise<{ joinedRunningTurn: boolean }> {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) {
       throw new Error(`Session ${sessionPath} does not exist`);
@@ -1541,9 +1686,10 @@ export class MultiSessionManager {
     try {
       if (activeSession.agentSession.isStreaming) {
         await activeSession.agentSession.prompt(message, { streamingBehavior: 'steer' });
-      } else {
-        await activeSession.agentSession.steer(message);
+        return { joinedRunningTurn: true };
       }
+      await activeSession.agentSession.steer(message);
+      return { joinedRunningTurn: false };
     } catch (error) {
       logger.error(`[MultiSessionManager] Error steering session ${sessionPath}:`, error);
       throw error;

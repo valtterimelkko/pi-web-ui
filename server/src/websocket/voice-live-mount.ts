@@ -1301,7 +1301,7 @@ export class VoiceLiveMount {
         proposalId,
         idempotencyKey,
         outcome: 'queued',
-        mechanism: 'follow_up',
+        mechanism: outcome.mechanism,
         disclosure: outcome.disclosure,
         atMs,
       };

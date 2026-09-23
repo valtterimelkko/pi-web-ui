@@ -80,7 +80,7 @@ export type DeliveryMechanism = 'steer' | 'prompt' | 'follow_up';
 
 export type DeliveryOutcome =
   | { outcome: 'delivered'; mechanism: Exclude<DeliveryMechanism, 'follow_up'>; disclosure?: string }
-  | { outcome: 'queued'; mechanism: 'follow_up'; disclosure: string }
+  | { outcome: 'queued'; mechanism: 'follow_up' | 'steer'; disclosure: string }
   | { outcome: 'refused'; reason: string }
   /**
    * M2 (review R): the contract's first-class ambiguous state (§4.4/§7.3, N6).

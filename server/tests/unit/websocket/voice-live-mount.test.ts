@@ -634,6 +634,57 @@ describe('VoiceLiveMount — frame routing and the release predicate', () => {
     expect((receipt.receipt as { outcome: string }).outcome).toBe('delivered');
   });
 
+  it('RED: a queued receipt carries the delivery’s own mechanism (steer), not a hardcoded follow_up (M3)', async () => {
+    const service = new FakeService();
+    const delivery = makeDelivery({
+      outcome: 'queued',
+      mechanism: 'steer',
+      disclosure: 'queued for the worker’s next turn; no turn was running',
+    });
+    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    utterance(service, 'check the tests.');
+    await flush();
+    await relay(mount, 'check the tests.');
+    const payload = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
+      proposalId: string;
+      version: number;
+      sha256: string;
+    };
+    const send = (message: unknown): void => {
+      sent.push(message as Sent);
+    };
+    await mount.route('client-1', { send }, {
+      type: 'proposal_presentation',
+      version: 1,
+      laneId: LANE,
+      attachmentGeneration: GENERATION,
+      proposalId: payload.proposalId,
+      presentedVariant: 'tidied',
+      completed: true,
+    } as never);
+    const code = await mount.route('client-1', { send }, {
+      type: 'proposal_confirm',
+      version: 1,
+      laneId: LANE,
+      attachmentGeneration: GENERATION,
+      proposalId: payload.proposalId,
+      variant: 'tidied',
+      idempotencyKey: 'idem-queued-1',
+      proposalRef: { version: payload.version, sha256: payload.sha256 },
+    } as never);
+    expect(code).toBeNull();
+
+    // The wire shape is unchanged (contract §7.3: mechanism ∈ steer | prompt |
+    // follow_up for any outcome) — the honest mechanism the adapter reported
+    // is what reaches the operator, not an invented one.
+    const receipt = sent.find((frame) => frame.type === 'receipt_event') as Sent;
+    expect((receipt.receipt as { outcome: string }).outcome).toBe('queued');
+    expect((receipt.receipt as { mechanism: string }).mechanism).toBe('steer');
+    expect((receipt.receipt as { disclosure: string }).disclosure).toContain('queued for the worker’s next turn');
+  });
+
   it('never delivers twice for a duplicate confirmation', async () => {
     const service = new FakeService();
     const delivery = makeDelivery();

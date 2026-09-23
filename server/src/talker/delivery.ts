@@ -5,6 +5,10 @@
  *   Pi          — mid-run steer via the EXISTING path; the extension
  *                 input-event bridge is H2 (a separate child) and is NOT wired
  *                 here. The disclosure field says so; nothing is hidden.
+ *                 M3: the idle path uses the SUBMISSION-shaped prompt (resolves
+ *                 once the worker's turn has started, never at turn end) and
+ *                 the busy path reports steer-join honestly — a receipt means
+ *                 "bytes delivered", never "the worker finished".
  *   Claude      — native steer/follow-up, SDK backend ONLY. A non-SDK (or
  *                 unprovable) backend refuses honestly; it never silently
  *                 degrades.
@@ -22,8 +26,19 @@ import type { DeliveryOutcome, WorkerDelivery } from './types.js';
 
 export interface PiDeliveryDeps {
   isBusy(sessionPath: string): boolean;
-  steer(sessionPath: string, text: string): Promise<void>;
-  prompt(sessionPath: string, text: string): Promise<void>;
+  /**
+   * Submission-shaped (M3): resolves once the worker's turn has genuinely
+   * STARTED, never waiting for the turn to complete. Throws when the
+   * submission fails (unresolvable session, already busy, preflight refusal).
+   */
+  submitPrompt(sessionPath: string, text: string): Promise<void>;
+  /**
+   * Submission-shaped steer (M3): resolves once the runtime has accepted the
+   * message and reports whether it joined a RUNNING turn (vs queuing for the
+   * worker's next turn) — the difference between an honest `delivered` and an
+   * honest `queued` receipt.
+   */
+  submitSteer(sessionPath: string, text: string): Promise<{ joinedRunningTurn: boolean }>;
   /**
    * Make the worker reachable before the relay (operator incident
    * 2026-09-16). Pi keys sessions by PATH and loads them LAZILY, so an idle
@@ -53,15 +68,36 @@ export function createPiDelivery(deps: PiDeliveryDeps): WorkerDelivery {
           : { path: workerSessionId, loadedHere: false };
         try {
           if (deps.isBusy(ready.path)) {
-            await deps.steer(ready.path, text);
+            // Busy: steer through the existing path. The submission resolves
+            // once the runtime accepts the message; the receipt is honest
+            // about what the acceptance means (contract §4.4: `queued`
+            // exists for exactly this).
+            const { joinedRunningTurn } = await deps.submitSteer(ready.path, text);
+            if (joinedRunningTurn) {
+              return {
+                outcome: 'delivered',
+                mechanism: 'steer',
+                disclosure:
+                  'delivered into the worker\'s running turn via steer; the extension input-event bridge (H2) is not wired yet',
+              };
+            }
             return {
-              outcome: 'delivered',
+              outcome: 'queued',
               mechanism: 'steer',
-              disclosure: 'delivered via the existing steer path; the extension input-event bridge (H2) is not wired yet',
+              disclosure:
+                'queued via steer; no turn was running, the message joins the worker\'s next turn',
             };
           }
-          await deps.prompt(ready.path, text);
-          return { outcome: 'delivered', mechanism: 'prompt', disclosure: 'delivered as the worker was idle' };
+          // Idle: submission-shaped prompt — the receipt fires once the
+          // worker has genuinely started the turn; the turn itself continues
+          // in the background and is NOT waited for (M3: attempt-28).
+          await deps.submitPrompt(ready.path, text);
+          return {
+            outcome: 'delivered',
+            mechanism: 'prompt',
+            disclosure:
+              'delivered as the worker was idle; the worker\'s turn continues in the background',
+          };
         } finally {
           // Only a load THIS delivery made is handed back; a session that was
           // already in memory is left exactly as it was found.
@@ -216,8 +252,11 @@ export async function createDefaultDeliveries(
           const info = manager.getSessionStatus(path);
           return info?.status === 'busy' || info?.status === 'streaming';
         },
-        steer: (path, text) => manager.steer(path, text),
-        prompt: (path, text) => manager.prompt(path, text),
+        // M3: submission-shaped seams — the receipt means "bytes delivered",
+        // not "the worker finished". manager.prompt()/steer() keep their
+        // whole-turn semantics for every other caller.
+        submitSteer: (path, text) => manager.submitSteer(path, text),
+        submitPrompt: (path, text) => manager.submitPrompt(path, text),
         ensureReady: async (ref) => {
           // Already loaded? By path, or by an id the manager can resolve itself.
           const loaded = manager.resolveSessionRef?.(ref) ?? (manager.hasSession(ref) ? ref : undefined);
