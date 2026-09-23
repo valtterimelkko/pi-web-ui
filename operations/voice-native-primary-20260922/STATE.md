@@ -10,19 +10,18 @@
 **Wave:** W1 · W2 complete · **W3 fix loop COMPLETE — GATE G4 ACHIEVED** (11 passes; pass 10 and
 pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
-**Active children**
+**Children:** none active. EV (evaluator) and RV (reviewer) both settled and reconciled.
 
-| Child | Session | Worktree · branch | Lease | Watch | Scope |
-|---|---|---|---|---|---|
-| EV evaluator | `01a0cef7-1a11-…` | (none; cwd `/root/pi-web-ui`, read-only) | `9ded265f…` | `ww_19` | blinded evaluator pass over 10 packs → `coordination/EV/` |
-| RV reviewer | `01a0cef7-49aa-…` | `wt-voice-rv` · `task/voice-native-rv` | `9775b192…` | `ww_20` | read-only falsification of all 34 cells → `coordination/RV/` |
-
-**Campaign: COMPLETE — 34 cells run, 29 pass** on revision `5fc3f1bb` (`campaign/CAMPAIGN-INDEX.json`).
-Per-arm: standard 15/17, ET-HIGH 14/17; discordant pairs 2:1 for standard → rule-4 tie, retain
-standard. Failures diagnosed: C05-et-high (flaky, chatty model over the confirm), C11-standard
-(amendment classified `cancel`), C24-et-high (no first candidate), SOAK ×2 (post-reconnect repeat
-relay produces no candidate → early termination fails the bars). Verdict draft at
-`campaign/VERDICT.md` (`NO_CANDIDATE_MEETS_TARGET`); evaluator + reviewer fold in before it is final.
+**Campaign: COMPLETE and independently reviewed.** 34 required cells on revision `5fc3f1bb`;
+accepted (verifier ∧ evaluator): **standard 14/17, ET-HIGH 12/17**; discordant pairs 3:1 for standard
+→ rule-4 tie, retain standard. Failures preserved: C05-et-high (flaky), C11-standard (amendment
+classified `cancel`), C16-et-high (evaluator indeterminate), C21 both arms (evaluator Q1 — the
+version-check precondition unaddressed), C24-et-high (no first candidate), SOAK ×2 (post-reconnect
+repeat relay produced no candidate). Reviewer verdict `supported-with-findings`, 34/34 cell verdicts
+independently reproduced; three material findings (F1 holdout wording disclosure — ledger corrected;
+F2 the C24 bar change, flagged post-hoc; F3 spend unverifiable) and two required corrections, both
+applied. Final verdict `campaign/VERDICT.md`: **`NO_CANDIDATE_MEETS_TARGET`** with the failing boundary
+and the smallest next experiment named; production not deployed.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
@@ -51,5 +50,4 @@ relay produces no candidate → early termination fails the bars). Verdict draft
 5. Independent reviewer child (read-only) — **brief ready** (`children/RV/brief.md`).
 6. Verdict + repository gates + canonical docs + Agent OS capture.
 
-**Watching (zero-token):** primary wake `ww_18` (M5). Model-free backstop: armed below. No independent
-process backstop (background-task cap saturated).
+**Watching (zero-token):** none — all children settled. No process backstop needed (background-task cap saturated).
