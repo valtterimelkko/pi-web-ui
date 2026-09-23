@@ -23,11 +23,16 @@
  *   run [--out <dir>] [--question "…"] [--listen-ms N] [--json]
  *   analyse <dir>                    re-analyse a recorded capture (no network)
  *   built-app [--episode C01] …      Phase 1 capture proof (L)
- *   primary-mic --episode C01 --arm standard [--server-env K=V]…
+ *   primary-mic --episode C01 --arm standard [--tts synthetic|real] [--server-env K=V]…
  *                                    the built-app main-control journey: real
  *                                    fake-file mic speech + labelled
  *                                    synthetic-stream-source steps, immutable
- *                                    E2 record, offline-verifiable (J)
+ *                                    E2 record, offline-verifiable (J).
+ *                                    --tts synthetic (explicit, default off)
+ *                                    adds the labelled synthetic-tts-source
+ *                                    read-back shim, whose spoken texts are
+ *                                    recorded and verifier-checked against the
+ *                                    proposal's retained bytes (J3)
  *   campaign --plan --arms standard,et-high [--dry-run] [--server-env K=V]…
  *                                    resume-safe §8 matrix runner with a full
  *                                    scheduled-cell index (J)
@@ -64,7 +69,9 @@ import {
   journeyPlanHash,
   armServerEnv,
   ARM_LABELS,
+  TTS_MODES,
   type ArmLabel,
+  type TtsMode,
 } from './lib/journey-plan.js';
 import { runJourney } from './lib/journey-run.js';
 import {
@@ -334,11 +341,20 @@ async function primaryMicCommand(argv: string[]): Promise<number> {
   const arm = flag(argv, '--arm') ?? 'standard';
   const dryRun = argv.includes('--dry-run');
   const serverEnvEntries = collectServerEnv(argv);
+  // Child J3: --tts is EXPLICIT and default-off. "real" (or no flag) is the
+  // unchanged journey; "synthetic" installs the labelled read-back shim.
+  // Anything else is refused before any plan or record exists.
+  const ttsArg = flag(argv, '--tts');
+  if (ttsArg !== undefined && !TTS_MODES.includes(ttsArg as TtsMode)) {
+    writeErr(`--tts must be one of ${TTS_MODES.join('|')} (explicit; default real = unchanged journey with no shim), got: "${ttsArg}"`);
+    return 2;
+  }
+  const tts = ttsArg === 'synthetic' ? 'synthetic' : undefined;
   const corpus = loadCorpus();
   let plan;
   try {
     if (!episodeId) throw new Error('--episode <id> is required (a corpus episode, not a holdout)');
-    plan = journeyPlan(episodeId, { corpus, corpusDir: CORPUS_DIR, arm });
+    plan = journeyPlan(episodeId, { corpus, corpusDir: CORPUS_DIR, arm, tts });
   } catch (error) {
     writeErr(String(error instanceof Error ? error.message : error));
     return 2;
@@ -346,7 +362,7 @@ async function primaryMicCommand(argv: string[]): Promise<number> {
   if (dryRun) {
     writeOut(JSON.stringify({ ...plan, planHash: journeyPlanHash(plan) }, null, 2));
     writeOut('');
-    writeOut(`dry-run journey plan OK: ${plan.episodeId} arm=${plan.arm} turns=${plan.turns.length} modes=${plan.turns.map((turn) => turn.inputMode).join(',')}`);
+    writeOut(`dry-run journey plan OK: ${plan.episodeId} arm=${plan.arm} tts=${plan.tts ?? 'real'} turns=${plan.turns.length} modes=${plan.turns.map((turn) => turn.inputMode).join(',')}`);
     writeOut('no browser, no server, no network — a dry run proves the plan, not the journey');
     return 0;
   }

@@ -400,6 +400,128 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
 })();
 `.replace('__INGRESS_ID__', INSTRUMENT_ID);
 
+// ── The labelled synthetic-TTS shim (child J3; explicit --tts synthetic) ────
+
+/**
+ * The read-back side's sanctioned lab fixture, named after the input-side
+ * `synthetic-stream-source`: a labelled page shim, injected BEFORE app boot
+ * only when the journey was explicitly requested with `--tts synthetic`, that
+ * replaces `speechSynthesis` with a deterministic implementation. The journey's
+ * Chromium has no speech synthesis, so without it the client honestly reports
+ * the read-back incomplete; with it, the read-back completes deterministically
+ * and every spoken text lands in a window-scoped array the runner dumps into
+ * the attempt record — where the verifier checks those bytes against the live
+ * proposal's retained bytes. Default journeys never install it.
+ *
+ * Contract (plan §J3):
+ *   - non-empty `getVoices()`;
+ *   - `speak(utterance)` fires `onstart` then `onend` after a small
+ *     length-proportional delay (configurable, default modest);
+ *   - `cancel()` fires nothing further;
+ *   - every spoken text is logged to `window.__voiceTtsShim.spoken`;
+ *   - `window.speechSynthesis.__voiceTtsShim === true` is the runner's
+ *     installation marker; the script is idempotent per page generation.
+ */
+export const SYNTHETIC_TTS_LABEL = 'synthetic-tts-source';
+
+export const TTS_SHIM_SCRIPT: string = `
+(() => {
+  if (window.__voiceTtsShim) return;
+  const shim = {
+    label: '__TTS_LABEL__',
+    installedAtMs: performance.now(),
+    spoken: [],   // every text the shim was asked to speak: {seq, atMs, text, chars}
+    cancelled: 0,
+    speaking: false,
+  };
+  window.__voiceTtsShim = shim;
+
+  const timing = { baseMs: 150, perCharMs: 6 }; // configurable, default modest
+  window.__voiceTtsShimConfigure = (patch) => {
+    if (patch && typeof patch === 'object') {
+      if (Number.isFinite(patch.baseMs)) timing.baseMs = Math.max(0, patch.baseMs);
+      if (Number.isFinite(patch.perCharMs)) timing.perCharMs = Math.max(0, patch.perCharMs);
+    }
+    return { baseMs: timing.baseMs, perCharMs: timing.perCharMs };
+  };
+
+  class LabUtterance {
+    constructor(text) {
+      this.text = String(text ?? '');
+      this.lang = ''; this.voice = null; this.volume = 1; this.rate = 1; this.pitch = 1;
+      this.onstart = null; this.onend = null; this.onerror = null;
+      this.onboundary = null; this.onmark = null; this.onpause = null; this.onresume = null;
+    }
+    addEventListener(type, fn) { const key = 'on' + type; if (typeof fn === 'function') this[key] = fn; }
+    removeEventListener(type) { this['on' + type] = null; }
+    dispatchEvent() { return false; }
+  }
+
+  const pending = new Map(); // utterance → { startTimer, endTimer }
+  const safe = (fn) => { try { fn(); } catch {} };
+
+  // Real Chromium exposes speechSynthesis as a getter-only WebIDL accessor on
+  // the Window prototype: a plain assignment silently no-ops (sloppy mode),
+  // which the first live confirmation run caught (shim present, synthesis not
+  // replaced). defineProperty on the instance shadows the prototype accessor.
+  const install = (key, value) => {
+    try {
+      Object.defineProperty(window, key, { value, writable: true, configurable: true });
+    } catch {
+      try { window[key] = value; } catch {}
+    }
+  };
+
+  const synthesis = {
+    __voiceTtsShim: true,   // the runner's installation marker
+    label: shim.label,
+    speaking: false,
+    pending: false,
+    paused: false,
+    getVoices: () => [
+      { name: 'voice-lane-lab synthetic', voiceURI: '__TTS_LABEL__', lang: 'en-GB', default: true, localService: true },
+    ],
+    speak: (utterance) => {
+      if (!utterance || typeof utterance.text !== 'string') return;
+      const text = utterance.text;
+      shim.spoken.push({ seq: shim.spoken.length, atMs: performance.now(), text, chars: text.length });
+      if (shim.spoken.length > 500) shim.spoken.shift();
+      shim.speaking = true;
+      synthesis.speaking = true;
+      synthesis.pending = true;
+      const startTimer = typeof utterance.onstart === 'function'
+        ? setTimeout(() => safe(() => { if (typeof utterance.onstart === 'function') utterance.onstart(); }), 0)
+        : null;
+      const delayMs = timing.baseMs + text.length * timing.perCharMs;
+      const endTimer = setTimeout(() => {
+        pending.delete(utterance);
+        synthesis.pending = pending.size > 0;
+        synthesis.speaking = pending.size > 0;
+        shim.speaking = pending.size > 0;
+        safe(() => { if (typeof utterance.onend === 'function') utterance.onend({ charIndex: text.length, elapsedTime: delayMs }); });
+      }, delayMs);
+      pending.set(utterance, { startTimer, endTimer });
+    },
+    // Deterministic: cancel fires NOTHING further — no onstart, no onend, no onerror.
+    cancel: () => {
+      for (const timers of pending.values()) {
+        if (timers.startTimer !== null) clearTimeout(timers.startTimer);
+        clearTimeout(timers.endTimer);
+      }
+      pending.clear();
+      synthesis.speaking = false;
+      synthesis.pending = false;
+      shim.speaking = false;
+      shim.cancelled += 1;
+    },
+    pause: () => {},
+    resume: () => {},
+  };
+  install('speechSynthesis', synthesis);
+  install('SpeechSynthesisUtterance', LabUtterance);
+})();
+`.split('__TTS_LABEL__').join(SYNTHETIC_TTS_LABEL);
+
 // ── Process helpers (shared with the primary-mic journey runner) ───────────
 
 export function freePort(): Promise<number> {

@@ -24,6 +24,8 @@ import path from 'node:path';
 
 import {
   INGRESS_INSTRUMENT_SCRIPT,
+  SYNTHETIC_TTS_LABEL,
+  TTS_SHIM_SCRIPT,
   ensureBuiltAppFresh,
   freePort,
   run,
@@ -305,6 +307,30 @@ export function parseServerEvidenceLine(line: string): EvidenceRow | null {
   return null;
 }
 
+/** The shim state the runner dumps out of the page at read-back time. */
+interface TtsShimDump {
+  label: string;
+  synthReplaced: boolean;
+  spoken: Array<{ seq: number; atMs: number; text: string; chars: number }>;
+}
+
+function readTtsShim(page: import('playwright').Page): Promise<TtsShimDump | null> {
+  return page
+    .evaluate(() => {
+      const root = window as unknown as {
+        __voiceTtsShim?: { label?: unknown; spoken?: Array<{ seq: number; atMs: number; text: string; chars: number }> };
+        speechSynthesis?: { __voiceTtsShim?: unknown };
+      };
+      if (!root.__voiceTtsShim) return null;
+      return {
+        label: typeof root.__voiceTtsShim.label === 'string' ? root.__voiceTtsShim.label : '',
+        synthReplaced: root.speechSynthesis?.__voiceTtsShim === true,
+        spoken: JSON.parse(JSON.stringify(root.__voiceTtsShim.spoken ?? [])) as TtsShimDump['spoken'],
+      };
+    })
+    .catch(() => null);
+}
+
 // ── The runner ──────────────────────────────────────────────────────────────
 
 interface StepRow {
@@ -538,6 +564,12 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       args: browserArgs,
     });
     const page = await browserContext.newPage();
+    // Explicit --tts synthetic (child J3): the labelled read-back shim rides
+    // into every page generation BEFORE app boot. Default journeys never
+    // inject it — no shim unless requested.
+    if (plan.tts === 'synthetic') {
+      await page.addInitScript(new Function(TTS_SHIM_SCRIPT) as () => void);
+    }
     page.on('pageerror', (error) => consoleErrors.push(String(error)));
     page.on('console', (message) => {
       if (['error', 'warning'].includes(message.type())) consoleLog.push(`${message.type()}: ${message.text().slice(0, 300)}`);
@@ -547,7 +579,6 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       ws.on('close', () => wsLog.push(`WS closed: ${ws.url()}`));
     });
     await page.addInitScript(new Function(INGRESS_INSTRUMENT_SCRIPT) as () => void);
-
     await page.goto(`http://127.0.0.1:${clientPort}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1_200);
     const password = page.locator('input[type="password"]');
@@ -583,6 +614,20 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         capture: node.getAttribute('data-capture'),
       }))
       .catch(() => null);
+
+    // The seam must actually be live on the page that will speak: a requested
+    // shim that did not install is a broken harness, not a silent downgrade.
+    let ttsShim: TtsShimDump | null = null;
+    if (plan.tts === 'synthetic') {
+      ttsShim = await readTtsShim(page);
+      if (!ttsShim || ttsShim.label !== SYNTHETIC_TTS_LABEL || !ttsShim.synthReplaced) {
+        throw new Error(
+          `the labelled ${SYNTHETIC_TTS_LABEL} shim is not installed on the live page ` +
+            `(label ${ttsShim?.label ?? 'none'}, speechSynthesis replaced: ${ttsShim?.synthReplaced === true}) — refusing a synthetic-tts journey without it`
+        );
+      }
+      log(`labelled ${SYNTHETIC_TTS_LABEL} shim installed: speechSynthesis replaced, spoken log armed`);
+    }
 
     // ── The director loop ────────────────────────────────────────────────
     const waitForListening = async (listening: boolean, timeoutMs: number): Promise<boolean> => {
@@ -778,6 +823,30 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     writeFileSync(path.join(captureDir, 'console-errors.json'), `${JSON.stringify({ pageErrors: consoleErrors, console: consoleLog, websockets: wsLog }, null, 2)}\n`, { mode: 0o600 });
     writeFileSync(path.join(captureDir, 'wire-frames.json'), `${JSON.stringify(dump.wireFrames, null, 2)}\n`, { mode: 0o600 });
 
+    // Record every text the shim was asked to speak, honestly: the file is
+    // written only when the shim was actually present, and its own label is
+    // recorded (a foreign label is the verifier's problem, not something to
+    // silently rewrite).
+    if (plan.tts === 'synthetic' && labPage.current) {
+      ttsShim = await readTtsShim(labPage.current);
+    }
+    if (plan.tts === 'synthetic' && ttsShim) {
+      writeFileSync(
+        path.join(captureDir, 'tts-spoken.json'),
+        `${JSON.stringify(
+          {
+            label: ttsShim.label,
+            shimVerified: ttsShim.label === SYNTHETIC_TTS_LABEL && ttsShim.synthReplaced,
+            readBackAttribution: SYNTHETIC_TTS_LABEL,
+            spoken: ttsShim.spoken,
+          },
+          null,
+          2
+        )}\n`,
+        { mode: 0o600 }
+      );
+    }
+
     writeFileSync(
       path.join(attemptLayout.attemptDir, 'director', 'steps.jsonl'),
       steps.map((row) => JSON.stringify(row)).join('\n') + '\n',
@@ -818,7 +887,27 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     );
     writeFileSync(
       path.join(attemptLayout.attemptDir, 'evaluation', 'speak-log.json'),
-      `${JSON.stringify({ syntheticInjections: dump.speakLog, syntheticModeVerified, laneWentLive, engineBadge }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          syntheticInjections: dump.speakLog,
+          syntheticModeVerified,
+          laneWentLive,
+          engineBadge,
+          ...(plan.tts === 'synthetic'
+            ? {
+                ttsShim: {
+                  mode: 'synthetic',
+                  label: ttsShim?.label ?? SYNTHETIC_TTS_LABEL,
+                  shimVerified: ttsShim?.label === SYNTHETIC_TTS_LABEL && ttsShim?.synthReplaced === true,
+                  spokenCount: ttsShim?.spoken.length ?? 0,
+                  spokenLog: ttsShim ? 'capture/tts-spoken.json' : null,
+                },
+              }
+            : {}),
+        },
+        null,
+        2
+      )}\n`,
       { mode: 0o600 }
     );
 
@@ -897,6 +986,23 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       cleanup,
       terminal: terminalAction,
       turnModes: plan.turns.map((turn) => ({ turnId: turn.turnId, inputMode: turn.inputMode, fixtureId: turn.fixtureId })),
+      // Child J3: the manifest carries the shim marker (captureMode already
+      // does, from the plan) plus the honest seam description. evidenceLevel
+      // stays E2 — a shim read-back is never a rendered-audio claim.
+      ...(plan.tts === 'synthetic'
+        ? {
+            tts: {
+              mode: 'synthetic',
+              label: ttsShim?.label ?? SYNTHETIC_TTS_LABEL,
+              shimVerified: ttsShim?.label === SYNTHETIC_TTS_LABEL && ttsShim?.synthReplaced === true,
+              spokenCount: ttsShim?.spoken.length ?? 0,
+              spokenLog: ttsShim ? 'capture/tts-spoken.json' : null,
+              readBackAttribution: SYNTHETIC_TTS_LABEL,
+              renderedAudioClaimed: false,
+              note: 'labelled lab shim; the verifier checks every spoken text against the proposal retained bytes — never a rendered-audio (E2R/E3) claim',
+            },
+          }
+        : {}),
     };
     finaliseAttempt(attemptLayout.attemptDir, manifest);
     log(`attempt record: ${attemptLayout.attemptDir}`);

@@ -37,6 +37,7 @@ import path from 'node:path';
 
 import { type LoadedCorpus } from './corpus.js';
 import { EpisodeDirector, checkSlots, normaliseUtterance, type DirectorObservation } from './director.js';
+import { SYNTHETIC_TTS_LABEL } from './built-app.js';
 
 export const RECORD_SCHEMA_VERSION = 1;
 
@@ -158,6 +159,202 @@ function occursUnnegated(clauses: string[], needle: string): boolean {
     }
   }
   return false;
+}
+
+// ── Labelled synthetic-TTS seam (child J3) ─────────────────────────────────
+
+interface ProposalFrame {
+  proposalId: string;
+  original: string;
+  tidied: string;
+  presentedVariant: string;
+}
+
+/** The proposal_created frames the runner recorded from the live wire. */
+function readProposalFrames(attemptDir: string): ProposalFrame[] {
+  const framesPath = path.join(attemptDir, 'capture', 'wire-frames.json');
+  if (!existsSync(framesPath)) return [];
+  try {
+    const rows = JSON.parse(readFileSync(framesPath, 'utf8')) as Array<{ type?: unknown; frame?: unknown }>;
+    const out: ProposalFrame[] = [];
+    for (const row of rows) {
+      if (row?.type !== 'proposal_created') continue;
+      const frame = row.frame as { proposal?: unknown } | undefined;
+      const proposal = (frame?.proposal ?? null) as Record<string, unknown> | null;
+      if (!proposal) continue;
+      const proposalId = String(proposal.proposalId ?? '');
+      if (!proposalId) continue;
+      const original = String(proposal.original ?? '');
+      out.push({
+        proposalId,
+        original,
+        tidied: String(proposal.tidied ?? original),
+        presentedVariant: String(proposal.presentedVariant ?? 'tidied'),
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** The bytes the client reads back for one proposal: the presented variant, verbatim. */
+function readBackBytes(proposal: ProposalFrame): string {
+  return proposal.presentedVariant === 'original' ? proposal.original : proposal.tidied;
+}
+
+export interface TtsSeamResult {
+  problems: VerifierProblem[];
+  lines: string[];
+  /** True when the declared seam's evidence is missing/malformed: never a pass — incomplete. */
+  incomplete: boolean;
+}
+
+/**
+ * The synthetic-TTS seam's integrity (child J3):
+ *   - shim artefacts in the record force a manifest declaration (no silent use);
+ *   - a declared seam must be described by an honest manifest tts block, must
+ *     record what the shim spoke (capture/tts-spoken.json), and must keep the
+ *     record at evidence level E2 (a shim read-back is NEVER a rendered-audio
+ *     E2R/E3 pass);
+ *   - every text the shim spoke must equal the live proposal's retained bytes
+ *     (exact comparison after the product's own normalisation) — a shim that
+ *     fabricated a read-back of different words is a demonstrated failure;
+ *   - every completed read-back presentation must join to a shim-spoken text
+ *     (attribution), and a claimed completion with zero shim speech is fraud.
+ */
+function collectTtsSeamProblems(attemptDir: string, manifest: Record<string, unknown>, steps: StepRow[]): TtsSeamResult {
+  const problems: VerifierProblem[] = [];
+  const lines: string[] = [];
+  const spokenRel = path.join('capture', 'tts-spoken.json');
+
+  const captureMode = typeof manifest.captureMode === 'string' ? manifest.captureMode : '';
+  const declared = captureMode.includes(SYNTHETIC_TTS_LABEL);
+  const spokenPath = path.join(attemptDir, spokenRel);
+  const spokenExists = existsSync(spokenPath);
+  const ttsBlock = (manifest.tts ?? null) as Record<string, unknown> | null;
+
+  if (!declared && !spokenExists && !ttsBlock) {
+    lines.push('synthetic-tts seam: not declared, no shim artefacts (default journey)');
+    return { problems, lines, incomplete: false };
+  }
+  if (!declared) {
+    problems.push({
+      code: 'tts-shim-undeclared',
+      detail: `the ${SYNTHETIC_TTS_LABEL} shim left evidence in the record (${spokenExists ? spokenRel : 'manifest tts block'}) but manifest.captureMode does not declare it — silent shim use`,
+    });
+    return { problems, lines, incomplete: false };
+  }
+
+  // Declared: the seam must be honestly described and fully evidenced.
+  lines.push(`synthetic-tts seam declared (${captureMode})`);
+  if (manifest.evidenceLevel !== 'E2') {
+    problems.push({
+      code: 'tts-shim-rendered-audio-claim',
+      detail: `a ${SYNTHETIC_TTS_LABEL} record claims evidence level ${String(manifest.evidenceLevel)} — a shim read-back is never a rendered-audio (E2R/E3) pass`,
+    });
+  }
+  if (!ttsBlock) {
+    problems.push({ code: 'tts-shim-evidence-missing', detail: 'captureMode declares the shim but the manifest has no tts block describing it' });
+    return { problems, lines, incomplete: true };
+  }
+  if (ttsBlock.mode !== 'synthetic' || ttsBlock.label !== SYNTHETIC_TTS_LABEL) {
+    problems.push({
+      code: 'tts-shim-undeclared',
+      detail: `manifest tts block does not describe the sanctioned shim (mode ${String(ttsBlock.mode)}, label ${String(ttsBlock.label)})`,
+    });
+  }
+  if (ttsBlock.renderedAudioClaimed === true) {
+    problems.push({ code: 'tts-shim-rendered-audio-claim', detail: 'the manifest claims rendered audio for a shim read-back' });
+  }
+  if (!spokenExists) {
+    problems.push({ code: 'tts-shim-evidence-missing', detail: `captureMode declares the shim but ${spokenRel} is absent — the spoken texts were not recorded` });
+    return { problems, lines, incomplete: true };
+  }
+  let spokenLog: { label?: unknown; shimVerified?: unknown; spoken?: unknown };
+  try {
+    spokenLog = JSON.parse(readFileSync(spokenPath, 'utf8')) as typeof spokenLog;
+  } catch (error) {
+    problems.push({ code: 'tts-shim-log-malformed', detail: `${spokenRel}: ${String(error)}` });
+    return { problems, lines, incomplete: true };
+  }
+  if (spokenLog.label !== SYNTHETIC_TTS_LABEL) {
+    problems.push({ code: 'tts-shim-undeclared', detail: `${spokenRel} carries label ${String(spokenLog.label)} — not the sanctioned shim log` });
+  }
+  if (spokenLog.shimVerified !== true) {
+    problems.push({ code: 'tts-shim-evidence-missing', detail: `${spokenRel} records shimVerified=false — the shim's installation was not verified in-page` });
+  }
+  if (!Array.isArray(spokenLog.spoken)) {
+    problems.push({ code: 'tts-shim-log-malformed', detail: `${spokenRel}: spoken is not an array` });
+    return { problems, lines, incomplete: true };
+  }
+  const spoken = spokenLog.spoken as Array<{ seq?: unknown; text?: unknown }>;
+  lines.push(`${spoken.length} shim-spoken texts recorded`);
+  const completedPresentation = steps.some(
+    (step) => (step.observation as { kind?: unknown; complete?: unknown } | undefined)?.kind === 'presentation' &&
+      (step.observation as { complete?: unknown } | undefined)?.complete === true
+  );
+  if (spoken.length === 0) {
+    if (completedPresentation) {
+      problems.push({
+        code: 'tts-shim-readback-unattributed',
+        detail: 'the record claims a completed read-back presentation but the shim spoke nothing — the read-back is not attributable to the shim',
+      });
+      return { problems, lines, incomplete: false };
+    }
+    // Zero speech and no claimed completion: an honest gap the journey verdict
+    // already grades; the declared seam itself has nothing more to check.
+    return { problems, lines, incomplete: true };
+  }
+
+  // Byte integrity: every spoken text must be some proposal's read-back bytes.
+  const proposals = readProposalFrames(attemptDir);
+  if (proposals.length === 0) {
+    problems.push({
+      code: 'tts-shim-evidence-missing',
+      detail: 'no proposal_created wire frames recorded — the spoken bytes cannot be compared against the proposal',
+    });
+    return { problems, lines, incomplete: true };
+  }
+  let mismatches = 0;
+  for (const row of spoken) {
+    const text = typeof row.text === 'string' ? row.text : '';
+    if (!text) {
+      mismatches += 1;
+      problems.push({ code: 'tts-shim-text-mismatch', detail: `shim-spoken entry ${String(row.seq)} carries no text` });
+      continue;
+    }
+    const spokenNorm = normaliseUtterance(text);
+    const matched = proposals.some((proposal) => normaliseUtterance(readBackBytes(proposal)) === spokenNorm);
+    if (!matched) {
+      mismatches += 1;
+      problems.push({
+        code: 'tts-shim-text-mismatch',
+        detail: `shim spoke words no proposal retains: "${text.slice(0, 80)}" — the seam must not fabricate a read-back of different words`,
+      });
+    }
+  }
+  lines.push(
+    mismatches > 0
+      ? `shim spoken-text integrity: ${mismatches} of ${spoken.length} texts match no proposal bytes`
+      : `shim spoken-text integrity: all ${spoken.length} texts equal the retained proposal bytes`
+  );
+
+  // Attribution: every completed presentation joins to a shim-spoken text.
+  for (const step of steps) {
+    const obs = step.observation as { kind?: unknown; identity?: unknown; complete?: unknown } | undefined;
+    if (!obs || obs.kind !== 'presentation' || obs.complete !== true) continue;
+    const proposal = proposals.find((candidate) => candidate.proposalId === String(obs.identity ?? ''));
+    if (!proposal) continue; // identity integrity is graded elsewhere
+    const expected = normaliseUtterance(readBackBytes(proposal));
+    if (!spoken.some((row) => typeof row.text === 'string' && normaliseUtterance(row.text) === expected)) {
+      problems.push({
+        code: 'tts-shim-readback-unattributed',
+        detail: `completed presentation for ${String(obs.identity)} has no shim-spoken text equal to its retained bytes — the read-back is not attributable to the shim`,
+      });
+    }
+  }
+  return { problems, lines, incomplete: false };
 }
 
 // ── Main entry ──────────────────────────────────────────────────────────────
@@ -305,6 +502,13 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
   }
   if (steps.length === 0) return indeterminate('evidence-empty', 'director step log is empty');
   lines.push(`evidence present: ${ingressChunks.length} ingress + ${egressChunks.length} egress chunks, ${steps.length} steps`);
+
+  // 4b. Labelled synthetic-TTS seam (J3): declared use must be declared-honest,
+  // evidenced, and byte-matched to the proposal. Problems flow into the shared
+  // set; the incomplete class is gated at each pass-issuing return below.
+  const ttsSeam = collectTtsSeamProblems(attemptDir, manifest, steps);
+  problems.push(...ttsSeam.problems);
+  lines.push(...ttsSeam.lines);
 
   // 5. Negative-control contamination of an E2 record.
   if (evidenceLevel === 'E2') {
@@ -462,6 +666,7 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
       );
     }
     lines.push(`cleanup verified: ${Object.keys(cleanup).join(', ')}`);
+    if (ttsSeam.incomplete) return { verdict: 'indeterminate', problems, lines };
     if (problems.length === 0) lines.push('capture window verified: start/stop brackets the recorded audio');
     return { verdict: problems.length === 0 ? 'pass' : 'fail', problems, lines };
   }
@@ -563,6 +768,11 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
       }
       if (problems.length > 0) return { verdict: 'fail', problems, lines };
       lines.push('response grounding verified against the episode slots');
+    }
+    if (ttsSeam.incomplete) {
+      // A declared seam with missing/malformed evidence is incomplete proof —
+      // never a pass, and never upgraded to a demonstrated failure either.
+      return { verdict: 'indeterminate', problems, lines };
     }
     if (problems.length === 0) lines.push('verdict: the recorded journey completed with verified evidence');
     return { verdict: problems.length === 0 ? 'pass' : 'fail', problems, lines };
