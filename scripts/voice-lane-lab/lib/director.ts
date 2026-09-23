@@ -408,12 +408,10 @@ export class EpisodeDirector {
         if (turn?.kind === 'adaptive-confirm' || turn?.kind === 'adaptive-steer') {
           this.approvedIdentity = this.candidateIdentity;
         }
-        // Keep going: the next await phase must be entered at THIS clock reading
-        // so its deadline runs from when the operator finished speaking.
-        const next = this.phases[this.cursor];
-        if (next && next.kind !== 'speak' && next.enteredAtMs === null) {
-          next.enteredAtMs = this.now();
-        }
+        // The NEXT await phase arms when it is first POLLED, not here: the
+        // runner speaks the frozen utterance (device playback + pipeline entry
+        // take real time), and the deadline must measure model latency from the
+        // end of the operator's speech — never transport time.
         return { type: 'speak', turnId: phase.turnId ?? turn?.id ?? 'unknown', text };
       }
       if (phase.enteredAtMs === null) phase.enteredAtMs = this.now();

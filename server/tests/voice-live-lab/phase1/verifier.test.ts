@@ -481,3 +481,93 @@ describe('missing, empty or malformed evidence fails closed', () => {
 });
 
 // (slot damage is now covered directly in the damage block above)
+
+// ── Journey records (child J): kind 'primary-mic-journey' ───────────────────
+
+function conversationJourneyRecord(responseText: string): RecordBuilder {
+  const builder = new RecordBuilder('C09');
+  builder.patchManifest({
+    kind: 'primary-mic-journey',
+    captureMode: 'fake-file+synthetic-stream-source',
+    laneStop: { finalState: 'stopped-start-control-back' },
+    cleanup: { browserClosed: true, previewStopped: true, serverStopped: true, socketsRemoved: true },
+    armSelection: { requested: 'standard', env: { VOICE_LIVE_PROFILE: 'standard' } },
+    turnModes: [{ turnId: 't1', inputMode: 'fake-file', fixtureId: 'C09-t1' }],
+  });
+  builder.step(1_000, { type: 'speak', turnId: 't1', text: episodeById(corpus, 'C09').inputTurns[0].text });
+  builder.step(1_600, { type: 'await', reason: 'waiting for response', deadlineMs: episodeById(corpus, 'C09').perStepDeadlinesMs.candidateMs });
+  builder.step(4_000, { type: 'terminal', status: 'complete', reason: 'episode flow completed' }, {
+    kind: 'response',
+    text: responseText,
+    atMs: 4_000,
+  });
+  for (let index = 0; index < 30; index += 1) {
+    const samples = new Int16Array(480).map((_, i) => ((index * 480 + i) % 1000) as number);
+    builder.addIngressChunk({ atMs: 1_100 + index * 10, samples });
+    builder.addEgressChunk({ atMs: 1_120 + index * 10, samples: new Int16Array(160).map((_, i) => ((index * 160 + i) % 1000) as number) });
+  }
+  builder.useFixture({
+    fixtureId: 'C09-t1',
+    episodeId: 'C09',
+    turnId: 't1',
+    inputMode: 'fake-file',
+    speechLabel: 'synthetic speech based on real wording',
+    pcmSha256: sha256(Buffer.from('fixture-bytes-c09')),
+    manifestPath: 'corpus/voices/voice-a.manifest.json',
+  });
+  return builder;
+}
+
+describe('journey records: conversational-only episodes', () => {
+  it('a clean conversational journey passes on response grounding, not on a release that never exists', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('The retry handler currently swallows the second error, per the worker session log.').write(),
+      { corpus }
+    );
+    expect(outcome.problems).toEqual([]);
+    expect(outcome.verdict).toBe('pass');
+    expect(exitCodeFor(outcome)).toBe(0);
+  });
+
+  it('a response missing its required content is a demonstrated failure (slot-violation)', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('Something entirely unrelated happened today.').write(),
+      { corpus }
+    );
+    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.code === 'slot-violation')).toBe(true);
+  });
+
+  it('a response claiming a forbidden action is a demonstrated failure', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('The retry handler issue has been sent to the worker already.').write(),
+      { corpus }
+    );
+    expect(outcome.verdict).toBe('fail');
+  });
+});
+
+describe('journey records: cleanup and lane stop fail closed', () => {
+  it('an unverified cleanup is indeterminate, never a pass', () => {
+    const builder = conversationJourneyRecord('The retry handler is the cause.');
+    builder.patchManifest({ cleanup: { browserClosed: true, previewStopped: true, serverStopped: false, socketsRemoved: false } });
+    const outcome = verifyRecord(builder.write(), { corpus });
+    expect(outcome.verdict).toBe('indeterminate');
+    expect(outcome.problems.some((problem) => problem.code === 'cleanup-unverified')).toBe(true);
+  });
+
+  it('a lane still live after the stop control is a demonstrated failure', () => {
+    const builder = conversationJourneyRecord('The retry handler is the cause.');
+    builder.patchManifest({ laneStop: { finalState: 'live' } });
+    const outcome = verifyRecord(builder.write(), { corpus });
+    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.code === 'lane-stop-unverified')).toBe(true);
+  });
+
+  it('a journey record without turn mode data is indeterminate', () => {
+    const builder = conversationJourneyRecord('The retry handler is the cause.');
+    builder.patchManifest({ turnModes: undefined });
+    const outcome = verifyRecord(builder.write(), { corpus });
+    expect(outcome.verdict).toBe('indeterminate');
+  });
+});

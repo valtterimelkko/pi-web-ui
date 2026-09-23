@@ -110,6 +110,27 @@ describe('candidates are checked against the declared slots', () => {
   });
 });
 
+describe('phase clocks arm at first poll, not at speak time', () => {
+  it('transport time between the speak and the next poll does not consume the deadline', () => {
+    const { actions } = run('C09', (director) => {
+      director.step(); // speak t1 (the utterance then travels + plays)
+      director.step(undefined, 8_000); // first poll AFTER the utterance entered the pipeline (arms here)
+      director.step(undefined, 1_000); // 1 s later: still inside candidateMs — must still be awaiting
+    });
+    expect(actions.some((action) => action.type === 'terminal')).toBe(false);
+    expect(actions.some((action) => action.type === 'await' && action.reason.includes('response'))).toBe(true);
+  });
+
+  it('still fires the frozen repair once the armed phase truly exceeds its deadline', () => {
+    const { actions } = run('C09', (director) => {
+      director.step();
+      director.step(undefined, 8_000); // arm at first poll
+      director.step(undefined, 17_000); // 9 s later, past candidateMs with no response
+    });
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'interaction-failure' });
+  });
+});
+
 describe('repair branches are frozen and bounded', () => {
   it('a mismatched candidate gets exactly one frozen clarification, then terminal interaction-failure', () => {
     const { actions } = run('C01', (director) => {
@@ -132,7 +153,8 @@ describe('repair branches are frozen and bounded', () => {
   it('silence past the candidate deadline runs the same frozen repair, never an improvisation', () => {
     const { actions } = run('C01', (director) => {
       director.step();
-      director.step(undefined, 16_000); // tick past candidateMs with no candidate
+      director.step(undefined, 8_000); // the await phase arms at the first poll (9 s)
+      director.step(undefined, 16_000); // 16 s later, past candidateMs with no candidate
     });
     const clarification = actions.find((action) => action.type === 'speak' && action.turnId === 'repair-1');
     expect(clarification).toBeDefined();

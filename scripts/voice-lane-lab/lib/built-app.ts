@@ -178,6 +178,11 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
     ingress: [],   // {seq, atMs, sampleRate, sampleCount, pcm (Int16 → b64)}
     egress: [],    // {seq, atMs, sampleRate, sampleCount, b64}
     wsSendCalls: 0,
+    // Product wire frames the session WebSocket carried (proposal/resolution/
+    // receipt/transcript/state): the client-visible conversation record. Small
+    // text frames only, newest last, bounded.
+    wireFrames: [],
+    speakLog: [],  // synthetic-stream-source injections: {turnMs, sampleRate, frames}
     synthQueue: [], // {pcm16kB64, sampleRate} — synthetic-stream-source mode
     synthGain: null,
     synthContext: null,
@@ -185,6 +190,45 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
     stopped: false,
   };
   window.__voiceLaneLab = lab;
+
+  const WIRE_FRAME_TYPES = [
+    'proposal_created', 'proposal_resolved', 'receipt_event',
+    'transcript_delta', 'voice_state', 'voice_error', 'parking_updated',
+    'proposal_presentation',
+  ];
+
+  // Inbound wire sniffing: the server→client conversation (proposals,
+  // resolutions, receipts, captions) arrives as WebSocket messages — invisible
+  // to a send patch. A passive addEventListener coexists with the app's own
+  // handlers; nothing here consumes or alters the frames.
+  const NativeWebSocket = window.WebSocket;
+  const LabWebSocket = function (...args) {
+    const ws = new NativeWebSocket(...args);
+    try {
+      ws.addEventListener('message', (event) => {
+        try {
+          if (typeof event.data !== 'string') return;
+          const parsed = JSON.parse(event.data);
+          if (parsed && typeof parsed.type === 'string' && WIRE_FRAME_TYPES.includes(parsed.type)) {
+            lab.wireFrames.push({
+              seq: lab.wireFrames.length,
+              atMs: performance.now(),
+              direction: 'inbound',
+              type: parsed.type,
+              frame: parsed,
+            });
+            if (lab.wireFrames.length > 800) lab.wireFrames.shift();
+          }
+        } catch {}
+      });
+    } catch {}
+    return ws;
+  };
+  LabWebSocket.prototype = NativeWebSocket.prototype;
+  for (const stat of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
+    try { LabWebSocket[stat] = NativeWebSocket[stat]; } catch {}
+  }
+  window.WebSocket = LabWebSocket;
 
   const i16ToB64 = (i16) => {
     let s = '';
@@ -266,7 +310,8 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
     return source;
   };
 
-  // Tap the frames leaving the production pipeline (post-resampler, 16 kHz).
+  // Tap the frames leaving the production pipeline (post-resampler, 16 kHz),
+  // and record the product's wire conversation (small JSON control frames).
   const origSend = WebSocket.prototype.send;
   WebSocket.prototype.send = function (...sendArgs) {
     lab.wsSendCalls += 1;
@@ -288,6 +333,18 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
             b64: parsed.data,
           });
         }
+      } else if (typeof data === 'string') {
+        const parsed = JSON.parse(data);
+        if (parsed && typeof parsed.type === 'string' && WIRE_FRAME_TYPES.includes(parsed.type)) {
+          lab.wireFrames.push({
+            seq: lab.wireFrames.length,
+            atMs: performance.now(),
+            direction: 'outbound',
+            type: parsed.type,
+            frame: parsed,
+          });
+          if (lab.wireFrames.length > 800) lab.wireFrames.shift();
+        }
       }
     } catch {}
     // send is a native method: it MUST be invoked with the socket as this,
@@ -300,6 +357,26 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
     lab.captureStoppedAtMs = performance.now();
     if (lab.synthContext) { try { lab.synthContext.close(); } catch {} }
   };
+  // Switch the NEXT getUserMedia to the labelled synthetic-stream-source
+  // (plan §4.2(2)): a lab-only controllable MediaStream feeding the UNCHANGED
+  // product capture pipeline. The product code is untouched; only which
+  // virtual microphone it captures changes, at the operator's next main-
+  // control pause/resume gesture.
+  window.__voiceLaneLabUseSynthetic = () => {
+    if (lab.stopped) return { ok: false, reason: 'instrument stopped' };
+    lab.mode = 'synthetic-stream-source';
+    return { ok: true, mode: lab.mode };
+  };
+  window.__voiceLaneLabState = () => ({
+    mode: lab.mode,
+    sourceLabel: lab.sourceLabel,
+    getUserMediaCalls: lab.getUserMediaCalls,
+    ingress: lab.ingress.length,
+    egress: lab.egress.length,
+    wireFrames: lab.wireFrames.length,
+    speaks: lab.speakLog.length,
+    stopped: lab.stopped,
+  });
   window.__voiceLaneLabSpeak = (pcm16kB64, sampleRate) => {
     // synthetic-stream-source mode only: schedule one utterance NOW.
     const dest = ensureSyntheticStream();
@@ -315,15 +392,17 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(dest);
+    const atMs = performance.now();
     source.start();
+    lab.speakLog.push({ atMs, sampleRate, frames: f32.length });
     return { sampleRate, frames: f32.length };
   };
 })();
 `.replace('__INGRESS_ID__', INSTRUMENT_ID);
 
-// ── Process helpers ─────────────────────────────────────────────────────────
+// ── Process helpers (shared with the primary-mic journey runner) ───────────
 
-function freePort(): Promise<number> {
+export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.listen(0, '127.0.0.1', () => {
@@ -336,7 +415,7 @@ function freePort(): Promise<number> {
   });
 }
 
-function run(cmd: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): { code: number | null; stdout: string; stderr: string } {
+export function run(cmd: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): { code: number | null; stdout: string; stderr: string } {
   const result = spawnSync(cmd, args, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
@@ -346,7 +425,7 @@ function run(cmd: string, args: string[], options: { cwd?: string; env?: NodeJS.
   return { code: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
-async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
+export async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {

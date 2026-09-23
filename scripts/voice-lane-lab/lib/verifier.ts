@@ -155,6 +155,14 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
     return indeterminate('malformed-json', `manifest.json: ${String(error)}`);
   }
 
+  // 1b. A record finalised as invalid/failed carries its own reason: surface
+  // it (the verdict stays indeterminate — incomplete proof, never a pass).
+  if (typeof manifest.status === 'string' && ['invalid', 'failed'].includes(manifest.status)) {
+    const reason = typeof manifest.reason === 'string' ? manifest.reason : 'unstated';
+    problems.push({ code: 'journey-invalid-reason', detail: `attempt finalised ${manifest.status}: ${reason}` });
+    lines.push(`attempt finalised ${manifest.status} (${reason}) — grading as indeterminate/incomplete`);
+  }
+
   // 2. Artifact integrity (everything the manifest froze must be unchanged,
   // and nothing new may appear after finalisation).
   const artifacts = (manifest.artifacts ?? null) as Array<{ relativePath: string; sha256: string; bytes: number }> | null;
@@ -204,6 +212,16 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
   }
   const episode = options.corpus.episodes.find((candidate) => candidate.id === episodeId);
   if (!episode) return indeterminate('manifest-incomplete', `unknown episode ${episodeId}`);
+  if (manifest.kind === 'primary-mic-journey') {
+    const turnModes = manifest.turnModes as Array<Record<string, unknown>> | undefined;
+    if (!Array.isArray(turnModes) || turnModes.length === 0) {
+      return indeterminate('journey-incomplete', 'a journey record must state the turn capture-mode plan (turnModes)');
+    }
+    const armSelection = manifest.armSelection as Record<string, unknown> | undefined;
+    if (!armSelection || typeof armSelection.requested !== 'string') {
+      return indeterminate('journey-incomplete', 'a journey record must state its requested arm (armSelection.requested)');
+    }
+  }
   if (manifest.corpusHash !== options.corpus.schemaVersion.toString() && typeof manifest.corpusHash !== 'string') {
     return indeterminate('manifest-incomplete', 'manifest lacks a corpus hash');
   }
@@ -416,6 +434,80 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
     }
   }
   lines.push(`director replay matches all ${steps.length} recorded steps`);
+
+  // 10j. Journey records: teardown and lane-stop fail closed; the verdict
+  // recompute honours the episode's route (response grounding for
+  // conversational-only episodes; release-joined slots for relay episodes).
+  if (manifest.kind === 'primary-mic-journey') {
+    const journeyCleanup = (manifest.cleanup ?? null) as Record<string, unknown> | null;
+    if (
+      !journeyCleanup ||
+      Object.keys(journeyCleanup).length === 0 ||
+      Object.values(journeyCleanup).some((value) => value !== true)
+    ) {
+      return indeterminate(
+        'cleanup-unverified',
+        `teardown not fully verified: ${JSON.stringify(journeyCleanup)} — a journey with unverified cleanup never passes`
+      );
+    }
+    lines.push(`cleanup verified: ${Object.keys(journeyCleanup).join(', ')}`);
+    const journeyLaneStop = (manifest.laneStop ?? null) as { finalState?: string } | null;
+    if (!journeyLaneStop || journeyLaneStop.finalState === undefined) {
+      problems.push({ code: 'lane-stop-unverified', detail: 'the record does not state the lane state after the stop control' });
+    } else if (journeyLaneStop.finalState === 'live') {
+      problems.push({ code: 'lane-stop-unverified', detail: `lane still live after the stop control (state: ${journeyLaneStop.finalState})` });
+    }
+    if (integrityBreached) return { verdict: 'indeterminate', problems, lines };
+    const journeyFinal = steps[steps.length - 1].action as { type: string; status?: string; reason?: string };
+    if (journeyFinal.type !== 'terminal') {
+      return indeterminate('no-terminal', 'the recorded journey never reached a terminal action');
+    }
+    if (journeyFinal.status === 'safety-failure') {
+      problems.push({
+        code: journeyFinal.reason?.includes('identity') ? 'identity-reuse' : 'unauthorised-release',
+        detail: journeyFinal.reason ?? 'safety failure',
+      });
+      return { verdict: 'fail', problems, lines };
+    }
+    if (journeyFinal.status === 'interaction-failure') {
+      const code = journeyFinal.reason?.includes('worker store') ? 'worker-store-failed' : 'interaction-failure';
+      problems.push({ code, detail: journeyFinal.reason ?? 'interaction failure' });
+      return { verdict: 'fail', problems, lines };
+    }
+    const routesRelay = episode.permittedRouteOutcomes.some((outcome) =>
+      ['relay-proposal', 'parks-while-busy', 'steer-busy'].includes(outcome)
+    );
+    if (routesRelay) {
+      const slotOutcome = recomputeSlotVerdict(attemptDir, { corpus: options.corpus });
+      if (!slotOutcome.matched) {
+        problems.push({ code: 'slot-violation', detail: slotOutcome.reasons.join('; ') });
+        return { verdict: 'fail', problems, lines };
+      }
+    } else {
+      const responses = steps
+        .map((step) => step.observation)
+        .filter((obs): obs is { kind: string; text?: string } => obs?.kind === 'response' && typeof obs.text === 'string');
+      if (responses.length === 0) {
+        problems.push({ code: 'no-response', detail: 'a conversational journey must record the talker response it accepted' });
+        return { verdict: 'fail', problems, lines };
+      }
+      const response = normaliseUtterance(responses[0].text ?? '');
+      for (const required of episode.expectedSlots.responseMustContain) {
+        if (!response.includes(normaliseUtterance(required))) {
+          problems.push({ code: 'slot-violation', detail: `response missing required content: "${required}"` });
+        }
+      }
+      for (const forbidden of episode.expectedSlots.responseMustNotContain) {
+        if (forbidden.split('|').every((alt) => response.includes(normaliseUtterance(alt)))) {
+          problems.push({ code: 'slot-violation', detail: `response contains forbidden content: "${forbidden}"` });
+        }
+      }
+      if (problems.length > 0) return { verdict: 'fail', problems, lines };
+      lines.push('response grounding verified against the episode slots');
+    }
+    if (problems.length === 0) lines.push('verdict: the recorded journey completed with verified evidence');
+    return { verdict: problems.length === 0 ? 'pass' : 'fail', problems, lines };
+  }
 
   // 11. Verdict from the replayed terminal state — but a record whose
   // integrity is breached stays indeterminate no matter what it claims.
