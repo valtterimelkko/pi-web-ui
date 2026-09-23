@@ -243,14 +243,14 @@ function switchCorpus(): ReturnType<typeof loadCorpus> {
 }
 
 describe('the verifier attachment-switch adjudication', () => {
-  it('a compliant switch record passes: old proposal retired, never retargeted, audibly acknowledged', () => {
+  it('a compliant switch record passes: old proposal retired, never retargeted (M: the lane stops, so no ack follows)', () => {
     const dir = buildSwitchRecord({});
     const outcome = verifyRecord(dir, { corpus: switchCorpus() });
     const lines = outcome.lines.join('\n');
     expect(outcome.problems.filter((problem) => problem.code.startsWith('switch-'))).toEqual([]);
     expect(lines).toContain('retired by the product');
     expect(lines).toContain('never retargeted');
-    expect(lines).toContain('acknowledged audibly');
+    expect(lines).toContain('complete at the retirement frame');
     expect(outcome.verdict).toBe('pass');
   });
 
@@ -274,10 +274,10 @@ describe('the verifier attachment-switch adjudication', () => {
     expect(outcome.verdict).toBe('fail');
   });
 
-  it('a silent switch (no audible acknowledgement) fails', () => {
+  it('a switch with no talker response is complete, not a failure (M retired the audible ack)', () => {
     const dir = buildSwitchRecord({ ackAfterSwitch: false });
     const outcome = verifyRecord(dir, { corpus: switchCorpus() });
-    expect(outcome.problems.some((problem) => problem.code === 'switch-unacknowledged')).toBe(true);
-    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.code === 'switch-unacknowledged')).toBe(false);
+    expect(outcome.verdict).toBe('pass');
   });
 });

@@ -879,12 +879,13 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
             lines.push(`attachment switch: the old proposal ${identity} was never released or delivered after the switch (never retargeted)`);
           }
         }
-        const acknowledged = steps.some((step) => step.observation?.kind === 'response' && step.seq > switchStep.seq);
-        if (!acknowledged) {
-          problems.push({ code: 'switch-unacknowledged', detail: 'no talker response was recorded after the switch — the switch was not acknowledged audibly' });
-        } else {
-          lines.push('attachment switch: acknowledged audibly (a talker response followed the switch)');
-        }
+        // M (merged 2026-09-23) stops the lane's native session on the switch,
+        // so no talker response can follow: the retirement frame is the
+        // switch's guarantee and the audible ack is no longer a product
+        // behaviour. The absence of a response is therefore not a problem —
+        // but a response that *contradicts* the retirement (a release) still
+        // fails above, and the old proposal must never be retargeted.
+        lines.push('attachment switch: complete at the retirement frame (the lane stops by design; no talker response follows a stopped lane)');
       }
     }
     if (integrityBreached) return { verdict: 'indeterminate', problems, lines };
