@@ -28,16 +28,20 @@ current target.
 - master `20eb75f1`: W1/W2 + corpus corrections + **H2** (host read-back, prompt) + **J2** (director
   persistence, negation awareness) + deadline bump/test derivation/lint cleanup. Repo lint 0 errors;
   full server suite 5714 green; phase1 144; voice-live-lab 608.
-- **Pass 1: 1 pass / 11 fail**, all boundary-diagnosed and corrected (`fix-loop/PASS-1-DIAGNOSIS.md`).
-- **Pass 2 running**; live accounting: pass-1+2 journeys (~16 min) + probes; inside §10.
+- **Pass 1: 1 pass / 11 fail** — boundary-diagnosed and corrected (`fix-loop/PASS-1-DIAGNOSIS.md`).
+- **Pass 2: 3 pass / 9 fail — INVALIDATED**: the runner served stale built artifacts (built only when
+  a dist was missing), so H2's fixes were never in the bundle. **Fixed `d23cbac5`** (freshness-aware
+  rebuild, unit-tested); **pass 3 running** (`bg_f750d169`) — first true run against current code.
+- Live accounting: passes 1–3 journeys (~25 min) + probes; inside §10. Pass 2 remains recorded as an
+  invalid run (never removed, per plan §8/§9).
 
 **Next sequence**
 
-1. On pass-2 completion: analyse by boundary. If clean, run pass 3 for the second consecutive clean
+1. On pass-3 completion: analyse by boundary. If clean, run pass 4 for the second consecutive clean
    full pass; if failures remain, correct and re-run.
 2. On two consecutive clean passes: freeze code/prompt/corpus/scorer (hash and record), then cost the
    §8 matrix (adapt rule).
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** pass 2's `backstop_s` covers this window; no child watches armed.
+**Backstops:** pass 3's `backstop_s` covers this window; no child watches armed.
