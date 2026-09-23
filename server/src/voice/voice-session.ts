@@ -88,8 +88,12 @@ export const VOICE_PENDING_CONTEXT_MAX_CHARS = 400_000;
  *  turn boundary — before the service declares the provider session wedged and
  *  remints it (SOAK-10MIN F-1 seam: after a barge-in interrupted read-back the
  *  revived session never produces model output again; only a fresh session
- *  responds). Confirmations and cancels are mechanical and never arm the watch. */
-export const VOICE_MODEL_REPLY_STALL_MS = 12_000;
+ *  responds). Confirmations and cancels are mechanical and never arm the watch.
+ *  The window sits ABOVE the measured worst-case healthy model latency
+ *  (SOAK-10MIN attempt-07: a fresh session took 12.8 s to decide a relay over a
+ *  long context — a 12 s window fired a false remint mid-decision), while a
+ *  remint + reply still fits the harness's repair budget. */
+export const VOICE_MODEL_REPLY_STALL_MS = 20_000;
 
 export const DEFAULT_VOICE_SYSTEM_INSTRUCTION = [
   'You are the voice talker in a two-lane system. The operator hears you; a worker session does the work. You speak like a colleague: natural, brief, no markdown, no spelled-out file paths.',
