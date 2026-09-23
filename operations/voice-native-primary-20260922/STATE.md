@@ -49,4 +49,8 @@ Campaign script ready; the 34-cell window opens when L5 lands.
 6. Verdict + repository gates + canonical docs + Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** `deadline-a7b9cadb-c312-4a6a-97c4-19cf6ffc5cb8` armed to 09:14:47Z (L5 round 2 window); primary wake `ww_12`.
+**Watching (zero-token):** primary wake `ww_13_1790152744046` on L5's session (fresh conditions:
+goal_end, goal_state paused, PARENT-INPUT-NEEDED; 4 wakes). `ww_12` was retired — its conditions had
+already fired once in round 1, so a second goal_end would not have woken us. Model-free backstop:
+`deadline-a7b9cadb-c312-4a6a-97c4-19cf6ffc5cb8` to 09:14:47Z. No independent process backstop is
+available: the background-task cap (8) is saturated by terminal tasks that refuse cancellation.
