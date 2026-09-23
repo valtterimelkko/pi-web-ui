@@ -15,7 +15,7 @@
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": ["plan"],
+    "responseMustContain": ["test"],
     "responseMustNotContain": ["passed", "finished", "succeeded", "green"],
     "sourceAttributionRequired": true
   },

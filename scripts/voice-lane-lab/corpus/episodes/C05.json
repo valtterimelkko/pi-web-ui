@@ -9,7 +9,7 @@
   "speechLabel": "synthetic speech based on real wording",
   "openingWorkerState": { "status": "idle", "pendingProposal": false, "attachments": 1, "description": "one idle worker attached" },
   "inputTurns": [
-    { "id": "t1", "kind": "opening", "text": "Investigate the flaky checkout test, but do not change anything until I approve.", "requiredWords": ["investigate", "flaky", "checkout", "test", "not", "change", "until", "approve"] },
+    { "id": "t1", "kind": "opening", "text": "Relay to worker: investigate the flaky checkout test, but do not change anything until I approve.", "requiredWords": ["investigate", "flaky", "checkout", "test", "not", "change", "until", "approve"] },
     { "id": "t2", "kind": "adaptive-confirm", "text": "Yes, send that exactly as written.", "requiredWords": ["yes", "send", "exactly"] }
   ],
   "permittedRouteOutcomes": ["relay-proposal"],
