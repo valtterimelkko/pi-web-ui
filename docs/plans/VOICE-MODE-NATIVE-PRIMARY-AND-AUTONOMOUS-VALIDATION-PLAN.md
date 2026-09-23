@@ -1,7 +1,7 @@
 # Voice Mode — one native conversation, autonomous validation, evidence-based model choice
 
 > **Class:** execution plan and acceptance contract.
-> **Status:** planning complete; execution NOT started. Written 2026-09-22 at baseline `86b91674`; **revised 2026-09-22 (scaled down)** per owner direction at `5c3d795b`→this revision.
+> **Status:** **executed 2026-09-22/23** — Phases 0–5 complete, terminal verdict `NO_CANDIDATE_MEETS_TARGET` (rule-4 tie retains standard; [`VERDICT.md`](../../operations/voice-native-primary-20260922/campaign/VERDICT.md)). **Post-campaign audit, owner decisions and the follow-up programme are in [§15](#15-post-campaign-audit-owner-decisions-and-follow-up-2026-09-23) — read §15 before acting on anything below.** Written 2026-09-22 at baseline `86b91674`; **revised 2026-09-22 (scaled down)** per owner direction at `5c3d795b`→this revision.
 > **Owner instruction:** write a plan for a separately dispatched execution agent; remove the owner from routine testing, reuse the audio/lane labs, compare standard Live with Extended Thinking under the same host contract, and end with a measured architecture verdict. **Revision instruction (2026-09-22, later the same day):** the first draft's campaign (312 episodes, six 30-minute soaks, 30-hour wall-clock, US$60) is far too heavy. Do much less testing, no 30-minute sessions, avoid over-engineering, keep the core of the fix, and keep iterative live validation (data → fix → data → fix) as the working mode.
 > **Discovery:** [Voice Mode index](../VOICE-MODE-INDEX.md) → **this plan** → phase ledger and evidence created by the executor.
 > **Intent sources:** [canonical intent](../VOICE-MODE-INTENT.md), [architecture of record](../VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md), and the owner's 22 September direction recorded below.
@@ -368,3 +368,61 @@ One executor can deliver this sequentially; that is the default. If parallelised
 > Execute `docs/plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md` (revised 2026-09-22, scaled-down edition) from Phase 0. Preserve the owner's intent: one ongoing native conversation, faithful explicitly approved handovers, an existing strong worker/conductor, no competing default cascade UI. Work in two modes: the fix loop first (small dev corpus through the real built app and real browser mic — data, fix, data), then one small frozen standard-vs-ET-HIGH comparison. Respect the 8-hour live wall-clock and US$25 all-in ceilings and the adapt rule. Do not require the owner to operate tests. Do not restart, deploy or validate production. Report an honest terminal verdict even if no model qualifies. Read the current board and coordinate before changing shared paths.
 
 The owner can use this prompt to dispatch the separate executor. This planning session has not executed it.
+
+## 15. Post-campaign audit, owner decisions and follow-up (2026-09-23)
+
+> **Class:** decision record and follow-up acceptance contract. **Status:** decisions owner-approved 2026-09-23; follow-up (§15.4) dispatched to the original executor session `01a0caac-7dbe-73fd-809a-f3eb3c6b0b6b`, adopted as a child by an independent parent (Claude Code session `19856bbe-a700-4c6c-9266-4ece9f32179f`). Live progress: [`LEDGER.md`](../../operations/voice-native-primary-20260922/LEDGER.md) / [`STATE.md`](../../operations/voice-native-primary-20260922/STATE.md).
+
+### 15.1 What the programme achieved
+
+An independent read-only audit (parent session above, 2026-09-23) against this plan, the owner's intent, the campaign records and the source concluded: **the core fix landed and the process was honest, but the programme is not finished and none of it was in production at audit time** (`pi-web-ui.service` had started 2026-09-22 21:05Z, before the first W1 merge).
+
+| Owner problem (§1, §2) | Outcome |
+|---|---|
+| Main controls ran the cascade, not native Live | **Fixed.** Main mic drives the native lane; the cascade is an explicit, labelled fallback gesture (`DriveModeDictate.tsx`). |
+| Punctuation-free "relay to worker I want…" kept the addressing frame | **Fixed** (`relay-normalise.ts`, first-person bare continuation). |
+| Repeats concatenated a failed first attempt | **Fixed** (replace-not-append; C17 passes both arms). |
+| Thinking aloud became a proposal (run 6) | **Fixed at measured scale** (C09/C14/C15 and holdout C10 pass both arms). |
+| Owner as test harness | **Removed** — autonomous built-app browser-mic lab with synthetic speech, frozen corpus, blinded evaluator, independent reviewer. |
+| Continuity across a voice reconnect | **Not met** — both 10-minute soaks failed: after the mid-session reconnect the repeat relay produced no candidate. |
+| Natural approval/correction speech | **Partly met** — see §15.2 finding 2. |
+
+### 15.2 Audit findings that the verdict under-states
+
+1. **Standard is clearly better than ET-HIGH for the voice seat, more than 14/17 vs 12/17 suggests.** ET needed three product/harness fixes (M4, M5, talker-text quiescence) just to get confirmations through, because it emits text-only turns and talks over the operator. The campaign index takes each cell's **last** attempt, and ET's C19 and C20 passed only on a retry at the same revision (C20: fail, fail, pass); standard's C11 stayed failed. On first attempts the gap is wider.
+2. **The switchboard friction moved into the approval classifier** (`server/src/talker/utterance-classifier.ts`). `CANCEL_PATTERNS` includes `actually, no`, so "Actually no — make it thirty seconds" cancels the amendment's *own* proposal (C11-standard, failed twice). The confirmation vocabulary is closed, so "Yes, send the amended version" released nothing (C18); during the fix loop the **fixture was reworded to "Yes, send it."** rather than the product being changed. This is teaching the test to fit the product.
+3. **Required KPIs were not reported:** monetary spend (no metered usage in any manifest; reviewer F3), latency p50/p95 (§6.1), approval-efficiency and speech-honesty rows. The cost half of the owner's original standard-vs-ET question is therefore unanswered.
+4. **The §8 worker-conductor demonstration has no record** (voice-approved task → disposable Pi worker → one bounded child → artefact), yet `VERDICT.md` "Explicitly not claimed" describes what it "proves". The sentence must be corrected or the demo run.
+5. **Canonical docs were not updated** beyond one index line, so [`VOICE-MODE-INTENT.md`](../VOICE-MODE-INTENT.md) and [`VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md`](../VOICE-MODE-ARCHITECTURE-RECOMMENDATION-2026-09.md) predate what the campaign learned.
+6. C21 (both arms): a conversational precondition ("check the version number before anything") was ignored — a talker-prompt quality issue, not a safety one.
+
+### 15.3 Owner decisions (2026-09-23)
+
+| # | Decision | Consequence |
+|---|---|---|
+| D15-1 | **Standard Gemini Live is the voice-seat model.** ET-HIGH is not pursued for this role; no larger comparison campaign. | The ET profile boundary (`voice-profiles.ts`) stays as capability, not a default. Extra reasoning belongs in the worker, not the talker. |
+| D15-2 | The architecture of record stands: **one native conversation → host-owned presentation/approval/delivery → existing worker/conductor.** No third reasoning model; no Live-as-conductor work now. | §3 remains the contract. |
+| D15-3 | **Approval stays deterministic and candidate-bound, but must accept natural speech.** A confirmation that explicitly refers to the pending candidate ("yes, send the amended/new/updated/corrected version/one") counts; negation/uncertainty disqualifiers stay; an utterance that cancels *and* carries a replacement instruction ("actually no — make it thirty seconds") amends rather than silently cancelling. The gate (`policy-core.ts`) and its reachability are **not** widened; the change is confined to classification of utterances aimed at the currently presented candidate. | RED tests use the owner's real phrasing; restore C18's natural confirm wording in the corpus. |
+| D15-4 | **The post-reconnect relay defect blocks car use** and must be fixed before claiming continuity. | Re-run one soak per arm (standard is decisive). |
+| D15-5 | **Production deploy and restart of `pi-web-ui.service` are authorised** for this follow-up, following the restart safety gate (activeTurns 0, verify capabilities after). | Owner judgement needs the deployed build. |
+| D15-6 | Future comparisons report **first-attempt** counts as primary, and record metered usage and latency per cell. | Applies to any later voice or model comparison. |
+| D15-7 | The final acceptance for feel is a **short owner real-voice session at the desk and in the car** after deploy (E4). This is the one step that is deliberately not automated. | The executor notifies the owner when the build is live. |
+
+### 15.4 Follow-up work items (acceptance contract for the adopted executor)
+
+| ID | Outcome that must be true | Evidence that settles it |
+|---|---|---|
+| F-1 | After a same-lane voice reconnect, a new explicit relay produces a candidate and the pre-reconnect proposal's release reaches `delivered` with worker-store evidence. | RED→GREEN test at the mount/kernel boundary; one real `SOAK-10MIN` pass on standard (ET optional), recorded as new attempts. |
+| F-2 | D15-3 implemented: candidate-referring confirmations release; "actually no — <replacement>" amends; bare "no"/"cancel that"/"don't send" still cancel; negations never confirm; gate untouched. | Classifier unit tests with real phrasings (RED first); C11 and C18 (natural wording restored) pass on standard. |
+| F-3 | C21: the talker addresses an operator precondition instead of substituting its own activity. | Prompt change plus C21 re-run; evaluator-style check recorded. |
+| F-4 | `VERDICT.md` is accurate: the orchestration-demo sentence corrected (or the demo actually run), first-attempt counts per arm added, follow-up results appended as a dated addendum without rewriting the original table. | Diff of `VERDICT.md`; counts reproducible from `campaign-summary.txt`. |
+| F-5 | Canonical docs reflect the campaign: intent and architecture recommendation updated with dated scope; Voice Mode index row for this plan shows it executed. | `docs:check-links`, `docs:check-status`, `docs:check-agent-guides` exit 0. |
+| F-6 | Lab manifests record provider usage and first-response latency where the server exposes them; if not exposed, the gap is stated honestly rather than claimed. | A manifest from an F-1/F-2 run showing the fields, or a recorded limitation. |
+| F-7 | Repository gates green on the final commit (lint, typecheck, build, relevant suites) and CI green. | Exact exits; `gh run list` success on the final commit. |
+| F-8 | Production runs the final master: build, restart under the safety gate, `/capabilities` verified, served build identity recorded, owner notified that D15-7 dogfooding can start. | Service start time after the final commit; capabilities read-back; Telegram delivery verified. |
+
+Boundaries unchanged from §0: no real-session prompting, no publication, no widening of the confirm gate's reachability, disposable servers for validation. Production is touched only in F-8.
+
+### 15.5 Discovery path
+
+[Voice Mode index](../VOICE-MODE-INDEX.md) → this plan (§15 first) → [`VERDICT.md`](../../operations/voice-native-primary-20260922/campaign/VERDICT.md) and [reviewer report](../../operations/voice-native-primary-20260922/coordination/RV/review.md) → [`LEDGER.md`](../../operations/voice-native-primary-20260922/LEDGER.md) for follow-up progress.
