@@ -213,6 +213,41 @@ function talkerSays(service: FakeService, laneId: string, text: string, generati
   });
 }
 
+/** One talker audio chunk: the mechanical fact that put TTS in the room. */
+function talkerAudio(service: FakeService, laneId: string, seq: number): void {
+  service.emit({
+    kind: 'audio_out',
+    laneId,
+    attachmentGeneration: 1,
+    seq,
+    mimeType: 'audio/pcm;rate=24000',
+    data: '',
+    durationMs: 200,
+    atMs: 1,
+  });
+}
+
+/** The client's local VAD boundary, routed the way the wire delivers it. */
+async function speech(
+  mount: VoiceLiveMount,
+  sent: Sent[],
+  laneId: string,
+  state: 'speech_start' | 'speech_end'
+): Promise<void> {
+  await mount.route('c1', ctx(sent) as never, {
+    type: 'voice_activity_state',
+    version: 1,
+    laneId,
+    attachmentGeneration: 1,
+    state,
+    atMs: 1,
+  } as never);
+}
+
+function echoSuspect(events: Record<string, unknown>[], reason: string): Record<string, unknown>[] {
+  return events.filter((event) => event.event === 'operator_utterance_echo_suspect' && event.reason === reason);
+}
+
 interface ProposalRef {
   proposalId: string;
   version: number;
@@ -695,7 +730,12 @@ describe('M6: talker echo never releases the gate', () => {
     await relayToWorker(service, mount, 'lane-1', 'check the tests.');
     await flush();
     // The talker's read-back completes the presentation AND puts its audio in
-    // the room.
+    // the room. The echo window is armed by that AUDIO (M5): transcripts are
+    // not sound, so the chunks are emitted explicitly here.
+    talkerAudio(service, 'lane-1', 0);
+    clock.advance(200);
+    talkerAudio(service, 'lane-1', 1);
+    clock.advance(200);
     talkerSays(service, 'lane-1', 'I will ask the worker to check the tests.');
     await flush();
 
@@ -803,40 +843,6 @@ describe('M6: talker echo never releases the gate', () => {
  */
 describe('M6-fix: a final whose speech window precedes the talker audio is genuine, not echo', () => {
   const OPERATOR_TEXT = 'I want to find out about Pod Point.';
-
-  /** One talker audio chunk: the mechanical fact that put TTS in the room. */
-  function talkerAudio(service: FakeService, laneId: string, seq: number): void {
-    service.emit({
-      kind: 'audio_out',
-      laneId,
-      attachmentGeneration: 1,
-      seq,
-      mimeType: 'audio/pcm;rate=24000',
-      data: '',
-      durationMs: 200,
-      atMs: 1,
-    });
-  }
-
-  async function speech(
-    mount: VoiceLiveMount,
-    sent: Sent[],
-    laneId: string,
-    state: 'speech_start' | 'speech_end'
-  ): Promise<void> {
-    await mount.route('c1', ctx(sent) as never, {
-      type: 'voice_activity_state',
-      version: 1,
-      laneId,
-      attachmentGeneration: 1,
-      state,
-      atMs: 1,
-    } as never);
-  }
-
-  function echoSuspect(events: Record<string, unknown>[], reason: string): Record<string, unknown>[] {
-    return events.filter((event) => event.event === 'operator_utterance_echo_suspect' && event.reason === reason);
-  }
 
   it('(the defect) accepts a late final whose speech ended before the talker audio began, binds the relay, and releases through the ordinary gate', async () => {
     const clock = makeClock();
@@ -1023,6 +1029,141 @@ describe('M6-fix: a final whose speech window precedes the talker audio is genui
     const suspect = echoSuspect(events, 'talker_audio_window');
     expect(suspect).toHaveLength(1);
     expect(suspect[0].speechOverlap).toBe('unknown');
+  });
+});
+
+// ── M5 (voice-native campaign): the echo window is armed by AUDIO, not text ──
+
+/**
+ * The et-high confound the W4 fix could not see (C01-et-high/attempt-03): the
+ * echo window armed on BOTH `audio_out` and talker transcript events. A
+ * talker transcript final routinely flushes a second or more AFTER its audio
+ * finished (the provider flushes finals at the turn boundary), so the
+ * transcript re-armed the suppression window over a quiet room, the
+ * operator's VAD then opened "inside" that phantom window, and the genuine
+ * spoken confirm was suppressed as echo — no release, deadline exceeded.
+ *
+ * Echo is acoustic: the operator's microphone can only pick up the talker
+ * while the talker's audio is actually playing. The window (and the
+ * mid-speech overlap mark) must arm from `audio_out` alone. Talker
+ * transcripts keep their other jobs — the content backstop
+ * (`lastTalkerFinalText`) and the spoken read-back — untouched.
+ */
+describe('M5: the echo window is armed by talker audio, not by talker transcripts', () => {
+  it('(the C01-et-high defect) accepts a confirm spoken after the audio stopped but inside a transcript-armed window, and releases', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const delivery = recordingDelivery();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery,
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    // t1: the proposal exists; the talker reads it back aloud.
+    await relayToWorker(service, mount, 'lane-1', 'Relay to worker I want to find out about Podpoint.');
+    await flush();
+    const proposal = proposalFrom(sent);
+
+    // The read-back AUDIO plays in real-time chunks and stops at t=0.4 s.
+    talkerAudio(service, 'lane-1', 0);
+    clock.advance(400);
+    talkerAudio(service, 'lane-1', 1);
+    // The read-back TRANSCRIPT final flushes 1.1 s AFTER the audio stopped —
+    // nothing is in the room. (It still completes the spoken presentation.)
+    clock.advance(1_100);
+    talkerSays(service, 'lane-1', `I will ask the worker to ${proposal.tidied}`);
+    await flush();
+
+    // The director's quiescence wait passes; the operator confirms at t=1.7 s
+    // — after the audio-armed window expired (t=1.4 s) but inside the window
+    // the transcript re-armed (t=1.5 s → 2.5 s).
+    clock.advance(200);
+    await speech(mount, sent, 'lane-1', 'speech_start');
+    clock.advance(1_500);
+    await speech(mount, sent, 'lane-1', 'speech_end');
+
+    // Seconds of silence; then, as in the real run, the talker's next final
+    // lands a heartbeat before the operator's own transcript finalises.
+    clock.advance(4_800);
+    talkerSays(service, 'lane-1', 'I will send that over for approval now.');
+    clock.advance(100);
+    utterance(service, 'lane-1', 'Yes, send that.');
+    await flush();
+
+    // The confirm is genuine: no talker audio was playing — or armed —
+    // anywhere near it. It must reach the gate and release the proposal.
+    expect(echoSuspect(events, 'talker_audio_window')).toHaveLength(0);
+    expect(events.some((event) => event.event === 'operator_utterance' && event.text === 'Yes, send that.')).toBe(true);
+    expect(delivery.calls).toEqual([{ workerSessionId: 'W1', text: proposal.tidied }]);
+  });
+
+  it('a talker transcript landing while the operator VAD is open marks nothing (transcripts are not sound)', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const delivery = recordingDelivery();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery,
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    // No audio_out has ever been emitted: nothing of the talker is in the
+    // room. The operator speaks; a talker final flushes mid-speech (the turn
+    // boundary catching up with long-settled audio).
+    await speech(mount, sent, 'lane-1', 'speech_start');
+    clock.advance(200);
+    talkerSays(service, 'lane-1', 'I have asked the worker to check the retry handler.');
+    clock.advance(200);
+    await speech(mount, sent, 'lane-1', 'speech_end');
+    clock.advance(400);
+    utterance(service, 'lane-1', 'Yes, send that.');
+    await flush();
+
+    // Today the transcript re-armed the window and marked the open VAD, so
+    // the final was suppressed. Nothing acoustic happened: gate input.
+    expect(echoSuspect(events, 'talker_audio_window')).toHaveLength(0);
+    expect(events.some((event) => event.event === 'operator_utterance' && event.text === 'Yes, send that.')).toBe(true);
+  });
+
+  it('a talker text-only turn (no audio_out ever) arms nothing: a later window-less final is not suppressed', async () => {
+    const clock = makeClock();
+    const events: Record<string, unknown>[] = [];
+    const service = new FakeService();
+    const delivery = recordingDelivery();
+    const mount = new VoiceLiveMount({
+      service,
+      delivery,
+      isWorkerBusy: async () => false,
+      now: clock.now,
+      echoSuppressionWindowMs: 1_000,
+      evidence: (event) => events.push(event),
+    });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, 'lane-1');
+
+    // A text-only turn produced a transcript final but never any audio —
+    // nothing was in the room to echo.
+    talkerSays(service, 'lane-1', 'I have asked the worker to check the retry handler.');
+    clock.advance(600);
+    // The operator's final arrives with no activity frames either.
+    utterance(service, 'lane-1', 'Yes, send that.');
+    await flush();
+
+    expect(echoSuspect(events, 'talker_audio_window')).toHaveLength(0);
+    expect(events.some((event) => event.event === 'operator_utterance' && event.text === 'Yes, send that.')).toBe(true);
   });
 });
 

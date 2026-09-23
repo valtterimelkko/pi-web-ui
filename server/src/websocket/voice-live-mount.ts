@@ -1507,7 +1507,18 @@ export class VoiceLiveMount {
     // speech window decides (see `echoGateVerdict`). If the operator's VAD is
     // open while talker audio lands, that window overlaps the talker's audio
     // by construction.
-    if (event.kind === 'audio_out' || (event.kind === 'transcript' && event.speaker === 'talker')) {
+    // M5 (voice-native campaign): the window — and that mid-speech mark — arm
+    // from `audio_out` ALONE. Echo is acoustic: the operator's mic can only
+    // pick up the talker while its audio is actually playing, and a transcript
+    // event is not sound. Talker transcript finals routinely flush a second or
+    // more AFTER the audio stopped (the provider flushes them at the turn
+    // boundary), so arming from transcripts re-opened the window over a quiet
+    // room and suppressed a genuine operator confirm spoken in that gap
+    // (C01-et-high/attempt-03). Audio-only arming is complete: the sole bridge
+    // provider emits every spoken turn's audio as `audio_out` events, and the
+    // client plays only those same events — a turn with no `audio_out` put no
+    // sound in the room, so there is nothing to echo.
+    if (event.kind === 'audio_out') {
       if (lane.operatorSpeechActive && lane.operatorSpeechWindow) {
         lane.operatorSpeechWindow.overlappedTalkerAudio = true;
       }
@@ -1707,6 +1718,11 @@ export class VoiceLiveMount {
    * `operator_speech_active` and the `talker_output_overlap` content backstop
    * are unchanged — the content rule stays armed even for an otherwise
    * accepted late final.
+   *
+   * M5 (voice-native campaign): the time window is armed by `audio_out`
+   * events only — talker transcripts never extend it (see the arming site
+   * above). A final arriving after the audio-armed window has expired is
+   * judged by the content backstop alone, even with no fresh VAD window.
    */
   private echoGateVerdict(lane: LaneRecord, text: string): EchoGateVerdict {
     if (lane.operatorSpeechActive) return { reason: 'operator_speech_active' };
