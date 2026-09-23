@@ -283,9 +283,18 @@ interface LaneRecord {
   operatorSpeechActive: boolean;
   /**
    * M6: `now()` until which the talker's own audio was in the room. An operator
-   * transcript arriving inside this window is echo-suspect and never gate input.
+   * transcript arriving inside this window is echo-suspect — but M6-fix (W4
+   * campaign) lets the operator's own speech window overrule the suspicion
+   * when it demonstrably ended before the talker's audio began.
    */
   talkerAudioUntilMs: number;
+  /**
+   * M6-fix (W4 campaign): the operator's latest speech window from the
+   * client's local VAD, not yet attributed to an accepted final transcript.
+   * Null when the client has not reported a window (unknown → conservative
+   * suppression). Consumed only by an accepted final.
+   */
+  operatorSpeechWindow: OperatorSpeechWindow | null;
   /**
    * H3(c): the last completed talker utterance, checked against the live draft
    * as the spoken read-back (intent §18.2). Reset when a proposal is created.
@@ -318,6 +327,37 @@ interface LaneOperatorUtterance extends SourceUtterance {
   atMs: number;
 }
 
+/**
+ * M6-fix (W4 campaign): one operator speech window as reported by the
+ * client's local VAD (`voice_activity_state`). The echo guard consults it to
+ * tell a genuine late-finalising transcript (the speech window ended before
+ * the talker's audio began) from acoustic echo (the VAD was open while the
+ * talker's TTS was in the room).
+ */
+interface OperatorSpeechWindow {
+  startMs: number;
+  /** Null while the VAD is still open (`speech_start` seen, no end yet). */
+  endMs: number | null;
+  /** The window overlapped the talker's audio window at some boundary. */
+  overlappedTalkerAudio: boolean;
+}
+
+/** The echo gate's decision for one final operator transcript. */
+interface EchoGateVerdict {
+  /** Suppression reason; null when the transcript may proceed. */
+  reason: string | null;
+  /**
+   * True when the M6-fix rule accepted a late final inside the talker's audio
+   * window because the operator's own speech window ended before the talker's
+   * audio began (recorded as `operator_utterance_late_final_accepted`).
+   */
+  lateFinalAccepted?: boolean;
+  /** The speech-window end that was consumed by the acceptance. */
+  operatorSpeechEndMs?: number;
+  /** For `talker_audio_window`: why the window still suppressed. */
+  speechOverlap?: 'overlaps' | 'unknown';
+}
+
 /** Hard bound on the lane's operator-utterance candidate window. */
 const MAX_OPERATOR_UTTERANCE_HISTORY = 8;
 
@@ -345,6 +385,14 @@ const DEFAULT_LANE_REAP_GRACE_MS = 30_000;
  * talker's own audio is treated as acoustic echo — the talker's TTS transcribing
  * through the operator's open mic — and never consumes the release gate. It is
  * surfaced as echo-suspect evidence rather than silently dropped.
+ *
+ * M6-fix (W4 campaign): the window arms the echo suspicion but no longer
+ * decides alone. The suppression applies only when the operator's own speech
+ * window (`voice_activity_state`) OVERLAPS the talker's audio — the mic
+ * plausibly picked the talker up — or when no activity frames were seen
+ * (unknown window keeps the conservative behaviour). A speech window that
+ * ended before the talker's audio began is a genuine operator utterance whose
+ * transcript finalised late; it is accepted as gate input.
  */
 const DEFAULT_ECHO_SUPPRESSION_WINDOW_MS = 1_000;
 
@@ -770,6 +818,7 @@ export class VoiceLiveMount {
       pendingWorkerActivity: null,
       operatorSpeechActive: false,
       talkerAudioUntilMs: 0,
+      operatorSpeechWindow: null,
       lastTalkerFinalText: '',
       recentOperatorUtterances: [],
       lastRelay: null,
@@ -1454,7 +1503,14 @@ export class VoiceLiveMount {
     // M6 (review R): remember that the talker's own voice was in the room. Its
     // TTS is picked up by the operator's open mic, so an operator transcript
     // inside this window is echo-suspect, never gate input.
+    // M6-fix (W4 campaign): the window arms the suspicion; the operator's own
+    // speech window decides (see `echoGateVerdict`). If the operator's VAD is
+    // open while talker audio lands, that window overlaps the talker's audio
+    // by construction.
     if (event.kind === 'audio_out' || (event.kind === 'transcript' && event.speaker === 'talker')) {
+      if (lane.operatorSpeechActive && lane.operatorSpeechWindow) {
+        lane.operatorSpeechWindow.overlappedTalkerAudio = true;
+      }
       lane.talkerAudioUntilMs = this.now() + this.echoSuppressionWindowMs;
     }
     // H3(c): the talker's completed spoken read-back IS the presentation signal
@@ -1514,16 +1570,35 @@ export class VoiceLiveMount {
     // transcribed by the open mic; ordinary acoustic feedback that lands as a
     // confirmation-shaped utterance while a proposal is live must not release
     // it. It is surfaced as echo-suspect evidence, never silently dropped.
-    const echoReason = this.echoSuspectReason(lane, text);
-    if (echoReason !== null) {
+    // M6-fix (W4 campaign): the talker-audio time window no longer decides
+    // alone — the operator's own speech window does (see `echoGateVerdict`).
+    const echo = this.echoGateVerdict(lane, text);
+    if (echo.reason !== null) {
       this.evidence({
         event: 'operator_utterance_echo_suspect',
         laneId: event.laneId,
-        reason: echoReason,
+        reason: echo.reason,
+        // Why the talker-audio window still suppressed: the operator's VAD
+        // overlapped the talker's audio, or no activity frames were seen.
+        ...(echo.speechOverlap !== undefined ? { speechOverlap: echo.speechOverlap } : {}),
         chars: text.length,
         atMs: event.atMs,
       });
       return;
+    }
+    if (echo.lateFinalAccepted) {
+      // The guard accepted a final the old rule would have discarded as echo,
+      // because the operator's own speech window ended before the talker's
+      // audio began. Without this record the campaign cannot tell a genuine
+      // late final from a guard bypass.
+      this.evidence({
+        event: 'operator_utterance_late_final_accepted',
+        laneId: event.laneId,
+        reason: 'operator_speech_window_precedes_talker_audio',
+        chars: text.length,
+        operatorSpeechEndMs: echo.operatorSpeechEndMs,
+        atMs: event.atMs,
+      });
     }
     try {
       // Provenance for a model relay: every final operator utterance is
@@ -1564,10 +1639,28 @@ export class VoiceLiveMount {
    * M4/M6: mirror the client's local voice-activity boundary on the lane. On
    * speech end, flush a worker-status update that was deferred while the
    * operator was speaking (the service coalesces and suppresses as well).
+   * M6-fix (W4 campaign): the boundaries also maintain the lane's per-utterance
+   * speech window, which the echo guard uses to tell a genuine late-finalising
+   * transcript from acoustic echo of the talker's own voice.
    */
   private noteOperatorSpeech(lane: LaneRecord, state: 'speech_start' | 'speech_end'): void {
     lane.operatorSpeechActive = state === 'speech_start';
-    if (lane.operatorSpeechActive) return;
+    if (state === 'speech_start') {
+      // A fresh per-utterance window; it replaces any un-attributed earlier
+      // one. If the VAD opened while the talker's audio was still in the room
+      // (including its short suppression tail), the window overlaps the
+      // talker's audio by construction.
+      lane.operatorSpeechWindow = {
+        startMs: this.now(),
+        endMs: null,
+        overlappedTalkerAudio: this.now() < lane.talkerAudioUntilMs,
+      };
+      return;
+    }
+    if (lane.operatorSpeechWindow) {
+      lane.operatorSpeechWindow.endMs = this.now();
+      lane.operatorSpeechWindow.overlappedTalkerAudio ||= this.now() < lane.talkerAudioUntilMs;
+    }
     if (lane.pendingWorkerActivity === null) return;
     const activity = lane.pendingWorkerActivity;
     const brief = lane.pendingBrief;
@@ -1596,16 +1689,53 @@ export class VoiceLiveMount {
     });
   }
 
-  /** M6: why this final operator transcript cannot be gate input, or null. */
-  private echoSuspectReason(lane: LaneRecord, text: string): string | null {
-    if (lane.operatorSpeechActive) return 'operator_speech_active';
-    if (this.now() < lane.talkerAudioUntilMs) return 'talker_audio_window';
+  /**
+   * M6: why this final operator transcript cannot be gate input, or null.
+   *
+   * M6-fix (W4 campaign): the talker-audio time window alone is no longer the
+   * verdict — it arms the echo suspicion, and the operator's own speech
+   * window (`voice_activity_state`) decides:
+   *   - the speech window overlaps the talker's audio (the VAD was open while
+   *     the talker's TTS was in the room — the mic plausibly holds the
+   *     talker), or the window is unknown (no activity frames), → the
+   *     conservative `talker_audio_window` suppression, as before;
+   *   - the speech window ended BEFORE the talker's audio began → the
+   *     transcript is a genuine operator utterance whose finalisation was
+   *     merely late: it is accepted as gate input, the consumed window cannot
+   *     excuse a later window-less final, and the caller records
+   *     `operator_utterance_late_final_accepted` for the campaign record.
+   * `operator_speech_active` and the `talker_output_overlap` content backstop
+   * are unchanged — the content rule stays armed even for an otherwise
+   * accepted late final.
+   */
+  private echoGateVerdict(lane: LaneRecord, text: string): EchoGateVerdict {
+    if (lane.operatorSpeechActive) return { reason: 'operator_speech_active' };
+    let lateFinalAccepted = false;
+    let operatorSpeechEndMs: number | undefined;
+    if (this.now() < lane.talkerAudioUntilMs) {
+      const window = lane.operatorSpeechWindow;
+      const endMs = window?.endMs ?? null;
+      if (window === null || endMs === null || window.overlappedTalkerAudio) {
+        return {
+          reason: 'talker_audio_window',
+          speechOverlap: endMs !== null ? 'overlaps' : 'unknown',
+        };
+      }
+      // The operator's speech ended before the talker's audio began: the late
+      // final is genuine. The window is consumed below, only on actual
+      // acceptance, so a later final with no fresh VAD window is unknown again
+      // and keeps the conservative suppression.
+      lateFinalAccepted = true;
+      operatorSpeechEndMs = endMs;
+    }
     // Time-independent backstop: a transcript that substantially reproduces
     // the talker's own last output is its TTS, not the operator.
     if (lane.lastTalkerFinalText && tokenOverlap(lane.lastTalkerFinalText, text) >= 0.8) {
-      return 'talker_output_overlap';
+      return { reason: 'talker_output_overlap' };
     }
-    return null;
+    if (!lateFinalAccepted) return { reason: null };
+    lane.operatorSpeechWindow = null;
+    return { reason: null, lateFinalAccepted, operatorSpeechEndMs };
   }
 
   /**
