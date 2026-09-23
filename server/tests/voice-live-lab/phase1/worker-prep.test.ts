@@ -193,12 +193,11 @@ describe('the two-real-session preparation (C24 prerequisite)', () => {
 });
 
 describe('holdout voice fixtures (real-run prerequisite for both families)', () => {
-  // The C22-t1 'auth'/'oath' homophone: Supertonic M1 (voice-a) deterministically
-  // synthesises audio the ASR gate can only hear as 'oath' (18 samples produced
-  // byte-identical output). The C22 journey therefore drives on voice-b, whose
-  // slower profile resolves the word; voice-a intentionally carries every other
-  // overlay fixture. The absence is documented, never silent.
-  const C22_T1_VOICE_A_SKIP = 't1';
+  // The C22-t1 'auth'/'oath' homophone was resolved on 2026-09-23 by clearer
+  // wording ('sign-in module' instead of 'auth module') — not by a hidden fold.
+  // Both voices now carry every C22 overlay fixture with the ASR gate green, so
+  // the former voice-a skip is gone: a fixture that does not exist is a gap,
+  // and this test fails closed on one.
 
   it('the frozen manifests carry ASR-validated fixtures for the C22 overlay turns', () => {
     const merged = withValidatorOverlays(corpus, corpusDir);
@@ -210,13 +209,6 @@ describe('holdout voice fixtures (real-run prerequisite for both families)', () 
         fixtures: Array<{ id: string; text: string; asr: { ok: boolean } | null }>;
       };
       for (const turn of overlay.inputTurns) {
-        if (profile === 'voice-a' && turn.id === C22_T1_VOICE_A_SKIP) {
-          expect(
-            manifest.fixtures.find((candidate) => candidate.id === `C22-${turn.id}`),
-            'voice-a C22-t1 must stay absent until the auth/oath homophone is re-judged (documented skip)'
-          ).toBeUndefined();
-          continue;
-        }
         const fixture = manifest.fixtures.find((candidate) => candidate.id === `C22-${turn.id}`);
         expect(fixture, `${profile} has no C22-${turn.id} fixture`).toBeDefined();
         expect(fixture!.text).toBe(turn.text);
