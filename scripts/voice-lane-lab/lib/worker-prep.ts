@@ -42,8 +42,8 @@ export interface SessionListRow {
  * attempt-02 failure), so the drive re-prompts whenever that happens.
  */
 export const BUSY_DRIVE_PROMPT =
-  'Automation needs a timed pause. Use your shell tool to run exactly this command and wait for the real command to finish — do not simulate or shortcut it: sleep 75 && echo pause-complete. Reply with only pause-complete once the command has actually finished.';
-export const BUSY_HOLD_MS = 75_000;
+  'Automation needs a timed pause. Use your shell tool to run exactly this command and wait for the real command to finish — do not simulate or shortcut it: sleep 40 && echo pause-complete. Reply with only pause-complete once the command has actually finished.';
+export const BUSY_HOLD_MS = 40_000;
 
 /** How long the drive waits for the FIRST busy report (bounded, 1 s poll). */
 export const BUSY_POLL_TIMEOUT_MS = 20_000;
