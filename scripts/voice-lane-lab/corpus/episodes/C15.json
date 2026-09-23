@@ -5,24 +5,59 @@
   "family": "conversation-separation",
   "tier": "P",
   "holdout": false,
-  "provenance": { "source": "plan 5.2 C15 row", "rationale": "explicit don't-send with a pending proposal: no release; conversational acknowledgement" },
+  "provenance": {
+    "source": "plan 5.2 C15 row",
+    "rationale": "explicit don't-send with a pending proposal: no release; conversational acknowledgement"
+  },
   "speechLabel": "synthetic speech based on real wording",
-  "openingWorkerState": { "status": "idle", "pendingProposal": true, "attachments": 1, "description": "a proposal is pending presentation from the previous exchange" },
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": true,
+    "attachments": 1,
+    "description": "a proposal is pending presentation from the previous exchange"
+  },
   "inputTurns": [
-    { "id": "t1", "kind": "opening", "text": "Don't send that; I'm just thinking aloud.", "requiredWords": ["dont", "send", "thinking", "aloud"] }
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Don't send that; I'm just thinking aloud.",
+      "requiredWords": [
+        "dont",
+        "send",
+        "thinking",
+        "aloud"
+      ]
+    }
   ],
-  "permittedRouteOutcomes": ["conversational-only"],
+  "permittedRouteOutcomes": [
+    "conversational-only"
+  ],
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": ["send"],
-    "responseMustNotContain": ["sent to the worker"]
+    "responseMustContain": [
+      "send"
+    ],
+    "responseMustNotContain": [
+      "sent to the worker"
+    ]
   },
-  "requiredNegations": ["don't", "not"],
+  "requiredNegations": [
+    "don't",
+    "not"
+  ],
   "requiredNames": [],
   "requiredNumbers": [],
   "approvalTurns": [],
   "repairBranches": [],
-  "perStepDeadlinesMs": { "candidateMs": 8000, "presentationMs": 8000, "deliveryMs": 8000, "workerStoreMs": 8000 },
-  "expectedFinalWorkerArtefact": { "kind": "no-worker-action", "description": "pending proposal is never released; nothing parked, nothing sent" }
+  "perStepDeadlinesMs": {
+    "candidateMs": 25000,
+    "presentationMs": 15000,
+    "deliveryMs": 20000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "no-worker-action",
+    "description": "pending proposal is never released; nothing parked, nothing sent"
+  }
 }

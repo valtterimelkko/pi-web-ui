@@ -5,17 +5,40 @@
   "family": "conversation-separation",
   "tier": "P",
   "holdout": false,
-  "provenance": { "source": "plan 5.2 C14 row", "rationale": "discussing the trigger phrase must not create a tool-call proposal" },
+  "provenance": {
+    "source": "plan 5.2 C14 row",
+    "rationale": "discussing the trigger phrase must not create a tool-call proposal"
+  },
   "speechLabel": "synthetic speech based on real wording",
-  "openingWorkerState": { "status": "idle", "pendingProposal": false, "attachments": 1, "description": "one idle worker attached" },
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
   "inputTurns": [
-    { "id": "t1", "kind": "opening", "text": "The phrase relay to worker is a bit clunky, don't you think?", "requiredWords": ["phrase", "relay", "worker", "clunky", "think"] }
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "The phrase relay to worker is a bit clunky, don't you think?",
+      "requiredWords": [
+        "phrase",
+        "relay",
+        "worker",
+        "clunky",
+        "think"
+      ]
+    }
   ],
-  "permittedRouteOutcomes": ["conversational-only"],
+  "permittedRouteOutcomes": [
+    "conversational-only"
+  ],
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": ["relay"],
+    "responseMustContain": [
+      "relay"
+    ],
     "responseMustNotContain": [],
     "sourceAttributionRequired": false
   },
@@ -24,6 +47,14 @@
   "requiredNumbers": [],
   "approvalTurns": [],
   "repairBranches": [],
-  "perStepDeadlinesMs": { "candidateMs": 8000, "presentationMs": 8000, "deliveryMs": 8000, "workerStoreMs": 8000 },
-  "expectedFinalWorkerArtefact": { "kind": "no-worker-action", "description": "no tool-call proposal; the phrase is discussed, not acted on" }
+  "perStepDeadlinesMs": {
+    "candidateMs": 25000,
+    "presentationMs": 15000,
+    "deliveryMs": 20000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "no-worker-action",
+    "description": "no tool-call proposal; the phrase is discussed, not acted on"
+  }
 }

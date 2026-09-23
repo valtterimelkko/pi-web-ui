@@ -19,6 +19,7 @@ import {
   fabricateCandidate,
 } from '../../../../scripts/voice-lane-lab/lib/negative-controls.js';
 import { verifyRecord } from '../../../../scripts/voice-lane-lab/lib/verifier.js';
+import * as nodeFs from 'node:fs';
 
 const corpus = loadCorpus();
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
@@ -69,7 +70,7 @@ describe('the verifier rejects E2 records that contain a negative-control marker
   afterEach(() => {
     for (const dir of dirs) {
       try {
-        require('node:fs').rmSync(dir, { recursive: true, force: true });
+        nodeFs.rmSync(dir, { recursive: true, force: true });
       } catch {
         /* ignore */
       }
@@ -121,7 +122,7 @@ describe('the verifier rejects E2 records that contain a negative-control marker
 
     const files: Array<[string, Buffer]> = [];
     const walk = (root: string): void => {
-      const fs = require('node:fs');
+      const fs = nodeFs;
       for (const entry of fs.readdirSync(root).sort()) {
         const full = path.join(root, entry);
         if (fs.statSync(full).isDirectory()) walk(full);
@@ -142,7 +143,7 @@ describe('the verifier rejects E2 records that contain a negative-control marker
       artifacts: files.map(([relativePath, bytes]) => ({ relativePath, sha256: sha256(bytes), bytes: bytes.byteLength })),
     };
     writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-    writeFileSync(path.join(dir, 'manifest.sha256'), sha256(require('node:fs').readFileSync(path.join(dir, 'manifest.json'))) + '\n');
+    writeFileSync(path.join(dir, 'manifest.sha256'), sha256(nodeFs.readFileSync(path.join(dir, 'manifest.json'))) + '\n');
     writeFileSync(path.join(dir, 'FINALISED'), 'x\n');
     return dir;
   }

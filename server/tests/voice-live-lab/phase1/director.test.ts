@@ -122,10 +122,11 @@ describe('phase clocks arm at first poll, not at speak time', () => {
   });
 
   it('still fires the frozen repair once the armed phase truly exceeds its deadline', () => {
+    const d = episodeById(corpus, 'C09').perStepDeadlinesMs;
     const { actions } = run('C09', (director) => {
       director.step();
       director.step(undefined, 8_000); // arm at first poll
-      director.step(undefined, 17_000); // 9 s later, past candidateMs with no response
+      director.step(undefined, 8_000 + d.candidateMs + 1_000); // past the response deadline, no response
     });
     expect(actions[actions.length - 1]).toMatchObject({ type: 'terminal', status: 'interaction-failure' });
   });
@@ -151,10 +152,11 @@ describe('repair branches are frozen and bounded', () => {
   });
 
   it('silence past the candidate deadline runs the same frozen repair, never an improvisation', () => {
+    const d = episodeById(corpus, 'C01').perStepDeadlinesMs;
     const { actions } = run('C01', (director) => {
       director.step();
-      director.step(undefined, 8_000); // the await phase arms at the first poll (9 s)
-      director.step(undefined, 16_000); // 16 s later, past candidateMs with no candidate
+      director.step(undefined, 8_000); // the await phase arms at the first poll
+      director.step(undefined, 8_000 + d.candidateMs + 1_000); // past candidateMs with no candidate
     });
     const clarification = actions.find((action) => action.type === 'speak' && action.turnId === 'repair-1');
     expect(clarification).toBeDefined();

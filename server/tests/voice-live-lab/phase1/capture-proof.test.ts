@@ -15,6 +15,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadCorpus } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
 import { verifyRecord, exitCodeFor } from '../../../../scripts/voice-lane-lab/lib/verifier.js';
+import * as nodeFs from 'node:fs';
 
 const corpus = loadCorpus();
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
@@ -94,7 +95,7 @@ function buildCaptureProofRecord(options: CaptureProofOptions = {}): string {
 
   const files: Array<[string, Buffer]> = [];
   const walk = (root: string): void => {
-    const fs = require('node:fs');
+    const fs = nodeFs;
     for (const entry of fs.readdirSync(root).sort()) {
       const full = path.join(root, entry);
       if (fs.statSync(full).isDirectory()) walk(full);
@@ -120,13 +121,13 @@ function buildCaptureProofRecord(options: CaptureProofOptions = {}): string {
     artifacts: files.map(([relativePath, bytes]) => ({ relativePath, sha256: sha256(bytes), bytes: bytes.byteLength })),
   };
   writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-  writeFileSync(path.join(dir, 'manifest.sha256'), sha256(require('node:fs').readFileSync(path.join(dir, 'manifest.json'))) + '\n');
+  writeFileSync(path.join(dir, 'manifest.sha256'), sha256(nodeFs.readFileSync(path.join(dir, 'manifest.json'))) + '\n');
   writeFileSync(path.join(dir, 'FINALISED'), 'x\n');
   return dir;
 }
 
 afterEach(() => {
-  const fs = require('node:fs');
+  const fs = nodeFs;
   for (const entry of fs.readdirSync(tmpdir())) {
     if (entry.startsWith('voice-lab-cp-')) fs.rmSync(path.join(tmpdir(), entry), { recursive: true, force: true });
   }
@@ -171,7 +172,7 @@ describe('capture-proof damage is caught', () => {
     const dir = buildCaptureProofRecord();
     // declared stop (6000) before the last chunk (1390+... last at 1390? 1100+29*10=1390 —
     // instead move the stop observation before the first chunk via the manifest window:
-    const fs = require('node:fs');
+    const fs = nodeFs;
     const manifestPath = path.join(dir, 'manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     manifest.capture.stoppedAtMs = 900;

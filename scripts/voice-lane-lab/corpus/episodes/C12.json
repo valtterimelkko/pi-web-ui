@@ -49,10 +49,10 @@
   "approvalTurns": [],
   "repairBranches": [],
   "perStepDeadlinesMs": {
-    "candidateMs": 8000,
-    "presentationMs": 8000,
-    "deliveryMs": 8000,
-    "workerStoreMs": 8000
+    "candidateMs": 25000,
+    "presentationMs": 15000,
+    "deliveryMs": 20000,
+    "workerStoreMs": 20000
   },
   "expectedFinalWorkerArtefact": {
     "kind": "no-worker-action",

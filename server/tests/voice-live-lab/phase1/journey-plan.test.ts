@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
-import { loadCorpus } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
+import { loadCorpus, episodeById } from '../../../../scripts/voice-lane-lab/lib/corpus.js';
 import {
   journeyPlan,
   journeyPlanHash,
@@ -95,7 +95,7 @@ describe('the primary-mic journey plan', () => {
   it('carries the episode deadlines and expected artefact into the plan', () => {
     withFakeVoices(C01_TURNS, (corpusDir) => {
       const plan = journeyPlan('C01', { corpus, corpusDir, arm: 'standard' });
-      expect(plan.deadlines).toEqual({ candidateMs: 15_000, presentationMs: 8_000, deliveryMs: 15_000, workerStoreMs: 20_000 });
+      expect(plan.deadlines).toEqual(episodeById(corpus, 'C01').perStepDeadlinesMs);
       expect(plan.attemptDeadlineMs).toBeGreaterThanOrEqual(120_000);
       expect(plan.expectedArtefact.kind).toBe('worker-input-persisted');
       expect(plan.routesRelay).toBe(true);

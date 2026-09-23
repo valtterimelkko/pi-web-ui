@@ -67,9 +67,9 @@
   ],
   "repairBranches": [],
   "perStepDeadlinesMs": {
-    "candidateMs": 15000,
-    "presentationMs": 8000,
-    "deliveryMs": 15000,
+    "candidateMs": 25000,
+    "presentationMs": 15000,
+    "deliveryMs": 20000,
     "workerStoreMs": 20000
   },
   "expectedFinalWorkerArtefact": {

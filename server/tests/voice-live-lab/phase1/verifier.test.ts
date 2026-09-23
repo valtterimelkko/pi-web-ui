@@ -12,6 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -24,6 +25,7 @@ import {
 } from '../../../../scripts/voice-lane-lab/lib/verifier.js';
 
 const corpus = loadCorpus();
+const C01_D = episodeById(corpus, 'C01').perStepDeadlinesMs;
 
 // ── Record builder (the format the built-app runner writes) ────────────────
 
@@ -153,13 +155,13 @@ class RecordBuilder {
     if (this.finalise) {
       const artifacts: Array<{ relativePath: string; sha256: string; bytes: number }> = [];
       const walk = (dir: string): void => {
-        for (const entry of require('node:fs').readdirSync(dir).sort()) {
+        for (const entry of nodeFs.readdirSync(dir).sort()) {
           const full = path.join(dir, entry);
-          if (require('node:fs').statSync(full).isDirectory()) {
+          if (nodeFs.statSync(full).isDirectory()) {
             walk(full);
             continue;
           }
-          const bytes = require('node:fs').readFileSync(full);
+          const bytes = nodeFs.readFileSync(full);
           artifacts.push({
             relativePath: path.relative(this.dir, full),
             sha256: sha256(bytes),
@@ -170,7 +172,7 @@ class RecordBuilder {
       walk(this.dir);
       const frozen = { ...this.manifest, artifacts };
       writeFileSync(path.join(this.dir, 'manifest.json'), `${JSON.stringify(frozen, null, 2)}\n`);
-      writeFileSync(path.join(this.dir, 'manifest.sha256'), `${sha256(require('node:fs').readFileSync(path.join(this.dir, 'manifest.json')))}\n`);
+      writeFileSync(path.join(this.dir, 'manifest.sha256'), `${sha256(nodeFs.readFileSync(path.join(this.dir, 'manifest.json')))}\n`);
       writeFileSync(path.join(this.dir, 'FINALISED'), `${new Date().toISOString()}\n`);
     }
     return this.dir;
@@ -179,7 +181,7 @@ class RecordBuilder {
 
 afterEach(() => {
   // bounded cleanup of the test dirs created this run
-  for (const entry of require('node:fs').readdirSync(tmpdir())) {
+  for (const entry of nodeFs.readdirSync(tmpdir())) {
     if (entry.startsWith('voice-lab-verify-')) rmSync(path.join(tmpdir(), entry), { recursive: true, force: true });
   }
 });
@@ -190,10 +192,10 @@ function cleanRecord(): RecordBuilder {
   const builder = new RecordBuilder('C01');
   const speaking = (turnId: string, text: string, atMs: number) =>
     builder.step(atMs, { type: 'speak', turnId, text });
-  const awaiting = (atMs: number, reason: string) => builder.step(atMs, { type: 'await', reason, deadlineMs: 15_000 });
+  const awaiting = (atMs: number, reason: string) => builder.step(atMs, { type: 'await', reason, deadlineMs: reason.includes('presentation') ? C01_D.presentationMs : reason.includes('release') || reason.includes('delivery') ? C01_D.deliveryMs : reason.includes('worker store') ? C01_D.workerStoreMs : C01_D.candidateMs });
   speaking('t1', 'Relay to worker I want to find out about Podpoint.', 1_000);
   awaiting(1_500, 'waiting for candidate');
-  builder.step(2_200, { type: 'await', reason: 'waiting for presentation', deadlineMs: 8_000 }, {
+  builder.step(2_200, { type: 'await', reason: 'waiting for presentation', deadlineMs: C01_D.presentationMs }, {
     kind: 'candidate',
     payloadText: 'I want to find out about Podpoint.',
     identity: 'cand-1',
@@ -205,13 +207,13 @@ function cleanRecord(): RecordBuilder {
     complete: true,
     atMs: 2_800,
   });
-  builder.step(3_200, { type: 'await', reason: 'waiting for release', deadlineMs: 15_000 });
-  builder.step(3_500, { type: 'await', reason: 'waiting for delivery', deadlineMs: 15_000 }, {
+  builder.step(3_200, { type: 'await', reason: 'waiting for release', deadlineMs: C01_D.deliveryMs });
+  builder.step(3_500, { type: 'await', reason: 'waiting for delivery', deadlineMs: C01_D.deliveryMs }, {
     kind: 'release',
     identity: 'cand-1',
     atMs: 3_500,
   });
-  builder.step(3_700, { type: 'await', reason: 'waiting for worker store', deadlineMs: 20_000 }, {
+  builder.step(3_700, { type: 'await', reason: 'waiting for worker store', deadlineMs: C01_D.workerStoreMs }, {
     kind: 'delivery',
     identity: 'cand-1',
     atMs: 3_700,
@@ -288,10 +290,10 @@ describe('damaged evidence is caught for the right reason', () => {
     const builder = new RecordBuilder('C01');
     builder
       .step(1_000, { type: 'speak', turnId: 't1', text: 'Relay to worker I want to find out about Podpoint.' })
-      .step(1_500, { type: 'await', reason: 'waiting for candidate', deadlineMs: 15_000 })
+      .step(1_500, { type: 'await', reason: 'waiting for candidate', deadlineMs: C01_D.candidateMs })
       .step(
         2_200,
-        { type: 'await', reason: 'waiting for presentation', deadlineMs: 8_000 },
+        { type: 'await', reason: 'waiting for presentation', deadlineMs: C01_D.presentationMs },
         { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'cand-1', atMs: 2_200 }
       )
       .step(
@@ -299,15 +301,15 @@ describe('damaged evidence is caught for the right reason', () => {
         { type: 'speak', turnId: 't2', text: 'Yes, send that.' },
         { kind: 'presentation', identity: 'cand-1', complete: true, atMs: 2_800 }
       )
-      .step(3_200, { type: 'await', reason: 'waiting for release', deadlineMs: 15_000 })
+      .step(3_200, { type: 'await', reason: 'waiting for release', deadlineMs: C01_D.deliveryMs })
       .step(
         3_500,
-        { type: 'await', reason: 'waiting for delivery', deadlineMs: 15_000 },
+        { type: 'await', reason: 'waiting for delivery', deadlineMs: C01_D.deliveryMs },
         { kind: 'release', identity: 'cand-1', atMs: 3_500 }
       )
       .step(
         3_700,
-        { type: 'await', reason: 'waiting for worker store', deadlineMs: 20_000 },
+        { type: 'await', reason: 'waiting for worker store', deadlineMs: C01_D.workerStoreMs },
         { kind: 'delivery', identity: 'cand-1', atMs: 3_700 }
       )
       .step(
@@ -341,12 +343,12 @@ describe('damaged evidence is caught for the right reason', () => {
   it('an egress stream with invented audio fails the duration-gap oracle (ingress-egress-duration-gap)', () => {
     const cut = new RecordBuilder('C01');
     cut.step(1_000, { type: 'speak', turnId: 't1', text: 'Relay to worker I want to find out about Podpoint.' });
-    cut.step(1_500, { type: 'await', reason: 'waiting for candidate', deadlineMs: 15_000 });
-    cut.step(2_200, { type: 'await', reason: 'waiting for presentation', deadlineMs: 8_000 }, { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'cand-1', atMs: 2_200 });
+    cut.step(1_500, { type: 'await', reason: 'waiting for candidate', deadlineMs: C01_D.candidateMs });
+    cut.step(2_200, { type: 'await', reason: 'waiting for presentation', deadlineMs: C01_D.presentationMs }, { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'cand-1', atMs: 2_200 });
     cut.step(2_800, { type: 'speak', turnId: 't2', text: 'Yes, send that.' }, { kind: 'presentation', identity: 'cand-1', complete: true, atMs: 2_800 });
-    cut.step(3_200, { type: 'await', reason: 'waiting for release', deadlineMs: 15_000 });
-    cut.step(3_500, { type: 'await', reason: 'waiting for delivery', deadlineMs: 15_000 }, { kind: 'release', identity: 'cand-1', atMs: 3_500 });
-    cut.step(3_700, { type: 'await', reason: 'waiting for worker store', deadlineMs: 20_000 }, { kind: 'delivery', identity: 'cand-1', atMs: 3_700 });
+    cut.step(3_200, { type: 'await', reason: 'waiting for release', deadlineMs: C01_D.deliveryMs });
+    cut.step(3_500, { type: 'await', reason: 'waiting for delivery', deadlineMs: C01_D.deliveryMs }, { kind: 'release', identity: 'cand-1', atMs: 3_500 });
+    cut.step(3_700, { type: 'await', reason: 'waiting for worker store', deadlineMs: C01_D.workerStoreMs }, { kind: 'delivery', identity: 'cand-1', atMs: 3_700 });
     cut.step(4_000, { type: 'terminal', status: 'complete', reason: 'episode flow completed' }, { kind: 'worker-store', identity: 'cand-1', ok: true, atMs: 4_000 });
     for (let index = 0; index < 30; index += 1) {
       cut.addIngressChunk({ atMs: 1_100 + index * 10 });
@@ -371,7 +373,7 @@ describe('damaged evidence is caught for the right reason', () => {
   it('tampered manifest is indeterminate, never a pass (manifest-hash-mismatch)', () => {
     const record = cleanRecord().write();
     const manifestPath = path.join(record, 'manifest.json');
-    const fs = require('node:fs');
+    const fs = nodeFs;
     const tampered = fs.readFileSync(manifestPath, 'utf8').replace('"status": "pass"', '"status": "tampered"');
     fs.writeFileSync(manifestPath, tampered);
     const outcome = verifyRecord(record, { corpus });
@@ -382,7 +384,7 @@ describe('damaged evidence is caught for the right reason', () => {
 
   it('a modified artifact after finalisation is caught (artifact-hash-mismatch)', () => {
     const record = cleanRecord().write();
-    const fs = require('node:fs');
+    const fs = nodeFs;
     fs.appendFileSync(path.join(record, 'provider', 'injected.txt'), 'tail appended later');
     const outcome = verifyRecord(record, { corpus });
     expect(outcome.problems.map((problem) => problem.code)).toContain('artifact-hash-mismatch');
@@ -466,7 +468,7 @@ describe('missing, empty or malformed evidence fails closed', () => {
 
   it('malformed JSON in a required section → indeterminate', () => {
     const record = cleanRecord().write();
-    const fs = require('node:fs');
+    const fs = nodeFs;
     fs.writeFileSync(path.join(record, 'capture', 'ingress-chunks.json'), '{not json');
     const outcome = verifyRecord(record, { corpus });
     expect(outcome.verdict).toBe('indeterminate');
@@ -581,7 +583,7 @@ describe('responseMustNotContain is negation-aware (C15/C16 boundary)', () => {
 
   it('C15: a negated forbidden phrase passes while required literal content stays literal', () => {
     const outcome = verifyRecord(
-      conversationJourneyRecord('Understood. It has not yet been sent to the worker. I am still thinking about it.', 'C15').write(),
+      conversationJourneyRecord('Understood. It has not yet been sent to the worker. I will not send it. I am still thinking about it.', 'C15').write(),
       { corpus }
     );
     expect(outcome.problems).toEqual([]);
