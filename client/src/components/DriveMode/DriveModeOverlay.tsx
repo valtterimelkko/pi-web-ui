@@ -13,6 +13,7 @@ import { DriveModeSessionPicker } from './DriveModeSessionPicker';
 import { DriveModeDictate } from './DriveModeDictate';
 import { DriveModeSessionPane } from './DriveModeSessionPane';
 import { LaneStrip } from './LaneStrip';
+import { stopVoiceLaneForWorkerSwitch } from '../../hooks/useVoiceLiveLane';
 import { laneFloor } from './voiceLanes';
 import { useVoiceLayout } from './useVoiceLayout';
 
@@ -169,11 +170,23 @@ export function DriveModeOverlay() {
     const replacing = replacingLaneId;
     if (replacing) {
       const oldSession = sessionById(replacing);
-      const outcome = replaceVoiceLane(replacing, sessionId);
-      if (outcome === 'duplicate') {
+      // The same refusal the store applies — checked here first so a refused
+      // duplicate pick never stops the old lane (the asking rule: the pick
+      // changed nothing, so nothing is retired).
+      if (lanes.some((lane) => lane.sessionId === sessionId)) {
         useUIStore.getState().addToast({ type: 'error', message: 'That session is already a lane.' });
         return;
       }
+      // C24 / contract §3.2 steps 1–2, in order: the lane's worker is about
+      // to change, so the OLD lane's native session is stopped with reason
+      // `worker_switch` (the server resolves any live proposal —
+      // proposal_resolved `replaced` — before the swap takes effect, and a
+      // pending confirmation can never follow the lane to the new worker);
+      // then the store swaps the lane in place, and the new surface opens
+      // its own generation when the operator next starts it. A no-op when
+      // the old lane never opened.
+      stopVoiceLaneForWorkerSwitch(replacing);
+      replaceVoiceLane(replacing, sessionId);
       if (oldSession?.path) unsubscribeFromSession(oldSession.path);
       subscribeToSession(sessionPath);
       setAskReplace(false);
@@ -241,7 +254,12 @@ export function DriveModeOverlay() {
 
   const handleSwitchSinglePick = (sessionId: string, sessionPath: string) => {
     setSwitchSingleLane(false);
-    if (sessionId === activeSessionId) return;
+    const previous = activeSessionId || currentSessionId;
+    if (sessionId === previous) return;
+    // C24 / contract §3.2 step 1: single-lane has the same seam — the surface
+    // is being handed to another worker, so its native session is stopped
+    // (reason `worker_switch`) before the addressed session changes.
+    if (previous) stopVoiceLaneForWorkerSwitch(previous);
     setActiveSession(sessionId);
     switchSession(sessionPath);
   };

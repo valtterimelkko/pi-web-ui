@@ -547,6 +547,19 @@ export class VoiceLiveMount {
       // browser console (the 2026-09-18 native-lane failure).
       if (message.captureFault) this.noteClientCaptureFault(lane, message.captureFault);
     }
+    // C24 / contract §3.2: the Drive Mode picker swaps a lane's worker IN
+    // PLACE, so no lane re-attach ever reaches `registerLane` — the switch
+    // announces itself only through this stop, reason `worker_switch`. That
+    // stop IS a worker change: the H1 guarantee rides it. The live proposal
+    // is cancelled and announced (`proposal_resolved {replaced}`) to the
+    // lane's socket BEFORE the session closes, so a pending confirmation can
+    // never silently become one for the new worker. An ordinary stop keeps
+    // the kernel's proposal (contract §4.2: the kernel keeps it); only a
+    // worker change retires it. Cascade lanes resolve too: their kernel
+    // frames are live even while the live engine is not.
+    if (lane && message.type === 'voice_session_stop' && message.reason === 'worker_switch') {
+      this.resolveLiveProposalForWorkerChange(message.laneId, lane, 'worker_switch_stop');
+    }
 
     // Phase 8: a lane served by the cascade never touches the live service.
     // - a start is acknowledged honestly (configured cascade, or a lane that

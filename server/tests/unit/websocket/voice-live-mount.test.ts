@@ -1401,3 +1401,150 @@ describe('H3 — transcription grace for the relay source binding', () => {
     expect(sent.filter((f) => f.type === 'proposal_created')).toHaveLength(1);
   });
 });
+
+// ── C24: the picker's in-place worker switch ────────────────────────────────
+//
+// Drive Mode's session picker swaps a lane's worker IN PLACE (client store
+// `replaceVoiceLane`), so the server never sees a lane re-attach for the old
+// lane — `registerLane` (and with it `resolveLiveProposalForWorkerChange`)
+// never fires, and a pending proposal silently outlives the switch.
+// Contract §3.2 prescribes what the switch sends instead: the client stops the
+// lane's native session with reason `worker_switch`. That stop is a worker
+// change, so the H1 guarantee must ride it: the live proposal is resolved
+// (`proposal_resolved {outcome: 'replaced'}`) and announced to the lane's
+// socket BEFORE the session closes, and a later confirm of the old proposal
+// can never reach anyone — least of all the NEW worker.
+
+describe('VoiceLiveMount — a worker_switch stop resolves the live proposal (C24)', () => {
+  /** The stop frame the picker's switch sends (contract §3.2 step 1). */
+  async function stopForWorkerSwitch(mount: VoiceLiveMount, sent: Sent[]): Promise<string | null> {
+    return mount.route(
+      'client-1',
+      { send: (message) => sent.push(message as unknown as Sent) },
+      {
+        type: 'voice_session_stop',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        reason: 'worker_switch',
+      } as never
+    );
+  }
+
+  it('announces proposal_resolved {replaced} on a worker_switch stop, before the session closes', async () => {
+    const service = new FakeService();
+    const delivery = makeDelivery();
+    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    utterance(service, 'check the tests.');
+    await flush();
+    await relay(mount, 'check the tests.');
+    expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(1);
+
+    // Capture how many frames had been sent when the bridge session stopped,
+    // so the retirement's ordering is evidenced, not assumed.
+    let sentAtStop = -1;
+    const originalStop = service.stop.bind(service);
+    service.stop = async (laneId, reason) => {
+      sentAtStop = sent.length;
+      await originalStop(laneId, reason);
+    };
+
+    const code = await stopForWorkerSwitch(mount, sent);
+    expect(code).toBeNull();
+
+    // The resolution frame reached the lane's socket binding, carrying the
+    // OLD lane identity and generation (the proposal never moves), and it
+    // was on the wire BEFORE the bridge session was stopped: the client
+    // hears the retirement while the lane still exists.
+    const resolved = sent.filter((frame) => frame.type === 'proposal_resolved');
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      laneId: LANE,
+      attachmentGeneration: GENERATION,
+      outcome: 'replaced',
+    });
+    expect(service.stopped).toEqual([{ laneId: LANE, reason: 'worker_switch' }]);
+    expect(sentAtStop).toBeGreaterThan(0);
+    expect(sent.slice(0, sentAtStop).some((frame) => frame.type === 'proposal_resolved')).toBe(true);
+  });
+
+  it('a confirm of the old proposal after the switch can never reach the new worker', async () => {
+    const service = new FakeService();
+    const delivery = makeDelivery();
+    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service, 'worker-1');
+    utterance(service, 'check the tests.');
+    await flush();
+    await relay(mount, 'check the tests.');
+    const payload = (sent.find((frame) => frame.type === 'proposal_created') as Sent).proposal as {
+      proposalId: string;
+      version: number;
+      sha256: string;
+    };
+    await mount.route(
+      'client-1',
+      { send: (message) => sent.push(message as unknown as Sent) },
+      {
+        type: 'proposal_presentation',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        proposalId: payload.proposalId,
+        presentedVariant: 'tidied',
+        completed: true,
+      } as never
+    );
+
+    // The picker switches the lane to a different worker in place.
+    expect(await stopForWorkerSwitch(mount, sent)).toBeNull();
+
+    // Even a fully-formed confirmation of the OLD proposal is refused: the
+    // resolution consumed it. Nothing is delivered anywhere.
+    const refused = await mount.route(
+      'client-1',
+      { send: (message) => sent.push(message as unknown as Sent) },
+      {
+        type: 'proposal_confirm',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        proposalId: payload.proposalId,
+        variant: 'tidied',
+        idempotencyKey: 'idem-after-switch',
+        proposalRef: { version: payload.version, sha256: payload.sha256 },
+      } as never
+    );
+    expect(refused).not.toBeNull();
+    expect(delivery.calls).toHaveLength(0);
+  });
+
+  it('an ordinary operator_stop still leaves the kernel proposal alone', async () => {
+    const service = new FakeService();
+    const delivery = makeDelivery();
+    const mount = new VoiceLiveMount({ service, delivery, isWorkerBusy: async () => false });
+    const sent: Sent[] = [];
+    await startLane(mount, sent, service);
+    utterance(service, 'check the tests.');
+    await flush();
+    await relay(mount, 'check the tests.');
+
+    const code = await mount.route(
+      'client-1',
+      { send: (message) => sent.push(message as unknown as Sent) },
+      {
+        type: 'voice_session_stop',
+        version: 1,
+        laneId: LANE,
+        attachmentGeneration: GENERATION,
+        reason: 'operator_stop',
+      } as never
+    );
+    expect(code).toBeNull();
+    // No resolution: the proposal survives an ordinary stop (contract §4.2 —
+    // the kernel keeps it); only a worker change retires it.
+    expect(sent.filter((frame) => frame.type === 'proposal_resolved')).toHaveLength(0);
+  });
+});

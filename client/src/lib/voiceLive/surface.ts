@@ -621,6 +621,35 @@ export class VoiceLiveSurface {
     return this.startLane();
   }
 
+  /**
+   * The picker is handing this lane to another worker (contract §3.2, step
+   * 1): stop the lane's native session with reason `worker_switch`. The
+   * server resolves any live proposal — `proposal_resolved {replaced}`, the
+   * H1 guarantee — and closes the provider session BEFORE the lane's worker
+   * changes, so a pending confirmation can never follow the lane to the new
+   * worker. Capture is deliberately untouched: the picker already finalised
+   * it, and the operator's words belong to the OLD lane's talker.
+   * Returns false (and sends nothing) when the wire session was never
+   * opened — a stop for a lane the server never accepted would be noise.
+   */
+  stopForWorkerSwitch(): boolean {
+    const wireState = this.controller.snapshot().wireState;
+    // `suspended` is the provider's own reconnect state: the session still
+    // exists server-side, so a switch must stop it too. Only states with no
+    // open session (idle, already stopped, errored) are no-ops.
+    if (
+      wireState !== 'live' &&
+      wireState !== 'connecting' &&
+      wireState !== 'reconnecting' &&
+      wireState !== 'suspended'
+    ) {
+      return false;
+    }
+    this.clearLaneProbe();
+    this.controller.stop('worker_switch');
+    return true;
+  }
+
   private armLaneProbe(): void {
     this.clearLaneProbe();
     const timeoutMs = this.factories.laneProbeTimeoutMs ?? DEFAULT_LANE_PROBE_MS;

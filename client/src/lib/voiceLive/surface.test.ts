@@ -784,3 +784,54 @@ describe('VoiceLiveSurface — transport-level refusals reach the surface (M8)',
     expect(harness.surface.getState().controller.transportRefusals).toHaveLength(0);
   });
 });
+
+// ── C24: the picker hands the lane to another worker ────────────────────────
+//
+// Drive Mode's session picker swaps a lane's worker in place and DISCARDS the
+// lane's surface. The contract (§3.2 step 1) says the switch stops the lane's
+// native session with reason `worker_switch` — the server resolves any live
+// proposal (proposal_resolved `replaced`) and closes the provider session
+// before the worker changes. The surface owns the wire session, so it owns
+// that stop.
+
+describe('VoiceLiveSurface — stopForWorkerSwitch (C24)', () => {
+  it('sends voice_session_stop {worker_switch} for an open lane and reports stopped', async () => {
+    const harness = makeSurface();
+    harness.surface.startLane();
+    await harness.surface.startCapture();
+    // The server's ack makes the lane genuinely live (the state the picker
+    // switches away from).
+    harness.surface.onWireMessage(env('voice_state', { state: 'live' }));
+    expect(harness.surface.getState().controller.wireState).toBe('live');
+
+    const sent = harness.surface.stopForWorkerSwitch();
+
+    expect(sent).toBe(true);
+    const stop = harness.frames.find((frame) => frame.type === 'voice_session_stop') as
+      | { type: string; reason: string; laneId: string; attachmentGeneration: number }
+      | undefined;
+    expect(stop).toBeDefined();
+    expect(stop?.reason).toBe('worker_switch');
+    expect(stop?.laneId).toBe(LANE.laneId);
+    expect(stop?.attachmentGeneration).toBe(LANE.attachmentGeneration);
+    expect(harness.surface.getState().controller.wireState).toBe('stopped');
+  });
+
+  it('is a no-op (false, no frame) when the lane was never opened', () => {
+    const harness = makeSurface();
+    expect(harness.surface.stopForWorkerSwitch()).toBe(false);
+    expect(harness.frames).toHaveLength(0);
+  });
+
+  it('stops a suspended lane too — the provider session still exists server-side', () => {
+    const harness = makeSurface();
+    harness.surface.startLane();
+    harness.surface.onWireMessage(env('voice_state', { state: 'suspended' }));
+    expect(harness.surface.getState().controller.wireState).toBe('suspended');
+    expect(harness.surface.stopForWorkerSwitch()).toBe(true);
+    const stop = harness.frames.find((frame) => frame.type === 'voice_session_stop') as
+      | { reason: string }
+      | undefined;
+    expect(stop?.reason).toBe('worker_switch');
+  });
+});
