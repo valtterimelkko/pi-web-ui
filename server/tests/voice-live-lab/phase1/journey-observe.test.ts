@@ -47,10 +47,10 @@ describe('wire frame → director observation', () => {
   it('a released proposal_resolved frame is a release observation; cancelled is not', () => {
     const identities = new Map<string, string>();
     expect(
-      observationFromWireFrame(frame(2, 'proposal_resolved', { proposalId: 'prop-1', resolution: 'released' }), identities)
+      observationFromWireFrame(frame(2, 'proposal_resolved', { proposalId: 'prop-1', outcome: 'released' }), identities)
     ).toMatchObject({ kind: 'release', identity: 'prop-1' });
     expect(
-      observationFromWireFrame(frame(3, 'proposal_resolved', { proposalId: 'prop-1', resolution: 'cancelled' }), identities)
+      observationFromWireFrame(frame(3, 'proposal_resolved', { proposalId: 'prop-1', outcome: 'cancelled' }), identities)
     ).toBeNull();
   });
 

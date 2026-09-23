@@ -220,7 +220,7 @@ export function observationFromWireFrame(
     candidateTextByIdentity.set(identity, presentedVariant === 'original' ? original : tidied);
     return { kind: 'candidate', payloadText: presentedVariant === 'original' ? original : tidied, identity, atMs: row.atMs };
   }
-  if (row.type === 'proposal_resolved' && String(frame.resolution ?? '') === 'released') {
+  if (row.type === 'proposal_resolved' && String(frame.outcome ?? '') === 'released') {
     return { kind: 'release', identity: String(frame.proposalId ?? ''), atMs: row.atMs };
   }
   if (row.type === 'receipt_event' && frame.receipt && typeof frame.receipt === 'object') {
