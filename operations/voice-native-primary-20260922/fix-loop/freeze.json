@@ -1,0 +1,16 @@
+{
+  "frozenAtIso": "2026-09-23T06:15:20Z",
+  "commit": "f7c43bc9090a42ad8c385af3104138f8f422072b",
+  "corpus": "fb51a827483155c6f60e8fef8f048a92576af941fe6a440ce417ea827f04b5c4",
+  "voiceManifests": {
+    "voice-a": "1a68df3b6fdf8fe9d0c177b33083c172ae10de77e4cc34c1614468a2f8e9f830",
+    "voice-b": "0a72c35922285a944fd2c7fcd966604c9762d55e8744c40c52ae2a4023375695"
+  },
+  "prompt": "f98c86d3f8bb8ccc586a1482416ce05260e3bb185759d52c861a3f51be258c96",
+  "scorerVerifier": "608bef5797bef32aac5015f7ce1b5af7813e79fbda28d95cc6990d56beba4bd1",
+  "runner": "64c3fea91611ff9dfffe1914550f7871d1c7fdc3a72163d0491329ad3ff0cffd",
+  "cleanPasses": [
+    "pass-10 (2026-09-23 ~05:5xZ, 12/12)",
+    "pass-11 (2026-09-23 ~06:0xZ, 12/12)"
+  ]
+}

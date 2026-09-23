@@ -95,12 +95,12 @@ heavy browser/audio runner** exists at a time (conductor-owned). Cap concurrent 
 | Phase | Status | Commit/build identity | Evidence pointer |
 |---|---|---|---|
 | P0 baseline + RED | **passed (G0)** | baseline `fa1eb393`; evidence commit `57efe420` | `phase0/PHASE0-RED.md` (+ raw logs), `ACCEPTANCE-MANIFEST.md` |
-| P1 instrumentation | **passed (G1)** — merged `301331d1` | branch `task/voice-native-lab` (removed) | `children/L/`; handback `/root/voice-native-20260922/coordination/L/`; parent verification logs `/root/voice-lane-lab/parent-verification/` |
-| P2 native primary surface | **passed (G2)** — C `5fa309a9` + J `c50eca93`; parent-run real journey attempt-14 pass | branches removed | `children/{C,J}/`; journey evidence `/root/voice-lane-lab/campaigns/primary-mic-journeys/` |
-| P3 relay/approval fidelity | **passed (G3)** — H `8f27fd98`; journey director replay (71 steps) + approval identity in records | branch removed | `children/H/`; PHASE0 seeds green |
-| P4 pilot + fix loop | **running** (parent-led dev-set pass 1) | master `c50eca93` | `/root/voice-lane-lab/fix-loop/pass-1/` |
-| P4 pilot + fix loop | not started | — | — |
-| P5 comparison + verdict | not started | — | — |
+| P0 baseline + RED | **passed (G0)** | baseline `fa1eb393`; evidence commit `57efe420` | `phase0/PHASE0-RED.md` (+ raw logs), `ACCEPTANCE-MANIFEST.md` |
+| P1 instrumentation | **passed (G1)** — merged `301331d1` | branch removed | `children/L/`; `/root/voice-lane-lab/parent-verification/` |
+| P2 native primary surface | **passed (G2)** — C `5fa309a9` + J `c50eca93`; parent-run journey attempt-14 pass | branches removed | `children/{C,J}/` |
+| P3 relay/approval fidelity | **passed (G3)** — H `8f27fd98`; journeys audit the full chain | branch removed | `children/H/` |
+| P4 pilot + fix loop | **passed (G4)** — 11 passes; **pass 10 + pass 11 clean 12/12**; freeze at `f7c43bc9` | freeze `fix-loop/freeze.json` + `FREEZE.md` | `fix-loop/pass-10/`, `pass-11/` |
+| P5 comparison + verdict | **running (W4)** | frozen `f7c43bc9` | campaign ledger (to be created) |
 
 ---
 
@@ -340,6 +340,21 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-23 05:08 | W3 | **Pass 5 result: 9 clean / 3 not** (C01, C03, C09, C14, C15, C16, C17, C19, C20). Remaining: **C05** the operator HEARD THE OLD SENTENCE — the fixture manifest is keyed by fixture id, so the audio still said "Yes, send that exactly as written."; **C18** the model relayed only the restriction clause ("Do not deploy anything…"), losing the deploy instruction; **C21** still carried a required word (missed in the openResponse round). | `fix-loop/pass-5/`; C05 attempt-05 operator_utterance text |
 | 2026-09-23 05:25 | W3 | **Conductor corrections (`d53a0a2d`)**: C05-t2 **re-frozen for both voices** against the corrected wording (WER 0, requiredWords yes|send) with `journeyPlan` now **failing closed on fixture text drift**; the C18 amendment bullet names the FULL corrected instruction (with the pass-5 failure quoted); **C21 joins openResponse**. Lab 909 passed; compile 0; lint 0 errors. | `scripts/voice-lane-lab/corpus/voices/*.json`; `journey-plan.ts`; `voice-session.ts` |
 | 2026-09-23 05:26 | W3 | **Fix-loop pass 6 launched** (`bg_8ffe47aa`) — verification of the pass-5 corrections. | `/root/voice-lane-lab/fix-loop/pass-6/` |
+| 2026-09-23 05:35 | W3 | **Pass 7: 11/12** (only C18: its confirm "Yes, send the amended version." is outside the closed confirmation vocabulary → statement → no release). The new fixture text-drift guard also exposed pre-existing drift: C05-t1 (both voices) and C17-t1 (voice-a) were re-frozen (WER 0); C18-t3 re-frozen after the wording fix to "Yes, send it.". | `fix-loop/pass-7/`; `regen-fixtures.mts` |
+| 2026-09-23 05:50 | W3 | **Pass 8: 11/12** (C18 passes; C01 flaked: the operator's confirm landed in the talker audio window and was dropped as `talker_audio_window` echo-suspect). Fix: confirm turns now wait for **talker quiescence** (lab egress counter quiet 1.2 s, bounded 8 s) before speaking. | `fix-loop/pass-8/`; `journey-run.ts` |
+| 2026-09-23 06:00 | W3 | **Pass 9: 10/12** (C16 honest answer lacked the literal slot word → openResponse; C18 relayed only the correction clause → **state-aware correction hint** added to the relay tool response, plus the full-instruction prompt rule). | `fix-loop/pass-9/` |
+| 2026-09-23 06:05 | W3 | **Pass 10: 12/12 CLEAN.** | `fix-loop/pass-10/` |
+| 2026-09-23 06:10 | W3 | **Pass 11: 12/12 CLEAN — two consecutive clean full passes. GATE G4 ACHIEVED.** Both arms reachable (P's real probes); measured cost far inside §10 (~90 min live journeys total). | `fix-loop/pass-11/` |
+| 2026-09-23 06:15 | W3 | **Freeze recorded at `f7c43bc9`** (corpus, voice manifests, prompt, scorer, runner hashes) in `fix-loop/freeze.json` + `FREEZE.md`. | `fix-loop/FREEZE.md` |
+
+### W4 plan (Phase 5, opening)
+
+1. **Holdout validator (parent):** author + freeze the 4 holdout surface forms (C10/C11/C22/C24), synthesise/validate their fixtures for both voices, and record the freeze. The implementer lineage never saw this wording.
+2. **Cost the matrix** from measured per-episode spend (11 passes ≈ 90 min live journeys, ~7–10 min/pass; provider usage small) — comfortably inside §10; run the full §8 matrix.
+3. **Campaign:** 34 required cells — 12 core × 2 arms, 4 holdout × 2 arms, 2×10-min soak — one heavy runner, paired by episode ID, alternating arm order with recorded seed. Cells run via `primary-mic --episode <id> --arm <standard|et-high>` (campaign runner's live mode is conductor-gated by design; the soak needs a driver — check/extend).
+4. **Evaluator pass** for open-response episodes (C09/C14/C15/C16/C21 + holdout conversation), fixed rubric, blinded to arm labels.
+5. **Independent reviewer child** (read-only): manifests, accounting, model identity, no hint leakage, offline re-verification of every cell.
+6. **Verdict + repository gates + canonical docs + Agent OS capture.**
 
 ### Wave 2 dispatch record (2026-09-23 00:43Z)
 

@@ -7,37 +7,36 @@
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W1 · W2 complete · **W3 fix loop RUNNING** — passes: 1 → 1/12; 2 INVALID; 3 → 5/12;
-4 → 4 clean; **5 → 9 clean/3 not**; conductor corrections (`d53a0a2d`: C05 re-freeze + drift guard,
-C18 full-instruction prompt, C21 openResponse); **pass 6 running** (`bg_8ffe47aa`).
+**Wave:** W1 · W2 complete · **W3 fix loop COMPLETE — GATE G4 ACHIEVED** (11 passes; pass 10 and
+pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
-**Active children:** none — all correction lanes verified, merged and cleaned up.
+**Active children:** none.
 
-| Lane | Merge | Verified by parent |
-|---|---|---|
-| H host (P3) | `8f27fd98` | 900 tests; parent probe 12/12; source binding + original + correction + exact read-back |
-| C client (P2) | `5fa309a9` | client 381; build/typecheck 0; anti-cheat sound |
-| L lab (P1) | `301331d1` | phase1 87 / lab 551 / lane 14 / compile 0; **parent-reproduced capture proof**; verifier fail-closed |
-| P provider (§7) | `cf003f13` | voice 257; typecheck/eslint 0; **parent re-ran both real arm probes** (standard 337 ms, ET-HIGH 389 ms, transcript 100%) |
-| J journey/runner | `c50eca93` | voice-live-lab 597; compile 0; campaign dry 54 cells; credential-missing exit 2; **parent-run real journey attempt-14 pass** (727/366 chunks, 71 steps replayed, cleanup verified) |
+**W3 outcome (frozen revision `f7c43bc9`)**
 
-**Gates:** G0–G3 passed with evidence. G4 (dev set clean ×2; both arms reachable; cost fits) is the
-current target.
+- 11 dev-set passes: 1/12 → invalid (stale build) → 5/12 → 4 clean → 9 clean → 11 → 11 → 10 →
+  **12/12 → 12/12**.
+- Corrections delivered by children (all verified + merged): H2 (host read-back, routing prompt),
+  J2 (director persistence, verifier negation), H3 (binding grace), J3 (labelled TTS seam),
+  K (presentation persistence, seam completeness, openResponse, C18 prompt).
+- Conductor fixes: corpus C05/C15/C16/C18/C21 data, fixture re-freezes (C05-t1/t2, C17-t1, C18-t3),
+  fixture text-drift guard, deadline bump + data-derived timing tests, 15 lint errors cleared,
+  runner freshness (stale built app), C16 openResponse, state-aware correction hint, talker-quiescence
+  before confirm turns.
+- Evidence: `fix-loop/pass-1..11/`, `PASS-1-DIAGNOSIS.md`, `freeze.json` + `FREEZE.md`.
 
-**Current truth**
+**W4 plan (Phase 5)**
 
-- master `d53a0a2d`: all W1/W2 lanes + correction rounds (H2/J2/H3/J3/K) + conductor pass-5 corrections
-  (C05 fixture re-freeze + text-drift guard, C18 full-instruction prompt, C21 openResponse). Lab 909;
-  compile 0; repo lint 0 errors.
-- Passes: 1 → 1/12 · 2 INVALID · 3 → 5/12 · 4 → 4 clean · **5 → 9 clean** · **6 running**.
-- Live accounting: passes 1–6 (~70 min) + probes; inside §10.
-
-**Next sequence**
-
-1. On pass-4 completion: analyse by boundary. If clean, run pass 5 for the second consecutive clean
-   full pass; if failures remain, correct and re-run.
-2. On two consecutive clean passes: freeze code/prompt/corpus/scorer; cost the §8 matrix (adapt rule).
-3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
+1. Holdout validator (parent): author + freeze C10/C11/C22/C24 wording + fixtures (unseen by the
+   implementer lineage).
+2. Cost the matrix from measured spend (≈90 min live so far; §10: 8 h / US$25) — full §8 matrix fits.
+3. Campaign: 34 required cells (12 core ×2 arms, 4 holdout ×2, 2 soaks), one heavy runner, paired by
+   ID, alternating arms with recorded seed; cells via `primary-mic --episode <id> --arm <arm>`;
+   soak driver to check/extend.
+4. Evaluator pass for open-response episodes (fixed rubric, blinded).
+5. Independent reviewer child (read-only): manifests, accounting, identity, hint leakage, offline
+   re-verification.
+6. Verdict + repository gates + canonical docs + Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** pass 6's `backstop_s` covers this window; no child watches armed.
+**Backstops:** none armed (goal resuming for W4 work).
