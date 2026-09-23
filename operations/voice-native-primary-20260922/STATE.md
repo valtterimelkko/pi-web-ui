@@ -8,15 +8,10 @@
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
 **Wave:** W1 · W2 complete · **W3 fix loop RUNNING** — pass 1 diagnosed; pass 2 INVALID (stale served
-build; runner fixed `d23cbac5`); **pass 3: 5/12 pass** (C09/C15/C16/C17/C21); **correction round 3 in
-flight** (H3 binding race, J3 synthetic-TTS seam).
+build; runner fixed); pass 3: 5/12; **correction round 3 complete (H3 + J3 merged)**; **pass 4
+running** (`bg_89145ea9`, first pass with the labelled `--tts synthetic` seam).
 
-**Active children**
-
-| Child | Session | Worktree · branch | Lease | Watch | Scope |
-|---|---|---|---|---|---|
-| ~~H3 binding~~ | `01a0cc4e-9210-…` | ~~`wt-voice-bind`~~ | released | `ww_8` cancelled | **merged `ee32b5e0`, cleaned up** |
-| J3 TTS seam | `01a0cc4e-95e1-73f0-b149-c13402ba67af` | `wt-voice-tts` · `task/voice-native-tts` | `fae2d672…` | `ww_9_1790134105905` | labelled `--tts synthetic` journey seam + verifier byte equality (running) |
+**Active children:** none — all correction lanes verified, merged and cleaned up.
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -31,17 +26,19 @@ current target.
 
 **Current truth**
 
-- master `ee32b5e0`: W1/W2 + H2 + J2 + runner freshness fix + **H3 (binding grace) merged**.
-- **Pass 1: 1/12** · **Pass 2: INVALID** (stale build; fixed) · **Pass 3: 5/12** — remaining: journey
-  TTS absence (J3 in flight), C05 relay variance, C14 slot strictness (re-observe in pass 4).
-- Live accounting: passes 1–3 (~27 min) + probes; inside §10.
+- master `299276b1`: W1/W2 + H2 + J2 + runner freshness fix + **H3 (binding grace)** + **J3 (labelled
+  synthetic-TTS seam)** merged. All worktrees/leases/watches released.
+- Passes: 1 → 1/12 · 2 → INVALID (stale build; fixed) · 3 → 5/12 · **4 running** — first pass with
+  every correction in the served build and the labelled read-back seam.
+- Live accounting: passes 1–4 (~40 min) + probes; inside §10. Audio-output claims remain scoped to E2
+  (a shim read-back is never an E2R/E3 pass — enforced by the verifier).
 
 **Next sequence**
 
-1. On H3/J3 handbacks: verify, merge, cleanup; run **pass 4** (all 12) and iterate until two
-   consecutive clean passes.
-2. Freeze code/prompt/corpus/scorer; cost the §8 matrix (adapt rule).
+1. On pass-4 completion: analyse by boundary. If clean, run pass 5 for the second consecutive clean
+   full pass; if failures remain, correct and re-run.
+2. On two consecutive clean passes: freeze code/prompt/corpus/scorer; cost the §8 matrix (adapt rule).
 3. W4: campaign + read-only reviewer + verdict; canonical docs; Agent OS capture.
 
 **Open questions:** none.
-**Backstops:** watches `ww_8`/`ww_9` primary; `wake_deadline` armed for the round-3 window.
+**Backstops:** pass 4's `backstop_s` covers this window; no child watches armed.
