@@ -152,7 +152,7 @@ describe('provider-stall remint (soak F-1 seam)', () => {
 
     await operatorSays(h, 'Relay to worker I want to find out about Podpoint.');
     // The mount (which classifies) arms the watch for this statement.
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.', 1_000);
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.');
     // No model output at all — the wedge. Advance past the stall and fire the check.
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 1);
     await h.runTimers();
@@ -180,7 +180,7 @@ describe('provider-stall remint (soak F-1 seam)', () => {
     await startLive(h);
 
     await operatorSays(h, 'I think our real problem is that the deploy takes nearly 10 minutes.');
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'I think our real problem is that the deploy takes nearly 10 minutes.', 1_000);
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'I think our real problem is that the deploy takes nearly 10 minutes.');
     // The model answers (talker output).
     h.bridges[0].callbacks.onOutputTranscription?.('Right — the deploy is the slow part.', 0);
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 5_000);
@@ -190,12 +190,41 @@ describe('provider-stall remint (soak F-1 seam)', () => {
     expect(h.bridges[0].closed).toBe(false);
   });
 
+  it('never arms while the model is mid-answer (the attempt-08 race, timebase-safe)', async () => {
+    const h = createHarness();
+    await startLive(h);
+
+    // The operator's words are still being finalised when the model's answer
+    // starts streaming: engagement lands essentially at the arm moment.
+    h.advance(1_005);
+    h.bridges[0].callbacks.onOutputTranscription?.('Right — the deploy is the slow part.', 1_005);
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'I think our real problem is that the deploy takes nearly 10 minutes.');
+
+    h.advance(VOICE_MODEL_REPLY_STALL_MS + 5_000);
+    await h.runTimers();
+    expect(h.bridges.length).toBe(1); // no false remint
+  });
+
+  it('arms normally when the last engagement is older than the grace', async () => {
+    const h = createHarness();
+    await startLive(h);
+
+    h.bridges[0].callbacks.onOutputTranscription?.('Done.', 1);
+    h.advance(10_000); // the model answered long ago; a NEW utterance must arm
+    await operatorSays(h, 'Relay to worker I want to find out about Podpoint.');
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.');
+
+    h.advance(VOICE_MODEL_REPLY_STALL_MS + 1);
+    await h.runTimers();
+    expect(h.bridges.length).toBe(2); // the wedge is recovered
+  });
+
   it('remints at most once per wedge — a persistent wedge is logged, not looped', async () => {
     const h = createHarness();
     await startLive(h);
 
     await operatorSays(h, 'Relay to worker I want to find out about Podpoint.');
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.', 1_000);
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.');
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 1);
     await h.runTimers();
     expect(h.bridges.length).toBe(2);
@@ -203,7 +232,7 @@ describe('provider-stall remint (soak F-1 seam)', () => {
     // The fresh session goes live but wedges too; another statement stalls.
     h.bridges[1].callbacks.onState?.('live');
     await operatorSays(h, 'Relay to worker, please: I want to find out about Podpoint.');
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker, please: I want to find out about Podpoint.', 1_000);
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker, please: I want to find out about Podpoint.');
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 1);
     await h.runTimers();
 
