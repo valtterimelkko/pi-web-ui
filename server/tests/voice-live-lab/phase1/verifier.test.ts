@@ -484,18 +484,18 @@ describe('missing, empty or malformed evidence fails closed', () => {
 
 // ── Journey records (child J): kind 'primary-mic-journey' ───────────────────
 
-function conversationJourneyRecord(responseText: string): RecordBuilder {
-  const builder = new RecordBuilder('C09');
+function conversationJourneyRecord(responseText: string, episodeId = 'C09'): RecordBuilder {
+  const builder = new RecordBuilder(episodeId);
   builder.patchManifest({
     kind: 'primary-mic-journey',
     captureMode: 'fake-file+synthetic-stream-source',
     laneStop: { finalState: 'stopped-start-control-back' },
     cleanup: { browserClosed: true, previewStopped: true, serverStopped: true, socketsRemoved: true },
     armSelection: { requested: 'standard', env: { VOICE_LIVE_PROFILE: 'standard' } },
-    turnModes: [{ turnId: 't1', inputMode: 'fake-file', fixtureId: 'C09-t1' }],
+    turnModes: [{ turnId: 't1', inputMode: 'fake-file', fixtureId: `${episodeId}-t1` }],
   });
-  builder.step(1_000, { type: 'speak', turnId: 't1', text: episodeById(corpus, 'C09').inputTurns[0].text });
-  builder.step(1_600, { type: 'await', reason: 'waiting for response', deadlineMs: episodeById(corpus, 'C09').perStepDeadlinesMs.candidateMs });
+  builder.step(1_000, { type: 'speak', turnId: 't1', text: episodeById(corpus, episodeId).inputTurns[0].text });
+  builder.step(1_600, { type: 'await', reason: 'waiting for response', deadlineMs: episodeById(corpus, episodeId).perStepDeadlinesMs.candidateMs });
   builder.step(4_000, { type: 'terminal', status: 'complete', reason: 'episode flow completed' }, {
     kind: 'response',
     text: responseText,
@@ -507,12 +507,12 @@ function conversationJourneyRecord(responseText: string): RecordBuilder {
     builder.addEgressChunk({ atMs: 1_120 + index * 10, samples: new Int16Array(160).map((_, i) => ((index * 160 + i) % 1000) as number) });
   }
   builder.useFixture({
-    fixtureId: 'C09-t1',
-    episodeId: 'C09',
+    fixtureId: `${episodeId}-t1`,
+    episodeId,
     turnId: 't1',
     inputMode: 'fake-file',
     speechLabel: 'synthetic speech based on real wording',
-    pcmSha256: sha256(Buffer.from('fixture-bytes-c09')),
+    pcmSha256: sha256(Buffer.from(`fixture-bytes-${episodeId.toLowerCase()}`)),
     manifestPath: 'corpus/voices/voice-a.manifest.json',
   });
   return builder;
@@ -544,6 +544,57 @@ describe('journey records: conversational-only episodes', () => {
       { corpus }
     );
     expect(outcome.verdict).toBe('fail');
+  });
+});
+
+describe('responseMustNotContain is negation-aware (C15/C16 boundary)', () => {
+  it('C16: an honest negated response is not flagged for the forbidden completion claim', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord(
+        "The worker session is new and has no messages yet, so I can't confirm if the test suite has finished running. The plan is still to run the suite.",
+        'C16'
+      ).write(),
+      { corpus }
+    );
+    expect(outcome.problems).toEqual([]);
+    expect(outcome.verdict).toBe('pass');
+    expect(exitCodeFor(outcome)).toBe(0);
+  });
+
+  it('C16: an unnegated completion claim still fails', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('The test suite finished and everything is green. The plan worked.', 'C16').write(),
+      { corpus }
+    );
+    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.code === 'slot-violation' && problem.detail.includes('finished'))).toBe(true);
+  });
+
+  it('a negation cue only rescues occurrences inside its own clause', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord("I can't confirm the plan details. The suite finished.", 'C16').write(),
+      { corpus }
+    );
+    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.detail.includes('finished'))).toBe(true);
+  });
+
+  it('C15: a negated forbidden phrase passes while required literal content stays literal', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('Understood. It has not yet been sent to the worker. I am still thinking about it.', 'C15').write(),
+      { corpus }
+    );
+    expect(outcome.problems).toEqual([]);
+    expect(outcome.verdict).toBe('pass');
+  });
+
+  it('C15: an unnegated forbidden phrase still fails', () => {
+    const outcome = verifyRecord(
+      conversationJourneyRecord('Understood. The message was sent to the worker while I was thinking.', 'C15').write(),
+      { corpus }
+    );
+    expect(outcome.verdict).toBe('fail');
+    expect(outcome.problems.some((problem) => problem.detail.includes('sent to the worker'))).toBe(true);
   });
 });
 
