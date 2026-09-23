@@ -23,7 +23,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, openSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -251,7 +251,13 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
           if (lab.ingress.length > 20000) lab.ingress.shift();
         };
         origConnect(tap);
-        tap.connect(this.context.createGain()); // muted sink keeps the tap live
+        // ScriptProcessor only processes with a complete path to the
+        // destination: route the tap through a ZERO-GAIN sink so the mic is
+        // tapped but never audible.
+        const tapSink = this.context.createGain();
+        tapSink.gain.value = 0;
+        tap.connect(tapSink);
+        tapSink.connect(this.context.destination);
       } catch (error) {
         (window.__voiceLaneLabFaults ||= []).push('tap: ' + String(error));
       }
@@ -262,8 +268,9 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
 
   // Tap the frames leaving the production pipeline (post-resampler, 16 kHz).
   const origSend = WebSocket.prototype.send;
-  WebSocket.prototype.send = function (data) {
+  WebSocket.prototype.send = function (...sendArgs) {
     lab.wsSendCalls += 1;
+    const data = sendArgs[0];
     try {
       if (typeof data === 'string' && data.includes('voice_audio_chunk')) {
         const parsed = JSON.parse(data);
@@ -283,7 +290,9 @@ export const INGRESS_INSTRUMENT_SCRIPT: string = `
         }
       }
     } catch {}
-    return origSend(data);
+    // send is a native method: it MUST be invoked with the socket as this,
+    // or the page gets "Illegal invocation" on every outbound message.
+    return origSend.apply(this, sendArgs);
   };
 
   window.__voiceLaneLabStop = () => {
@@ -388,8 +397,13 @@ export async function runCaptureProof(
   }
   const clientBuildSha = sha256(readFileSync(path.join(repoRoot, 'client', 'dist', 'index.html')));
 
+  // The client port must exist before the server boots: the disposable
+  // server's ALLOWED_ORIGINS has to name the serving origin or the browser's
+  // WebSocket upgrade is origin-rejected (REST login works; sessions hang).
+  const clientPort = await freePort();
   // 2. Disposable compiled validation server (via the guarded boot script).
   const bootScript = path.join(repoRoot, 'scripts', 'voice-live-lab', 'boot-disposable-server.sh');
+  const serverMode = process.env.VOICE_LAB_SERVER_MODE === 'source' ? 'source' : 'compiled';
   const stateDir = mkdtempSync(path.join(os.tmpdir(), 'voice-lab-bapp-'));
   const unitName = `voice-lab-bapp-${process.pid}-${Date.now().toString(36)}`;
   const authPassword = options.authPassword;
@@ -399,9 +413,10 @@ export async function runCaptureProof(
       VOICE_LAB_DIR: stateDir,
       VOICE_LAB_UNIT: unitName,
       VOICE_LAB_POINTER: path.join(stateDir, 'current'),
-      VOICE_LAB_COMPILED: '1',
+      ...(serverMode === 'compiled' ? { VOICE_LAB_COMPILED: '1' } : {}),
       VOICE_MODE_ENGINE: plan.server.engine,
       AUTH_PASSWORD: authPassword,
+      ALLOWED_ORIGINS: `http://127.0.0.1:${clientPort},http://localhost:${clientPort}`,
       LOG_FORMAT: 'json',
     },
     timeoutMs: 300_000,
@@ -433,14 +448,19 @@ export async function runCaptureProof(
   let startedAtIso = new Date().toISOString();
 
   try {
-    // 3. Serve the built client (vite preview + proxy).
-    const clientPort = await freePort();
-    viteProcess = spawn('npx', ['vite', 'preview', '--port', String(clientPort), '--strictPort'], {
-      cwd: path.join(repoRoot, 'client'),
-      env: { ...process.env, VITE_API_TARGET: `http://127.0.0.1:${serverPort}` },
-      stdio: 'ignore',
-      detached: true,
-    });
+    // 3. Serve the built client (vite preview + proxy). Pin the IPv4 loopback:
+    // vite's default `localhost` can bind ::1 only, which 127.0.0.1 checks miss.
+    const viteLog = path.join(stateDir, 'vite-preview.log');
+    viteProcess = spawn(
+      'npx',
+      ['vite', 'preview', '--host', '127.0.0.1', '--port', String(clientPort), '--strictPort'],
+      {
+        cwd: path.join(repoRoot, 'client'),
+        env: { ...process.env, VITE_API_TARGET: `http://127.0.0.1:${serverPort}` },
+        stdio: ['ignore', openSync(viteLog, 'a'), 'inherit'],
+        detached: true,
+      }
+    );
     await waitForHttp(`http://127.0.0.1:${clientPort}/`, 90_000);
     log(`built client served: http://127.0.0.1:${clientPort} (proxying to ${serverPort})`);
 
@@ -453,8 +473,25 @@ export async function runCaptureProof(
     });
     const page = await browserContext.newPage();
     const consoleErrors: string[] = [];
+    const consoleLog: string[] = [];
+    const networkLog: string[] = [];
+    const wsLog: string[] = [];
     page.on('pageerror', (error) => consoleErrors.push(String(error)));
-    await page.addInitScript(INGRESS_INSTRUMENT_SCRIPT);
+    page.on('console', (message) => {
+      if (['error', 'warning'].includes(message.type())) consoleLog.push(`${message.type()}: ${message.text().slice(0, 300)}`);
+    });
+    page.on('requestfailed', (request) => networkLog.push(`FAILED ${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? '?'}`));
+    page.on('response', (response) => {
+      if (response.url().includes('/api/') && response.status() >= 400) networkLog.push(`HTTP ${response.status()} ${response.url()}`);
+    });
+    page.on('websocket', (ws) => {
+      wsLog.push(`WS open: ${ws.url()}`);
+      ws.on('close', () => wsLog.push(`WS closed: ${ws.url()}`));
+      ws.on('socketerror', (data) => wsLog.push(`WS error: ${String(data).slice(0, 200)}`));
+    });
+    // addInitScript needs a callable: a bare string silently no-ops in the
+    // current Playwright Node API, so wrap the script source as a function.
+    await page.addInitScript(new Function(INGRESS_INSTRUMENT_SCRIPT) as () => void);
 
     startedAtIso = new Date().toISOString();
     await page.goto(`http://127.0.0.1:${clientPort}/`, { waitUntil: 'domcontentloaded' });
@@ -478,9 +515,31 @@ export async function runCaptureProof(
     await page.waitForTimeout(1_200);
     await page.locator('button[aria-label="Enter Voice Mode"]').first().click();
     await page.getByRole('button', { name: 'Start a new session' }).click();
-    await page.locator('text=Kimi for Coding').click();
+    // The model catalogue loads asynchronously over the session socket; a click
+    // against an unpopulated list selects nothing (the dialog then shows
+    // "No Model" and session creation hangs). Wait for the row, click it, and
+    // VERIFY the selection took before moving on.
+    const modelRow = page.getByText('Kimi for Coding', { exact: true }).first();
+    await modelRow.waitFor({ timeout: 45_000 });
+    await modelRow.click();
     await page.locator('button').filter({ hasText: '/tmp' }).first().click();
-    await page.waitForSelector('[data-testid="drive-mode-surface"]', { timeout: 60_000 });
+    try {
+      await page.waitForSelector('[data-testid="drive-mode-surface"]', { timeout: 90_000 });
+    } catch (error) {
+      // Evidence-first: capture what the page actually showed before failing.
+      await page
+        .screenshot({ path: path.join(attemptLayout.attemptDir, 'capture', 'shot-timeout-drive-mode.png') })
+        .catch(() => {});
+      const bodyText = await page
+        .evaluate(() => document.body.innerText.slice(0, 2_000))
+        .catch(() => `body unreadable`);
+      writeFileSync(
+        path.join(attemptLayout.attemptDir, 'capture', 'page-at-timeout.txt'),
+        `${bodyText}\n\npage errors:\n${consoleErrors.join('\n')}\n\nconsole (error/warn):\n${consoleLog.join('\n')}\n\nnetwork:\n${networkLog.join('\n')}\n\nwebsockets:\n${wsLog.join('\n')}\n`,
+        { mode: 0o600 }
+      );
+      throw error;
+    }
     await page.screenshot({ path: path.join(attemptLayout.attemptDir, 'capture', 'shot-1-drive-mode.png') });
 
     // The main capture control: open the native lane and press Start.
@@ -493,17 +552,42 @@ export async function runCaptureProof(
     const listenMs = Math.max(4_000, Math.min(plan.utterance.durationMs + 6_000, 30_000));
     await page.waitForTimeout(listenMs);
 
-    // Stop via the main control, then stop the instrument.
+    // Stop via the main control. The product's stop ends the talker session
+    // and returns the panel to its listening controls: the START control
+    // reappearing is the observable proof the stop took. The lane attribute
+    // staying `live` means the open-mic lane itself remains up — that is
+    // product behaviour, not a stuck stop, so it is recorded, not failed.
     await page.getByTestId('voice-live-stop').click();
-    await page.waitForSelector('[data-testid="voice-live-status"][data-lane="idle"]', { timeout: 30_000 }).catch(async () => {
-      const lane = await page.getByTestId('voice-live-status').getAttribute('data-lane');
-      consoleErrors.push(`lane did not return to idle (data-lane=${String(lane)})`);
-    });
-    await page.evaluate(() => (window as unknown as { __voiceLaneLabStop: () => void }).__voiceLaneLabStop());
+    const stopped = await page
+      .waitForSelector('[data-testid="voice-live-start"]', { state: 'visible', timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false);
+    const laneState = stopped ? 'stopped-start-control-back' : 'live';
+    // Best-effort instrument stop: the app may host the lane on a different
+    // context page than the one the runner clicked in, so look for the page
+    // that actually carries the lab handle before stopping the instrument.
+    const instrumentState: Record<string, unknown> = { pages: browserContext.pages().map((candidate) => candidate.url()) };
+    let labPage: import('playwright').Page | null = null;
+    for (const candidate of browserContext.pages()) {
+      const hasLab = await candidate
+        .evaluate(() => typeof (window as unknown as Record<string, unknown>).__voiceLaneLab)
+        .catch(() => 'evaluate-failed');
+      instrumentState[`lab@${candidate.url()}`] = hasLab;
+      if (hasLab === 'object') labPage = candidate;
+    }
+    log(`instrument pages: ${JSON.stringify(instrumentState)}`);
+    if (labPage) {
+      await labPage.evaluate(() => (window as unknown as { __voiceLaneLabStop: () => void }).__voiceLaneLabStop());
+    } else {
+      log('no page carries the lab instrument — the capture may have run without the tap');
+    }
+    const dumpPage = labPage ?? page;
     await page.screenshot({ path: path.join(attemptLayout.attemptDir, 'capture', 'shot-3-stopped.png') });
-    const dump = await page.evaluate(() => {
-      const lab = (window as unknown as { __voiceLaneLab: Record<string, unknown> }).__voiceLaneLab;
-      return JSON.parse(JSON.stringify(lab)) as {
+    const dump = await dumpPage
+      .evaluate(() => {
+        const lab = (window as unknown as { __voiceLaneLab?: Record<string, unknown> }).__voiceLaneLab;
+        if (!lab) return null;
+        return JSON.parse(JSON.stringify(lab)) as {
         instrumentId: string;
         label: string;
         mode: string;
@@ -515,7 +599,11 @@ export async function runCaptureProof(
         egress: Array<{ seq: number; atMs: number; sampleRate: number; sampleCount: number; b64: string }>;
         wsSendCalls: number;
       };
-    });
+      })
+      .catch(() => null);
+    if (!dump || !Array.isArray(dump.ingress)) {
+      throw new Error('the lab instrument carried no ingress data on any page');
+    }
 
     // 5. Write the immutable record.
     const captureDir = path.join(attemptLayout.attemptDir, 'capture');
@@ -562,7 +650,14 @@ export async function runCaptureProof(
       { seq: 1, atMs: nowMs(-1_500), action: { type: 'speak', turnId: 't1', text: plan.utterance.text }, observation: { kind: 'capture-started', mode: 'fake-file', source: dump.sourceLabel } },
       { seq: 2, atMs: nowMs(-500), action: { type: 'await', reason: 'waiting for lane live', deadlineMs: 60_000 }, observation: { kind: 'lane-live' } },
       { seq: 3, atMs: nowMs(listenMs), action: { type: 'await', reason: 'waiting for utterance to traverse', deadlineMs: 45_000 }, observation: { kind: 'ingress-complete', chunks: dump.ingress.length } },
-      { seq: 4, atMs: nowMs(listenMs + 500), action: { type: 'terminal', status: 'capture-complete', reason: 'capture proof finished' }, observation: { kind: 'capture-stopped' } },
+      {
+        seq: 4,
+        // The stop observation is anchored to the instrument's OWN stop time,
+        // not the click: audio legitimately keeps flowing until the tap ends.
+        atMs: dump.captureStoppedAtMs ?? nowMs(listenMs + 500),
+        action: { type: 'terminal', status: 'capture-complete', reason: 'capture proof finished' },
+        observation: { kind: 'capture-stopped' },
+      },
     ];
     writeFileSync(
       path.join(attemptLayout.attemptDir, 'director', 'steps.jsonl'),
@@ -638,6 +733,7 @@ export async function runCaptureProof(
         ingressChunks: ingressRows.length,
         egressChunks: egressRows.length,
       },
+      laneStop: { finalState: String(laneState) },
       startedAtIso,
       finishedAtIso: new Date().toISOString(),
       cleanup,

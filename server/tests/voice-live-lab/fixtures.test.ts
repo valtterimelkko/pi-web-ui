@@ -167,7 +167,7 @@ describe('whisper ASR client', () => {
   });
 
   it('throws on a non-200 response', async () => {
-    const stub = (async () => ({ ok: false, status: 503, json: async () => ({}) }) as Response) as typeof fetch;
+    const stub = (async () => ({ ok: false, status: 503, json: async () => ({}), text: async () => 'Service Unavailable' }) as Response) as typeof fetch;
     const client = createWhisperAsrClient({ baseUrl: 'http://127.0.0.1:9000', fetchImpl: stub });
     await expect(client(Buffer.alloc(64))).rejects.toThrow(/HTTP 503/);
   });

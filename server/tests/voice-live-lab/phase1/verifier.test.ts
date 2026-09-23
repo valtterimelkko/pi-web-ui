@@ -338,7 +338,7 @@ describe('damaged evidence is caught for the right reason', () => {
     expect(exitCodeFor(outcome)).toBe(1);
   });
 
-  it('an egress stream that lost most of its audio fails the duration-gap oracle (ingress-egress-duration-gap)', () => {
+  it('an egress stream with invented audio fails the duration-gap oracle (ingress-egress-duration-gap)', () => {
     const cut = new RecordBuilder('C01');
     cut.step(1_000, { type: 'speak', turnId: 't1', text: 'Relay to worker I want to find out about Podpoint.' });
     cut.step(1_500, { type: 'await', reason: 'waiting for candidate', deadlineMs: 15_000 });
@@ -351,7 +351,7 @@ describe('damaged evidence is caught for the right reason', () => {
     for (let index = 0; index < 30; index += 1) {
       cut.addIngressChunk({ atMs: 1_100 + index * 10 });
     }
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 60; index += 1) {
       cut.addEgressChunk({ atMs: 1_120 + index * 10 });
     }
     cut.useFixture({

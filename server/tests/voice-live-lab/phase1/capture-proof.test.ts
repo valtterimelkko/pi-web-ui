@@ -23,6 +23,7 @@ interface CaptureProofOptions {
   cleanup?: Record<string, boolean>;
   withStop?: boolean;
   tamperStop?: boolean;
+  laneStopOverride?: Record<string, unknown>;
 }
 
 function buildCaptureProofRecord(options: CaptureProofOptions = {}): string {
@@ -113,7 +114,9 @@ function buildCaptureProofRecord(options: CaptureProofOptions = {}): string {
     captureMode: 'fake-file',
     corpusHash: 'x',
     capture: { startedAtMs: 1_100, stoppedAtMs: 6_000, getUserMediaCalls: 1, sourceLabel: 'default', ingressChunks: 30, egressChunks: 30 },
+    laneStop: { finalState: 'stopped-start-control-back' },
     cleanup: options.cleanup ?? { browserClosed: true, previewStopped: true, serverStopped: true, socketsRemoved: true },
+    ...(options.laneStopOverride ? { laneStop: options.laneStopOverride } : {}),
     artifacts: files.map(([relativePath, bytes]) => ({ relativePath, sha256: sha256(bytes), bytes: bytes.byteLength })),
   };
   writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
@@ -153,6 +156,15 @@ describe('capture-proof damage is caught', () => {
     expect(outcome.problems.map((problem) => problem.code)).toContain('cleanup-unverified');
     expect(outcome.verdict).toBe('indeterminate');
     expect(exitCodeFor(outcome)).toBe(2);
+  });
+
+  it('a lane left live after the stop control is a demonstrated defect (lane-stop-unverified)', () => {
+    const outcome = verifyRecord(
+      buildCaptureProofRecord({ cleanup: { browserClosed: true, previewStopped: true, serverStopped: true, socketsRemoved: true }, laneStopOverride: { finalState: 'live' } }),
+      { corpus }
+    );
+    expect(outcome.problems.map((problem) => problem.code)).toContain('lane-stop-unverified');
+    expect(outcome.verdict).toBe('fail');
   });
 
   it('capture stopping before the audio ends is a causality violation (no-capture-stop bracket)', () => {

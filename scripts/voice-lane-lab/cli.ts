@@ -258,6 +258,9 @@ async function builtAppCommand(argv: string[]): Promise<number> {
   const episodeId = flag(argv, '--episode') ?? 'C01';
   const dryRun = argv.includes('--dry-run');
   const profileId = flag(argv, '--voice') ?? 'voice-a';
+  if (argv.includes('--server-mode')) {
+    process.env.VOICE_LAB_SERVER_MODE = flag(argv, '--server-mode') ?? 'compiled';
+  }
   const corpus = loadCorpus();
   let plan;
   try {

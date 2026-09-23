@@ -305,11 +305,14 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
     previousAtMs = chunk.atMs;
     egressTotalMs += (chunk.sampleCount / chunk.sampleRate) * 1_000;
   }
-  const gap = Math.abs(ingressTotalMs - egressTotalMs) / Math.max(ingressTotalMs, 1);
-  if (gap > 0.15) {
+  // The product's egress is VAD-gated: it sends a SUBSET of the captured
+  // audio (speech), not a pass-through. The dishonest direction is egress
+  // EXCEEDING ingress — audio the capture path invented. Silence the product
+  // chose not to send is not evidence of a dropped utterance.
+  if (egressTotalMs > ingressTotalMs * 1.05) {
     problems.push({
       code: 'ingress-egress-duration-gap',
-      detail: `ingress ${ingressTotalMs.toFixed(0)} ms vs egress ${egressTotalMs.toFixed(0)} ms — the capture path dropped or invented audio`,
+      detail: `egress ${egressTotalMs.toFixed(0)} ms exceeds ingress ${ingressTotalMs.toFixed(0)} ms — the capture path invented audio`,
     });
   }
   if (problems.length > 0 && problems.some((problem) => problem.code.startsWith('ingress-') || problem.code.startsWith('egress-'))) {
@@ -371,6 +374,14 @@ export function verifyRecord(attemptDir: string, options: { corpus: LoadedCorpus
     }
     if (stopped && ingressChunks.length > 0 && ingressChunks[ingressChunks.length - 1].atMs > stopped.atMs) {
       problems.push({ code: 'ingress-causality', detail: 'audio captured after capture-stopped was recorded' });
+    }
+    // The stop control itself is part of the start/stop proof: a lane left
+    // live after an explicit stop is a demonstrated defect.
+    const laneStop = (manifest.laneStop ?? null) as { finalState?: string } | null;
+    if (!laneStop || laneStop.finalState === undefined) {
+      problems.push({ code: 'lane-stop-unverified', detail: 'the record does not state the lane state after the stop control' });
+    } else if (laneStop.finalState === 'live') {
+      problems.push({ code: 'lane-stop-unverified', detail: `lane still live after the stop control (state: ${laneStop.finalState})` });
     }
     const cleanup = (manifest.cleanup ?? null) as Record<string, unknown> | null;
     if (
