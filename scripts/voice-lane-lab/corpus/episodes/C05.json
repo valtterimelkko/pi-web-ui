@@ -35,7 +35,7 @@
     {
       "id": "t2",
       "kind": "adaptive-confirm",
-      "text": "Yes, send that exactly as written.",
+      "text": "Yes, send it.",
       "requiredWords": [
         "yes",
         "send",
