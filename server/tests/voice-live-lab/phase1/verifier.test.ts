@@ -26,6 +26,18 @@ import {
 
 const corpus = loadCorpus();
 const C01_D = episodeById(corpus, 'C01').perStepDeadlinesMs;
+/** A corpus clone where C09 carries deterministic required words again (the pre-openResponse shape). */
+const corpusWithRequiredC09 = () => ({
+  ...corpus,
+  episodes: corpus.episodes.map((episode) =>
+    episode.id === 'C09'
+      ? {
+          ...episode,
+          expectedSlots: { ...episode.expectedSlots, openResponse: undefined, responseMustContain: ['retry handler'] },
+        }
+      : episode
+  ),
+});
 
 // ── Record builder (the format the built-app runner writes) ────────────────
 
@@ -534,7 +546,7 @@ describe('journey records: conversational-only episodes', () => {
   it('a response missing its required content is a demonstrated failure (slot-violation)', () => {
     const outcome = verifyRecord(
       conversationJourneyRecord('Something entirely unrelated happened today.').write(),
-      { corpus }
+      { corpus: corpusWithRequiredC09() }
     );
     expect(outcome.verdict).toBe('fail');
     expect(outcome.problems.some((problem) => problem.code === 'slot-violation')).toBe(true);
@@ -657,7 +669,7 @@ describe('openResponse episodes skip the required-word check but keep the forbid
   it('without the flag the required words are still enforced (the boundary does not move)', () => {
     const outcome = verifyRecord(
       conversationJourneyRecord('Something entirely unrelated happened today.').write(),
-      { corpus }
+      { corpus: corpusWithRequiredC09() }
     );
     expect(outcome.verdict).toBe('fail');
     expect(outcome.problems.some((problem) => problem.detail.includes('retry handler'))).toBe(true);
