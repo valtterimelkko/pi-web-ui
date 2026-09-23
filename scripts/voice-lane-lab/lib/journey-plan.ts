@@ -24,7 +24,12 @@ import { createHash } from 'node:crypto';
 
 import type { Episode, LoadedCorpus } from './corpus.js';
 import { episodeById } from './corpus.js';
-import { readFrozenVoiceManifest, INSTRUMENT_ID, type FrozenVoiceManifest } from './built-app.js';
+import {
+  readFrozenVoiceManifest,
+  INSTRUMENT_ID,
+  SYNTHETIC_TTS_LABEL,
+  type FrozenVoiceManifest,
+} from './built-app.js';
 
 export const SYNTHETIC_LABEL = 'synthetic-stream-source';
 
@@ -34,8 +39,17 @@ export const DEFAULT_ARM_ENV_KEY = 'VOICE_LIVE_PROFILE';
 export const ARM_LABELS = ['standard', 'et-high'] as const;
 export type ArmLabel = (typeof ARM_LABELS)[number];
 
+/** Explicit `--tts` modes (child J3): `real` is the unchanged default; `synthetic` installs the labelled read-back shim. */
+export const TTS_MODES = ['synthetic', 'real'] as const;
+export type TtsMode = (typeof TTS_MODES)[number];
+
 /** Capture modes a journey turn may use. */
 export type TurnInputMode = 'fake-file' | typeof SYNTHETIC_LABEL;
+
+/** The journey's capture mode: the base pair, or with the labelled TTS shim appended (explicit `--tts synthetic` only). */
+export const CAPTURE_MODE_BASE = 'fake-file+synthetic-stream-source';
+export const CAPTURE_MODE_TTS_SYNTHETIC = `${CAPTURE_MODE_BASE}+${SYNTHETIC_TTS_LABEL}`;
+export type JourneyCaptureMode = typeof CAPTURE_MODE_BASE | typeof CAPTURE_MODE_TTS_SYNTHETIC;
 
 export interface JourneyTurn {
   turnId: string;
@@ -61,9 +75,18 @@ export interface JourneyPlan {
   kind: 'primary-mic-journey';
   episodeId: string;
   arm: ArmLabel;
-  captureMode: 'fake-file+synthetic-stream-source';
+  captureMode: JourneyCaptureMode;
   evidenceLevel: 'E2';
   syntheticLabel: typeof SYNTHETIC_LABEL;
+  /**
+   * Present ONLY when the journey was explicitly requested with `--tts
+   * synthetic` (child J3): the labelled read-back shim rides on the page and
+   * every text it speaks is recorded and verifier-checked against the live
+   * proposal's retained bytes. Absent on default journeys — no shim unless
+   * requested, so default plan bytes (and hashes) are unchanged.
+   */
+  tts?: 'synthetic';
+  ttsLabel?: typeof SYNTHETIC_TTS_LABEL;
   turns: JourneyTurn[];
   deadlines: Episode['perStepDeadlinesMs'];
   /** Overall attempt deadline — model/audio connections abort at it. */
@@ -129,11 +152,18 @@ function directorTurnIds(episode: Episode): string[] {
  */
 export function journeyPlan(
   episodeId: string,
-  options: { corpus: LoadedCorpus; corpusDir: string; arm: string; profileId?: string }
+  options: { corpus: LoadedCorpus; corpusDir: string; arm: string; profileId?: string; tts?: string }
 ): JourneyPlan {
   if (!ARM_LABELS.includes(options.arm as ArmLabel)) {
     throw new Error(`unknown arm "${options.arm}" — expected one of ${ARM_LABELS.join(', ')}`);
   }
+  if (options.tts !== undefined && !(TTS_MODES as readonly string[]).includes(options.tts)) {
+    throw new Error(
+      `unknown --tts mode "${options.tts}" — expected one of ${TTS_MODES.join(', ')} ` +
+        '(explicit; default real = unchanged journey with no shim)'
+    );
+  }
+  const ttsSynthetic = options.tts === 'synthetic';
   const profileId = options.profileId ?? 'voice-a';
   const episode = episodeById(options.corpus, episodeId);
   if (episode.holdout) {
@@ -186,9 +216,10 @@ export function journeyPlan(
     kind: 'primary-mic-journey',
     episodeId,
     arm: options.arm as ArmLabel,
-    captureMode: 'fake-file+synthetic-stream-source',
+    captureMode: ttsSynthetic ? CAPTURE_MODE_TTS_SYNTHETIC : CAPTURE_MODE_BASE,
     evidenceLevel: 'E2',
     syntheticLabel: SYNTHETIC_LABEL,
+    ...(ttsSynthetic ? { tts: 'synthetic' as const, ttsLabel: SYNTHETIC_TTS_LABEL } : {}),
     turns,
     deadlines,
     attemptDeadlineMs,
