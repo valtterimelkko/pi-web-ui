@@ -15,8 +15,8 @@ flight** (H3 binding race, J3 synthetic-TTS seam).
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| H3 binding | `01a0cc4e-9210-73f0-b149-c132a724cea8` | `wt-voice-bind` · `task/voice-native-bind` | `5c491fe8…` | `ww_8_1790134105805` | bounded transcription grace before `unbound_source` |
-| J3 TTS seam | `01a0cc4e-95e1-73f0-b149-c13402ba67af` | `wt-voice-tts` · `task/voice-native-tts` | `fae2d672…` | `ww_9_1790134105905` | labelled `--tts synthetic` journey seam + verifier byte equality |
+| ~~H3 binding~~ | `01a0cc4e-9210-…` | ~~`wt-voice-bind`~~ | released | `ww_8` cancelled | **merged `ee32b5e0`, cleaned up** |
+| J3 TTS seam | `01a0cc4e-95e1-73f0-b149-c13402ba67af` | `wt-voice-tts` · `task/voice-native-tts` | `fae2d672…` | `ww_9_1790134105905` | labelled `--tts synthetic` journey seam + verifier byte equality (running) |
 
 | Lane | Merge | Verified by parent |
 |---|---|---|
@@ -31,9 +31,9 @@ current target.
 
 **Current truth**
 
-- master `187a09aa`: W1/W2 + H2 + J2 + runner freshness fix + H3/J3 briefs.
-- **Pass 1: 1/12** (diagnosed) · **Pass 2: INVALID** (stale served build; fixed) · **Pass 3: 5/12** —
-  remaining classes: binding race (H3), journey TTS absence (J3), C05 relay variance, C14 slot.
+- master `ee32b5e0`: W1/W2 + H2 + J2 + runner freshness fix + **H3 (binding grace) merged**.
+- **Pass 1: 1/12** · **Pass 2: INVALID** (stale build; fixed) · **Pass 3: 5/12** — remaining: journey
+  TTS absence (J3 in flight), C05 relay variance, C14 slot strictness (re-observe in pass 4).
 - Live accounting: passes 1–3 (~27 min) + probes; inside §10.
 
 **Next sequence**
