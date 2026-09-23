@@ -309,7 +309,15 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-22 22:16 | W1 | **C merged to master (`5fa309a9`) and pushed**; lease released, watch `ww_2` cancelled, worktree + branch removed. Post-merge client suite + typecheck + build launched in background (`bg_f1aab31a`) | `git log` |
 | 2026-09-22 22:17 | W1 | **Post-merge client gates GREEN** on `f920543e`: client suite **145 files / 1639 tests**, typecheck exit 0, client build exit 0 | `/root/voice-lane-lab/w1-postmerge-client-{suite,typecheck,client-build}.log` |
 | 2026-09-23 00:35 | W1 | Child L `goal_end` (achieved); handback FROZEN at `91323cbb`. **Parent verification**: phase1 87, voice-live-lab 551, lane-lab 14, scripts compile check 0; **parent-reproduced real built-app capture proof attempt-10** (ingress 111 / egress 132 / 0 page errors); verify pass(0); parent damage probes fail closed (raw exit 2 both). Holdouts confirmed empty. | `/root/voice-lane-lab/parent-verification/**`; `coordination/L/complete.md` |
-| 2026-09-23 00:42 | W1 | **L merged to master (`301331d1`) and pushed**; lease released, watch `ww_1` cancelled, worktree + branch removed — no worktrees remain. **WAVE 1 COMPLETE** (H `8f27fd98`, C `5fa309a9`, L `301331d1`). Merged-tree gates green: phase1 87 / voice-live-lab 551 / lane-lab 14 / compile check 0; post-merge server 5520 and client 1639 green earlier. | `git log`; gate logs |
+| 2026-09-23 00:41 | W1 | **L merged to master (`301331d1`) and pushed**; lease released, watch `ww_1` cancelled, worktree + branch removed — no worktrees remain. **WAVE 1 COMPLETE** (H `8f27fd98`, C `5fa309a9`, L `301331d1`). Merged-tree gates green: phase1 87 / voice-live-lab 551 / lane-lab 14 / compile check 0; post-merge server 5520 and client 1639 green earlier. | `git log`; gate logs |
+| 2026-09-23 00:42 | W2 | W2 briefs committed (`df9f9590`); worktrees created (provider, journey) with node_modules isolation; preflight green (zai 78% off-peak; capacity 1/16). Children created goal-armed on `zai/glm-5.3-flash` high; watches `ww_4`/`ww_5` registered BEFORE brief delivery; briefs delivered as `follow_up`; both confirmed busy/running | P `01a0cbb6-f85a-…` lease `94637b2a…` run `4ffa8ead…`; J `01a0cbb6-fc3c-…` lease `73063c95…` run `e146d889…` |
+
+### Wave 2 dispatch record (2026-09-23 00:43Z)
+
+| Child | Session id | Worktree · branch | Lease (ownerId) | Watch | Brief runId (follow_up) |
+|---|---|---|---|---|---|
+| P provider | `01a0cbb6-f85a-73f0-b149-c1240fbef407` | `/root/pi-web-ui-wt-voice-provider` · `task/voice-native-provider` | `94637b2a-a5df-4d6a-b164-0f724ca52c5e` (`voice-native-20260922-provider`) | `ww_4_1790124169013` | `4ffa8ead-c2ee-4a26-a2d7-832e77297df5` |
+| J journey | `01a0cbb6-fc3c-73f0-b149-c12630857a5f` | `/root/pi-web-ui-wt-voice-journey` · `task/voice-native-journey` | `73063c95-4f9e-4dac-930d-e9f438f9c359` (`voice-native-20260922-journey`) | `ww_5_1790124169077` | `e146d889-28b7-41f6-bbde-796ac21b9292` |
 
 ### Wave 1 dispatch record (2026-09-22 21:12Z)
 
