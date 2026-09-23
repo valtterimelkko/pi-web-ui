@@ -62,6 +62,11 @@ export function makeUnavailableNativeLaneStub() {
     beginPushToTalk: async () => 'error' as const,
     endPushToTalk: async () => {},
     readBackProposal: async () => 'unsupported' as const,
+    // The shipped surface grew the host-controlled read-back switch (H2/K);
+    // suites that pin the cascade fallback must expose it too, or the
+    // component throws on mount and every legacy assertion fails on the
+    // TypeError instead of its own subject.
+    setAutoReadBackActive: (_active: boolean) => {},
     retryLane: () => {},
     teardownForUnmount: async () => {},
     armController: () => () => {},
