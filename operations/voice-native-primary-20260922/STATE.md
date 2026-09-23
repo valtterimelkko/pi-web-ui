@@ -18,6 +18,10 @@
 
 Both: `zai/glm-5.3-flash` high · briefs `children/{P,J}/brief.md` · handbacks `/root/voice-native-20260922/coordination/{P,J}/complete.md`.
 
+**Window 1 progress (01:28Z):** P 358 msgs, commit `b2631a76` (provider-profile boundary); J 342 msgs,
+commits `1ae44123` (journey-plan + campaign core) and `bb346c9f` (primary-mic journey runner + CLI) —
+both active, no handbacks yet, no stall.
+
 **W1 outcomes (all merged, all independently verified)**
 
 | Child | Merge | Verification |
@@ -45,4 +49,4 @@ No worktrees or leases remain; all three watches cancelled.
    verdict.
 
 **Open questions:** none.
-**Backstops:** `wake_deadline` to be armed after this update; watches `ww_4`/`ww_5` primary.
+**Backstops:** W2 window 2 armed after the 01:28 expiry (both progressing with real commits).
