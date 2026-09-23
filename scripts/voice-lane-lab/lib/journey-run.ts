@@ -500,6 +500,13 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
       `/api/v1/sessions/${encodeURIComponent(workerSessionId)}/transcript?view=screen`,
       8_000
     );
+    // Every probe is recorded — a failed store check must be explainable
+    // from the record alone, not reconstructed from memory.
+    writeFileSync(
+      path.join(attemptLayout.attemptDir, 'provider', 'worker-store-probes.jsonl'),
+      `${JSON.stringify({ atMs: Date.now(), workerSessionId, approvedTextPrefix: approvedText.slice(0, 40), status: response?.status ?? null, bytes: response?.body.length ?? 0, matched: response ? response.body.includes(approvedText.slice(0, Math.min(40, approvedText.length))) : false })}\n`,
+      { flag: 'a', mode: 0o600 }
+    );
     if (!response || response.status !== 200) return false;
     writeFileSync(
       path.join(attemptLayout.attemptDir, 'provider', 'worker-transcript-response.txt'),
