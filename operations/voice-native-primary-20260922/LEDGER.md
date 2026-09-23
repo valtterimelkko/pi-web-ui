@@ -95,7 +95,7 @@ heavy browser/audio runner** exists at a time (conductor-owned). Cap concurrent 
 | Phase | Status | Commit/build identity | Evidence pointer |
 |---|---|---|---|
 | P0 baseline + RED | **passed (G0)** | baseline `fa1eb393`; evidence commit `57efe420` | `phase0/PHASE0-RED.md` (+ raw logs), `ACCEPTANCE-MANIFEST.md` |
-| P1 instrumentation | running (Child L) | branch `task/voice-native-lab` from `57efe420` | `children/L/brief.md`; handback `/root/voice-native-20260922/coordination/L/` |
+| P1 instrumentation | **passed (G1)** — merged `301331d1` | branch `task/voice-native-lab` (removed) | `children/L/brief.md`; handback `/root/voice-native-20260922/coordination/L/`; parent verification logs `/root/voice-lane-lab/parent-verification/` |
 | P2 native primary surface | **client half passed** (Child C verified + merged `5fa309a9`); full G2 pending J's primary-mic browser journey | branch `task/voice-native-client` (removed) | `children/C/`; handback `/root/voice-native-20260922/coordination/C/` |
 | P3 relay/approval fidelity | **server half passed** (Child H verified + merged `8f27fd98`); full G3 pending client/browser integration | branch `task/voice-native-host` (removed) | `children/H/`; handback `/root/voice-native-20260922/coordination/H/`; PHASE0 seeds now green |
 | P4 pilot + fix loop | not started | — | — |
@@ -308,6 +308,8 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-22 22:13 | W1 | Child C `goal_end` (achieved); handback FROZEN (`coordination/C/complete.md`); L still running. C verified independently on frozen `a190ed87`: scoped client suite 381 passed, client build exit 0, typecheck exit 0; **anti-cheat sound** (new suite drives the real VoiceLiveSurface over fake browser factories, asserts `voice_session_start` on the wire, capture goes live, and the cascade is NOT engaged) | C RED evidence verbatim in handback; parent re-ran gates |
 | 2026-09-22 22:16 | W1 | **C merged to master (`5fa309a9`) and pushed**; lease released, watch `ww_2` cancelled, worktree + branch removed. Post-merge client suite + typecheck + build launched in background (`bg_f1aab31a`) | `git log` |
 | 2026-09-22 22:17 | W1 | **Post-merge client gates GREEN** on `f920543e`: client suite **145 files / 1639 tests**, typecheck exit 0, client build exit 0 | `/root/voice-lane-lab/w1-postmerge-client-{suite,typecheck,client-build}.log` |
+| 2026-09-23 00:35 | W1 | Child L `goal_end` (achieved); handback FROZEN at `91323cbb`. **Parent verification**: phase1 87, voice-live-lab 551, lane-lab 14, scripts compile check 0; **parent-reproduced real built-app capture proof attempt-10** (ingress 111 / egress 132 / 0 page errors); verify pass(0); parent damage probes fail closed (raw exit 2 both). Holdouts confirmed empty. | `/root/voice-lane-lab/parent-verification/**`; `coordination/L/complete.md` |
+| 2026-09-23 00:42 | W1 | **L merged to master (`301331d1`) and pushed**; lease released, watch `ww_1` cancelled, worktree + branch removed — no worktrees remain. **WAVE 1 COMPLETE** (H `8f27fd98`, C `5fa309a9`, L `301331d1`). Merged-tree gates green: phase1 87 / voice-live-lab 551 / lane-lab 14 / compile check 0; post-merge server 5520 and client 1639 green earlier. | `git log`; gate logs |
 
 ### Wave 1 dispatch record (2026-09-22 21:12Z)
 

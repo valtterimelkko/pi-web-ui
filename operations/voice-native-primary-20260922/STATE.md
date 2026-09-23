@@ -7,41 +7,38 @@
 
 **Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
 
-**Wave:** W0 complete (G0 passed) · **W1 running** — H and C merged and cleaned up; L still active.
+**Wave:** **W1 COMPLETE (3/3 merged and verified)** · W2 opening — P (provider profiles) and
+J (primary-mic journey + campaign runner) to be briefed and dispatched.
 
-**Active children**
+**Active children:** none yet (W2 children being prepared).
 
-| Child | Session | Worktree · branch | Lease | Watch | Status |
-|---|---|---|---|---|---|
-| L lab | `01a0caf6-943c-73f0-b149-c1154832eb5d` | `wt-voice-lab` · `task/voice-native-lab` | `ee53d6a8…` | `ww_1_1790111565332` | running (goal armed) |
-| ~~C client~~ | `01a0caf6-9844-…` | ~~`wt-voice-client`~~ | released | `ww_2` cancelled | **merged `5fa309a9`, cleaned up** |
-| ~~H host~~ | `01a0caf6-9c9f-…` | ~~`wt-voice-host`~~ | released | `ww_3` cancelled | **merged `8f27fd98`, cleaned up** |
+**W1 outcomes (all merged, all independently verified)**
 
-All three: `zai/glm-5.3-flash` high · briefs at `children/<X>/brief.md` · handbacks
-`/root/voice-native-20260922/coordination/<X>/complete.md`.
+| Child | Merge | Verification |
+|---|---|---|
+| H host (Phase 3 server) | `8f27fd98` | scoped 900 passed; parent probe 12/12; exact read-back + source binding + correction/original fixes |
+| C client (Phase 2 surface) | `5fa309a9` | scoped client 381; build/typecheck 0; anti-cheat sound (real surface + wire frames) |
+| L lab (Phase 1 instrumentation) | `301331d1` | phase1 87 / voice-live-lab 551 / lane-lab 14; scripts compile 0; **parent-reproduced real capture proof** (attempt-10: ingress 111 / egress 132); verifier fail-closed (raw exit 2 on parent damage probes) |
+
+Post-merge gates: server suite 446 files / 5520 tests; client suite 145 files / 1639 tests — both green.
+No worktrees or leases remain; all three watches cancelled.
 
 **Current truth**
 
-- master `5fa309a9` (= origin): Phase 0 evidence + **H (Phase 3 server half)** + **C (Phase 2 client surface)** merged.
-- C verified: scoped client suite 381 passed, build 0, typecheck 0; new suite non-vacuous. H verified: 900 passed, parent probe 12/12. Post-merge server suite green (5520).
-- Post-merge client gates **green** on `f920543e`: client suite 145 files / 1639 tests, typecheck 0, client build 0 (`/root/voice-lane-lab/w1-postmerge-client-*.log`).
-- L still working (goal running, 781 messages at 00:13, active). Third commit`00e3c6fb`; now working
-  `cli.ts`, `built-app.ts`, `verifier.ts` + phase1 tests. Bounded transcript diagnosis (window 3
-  expiry): real capture proof **OK** (ingress 111 chunks, egress 132), iterating on the post-stop
-  lane-state oracle with screenshot evidence — converging, not thrashing. No handback yet; re-armed.
-- Sibling lineage settled; merge authority granted for accepted, verified lanes.
-- zai pool ample at preflight; contract 1.44.0.
+- master `301331d1` (= origin at last push; docs commit follows).
+- Holdout corpus surface forms intentionally EMPTY (validator freeze is pending, to be done by the
+  parent/validator before the final campaign only).
+- Plan §10 budget untouched: US$0.00 metered spend (children run on the zai subscription allowance);
+  live wall-clock count starts when the fix loop's real Live calls begin.
 
 **Next sequence**
 
-1. On wake (L handback, bg client gates, or deadline): reconcile L, independently verify G1 on the
-   frozen commit, merge if accepted, clean up.
-2. When W1 is fully merged: open W2 — children P (provider profiles for standard vs ET-HIGH) and J
-   (primary-mic journey + campaign runner); parent integration gates between.
-3. Then W3 fix loop (parent-led, bounded corrections) → W4 campaign + read-only reviewer + verdict.
+1. Dispatch W2: **P** provider profiles (standard vs ET-HIGH typed boundary, real bounded capability
+   probe, late-async tool calls, same host operations) and **J** primary-mic browser journey + E2
+   attempt records + campaign runner on top of L's lab and C's surface. Briefs under
+   `children/P/` and `children/J/`; watches registered before dispatch; goals armed.
+2. On W2 handbacks: independent verification (J's journey must be a real browser run against the
+   built app), merge, cleanup; then W3 fix loop (parent-led) and W4 campaign + reviewer + verdict.
 
 **Open questions:** none.
-**Spend:** US$0.00 / 8 h live (GLM child tokens inside zai allowance; counted at review).
-
-**Backstops:** fourth L window armed after the 00:16 expiry (progressing; capture proof passing,
-post-stop oracle being refined). Post-merge server and client suites green; only L outstanding.
+**Backstops:** none armed while no child is dispatched.
