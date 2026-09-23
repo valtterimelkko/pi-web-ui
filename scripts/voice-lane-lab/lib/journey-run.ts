@@ -281,6 +281,11 @@ export function observationFromWireFrame(
   if (row.type === 'proposal_resolved' && String(frame.outcome ?? '') === 'released') {
     return { kind: 'release', identity: String(frame.proposalId ?? ''), atMs: row.atMs };
   }
+  if (row.type === 'proposal_resolved' && ['replaced', 'cancelled'].includes(String(frame.outcome ?? ''))) {
+    // W4 attachment switch: the pending proposal retired by the product on a
+    // worker change (cancel-before-retarget) — the C24 retirement fact.
+    return { kind: 'retirement', identity: String(frame.proposalId ?? ''), outcome: String(frame.outcome ?? ''), atMs: row.atMs };
+  }
   if (row.type === 'receipt_event' && frame.receipt && typeof frame.receipt === 'object') {
     const receipt = frame.receipt as Record<string, unknown>;
     if (String(receipt.outcome ?? '') === 'delivered') {
@@ -523,6 +528,11 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
   const pendingObservations: DirectorObservation[] = [];
   let terminalAction: Extract<DirectorAction, { type: 'terminal' }> | null = null;
   const labPage: LabPage = { current: null };
+  // W4: a session switch can move the product (and its instrument) to another
+  // page/document. Per-page counters let the runner observe EVERY instrument
+  // page and save the UNION of their wire records — no post-switch frame is
+  // lost to a stale single-page cache.
+  const perPageSeen = new Map<import('playwright').Page, number>();
 
   /** Map one instrument wire frame to a director observation (or none). */
   const observeWireFrame = (row: WireFrameRow): DirectorObservation | null =>
@@ -530,16 +540,28 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
 
   const observeEvidence = (row: EvidenceRow): DirectorObservation | null => observationFromEvidence(row);
 
-  /** Poll the instrument + the server evidence log; queue new observations. */
+  /** Every open page that carries the lab instrument. */
+  const labPages = async (): Promise<Array<import('playwright').Page>> => {
+    const pages: Array<import('playwright').Page> = [];
+    for (const candidate of browserContext!.pages()) {
+      const hasLab = await candidate
+        .evaluate(() => typeof (window as unknown as Record<string, unknown>).__voiceLaneLab)
+        .catch(() => 'evaluate-failed');
+      if (hasLab === 'object') pages.push(candidate);
+    }
+    return pages;
+  };
+
+  /** Poll EVERY instrument page + the server evidence log; queue new observations. */
   const seenParkedItemIds = new Set<string>();
   const collectObservations = async (): Promise<void> => {
-    if (!labPage.current) await findLabPage(browserContext!, labPage);
-    if (labPage.current) {
-      const dump = await dumpLab(labPage.current);
-      if (dump) {
-        const fresh = dump.wireFrames.slice(wireFramesSeen);
-        wireFramesSeen = dump.wireFrames.length;
-        for (const row of fresh) {
+    for (const candidate of await labPages()) {
+      const dump = await dumpLab(candidate);
+      if (!dump) continue;
+      const seen = perPageSeen.get(candidate) ?? 0;
+      const fresh = dump.wireFrames.slice(seen);
+      perPageSeen.set(candidate, dump.wireFrames.length);
+      for (const row of fresh) {
           // parking_updated carries the lot snapshot: each NEW parked item
           // becomes one `parked` observation (W4 busy parking). Promotions and
           // removals are the product's business; the FSM never re-parks.
@@ -558,7 +580,6 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
           }
           const observation = observeWireFrame(row);
           if (observation) pendingObservations.push(observation);
-        }
       }
     }
     for (const row of readServerEvidence(serverLogPath, serverLogOffset)) {
@@ -874,10 +895,14 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     for (let index = 0; index < 60 && !laneBack; index += 1) {
       await page.waitForTimeout(500);
       await collectObservations();
-      const dump = await dumpLab(labPage.current!).catch(() => null);
-      laneBack = (dump?.wireFrames ?? []).some(
-        (row) => row.type === 'voice_state' && (row.frame as { state?: unknown }).state === 'live' && row.seq >= wireBefore
-      );
+      for (const labCandidate of await labPages()) {
+        const dump = await dumpLab(labCandidate).catch(() => null);
+        if (!dump) continue;
+        laneBack = (dump.wireFrames ?? []).some(
+          (row) => row.type === 'voice_state' && (row.frame as { state?: unknown }).state === 'live' && row.seq >= 0
+        );
+        if (laneBack) break;
+      }
     }
     recordSoakEvent({
       kind: 'transport-reconnect',
@@ -1150,7 +1175,16 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     writeFileSync(path.join(captureDir, 'ingress-chunks.json'), `${JSON.stringify(ingressRows, null, 2)}\n`, { mode: 0o600 });
     writeFileSync(path.join(captureDir, 'egress-chunks.json'), `${JSON.stringify(egressRows, null, 2)}\n`, { mode: 0o600 });
     writeFileSync(path.join(captureDir, 'console-errors.json'), `${JSON.stringify({ pageErrors: consoleErrors, console: consoleLog, websockets: wsLog }, null, 2)}\n`, { mode: 0o600 });
-    writeFileSync(path.join(captureDir, 'wire-frames.json'), `${JSON.stringify(dump.wireFrames, null, 2)}\n`, { mode: 0o600 });
+    // The UNION of every instrument page's wire record: a session switch moves
+    // the product (and its instrument) to another page/document, and saving a
+    // single stale page would hide the post-switch frames (L5).
+    const allWireFrames: Array<Record<string, unknown>> = [];
+    for (const labCandidate of await labPages()) {
+      const pageDump = await dumpLab(labCandidate).catch(() => null);
+      if (pageDump && Array.isArray(pageDump.wireFrames)) allWireFrames.push(...(pageDump.wireFrames as unknown as Array<Record<string, unknown>>));
+    }
+    const wireUnion = allWireFrames.length >= dump.wireFrames.length ? allWireFrames : dump.wireFrames;
+    writeFileSync(path.join(captureDir, 'wire-frames.json'), `${JSON.stringify(wireUnion, null, 2)}\n`, { mode: 0o600 });
 
     // Record every text the shim was asked to speak, honestly: the file is
     // written only when the shim was actually present, and its own label is

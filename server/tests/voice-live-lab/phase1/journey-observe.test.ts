@@ -44,14 +44,16 @@ describe('wire frame → director observation', () => {
     expect(identities.get('prop-1')).toBe('I want to find out about Podpoint.');
   });
 
-  it('a released proposal_resolved frame is a release observation; cancelled is not', () => {
+  it('a released proposal_resolved frame is a release observation; cancelled is a distinct retirement observation (L5)', () => {
     const identities = new Map<string, string>();
     expect(
       observationFromWireFrame(frame(2, 'proposal_resolved', { proposalId: 'prop-1', outcome: 'released' }), identities)
     ).toMatchObject({ kind: 'release', identity: 'prop-1' });
+    // L5: a cancelled/replaced resolution is the attachment switch's
+    // retirement fact — a distinct observation kind, never a release.
     expect(
       observationFromWireFrame(frame(3, 'proposal_resolved', { proposalId: 'prop-1', outcome: 'cancelled' }), identities)
-    ).toBeNull();
+    ).toMatchObject({ kind: 'retirement', identity: 'prop-1', outcome: 'cancelled' });
   });
 
   it('a delivered receipt_event is a delivery observation; failed receipts are not', () => {

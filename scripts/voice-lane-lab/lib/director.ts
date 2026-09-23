@@ -87,7 +87,9 @@ export type DirectorObservation =
   | { kind: 'worker-store'; identity: string; ok: boolean; atMs: number }
   | { kind: 'response'; text: string; atMs: number }
   /** The mount parked the relay while the worker was busy (W4 busy parking). */
-  | { kind: 'parked'; itemId: string; atMs: number };
+  | { kind: 'parked'; itemId: string; atMs: number }
+  /** The pending proposal was retired (replaced/cancelled) on a worker switch (W4 attachment switch, L5). */
+  | { kind: 'retirement'; identity: string; outcome: string; atMs: number };
 
 export type DirectorAction =
   | { type: 'speak'; turnId: string; text: string }
@@ -115,6 +117,8 @@ type PhaseKind =
   | 'await-delivery'
   | 'await-worker-store'
   | 'await-parked'
+  | 'await-switch-retirement'
+  | 'await-switch-ack'
   | 'promote'
   | 'switch'
   | 'pace'
@@ -151,6 +155,8 @@ const AWAIT_LABELS: Record<string, string> = {
   'await-delivery': 'delivery',
   'await-worker-store': 'worker store',
   'await-parked': 'parked item',
+  'await-switch-retirement': 'switch retirement',
+  'await-switch-ack': 'switch acknowledgement',
 };
 
 export class EpisodeDirector {
@@ -177,6 +183,8 @@ export class EpisodeDirector {
   private pendingRelease: { identity: string } | null = null;
   private pendingDelivery: { identity: string } | null = null;
   private pendingWorkerStore: { identity: string | null; ok: boolean } | null = null;
+  /** A retirement observed while a non-tail phase was current (W4 attachment switch, L5). */
+  private pendingRetirement: { identity: string } | null = null;
   /** The ONE observed parked item this journey promotes (W4). */
   private parkedItemId: string | null = null;
   private presented = false;
@@ -252,7 +260,20 @@ export class EpisodeDirector {
           break;
       }
     }
-    if (routesRelay) {
+    // The switch tail applies only when the switch is the episode's LAST
+    // turn: the real C24 overlay ends on the switch (nothing follows it), so
+    // the flow must resolve through retirement + acknowledgement. An episode
+    // that CONTINUES after a switch (L4's unit shape: post-switch relay +
+    // confirm) keeps the standard release/delivery/store tail.
+    const endsWithSwitch = this.episode.inputTurns[this.episode.inputTurns.length - 1]?.kind === 'adaptive-switch';
+    if (endsWithSwitch) {
+      // W4 attachment switch (L5): after the switch the pending proposal is
+      // RETIRED by the product (cancel-before-retarget) and the switch is
+      // acknowledged audibly — a release/delivery/store tail can never
+      // complete, because a retired proposal is never released.
+      phases.push({ kind: 'await-switch-retirement', deadlineMs: d.deliveryMs, enteredAtMs: null });
+      phases.push({ kind: 'await-switch-ack', deadlineMs: d.presentationMs, enteredAtMs: null });
+    } else if (routesRelay) {
       phases.push({ kind: 'await-release', deadlineMs: d.deliveryMs, enteredAtMs: null });
       phases.push({ kind: 'await-delivery', deadlineMs: d.deliveryMs, enteredAtMs: null });
       phases.push({ kind: 'await-worker-store', deadlineMs: d.workerStoreMs, enteredAtMs: null });
@@ -424,6 +445,9 @@ export class EpisodeDirector {
         if (observation.kind === 'worker-store') {
           this.pendingWorkerStore = { identity: (observation as { identity?: string | null }).identity ?? null, ok: observation.ok === true };
         }
+        if (observation.kind === 'retirement') {
+          this.pendingRetirement = { identity: observation.identity };
+        }
         return null;
       case 'await-candidate':
       case 'await-presentation': {
@@ -519,6 +543,24 @@ export class EpisodeDirector {
           if (!observation.ok) {
             return this.fail('interaction-failure', 'worker store check failed: approved input was not persisted');
           }
+          return this.complete();
+        }
+        return null;
+      }
+      case 'await-switch-retirement': {
+        if (observation.kind === 'retirement') {
+          const target = this.approvedIdentity ?? this.candidateIdentity ?? this.pendingCandidate?.identity ?? null;
+          if (target !== null && observation.identity === target) {
+            this.advance();
+          }
+          // A retirement for a different identity is not the switch's
+          // retirement; the deadline governs.
+        }
+        return null;
+      }
+      case 'await-switch-ack': {
+        if (observation.kind === 'response') {
+          this.responseText = observation.text;
           return this.complete();
         }
         return null;
@@ -631,6 +673,18 @@ export class EpisodeDirector {
           this.pendingWorkerStore = null;
           return this.complete();
         }
+      }
+      // A retirement recorded during the switch gesture satisfies the
+      // await-switch-retirement phase the moment it is entered (L5).
+      if (
+        phase.kind === 'await-switch-retirement' &&
+        phase.enteredAtMs === null &&
+        this.pendingRetirement &&
+        (this.pendingRetirement.identity === (this.approvedIdentity ?? this.candidateIdentity ?? this.pendingCandidate?.identity ?? null))
+      ) {
+        this.pendingRetirement = null;
+        this.advance();
+        continue;
       }
       if (phase.kind === 'pace') {
         this.cursor += 1;

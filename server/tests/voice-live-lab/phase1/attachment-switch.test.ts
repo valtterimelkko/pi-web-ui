@@ -21,6 +21,47 @@ const sha256 = (data: string | Buffer) => createHash('sha256').update(data).dige
 const dirs: string[] = [];
 afterEach(() => dirs.splice(0));
 
+describe('the real C24 shape: switch is the last turn — the tail watches retirement + audible ack', () => {
+  it('completes when the product retires the pending proposal and acknowledges audibly, never awaiting a release', () => {
+    const base = episodeById(corpus, 'C01');
+    const parsed = EpisodeSchema.safeParse({
+      ...base,
+      id: 'C24',
+      holdout: false,
+      title: 'test: switch with retirement tail',
+      permittedRouteOutcomes: ['relay-proposal'],
+      inputTurns: [
+        { id: 't1', kind: 'opening', text: base.inputTurns[0]!.text, requiredWords: base.inputTurns[0]!.requiredWords },
+        { id: 't2', kind: 'adaptive-switch', text: '', requiredWords: [] },
+      ],
+      approvalTurns: [],
+    });
+    expect(parsed.success).toBe(true);
+    const episode = parsed.data as Episode;
+    let clock = 1_000;
+    const director = new EpisodeDirector(episode, { now: () => clock });
+    const actions: Array<ReturnType<EpisodeDirector['step']>> = [];
+    const entries: Array<{ observation?: DirectorObservation; advanceMs?: number }> = [
+      { advanceMs: 2_000 }, // speak t1: relay
+      { observation: { kind: 'candidate', payloadText: 'I want to find out about Podpoint.', identity: 'p1', atMs: 0 }, advanceMs: 3_000 },
+      { observation: { kind: 'presentation', identity: 'p1', complete: true, atMs: 0 }, advanceMs: 2_000 }, // switch t2 action
+      { advanceMs: 2_000 }, // the retirement + ack land on the wire
+      { observation: { kind: 'retirement', identity: 'p1', outcome: 'replaced', atMs: 0 }, advanceMs: 2_000 },
+      { observation: { kind: 'response', text: 'Switched to the other worker — the old request is dropped.', atMs: 0 }, advanceMs: 2_000 },
+      { advanceMs: 2_000 },
+    ];
+    for (const entry of entries) {
+      clock += entry.advanceMs ?? 100;
+      const action = director.step(entry.observation);
+      actions.push(action);
+      if (action.type === 'terminal') break;
+    }
+    const last = actions[actions.length - 1];
+    expect(last).toMatchObject({ type: 'terminal', status: 'complete' });
+    expect(actions.some((action) => action.type === 'switch-attachment')).toBe(true);
+  });
+});
+
 describe('the adaptive-switch director gesture', () => {
   it('emits exactly one switch-attachment action and completes the post-switch confirm flow', () => {
     const base = episodeById(corpus, 'C01');
