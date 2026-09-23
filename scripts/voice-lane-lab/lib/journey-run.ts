@@ -88,6 +88,33 @@ interface LabDump {
   wsSendCalls: number;
 }
 
+/**
+ * Wait until the talker's own audio has been quiet for `quietMs` (fix-loop pass
+ * 8, C01). A real operator does not confirm over the assistant's speech, and a
+ * confirmation spoken inside the echo window is dropped as echo
+ * (`talker_audio_window`) so the release never fires. Quiescence is observed
+ * from the lab's own egress counter — the model audio the server sent the lane,
+ * a signal independent of the child's cooperation — never from a fixed sleep.
+ */
+async function waitForTalkerQuiet(labPage: LabPage, quietMs = 1_200, timeoutMs = 8_000): Promise<void> {
+  if (!labPage.current) return;
+  const started = Date.now();
+  let lastCount = -1;
+  let lastChangeAt = Date.now();
+  for (;;) {
+    const dump = await dumpLab(labPage.current).catch(() => null);
+    const count = dump?.egressCount ?? lastCount;
+    if (count !== lastCount) {
+      lastCount = count;
+      lastChangeAt = Date.now();
+    } else if (Date.now() - lastChangeAt >= quietMs) {
+      return;
+    }
+    if (Date.now() - started >= timeoutMs) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
 /** Pull everything the instrument holds (bounded arrays) out of the page. */
 async function dumpLab(page: import('playwright').Page): Promise<LabDump | null> {
   return page
@@ -741,6 +768,13 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
         // The recorded step's clock must match the speak: the director's speak
         // text is the frozen wording, verified here against the plan.
         if (action.text !== turn.text) throw new Error(`director/plan wording drift on turn ${action.turnId}`);
+        // Confirmations are spoken only after the talker has gone quiet: the
+        // echo window otherwise drops the operator's approval as echo-suspect
+        // and the release never fires (fix-loop pass 8, C01).
+        if (turn.kind === 'adaptive-confirm' || turn.kind === 'adaptive-steer') {
+          if (!labPage.current) await findLabPage(browserContext!, labPage);
+          await waitForTalkerQuiet(labPage);
+        }
         await speakTurn(turn);
         executed = true;
         // Let the utterance FINISH entering the pipeline before the next step:
