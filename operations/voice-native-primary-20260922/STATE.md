@@ -13,14 +13,12 @@
 
 | Child | Session | Worktree · branch | Lease | Watch | Status |
 |---|---|---|---|---|---|
-| P provider | `01a0cbb6-f85a-73f0-b149-c1240fbef407` | `wt-voice-provider` · `task/voice-native-provider` | `94637b2a…` | `ww_4_1790124169013` | running (goal armed) |
-| J journey | `01a0cbb6-fc3c-73f0-b149-c12630857a5f` | `wt-voice-journey` · `task/voice-native-journey` | `73063c95…` | `ww_5_1790124169077` | running (goal armed) |
+| ~~P provider~~ | `01a0cbb6-f85a-…` | ~~`wt-voice-provider`~~ | released | `ww_4` cancelled | **merged `cf003f13`, cleaned up** |
+| J journey | `01a0cbb6-fc3c-73f0-b149-c12630857a5f` | `wt-voice-journey` · `task/voice-native-journey` | `73063c95…` | `ww_5_1790124169077` | running (goal armed; HEAD advanced to `e3ea7694`) |
 
-Both: `zai/glm-5.3-flash` high · briefs `children/{P,J}/brief.md` · handbacks `/root/voice-native-20260922/coordination/{P,J}/complete.md`.
-
-**Window 1 progress (01:28Z):** P 358 msgs, commit `b2631a76` (provider-profile boundary); J 342 msgs,
-commits `1ae44123` (journey-plan + campaign core) and `bb346c9f` (primary-mic journey runner + CLI) —
-both active, no handbacks yet, no stall.
+P: verified by parent (voice 257, typecheck 0, eslint 0, both real arm probes re-run: standard 337 ms /
+ET-HIGH 389 ms, transcript 100%). J: `zai/glm-5.3-flash` high · brief `children/J/brief.md` · handback
+`/root/voice-native-20260922/coordination/J/complete.md`.
 
 **W1 outcomes (all merged, all independently verified)**
 
@@ -35,18 +33,18 @@ No worktrees or leases remain; all three watches cancelled.
 
 **Current truth**
 
-- master `df9f9590` (= origin) holds W1 merges + W2 briefs; worktrees provider/journey based on it.
-- Holdout corpus surface forms intentionally EMPTY (validator freeze is pending, to be done by the
-  parent/validator before the final campaign only).
-- Plan §10 budget: metered spend so far US$0.00; P's real arm probes will be the first counted calls.
-- Preflight 2026-09-23 00:42Z: zai 78% (off-peak), capacity 1/16.
+- master `cf003f13` (= origin): W1 merges + W2 briefs + **P merged** (provider-profile boundary).
+- Real provider calls have begun: 4 probe sessions total (P's two + parent re-runs of both arms) — the
+  first counted live activity; §10 fix-loop budget now applies.
+- J still working (goal running, HEAD `e3ea7694`, no handback yet).
 
 **Next sequence**
 
-1. On W2 handbacks: independent verification (P: real arm probes + same-host mapping; J: real
-   browser journey + runner dry index; no green-skip paths), merge accepted lanes, cleanup.
+1. On J's handback: independent verification (real browser journey + runner dry index; no
+   green-skip paths), merge accepted lane, cleanup.
 2. Then W3 fix loop (parent-led, bounded correction children) → W4 campaign + read-only reviewer +
    verdict.
 
 **Open questions:** none.
-**Backstops:** W2 window 2 armed after the 01:28 expiry (both progressing with real commits).
+**Backstops:** `deadline-e43f805c-2817-4db6-a5fb-f847bee73570` until 02:14:14Z (J window); watch
+`ww_5` primary. P is settled and cleaned up.
