@@ -14,19 +14,15 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| M5 echo arming | `01a0ce9c-ca8c-…` | `wt-voice-m5` · `task/voice-native-m5` | `49bd1c70…` | `ww_18` | echo window armed by audio, not text (et-high confirm confound) |
+| EV evaluator | `01a0cef7-1a11-…` | (none; cwd `/root/pi-web-ui`, read-only) | `9ded265f…` | `ww_19` | blinded evaluator pass over 10 packs → `coordination/EV/` |
+| RV reviewer | `01a0cef7-49aa-…` | `wt-voice-rv` · `task/voice-native-rv` | `9775b192…` | `ww_20` | read-only falsification of all 34 cells → `coordination/RV/` |
 
-**Settled and merged this round:** M (`e3e9e0b5` — worker-switch proposal resolution, RED reproduced at the
-parent and re-verified), L5 (`a8ccf2ed` — busy drive with a real C22 PASS at attempt-09, two-session
-prep, soak reconnect v2, holdout fixtures; gates re-run by the conductor: lab 705/705, voice-lab tsc 0).
-**Holdout freeze now complete** (`9eaaf891`): all nine turns (C10, C11, C22, C24) frozen for both voices,
-49 fixtures each, zero drift, ASR green; the obsolete voice-a C22-t1 homophone skip removed (`e8724669`).
-M2 (`958d9370`), M3 (`fcef1718`), M4 (`9987ebb1`) merged — soak re-bind, delivery-at-submission and
-the speech-window-aware echo guard all fixed and RED-verified. Campaign: C09 both arms pass;
-**standard arm passes C01/C03/C05**; the **et-high arm advanced from 'waiting for candidate' to
-'waiting for release'**: the confirm is dropped as echo because the echo window is armed by talker
-*transcripts* as well as audio (`voice-live-mount.ts:1514`). M5 owns that arming fix; the et-high
-cells re-run after it lands, then the remaining campaign cells.
+**Campaign: COMPLETE — 34 cells run, 29 pass** on revision `5fc3f1bb` (`campaign/CAMPAIGN-INDEX.json`).
+Per-arm: standard 15/17, ET-HIGH 14/17; discordant pairs 2:1 for standard → rule-4 tie, retain
+standard. Failures diagnosed: C05-et-high (flaky, chatty model over the confirm), C11-standard
+(amendment classified `cancel`), C24-et-high (no first candidate), SOAK ×2 (post-reconnect repeat
+relay produces no candidate → early termination fails the bars). Verdict draft at
+`campaign/VERDICT.md` (`NO_CANDIDATE_MEETS_TARGET`); evaluator + reviewer fold in before it is final.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
