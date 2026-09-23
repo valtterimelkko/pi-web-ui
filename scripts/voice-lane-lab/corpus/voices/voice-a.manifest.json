@@ -18,7 +18,7 @@
     "silence": 0.05,
     "steps": 8
   },
-  "corpusHash": "788d654c98a9facc214b71fbd83283f25ed3521d4bfce699f51872565b15a5ad",
+  "corpusHash": "70695f5709cd733c4c8502e2c4950612466944cbdc8b6b389d5c6ccd3d08c82a",
   "audioRoot": "/root/voice-lane-lab/fixtures/voice-a",
   "fixtures": [
     {

@@ -7,12 +7,12 @@
     {
       "id": "t1",
       "kind": "opening",
-      "text": "Relay to worker, tidy up the logging in the auth module \u2014 no rush at all.",
+      "text": "Relay to worker, tidy up the logging in the sign-in module \u2014 no rush at all.",
       "requiredWords": [
         "relay",
         "worker",
         "logging",
-        "auth"
+        "sign-in"
       ]
     },
     {
@@ -36,7 +36,7 @@
   "expectedSlots": {
     "mustContain": [
       "logging",
-      "auth"
+      "sign-in"
     ],
     "mustNotContain": [],
     "responseMustContain": [

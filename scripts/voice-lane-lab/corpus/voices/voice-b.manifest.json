@@ -18,7 +18,7 @@
     "silence": 0.14,
     "steps": 8
   },
-  "corpusHash": "509ba9dc5ee54e29add0bd77fa827eeba5d0b1ef75a6b23002e1160c8991042b",
+  "corpusHash": "a04fa4646b66639a76298a9c170b860686f80ffaee0e4b850732ff82b6c12c8f",
   "audioRoot": "/root/voice-lane-lab/fixtures/voice-b",
   "fixtures": [
     {

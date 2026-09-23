@@ -143,6 +143,8 @@ const NUMBER_WORDS: Record<string, string> = {
   six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11',
   twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
   seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20',
+  thirty: '30', forty: '40', fifty: '50', sixty: '60', seventy: '70',
+  eighty: '80', ninety: '90',
 };
 
 /**
@@ -166,11 +168,39 @@ export function foldWord(word: string): string {
   return folded;
 }
 
+/**
+ * ASR compound splits observed on this host (2026-09-23, W4 holdout fixtures):
+ * Whisper renders the one-word "backoff" as "back off". Joining the split on
+ * BOTH sides of the comparison stops the checker disagreeing with the
+ * microphone about a compound the speaker said as one word — it cannot hide a
+ * real substitution, because the join is applied identically to reference and
+ * hypothesis.
+ */
+const COMPOUND_JOINS: Array<[string, string]> = [['back off', 'backoff']];
+
+function joinCompounds(words: string[]): string[] {
+  let out = words;
+  for (const [from, to] of COMPOUND_JOINS) {
+    const parts = from.split(' ');
+    const next: string[] = [];
+    for (let i = 0; i < out.length; i += 1) {
+      if (i + parts.length <= out.length && parts.every((part, offset) => out[i + offset] === part)) {
+        next.push(to);
+        i += parts.length - 1;
+      } else {
+        next.push(out[i]);
+      }
+    }
+    out = next;
+  }
+  return out;
+}
+
 /** Levenshtein word error rate: substitutions + insertions + deletions over
  *  the reference length. 0 is perfect; 1 means every reference word was lost. */
 export function wordErrorRate(reference: string, hypothesis: string): number {
-  const ref = normaliseWords(reference).map(foldWord);
-  const hyp = normaliseWords(hypothesis).map(foldWord);
+  const ref = joinCompounds(normaliseWords(reference).map(foldWord));
+  const hyp = joinCompounds(normaliseWords(hypothesis).map(foldWord));
   if (ref.length === 0) return hyp.length === 0 ? 0 : 1;
   const previous = new Array<number>(hyp.length + 1);
   for (let j = 0; j <= hyp.length; j += 1) previous[j] = j;
