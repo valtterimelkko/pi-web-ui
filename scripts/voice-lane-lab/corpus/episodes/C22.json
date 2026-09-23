@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "C22",
+  "title": "Holdout: busy parking and one promotion (surface form frozen by validator)",
+  "family": "busy-parking",
+  "tier": "H",
+  "holdout": true,
+  "provenance": { "source": "plan 5.2 C22 row (holdout)", "rationale": "explicit new non-urgent item parks while busy; operator promotes exactly one; busy work continues; wording frozen by the separate validator" },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": { "status": "busy", "pendingProposal": false, "attachments": 1, "description": "worker is busy on existing work that must continue" },
+  "inputTurns": [
+    { "id": "t1", "kind": "opening", "text": "", "requiredWords": [], "validatorFrozen": true },
+    { "id": "t2", "kind": "adaptive-confirm", "text": "", "requiredWords": [], "validatorFrozen": true }
+  ],
+  "permittedRouteOutcomes": ["parks-while-busy"],
+  "expectedSlots": {
+    "mustContain": [],
+    "mustNotContain": [],
+    "responseMustContain": ["parked"],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [],
+  "repairBranches": [],
+  "perStepDeadlinesMs": { "candidateMs": 15000, "presentationMs": 10000, "deliveryMs": 15000, "workerStoreMs": 20000 },
+  "expectedFinalWorkerArtefact": { "kind": "parked-item-promoted", "description": "exactly one parked item promoted; existing busy work continues; validator freezes details" }
+}

@@ -28,11 +28,27 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
+// The shipped-scheduler replay and the browser probe pull in CLIENT source
+// (client/src/lib/voiceLive/**), which reads import.meta.env at module scope
+// and therefore only loads inside Vite/Playwright contexts. They are imported
+// lazily by the commands that need them (types are erased at runtime) so every
+// other command runs on plain tsx.
+import type { CapturedAudioChunk, PageFacts } from './lib/oracle.js';
 import { captureLane, DEFAULT_QUESTION } from './lib/capture.js';
-import { runShippedScheduler } from './lib/schedule.js';
-import { gradeBrowserRun, probeInBrowser } from './lib/browser-probe.js';
-import { analyseLaneAudio, type CapturedAudioChunk, type PageFacts } from './lib/oracle.js';
+import { loadCorpus } from './lib/corpus.js';
+import {
+  VOICE_PROFILES,
+  buildVoiceProfile,
+} from './lib/voices.js';
+import {
+  planCaptureProof,
+  planHash,
+  runCaptureProof,
+} from './lib/built-app.js';
+import { verifyRecord, exitCodeFor } from './lib/verifier.js';
+import { freezeFixtureManifest } from '../voice-live-lab/lib/fixtures.js';
 
 const CAPTURE_VERSION = 'voice-lane-lab.capture/1';
 
@@ -52,7 +68,9 @@ function flag(args: string[], name: string): string | undefined {
 }
 
 /** Fold a capture into the oracle's input, running the shipped scheduler over it. */
-async function measure(captureDir: string): Promise<{ verdict: ReturnType<typeof analyseLaneAudio>; detail: Record<string, unknown> }> {
+async function measure(captureDir: string): Promise<{ verdict: Awaited<ReturnType<typeof analyseLaneAudio>>; detail: Record<string, unknown> }> {
+  const { analyseLaneAudio } = await import('./lib/oracle.js');
+  const { runShippedScheduler } = await import('./lib/schedule.js');
   const chunksPath = path.join(captureDir, 'chunks.json');
   const framesPath = path.join(captureDir, 'frames.ndjson');
   if (!existsSync(chunksPath)) throw new Error(`no capture at ${captureDir} (chunks.json missing)`);
@@ -169,6 +187,121 @@ function doctor(): number {
   return ok ? 0 : 2;
 }
 
+const CORPUS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'corpus');
+const VOICES_ROOT = '/root/voice-lane-lab/fixtures';
+const RECORDS_ROOT = '/root/voice-lane-lab';
+
+/** Phase 1: synthesise + ASR-validate + freeze the two corpus voices. */
+async function voicesCommand(argv: string[]): Promise<number> {
+  const whisper = flag(argv, '--whisper') ?? 'http://localhost:9000';
+  const corpus = loadCorpus();
+  const failures: string[] = [];
+  for (const profile of VOICE_PROFILES) {
+    const outDir = path.join(VOICES_ROOT, profile.id);
+    const commitPath0 = path.join(CORPUS_DIR, 'voices', `${profile.id}.manifest.json`);
+    if (existsSync(commitPath0)) {
+      writeOut(`voice ${profile.id}: already frozen (${commitPath0}) — skipping`);
+      continue;
+    }
+    writeOut(`voice ${profile.id}: ${profile.description} (${profile.supertonic.voice}, speed ${profile.supertonic.speed}, silence ${profile.supertonic.silence})`);
+    try {
+      const build = await buildVoiceProfile(profile, corpus, { outDir, whisperBaseUrl: whisper, log: (line) => writeOut(`  ${line}`) });
+      if (!build.verification.ok) {
+        failures.push(`${profile.id}: ${build.verification.problems.join('; ')}`);
+        continue;
+      }
+      // Freeze the working manifest once (audio + hashes live outside Git).
+      freezeFixtureManifest(outDir, build.manifest);
+      // Commit-copy: provenance + hashes in-repo (real audio stays outside).
+      const commitDir = path.join(CORPUS_DIR, 'voices');
+      mkdirSync(commitDir, { recursive: true, mode: 0o755 });
+      const sanitised = {
+        profileId: profile.id,
+        description: profile.description,
+        speechLabel: profile.speechLabel,
+        supertonic: profile.supertonic,
+        schemaVersion: build.manifest.schemaVersion,
+        provider: build.manifest.provider,
+        model: build.manifest.model,
+        voice: build.manifest.voice,
+        synthesis: build.manifest.synthesis,
+        corpusHash: build.manifest.corpusHash,
+        audioRoot: outDir,
+        fixtures: build.manifest.fixtures.map((fixture) => ({
+          id: fixture.id,
+          text: fixture.text,
+          pcm16kSha256: fixture.pcm16kSha256,
+          pcm16kPath: fixture.pcm16kPath,
+          masterWavPath: fixture.masterWavPath,
+          durationMs: fixture.durationMs,
+          asr: build.verification.verdicts.find((verdict) => verdict.id === fixture.id) ?? null,
+        })),
+      };
+      const commitPath = path.join(commitDir, `${profile.id}.manifest.json`);
+      if (existsSync(commitPath)) throw new Error(`refusing to overwrite frozen commit-copy: ${commitPath}`);
+      writeFileSync(commitPath, `${JSON.stringify(sanitised, null, 2)}\n`, { mode: 0o644 });
+      writeOut(`  frozen: ${commitPath}`);
+    } catch (error) {
+      failures.push(`${profile.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (failures.length > 0) {
+    writeErr(`voice validation FAILED:\n  ${failures.join('\n  ')}`);
+    return 2;
+  }
+  writeOut('both voices validated (WER ≤ 0.08, required words present) and frozen');
+  return 0;
+}
+
+/** Phase 1: built-app primary-control capture proof. */
+async function builtAppCommand(argv: string[]): Promise<number> {
+  const episodeId = flag(argv, '--episode') ?? 'C01';
+  const dryRun = argv.includes('--dry-run');
+  const profileId = flag(argv, '--voice') ?? 'voice-a';
+  if (argv.includes('--server-mode')) {
+    process.env.VOICE_LAB_SERVER_MODE = flag(argv, '--server-mode') ?? 'compiled';
+  }
+  const corpus = loadCorpus();
+  let plan;
+  try {
+    plan = planCaptureProof(episodeId, { corpus, corpusDir: CORPUS_DIR, profileId });
+  } catch (error) {
+    writeErr(String(error instanceof Error ? error.message : error));
+    return 2;
+  }
+  if (dryRun) {
+    writeOut(JSON.stringify({ ...plan, planHash: planHash(plan) }, null, 2));
+    writeOut('');
+    writeOut(`dry-run plan OK: ${plan.episodeId} utterance "${plan.utterance.text}" via ${plan.utterance.voiceProfileId}`);
+    writeOut('no browser, no server, no network — a dry run proves the plan, not the capture');
+    return 0;
+  }
+  const result = await runCaptureProof(plan, {
+    repoRoot: process.cwd(),
+    corpus,
+    corpusDir: CORPUS_DIR,
+    recordsRoot: RECORDS_ROOT,
+    authPassword: process.env.VOICE_LAB_AUTH_PASSWORD ?? 'voice-lab-disposable',
+    log: writeOut,
+  });
+  writeOut(`capture proof: ${result.ok ? 'OK' : 'FAILED'} — ${result.detail}`);
+  return result.ok ? 0 : 2;
+}
+
+/** Offline verification of an attempt record (exit 0/1/2). */
+function verifyCommand(argv: string[]): number {
+  const dir = argv[1];
+  if (!dir) {
+    writeErr('verify needs an attempt directory');
+    return 2;
+  }
+  const outcome = verifyRecord(dir, { corpus: loadCorpus() });
+  for (const line of outcome.lines) writeOut(`  ${line}`);
+  for (const problem of outcome.problems) writeOut(`  PROBLEM ${problem.code}: ${problem.detail}`);
+  writeOut(`verdict: ${outcome.verdict}`);
+  return exitCodeFor(outcome);
+}
+
 async function main(argv: string[]): Promise<number> {
   const command = argv[0];
   if (!command || command === 'help' || command === '--help') {
@@ -254,6 +387,7 @@ async function main(argv: string[]): Promise<number> {
         pcmPath?: string;
       }>;
       const settleMs = Number(flag(argv, '--settle-ms') ?? 25_000);
+      const { gradeBrowserRun, probeInBrowser } = await import('./lib/browser-probe.js');
       const probe = await probeInBrowser({ captureDir: dir, appUrl, settleMs, log: writeOut });
       const verdict = gradeBrowserRun({ chunks: rows }, probe, dir);
       writeFileSync(
@@ -270,6 +404,16 @@ async function main(argv: string[]): Promise<number> {
       writeErr(error instanceof Error ? error.message : String(error));
       return 2;
     }
+  }
+
+  if (command === 'voices') {
+    return await voicesCommand(argv);
+  }
+  if (command === 'built-app') {
+    return await builtAppCommand(argv);
+  }
+  if (command === 'verify') {
+    return verifyCommand(argv.slice(0));
   }
 
   if (command === 'list') {

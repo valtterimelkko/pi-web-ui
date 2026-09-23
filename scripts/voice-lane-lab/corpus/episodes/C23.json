@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "C23",
+  "title": "Urgent explicit redirect while busy",
+  "family": "busy-parking",
+  "tier": "E",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C23 row",
+    "rationale": "approval uses the existing steer path; no automatic authority; the busy delivery class is reported truthfully"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "busy",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "worker is mid-task; operator redirects urgently"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Urgent: stop and steer to the failing deploy instead.",
+      "requiredWords": [
+        "urgent",
+        "stop",
+        "steer",
+        "failing",
+        "deploy"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-steer",
+      "text": "Yes, I approve the steer now.",
+      "requiredWords": [
+        "yes",
+        "approve",
+        "steer",
+        "now"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "steer-busy"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "steer",
+      "failing deploy"
+    ],
+    "mustNotContain": [],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t2",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "steer-delivered",
+    "description": "steer delivered through the existing path; busy delivery class stated truthfully"
+  }
+}

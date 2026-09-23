@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "id": "C17",
+  "title": "Misheard attempt then correction",
+  "family": "correction-identity",
+  "tier": "P",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C17 row",
+    "rationale": "candidate replacement, not concatenation; the corrected version alone is releasable"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Relay to worker, check the lag for the retry handler.",
+      "requiredWords": [
+        "relay",
+        "worker",
+        "check",
+        "retry",
+        "handler"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-repair",
+      "text": "No, sorry, I meant the logs for the retry handler.",
+      "requiredWords": [
+        "meant",
+        "logs",
+        "retry",
+        "handler"
+      ]
+    },
+    {
+      "id": "t3",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send that.",
+      "requiredWords": [
+        "yes",
+        "send"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "logs",
+      "retry handler"
+    ],
+    "mustNotContain": [
+      "the lag",
+      "logs for the retry handler lag"
+    ],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t3",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "identity": {
+    "invalidateOnCancel": false,
+    "newIdentityOnRepeatAfterCancel": false
+  },
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "exactly one worker task containing the corrected logs wording; no concatenated double instruction"
+  }
+}

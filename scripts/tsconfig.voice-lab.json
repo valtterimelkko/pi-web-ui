@@ -1,0 +1,32 @@
+// Scripts-inclusive strict compile check for the voice lab (native-primary
+// Phase 1; the standard typecheck excludes scripts/). Run:
+//   npx tsc -p scripts/tsconfig.voice-lab.json --noEmit
+// Covers the changed lab import graph: scripts/voice-lane-lab/** plus the
+// voice-live-lab/audio-lab modules it imports. browser-probe.ts and
+// schedule.ts are excluded: they statically import client source and only
+// load inside Vite/Playwright contexts (see cli.ts lazy imports).
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node", "vite/client"],
+    "lib": ["ES2022", "DOM"],
+    "strict": true
+  },
+  "include": [
+    "./voice-lane-lab/**/*.ts",
+    "../voice-live-lab/lib/fixtures.ts",
+    "../voice-live-lab/lib/record.ts",
+    "../voice-live-lab/lib/scheduler.ts",
+    "../voice-live-lab/lib/voice-slice/operator-audio.ts",
+    "../audio-lab/lib/wav.ts",
+    "../audio-lab/lib/audio-io.ts"
+  ],
+  "exclude": [
+    "./voice-lane-lab/lib/browser-probe.ts",
+    "./voice-lane-lab/lib/schedule.ts"
+  ]
+}

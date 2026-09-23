@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "id": "C19",
+  "title": "Cancel then repeat identical words",
+  "family": "correction-identity",
+  "tier": "P",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C19 row",
+    "rationale": "after cancel and an identical repeat, a new identity and a new approval are required; the old confirmation is invalid"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Relay to worker, restart the payment service.",
+      "requiredWords": [
+        "relay",
+        "worker",
+        "restart",
+        "payment",
+        "service"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-cancel",
+      "text": "Cancel that.",
+      "requiredWords": [
+        "cancel"
+      ]
+    },
+    {
+      "id": "t3",
+      "kind": "adaptive-repeat",
+      "text": "Relay to worker, restart the payment service.",
+      "requiredWords": [
+        "relay",
+        "worker",
+        "restart",
+        "payment",
+        "service"
+      ]
+    },
+    {
+      "id": "t4",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send that.",
+      "requiredWords": [
+        "yes",
+        "send"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "restart",
+      "payment service"
+    ],
+    "mustNotContain": [],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t4",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "identity": {
+    "invalidateOnCancel": true,
+    "newIdentityOnRepeatAfterCancel": true
+  },
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "exactly one worker task from the post-cancel identity; the pre-cancel approval never releases anything"
+  }
+}

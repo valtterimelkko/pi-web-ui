@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "id": "C07",
+  "title": "Quoted tell-the-worker inside message content",
+  "family": "relay-addressing",
+  "tier": "E",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C07 row",
+    "rationale": "strip addressing only; the quoted phrase is content and must be delivered verbatim"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Tell the worker the brief says tell the worker to start, and I want that quoted exactly in the notes.",
+      "requiredWords": [
+        "tell",
+        "worker",
+        "brief",
+        "quoted",
+        "exactly",
+        "notes"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send it now.",
+      "requiredWords": [
+        "yes",
+        "send",
+        "now"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "tell the worker to start",
+      "quoted exactly"
+    ],
+    "mustNotContain": [],
+    "mustNotStartWith": [
+      "tell the worker the brief"
+    ],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t2",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "delivered bytes keep the inner quoted instruction; only the outer addressing is stripped"
+  }
+}

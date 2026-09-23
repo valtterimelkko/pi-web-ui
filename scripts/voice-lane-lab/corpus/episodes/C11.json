@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "C11",
+  "title": "Holdout: self-correction, no draft accumulation (surface form frozen by validator)",
+  "family": "correction-identity",
+  "tier": "H",
+  "holdout": true,
+  "provenance": { "source": "plan 5.2 C11 row (holdout)", "rationale": "followed by self-correction: no draft accumulation; wording frozen by the separate validator" },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": { "status": "idle", "pendingProposal": false, "attachments": 1, "description": "one idle worker attached" },
+  "inputTurns": [
+    { "id": "t1", "kind": "opening", "text": "", "requiredWords": [], "validatorFrozen": true },
+    { "id": "t2", "kind": "adaptive-repair", "text": "", "requiredWords": [], "validatorFrozen": true }
+  ],
+  "permittedRouteOutcomes": ["relay-proposal"],
+  "expectedSlots": {
+    "mustContain": ["backoff"],
+    "mustNotContain": [],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [],
+  "repairBranches": [],
+  "perStepDeadlinesMs": { "candidateMs": 15000, "presentationMs": 8000, "deliveryMs": 15000, "workerStoreMs": 20000 },
+  "expectedFinalWorkerArtefact": { "kind": "worker-input-persisted", "description": "replaced-not-concatenated candidate; validator freezes exact wording and facts" }
+}

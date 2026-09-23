@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "id": "C18",
+  "title": "Amend a presented instruction before confirming",
+  "family": "correction-identity",
+  "tier": "P",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C18 row",
+    "rationale": "stale yes or stale card refuses; a new exact presentation is required after the amendment"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "idle",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "one idle worker attached"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Relay to worker, deploy the hot fix to staging.",
+      "requiredWords": [
+        "relay",
+        "worker",
+        "deploy",
+        "hot fix|hotfix",
+        "staging"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-amend",
+      "text": "Wait, do not deploy anything until I approve it in the ticket first.",
+      "requiredWords": [
+        "wait",
+        "not",
+        "deploy",
+        "until",
+        "approve",
+        "ticket"
+      ]
+    },
+    {
+      "id": "t3",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send the amended version.",
+      "requiredWords": [
+        "yes",
+        "send",
+        "amended"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "relay-proposal"
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "deploy",
+      "staging",
+      "hot fix|hotfix"
+    ],
+    "mustNotContain": [],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "requiredNegations": [
+    "not",
+    "until"
+  ],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [
+    {
+      "turnId": "t3",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": [],
+  "identity": {
+    "invalidateOnCancel": true,
+    "newIdentityOnRepeatAfterCancel": true
+  },
+  "perStepDeadlinesMs": {
+    "candidateMs": 15000,
+    "presentationMs": 8000,
+    "deliveryMs": 15000,
+    "workerStoreMs": 20000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "worker-input-persisted",
+    "description": "delivered bytes carry the amended negation; the pre-amendment identity cannot be released"
+  }
+}

@@ -1,0 +1,665 @@
+{
+  "profileId": "voice-b",
+  "description": "moderately slower rate, longer pauses",
+  "speechLabel": "synthetic speech based on real wording",
+  "supertonic": {
+    "voice": "F5",
+    "model": "supertonic-3",
+    "speed": 0.92,
+    "silence": 0.14,
+    "steps": 8
+  },
+  "schemaVersion": 1,
+  "provider": "supertonic",
+  "model": "supertonic-3",
+  "voice": "F5",
+  "synthesis": {
+    "speed": 0.92,
+    "silence": 0.14,
+    "steps": 8
+  },
+  "corpusHash": "46f4ba5404b62a4232b6db1a1c481f1b6b850990cfc8c680fc713e0b616da089",
+  "audioRoot": "/root/voice-lane-lab/fixtures/voice-b",
+  "fixtures": [
+    {
+      "id": "C01-t1",
+      "text": "Relay to worker I want to find out about Podpoint.",
+      "pcm16kSha256": "deb3475aafa805ea8f35bd04890f02fc306b643d9d768e7a2264a08b3f2db221",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C01-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C01-t1.master.wav",
+      "durationMs": 3761.625,
+      "asr": {
+        "id": "C01-t1",
+        "text": "Relay to worker I want to find out about Podpoint.",
+        "transcript": " Relay to worker I want to find out about Podpoint.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C01-t2",
+      "text": "Yes, send that.",
+      "pcm16kSha256": "519f301b0733543b103cc3f6d0271b2c7ec1232d1d6c466ea9c763fd873338d8",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C01-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C01-t2.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C01-t2",
+        "text": "Yes, send that.",
+        "transcript": " Yes, send that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C01-repair-1",
+      "text": "Relay to worker, please: I want to find out about Podpoint.",
+      "pcm16kSha256": "ca0259efe593db6def8c7a023cba5be57357f128526d4e7d2e8c3a0b3f6ea6a9",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C01-repair-1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C01-repair-1.master.wav",
+      "durationMs": 4806.541666666667,
+      "asr": {
+        "id": "C01-repair-1",
+        "text": "Relay to worker, please: I want to find out about Podpoint.",
+        "transcript": " Relay to worker, please. I want to find out about Podpoint.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C02-t1",
+      "text": "Relay to the worker that it needs to summarise what it knows about the retry handler.",
+      "pcm16kSha256": "bce0ec55f0b8304e33556bbaeb2e0a58d4d1a8860db1de8536bf108e9210f67a",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C02-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C02-t1.master.wav",
+      "durationMs": 6130.083333333333,
+      "asr": {
+        "id": "C02-t1",
+        "text": "Relay to the worker that it needs to summarise what it knows about the retry handler.",
+        "transcript": " Relay to the worker that it needs to summarize what it knows about the retry handler.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C02-t2",
+      "text": "Yes, send that.",
+      "pcm16kSha256": "0a2563701b96743fe80bc1b25f3c0f4686a32bc4d012741f022711045dabb4d1",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C02-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C02-t2.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C02-t2",
+        "text": "Yes, send that.",
+        "transcript": " Yes, send that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C03-t1",
+      "text": "Ask the worker I want to find out why the retry handler fails on the third attempt.",
+      "pcm16kSha256": "a0812cc0d3f6c809c9b5f5a626c7b73481638d0b173c176cc08bf6a17c57d397",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C03-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C03-t1.master.wav",
+      "durationMs": 5990.75,
+      "asr": {
+        "id": "C03-t1",
+        "text": "Ask the worker I want to find out why the retry handler fails on the third attempt.",
+        "transcript": " Ask the worker I want to find out why the retry handler fails on the third attempt.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C03-t2",
+      "text": "Yes, send that.",
+      "pcm16kSha256": "1264591f2991cd5529b1aecc68843b6be94d53ddf7aa5ac3d04b2d78e9c4dbfa",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C03-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C03-t2.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C03-t2",
+        "text": "Yes, send that.",
+        "transcript": " Yes, send that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C04-t1",
+      "text": "Good morning. When you get a chance, tell the worker to run the failing tests and report back.",
+      "pcm16kSha256": "adaaa698b4aa9be1f1ea0a8bd2e5383daeec83b2fdbc5defb6c93c4b6fca3e01",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C04-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C04-t1.master.wav",
+      "durationMs": 6966,
+      "asr": {
+        "id": "C04-t1",
+        "text": "Good morning. When you get a chance, tell the worker to run the failing tests and report back.",
+        "transcript": " Good morning. When you get a chance, tell the worker to run the failing tests and report back.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C04-t2",
+      "text": "Yes, go ahead.",
+      "pcm16kSha256": "4adfc36fea53d0fa2b00e86850746272abdb3fc88437a617aa7e286ea71239c4",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C04-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C04-t2.master.wav",
+      "durationMs": 1602.1666666666667,
+      "asr": {
+        "id": "C04-t2",
+        "text": "Yes, go ahead.",
+        "transcript": " Yes, go ahead.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C05-t1",
+      "text": "Investigate the flaky checkout test, but do not change anything until I approve.",
+      "pcm16kSha256": "634c57078f35c6b6d7437f19d3329f2a1d5162dfdcc747ed789ca8de4e81baad",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t1.master.wav",
+      "durationMs": 5851.416666666666,
+      "asr": {
+        "id": "C05-t1",
+        "text": "Investigate the flaky checkout test, but do not change anything until I approve.",
+        "transcript": " Investigate the flaky checkout test, but do not change anything until I approve.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C05-t2",
+      "text": "Yes, send that exactly as written.",
+      "pcm16kSha256": "c31135b2675a3f856a58712e30b9c5107c3b492dba25d44dfa0d2cc13561761c",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C05-t2.master.wav",
+      "durationMs": 2786.375,
+      "asr": {
+        "id": "C05-t2",
+        "text": "Yes, send that exactly as written.",
+        "transcript": " Yes, send that exactly as written.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C06-t1",
+      "text": "Tell the worker the build failed twice on run 3, and check the config yaml file at line 42 before anything else.",
+      "pcm16kSha256": "c42b281dee9d97a79a2bde16645f632dbf940d0f6d6017361b541cd34ac70b20",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C06-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C06-t1.master.wav",
+      "durationMs": 9055.791666666666,
+      "asr": {
+        "id": "C06-t1",
+        "text": "Tell the worker the build failed twice on run 3, and check the config yaml file at line 42 before anything else.",
+        "transcript": " Tell the worker the build failed twice on run 3 and check the config YAML file at line 42 before anything else.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C06-t2",
+      "text": "Yes, send that.",
+      "pcm16kSha256": "01d69cf35f41141a16cdca7be3c3378aa60bd47cebe990072017c1a943fa0fa7",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C06-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C06-t2.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C06-t2",
+        "text": "Yes, send that.",
+        "transcript": " Yes, send that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C07-t1",
+      "text": "Tell the worker the brief says tell the worker to start, and I want that quoted exactly in the notes.",
+      "pcm16kSha256": "f947f205e795e8a19729fc4572fc5b3735271f98b1cf521af917b383da4c7ced",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C07-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C07-t1.master.wav",
+      "durationMs": 7035.666666666667,
+      "asr": {
+        "id": "C07-t1",
+        "text": "Tell the worker the brief says tell the worker to start, and I want that quoted exactly in the notes.",
+        "transcript": " Tell the worker the brief says tell the worker to start, and I want that quoted exactly in the notes.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C07-t2",
+      "text": "Yes, send it now.",
+      "pcm16kSha256": "158465924e77b8d50e2ae28b850928d1a3266cbbce65fd1ba96f1b4dc7cb080d",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C07-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C07-t2.master.wav",
+      "durationMs": 1741.5,
+      "asr": {
+        "id": "C07-t2",
+        "text": "Yes, send it now.",
+        "transcript": " Yes, send it now.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C08-t1",
+      "text": "I think our real problem is that the deploy takes nearly ten minutes.",
+      "pcm16kSha256": "2c0e4913a33e1dd3e895e8f82d51c537c3a47d4574f00f0db97ff12800480e9b",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C08-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C08-t1.master.wav",
+      "durationMs": 5085.166666666667,
+      "asr": {
+        "id": "C08-t1",
+        "text": "I think our real problem is that the deploy takes nearly ten minutes.",
+        "transcript": " I think our real problem is that the deploy takes nearly 10 minutes.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C08-t2",
+      "text": "Yes, ask the worker my question.",
+      "pcm16kSha256": "19164c0a047ede302b834fc5f261e93b7700d808d31f596733c2ddef37dbda45",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C08-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C08-t2.master.wav",
+      "durationMs": 2647.083333333333,
+      "asr": {
+        "id": "C08-t2",
+        "text": "Yes, ask the worker my question.",
+        "transcript": " Yes, ask the worker my question.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C09-t1",
+      "text": "I keep thinking about the retry handler.",
+      "pcm16kSha256": "1c48fbb9fd0d7617f0e263ec2040e388db35cf24d9121476268f296b9cb032f3",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C09-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C09-t1.master.wav",
+      "durationMs": 2995.375,
+      "asr": {
+        "id": "C09-t1",
+        "text": "I keep thinking about the retry handler.",
+        "transcript": " I keep thinking about the retry handler.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C12-t1",
+      "text": "Summarise what has been done in this session.",
+      "pcm16kSha256": "11b22a0f3ba9a9f662b202ea7629802c39377879ff0337058cd28f92ebb8e219",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C12-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C12-t1.master.wav",
+      "durationMs": 3483,
+      "asr": {
+        "id": "C12-t1",
+        "text": "Summarise what has been done in this session.",
+        "transcript": " summarise what has been done in this session.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C13-t1",
+      "text": "Earlier you looked at the login timeout but skipped the refresh token path. What did you actually find there?",
+      "pcm16kSha256": "8eed928a0e79c500d4cdfa285587c7280af23eaf8b456d07cd5f4c440dc566ee",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C13-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C13-t1.master.wav",
+      "durationMs": 7801.916666666667,
+      "asr": {
+        "id": "C13-t1",
+        "text": "Earlier you looked at the login timeout but skipped the refresh token path. What did you actually find there?",
+        "transcript": " Earlier you looked at the login timeout, but skipped the refresh token path. What did you actually find there?",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C14-t1",
+      "text": "The phrase relay to worker is a bit clunky, don't you think?",
+      "pcm16kSha256": "dd8abc3508cca71f103e7df06b315a65b88792ba9ffa12f99e3a549c518845e1",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C14-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C14-t1.master.wav",
+      "durationMs": 4179.583333333333,
+      "asr": {
+        "id": "C14-t1",
+        "text": "The phrase relay to worker is a bit clunky, don't you think?",
+        "transcript": " The phrase relay to worker is a bit clunky. Don't you think?",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C15-t1",
+      "text": "Don't send that; I'm just thinking aloud.",
+      "pcm16kSha256": "da5806df252d6cf830b0dfcc3c6d7dfbaf20f067cb2a81aa4b657432537dd08c",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C15-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C15-t1.master.wav",
+      "durationMs": 2786.375,
+      "asr": {
+        "id": "C15-t1",
+        "text": "Don't send that; I'm just thinking aloud.",
+        "transcript": " Don't send that, I'm just thinking aloud.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C16-t1",
+      "text": "It says it plans to run the test suite now. Is that actually done yet?",
+      "pcm16kSha256": "026dd3851865e3f902d161354c311178c3da597ad3e3d4feb9df8f3550237c1b",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C16-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C16-t1.master.wav",
+      "durationMs": 5503.125,
+      "asr": {
+        "id": "C16-t1",
+        "text": "It says it plans to run the test suite now. Is that actually done yet?",
+        "transcript": " It says it plans to run the test suite now. Is that actually done yet?",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C17-t1",
+      "text": "Relay to worker, check the lag for the retry handler.",
+      "pcm16kSha256": "bee21367b1177270bfef41fece4aae2f5618ac1b436bfe0307902701a04d5e30",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C17-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C17-t1.master.wav",
+      "durationMs": 3900.9583333333335,
+      "asr": {
+        "id": "C17-t1",
+        "text": "Relay to worker, check the lag for the retry handler.",
+        "transcript": " Relay to worker, check the lag for the retry handler.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C17-t2",
+      "text": "No, sorry, I meant the logs for the retry handler.",
+      "pcm16kSha256": "9499c08be197d447c60ec3219ab28e8c61372a9ed673ed90661577214f164ccc",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C17-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C17-t2.master.wav",
+      "durationMs": 4109.916666666667,
+      "asr": {
+        "id": "C17-t2",
+        "text": "No, sorry, I meant the logs for the retry handler.",
+        "transcript": " No, sorry, I meant the logs for the retry handler.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C17-t3",
+      "text": "Yes, send that.",
+      "pcm16kSha256": "1be47761a75e9a2f0f9eee471ab090c03008726cae26a4f376ef64674ab9529f",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C17-t3.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C17-t3.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C17-t3",
+        "text": "Yes, send that.",
+        "transcript": " Yes, send that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C18-t1",
+      "text": "Relay to worker, deploy the hot fix to staging.",
+      "pcm16kSha256": "be5252aaad1f42bcab95c948de1e051602c1dc5ce568b5eb094cc47e4b833071",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C18-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C18-t1.master.wav",
+      "durationMs": 3691.9583333333335,
+      "asr": {
+        "id": "C18-t1",
+        "text": "Relay to worker, deploy the hot fix to staging.",
+        "transcript": " Relay to worker, deploy the hot fix to staging.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C18-t2",
+      "text": "Wait, do not deploy anything until I approve it in the ticket first.",
+      "pcm16kSha256": "7d9437b2b5be79a1777beb60b23cfc8134cd1df11991e1f6789333727d108c12",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C18-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C18-t2.master.wav",
+      "durationMs": 5154.833333333333,
+      "asr": {
+        "id": "C18-t2",
+        "text": "Wait, do not deploy anything until I approve it in the ticket first.",
+        "transcript": " Wait, do not deploy anything until I approve it in the ticket first.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C18-t3",
+      "text": "Yes, send the amended version.",
+      "pcm16kSha256": "8a5d44fa4643b2751bd9e89acdc5be3bbb9b2884f98508c18940dae644c94d4b",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C18-t3.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C18-t3.master.wav",
+      "durationMs": 2507.75,
+      "asr": {
+        "id": "C18-t3",
+        "text": "Yes, send the amended version.",
+        "transcript": " Yes, send the amended version.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C19-t1",
+      "text": "Relay to worker, restart the payment service.",
+      "pcm16kSha256": "9f48a124fd4f701a78b0787ef6651a3de15a9a6c3fb39453291abf41f6c598fd",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t1.master.wav",
+      "durationMs": 3552.6666666666665,
+      "asr": {
+        "id": "C19-t1",
+        "text": "Relay to worker, restart the payment service.",
+        "transcript": " Relay to worker, restart the payment service.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C19-t2",
+      "text": "Cancel that.",
+      "pcm16kSha256": "4e5dcb115ee7317f791dd24e94e3df3f9b4a50549ae42db9462775b3801c809f",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t2.master.wav",
+      "durationMs": 1532.5,
+      "asr": {
+        "id": "C19-t2",
+        "text": "Cancel that.",
+        "transcript": " Cancel that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C19-t3",
+      "text": "Relay to worker, restart the payment service.",
+      "pcm16kSha256": "16ef20a712f3a59625ff88d27542b5aa357e3a6918b04ea7f9185ebb8d32fef8",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t3.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t3.master.wav",
+      "durationMs": 3552.6666666666665,
+      "asr": {
+        "id": "C19-t3",
+        "text": "Relay to worker, restart the payment service.",
+        "transcript": " Relay to worker restart the payment service.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C19-t4",
+      "text": "Yes, send that.",
+      "pcm16kSha256": "2efabd2e8bbfbb5d43c82456812e299d9665c7bf9ff0281400d9d789b7c9de87",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t4.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C19-t4.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C19-t4",
+        "text": "Yes, send that.",
+        "transcript": " Yes, send that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C20-t1",
+      "text": "Relay to worker: update the changelog for the voice release.",
+      "pcm16kSha256": "5d0a3166196c554f553253e3f99119e0873efd002812c1c4cb4f1fdfa5480853",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t1.master.wav",
+      "durationMs": 4736.875,
+      "asr": {
+        "id": "C20-t1",
+        "text": "Relay to worker: update the changelog for the voice release.",
+        "transcript": " Relay to worker, update the changelog for the voice release.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C20-t2",
+      "text": "Do you think we will still get that walk in later?",
+      "pcm16kSha256": "7269233156e00d30214fa080c32cee475e508e9b4c34af6a92ab6db04ec4ad06",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t2.master.wav",
+      "durationMs": 3413.3333333333335,
+      "asr": {
+        "id": "C20-t2",
+        "text": "Do you think we will still get that walk in later?",
+        "transcript": " Do you think we will still get that walk in later?",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C20-t3",
+      "text": "Yes, probably.",
+      "pcm16kSha256": "112ac6fce0577f4e2e573d42af90c721baeff587d72191c8bea9cb6109fb3556",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t3.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t3.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C20-t3",
+        "text": "Yes, probably.",
+        "transcript": " Yes, probably.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C20-t4",
+      "text": "Yes, send that.",
+      "pcm16kSha256": "244c0f51c85edc78ccae9ca03329f704bdf46e1fd206432fca3610fde37ba8bb",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t4.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C20-t4.master.wav",
+      "durationMs": 1671.8333333333333,
+      "asr": {
+        "id": "C20-t4",
+        "text": "Yes, send that.",
+        "transcript": " Yes, send that.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C21-t1",
+      "text": "Not sure anymore. I said yes earlier, but yes, but wait, check the version number before anything.",
+      "pcm16kSha256": "0b014c460c3f8d1e32596a3ea635a04ce9a2c6d775d442b852e4b44efcf30b52",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C21-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C21-t1.master.wav",
+      "durationMs": 7174.958333333334,
+      "asr": {
+        "id": "C21-t1",
+        "text": "Not sure anymore. I said yes earlier, but yes, but wait, check the version number before anything.",
+        "transcript": " Not sure anymore, I said yes earlier, but yes, but wait, check the version number before anything.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C23-t1",
+      "text": "Urgent: stop and steer to the failing deploy instead.",
+      "pcm16kSha256": "3790cc9945a00aaa770ff865548f84e295275eb9711fdd3fbf619be42bb33914",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C23-t1.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C23-t1.master.wav",
+      "durationMs": 4179.583333333333,
+      "asr": {
+        "id": "C23-t1",
+        "text": "Urgent: stop and steer to the failing deploy instead.",
+        "transcript": " urgent, stop and steer to the failing deploy instead.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    },
+    {
+      "id": "C23-t2",
+      "text": "Yes, I approve the steer now.",
+      "pcm16kSha256": "ad369cfc28f3616f03d1e287a944eb203318e14a6f9f284a624ba2914ee485bd",
+      "pcm16kPath": "/root/voice-lane-lab/fixtures/voice-b/C23-t2.pcm16k",
+      "masterWavPath": "/root/voice-lane-lab/fixtures/voice-b/C23-t2.master.wav",
+      "durationMs": 2438.083333333333,
+      "asr": {
+        "id": "C23-t2",
+        "text": "Yes, I approve the steer now.",
+        "transcript": " Yes, I approve the steer now.",
+        "wer": 0,
+        "missingWords": [],
+        "ok": true
+      }
+    }
+  ]
+}

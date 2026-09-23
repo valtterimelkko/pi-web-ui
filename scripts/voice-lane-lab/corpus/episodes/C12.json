@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "C12",
+  "title": "Summarise the session so far",
+  "family": "session-retrieval",
+  "tier": "E",
+  "holdout": false,
+  "provenance": {
+    "source": "plan 5.2 C12 row",
+    "rationale": "answer from worker evidence; no delegation when the answer is already available"
+  },
+  "speechLabel": "synthetic speech based on real wording",
+  "openingWorkerState": {
+    "status": "working",
+    "pendingProposal": false,
+    "attachments": 1,
+    "description": "worker has completed actions this session; evidence available"
+  },
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Summarise what has been done in this session.",
+      "requiredWords": [
+        "summarise|summarize",
+        "done",
+        "session"
+      ]
+    }
+  ],
+  "permittedRouteOutcomes": [
+    "conversational-only"
+  ],
+  "expectedSlots": {
+    "mustContain": [],
+    "mustNotContain": [],
+    "responseMustContain": [
+      "session"
+    ],
+    "responseMustNotContain": [
+      "relay to worker",
+      "sent to the worker"
+    ],
+    "sourceAttributionRequired": true
+  },
+  "requiredNegations": [],
+  "requiredNames": [],
+  "requiredNumbers": [],
+  "approvalTurns": [],
+  "repairBranches": [],
+  "perStepDeadlinesMs": {
+    "candidateMs": 8000,
+    "presentationMs": 8000,
+    "deliveryMs": 8000,
+    "workerStoreMs": 8000
+  },
+  "expectedFinalWorkerArtefact": {
+    "kind": "no-worker-action",
+    "description": "grounded summary from existing evidence; no new worker task"
+  }
+}
