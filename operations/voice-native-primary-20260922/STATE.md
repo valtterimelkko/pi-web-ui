@@ -14,16 +14,17 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
 | Child | Session | Worktree · branch | Lease | Watch | Scope |
 |---|---|---|---|---|---|
-| M2 soak re-bind | `01a0ce05-110f-…` | `wt-voice-m2` · `task/voice-native-m2` | `45087040…` | `ww_15` | kernel utterance re-bind after a same-lane restart (server, RED-first) |
+| M3 delivery receipt | `01a0ce36-5eb3-…` | `wt-voice-m3` · `task/voice-native-m3` | `1a7424af…` | `ww_16` | receipt at submission, not turn completion (talker delivery, RED-first) |
 
 **Settled and merged this round:** M (`e3e9e0b5` — worker-switch proposal resolution, RED reproduced at the
 parent and re-verified), L5 (`a8ccf2ed` — busy drive with a real C22 PASS at attempt-09, two-session
 prep, soak reconnect v2, holdout fixtures; gates re-run by the conductor: lab 705/705, voice-lab tsc 0).
 **Holdout freeze now complete** (`9eaaf891`): all nine turns (C10, C11, C22, C24) frozen for both voices,
 49 fixtures each, zero drift, ASR green; the obsolete voice-a C22-t1 homophone skip removed (`e8724669`).
-L5's soak attempt-02 is an honest FAIL with a NEW product finding (kernel utterance pipeline does not
-re-bind after a same-lane provider restart) — M2 owns that fix; the campaign's soak cells are its
-end-to-end confirmation.
+L5's soak attempt-02 finding is fixed and merged (M2, `958d9370`). **Campaign chunk 1 halted the
+campaign**: C09 both arms passed, C01/C03/C05 both arms failed on a newly exposed product defect —
+the delivery receipt awaits the worker's whole turn (the contract's receipt is about *bytes
+delivered*). M3 owns the fix; the failed cells will be re-run and the remaining cells follow.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
@@ -52,5 +53,5 @@ end-to-end confirmation.
 5. Independent reviewer child (read-only) — **brief ready** (`children/RV/brief.md`).
 6. Verdict + repository gates + canonical docs + Agent OS capture.
 
-**Watching (zero-token):** primary wake `ww_15` (M2). Model-free backstop: armed below. No independent
+**Watching (zero-token):** primary wake `ww_16` (M3). Model-free backstop: armed below. No independent
 process backstop (background-task cap saturated).
