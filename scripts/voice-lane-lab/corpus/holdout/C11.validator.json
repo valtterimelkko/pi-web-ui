@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "C11",
+  "validatorFrozenAtIso": "2026-09-23T06:20:03Z",
+  "note": "Holdout overlay \u2014 self-correction replaces the candidate (plan 5.2 C11); completed with a confirm turn for runnability.",
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Relay to worker, change the retry backoff to exponential.",
+      "requiredWords": [
+        "relay",
+        "worker",
+        "backoff",
+        "exponential"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-amend",
+      "text": "Actually no \u2014 exponential backoff with jitter, and cap it at thirty seconds.",
+      "requiredWords": [
+        "backoff",
+        "jitter",
+        "thirty",
+        "cap"
+      ]
+    },
+    {
+      "id": "t3",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send it.",
+      "requiredWords": [
+        "yes",
+        "send"
+      ]
+    }
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "backoff",
+      "jitter"
+    ],
+    "mustNotContain": [],
+    "responseMustContain": [],
+    "responseMustNotContain": []
+  },
+  "approvalTurns": [
+    {
+      "turnId": "t3",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": []
+}

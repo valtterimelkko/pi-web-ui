@@ -346,6 +346,8 @@ _(empty — execution not started; owner goal activation is the start signal)_
 | 2026-09-23 06:05 | W3 | **Pass 10: 12/12 CLEAN.** | `fix-loop/pass-10/` |
 | 2026-09-23 06:10 | W3 | **Pass 11: 12/12 CLEAN — two consecutive clean full passes. GATE G4 ACHIEVED.** Both arms reachable (P's real probes); measured cost far inside §10 (~90 min live journeys total). | `fix-loop/pass-11/` |
 | 2026-09-23 06:15 | W3 | **Freeze recorded at `f7c43bc9`** (corpus, voice manifests, prompt, scorer, runner hashes) in `fix-loop/freeze.json` + `FREEZE.md`. | `fix-loop/FREEZE.md` |
+| 2026-09-23 06:18 | W4 | **L4 harness child dispatched** (`01a0ccea-8c88-…`, watch `ww_11`): soak runner (10 min, ≥8 turns, mid-session reconnect, pending-work survival), busy-parking support, attachment-switch support; holdout-overlay mechanism added by steer (`corpus/holdout/<ID>.validator.json` merged for holdout cells; corpus files stay empty). | brief `children/L4/` |
+| 2026-09-23 06:22 | W4 | **Validator overlays authored** for C10 (token discussion) and C11 (self-correction replaces the candidate, completed with a confirm turn for runnability); C22/C24 overlays deferred until L4's parking/attachment mechanism is known (the overlay must match the implemented turn kinds). Campaign core cells (24) are ready to run on the frozen revision once the heavy-runner window is free. | `corpus/holdout/C10.validator.json`, `C11.validator.json` |
 
 ### W4 plan (Phase 5, opening)
 

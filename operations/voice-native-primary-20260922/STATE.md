@@ -10,7 +10,15 @@
 **Wave:** W1 · W2 complete · **W3 fix loop COMPLETE — GATE G4 ACHIEVED** (11 passes; pass 10 and
 pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 
-**Active children:** none.
+**Active children**
+
+| Child | Session | Worktree · branch | Lease | Watch | Scope |
+|---|---|---|---|---|---|
+| L4 W4 harness | `01a0ccea-8c88-73f0-b149-c143c6b54a60` | `wt-voice-w4` · `task/voice-native-w4` | `abb1634d…` | `ww_11_1790144328455` | soak runner + parking + attachment switch + holdout overlay mechanism |
+
+**W4 status:** validator overlays authored for C10/C11 (`corpus/holdout/*.validator.json`); C22/C24
+overlays await L4's mechanism; the 24 core cells are ready to run on the frozen revision once the
+heavy-runner window is free (one heavy runner at a time).
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 

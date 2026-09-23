@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "C10",
+  "validatorFrozenAtIso": "2026-09-23T06:20:03Z",
+  "note": "Holdout overlay \u2014 surface form and expected facts frozen by the separate validator (plan 5.2 C10).",
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "The session token keeps getting dropped on the third retry \u2014 I want to understand why before we change anything.",
+      "requiredWords": [
+        "session",
+        "token",
+        "third",
+        "retry"
+      ]
+    }
+  ],
+  "expectedSlots": {
+    "mustContain": [],
+    "mustNotContain": [],
+    "responseMustContain": [
+      "token"
+    ],
+    "responseMustNotContain": [
+      "relay to worker",
+      "sent to the worker"
+    ]
+  },
+  "approvalTurns": [],
+  "repairBranches": []
+}
