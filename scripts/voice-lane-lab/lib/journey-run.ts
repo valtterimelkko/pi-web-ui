@@ -768,12 +768,12 @@ export async function runJourney(plan: JourneyPlan, options: JourneyRunOptions):
     } else {
       await page.getByRole('button', { name: 'Start a new session' }).click();
       // The worker model must be one whose provider actually completes turns
-      // in the disposable env: the seeded auth store authenticates
-      // github-copilot, while the kimi-coding/kimi-subscription providers die
-      // in ~1 s with no output (the C22 attempts 02–04 failure, verified by
-      // direct Internal API diagnostics). The journey's frozen wording and
-      // bars do not depend on the worker model.
-      const modelRow = page.getByText('Kimi K2.7 Code', { exact: true }).first();
+      // in the disposable env: verified by direct Internal API diagnostics,
+      // openai-codex/gpt-5.6-sol (UI row 'Codex / GPT-5.6 Sol') runs the shell
+      // tool and holds busy, while the kimi-coding/kimi-subscription providers
+      // die in ~1 s with no output (the C22 attempts 02–04 failure). The
+      // journey's frozen wording and bars do not depend on the worker model.
+      const modelRow = page.getByText('Codex / GPT-5.6 Sol', { exact: true }).first();
       await modelRow.waitFor({ timeout: 45_000 });
       await modelRow.click();
       await page.locator('button').filter({ hasText: '/tmp' }).first().click();
