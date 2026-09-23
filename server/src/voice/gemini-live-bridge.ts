@@ -129,7 +129,6 @@ function emptyUsage(): GeminiLiveBridgeUsage {
     toolCallDuplicates: 0,
     lateToolCalls: 0,
     unmatchedActivityEndsSuppressed: 0,
-    replayTurns: 0,
   };
 }
 
@@ -416,27 +415,6 @@ export class GeminiLiveBridge {
     try {
       this.session.sendClientContent({ turns: [{ role: 'user', parts: [{ text }] }], turnComplete: false });
       this.usageValue.contextSends += 1;
-      return true;
-    } catch (error) {
-      this.emitError('voice_provider_unavailable', errorMessage(error), false);
-      return false;
-    }
-  }
-
-  /**
-   * Host replay of an operator utterance as a user turn that ELICITS a reply
-   * (`turnComplete: true`, unlike sendContextText). Used only by the service's
-   * unresponsive-provider remint (soak F-1 seam): after the wedge the fresh
-   * session never heard the utterances the dead one accepted, so the host
-   * hands them back as the operator's words for the model to judge — a relay
-   * still needs the operator's own confirmation, so this cannot release
-   * anything by itself. Never throws.
-   */
-  replayUserTurn(text: string): boolean {
-    if (!this.isLive || !this.session) return false;
-    try {
-      this.session.sendClientContent({ turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true });
-      this.usageValue.replayTurns += 1;
       return true;
     } catch (error) {
       this.emitError('voice_provider_unavailable', errorMessage(error), false);

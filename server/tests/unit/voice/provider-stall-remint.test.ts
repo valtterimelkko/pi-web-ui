@@ -152,18 +152,21 @@ describe('provider-stall remint (soak F-1 seam)', () => {
 
     await operatorSays(h, 'Relay to worker I want to find out about Podpoint.');
     // The mount (which classifies) arms the watch for this statement.
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.');
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.', 1_000);
     // No model output at all — the wedge. Advance past the stall and fire the check.
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 1);
     await h.runTimers();
 
     expect(h.bridges.length).toBe(2); // a fresh provider session was minted
     expect(h.bridges[0].closed).toBe(true); // the wedged session was closed
-    // The fresh session has not gone live yet, so the replay is pending…
-    expect(h.bridges[1].replays).toEqual([]);
+    // The fresh session has not gone live yet, so the context replay is pending…
+    expect(h.bridges[1].sentContext).toEqual([]);
     h.bridges[1].callbacks.onState?.('live');
-    // …and flushes to the session that can actually answer it.
-    expect(h.bridges[1].replays).toEqual(['Relay to worker I want to find out about Podpoint.']);
+    // …and flushes to the session that can act on it — as CONTEXT
+    // (turnComplete false: no reply elicited, no audio over the operator).
+    expect(h.bridges[1].sentContext).toEqual([
+      'RECONNECT CONTEXT: while the voice connection was down, the operator said: Relay to worker I want to find out about Podpoint.',
+    ]);
     // The mount learns to reset its context ledger from the marked state event.
     expect(
       h.events.some(
@@ -177,7 +180,7 @@ describe('provider-stall remint (soak F-1 seam)', () => {
     await startLive(h);
 
     await operatorSays(h, 'I think our real problem is that the deploy takes nearly 10 minutes.');
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'I think our real problem is that the deploy takes nearly 10 minutes.');
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'I think our real problem is that the deploy takes nearly 10 minutes.', 1_000);
     // The model answers (talker output).
     h.bridges[0].callbacks.onOutputTranscription?.('Right — the deploy is the slow part.', 0);
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 5_000);
@@ -192,7 +195,7 @@ describe('provider-stall remint (soak F-1 seam)', () => {
     await startLive(h);
 
     await operatorSays(h, 'Relay to worker I want to find out about Podpoint.');
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.');
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker I want to find out about Podpoint.', 1_000);
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 1);
     await h.runTimers();
     expect(h.bridges.length).toBe(2);
@@ -200,7 +203,7 @@ describe('provider-stall remint (soak F-1 seam)', () => {
     // The fresh session goes live but wedges too; another statement stalls.
     h.bridges[1].callbacks.onState?.('live');
     await operatorSays(h, 'Relay to worker, please: I want to find out about Podpoint.');
-    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker, please: I want to find out about Podpoint.');
+    h.service.noteOperatorUtteranceForStallWatch('lane-1:probe', 'Relay to worker, please: I want to find out about Podpoint.', 1_000);
     h.advance(VOICE_MODEL_REPLY_STALL_MS + 1);
     await h.runTimers();
 

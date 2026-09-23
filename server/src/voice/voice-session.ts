@@ -89,10 +89,10 @@ export const VOICE_PENDING_CONTEXT_MAX_CHARS = 400_000;
  *  remints it (SOAK-10MIN F-1 seam: after a barge-in interrupted read-back the
  *  revived session never produces model output again; only a fresh session
  *  responds). Confirmations and cancels are mechanical and never arm the watch.
- *  The window sits ABOVE the measured worst-case healthy model latency
- *  (SOAK-10MIN attempt-07: a fresh session took 12.8 s to decide a relay over a
- *  long context — a 12 s window fired a false remint mid-decision), while a
- *  remint + reply still fits the harness's repair budget. */
+ *  The threshold sits ABOVE the measured worst-case healthy model latency
+ *  (SOAK-10MIN attempt-07: a fresh session took 12.8 s to decide a relay over
+ *  a long context — a 12 s threshold fired a false remint mid-decision), while
+ *  a remint + reply still fits the harness's repair budget. */
 export const VOICE_MODEL_REPLY_STALL_MS = 20_000;
 
 export const DEFAULT_VOICE_SYSTEM_INSTRUCTION = [
@@ -188,6 +188,9 @@ interface LaneRecord {
   // ── Unresponsive-provider watch (soak F-1 seam) ──
   /** The start options this lane was opened with — the remint reuses them. */
   startOptions: VoiceBridgeStartOptions | null;
+  /** Clock time of the last model engagement (any output). Anchors the stall
+   *  watch: an utterance the model already began answering must not arm it. */
+  lastModelEngagedAtMs: number;
   /** Clock time the last model-judged operator utterance has been waiting for
    *  any model engagement; null while nothing is pending. */
   awaitingModelSinceMs: number | null;
@@ -363,6 +366,7 @@ export class VoiceSessionService implements VoiceBridgeService {
       talkerPartial: '',
       resumptionHandle: null,
       startOptions: options,
+      lastModelEngagedAtMs: 0,
       awaitingModelSinceMs: null,
       unansweredUtterances: [],
       stallReminted: false,
@@ -873,9 +877,14 @@ export class VoiceSessionService implements VoiceBridgeService {
    * `VoiceBridgeService` interface: this is host-internal recovery plumbing,
    * reachable only on the concrete service the mount constructs.
    */
-  noteOperatorUtteranceForStallWatch(laneId: VoiceLaneId, text: string): void {
+  noteOperatorUtteranceForStallWatch(laneId: VoiceLaneId, text: string, atMs: number): void {
     const lane = this.lanes.get(laneId);
     if (!lane) return;
+    // The model may have begun answering this very utterance before its final
+    // landed (the answer races the transcript): an engagement at or after the
+    // utterance's timestamp means the model is alive on it — never arm
+    // (SOAK-10MIN attempt-08: three false remints from exactly this race).
+    if (lane.lastModelEngagedAtMs >= atMs) return;
     this.armStallWatch(lane, text);
   }
 
@@ -890,6 +899,7 @@ export class VoiceSessionService implements VoiceBridgeService {
   /** Any model output — talker transcript, audio, tool call, turn boundary —
    *  clears the watch. Cheap early-return: this rides the audio hot path. */
   private noteModelEngaged(lane: LaneRecord): void {
+    lane.lastModelEngagedAtMs = this.clock();
     if (lane.awaitingModelSinceMs === null && lane.unansweredUtterances.length === 0 && !lane.stallReminted) return;
     lane.awaitingModelSinceMs = null;
     lane.unansweredUtterances = [];
@@ -904,6 +914,17 @@ export class VoiceSessionService implements VoiceBridgeService {
   private async runStallCheck(lane: LaneRecord): Promise<void> {
     if (this.disposed) return;
     if (lane.awaitingModelSinceMs === null) return;
+    // The engagement anchor: an answer racing the transcript (or any output)
+    // pushes the stall horizon out — measure silence from the LAST model
+    // output, not from when the watch was armed.
+    const anchor = Math.max(lane.awaitingModelSinceMs, lane.lastModelEngagedAtMs);
+    const stalledForMs = this.clock() - anchor;
+    if (stalledForMs < VOICE_MODEL_REPLY_STALL_MS) {
+      if (lane.stallTimer) lane.stallTimer();
+      const remaining = VOICE_MODEL_REPLY_STALL_MS - stalledForMs + 5;
+      lane.stallTimer = this.scheduler(() => void this.runStallCheck(lane), remaining);
+      return;
+    }
     if (lane.stallReminted) {
       // One remint per wedge. A wedge that survives the fresh session is
       // surfaced once here and never reminted in a loop.
@@ -914,8 +935,6 @@ export class VoiceSessionService implements VoiceBridgeService {
       return;
     }
     if (lane.state !== 'live' || lane.bridge === null || lane.startOptions === null) return;
-    const stalledForMs = this.clock() - lane.awaitingModelSinceMs;
-    if (stalledForMs < VOICE_MODEL_REPLY_STALL_MS) return;
     const toReplay = [...lane.unansweredUtterances];
     lane.stallReminted = true;
     lane.awaitingModelSinceMs = null;
@@ -936,14 +955,25 @@ export class VoiceSessionService implements VoiceBridgeService {
       state: 'connecting',
       detail: 'provider_unresponsive_remint (fresh provider session)',
     });
-    lane.pendingReplays = toReplay;
-    this.flushPendingReplays(lane);
+    // CONTEXT-ONLY replay (attempt-08 lesson): reply-eliciting replays made
+    // the fresh model speak right over the operator's next turn, and the echo
+    // gate correctly suppressed the mid-speech confirm — the release never
+    // happened. The replay therefore joins the fresh session's context
+    // (turnComplete: false, no audio, no reply elicited); the model acts on it
+    // when the operator's own next words arrive — the soak's repeat relay IS
+    // that fresh audio, by design.
+    if (toReplay.length > 0) {
+      lane.pendingReplays = [
+        `RECONNECT CONTEXT: while the voice connection was down, the operator said: ${toReplay.join(' | ')}`,
+      ];
+      this.flushPendingReplays(lane);
+    }
   }
 
   private flushPendingReplays(lane: LaneRecord): void {
     if (lane.pendingReplays.length === 0) return;
     if (lane.state !== 'live' || lane.bridge === null) return;
-    for (const text of lane.pendingReplays) lane.bridge.replayUserTurn(text);
+    for (const text of lane.pendingReplays) lane.bridge.sendContextText(text);
     lane.pendingReplays = [];
   }
 

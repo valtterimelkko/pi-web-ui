@@ -559,17 +559,6 @@ describe('GeminiLiveBridge context and activity', () => {
     bridge.close();
   });
 
-  it('replays an operator utterance as a user turn that elicits a reply (turnComplete true)', async () => {
-    const { bridge, mock } = await connectedBridge();
-    expect(bridge.replayUserTurn('Relay to worker I want to find out about Podpoint.')).toBe(true);
-    const content = mock.last().sentClientContent[0];
-    expect(content.turnComplete).toBe(true);
-    expect(content.turns[0].role).toBe('user');
-    expect(content.turns[0].parts[0].text).toBe('Relay to worker I want to find out about Podpoint.');
-    expect(bridge.usage.replayTurns).toBe(1);
-    bridge.close();
-  });
-
   it('sends explicit activity markers when manual detection is on, and never when it is off', async () => {
     const manual = await connectedBridge();
     manual.bridge.activityStart();

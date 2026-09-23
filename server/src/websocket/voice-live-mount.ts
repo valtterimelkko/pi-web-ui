@@ -2323,7 +2323,7 @@ export class VoiceLiveMount {
     // remint + replay, not in a silent soak failure. Mechanical classes never
     // arm it (they need no model reply).
     if (utteranceClass === 'statement' || utteranceClass === 'question') {
-      this.concreteVoiceSession?.noteOperatorUtteranceForStallWatch(laneId, text);
+      this.concreteVoiceSession?.noteOperatorUtteranceForStallWatch(laneId, text, atMs);
     }
   }
 }
