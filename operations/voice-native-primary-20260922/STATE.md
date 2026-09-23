@@ -20,6 +20,9 @@ pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
 overlays await L4's mechanism; the 24 core cells are ready to run on the frozen revision once the
 heavy-runner window is free (one heavy runner at a time).
 
+**L4 progress (07:27Z):** commit `757c93fe` — holdout validator overlays (fail-closed merge, drivable
+merged episodes); mid-work on soak/parking/attachment (5 lab files modified); no handback yet.
+
 **W3 outcome (frozen revision `f7c43bc9`)**
 
 - 11 dev-set passes: 1/12 → invalid (stale build) → 5/12 → 4 clean → 9 clean → 11 → 11 → 10 →
