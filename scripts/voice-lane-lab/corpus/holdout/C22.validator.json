@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "C22",
+  "validatorFrozenAtIso": "2026-09-23T08:08:08Z",
+  "note": "Holdout overlay \u2014 busy parking: relay parks while the worker is busy; the operator promotes exactly one parked item and confirms it (plan 5.2 C22).",
+  "inputTurns": [
+    {
+      "id": "t1",
+      "kind": "opening",
+      "text": "Relay to worker, tidy up the logging in the auth module \u2014 no rush at all.",
+      "requiredWords": [
+        "relay",
+        "worker",
+        "logging",
+        "auth"
+      ]
+    },
+    {
+      "id": "t2",
+      "kind": "adaptive-promote",
+      "text": "Yes, promote that one.",
+      "requiredWords": [
+        "promote"
+      ]
+    },
+    {
+      "id": "t3",
+      "kind": "adaptive-confirm",
+      "text": "Yes, send it.",
+      "requiredWords": [
+        "yes",
+        "send"
+      ]
+    }
+  ],
+  "expectedSlots": {
+    "mustContain": [
+      "logging",
+      "auth"
+    ],
+    "mustNotContain": [],
+    "responseMustContain": [
+      "parked"
+    ],
+    "responseMustNotContain": []
+  },
+  "approvalTurns": [
+    {
+      "turnId": "t3",
+      "precondition": "candidate-matched+presentation-complete"
+    }
+  ],
+  "repairBranches": []
+}
