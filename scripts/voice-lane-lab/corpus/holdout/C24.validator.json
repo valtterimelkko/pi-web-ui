@@ -27,9 +27,7 @@
   "expectedSlots": {
     "mustContain": [],
     "mustNotContain": [],
-    "responseMustContain": [
-      "switched"
-    ],
+    "responseMustContain": [],
     "responseMustNotContain": []
   },
   "approvalTurns": [],

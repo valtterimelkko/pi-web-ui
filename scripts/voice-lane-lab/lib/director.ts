@@ -271,8 +271,12 @@ export class EpisodeDirector {
       // RETIRED by the product (cancel-before-retarget) and the switch is
       // acknowledged audibly — a release/delivery/store tail can never
       // complete, because a retired proposal is never released.
+      // M (merged 2026-09-23) stops the lane's native session on the switch
+      // (`voice_session_stop {reason: worker_switch}`) and resolves the pending
+      // proposal with `proposal_resolved {outcome: replaced}`. The retirement
+      // frame IS the switch's completion: no talker acknowledgement can follow
+      // on a stopped lane, so the old ack phase could only ever time out.
       phases.push({ kind: 'await-switch-retirement', deadlineMs: d.deliveryMs, enteredAtMs: null });
-      phases.push({ kind: 'await-switch-ack', deadlineMs: d.presentationMs, enteredAtMs: null });
     } else if (routesRelay) {
       phases.push({ kind: 'await-release', deadlineMs: d.deliveryMs, enteredAtMs: null });
       phases.push({ kind: 'await-delivery', deadlineMs: d.deliveryMs, enteredAtMs: null });
@@ -551,7 +555,9 @@ export class EpisodeDirector {
         if (observation.kind === 'retirement') {
           const target = this.approvedIdentity ?? this.candidateIdentity ?? this.pendingCandidate?.identity ?? null;
           if (target !== null && observation.identity === target) {
-            this.advance();
+            // The retirement is the switch's guarantee (H1 cancel-before-
+            // retarget), observed on the wire. The switch tail ends here.
+            return this.complete();
           }
           // A retirement for a different identity is not the switch's
           // retirement; the deadline governs.
