@@ -360,3 +360,86 @@ describe('the remint retires stale relay-source candidates', () => {
     expect(sent.some((message) => (message as { type: string }).type === 'proposal_created')).toBe(true);
   });
 });
+
+describe('a final that lands mid-speech is deferred to the speech window, not dropped', () => {
+  const relayBrief: VoiceWorkerBrief = {
+    entries: [{ role: 'user', text: 'deploy the hot fix to staging' }],
+    total: 1,
+  };
+
+  function mountWithSink() {
+    const service = new FakeService();
+    const evidenceEvents: Array<Record<string, unknown>> = [];
+    const mount = new VoiceLiveMount({
+      service,
+      delivery: {
+        describe: () => 'test delivery',
+        deliver: async () => ({ outcome: 'delivered', mechanism: 'prompt' }),
+      } as never,
+      isWorkerBusy: async () => false,
+      workerBrief: async () => relayBrief,
+      evidence: (event) => evidenceEvents.push(event),
+    } as never);
+    const sent: Sent[] = [];
+    return { service, mount, sent, evidenceEvents };
+  }
+
+  it('defers a mid-speech final and processes it when the speech window closes (soak F-1, attempt-09)', async () => {
+    const { service, mount, sent, evidenceEvents } = mountWithSink();
+    await startLane(mount, sent, 'lane-1');
+
+    // The operator starts speaking; the provider finalises the transcript
+    // BEFORE the client's speech_end arrives (the VAD tail races the turn
+    // boundary — exactly the post-reconnect confirm shape that ate the
+    // soak's first release in attempt-09).
+    await mount.route('c1', ctx(sent) as never, {
+      type: 'voice_activity_state', version: 1, laneId: 'lane-1', attachmentGeneration: 1, state: 'speech_start', atMs: 1,
+    } as never);
+    service.emit({
+      kind: 'transcript', laneId: 'lane-1', attachmentGeneration: 1, speaker: 'operator', source: 'native',
+      text: 'Yes, send that.', final: true, atMs: 2,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Deferred: recorded as deferred, not accepted, not echo-dropped.
+    const names = () => evidenceEvents.map((e) => String(e.event));
+    expect(names()).toContain('operator_utterance_deferred');
+    expect(names()).not.toContain('operator_utterance');
+
+    // The window closes — the deferred final is decided with full information.
+    await mount.route('c1', ctx(sent) as never, {
+      type: 'voice_activity_state', version: 1, laneId: 'lane-1', attachmentGeneration: 1, state: 'speech_end', atMs: 3,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(names()).toContain('operator_utterance'); // it reached the kernel path
+    expect(names()).toContain('spoken_confirm_no_proposal'); // honestly answered: nothing was pending
+  });
+
+  it('still suppresses a deferred final whose speech overlapped talker audio (echo guarantee intact)', async () => {
+    const { service, mount, sent, evidenceEvents } = mountWithSink();
+    await startLane(mount, sent, 'lane-1');
+
+    await mount.route('c1', ctx(sent) as never, {
+      type: 'voice_activity_state', version: 1, laneId: 'lane-1', attachmentGeneration: 1, state: 'speech_start', atMs: 1,
+    } as never);
+    // Talker audio is in the room while the operator speaks (the window will
+    // show the overlap once it closes).
+    (mount as unknown as { lanes: Map<string, { talkerAudioUntilMs: number }> }).lanes
+      .get('lane-1')!.talkerAudioUntilMs = Date.now() + 60_000;
+    service.emit({
+      kind: 'transcript', laneId: 'lane-1', attachmentGeneration: 1, speaker: 'operator', source: 'native',
+      text: 'Yes, send that.', final: true, atMs: 2,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const names = () => evidenceEvents.map((e) => String(e.event));
+    expect(names()).toContain('operator_utterance_deferred');
+
+    await mount.route('c1', ctx(sent) as never, {
+      type: 'voice_activity_state', version: 1, laneId: 'lane-1', attachmentGeneration: 1, state: 'speech_end', atMs: 3,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The window closed OVERLAPPING talker audio: the echo suppression holds.
+    expect(names()).toContain('operator_utterance_echo_suspect');
+    expect(names()).not.toContain('operator_utterance');
+  });
+});

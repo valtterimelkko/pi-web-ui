@@ -319,6 +319,12 @@ interface LaneRecord {
    * NEW identity and needs a NEW approval (C19) instead of being ignored.
    */
   lastRelay: { text: string; atMs: number } | null;
+  /** Final transcripts that arrived while the operator's VAD was still open
+   *  (the provider's turn boundary races the client's speech_end). Deferred
+   *  to the window's close, where the M6 rule decides with full information —
+   *  never dropped: dropping ate the post-reconnect confirm
+   *  (SOAK-10MIN-standard/attempt-09). */
+  pendingEchoVerdicts: Array<{ text: string; atMs: number }>;
 }
 
 /** One recorded final operator utterance (bounded lane history). */
@@ -842,6 +848,7 @@ export class VoiceLiveMount {
       lastTalkerFinalText: '',
       recentOperatorUtterances: [],
       lastRelay: null,
+      pendingEchoVerdicts: [],
     });
     return null;
   }
@@ -1625,6 +1632,23 @@ export class VoiceLiveMount {
     if (event.kind !== 'transcript' || event.speaker !== 'operator' || !event.final) return;
     const text = event.text.trim();
     if (!text) return;
+    // Soak F-1 (attempt-09): the provider's turn boundary can finalise the
+    // transcript while the client's VAD tail is still open — a mid-speech
+    // final. Dropping it ate the post-reconnect confirm. The verdict is
+    // DEFERRED to the speech window's close (see noteOperatorSpeech), where
+    // the same M6 rule decides with full information; an echo is still
+    // suppressed there.
+    if (lane.operatorSpeechActive) {
+      lane.pendingEchoVerdicts.push({ text, atMs: event.atMs });
+      if (lane.pendingEchoVerdicts.length > 4) lane.pendingEchoVerdicts.shift();
+      this.evidence({
+        event: 'operator_utterance_deferred',
+        laneId: event.laneId,
+        chars: text.length,
+        atMs: event.atMs,
+      });
+      return;
+    }
     // M6 (review R): echo/self-transcript exclusion. The talker's own TTS is
     // transcribed by the open mic; ordinary acoustic feedback that lands as a
     // confirmation-shaped utterance while a proposal is live must not release
@@ -1659,6 +1683,12 @@ export class VoiceLiveMount {
         atMs: event.atMs,
       });
     }
+    await this.acceptOperatorFinal(lane, text, event.atMs);
+  }
+
+  /** The accepted-final path (post echo gate): record the bounded
+   *  provenance window, then hand the utterance to the kernel. */
+  private async acceptOperatorFinal(lane: LaneRecord, text: string, atMs: number): Promise<void> {
     try {
       // Provenance for a model relay: every final operator utterance is
       // recorded with its stable id and class (bounded window) BEFORE the
@@ -1670,20 +1700,63 @@ export class VoiceLiveMount {
         id: utteranceId,
         text,
         utteranceClass: classifyOperatorUtterance(text),
-        atMs: event.atMs,
+        atMs,
       });
       if (lane.recentOperatorUtterances.length > MAX_OPERATOR_UTTERANCE_HISTORY) {
         lane.recentOperatorUtterances.splice(0, lane.recentOperatorUtterances.length - MAX_OPERATOR_UTTERANCE_HISTORY);
       }
-      await this.handleOperatorUtterance(event.laneId, text, event.atMs);
+      await this.handleOperatorUtterance(lane.laneId, text, atMs);
     } catch (error) {
       this.evidence({
         event: 'operator_utterance_failed',
-        laneId: event.laneId,
+        laneId: lane.laneId,
         message: error instanceof Error ? error.message : String(error),
         atMs: this.now(),
       });
     }
+  }
+
+  /** Decide the finals that were deferred while the operator was speaking
+   *  (soak F-1, attempt-09). Runs at speech_end, when the operator's own
+   *  speech window carries complete information. */
+  private drainDeferredEchoVerdicts(lane: LaneRecord): void {
+    if (lane.pendingEchoVerdicts.length === 0) return;
+    const deferred = lane.pendingEchoVerdicts.splice(0);
+    void (async () => {
+      for (const item of deferred) {
+        const echo = this.echoGateVerdict(lane, item.text);
+        if (echo.reason !== null) {
+          this.evidence({
+            event: 'operator_utterance_echo_suspect',
+            laneId: lane.laneId,
+            reason: echo.reason,
+            ...(echo.speechOverlap !== undefined ? { speechOverlap: echo.speechOverlap } : {}),
+            deferred: true,
+            chars: item.text.length,
+            atMs: item.atMs,
+          });
+          continue;
+        }
+        if (echo.lateFinalAccepted) {
+          this.evidence({
+            event: 'operator_utterance_late_final_accepted',
+            laneId: lane.laneId,
+            reason: 'operator_speech_window_precedes_talker_audio',
+            chars: item.text.length,
+            operatorSpeechEndMs: echo.operatorSpeechEndMs,
+            atMs: item.atMs,
+          });
+        }
+        await this.acceptOperatorFinal(lane, item.text, item.atMs);
+      }
+    })().catch((error: unknown) => {
+      this.evidence({
+        event: 'operator_utterance_failed',
+        laneId: lane.laneId,
+        message: error instanceof Error ? error.message : String(error),
+        atMs: this.now(),
+      });
+    });
   }
 
   /** M3: attach a pending start requestId to the lane's ack frame. */
@@ -1720,6 +1793,8 @@ export class VoiceLiveMount {
       lane.operatorSpeechWindow.endMs = this.now();
       lane.operatorSpeechWindow.overlappedTalkerAudio ||= this.now() < lane.talkerAudioUntilMs;
     }
+    // The speech window is complete: decide the finals deferred mid-speech.
+    this.drainDeferredEchoVerdicts(lane);
     if (lane.pendingWorkerActivity === null) return;
     const activity = lane.pendingWorkerActivity;
     const brief = lane.pendingBrief;

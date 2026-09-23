@@ -769,22 +769,24 @@ describe('M6: talker echo never releases the gate', () => {
       atMs: 1,
     } as never);
     // A commission-shaped transcript is now just conversation: no proposal.
-    // It is ALSO echo-suspect (speech is active), so it is never recorded as a
-    // relay source — the operator's words while speech is active are dropped.
+    // It arrives while speech is ACTIVE, so its verdict is DEFERRED to the
+    // speech window's close (soak F-1: dropping it ate the post-reconnect
+    // confirm) — deferred, never accepted, never echo-dropped.
     utterance(service, 'lane-1', 'Tell the worker to check the tests.');
     await flush();
     expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
 
     // Only the model's relay tool call creates the proposal, and operator speech
     // state is not an authority gate on it. But the relay still needs a SOURCE:
-    // the only words it could bind to were echo-suspect and never recorded, so
-    // the honest answer is a provenance refusal, not a guess.
+    // the deferred words are not recorded yet, so the honest answer is a
+    // provenance refusal, not a guess.
     await mount.handleToolRequest({ laneId: 'lane-1', name: 'relay_to_worker', args: { text: 'check the tests.' }, atMs: 1 });
     await flush();
     expect(sent.filter((frame) => frame.type === 'proposal_created')).toHaveLength(0);
 
-    // Speech ends; the operator's next words are recorded, and the relay binds
-    // and creates — the speech state itself never gated anything.
+    // Speech ends; the DEFERRED words are recorded as relay-source provenance
+    // (preserved, not dropped), and the model's relay binds and creates — the
+    // speech state itself never gated anything.
     await mount.route('c1', ctx(sent) as never, {
       type: 'voice_activity_state',
       version: 1,
@@ -793,7 +795,7 @@ describe('M6: talker echo never releases the gate', () => {
       state: 'speech_end',
       atMs: 2,
     } as never);
-    utterance(service, 'lane-1', 'check the tests.');
+    await flush();
     await flush();
     await mount.handleToolRequest({ laneId: 'lane-1', name: 'relay_to_worker', args: { text: 'check the tests.' }, atMs: 3 });
     await flush();
