@@ -87,6 +87,34 @@ describe('MultiSessionManager.recoverSession — browser re-attach and single-fl
     expect(manager.getSessionStatus(session.sessionFile)?.status).toBe('idle');
   });
 
+  it('RED (round 3): a recovered idle session with NO real clients is evictable — the internal multi- subscriber must be released', async () => {
+    // No browser clients subscribed: after recovery the only subscriber left
+    // must not be the manager's own multi-<path> rehydration handle, or the
+    // session can never satisfy the eviction predicate
+    // (idle && subscribers.size === 0 && !pinned) and leaks residency forever.
+    manager.unsubscribeClient('first-client', session.sessionFile);
+    expect(manager.getSubscribers(session.sessionFile)).toEqual([]);
+
+    await manager.recoverSession(session.sessionFile);
+
+    expect(manager.getSubscribers(session.sessionFile)).toEqual([]);
+    // And it really is evictable by the same predicate the cleanup timer uses:
+    const status = manager.getSessionStatus(session.sessionFile);
+    expect(status?.status).toBe('idle');
+  });
+
+  it('RED (round 3): a pre-existing multi- leak from an earlier recovery is healed, real clients kept', async () => {
+    // Simulate a leak left by an older build: the multi- handle is subscribed.
+    await manager.subscribeClient(`multi-${session.sessionFile}`, session.sessionFile);
+    await manager.subscribeClient('browser-1', session.sessionFile);
+
+    await manager.recoverSession(session.sessionFile);
+
+    const subscribers = manager.getSubscribers(session.sessionFile);
+    expect(subscribers).toEqual(expect.arrayContaining(['first-client', 'browser-1']));
+    expect(subscribers).not.toContain(`multi-${session.sessionFile}`);
+  });
+
   it('restores pin claims on the rehydrated session (owner decision: keep the pin)', async () => {
     manager.pinSession(session.sessionFile, 'web-ui');
     expect(manager.isSessionPinned(session.sessionFile)).toBe(true);

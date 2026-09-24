@@ -659,7 +659,11 @@ export class MultiSessionManager {
   }
 
   private async performRecovery(sessionPath: string): Promise<SessionRecoveryResult> {
-    const subscribers = this.getSubscribers(sessionPath);
+    // Round 3: exclude the manager's own rehydration handle from the capture —
+    // a pre-fix recovery left it subscribed (an eviction leak); healing means
+    // re-attaching only REAL clients.
+    const leakedHandle = `multi-${sessionPath}`;
+    const subscribers = this.getSubscribers(sessionPath).filter((id) => id !== leakedHandle);
     const viewers = this.getViewingClients(sessionPath);
     const pinClaims = this.getPinClaims(sessionPath);
     const previousSessionId = this.sessions.get(sessionPath)?.sessionId;
@@ -695,6 +699,12 @@ export class MultiSessionManager {
         logger.warn(`[MultiSessionManager] Recovery could not restore pin claim '${claim}' for ${sessionPath}`);
       }
     }
+
+    // Round 3 (load, act, release — same as the voice relay): the multi-
+    // rehydration handle is an internal load claim, not a client. Leaving it
+    // subscribed pins the session against idle cleanup and eviction forever
+    // (cleanup requires subscribers.size === 0).
+    this.unsubscribeClient(`multi-${sessionPath}`, sessionPath);
 
     const rehydrated = this.sessions.get(sessionPath);
     const sessionId = rehydrated?.sessionId ?? previousSessionId;
@@ -1848,6 +1858,9 @@ export class MultiSessionManager {
     try {
       await Promise.race([turnStart.promise, promptPromise]);
     } catch (error) {
+      // Round 3: the error path must release the waiter too — a rejected
+      // prompt leaves the parked waiter in the map forever otherwise.
+      turnStart.cancel();
       activeSession.status = 'error';
       if (turnStarted) {
         // The turn had genuinely started; what failed now is the worker's

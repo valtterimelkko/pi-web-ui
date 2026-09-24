@@ -53,6 +53,28 @@ export function useWebSocket() {
         // record each of them as protocol drift. Consumed BEFORE the store, as
         // the talker tap is (see lib/voiceLive/frameBus.ts).
         if (emitVoiceFrame(message)) return;
+        // Round 2 (session_recovered): the recovered session's in-memory
+        // transcript was rebuilt server-side, so the local view is stale.
+        // Re-switch to the current session — the server replies with a fresh
+        // history snapshot (history_start/end → store rebuild). Status resync
+        // itself is handled in the store's session_recovered case.
+        if (
+          typeof message === 'object'
+          && message !== null
+          && (message as { type?: string }).type === 'session_event'
+          && (message as { event?: { type?: string } }).event?.type === 'session_recovered'
+        ) {
+          const evt = message as { sessionId?: string; sessionPath?: string };
+          const current = currentSessionPathRef.current;
+          const recoveredPath = evt.sessionPath ?? evt.sessionId;
+          if (current && recoveredPath && (recoveredPath === current || evt.sessionId === current)) {
+            setTimeout(() => {
+              try {
+                client.send({ type: 'switch_session', sessionPath: current });
+              } catch { /* socket raced closed — the reconnect path resubscribes anyway */ }
+            }, 250);
+          }
+        }
         handleServerMessage(message);
       },
       onStatusChange: (status: WebSocketStatus) => {

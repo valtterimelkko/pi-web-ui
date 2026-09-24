@@ -25,15 +25,37 @@ API — the pre-checks exist for that reason.
 4. **Production is still expected to serve 1.44.0** before this runbook and **1.45.0** after
    (verify at step 4). If it already serves 1.45.0, this runbook already ran — stop.
 
-## 1. Backup (8a safety)
+## 1. Backup (8a safety) — OUTSIDE the extensions directory
 
-- `sudo cp -a /root/.pi/agent/extensions/auto-compact-75 /root/.pi/agent/extensions/auto-compact-75.bak-$(date -u +%Y%m%dT%H%M%SZ)`
-- `sudo cp -a /root/.pi/agent/extensions/goal-engine /root/.pi/agent/extensions/goal-engine.bak-$(date -u +%Y%m%dT%H%M%SZ)`
-- Record `sha256sum` of both directories' files into the run log.
+**Critical:** the Pi SDK loads EVERY subfolder of `extensions/` that contains an `index.ts`
+(loader.js:560). A backup written inside `extensions/` (e.g. `auto-compact-75.bak-…/`) would be
+loaded as a duplicate extension. Back up to a directory the loader never scans:
 
-Rollback for step 2/3 = restore these directories (`cp -a` back) and restart again.
+```bash
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+sudo mkdir -p /root/.pi/agent/extension-backups/$TS
+sudo cp -a /root/.pi/agent/extensions/auto-compact-75 /root/.pi/agent/extension-backups/$TS/
+sudo cp -a /root/.pi/agent/extensions/goal-engine /root/.pi/agent/extension-backups/$TS/
+sha256sum /root/.pi/agent/extension-backups/$TS/*/* | tee /root/.pi/agent/extension-backups/$TS/SHA256SUMS
+```
 
-## 2. 8a — deploy the extension builds (store → live)
+Rollback for step 2 = `rsync -a --delete /root/.pi/agent/extension-backups/$TS/auto-compact-75/
+/root/.pi/agent/extensions/auto-compact-75/` (same for goal-engine) and restart again.
+
+## 2. Pre-restart build gate (production serves server/dist)
+
+A restart only ever deploys a CLEAN BUILD of the exact master HEAD:
+
+1. `git -C /root/pi-web-ui rev-parse HEAD` — record the hash (this is what CI must be green on).
+2. `git -C /root/pi-web-ui status --short` — must show NO tracked-file modifications (untracked
+   docs are acceptable). A dirty tree means the build would not be the recorded commit — stop.
+3. `npm --prefix /root/pi-web-ui run build` — MUST exit 0. If the build fails: stop, fix on
+   master, push, wait for CI green, and only then rebuild. **Do not restart on a stale or
+   failed build** — production runs `node server/dist/index.js`, so the build output IS the
+   deployment.
+4. Record `sha256sum /root/pi-web-ui/server/dist/index.js` for the verification log.
+
+## 3. 8a — deploy the extension builds (store → live)
 
 Copy BOTH changed extensions from their store repos (they are committed and pushed):
 
@@ -45,7 +67,15 @@ Copy BOTH changed extensions from their store repos (they are committed and push
 3. Diff check: `diff -rq /root/pi-enhancement/auto-compact-75 /root/.pi/agent/extensions/auto-compact-75`
    and the same for goal-engine — both must report NO differences. (The reverse direction —
    live-only files — must also be empty.)
-4. **Restart** (the only service touch in this runbook):
+4. **Post-copy containment check (critical — the loader loads every subfolder with an
+   index.ts):**
+   `ls /root/.pi/agent/extensions/`
+   Compare against the expected extension set (the subfolders that existed before this runbook
+   plus `auto-compact-75` and `goal-engine` updates). Any unexpected subfolder — especially
+   anything matching `*.bak*` or a new directory — must be moved out to
+   `/root/.pi/agent/extension-backups/` BEFORE continuing. A stray directory with an index.ts
+   would load as a duplicate extension.
+5. **Restart** (the only service touch in this runbook):
    `sudo systemctl restart pi-web-ui.service`
    Note: already-loaded sessions pick up the new extensions only when they are reloaded; the
    restart unloads everything, so all sessions get the new builds.
@@ -88,7 +118,8 @@ If the Claude channel mode is ever re-enabled, `claude-channel-service.ts` calls
 
 ## 5. Rollback
 
-- Extensions: restore the step-1 backups, `sudo systemctl restart pi-web-ui.service`, re-verify
+- Extensions: restore from `/root/.pi/agent/extension-backups/<timestamp>/` (rsync back, per the
+  step-1 mapping), `sudo systemctl restart pi-web-ui.service`, re-verify
   health shows **1.44.0**-era behaviour (note: the contract constant only reverts with a server
   build rollback — `git checkout <pre-1.45 commit>` + rebuild if a full code rollback is needed).
 - Hooks: restore `settings.json` from the step-4.1 backup.

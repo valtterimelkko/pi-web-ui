@@ -3,7 +3,9 @@
 Status: **IMPLEMENTATION COMPLETE (Phases 0–7 executed and independently verified, 2026-09-24; S1–S13 all PASS;
 round 2 owner-review fixes complete — S7 browser re-attach corrected and verified over a real WebSocket,
 single-flight recovery, non-interactive goal flags in pi-enhancement+API, submitPrompt late-start grace,
-Phase 8 restart runbook written; see
+Phase 8 restart runbook written; round 3 second-review fixes complete — recovery subscriber release
+(eviction leak), runbook backup location + pre-restart clean-build gate, submitPrompt error-path waiter
+cancel, client history reload on session_recovered; see
 docs/plans/execution-reports/INTERNAL-API-SILENT-NOOP-20260924/INTERNAL-API-SILENT-NOOP-EXECUTION-REPORT.md).
 Phase 8 (production rollout) NOT executed — owner-gated; runbook:
 docs/plans/execution-reports/INTERNAL-API-SILENT-NOOP-20260924/PHASE-8-RESTART-RUNBOOK.md.**
