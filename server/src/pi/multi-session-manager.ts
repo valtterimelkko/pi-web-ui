@@ -1856,18 +1856,21 @@ export class MultiSessionManager {
         return;
       }
       throw error;
-    } finally {
-      turnStart.cancel();
     }
 
     // Contract 1.45.0 Phase 1b (voice relay honesty): the prompt PROMISE won
     // the race without a genuine turn start — the classic fenced-worker
-    // swallow. Apply the same compaction exemption and bounded grace as the
-    // Internal API fail-fast (Phase 1), then refuse honestly instead of
-    // reporting a green delivery. M3 timing for real deliveries (agent_start
-    // wins the race) is untouched.
+    // swallow. The turn-start waiter stays ARMED through the grace window so
+    // a start seen during the grace is treated as delivered (round-2 fix:
+    // the waiter was previously cancelled before this check, closing the
+    // late-start window). Compaction exemption mirrors Phase 1. M3 timing
+    // for real deliveries (agent_start wins the race) is untouched.
     if (!turnStarted) {
-      await delay(promptExecutionGraceMs());
+      const startedDuringGrace = await Promise.race([
+        turnStart.promise.then(() => true),
+        delay(promptExecutionGraceMs()).then(() => false),
+      ]);
+      turnStart.cancel();
       const compactionRecent =
         typeof activeSession.lastCompactionAt === 'number'
         && Date.now() - activeSession.lastCompactionAt <= promptExecutionGraceMs() * 4;
@@ -1875,12 +1878,20 @@ export class MultiSessionManager {
       // Read through a function: event handlers mutate the status during the
       // awaits above, which TS's control-flow narrowing cannot see.
       const statusNow = (): SessionStatus => activeSession.status;
-      if (!compactionRecent && !streamingNow && statusNow() !== 'streaming') {
+      if (
+        !startedDuringGrace
+        && !turnStarted
+        && !compactionRecent
+        && !streamingNow
+        && statusNow() !== 'streaming'
+      ) {
         if (activeSession.status === 'busy') activeSession.status = 'idle';
         throw new PromptNotSubmittedError(
           `message accepted by ${sessionPath} but no turn started (input likely swallowed by a runtime extension fence); nothing was delivered to a running worker`,
         );
       }
+    } else {
+      turnStart.cancel();
     }
   }
 
