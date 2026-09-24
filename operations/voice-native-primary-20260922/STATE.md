@@ -2,26 +2,28 @@
 
 > **Current state, not a completion claim — read before acting.** Rewritten at every fan-in/dispatch.
 > Authority and strategy live in [`LEDGER.md`](./LEDGER.md); the plan is the contract.
-> Conductor session `01a0caac-7dbe-73fd-809a-f3eb3c6b0b6b` (bare-CLI pi; primary wake
-> `watch_wake_register`, backstop `wake_deadline`/`bg_run`).
 
-**Stage:** `EXECUTING` — owner gates answered (Q1 merge granted, Q2 plan confirmed).
+**Stage:** `FOLLOW-UP EXECUTED (§15.4) — production deploy owner-gated (F-8 pending owner approval)`.
 
-**Wave:** W1 · W2 complete · **W3 fix loop COMPLETE — GATE G4 ACHIEVED** (11 passes; pass 10 and
-pass 11 both **12/12 clean**; freeze at `f7c43bc9`) · **W4 (Phase 5) opening**.
+**The §15.4 follow-up is executed (2026-09-24, direct execution — no children, owner redirect after
+the child-dispatch chain failed).** All eight acceptance items are met or pending only the
+owner-gated restart: F-1 SOAK-10MIN attempt-13 **verifier PASS** (pending-work survival verified:
+prop-1 released, delivered AND stored after the reconnect; the repeat relay produced prop-2 →
+presented → confirmed → delivered); F-2 D15-3 natural approval (C18 restored wording + C11
+amendment + candidate-referring confirms + withdrawal-amends, gate untouched); F-3 the C21
+precondition prompt (evaluator-style Q1 pass); F-4 VERDICT corrections + dated addendum; F-5
+canonical docs dated; F-6 manifests carry wall-clock/kernel-call counts + the honest metered-usage
+limitation; F-7 gates green + CI success on master `21bb5703`. The fix trail, one seam per attempt
+(attempts 04–13 the honest record): `8fd7ddaa`, `3ee65713`, `8fd993f6`, `f704daf8`, `d38acf2d`,
+`5283dbe9`, `539e60b6`, `284f186d`, `21bb5703`.
 
-**Children:** none active. EV (evaluator) and RV (reviewer) both settled and reconciled.
+**F-8:** build done; the restart of `pi-web-ui.service` is OWNER-GATED (restated by the operator
+2026-09-24) — the permission question was sent on Telegram with delivery `sent`; on approval,
+restart via `scripts/restart-pi-web-ui.sh`, verify `/capabilities` + served bundle identity, then
+the D15-7 dogfooding notice.
 
-**Campaign: COMPLETE and independently reviewed.** 34 required cells on revision `5fc3f1bb`;
-accepted (verifier ∧ evaluator): **standard 14/17, ET-HIGH 12/17**; discordant pairs 3:1 for standard
-→ rule-4 tie, retain standard. Failures preserved: C05-et-high (flaky), C11-standard (amendment
-classified `cancel`), C16-et-high (evaluator indeterminate), C21 both arms (evaluator Q1 — the
-version-check precondition unaddressed), C24-et-high (no first candidate), SOAK ×2 (post-reconnect
-repeat relay produced no candidate). Reviewer verdict `supported-with-findings`, 34/34 cell verdicts
-independently reproduced; three material findings (F1 holdout wording disclosure — ledger corrected;
-F2 the C24 bar change, flagged post-hoc; F3 spend unverifiable) and two required corrections, both
-applied. Final verdict `campaign/VERDICT.md`: **`NO_CANDIDATE_MEETS_TARGET`** with the failing boundary
-and the smallest next experiment named; production not deployed.
+**Children:** none. No watches, no leases. No worktrees. The original campaign record below is
+historical; read the §15.4 addendum in [`campaign/VERDICT.md`](./campaign/VERDICT.md) first.
 
 **W3 outcome (frozen revision `f7c43bc9`)**
 
