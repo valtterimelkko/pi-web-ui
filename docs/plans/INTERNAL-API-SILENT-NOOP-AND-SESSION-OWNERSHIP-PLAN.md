@@ -1,14 +1,14 @@
 # Internal API: Silent No-ops and Pi Session Ownership — Plan
 
-Status: **IMPLEMENTATION COMPLETE (Phases 0–7 executed and independently verified, 2026-09-24; S1–S13 all PASS;
-round 2 owner-review fixes complete — S7 browser re-attach corrected and verified over a real WebSocket,
-single-flight recovery, non-interactive goal flags in pi-enhancement+API, submitPrompt late-start grace,
-Phase 8 restart runbook written; round 3 second-review fixes complete — recovery subscriber release
-(eviction leak), runbook backup location + pre-restart clean-build gate, submitPrompt error-path waiter
-cancel, client history reload on session_recovered; see
+Status: **PROGRAMME COMPLETE (2026-09-24).** Phases 0–7 executed and independently verified (S1–S13 all
+PASS; rounds 2–3 owner-review fixes complete — see
 docs/plans/execution-reports/INTERNAL-API-SILENT-NOOP-20260924/INTERNAL-API-SILENT-NOOP-EXECUTION-REPORT.md).
-Phase 8 (production rollout) NOT executed — owner-gated; runbook:
-docs/plans/execution-reports/INTERNAL-API-SILENT-NOOP-20260924/PHASE-8-RESTART-RUNBOOK.md.**
+Phase 8 EXECUTED 2026-09-24 ~20:01 UTC under owner approval per
+PHASE-8-RESTART-RUNBOOK.md: extensions deployed (auto-compact-75 ownership publication +
+goal-engine --yes/--replace), pi-web-ui.service restarted, production serves contract
+**1.45.0**, ownership live (gate refusing with SESSION_OWNED_BY_OTHER_RUNTIME on production),
+the four dead :3111 hooks removed per 8b (backups in /root/.pi/agent/extension-backups/).
+P1–P3 all PASS — Programme complete.
 Written 2026-09-24; regression-checked against commit
 history the same day — see §2a; execution decisions in §1a.
 Target contract: **1.45.0** (additive, with one deliberate behaviour change —

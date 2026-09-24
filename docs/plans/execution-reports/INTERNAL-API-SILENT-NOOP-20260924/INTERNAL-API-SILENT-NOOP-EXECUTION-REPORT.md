@@ -51,6 +51,16 @@ Production `.env` has no `CLAUDE_CHANNEL_*` entries → `CLAUDE_CHANNEL_ENABLED 
 
 **Recommendation (Phase 8b, owner-gated): REMOVE the four http hook entries.** The owning feature is disabled; if you later enable channel mode, `writeHooksConfig()` re-registers the hooks automatically on the then-current port. Preserve the two Agent OS command-hook groups and everything else in the file. (The alternative — restoring a listener on 3111 — has no current purpose.) A managed removal exists in-code (`removeHooksConfig()`), or a surgical JSON edit removing exactly those four entries.
 
+## Phase 8 — EXECUTED 2026-09-24 (owner-approved) — Programme complete
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| P1 | Owner approved the Phase 4a extension deploy to `/root/.pi/agent/extensions/` and the `pi-web-ui.service` restart | **PASS** | Quoted approval in-conversation: "Round 3 verified … You are approved to execute Phase 8, both 8a and 8b, following PHASE-8-RESTART-RUNBOOK.md exactly and in order." Plus the mid-execution §0.2 ruling: activeTurns read 1 (stale quarantined slot — all sessions idle, no receipts, no board consumer); owner said "proceed now". Waiver recorded in phase8-logs/00-waiver-and-prestate.md |
+| P2 | Production serves 1.45.0 and the extension publishes status; read-only GET on a real Pi session shows `ownership.status` | **PASS** | Restart at 20:01:06Z (wrapper RESTART-REQUESTED record, --force named override of the stale-slot pre-flight); GET /health → "1.45.0"; GET /api/v1/capacity → activeTurns 0 (stale slot cleared, as predicted); journal: 16 extensions loaded exactly once — both new builds present, ZERO extension-backups loads, ZERO error lines; GET /sessions/01a0d366 → ownership {status:"conflict", ownerPid:1496414, ownerMode:"tui"} PUBLISHED, and control set_thinking_level on it → 409 SESSION_OWNED_BY_OTHER_RUNTIME in 11 ms naming that owner. A never-loaded session correctly reports {status:"unknown", leaseState:"owned"} (its own tui CLI owns the lease; the server never loaded it) |
+| P3 | Dead Claude hooks resolved per Phase 8b | **PASS** | Backup first: /root/.pi/agent/extension-backups/20260924T195637Z/settings.json.bak (pre sha256 b8816bcc…e650f5). Removed EXACTLY the four 127.0.0.1:3111 http entries (PostToolUse/Stop/SessionStart/UserPromptSubmit); JSON valid; grep 3111 == 0; ALL Agent OS command hooks intact (hooks-before/hooks-after captures). Re-enable safety cited: claude-channel-hooks-config.test.ts (writer emits exactly its four entries; merge test = re-registration after removal; cleanup removes only its own). Fresh-Claude-session transcript check deferred to the next natural session — the 3111 entries no longer exist, so that ECONNREFUSED source is structurally gone |
+
+**PROGRAMME COMPLETE — P1, P2, P3 all PASS.** Phase 8 execution log: phase8-logs/00-waiver-and-prestate.md + phase8-logs/01-restart-verification.md. Restart 2026-09-24T20:01:06Z; HEAD 44350706; dist sha256 753ded6b…2f762603d822b49248acb27cb0c46.
+
 ## Round 2 (owner review findings, 2026-09-24 evening) — all PASS
 
 The owner's review of the round-1 hand-back found S7 over-claimed and three more gaps. All fixed under the same rules (strict TDD, §2a tests unmodified, disposable servers only, per-fix commits pushed; no production restart, no live-extension copy, no settings.json edits).
