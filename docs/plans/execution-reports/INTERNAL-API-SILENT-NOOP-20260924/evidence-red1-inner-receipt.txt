@@ -1,0 +1,19 @@
+{
+ "runId": "9f2c571d-1991-4dfb-9ec8-5e192b001c30",
+ "status": "completed",
+ "errorCode": null,
+ "cessation": {
+  "state": "confirmed",
+  "basis": "documented_handler_return",
+  "observedAt": "2026-09-24T13:28:24.662Z"
+ },
+ "outputEvidence": {
+  "policyVersion": "run-output-v1",
+  "source": "normalized-events-v1",
+  "assistantMessages": 0,
+  "assistantTextBlocks": 0,
+  "assistantTextChars": 0,
+  "toolCalls": 0,
+  "disposition": "unknown"
+ }
+}

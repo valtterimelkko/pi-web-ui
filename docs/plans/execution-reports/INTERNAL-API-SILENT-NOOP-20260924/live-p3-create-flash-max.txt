@@ -1,0 +1,2 @@
+{"sessionId":"01a0d3c8-0b99-741b-a42c-caf2d9be16a1","sessionPath":"/tmp/pi-validation-p1/pi-sessions/2026-09-24T14-18-17-883Z_01a0d3c8-0b99-741b-a42c-caf2d9be16a1.jsonl","runtime":"pi","model":"zai/glm-5.3-flash","thinkingLevel":"max","resolvedModel":"zai/glm-5.3-flash","modelBinding":{"requested":"zai/glm-5.3-flash","resolved":"zai/glm-5.3-flash","fallbackApplied":false},"cwd":"/tmp/pi-validation-p1/workspace","createdAt":"2026-09-24T14:18:19.039Z"}
+HTTP 201

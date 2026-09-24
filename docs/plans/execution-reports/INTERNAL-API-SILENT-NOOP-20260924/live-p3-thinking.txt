@@ -1,0 +1,2 @@
+{"success":true,"action":"set_thinking_level","level":"high"}
+HTTP 200 in 0.478883s

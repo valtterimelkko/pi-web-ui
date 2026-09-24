@@ -1,0 +1,6 @@
+{
+ "status": "failed",
+ "errorCode": "PROMPT_NOT_EXECUTED",
+ "acceptedAt": "2026-09-24T13:51:36.302Z",
+ "terminalAt": "2026-09-24T13:51:39.039Z"
+}

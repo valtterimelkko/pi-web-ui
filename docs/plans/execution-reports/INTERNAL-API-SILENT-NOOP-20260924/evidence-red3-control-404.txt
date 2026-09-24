@@ -1,0 +1,2 @@
+{"error":"Pi session not loaded","code":"SESSION_NOT_FOUND","hint":"List current sessions with GET /api/v1/sessions and use a valid sessionId.","docs":"docs/INTERNAL-API.md#list-sessions"}
+HTTP 404 in 0.007743s
