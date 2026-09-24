@@ -3,6 +3,19 @@
 > **Class:** canonical intent and current-behaviour doc. **Status:** authoritative.
 > **Date:** 17 September 2026.
 >
+> **2026-09-23 scope update (W4 campaign + §15 follow-up):** the native-primary
+> programme executed against this intent — the main mic now drives the native
+> Live lane with the cascade as a labelled fallback, relay handover is
+> first-person without the addressing frame, and the owner-as-test-harness lab
+> was replaced by an autonomous built-app browser-mic lab with a frozen corpus
+> and blinded evaluation. Verdict `NO_CANDIDATE_MEETS_TARGET` with standard
+> Live retained as the voice-seat model (plan §15.3 D15-1); continuity across a
+> voice reconnect and natural approval speech were the gaps the §15.4
+> follow-up was dispatched to close. Sections below stand as the intent of
+> record; read
+> [`plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md`](./plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md)
+> §15 first for what the campaign changed.
+>
 > This file is the single source of intent for Voice Mode. It combines and
 > supersedes three documents that previously held that intent between them:
 >

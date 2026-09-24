@@ -4,6 +4,17 @@
 
 **Status:** **Direction and streamlined plan approved by the owner on 2026-09-17** (§8, D1–D7). This is the architecture of record. It is **not** production approval: each step in §7 still carries its own gate, and deployment or restart is separate.
 
+> **2026-09-23 scope update (W4 campaign, plan §15):** the §3 contract — one native
+> conversation → host-owned presentation/approval/delivery → existing
+> worker/conductor — was executed and held (owner decision D15-2 keeps it as the
+> architecture of record; no third reasoning model, no Live-as-conductor work).
+> Standard Gemini Live is the measured voice-seat model (D15-1); ET-HIGH remains
+> capability, not default. The native lane, kernel-owned proposal/approval
+> surface and the autonomous validation lab shipped on this architecture; see
+> [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md)'s dated note and the plan's
+> [§15](./plans/VOICE-MODE-NATIVE-PRIMARY-AND-AUTONOMOUS-VALIDATION-PLAN.md)
+> for the audit, decisions and follow-up.
+
 **Inspection baseline:** Pi Web UI `1212bec`; agent-benchmarks `c147519`. No production validation, new paid model runs, or runtime changes were performed.
 
 **Intent source:** [`VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md) is the canonical *what* and *why*, including the renewed thinking-together intent of 2026-09-17. This file is the *how*. Where they describe the same object, that file governs intent and this one governs construction.

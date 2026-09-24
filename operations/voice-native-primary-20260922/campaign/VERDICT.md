@@ -1,4 +1,4 @@
-# W4 campaign — verdict (draft, pending reviewer reconciliation)
+# W4 campaign — verdict (reviewer-reconciled; §15.4 follow-up addendum below)
 
 **Status: `NO_CANDIDATE_MEETS_TARGET`** (rule 5) — the full required matrix is not met; the failing
 boundary is named below with the smallest next experiment. Under the rule-4 tie-break, **standard**
@@ -32,6 +32,23 @@ Per-cell outcomes and every attempt: `CAMPAIGN-INDEX.json` + `campaign-summary.t
 directory; the raw attempt records — the authority — live outside the repo under
 `/root/voice-lane-lab/campaigns/primary-mic-journeys/runs/<EPISODE>-<arm>/attempt-*`, and the
 reviewer's reproduction of every one of them is in `../coordination/RV/`).
+
+## First-attempt outcomes per arm (D15-6, added 2026-09-23)
+
+The paired table above takes each cell's LAST graded run. D15-6 requires first-attempt counts as
+primary. From `campaign-summary.txt` (the frozen window from the `bb61cc1f` chunk onward, each
+cell's first graded run in that window):
+
+| Arm | First-attempt journey pass | First-attempt accepted (evaluator included) | Cells needing more than one attempt |
+|---|---|---|---|
+| standard | 14/17 | 13/17 | C11 (fail, retry fail — stayed failed), C24 (verifier bar fixed, then pass), SOAK (fail, fail) |
+| et-high | 12/17 | 11/17 | C05 (in-window fail; 1 pass of 3 same-revision attempts — flaky), C19 (fail, then pass), C20 (fail, fail, then pass), C24 (fail ×2), SOAK (fail) |
+
+C21 is a journey pass on the first attempt in BOTH arms but was failed by the evaluator (Q1) and is
+not accepted, so it counts as accepted-on-first-attempt in neither arm. On first attempts the gap
+is 14 vs 12 journey passes (13 vs 11 accepted) — wider than the last-attempt 14/17 vs 12/17 in the
+planned matrix, and every ET retry pass (C19, C20, C05) came after a product/harness fix or on a
+repeat run at the same revision. Counts are reproducible line-by-line from `campaign-summary.txt`.
 
 ## Paired (discordant) comparison — the rule-4 test
 
@@ -76,10 +93,14 @@ otherwise ready.
 
 ## Explicitly not claimed
 
-- No production deploy, restart or live validation (owner gate: never).
+- No production deploy, restart or live validation (owner gate: never; superseded for the §15.4
+  follow-up only by decision D15-5).
 - Audio proof level: E2 (labelled synthetic TTS seam, byte-equality enforced); E3/E4 not claimed.
-- The worker-conductor demonstration proves voice can initiate and supervise through the existing
-  worker — not Live-as-conductor superiority.
+- The §8 worker-conductor demonstration was **never run, and no record of it exists** — the earlier
+  draft sentence here ("proves voice can initiate and supervise through the existing worker")
+  described a demonstration with no record and is corrected per audit finding 4: nothing is claimed
+  for or against voice-initiated orchestration. Not Live-as-conductor superiority was the earlier
+  sentence's framing; the honest statement is that the demonstration itself is untested.
 
 ## Independent reviewer (read-only, `../coordination/RV/review.md` + `review.json`)
 
@@ -115,3 +136,42 @@ holdout-unique; one unfinalised L4-era attempt dir; STATE/ledger staleness) are 
   two required corrections are applied above.
 - The C05-et-high flakiness (1 pass of 3) and the C11-standard classifier finding are recorded, not
   smoothed: a failed cell stays failed in the index.
+
+---
+
+## Dated addendum — §15.4 follow-up results (2026-09-23, appended without editing the original)
+
+**Follow-up executed (plan §15.4 F-1..F-8).** The failing boundary named above (the post-reconnect
+repeat relay) is CLOSED. Evidence, all standard-arm (D15-1), at master `539e60b6`+:
+
+- **SOAK-10MIN-standard attempt-13: verifier PASS** (`journey: pass`, full duration, 10 operator
+  turns ≥ 8, exactly one reconnect) with the exact acceptance line: *"soak pending-work survival
+  verified: proposal prop-1 was pending at the reconnect and released, delivered and stored after
+  it"* — plus the new explicit relay producing candidate prop-2, presented, confirmed, delivered,
+  and store probes matched for BOTH cycles (`worker-store-probes.jsonl`, 2 entries, matched: true).
+- **C18 passes on the RESTORED natural wording** ("Yes, send the amended version." — the fixture
+  rewording the audit flagged is undone; fixtures re-synthesised, WER 0). **C11 — failed twice in
+  the campaign — passes**: the amendment no longer classifies `cancel`; the live trace shows the
+  model re-relaying the full amended text, prop-2 replacing prop-1, delivered. **C21 passes the
+  verifier**, and the evaluator-style Q1 check on the recorded reply now PASSES: the reply addresses
+  the operator's "check the version number before anything" precondition explicitly (the campaign
+  reply never mentioned it; both replies are quoted in `followup-summary.txt`'s attempt records).
+
+**What it took (each fix RED-first at a named seam, each diagnosed from attempt evidence, attempts
+04–13 are the honest failure record):** the provider wedge after a barge-in interrupted read-back is
+real and terminal for that session — the fix is the service's unresponsive-provider remint watchdog
+(20 s of silence after a model-judged operator utterance → remint once per wedge, context-only
+replay of the unanswered words, `provider_unresponsive_remint` marker resets the mount's context
+ledger and retires stale relay-source candidates); marker hygiene (unmatched `activityEnd`
+suppression) and the context-ledger reset on same-generation restart; natural-approval
+classification (D15-3); the C21 precondition prompt line; a mid-speech transcript final is DEFERRED
+to the speech window instead of dropped (the echo gate's guarantee intact); and the soak harness
+probes the worker store for every released identity. Full commit trail: `8fd7ddaa`, `3ee65713`,
+`8fd993f6`, `f704daf8`, `d38acf2d`, `5283dbe9`, `539e60b6`, `284f186d` + the harness probe fix.
+
+**D15-6 (first-attempt reporting) applies forward:** this addendum's acceptance rests on attempt-13;
+attempts 04–12 (fail, fail, fail, fail, fail, fail, journey-pass/verifier-fail, journey-pass/
+verifier-fail, fail) are recorded in `followup-summary.txt` and the attempt records, not smoothed.
+
+**Not yet claimed at addendum time:** the repository gates/CI run (F-7) and the production deploy
+(F-8, owner-gated per D15-5 + the operator's restated gate) — recorded separately in the ledger.
