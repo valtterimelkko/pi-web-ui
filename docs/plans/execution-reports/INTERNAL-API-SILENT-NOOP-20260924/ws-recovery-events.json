@@ -1,0 +1,395 @@
+{
+ "recovered": true,
+ "anyEventAfter": true,
+ "sawRecoveredEvent": {
+  "type": "session_event",
+  "sessionId": "01a0d487-54b2-7254-a747-400bc74e7c62",
+  "sessionPath": "/tmp/pi-validation-ws/pi-sessions/2026-09-24T17-47-13-971Z_01a0d487-54b2-7254-a747-400bc74e7c62.jsonl",
+  "event": {
+   "type": "session_recovered",
+   "message": "Session was fenced by another runtime; the dead owner was detected and the session recovered automatically. The view has been resynced."
+  }
+ },
+ "log": [
+  {
+   "at": "2026-09-24T17:50:38.569Z",
+   "event": "login",
+   "status": 200
+  },
+  {
+   "at": "2026-09-24T17:50:38.591Z",
+   "event": "ws open"
+  },
+  {
+   "at": "2026-09-24T17:50:38.592Z",
+   "dir": "in",
+   "type": "authenticated",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:38.793Z",
+   "event": "switch_session sent",
+   "sessionPath": "/tmp/pi-validation-ws/pi-sessions/2026-09-24T17-47-13-971Z_01a0d487-54b2-7254-a747-400bc74e7c62.jsonl"
+  },
+  {
+   "at": "2026-09-24T17:50:38.934Z",
+   "dir": "in",
+   "type": "antigravity_available",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:38.935Z",
+   "dir": "in",
+   "type": "commandcode_available",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:38.935Z",
+   "dir": "in",
+   "type": "claude_available",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.598Z",
+   "dir": "in",
+   "type": "notification",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.598Z",
+   "dir": "in",
+   "type": "widget_content",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.602Z",
+   "dir": "in",
+   "type": "extension_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.602Z",
+   "dir": "in",
+   "type": "widget_cleared",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.603Z",
+   "dir": "in",
+   "type": "extension_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.604Z",
+   "dir": "in",
+   "type": "widget_cleared",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.605Z",
+   "dir": "in",
+   "type": "extension_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.721Z",
+   "dir": "in",
+   "type": "notification",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.723Z",
+   "dir": "in",
+   "type": "extension_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.723Z",
+   "dir": "in",
+   "type": "widget_cleared",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:39.731Z",
+   "dir": "in",
+   "type": "session_switched",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:40.602Z",
+   "dir": "in",
+   "type": "session_update",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:40.607Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:41.578Z",
+   "dir": "in",
+   "type": "opencode_available",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:41.607Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:42.608Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:43.609Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:44.609Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:45.609Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:46.609Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:47.610Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:48.610Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:49.610Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:50.611Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:51.612Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:52.612Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:53.613Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:54.614Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:55.615Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:56.615Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:57.615Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:58.615Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:50:59.614Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:00.615Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:01.615Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:02.617Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:03.617Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:04.618Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:05.619Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:06.619Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:07.619Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:08.620Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:09.621Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:10.621Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:11.622Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:12.623Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:13.623Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:14.623Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:16.055Z",
+   "dir": "in",
+   "type": "session_event",
+   "eventType": "session_recovered"
+  },
+  {
+   "at": "2026-09-24T17:51:16.880Z",
+   "dir": "in",
+   "type": "session_status",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:16.932Z",
+   "dir": "in",
+   "type": "session_update",
+   "eventType": null
+  },
+  {
+   "at": "2026-09-24T17:51:17.258Z",
+   "dir": "in",
+   "type": "session_event",
+   "eventType": "agent_start"
+  },
+  {
+   "at": "2026-09-24T17:51:17.259Z",
+   "dir": "in",
+   "type": "session_event",
+   "eventType": "turn_start"
+  },
+  {
+   "at": "2026-09-24T17:51:17.260Z",
+   "dir": "in",
+   "type": "session_event",
+   "eventType": "message_start"
+  },
+  {
+   "at": "2026-09-24T17:51:17.260Z",
+   "dir": "in",
+   "type": "session_event",
+   "eventType": "message_end"
+  },
+  {
+   "at": "2026-09-24T17:51:17.261Z",
+   "dir": "in",
+   "type": "session_event",
+   "eventType": "message_start"
+  },
+  {
+   "at": "2026-09-24T17:51:17.261Z",
+   "dir": "in",
+   "type": "session_event",
+   "eventType": "message_end"
+  }
+ ]
+}

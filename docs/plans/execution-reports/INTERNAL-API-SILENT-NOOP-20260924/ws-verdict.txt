@@ -1,0 +1,13 @@
+{
+ "recovered": true,
+ "anyEventAfter": true,
+ "recoveredEvent": {
+  "type": "session_event",
+  "sessionId": "01a0d487-54b2-7254-a747-400bc74e7c62",
+  "sessionPath": "/tmp/pi-validation-ws/pi-sessions/2026-09-24T17-47-13-971Z_01a0d487-54b2-7254-a747-400bc74e7c62.jsonl",
+  "event": {
+   "type": "session_recovered",
+   "message": "Session was fenced by another runtime; the dead owner was detected and the session recovered automatically. The view has been resynced."
+  }
+ }
+}

@@ -1,8 +1,13 @@
 # Internal API: Silent No-ops and Pi Session Ownership — Plan
 
-Status: **IMPLEMENTATION COMPLETE (Phases 0–7 executed and independently verified, 2026-09-24; S1–S13 all PASS; see
+Status: **IMPLEMENTATION COMPLETE (Phases 0–7 executed and independently verified, 2026-09-24; S1–S13 all PASS;
+round 2 owner-review fixes complete — S7 browser re-attach corrected and verified over a real WebSocket,
+single-flight recovery, non-interactive goal flags in pi-enhancement+API, submitPrompt late-start grace,
+Phase 8 restart runbook written; see
 docs/plans/execution-reports/INTERNAL-API-SILENT-NOOP-20260924/INTERNAL-API-SILENT-NOOP-EXECUTION-REPORT.md).
-Phase 8 (production rollout) NOT executed — owner-gated.** Written 2026-09-24; regression-checked against commit
+Phase 8 (production rollout) NOT executed — owner-gated; runbook:
+docs/plans/execution-reports/INTERNAL-API-SILENT-NOOP-20260924/PHASE-8-RESTART-RUNBOOK.md.**
+Written 2026-09-24; regression-checked against commit
 history the same day — see §2a; execution decisions in §1a.
 Target contract: **1.45.0** (additive, with one deliberate behaviour change —
 see §1a correction C2). Production deploy and live-extension deploy are
