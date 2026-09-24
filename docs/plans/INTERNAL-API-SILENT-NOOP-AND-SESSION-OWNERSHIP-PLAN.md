@@ -1,6 +1,6 @@
 # Internal API: Silent No-ops and Pi Session Ownership — Plan
 
-Status: **READY FOR EXECUTION** (written 2026-09-24; nothing implemented).
+Status: **READY FOR EXECUTION** (written 2026-09-24; regression-checked against commit history the same day — see §2a; nothing implemented).
 Target contract: **1.45.0** (additive). Production deploy and live-extension
 deploy are **owner-gated** (Phase 8).
 
@@ -83,6 +83,29 @@ Sources: `/root/.claude/projects/-root-pi-web-ui/19856bbe-a700-4c6c-9266-4ece9f3
 - Model-routing drift (the executor ran on DeepSeek, which the skill retired on
   2026-09-09). This is an observation only.
 
+## 2a. Regression guardrails from commit history (read before Phase 1)
+
+A history review on 2026-09-24 found earlier fixes this plan must not undo.
+Each row names the prior fix, the risk, and the rule the phases follow. The
+listed tests must pass **without modification**. Changing one of them is a
+regression unless the owner approves it.
+
+| Prior fix (repo, commit) | What it settled | Risk from this plan | Rule |
+|---|---|---|---|
+| pi-web-ui `eb4d3463` *await Pi agent end after compaction* (contract 1.10.1) | `prompt()` may resolve at an auto-compaction boundary **before** the resumed `agent_start` arrives. The receipt must stay non-terminal until `agent_end`. | Phase 1's "resolved without `agent_start`" rule would fail exactly this case. | Phase 1 never fails a run that saw any compaction event in its window, and waits a short grace period for a late `agent_start`. `session-routes-run-receipts.test.ts` ("keeps a Pi receipt nonterminal when prompt returns at compaction…" and "completes a Pi slash command…") stays green. |
+| pi-enhancement `5f757a7` *resume after mid-run 75% compaction* | auto-compact-75 aborts the run to compact, then resumes it with `sendMessage({triggerTurn:true})`. | The same false positive via extension-driven compaction. | Covered by the same compaction rule. Live-validate one mid-run 75% compaction on a Phase 1 build (S2). |
+| pi-web-ui `2cd7a411` *route mid-run operator input through the extension input event* | Busy steer joins the running turn; **idle steer queues without starting a turn** (pinned behaviour). | Treating an idle steer as "not executed". | Phase 1 applies to `mode:'prompt'` only, never to steer or follow_up. `server/tests/unit/pi/pi-input-event-steer.test.ts` stays green. |
+| pi-web-ui `28c6d644` *voice M3: delivery receipts resolve at SUBMISSION* | `MultiSessionManager.submitPrompt()` resolves on `agent_start` **or when the prompt settles first**, and never waits for turn end. | The same silent-swallow bug exists here: a fenced worker shows green "Sent". Changing it carelessly breaks M3 receipt timing. | Phase 1b (below). `multi-session-manager-submit.test.ts`, `talker/delivery.test.ts` and `websocket/voice-live-mount.test.ts` stay green. |
+| pi-web-ui `d27e75cd` *relayed instruction survives an idle or restarted worker* | Pi sessions load lazily by path. The relay rehydrates through `subscribeClient`, delivers, then hands the load back, and never touches an already-loaded session. | Phase 3 inventing a second load path. | Phase 3 reuses that exact pattern. |
+| pi-web-ui `379211d6` *Pi model binding durability across rehydration* (contract 1.33.0) | After rehydration the stored model binding must be re-applied **before** taking the shared model lock; doing it inside the lock self-deadlocks. | Phase 3 lazy-load and Phase 4b reload skipping the re-bind: thinking level would clamp against the wrong default model. A re-bind inside the lock would deadlock. | Both call `ensurePiModelBinding` outside `withPiModelLock`, exactly as the dispatch path does. `session-routes-model-binding.test.ts` stays green. |
+| pi-web-ui `6d784a75` *headless sessions record extension UI snapshots* | Internal-API sessions get a no-op UI sink so `recordExtensionUiMessage` and goal events reach the broker. | Phase 2 building a parallel notify-capture path, or disturbing the goal bridge. | Phase 2 hooks notify capture into that existing sink. Browser delivery and the goal event bridge stay unchanged. The `multi-session-manager.test.ts` goal-bridge cases stay green. |
+| pi-web-ui `c55b1a08` *stale session recovery* and `91effe69` *canonical per-session reference release* | Recovery disposes the AgentSession and rehydrates a fresh one. **Pinned sessions** are status-reset, not disposed. Unload must release every PiService-owned map. | Phase 4b reload leaking references, or silently disposing a pinned session. | Phase 4b uses the existing dispose→rehydrate path, including `releaseSessionRefs`. A fenced **pinned** session gets an explicit decision plus a test; it is never skipped silently. `pi-service-release.test.ts` stays green. |
+| pi-enhancement `5764604` / `46982c0` *release disposed SDK session leases; keep disposed owners fail-closed* | Disposing a session releases its lease; a disposed owner stays fenced. | Phase 4b re-subscribing before the old session's shutdown finished, so the new instance meets its own un-released lease or process-owner entry. | Reload awaits full disposal (`session_shutdown` has run) before rehydrating. Test the same-pid reclamation path (`reclaimInactiveProcessOwner`). |
+| pi-enhancement `302fdfa` / `8eb9e01` *adopt the append-only tail instead of fencing* | Startup must not hard-fence on the benign disk-ahead tail, because a fenced runtime can't run its own remedy. | Phase 4a changing startup or fence behaviour. | Phase 4a only **publishes** status. It adds no new fence and doesn't change startup. The auto-compact-75 suite stays green. |
+| pi-web-ui `2924596f` goal function (contract 1.27.0), `afe4af4a` status labelling | Pi goal start receipt ends at the command boundary. The goal state file is written synchronously (`saveState`) before `/goal` returns. Canonical statuses must not be mislabelled. | Phase 2 read-back racing, or mapping `achieved`, `suggested` or `failed` wrongly. | Read back through `readPiGoalStateFile` / `projectPiGoalState` (the same projection as `GET /goal`). If the disk write failed, the result is a loud 409, never a fake success. Existing goal tests under `server/tests/unit/internal-api/goal/` stay green. |
+| pi-web-ui SESSION-ADOPTION-PLAN (contract 1.40.0) | Adoption is display-only and never changes runtime ownership. | Phase 4 making adopt recover or modify leases. | Adopt only **reports** `ownership` (S8). Recovery happens at dispatch or goal time. `session-routes-adopt.test.ts` stays green. |
+| pi-web-ui `27d14637` / `60251d0c` truthful run liveness; `stall-notification.ts` | Genuinely never-executed runs end `TURN_STALLED` and send a parent "Wake lost (never executed)" notification. | Phase 1 bypassing the wake, so a parent watching for the terminal event is never woken. | A `PROMPT_NOT_EXECUTED` failure must reach the same terminal fan-out (receipt terminal plus `child_turn_ended`/watch firing) as any failed run. `stall-notification.test.ts` and `run-stall-classification.test.ts` stay green. |
+
 ## 3. Definition of success
 
 The executor may report **"Implementation complete"** only when **every** item
@@ -96,7 +119,8 @@ plan.
 | # | Criterion | Required evidence |
 |---|---|---|
 | S1 | A detached **and** a synchronous `prompt` into a session whose input is swallowed fails with `PROMPT_NOT_EXECUTED` within **5 s**. The receipt is `failed`, `errorCode: PROMPT_NOT_EXECUTED`, cessation not `watchdog`. | RED→GREEN unit tests; live-validation receipt JSON showing `terminalAt - acceptedAt < 5000 ms`. |
-| S2 | S1 does **not** misfire on: a normal turn; a turn whose `prompt()` resolves at an auto-compaction boundary and then resumes; `follow_up` into a busy session; `steer` joined to a busy turn; Pi slash commands. | One unit test per case, all green. At least the normal and slash-command cases are also live-validated. |
+| S2 | S1 does **not** misfire on: a normal turn; a turn whose `prompt()` resolves at an auto-compaction boundary and then resumes (including the resumed `agent_start` arriving after `prompt()` resolves); an auto-compact-75 mid-run 75% compaction plus resume; `follow_up` into a busy session; `steer` joined to a busy turn; **idle steer** (queues, no turn); Pi slash commands. Every test named in §2a passes **unmodified**. A `PROMPT_NOT_EXECUTED` failure fires the same terminal fan-out and watch wake as other failed runs. | One unit test per case, all green. Before/after output of the §2a test files, plus `git diff --stat` showing none of them edited. Live validation of the normal, slash-command and mid-run 75% compaction cases. |
+| S2b | Voice relay: a fenced or swallowed worker prompt is reported as **not delivered** with a reason, never as green "Sent". M3 receipt timing for real deliveries is unchanged. | RED→GREEN test in `talker/delivery.test.ts` or `multi-session-manager-submit.test.ts`; existing M3 tests unchanged and green. |
 | S3 | `POST /sessions/:id/goal {action:"start"}` on a Pi session where the goal did not change returns **409 `GOAL_ACTION_NOT_APPLIED`**. The body includes the observed goal state and any extension warning text captured during the command. The receipt is `failed` with the same code. | Unit tests (fenced start, malformed/blocked start). Live-validation response body quoting the goal-engine "read-only" warning. |
 | S4 | `start` on a session whose goal is `achieved` (unfenced) **replaces** it: read-back shows the new objective with status `running` or `wrapping_up`. `clear` on an already-inactive goal returns 200 with `applied:false, reason:"already_inactive"` rather than a fake `completed`. | Unit tests plus live-validation read-back. |
 | S5 | Pi control actions (at least `set_thinking_level`; audit every `getAgentSession` → 404 `"Pi session not loaded"` path in control routes and create) lazy-load an unloaded registered session and succeed. Create-time `thinkingLevel` reads back non-null when the model supports it, or the response says why not. | Unit tests; live validation that unloads a session (or waits for eviction) and then sets the thinking level successfully. |
@@ -161,22 +185,49 @@ Run from `/root/pi-web-ui` unless noted:
 - Where: the Pi branch of `executePrompt` in
   `server/src/internal-api/routes/sessions.ts` (around line 5540–5670), next to
   the existing `documented_handler_return` slash-command branch.
-- Rule: for `mode === 'prompt'` (and `steer` into an **idle** session, if the
-  SDK treats it as a new turn; verify), if `agentSession.prompt()` resolves and
-  **no `agent_start` was observed** and the session is not streaming or
-  compacting, complete the run as failed with `PROMPT_NOT_EXECUTED`. Include
-  any captured extension notify text (see Phase 2 capture) in the error detail.
-- Must respect the existing comment that `prompt()` can resolve at an
-  auto-compaction boundary while the session resumes. Test that case
-  explicitly (S2).
+- Rule: for `mode === 'prompt'` **only** (idle steer queues by design, see
+  §2a `2cd7a411`): once `agentSession.prompt()` resolves, if **no
+  `agent_start`** and **no compaction event** (`session_compaction` or any
+  compaction start/end the observers see) were observed in the run's window,
+  and the session is not streaming or compacting, wait a short bounded grace
+  (≈2 s, a named constant) for a late `agent_start`. If none arrives, fail
+  the run with `PROMPT_NOT_EXECUTED`. Include any captured extension notify
+  text (Phase 2 capture) in the error detail.
+- Reuse the turn-start detection `MultiSessionManager` already has
+  (`armTurnStartWaiter`, from `28c6d644`) rather than writing a second
+  detector. Arm it before calling `prompt()`.
+- The existing compaction-boundary behaviour (`eb4d3463`) is untouched: any
+  observed compaction means "keep waiting for `agent_end`" as today.
+- The failure goes through the normal receipt-terminal path, so watches,
+  `child_turn_ended` and stall/wake notifications fire (§2a).
 - Add `PROMPT_NOT_EXECUTED` to `error-codes.ts` and types.
+
+### Phase 1b: Voice relay honesty for swallowed prompts (pi-web-ui)
+
+- `MultiSessionManager.submitPrompt()` treats "prompt settled before any
+  `agent_start`" as delivered. For a fenced worker, that means a green "Sent"
+  for an instruction that never ran.
+- Expose whether a turn actually started (for example, return
+  `{ turnStarted }` or throw a typed not-executed error, applying the same
+  compaction exemption and grace as Phase 1). The Pi delivery adapter then
+  reports `refused` with the reason, using the amber "NOT sent" path from
+  `d27e75cd`.
+- M3 timing for genuine deliveries must not change (S2b). Voice rule: this
+  changes delivery *honesty* only, and must never widen the talker gate's
+  reachability (see `server/src/talker/policy-core.ts` and
+  [`../VOICE-MODE-INDEX.md`](../VOICE-MODE-INDEX.md)).
 
 ### Phase 2: Goal actions tell the truth (pi-web-ui)
 
 - Capture extension `notify` messages emitted on the session during a
   slash-command window. The server's UI adapter is
-  `server/src/pi/extension-ui-adapter.ts` `notify()`. Add a bounded per-session
-  capture hook; don't change browser delivery.
+  `server/src/pi/extension-ui-adapter.ts` `notify()`, and headless sessions use
+  the no-op sink from `6d784a75`. Hook a bounded per-session capture into
+  those existing sinks (don't add a parallel path), leaving browser delivery
+  and the goal event bridge unchanged.
+- Read back through `readPiGoalStateFile` / `projectPiGoalState`, the same
+  projection `GET /goal` uses. goal-engine writes it synchronously before the
+  handler returns, so no polling is needed.
 - After a Pi `/goal start|clear|pause|resume` command returns, read back the
   goal projection and compare it with the requested transition:
   - start: objective equals the requested one and status is running or
@@ -192,8 +243,13 @@ Run from `/root/pi-web-ui` unless noted:
 
 - Replace `getAgentSession → 404 "Pi session not loaded"` in control and
   create paths (sessions.ts around lines 1637 and 4201; audit the rest) with
-  the same load path dispatch uses (`subscribeClient` on an internal client,
-  then unsubscribe). A genuinely unknown session stays `404 SESSION_NOT_FOUND`.
+  the same load path dispatch and the voice relay use (`subscribeClient` on an
+  internal client, act, then hand the load back; a session already loaded is
+  left as it is, per `d27e75cd`).
+- After loading, re-apply the stored model binding with `ensurePiModelBinding`
+  **outside** `withPiModelLock`, before setting the thinking level (§2a
+  `379211d6`). Thinking level clamps per model.
+- A genuinely unknown session stays `404 SESSION_NOT_FOUND`.
 - Investigate why create-time `thinkingLevel:"max"` read back `null` for
   `zai/glm-5.3-flash`. Fix it, or return an honest reason (S5).
 
@@ -223,11 +279,17 @@ repo:
   - `conflict` or `uncertain` with a live owner pid (`process.kill(pid,0)`), or
     owner state `handing_off`: return `409 SESSION_OWNED_BY_OTHER_RUNTIME`
     with `ownerPid`, `ownerMode`, `reason` and a hint
-  - fenced with a dead or absent owner: unload and reload the session through
-    `MultiSessionManager`, keeping or re-attaching browser subscribers. The
-    extension's startup path re-acquires the stale lease. Re-read the status
-    and proceed if `owned`, otherwise return `409 SESSION_FENCED` with the
-    reason.
+  - fenced with a dead or absent owner: reload the session with the existing
+    dispose→rehydrate recovery (`c55b1a08`, including `releaseSessionRefs`
+    from `91effe69`). **Await full disposal** (the extension's
+    `session_shutdown` has released its lease and process-owner entry) before
+    rehydrating. Keep or re-attach browser subscribers, and re-apply the model
+    binding outside the model lock. The extension's startup path re-acquires
+    the stale lease. Re-read the status and proceed if `owned`, otherwise
+    return `409 SESSION_FENCED` with the reason.
+  - For a **pinned** fenced session, make an explicit decision (reload anyway,
+    or 409 with a hint), record it in the report, and cover it with a test.
+    Never skip it silently.
 - Expose `ownership` on `GET /sessions/:id` and in the `adopt` response (S8).
 - Log every refusal and recovery with the session id, so the journal answers
   "why" directly.
