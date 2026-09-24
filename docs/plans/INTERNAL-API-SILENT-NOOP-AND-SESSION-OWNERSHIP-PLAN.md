@@ -1,8 +1,52 @@
 # Internal API: Silent No-ops and Pi Session Ownership — Plan
 
-Status: **READY FOR EXECUTION** (written 2026-09-24; regression-checked against commit history the same day — see §2a; nothing implemented).
-Target contract: **1.45.0** (additive). Production deploy and live-extension
-deploy are **owner-gated** (Phase 8).
+Status: **IN EXECUTION** (started 2026-09-24 by session pi-01a0d366; Phases 0–7,
+no production changes; see §1a for the owner's binding execution decisions).
+Written 2026-09-24; regression-checked against commit history the same day — see
+§2a; nothing implemented at execution start.
+Target contract: **1.45.0** (additive, with one deliberate behaviour change —
+see §1a correction C2). Production deploy and live-extension deploy are
+**owner-gated** (Phase 8).
+
+---
+
+## 1a. Owner execution decisions (2026-09-24, binding)
+
+Recorded verbatim-in-substance from the owner at execution start; these govern
+the run and must not be softened by the executor.
+
+- **Ownership.** `/root/pi-web-ui` master and `/root/pi-enhancement` are
+  exclusively the executor's for the execution window. The plan's author
+  (`claude-3d8ea7dc`) wrote the plan only, changed no code, and will make no
+  further edits; `pi-01a0cfeb` is an idle analysis session that makes no
+  writes. The executor still declares on the Agent OS board and re-checks
+  `agent-os board who` before **each phase commit**. If anyone else shows up
+  writing to either repo, the executor stops and notifies the owner.
+- **Scope.** Phases 0–7 run fully to "Implementation complete" (S1–S13) with
+  **no production changes**. Then the executor stops hard at the Phase 8 gate
+  with everything prepared and a Telegram to the owner. Phase 8 happens only
+  on the owner's explicit approval in that conversation.
+- **Phase 8b groundwork.** The owner of the dead `127.0.0.1:3111` hooks is
+  identified **read-only** during Phases 0–7, using bounded searches only
+  (never recursing from `/` because of `/mnt/gdrive`), and a restore-or-remove
+  recommendation goes into the report. No changes to `/root/.claude/settings.json`.
+- **Commit cadence.** Commit per phase with path-limited staging; push once
+  each phase's gate is green.
+- **Pinned sessions (Phase 4b).** A fenced pinned session with a dead owner is
+  **auto-recovered like any fenced session, keeping the pin** (dispose→
+  rehydrate, re-attach subscribers). This must be tested and recorded in the
+  report.
+- **Correction C1 (Phase 4b owner check).** Do not rely on
+  `process.kill(pid, 0)` alone. Also compare the lease's recorded process-start
+  identity (`processStartIdentity` in pi-enhancement `session-ownership.mjs`).
+  If the pid was reused by a different process, treat the owner as **dead**. If
+  the check is uncertain, **fail closed with a 409**.
+- **Correction C2 (Phase 5 changelog; goal 409).** The change of a goal action
+  that did not apply from `200 accepted` to `409 GOAL_ACTION_NOT_APPLIED` is a
+  **deliberate behaviour change, not purely additive** — the contract changelog
+  must say so explicitly. Before Phase 5 closes, the executor checks how the
+  Agent OS client (`/root/agent-os/src`, including `controlSession`) handles a
+  409 on goal calls and records the result in the report.
 
 Discovery path: this file → [`../INTERNAL-API.md`](../INTERNAL-API.md) →
 [`../INTERNAL-API-CONTRACT.md`](../INTERNAL-API-CONTRACT.md) (see "Required
