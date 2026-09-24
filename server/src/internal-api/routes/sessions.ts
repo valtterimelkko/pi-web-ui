@@ -5279,7 +5279,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
     }
 
-    const composed = composePiGoalCommand(raw ?? {});
+    // Contract 1.45.0 round 2: the Internal API is non-interactive — callers
+    // cannot answer goal-engine confirmations. Clear defaults to force
+    // (--yes); start replaces only when the caller asks (replace:true).
+    const controlRequest: SessionGoalControlRequest = { ...(raw ?? {}) };
+    if (controlRequest.action === 'clear' && controlRequest.force === undefined) {
+      controlRequest.force = true;
+    }
+    const composed = composePiGoalCommand(controlRequest);
     if (!composed.ok) {
       sendJson(res, 400, enrichedErrorBody(composed.error.code as ErrorCode, composed.error.message));
       return;
@@ -5298,7 +5305,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ? (() => {
           const record = {
             action: composed.action,
-            requestedObjective: composed.action === 'start' ? raw?.objective : undefined,
+            requestedObjective: composed.action === 'start' ? controlRequest.objective : undefined,
             before,
             outcome: undefined as { evaluation: GoalTransitionOutcome; after: SessionGoalProjection } | undefined,
           };

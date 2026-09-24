@@ -27,6 +27,10 @@ export interface SessionGoalControlRequest extends Partial<GoalStartOptions> {
   action?: string;
   /** Server-side pause semantics for runtimes without a native pause (claude/antigravity). */
   autoContinue?: boolean;
+  /** Contract 1.45.0 round 2: clear — append `--yes` (skip the interactive confirmation). */
+  force?: boolean;
+  /** Contract 1.45.0 round 2: start — append `--replace` (override an active goal without the interactive confirmation). */
+  replace?: boolean;
 }
 
 /** Upper bound for objective text (single-line commands only). */
@@ -80,7 +84,11 @@ export function composePiGoalCommand(
 
   if (action === 'pause') return { ok: true, action, command: '/goal pause-now' };
   if (action === 'resume') return { ok: true, action, command: '/goal resume' };
-  if (action === 'clear') return { ok: true, action, command: '/goal clear' };
+  if (action === 'clear') {
+    // Round 2: force:true appends --yes for non-interactive callers. The
+    // legacy shape stays byte-identical when the flag is absent.
+    return { ok: true, action, command: body.force === true ? '/goal clear --yes' : '/goal clear' };
+  }
 
   // start
   const objective = body.objective;
@@ -95,6 +103,12 @@ export function composePiGoalCommand(
   }
 
   let command = `/goal ${quoteObjective(objective.trim())}`;
+
+  // Round 2: replace:true appends --replace (override an active goal without
+  // the interactive confirmation). Absent → byte-identical legacy command.
+  if (body.replace === true) {
+    command += ' --replace';
+  }
 
   if (body.maxTurns !== undefined) {
     const maxTurns = asPositiveInt(body.maxTurns);

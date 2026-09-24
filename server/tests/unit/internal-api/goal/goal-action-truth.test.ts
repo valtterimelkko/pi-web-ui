@@ -254,6 +254,36 @@ describe('goal actions tell the truth (Phase 2, contract 1.45.0)', () => {
     expect(agentSession.prompt).not.toHaveBeenCalled();
   });
 
+  it('round 2: clear composes --yes and start composes --replace when requested', async () => {
+    // Route-level non-interactive default: clear always force-confirms via
+    // --yes (orchestrators cannot answer the extension's confirm).
+    const clearRes = mockRes();
+    await routes.handleSessionGoalControl(
+      jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'clear' }),
+      clearRes,
+      'session-1',
+    );
+    expect(agentSession.prompt).toHaveBeenCalledWith('/goal clear --yes');
+
+    agentSession.prompt.mockClear();
+    const startRes = mockRes();
+    await routes.handleSessionGoalControl(
+      jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'override me', replace: true }),
+      startRes,
+      'session-1',
+    );
+    expect(agentSession.prompt).toHaveBeenCalledWith('/goal "override me" --replace');
+
+    // Legacy shapes stay byte-identical without the flags (pinned contract).
+    agentSession.prompt.mockClear();
+    await routes.handleSessionGoalControl(
+      jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'plain start' }),
+      mockRes(),
+      'session-1',
+    );
+    expect(agentSession.prompt).toHaveBeenCalledWith('/goal "plain start"');
+  });
+
   it('a busy session keeps the queued accepted shape (goal state may lag mid-run)', async () => {
     multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
     const res = mockRes();
