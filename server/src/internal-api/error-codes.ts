@@ -57,6 +57,12 @@ export const ErrorCode = {
   // prompt but no turn ever started (the classic extension input-hook
   // swallow). The run fails fast instead of stalling to the watchdog.
   PROMPT_NOT_EXECUTED: 'PROMPT_NOT_EXECUTED',
+  // Contract 1.45.0 (silent no-op plan Phase 4b): a live foreign runtime owns
+  // the session lease — the action refuses without touching anything.
+  SESSION_OWNED_BY_OTHER_RUNTIME: 'SESSION_OWNED_BY_OTHER_RUNTIME',
+  // A fenced session remained fenced after a recovery attempt (owner dead but
+  // the rehydrate still does not own the lease).
+  SESSION_FENCED: 'SESSION_FENCED',
   // Contract 1.45.0 (silent no-op plan Phase 2): a goal action whose command
   // ran but whose transition did not happen (classic shape: the fenced
   // goal-engine refused mutation and only notified). Previously reported as
@@ -307,6 +313,20 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'The goal engine refused mutation (classic shape: a fenced runtime is read-only) or the command was answered but did not change state.',
     hint: 'Read observedGoal and extensionWarnings in the response; resolve the underlying reason (for example an ownership fence) and retry the goal action.',
     docs: 'docs/INTERNAL-API.md#goal-control',
+  },
+  [ErrorCode.SESSION_OWNED_BY_OTHER_RUNTIME]: {
+    httpStatus: 409,
+    description: 'A live foreign runtime owns the session lease; the action was refused without touching the session.',
+    cause: 'Another runtime (for example a pi CLI) holds the session lease with a verifiable live owner process.',
+    hint: 'Read ownerPid/ownerMode/reason; stop the other runtime or use /autocompact75 handoff+claim for an intentional transfer, then retry.',
+    docs: 'docs/INTERNAL-API.md#sessions',
+  },
+  [ErrorCode.SESSION_FENCED]: {
+    httpStatus: 409,
+    description: 'The session is fenced and remained fenced after a dead-owner recovery attempt.',
+    cause: 'The extension re-acquired the rehydrated session but still does not own the lease (for example an unreadable or conflicting lease).',
+    hint: 'Inspect the lease file and the server journal Ownership lines; /autocompact75 resync in the fenced runtime or manual lease cleanup may be required.',
+    docs: 'docs/TROUBLESHOOTING.md',
   },
   [ErrorCode.RUN_NOT_FOUND]: {
     httpStatus: 404,

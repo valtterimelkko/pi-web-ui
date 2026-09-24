@@ -4,6 +4,16 @@
 
 ## Session-ID evidence ladder
 
+### Diagnosing an ownership fence (contract 1.45.0)
+
+Symptom: a Pi session loads fine (GET /sessions/:id shows idle/healthy) but prompts hang or fail, goal actions answer `409 GOAL_ACTION_NOT_APPLIED`, or the API answers `409 SESSION_OWNED_BY_OTHER_RUNTIME` / `409 SESSION_FENCED`. The session is (or was) **fenced** by the auto-compact-75 ownership guard.
+
+1. Search the service journal for `Ownership: conflict` over the session's **whole lifetime**, not just the incident window — the fencing decision is made when the server loads the session, which can be hours before the symptom appears:
+   `journalctl -u pi-web-ui.service | grep 'Ownership: conflict' | grep <session-file-basename>`.
+2. The conflict line names the owning pid and mode (e.g. `pid 1584977, tui` — a tmux/pi CLI). Check whether that pid is still alive; a dead pid means the session recovers automatically on the next prompt/goal/control (1.45.0: dispose→rehydrate, pins preserved). A live pid means you must stop that runtime or do an intentional `/autocompact75 handoff` + `/autocompact75 claim` transfer.
+3. The lease itself lives at `${PI_SESSION_LEASE_DIR:-~/.pi/agent/session-leases}/<sha256(canonical-session-path)>.lease.json` and records `pid`, `pidStartIdentity`, `state` (`owned`/`handing_off`) and `mode`. A lease whose recorded `pidStartIdentity` no longer matches the pid's current `/proc` start ticks was left by a recycled pid — the server treats that owner as dead.
+4. `GET /sessions/:id` exposes a display-only `ownership` snapshot (status/reason/ownerPid/ownerMode/leaseState) when the extension publishes it; `unknown` means the running extension predates the publication (pre-1.45.0 live extension) and the API will not gate.
+
 When an operator gives you a session identifier, **do not start with `grep -R` from `/` or from the home directory**. The registry already maps the common identifier forms to the runtime-specific evidence. Use this sequence:
 
 ### 0. No identifier yet? Find the latest sessions first

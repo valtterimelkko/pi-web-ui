@@ -67,6 +67,7 @@ import type {
 } from '../types.js';
 import { isThinkingLevel } from '../types.js';
 import { composePiGoalCommand, evaluatePiGoalActionTransition, type GoalAction, type GoalTransitionOutcome, type SessionGoalControlRequest } from '../goal/goal-actions.js';
+import { decidePiOwnershipAction, readPiLeaseRecord, readPiOwnershipStatus } from '../../pi/session-ownership-status.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
@@ -2284,6 +2285,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             })();
         if (goal) (detail as unknown as Record<string, unknown>).goal = goal;
       } catch { /* non-fatal */ }
+      // Contract 1.45.0 (S8): ownership snapshot for Pi sessions — display
+      // only; reading it never recovers, refuses, or modifies leases.
+      try {
+        const ownershipEntry = await getNonCommandCodeRegistryEntry(sessionId);
+        if (ownershipEntry?.sdkType === 'pi' && ownershipEntry.path) {
+          const snapshot = readPiOwnershipStatus(ownershipEntry.path);
+          const leaseRecord = readPiLeaseRecord(ownershipEntry.path);
+          (detail as unknown as Record<string, unknown>).ownership = {
+            status: snapshot.status,
+            ...(snapshot.reason ? { reason: snapshot.reason } : {}),
+            ...(snapshot.ownerPid !== undefined ? { ownerPid: snapshot.ownerPid } : {}),
+            ...(snapshot.ownerMode !== undefined ? { ownerMode: snapshot.ownerMode } : {}),
+            ...(snapshot.updatedAt !== undefined ? { updatedAt: new Date(snapshot.updatedAt).toISOString() } : {}),
+            ...(leaseRecord?.state ? { leaseState: leaseRecord.state } : {}),
+          };
+        }
+      } catch { /* non-fatal */ }
       // Contract 1.34.0 child surfacing: additive children list + parent id so
       // parents can re-hydrate cards after reload and clients can badge children.
       try {
@@ -3257,6 +3275,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const runtime = entry.sdkType;
 
+    // Contract 1.45.0 Phase 4b: ownership gate BEFORE any receipt/admission/
+    // runtime call — a live foreign owner refuses 409 with no run created; a
+    // dead owner triggers dispose→rehydrate recovery.
+    if (runtime === 'pi') {
+      const gate = await resolvePiOwnershipGate(entry);
+      if (!gate.ok) {
+        sendJson(res, 409, gate.response);
+        return;
+      }
+    }
+
     // Fail-closed BEFORE any receipt/admission/runtime call: a disabled OpenCode
     // must reject with the contracted error, not proceed to dispatch (which
     // spawn/attaches via ensureServer) or leave a started receipt behind.
@@ -3886,11 +3915,30 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, outcome.status, outcome.body);
       return;
     }
+    // Contract 1.45.0 (S8): display-only ownership snapshot for Pi children —
+    // adoption never recovers, refuses, or modifies leases because of it.
+    let ownership: Record<string, unknown> | undefined;
+    try {
+      const childEntry = await getNonCommandCodeRegistryEntry(childId);
+      if (childEntry?.sdkType === 'pi' && childEntry.path) {
+        const snapshot = readPiOwnershipStatus(childEntry.path);
+        const leaseRecord = readPiLeaseRecord(childEntry.path);
+        ownership = {
+          status: snapshot.status,
+          ...(snapshot.reason ? { reason: snapshot.reason } : {}),
+          ...(snapshot.ownerPid !== undefined ? { ownerPid: snapshot.ownerPid } : {}),
+          ...(snapshot.ownerMode !== undefined ? { ownerMode: snapshot.ownerMode } : {}),
+          ...(snapshot.updatedAt !== undefined ? { updatedAt: new Date(snapshot.updatedAt).toISOString() } : {}),
+          ...(leaseRecord?.state ? { leaseState: leaseRecord.state } : {}),
+        };
+      }
+    } catch { /* non-fatal */ }
     const response: AdoptSessionResponse = {
       success: true,
       ...outcome.result,
       ...(body.alias ? { alias: body.alias } : {}),
       ...(body.role ? { role: body.role } : {}),
+      ...(ownership ? { ownership } : {}),
     };
     sendJson(res, 200, response);
   }
@@ -4205,6 +4253,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
+    // Contract 1.45.0 Phase 4b: ownership gate before control actions reach
+    // the runtime (set_model / set_thinking_level / pin family).
+    if (entry.sdkType === 'pi') {
+      const gate = await resolvePiOwnershipGate(entry);
+      if (!gate.ok) {
+        sendJson(res, 409, gate.response);
+        return;
+      }
+    }
+
     try {
       let response: SessionControlResponse;
       switch (body.action) {
@@ -4287,12 +4345,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             }
             return;
           } else if (entry.sdkType === 'pi') {
+            // Captured outside the deferred callback: TS narrowing on
+            // body.level (guaranteed non-null by the case guard above) does
+            // not survive into closures.
+            const requestedLevel = body.level as NonNullable<typeof body.level>;
             // Contract 1.45.0 Phase 3 (S5): an unloaded registered session is
             // lazy-loaded (dispatch-path pattern) instead of 404ing while
             // GET /sessions/:id reports it healthy. A genuinely unloadable
             // session still fails loudly below.
             effectiveThinkingLevel = await withLazyLoadedPiAgentSession(entry, (agentSession) => {
-              agentSession.setThinkingLevel(body.level);
+              agentSession.setThinkingLevel(requestedLevel);
               // Pi clamps unsupported requests to the nearest model-supported
               // level. Return the read-back value so callers can fail closed
               // instead of treating an echoed request as proof of effect.
@@ -5110,6 +5172,89 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     outcome?: { evaluation: GoalTransitionOutcome; after: SessionGoalProjection };
   }>();
 
+  /**
+   * Contract 1.45.0 Phase 4b: resolve the Pi ownership gate before an action
+   * touches a session. Proceeds for owned/unmanaged/unknown snapshots,
+   * refuses (409, pre-dispatch, no run created) while a live foreign owner or
+   * a handing-off lease holds the session, and performs the dispose→rehydrate
+   * recovery — restoring pins and the model binding — when the recorded owner
+   * is dead (a recycled pid counts as dead per owner correction C1). Liveness
+   * uncertainty fails closed.
+   */
+  async function resolvePiOwnershipGate(
+    entry: RegistryEntry,
+  ): Promise<{ ok: true } | { ok: false; response: Record<string, unknown> }> {
+    if (entry.sdkType !== 'pi') return { ok: true };
+    const snapshot = readPiOwnershipStatus(entry.path);
+    const leaseRecord = readPiLeaseRecord(entry.path);
+    const decision = decidePiOwnershipAction(snapshot, leaseRecord);
+
+    if (decision.action === 'proceed') return { ok: true };
+
+    if (decision.action === 'refuse_live') {
+      logger.warn(`[Ownership] Refusing ${entry.id} action: live owner pid=${decision.ownerPid ?? 'unknown'} mode=${decision.ownerMode ?? 'unknown'} uncertain=${decision.uncertain === true}`);
+      return { ok: false, response: {
+        error: decision.uncertain
+          ? 'Pi session ownership could not be verified; failing closed'
+          : 'Pi session is owned by another live runtime',
+        code: ErrorCode.SESSION_OWNED_BY_OTHER_RUNTIME,
+        ownerPid: decision.ownerPid,
+        ownerMode: decision.ownerMode,
+        reason: decision.reason,
+        ...(decision.handoffAvailable ? { handoffAvailable: true } : {}),
+        hint: decision.handoffAvailable
+          ? 'The lease is offered for handoff; run /autocompact75 claim in the target runtime for an intentional transfer.'
+          : 'Stop the other runtime or hand the session off intentionally, then retry.',
+        ownership: { status: decision.status, reason: decision.reason, ownerPid: decision.ownerPid, ownerMode: decision.ownerMode },
+      } };
+    }
+
+    // recover: fenced with a dead, recycled, or absent owner.
+    logger.warn(`[Ownership] Fenced Pi session with a dead/absent owner — recovering: ${entry.id} path=${entry.path}`);
+    const pinClaims = multiSessionManager.getPinClaims?.(entry.path) ?? [];
+    multiSessionManager.disposeLoadedSession?.(entry.path);
+    // Await full disposal: the in-memory session is gone AND the extension's
+    // async session_shutdown handlers (lease release, process-owner
+    // unregister) have had a bounded chance to settle (5764604/46982c0).
+    const settleDeadline = Date.now() + 2_000;
+    while (multiSessionManager.getAgentSession(entry.path) && Date.now() < settleDeadline) {
+      await delay(50);
+    }
+    await delay(150);
+    await multiSessionManager.subscribeClient(internalClientId, entry.path);
+    for (const claim of pinClaims) {
+      if (!multiSessionManager.pinSession?.(entry.path, claim)) {
+        logger.warn(`[Ownership] Recovery could not restore pin claim '${claim}' for ${entry.id}`);
+      }
+    }
+    const rehydrated = multiSessionManager.getAgentSession(entry.path);
+    if (rehydrated) {
+      try {
+        await ensurePiModelBinding(entry.id, entry, rehydrated);
+      } catch (bindingError) {
+        logger.warn(`[Ownership] Recovery rehydration could not re-apply the model binding for ${entry.id}: ${bindingError instanceof Error ? bindingError.message : String(bindingError)}`);
+      }
+    }
+    // Give the extension's startup acquisition a bounded chance to publish.
+    const publishDeadline = Date.now() + 1_500;
+    let after = readPiOwnershipStatus(entry.path);
+    while (after.status === 'conflict' && Date.now() < publishDeadline) {
+      await delay(50);
+      after = readPiOwnershipStatus(entry.path);
+    }
+    if (after.status === 'owned' || after.status === 'unknown' || after.status === 'unmanaged') {
+      logger.info(`[Ownership] Recovery succeeded for ${entry.id}: status=${after.status}`);
+      return { ok: true };
+    }
+    logger.warn(`[Ownership] Recovery left ${entry.id} fenced: status=${after.status} reason=${after.reason ?? 'unknown'}`);
+    return { ok: false, response: {
+      error: 'Pi session is fenced and remained fenced after a recovery attempt',
+      code: ErrorCode.SESSION_FENCED,
+      reason: after.reason,
+      ownership: { status: after.status, reason: after.reason, ownerPid: after.ownerPid, ownerMode: after.ownerMode },
+    } };
+  }
+
   async function handleSessionGoalControl(
     req: IncomingMessage,
     res: ServerResponse,
@@ -5135,6 +5280,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'antigravity') {
       await handleSessionGoalControlAntigravity(res, sessionId, entry, raw ?? {});
       return;
+    }
+
+    // Contract 1.45.0 Phase 4b: ownership gate before the command dispatch.
+    if (entry.sdkType === 'pi') {
+      const gate = await resolvePiOwnershipGate(entry);
+      if (!gate.ok) {
+        sendJson(res, 409, gate.response);
+        return;
+      }
     }
 
     const composed = composePiGoalCommand(raw ?? {});

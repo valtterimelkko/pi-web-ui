@@ -1499,6 +1499,16 @@ export class MultiSessionManager {
    * and aggressive cleanup. Only explicit stopSession() or dispose() will remove them.
    * Returns true if the session was pinned, false if not found or at max pinned limit.
    */
+  /**
+   * Contract 1.45.0 Phase 4b: current residency claims for a session, so a
+   * dispose→rehydrate recovery can restore the pin exactly as it was.
+   */
+  getPinClaims(sessionPath: string): string[] {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) return [];
+    return Array.from(activeSession.pinClaims);
+  }
+
   pinSession(sessionPath: string, claimId = 'web-ui'): boolean {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) return false;

@@ -17,6 +17,11 @@ Quick jump:
 - [WebSocket / Auth](#websocket--auth)
 - [Frontend](#frontend)
 
+## Session ownership fencing (contract 1.45.0)
+
+- **A browser (or any server-side load) opening a CLI-owned Pi session fences the server's copy.** The auto-compact-75 extension enforces single-runtime ownership per session file; when the server loads a session whose lease another runtime holds, the server-side copy is fenced (read-only: input swallowed, goal mutations refused) until ownership is resolved. From contract 1.45.0 the Internal API handles the two outcomes mechanically instead of leaving the session stuck: actions against a session with a **live** foreign owner refuse `409 SESSION_OWNED_BY_OTHER_RUNTIME` (ownerPid/ownerMode on the body, no run created), and actions on a session whose recorded owner is **dead** automatically recover it (dispose→rehydrate; pins preserved; model binding re-applied) and proceed. `GET /sessions/:id` and the adopt responses expose the display-only `ownership` snapshot. Recovery requires the published ownership status — servers running the pre-4a extension only report `unknown` and never gate (the fail-fast prompt check still catches the swallow).
+- **Unintentional fencing is easy and silent on the TUI side**: a tmux `pi` CLI that merely had a session open keeps the lease alive. Close the CLI (or run `/autocompact75 handoff`, then `/autocompact75 claim` in the target runtime) instead of restarting anything.
+
 ## Session-ID diagnosis
 
 - **Do not start with a global grep.** Run `npm run debug:where -- <id-or-path>` first. It resolves the registry entry and prints the relevant runtime-owned session file, native id, log source, and useful checks.
