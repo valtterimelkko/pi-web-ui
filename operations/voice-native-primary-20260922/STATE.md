@@ -3,7 +3,7 @@
 > **Current state, not a completion claim — read before acting.** Rewritten at every fan-in/dispatch.
 > Authority and strategy live in [`LEDGER.md`](./LEDGER.md); the plan is the contract.
 
-**Stage:** `FOLLOW-UP EXECUTED (§15.4) — production deploy owner-gated (F-8 pending owner approval)`.
+**Stage:** `FOLLOW-UP COMPLETE (§15.4) — DEPLOYED to production 2026-09-24 10:41Z (owner-approved); D15-7 dogfooding is the remaining, deliberately-manual step.`
 
 **The §15.4 follow-up is executed (2026-09-24, direct execution — no children, owner redirect after
 the child-dispatch chain failed).** All eight acceptance items are met or pending only the
@@ -17,10 +17,10 @@ limitation; F-7 gates green + CI success on master `21bb5703`. The fix trail, on
 (attempts 04–13 the honest record): `8fd7ddaa`, `3ee65713`, `8fd993f6`, `f704daf8`, `d38acf2d`,
 `5283dbe9`, `539e60b6`, `284f186d`, `21bb5703`.
 
-**F-8:** build done; the restart of `pi-web-ui.service` is OWNER-GATED (restated by the operator
-2026-09-24) — the permission question was sent on Telegram with delivery `sent`; on approval,
-restart via `scripts/restart-pi-web-ui.sh`, verify `/capabilities` + served bundle identity, then
-the D15-7 dogfooding notice.
+**F-8 DONE:** the owner approved in conversation; the audited restart ran 10:41:05Z (drainage
+pre-flight passed), `/capabilities` verified on contract 1.44.0, the served bundle
+`index-CKNTqq6X.js` matches the fresh build, and both Telegram messages verified `sent` (the
+question and the completion/dogfooding go).
 
 **Children:** none. No watches, no leases. No worktrees. The original campaign record below is
 historical; read the §15.4 addendum in [`campaign/VERDICT.md`](./campaign/VERDICT.md) first.
