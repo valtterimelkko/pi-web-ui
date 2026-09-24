@@ -8,6 +8,7 @@
  * extraction; flags accept double-quoted, single-quoted or bare values.
  */
 import { ErrorCode } from '../error-codes.js';
+import type { SessionGoalProjection } from './types.js';
 
 export type GoalAction = 'start' | 'pause' | 'resume' | 'clear';
 
@@ -130,4 +131,73 @@ export function composePiGoalCommand(
   }
 
   return { ok: true, action, command };
+}
+
+// ─── Phase 2 (contract 1.45.0): goal transition truth ───────────────────────
+
+export type GoalTransitionOutcome =
+  | { applied: true; failure: false }
+  | { applied: false; failure: false; reason: 'already_inactive' | 'already_paused' | 'not_paused' }
+  | { applied: false; failure: true; reason: 'objective_mismatch' | 'status_unchanged' | 'stayed_active' | 'stayed_paused' };
+
+function goalIsLive(projection: SessionGoalProjection): boolean {
+  return projection.status === 'running' || projection.status === 'wrapping_up';
+}
+
+/**
+ * Compare the goal projection read before a composed `/goal …` command with
+ * the projection read after the command's prompt() resolved (the extension
+ * persists synchronously before the command returns) and classify what
+ * actually happened. Rules mirror the extension (pi-enhancement/goal-engine):
+ * isActive is running|wrapping-up; clear on a non-active goal is a documented
+ * no-op; resume requires paused; start must show the requested objective in a
+ * live status. A failure here means the API previously would have returned
+ * `200 accepted` for an action that did not happen.
+ */
+export function evaluatePiGoalActionTransition(input: {
+  action: GoalAction;
+  requestedObjective?: string;
+  before: SessionGoalProjection;
+  after: SessionGoalProjection;
+}): GoalTransitionOutcome {
+  const { action, requestedObjective, before, after } = input;
+
+  if (action === 'start') {
+    const objectiveMatches =
+      typeof requestedObjective === 'string'
+      && typeof after.objective === 'string'
+      && after.objective === requestedObjective;
+    if (goalIsLive(after) && objectiveMatches) return { applied: true, failure: false };
+    if (goalIsLive(after)) return { applied: false, failure: true, reason: 'objective_mismatch' };
+    return { applied: false, failure: true, reason: 'status_unchanged' };
+  }
+
+  if (action === 'pause') {
+    if (after.status === 'paused') {
+      return goalIsLive(before)
+        ? { applied: true, failure: false }
+        : { applied: false, failure: false, reason: 'already_paused' };
+    }
+    return goalIsLive(after)
+      ? { applied: false, failure: true, reason: 'stayed_active' }
+      : { applied: false, failure: true, reason: 'status_unchanged' };
+  }
+
+  if (action === 'resume') {
+    if (before.status === 'paused') {
+      return goalIsLive(after)
+        ? { applied: true, failure: false }
+        : { applied: false, failure: true, reason: 'stayed_paused' };
+    }
+    return { applied: false, failure: false, reason: 'not_paused' };
+  }
+
+  // clear. The extension's own rule: a goal that is neither active nor paused
+  // answers "No active goal to clear." — a documented no-op, including achieved.
+  const beforeClearable = goalIsLive(before) || before.status === 'paused';
+  if (!beforeClearable) return { applied: false, failure: false, reason: 'already_inactive' };
+  const afterInactive = !goalIsLive(after) && after.status !== 'paused';
+  return afterInactive
+    ? { applied: true, failure: false }
+    : { applied: false, failure: true, reason: 'stayed_active' };
 }

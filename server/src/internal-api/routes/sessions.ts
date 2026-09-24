@@ -66,7 +66,7 @@ import type {
   AdoptNativeSessionResponse,
 } from '../types.js';
 import { isThinkingLevel } from '../types.js';
-import { composePiGoalCommand, type SessionGoalControlRequest } from '../goal/goal-actions.js';
+import { composePiGoalCommand, evaluatePiGoalActionTransition, type GoalAction, type GoalTransitionOutcome, type SessionGoalControlRequest } from '../goal/goal-actions.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
@@ -167,6 +167,54 @@ class TurnStalledError extends Error {
   }
 }
 
+/**
+ * Contract 1.45.0 (silent no-op plan Phase 1): the runtime accepted the prompt
+ * but no turn ever started — the classic extension input-hook swallow (the
+ * 23 Sep incident: a fenced auto-compact-75 returned {action:'handled'} and
+ * the run waited 15 minutes for a watchdog instead of failing in seconds).
+ */
+class PromptNotExecutedError extends Error {
+  constructor(detail?: string) {
+    super(
+      detail
+        ? `Prompt accepted but no turn started (input likely swallowed by a runtime extension): ${detail}`
+        : 'Prompt accepted but no turn started (input likely swallowed by a runtime extension)',
+    );
+    this.name = 'PromptNotExecutedError';
+  }
+}
+
+/**
+ * Contract 1.45.0 (silent no-op plan Phase 2): the composed /goal command ran
+ * but the requested transition did not happen (the extension refused mutation
+ * or answered without changing state). Previously this returned `200
+ * accepted` for an action that did not happen; failing the receipt loudly is
+ * a deliberate behaviour change recorded in the contract changelog.
+ */
+class GoalActionNotAppliedError extends Error {
+  readonly observedGoal: SessionGoalProjection;
+  readonly extensionWarnings: string[];
+  constructor(action: string, reason: string, observedGoal: SessionGoalProjection, extensionWarnings: string[]) {
+    super(`Goal action '${action}' did not apply (${reason})${extensionWarnings.length > 0 ? `; extension reported: ${extensionWarnings.join(' | ')}` : ''}`);
+    this.name = 'GoalActionNotAppliedError';
+    this.observedGoal = observedGoal;
+    this.extensionWarnings = extensionWarnings;
+  }
+}
+
+/** Bounded grace for a late agent_start before declaring PROMPT_NOT_EXECUTED. */
+const PROMPT_NOT_EXECUTED_DEFAULT_GRACE_MS = 2000;
+
+function promptExecutionGraceMs(): number {
+  const raw = process.env.PI_PROMPT_EXECUTION_GRACE_MS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : PROMPT_NOT_EXECUTED_DEFAULT_GRACE_MS;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 type ExecutionOwnership = 'owner' | 'joined';
 
 /**
@@ -187,6 +235,8 @@ function isRuntimeAlreadyRunningError(error: Error): boolean {
 
 function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
   if (runtime !== 'commandcode') {
+    if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
+    if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
     return error instanceof TurnStalledError ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR;
   }
   if (error instanceof CommandCodeRuntimeError) {
@@ -1584,6 +1634,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             status: 'idle',
           });
           let resolvedPiModel: string | undefined;
+          let createThinkingLevel: string | null | undefined;
           // The exact selector applied via setModel — bare ids resolve before
           // this point, so fallback detection compares like-for-like.
           let appliedPiSelector: string | undefined;
@@ -1637,6 +1688,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               throw new Error('Pi session not loaded');
             }
             agentSession.setThinkingLevel(body.thinkingLevel);
+            // Contract 1.45.0 (S5): echo the ACTUAL post-clamp level. A model
+            // that does not support the requested effort can end with no
+            // active level; the response then says so instead of staying
+            // silent while the request value is persisted.
+            createThinkingLevel = agentSession.thinkingLevel ?? null;
           }
           // Contract 1.33.0: persist the binding so dispatch-time rehydration
           // can restore it. Without this the create-time setModel lives only
@@ -1661,6 +1717,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sessionPath: status.sessionPath,
             runtime: 'pi',
             model: resolvedPiModel ?? body.model,
+            ...(body.thinkingLevel
+              ? {
+                  thinkingLevel: createThinkingLevel ?? null,
+                  ...(createThinkingLevel
+                    ? {}
+                    : { thinkingLevelNote: `model '${resolvedPiModel ?? body.model}' reported no active thinking level after the requested '${body.thinkingLevel}' (effort not supported)` }),
+                }
+              : {}),
             ...(resolvedPiModel ? { resolvedModel: resolvedPiModel } : {}),
             ...(resolvedPiModel ? {
               modelBinding: {
@@ -2952,6 +3016,33 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return status === 'busy' || status === 'streaming';
   }
 
+  /**
+   * Contract 1.45.0 Phase 3: resolve a loaded Pi AgentSession for control
+   * actions, lazy-loading a registered-but-unloaded session exactly as the
+   * dispatch and voice-relay paths do (d27e75cd): subscribe an internal
+   * client, re-apply the stored model binding OUTSIDE the model lock
+   * (379211d6 — inside the lock self-deadlocks), act, then hand the load back.
+   * A session that is already loaded is left untouched.
+   */
+  async function withLazyLoadedPiAgentSession<T>(
+    entry: RegistryEntry,
+    fn: (agentSession: NonNullable<ReturnType<typeof multiSessionManager.getAgentSession>>) => Promise<T> | T,
+  ): Promise<T> {
+    const loaded = multiSessionManager.getAgentSession(entry.path);
+    if (loaded) return await fn(loaded);
+    await multiSessionManager.subscribeClient(internalClientId, entry.path);
+    try {
+      const agentSession = multiSessionManager.getAgentSession(entry.path);
+      if (!agentSession) {
+        throw new Error(`Pi session could not be loaded from ${entry.path}`);
+      }
+      await ensurePiModelBinding(entry.id, entry, agentSession);
+      return await fn(agentSession);
+    } finally {
+      multiSessionManager.unsubscribeClient(internalClientId, entry.path);
+    }
+  }
+
   function chooseDispatchMode(
     runtime: SessionRuntime,
     mode: PromptMode,
@@ -4196,16 +4287,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             }
             return;
           } else if (entry.sdkType === 'pi') {
-            const agentSession = multiSessionManager.getAgentSession(entry.path);
-            if (!agentSession) {
-              sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Pi session not loaded'));
-              return;
-            }
-            agentSession.setThinkingLevel(body.level);
-            // Pi clamps unsupported requests to the nearest model-supported
-            // level. Return the read-back value so callers can fail closed
-            // instead of treating an echoed request as proof of effect.
-            effectiveThinkingLevel = agentSession.thinkingLevel;
+            // Contract 1.45.0 Phase 3 (S5): an unloaded registered session is
+            // lazy-loaded (dispatch-path pattern) instead of 404ing while
+            // GET /sessions/:id reports it healthy. A genuinely unloadable
+            // session still fails loudly below.
+            effectiveThinkingLevel = await withLazyLoadedPiAgentSession(entry, (agentSession) => {
+              agentSession.setThinkingLevel(body.level);
+              // Pi clamps unsupported requests to the nearest model-supported
+              // level. Return the read-back value so callers can fail closed
+              // instead of treating an echoed request as proof of effect.
+              return agentSession.thinkingLevel;
+            });
             // Contract 1.33.0: persist the clamped read-back so dispatch-time
             // rehydration restores the level actually in force.
             await sessionRegistry.patchSessionMeta(sessionId, { thinkingLevel: effectiveThinkingLevel });
@@ -5004,13 +5096,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     await respond({ note: 'goal cleared' });
   }
 
+  /**
+   * Contract 1.45.0 Phase 2: one-shot goal-control inspections keyed by
+   * session id. handleSessionGoalControl registers an inspection (idle
+   * sessions only) before dispatching the composed /goal command; the Pi
+   * slash-command completion consumes it and evaluates whether the requested
+   * transition actually applied.
+   */
+  const piGoalCompletionInspections = new Map<string, {
+    action: GoalAction;
+    requestedObjective?: string;
+    before: SessionGoalProjection;
+    outcome?: { evaluation: GoalTransitionOutcome; after: SessionGoalProjection };
+  }>();
+
   async function handleSessionGoalControl(
     req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
     const raw = await readJsonBody<SessionGoalControlRequest>(req);
-
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
       await handleSessionGoalControlCommandCode(res, commandCodeEntry, raw ?? {});
@@ -5042,31 +5147,107 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    // Reuse the entire prompt pipeline (injection check, receipts, admission,
-    // busy pass-through) by dispatching the composed slash command internally.
-    const innerRes = createCaptureResponse();
-    await handleSendPrompt(synthesizePromptRequest(composed.command), innerRes, sessionId);
+    // Contract 1.45.0 Phase 2: on an idle session the command executes at the
+    // slash-command boundary, so the transition is verifiable synchronously.
+    // On a busy session the command rides the running turn and the goal state
+    // may legitimately lag — the historical accepted shape is kept there.
+    const before = await readProjectPiGoalState(entry.path);
+    const inspection = !isSessionBusy(entry)
+      ? (() => {
+          const record = {
+            action: composed.action,
+            requestedObjective: composed.action === 'start' ? raw?.objective : undefined,
+            before,
+            outcome: undefined as { evaluation: GoalTransitionOutcome; after: SessionGoalProjection } | undefined,
+          };
+          piGoalCompletionInspections.set(sessionId, record);
+          return record;
+        })()
+      : undefined;
 
-    let inner: Record<string, unknown> = {};
-    try { inner = JSON.parse(innerRes.body) as Record<string, unknown>; } catch { /* non-JSON body forwarded below */ }
+    try {
+      // Reuse the entire prompt pipeline (injection check, receipts, admission,
+      // busy pass-through) by dispatching the composed slash command internally.
+      const innerRes = createCaptureResponse();
+      await handleSendPrompt(synthesizePromptRequest(composed.command), innerRes, sessionId);
 
-    if (innerRes.statusCode !== 200 && innerRes.statusCode !== 202) {
-      // Forward pipeline refusals verbatim — they are already contracted shapes.
-      sendJson(res, innerRes.statusCode || 500, inner);          
-      return;
+      let inner: Record<string, unknown> = {};
+      try { inner = JSON.parse(innerRes.body) as Record<string, unknown>; } catch { /* non-JSON body forwarded below */ }
+
+      const after = await readProjectPiGoalState(entry.path);
+
+      if (inspection?.outcome?.evaluation.failure) {
+        // The receipt already ended failed (GOAL_ACTION_NOT_APPLIED); answer
+        // with the observed goal and the extension's own warning text.
+        sendJson(res, 409, {
+          sessionId,
+          runtime: 'pi',
+          action: composed.action,
+          accepted: false,
+          applied: false,
+          error: `Goal action '${composed.action}' did not apply: ${inspection.outcome.evaluation.reason}`,
+          code: ErrorCode.GOAL_ACTION_NOT_APPLIED,
+          observedGoal: inspection.outcome.after,
+          extensionWarnings: multiSessionManager.getExtensionUiNotifications?.(entry.path, Date.now() - 120_000) ?? [],
+          receipt: {
+            runId: typeof inner.runId === 'string' ? inner.runId : null,
+            status: 'failed',
+            errorCode: ErrorCode.GOAL_ACTION_NOT_APPLIED,
+          },
+        });
+        return;
+      }
+
+      if (innerRes.statusCode !== 200 && innerRes.statusCode !== 202) {
+        // Forward pipeline refusals verbatim — they are already contracted shapes.
+        sendJson(res, innerRes.statusCode || 500, inner);
+        return;
+      }
+
+      if (inspection?.outcome) {
+        if (inspection.outcome.evaluation.applied) {
+          sendJson(res, 200, {
+            sessionId,
+            runtime: 'pi',
+            action: composed.action,
+            accepted: true,
+            applied: true,
+            receipt: typeof inner.runId === 'string'
+              ? { runId: inner.runId, status: inner.status ?? null, dispatchMode: inner.dispatchMode ?? null }
+              : null,
+            goal: after,
+          });
+          return;
+        }
+        // Honest no-op: the desired end state already held (never a fake completed).
+        sendJson(res, 200, {
+          sessionId,
+          runtime: 'pi',
+          action: composed.action,
+          accepted: true,
+          applied: false,
+          reason: inspection.outcome.evaluation.reason ?? 'already_inactive',
+          receipt: typeof inner.runId === 'string'
+            ? { runId: inner.runId, status: inner.status ?? null, dispatchMode: inner.dispatchMode ?? null }
+            : null,
+          goal: after,
+        });
+        return;
+      }
+
+      sendJson(res, 200, {
+        sessionId,
+        runtime: 'pi',
+        action: composed.action,
+        accepted: true,
+        receipt: typeof inner.runId === 'string'
+          ? { runId: inner.runId, status: inner.status ?? null, dispatchMode: inner.dispatchMode ?? null }
+          : null,
+        goal: after,
+      });
+    } finally {
+      piGoalCompletionInspections.delete(sessionId);
     }
-
-    const projection = await readProjectPiGoalState(entry.path);
-    sendJson(res, 200, {
-      sessionId,
-      runtime: 'pi',
-      action: composed.action,
-      accepted: true,
-      receipt: typeof inner.runId === 'string'
-        ? { runId: inner.runId, status: inner.status ?? null, dispatchMode: inner.dispatchMode ?? null }
-        : null,
-      goal: projection,
-    });
   }
 
   async function handleRespondApproval(
@@ -5583,9 +5764,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         attachPiObserverIfNeeded(sessionPath);
 
         // Per-prompt observer that forwards events to this prompt's caller.
-        // (The persistent observer only feeds the broker.)
+        // (The persistent observer only feeds the broker.) Also records the
+        // turn-window facts the PROMPT_NOT_EXECUTED fail-fast reads.
+        let sawAgentStart = false;
+        let sawCompaction = false;
         const eventObserver = (event: unknown) => {
-          try { onEvent(event as NormalizedEvent); } catch { /* non-fatal */ }
+          const normalized = event as NormalizedEvent;
+          if (normalized?.type === 'agent_start') sawAgentStart = true;
+          if (normalized?.type === 'session_compaction') sawCompaction = true;
+          try { onEvent(normalized); } catch { /* non-fatal */ }
         };
         multiSessionManager.addApiObserver(sessionPath, eventObserver);
 
@@ -5634,6 +5821,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             .catch(() => { /* receipt truth is best-effort; the run continues */ });
         }
 
+        // Contract 1.45.0 Phase 1: arm the M3 turn-start waiter BEFORE the
+        // dispatch so no agent_start can slip past unobserved. Optional call:
+        // managers without the observer fall back to the per-prompt event
+        // observer below.
+        const turnStartObserver = multiSessionManager.observeTurnStart?.(sessionPath);
+        const turnStartPromise = turnStartObserver?.started ?? null;
+
         try {
           if (mode === 'follow_up') {
             await agentSession.followUp(message);
@@ -5647,11 +5841,61 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           // Pi extension slash commands are handled synchronously by prompt()
           // and do not emit an agent_end turn event. Their handler return is a
           // documented command boundary, unlike an ordinary LLM prompt return.
+          // Contract 1.45.0 Phase 2: a registered goal-control inspection
+          // verifies, at the command boundary, that the requested transition
+          // really happened (the extension persists synchronously before the
+          // command returns). A not-applied transition fails the receipt
+          // instead of claiming success.
+          if (!ended && mode === 'prompt' && /^\s*\//.test(message)) {
+            const inspection = piGoalCompletionInspections.get(sessionId);
+            if (inspection) {
+              piGoalCompletionInspections.delete(sessionId);
+              const after = await readProjectPiGoalState(sessionPath);
+              const evaluation: GoalTransitionOutcome = evaluatePiGoalActionTransition({
+                action: inspection.action,
+                requestedObjective: inspection.requestedObjective,
+                before: inspection.before,
+                after,
+              });
+              inspection.outcome = { evaluation, after };
+              if (evaluation.failure) {
+                const warnings = multiSessionManager.getExtensionUiNotifications?.(sessionPath, Date.now() - 60_000) ?? [];
+                ended = true;
+                detachTurnObservers();
+                onComplete(new GoalActionNotAppliedError(inspection.action, evaluation.reason ?? 'not_applied', after, warnings));
+                resolveTurnBoundary();
+              }
+            }
+          }
           if (!ended && mode === 'prompt' && /^\s*\//.test(message)) {
             ended = true;
             detachTurnObservers();
             onComplete(undefined, 'documented_handler_return');
             resolveTurnBoundary();
+          } else if (!ended && mode === 'prompt') {
+            // Contract 1.45.0 Phase 1 — PROMPT_NOT_EXECUTED fail-fast (mode
+            // 'prompt' only; idle steer queues by design and steer/follow_up
+            // join or queue a live turn, per 2cd7a411): once prompt() resolves,
+            // a turn that never started means the input was swallowed. The
+            // compaction exemption (eb4d3463) is preserved: any observed
+            // compaction event keeps the run waiting for the resumed turn.
+            const startedBeforeGrace = turnStartPromise
+              ? await Promise.race([
+                  turnStartPromise.then(() => true),
+                  delay(promptExecutionGraceMs()).then(() => false),
+                ])
+              : await delay(promptExecutionGraceMs()).then(() => sawAgentStart);
+            const liveSession = multiSessionManager.getAgentSession(sessionPath);
+            const streamingNow = liveSession?.isStreaming === true || agentSession.isStreaming === true;
+            if (!startedBeforeGrace && !sawAgentStart && !sawCompaction && !streamingNow && !ended) {
+              ended = true;
+              detachTurnObservers();
+              turnStartObserver?.cancel();
+              const windowStart = Date.now() - promptExecutionGraceMs() * 4;
+              const extensionWarnings = multiSessionManager.getExtensionUiNotifications?.(sessionPath, windowStart) ?? [];
+              onComplete(new PromptNotExecutedError(extensionWarnings.length > 0 ? extensionWarnings.join(' | ') : undefined));
+              resolveTurnBoundary();
+            }
           }
         } catch (err) {
           detachTurnObservers();
@@ -5665,6 +5909,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // the same AgentSession resumes asynchronously. The normalized
         // agent_end event—not prompt() return—is the true terminal turn signal.
         await turnBoundary;
+        turnStartObserver?.cancel();
         });
         } finally {
           multiSessionManager.unsubscribeClient(internalClientId, sessionPath);

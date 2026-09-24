@@ -53,6 +53,15 @@ export const ErrorCode = {
   APPROVAL_REQUEST_NOT_FOUND: 'APPROVAL_REQUEST_NOT_FOUND',
   SESSION_NOT_STREAMING: 'SESSION_NOT_STREAMING',
   TURN_STALLED: 'TURN_STALLED',
+  // Contract 1.45.0 (silent no-op plan Phase 1): the Pi runtime accepted the
+  // prompt but no turn ever started (the classic extension input-hook
+  // swallow). The run fails fast instead of stalling to the watchdog.
+  PROMPT_NOT_EXECUTED: 'PROMPT_NOT_EXECUTED',
+  // Contract 1.45.0 (silent no-op plan Phase 2): a goal action whose command
+  // ran but whose transition did not happen (classic shape: the fenced
+  // goal-engine refused mutation and only notified). Previously reported as
+  // `200 accepted` — that change is deliberate, not purely additive.
+  GOAL_ACTION_NOT_APPLIED: 'GOAL_ACTION_NOT_APPLIED',
   IDEMPOTENCY_KEY_CONFLICT: 'IDEMPOTENCY_KEY_CONFLICT',
   RETENTION_CLAIM_NOT_FOUND: 'RETENTION_CLAIM_NOT_FOUND',
   RETENTION_CLAIM_OWNER_MISMATCH: 'RETENTION_CLAIM_OWNER_MISMATCH',
@@ -284,6 +293,20 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'The runtime or its dispatch path wedged without a terminal event.',
     hint: 'Inspect the run receipt and session diagnostics before retrying.',
     docs: 'docs/TROUBLESHOOTING.md',
+  },
+  [ErrorCode.PROMPT_NOT_EXECUTED]: {
+    httpStatus: 500,
+    description: 'The runtime accepted the prompt but no turn ever started; the run was failed fast instead of stalling.',
+    cause: 'A runtime extension input hook swallowed the input (classic shape: an ownership fence returns it as handled) so the turn never began.',
+    hint: 'Read the receipt detail for the captured extension warning; resolve the fence (for example /autocompact75 resync) or dispatch to a fresh session.',
+    docs: 'docs/INTERNAL-API.md#send-prompt',
+  },
+  [ErrorCode.GOAL_ACTION_NOT_APPLIED]: {
+    httpStatus: 409,
+    description: 'The goal command executed but the requested goal transition did not happen; the observed goal state is returned.',
+    cause: 'The goal engine refused mutation (classic shape: a fenced runtime is read-only) or the command was answered but did not change state.',
+    hint: 'Read observedGoal and extensionWarnings in the response; resolve the underlying reason (for example an ownership fence) and retry the goal action.',
+    docs: 'docs/INTERNAL-API.md#goal-control',
   },
   [ErrorCode.RUN_NOT_FOUND]: {
     httpStatus: 404,

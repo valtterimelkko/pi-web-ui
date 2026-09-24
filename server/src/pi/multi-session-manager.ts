@@ -9,6 +9,35 @@ import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 const logger = createLogger('MultiSessionManager');
 
+/** Contract 1.45.0: per-session cap on captured extension notify() messages. */
+const EXTENSION_UI_NOTIFICATION_RING_LIMIT = 20;
+
+/** Bounded grace for a late turn start before a submission is refused (shared with the Phase 1 fail-fast). */
+const PROMPT_NOT_EXECUTED_DEFAULT_GRACE_MS = 2000;
+
+function promptExecutionGraceMs(): number {
+  const raw = process.env.PI_PROMPT_EXECUTION_GRACE_MS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : PROMPT_NOT_EXECUTED_DEFAULT_GRACE_MS;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Contract 1.45.0 (silent no-op plan Phase 1b): the submission-shaped prompt
+ * was accepted by the runtime but no turn ever started — the classic fenced
+ * worker swallow. Delivery adapters surface this as an honest `refused`
+ * instead of a green "Sent".
+ */
+export class PromptNotSubmittedError extends Error {
+  constructor(detail?: string) {
+    super(detail ?? 'message accepted but no turn started');
+    this.name = 'PromptNotSubmittedError';
+  }
+}
+
 
 /**
  * WebUIContext for extension binding
@@ -42,6 +71,8 @@ export interface ActiveSession {
   subscribers: Set<string>;
   lastActivity: Date;
   lastEventTimestamp: number;
+  /** Contract 1.45.0 Phase 1b: when the last session_compaction event was observed (compaction-boundary honesty exemption). */
+  lastCompactionAt?: number;
   messageCount: number;
   currentStep: number;
   webUIContext?: WebUIContext;
@@ -231,6 +262,25 @@ export class MultiSessionManager {
     if (!message || typeof message !== 'object' || Array.isArray(message)) return;
     const payload = message as Record<string, unknown>;
     const type = payload.type;
+
+    // Contract 1.45.0 (silent no-op plan Phase 1/2): extension notify() calls
+    // reach the same sink as every other UI message; keep a bounded recent
+    // ring so fail-fast errors and goal-action refusals can quote the
+    // extension's own warning text. Browser delivery below is unchanged.
+    if (type === 'notification') {
+      const notification = payload.notification as { message?: unknown; type?: unknown; timestamp?: unknown } | undefined;
+      if (notification && typeof notification.message === 'string' && notification.message.length > 0) {
+        const ring = this.extensionUiNotifications.get(sessionPath) ?? [];
+        ring.push({
+          message: notification.message,
+          timestamp: typeof notification.timestamp === 'number' ? notification.timestamp : Date.now(),
+        });
+        while (ring.length > EXTENSION_UI_NOTIFICATION_RING_LIMIT) ring.shift();
+        this.extensionUiNotifications.set(sessionPath, ring);
+      }
+      return;
+    }
+
     let snapshotKey: string;
     let shouldDelete = false;
 
@@ -1162,6 +1212,12 @@ export class MultiSessionManager {
         this.resolveTurnStartWaiters(sessionPath);
         break;
 
+      case 'session_compaction':
+        // Contract 1.45.0 Phase 1b: a compaction boundary settles prompt()
+        // promises without a turn start; the resumed turn is legitimate.
+        activeSession.lastCompactionAt = Date.now();
+        break;
+
       case 'agent_end':
         activeSession.status = 'idle';
         break;
@@ -1503,6 +1559,13 @@ export class MultiSessionManager {
   private turnStartWaiters = new Map<string, Set<{ resolve: () => void; cancel: () => void }>>();
 
   /**
+   * Contract 1.45.0: bounded per-session ring of recent extension notify()
+   * messages, captured at the same sink every UI message already flows
+   * through (recordExtensionUiMessage).
+   */
+  private extensionUiNotifications = new Map<string, Array<{ message: string; timestamp: number }>>();
+
+  /**
    * Park a waiter that resolves when THIS session's turn has genuinely
    * started: the `agent_start` event flips the status to 'streaming', or the
    * session is already streaming when the waiter is armed (events are
@@ -1535,6 +1598,37 @@ export class MultiSessionManager {
     if (!set) return;
     this.turnStartWaiters.delete(sessionPath);
     for (const entry of set) entry.resolve();
+  }
+
+  /**
+   * Contract 1.45.0: recent extension notify() messages for a session, newest
+   * last, bounded per session (see EXTENSION_UI_NOTIFICATION_RING_LIMIT) and
+   * filtered to the requested window. Consumed by the Internal API's
+   * fail-fast and goal-action refusal details so the API quotes the
+   * extension's own warning instead of a generic failure.
+   */
+  getExtensionUiNotifications(sessionPath: string, sinceMs?: number): string[] {
+    const ring = this.extensionUiNotifications.get(sessionPath);
+    if (!ring || ring.length === 0) return [];
+    const cutoff = typeof sinceMs === 'number' && Number.isFinite(sinceMs) ? sinceMs : 0;
+    return ring
+      .filter((entry) => entry.timestamp >= cutoff)
+      .map((entry) => entry.message);
+  }
+
+  /**
+   * Contract 1.45.0 (silent no-op plan Phase 1): observe whether a dispatched
+   * prompt's turn genuinely starts, reusing the M3 turn-start waiter (same
+   * semantics: an already-streaming session IS a started turn). Fail-open when
+   * the session is unknown to the manager — the dispatch path already fails
+   * loudly for unknown/unloaded sessions, so this observer must never invent a
+   * second failure mode.
+   */
+  observeTurnStart(sessionPath: string): { started: Promise<void>; cancel: () => void } {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) return { started: Promise.resolve(), cancel: () => {} };
+    const waiter = this.armTurnStartWaiter(activeSession);
+    return { started: waiter.promise, cancel: waiter.cancel };
   }
 
   /**
@@ -1649,6 +1743,29 @@ export class MultiSessionManager {
       throw error;
     } finally {
       turnStart.cancel();
+    }
+
+    // Contract 1.45.0 Phase 1b (voice relay honesty): the prompt PROMISE won
+    // the race without a genuine turn start — the classic fenced-worker
+    // swallow. Apply the same compaction exemption and bounded grace as the
+    // Internal API fail-fast (Phase 1), then refuse honestly instead of
+    // reporting a green delivery. M3 timing for real deliveries (agent_start
+    // wins the race) is untouched.
+    if (!turnStarted) {
+      await delay(promptExecutionGraceMs());
+      const compactionRecent =
+        typeof activeSession.lastCompactionAt === 'number'
+        && Date.now() - activeSession.lastCompactionAt <= promptExecutionGraceMs() * 4;
+      const streamingNow = activeSession.agentSession.isStreaming === true;
+      // Read through a function: event handlers mutate the status during the
+      // awaits above, which TS's control-flow narrowing cannot see.
+      const statusNow = (): SessionStatus => activeSession.status;
+      if (!compactionRecent && !streamingNow && statusNow() !== 'streaming') {
+        if (activeSession.status === 'busy') activeSession.status = 'idle';
+        throw new PromptNotSubmittedError(
+          `message accepted by ${sessionPath} but no turn started (input likely swallowed by a runtime extension fence); nothing was delivered to a running worker`,
+        );
+      }
     }
   }
 
