@@ -138,6 +138,14 @@ describe('Pi ownership gate (Phase 4b, contract 1.45.0)', () => {
       isSessionPinned: vi.fn(() => false),
       getPinClaims: vi.fn(() => [] as string[]),
       disposeLoadedSession: vi.fn(() => true),
+      // Round 2: recovery moved into the manager (single-flight + browser
+      // re-attach). The route delegates; the mock mirrors the extension's
+      // post-recovery publication.
+      recoverSession: vi.fn(async () => {
+        multiSessionManager.getAgentSession.mockReturnValue(agentSession);
+        ownershipMap.set(SESSION_PATH, { status: 'owned', reason: 'this runtime owns the persisted session', updatedAt: Date.now() });
+        return { subscribers: [], viewers: [], pinClaims: [] };
+      }),
       getAllSessionStatuses: vi.fn(() => []),
     };
     manager = new RunReceiptManager({
@@ -257,8 +265,7 @@ describe('Pi ownership gate (Phase 4b, contract 1.45.0)', () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toMatchObject({ success: true, action: 'set_thinking_level', level: 'high' });
-    expect(multiSessionManager.disposeLoadedSession).toHaveBeenCalledWith(SESSION_PATH);
-    expect(multiSessionManager.subscribeClient).toHaveBeenCalledWith('internal-test-client', SESSION_PATH);
+    expect(multiSessionManager.recoverSession).toHaveBeenCalledWith(SESSION_PATH);
     expect(agentSession.setThinkingLevel).toHaveBeenCalledWith('high');
   });
 
@@ -280,7 +287,7 @@ describe('Pi ownership gate (Phase 4b, contract 1.45.0)', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    expect(multiSessionManager.pinSession).toHaveBeenCalledWith(SESSION_PATH, 'web-ui');
+    expect(multiSessionManager.recoverSession).toHaveBeenCalledWith(SESSION_PATH);
   });
 
   it('uncertain liveness fails CLOSED with a refusal (correction C1)', async () => {

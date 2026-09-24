@@ -5209,24 +5209,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       } };
     }
 
-    // recover: fenced with a dead, recycled, or absent owner.
+    // recover: fenced with a dead, recycled, or absent owner. The manager's
+    // recoverSession is single-flight: concurrent actions on the same session
+    // share ONE dispose→rehydrate, then each proceeds against the rehydrated
+    // session.
     logger.warn(`[Ownership] Fenced Pi session with a dead/absent owner — recovering: ${entry.id} path=${entry.path}`);
-    const pinClaims = multiSessionManager.getPinClaims?.(entry.path) ?? [];
-    multiSessionManager.disposeLoadedSession?.(entry.path);
-    // Await full disposal: the in-memory session is gone AND the extension's
-    // async session_shutdown handlers (lease release, process-owner
-    // unregister) have had a bounded chance to settle (5764604/46982c0).
-    const settleDeadline = Date.now() + 2_000;
-    while (multiSessionManager.getAgentSession(entry.path) && Date.now() < settleDeadline) {
-      await delay(50);
-    }
-    await delay(150);
-    await multiSessionManager.subscribeClient(internalClientId, entry.path);
-    for (const claim of pinClaims) {
-      if (!multiSessionManager.pinSession?.(entry.path, claim)) {
-        logger.warn(`[Ownership] Recovery could not restore pin claim '${claim}' for ${entry.id}`);
-      }
-    }
+    await multiSessionManager.recoverSession(entry.path);
     const rehydrated = multiSessionManager.getAgentSession(entry.path);
     if (rehydrated) {
       try {

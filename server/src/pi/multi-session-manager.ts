@@ -12,6 +12,16 @@ const logger = createLogger('MultiSessionManager');
 /** Contract 1.45.0: per-session cap on captured extension notify() messages. */
 const EXTENSION_UI_NOTIFICATION_RING_LIMIT = 20;
 
+/** Result of a dead-owner recovery: which attachments were restored. */
+export interface SessionRecoveryResult {
+  /** Client ids re-subscribed to the recovered session. */
+  subscribers: string[];
+  /** Client ids whose viewing reference was restored. */
+  viewers: string[];
+  /** Pin claims restored on the rehydrated session. */
+  pinClaims: string[];
+}
+
 /** Bounded grace for a late turn start before a submission is refused (shared with the Phase 1 fail-fast). */
 const PROMPT_NOT_EXECUTED_DEFAULT_GRACE_MS = 2000;
 
@@ -605,6 +615,101 @@ export class MultiSessionManager {
     if (!this.sessions.has(sessionPath)) return false;
     this.disposeSession(sessionPath);
     return true;
+  }
+
+  /** Public read: client ids currently subscribed to a session. */
+  getSubscribers(sessionPath: string): string[] {
+    const result: string[] = [];
+    for (const [clientId, subscriptions] of this.clientSubscriptions.entries()) {
+      if (subscriptions.has(sessionPath)) result.push(clientId);
+    }
+    return result;
+  }
+
+  /** Public read: client ids currently viewing a session. */
+  getViewingClients(sessionPath: string): string[] {
+    const result: string[] = [];
+    for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
+      if (viewingPath === sessionPath) result.push(clientId);
+    }
+    return result;
+  }
+
+  private recoveryInFlight = new Map<string, Promise<SessionRecoveryResult>>();
+
+  /**
+   * Contract 1.45.0 round 2: dispose→rehydrate recovery that PRESERVES browser
+   * attachment. Captures every subscribed and viewing client before disposal,
+   * re-subscribes them after the reload (restoring viewing references and pin
+   * claims), and broadcasts the same session_event envelope the stale-stream
+   * reload path uses, so attached browsers resync.
+   *
+   * Single-flight: concurrent callers for the same session share ONE recovery
+   * (the second action awaits the first's completion instead of disposing a
+   * rehydrating session again).
+   */
+  async recoverSession(sessionPath: string): Promise<SessionRecoveryResult> {
+    const inFlight = this.recoveryInFlight.get(sessionPath);
+    if (inFlight) return inFlight;
+    const promise = this.performRecovery(sessionPath).finally(() => {
+      this.recoveryInFlight.delete(sessionPath);
+    });
+    this.recoveryInFlight.set(sessionPath, promise);
+    return promise;
+  }
+
+  private async performRecovery(sessionPath: string): Promise<SessionRecoveryResult> {
+    const subscribers = this.getSubscribers(sessionPath);
+    const viewers = this.getViewingClients(sessionPath);
+    const pinClaims = this.getPinClaims(sessionPath);
+    const previousSessionId = this.sessions.get(sessionPath)?.sessionId;
+
+    this.disposeLoadedSession(sessionPath);
+
+    // Await full disposal: the in-memory session is gone AND the extension's
+    // async session_shutdown handlers have had a bounded chance to settle
+    // (5764604/46982c0).
+    const settleDeadline = Date.now() + 2_000;
+    while (this.getAgentSession(sessionPath) && Date.now() < settleDeadline) {
+      await delay(50);
+    }
+    await delay(150);
+
+    await this.subscribeClient(`multi-${sessionPath}`, sessionPath);
+    for (const clientId of subscribers) {
+      try {
+        await this.subscribeClient(clientId, sessionPath);
+      } catch (error) {
+        logger.warn(`[MultiSessionManager] Recovery could not re-subscribe client ${clientId} to ${sessionPath}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    for (const clientId of viewers) {
+      try {
+        this.setClientViewingSession(clientId, sessionPath);
+      } catch (error) {
+        logger.warn(`[MultiSessionManager] Recovery could not restore viewing client ${clientId} for ${sessionPath}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    for (const claim of pinClaims) {
+      if (!this.pinSession(sessionPath, claim)) {
+        logger.warn(`[MultiSessionManager] Recovery could not restore pin claim '${claim}' for ${sessionPath}`);
+      }
+    }
+
+    const rehydrated = this.sessions.get(sessionPath);
+    const sessionId = rehydrated?.sessionId ?? previousSessionId;
+    this.broadcastToSubscribers(sessionPath, {
+      type: 'session_event',
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      sessionPath,
+      event: {
+        type: 'session_recovered',
+        message: 'Session was fenced by another runtime; the dead owner was detected and the session recovered automatically. The view has been resynced.',
+      },
+    });
+
+    logger.info(`[MultiSessionManager] Session recovered: ${sessionPath} resubscribed=${subscribers.length} viewers=${viewers.length} pins=${pinClaims.length}`);
+    return { subscribers, viewers, pinClaims };
   }
 
   /**

@@ -3198,6 +3198,25 @@ export const useSessionStore = create<SessionState>()(
                 break;
               }
 
+              case 'session_recovered': {
+                // Server recovered the session (dead-owner fence, contract
+                // 1.45.0 round 2): resync the view exactly like a stale reset
+                // and tell the operator why the session blinked.
+                const recoveredMsg = (event.message as string) || 'Session recovered from an ownership fence; resynced.';
+                get().setSessionStatus(sessionId, 'idle');
+                if (get().currentSessionId === sessionId) {
+                  set({
+                    isStreaming: false,
+                    isLoading: false,
+                  });
+                  useUIStore.getState().addToast({
+                    type: 'success',
+                    message: recoveredMsg,
+                  });
+                }
+                break;
+              }
+
               case 'rate_limit': {
                 // Claude quota / rate-limit info
                 const rateLimitData = event as unknown as {

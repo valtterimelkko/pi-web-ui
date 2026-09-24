@@ -104,6 +104,22 @@ describe('MultiSessionManager.submitPrompt — honest refusal when the turn neve
     await expect(manager.submitPrompt(session.sessionFile, 'compact then resume')).resolves.toBeUndefined();
   });
 
+  it('RED (round 2): a turn that starts LATE — inside the grace — and finishes quickly is delivered, not refused', async () => {
+    session.prompt.mockImplementation(async () => {
+      // The prompt settles immediately (the fenced/swallowed shape)…
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    });
+    const submission = manager.submitPrompt(session.sessionFile, 'late-start probe');
+    // …but the turn actually starts during the grace window (late worker).
+    setTimeout(() => {
+      eventHandler({ type: 'agent_start', timestamp: Date.now() });
+      eventHandler({ type: 'agent_end', timestamp: Date.now() });
+    }, GRACE_MS / 2);
+
+    await expect(submission).resolves.toBeUndefined();
+    expect(manager.getSessionStatus(session.sessionFile)?.status).toBe('idle');
+  });
+
   it('delivery adapter maps a not-started submission to refused with the reason (amber NOT-sent path)', async () => {
     const delivery = createPiDelivery({
       isBusy: () => false,
