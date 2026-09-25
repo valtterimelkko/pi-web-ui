@@ -2375,7 +2375,9 @@ legacy deterministic `watchId`.
 
 Condition types (all generic): `event_type` (`eventType` + optional `dataMatch`),
 `tool` (`toolName`, `phase`, `argIncludes`), `text` (`contains` or
-`pattern`/`patternFlags`, `source`). Common fields: `id` (auto `c0`,`c1`,…),
+`pattern`/`patternFlags`, `source`; with the default `source: "assistant"` it
+matches assistant text only — never a user prompt echo — and fires once per
+occurrence, contract 1.47.1). Common fields: `id` (auto `c0`,`c1`,…),
 `once` (default `true`). Registering owns a source-owned `watch:<watchId>`
 residency claim by default so idle eviction cannot kill the subject mid-watch;
 it does not consume or release a human Web UI pin slot.

@@ -64,6 +64,43 @@ describe('ConditionEngine — generic, function-agnostic matching', () => {
     expect(e.ingest(ev('message_update', { text: 'NE' }))).toHaveLength(0);
   });
 
+  it('ignores user-role message text (prompt echoes never feed the assistant buffer)', () => {
+    const e = engine([{ type: 'text', contains: 'QUESTION-FOR-PARENT' }]);
+    // Claude / Command Code / agy shape: role on data.role.
+    expect(e.ingest(ev('message_start', { role: 'user', text: 'If blocked, write QUESTION-FOR-PARENT' }))).toHaveLength(0);
+    // Antigravity / OpenCode replay echo the user text as a text_delta after a user message_start.
+    expect(e.ingest(ev('message_update', { assistantMessageEvent: { type: 'text_delta', delta: 'QUESTION-FOR-PARENT' } }))).toHaveLength(0);
+    expect(e.ingest(ev('message_end', { role: 'user' }))).toHaveLength(0);
+    // Pi shape: role on data.message.role.
+    expect(e.ingest(ev('message_start', { message: { role: 'user' }, text: 'QUESTION-FOR-PARENT' }))).toHaveLength(0);
+    // The assistant saying it is what fires.
+    expect(e.ingest(ev('message_start', { role: 'assistant' }))).toHaveLength(0);
+    expect(e.ingest(ev('message_update', { assistantMessageEvent: { type: 'text_delta', delta: 'QUESTION-FOR-PARENT: which db?' } }))).toHaveLength(1);
+  });
+
+  it('fires once per new occurrence, not on every later event of the turn', () => {
+    const e = engine([{ type: 'text', contains: 'SENTINEL', once: false }]);
+    expect(e.ingest(ev('message_update', { assistantMessageEvent: { type: 'text_delta', delta: 'SENTI' } }))).toHaveLength(0);
+    expect(e.ingest(ev('message_update', { assistantMessageEvent: { type: 'text_delta', delta: 'NEL here' } }))).toHaveLength(1);
+    // Later non-text events and text without a new occurrence must not re-fire.
+    expect(e.ingest(ev('tool_execution_start', { toolName: 'Bash', args: {} }))).toHaveLength(0);
+    expect(e.ingest(ev('tool_execution_end', { toolName: 'Bash', result: 'ok' }))).toHaveLength(0);
+    expect(e.ingest(ev('claude_sdk_raw', { raw: {} }))).toHaveLength(0);
+    expect(e.ingest(ev('message_update', { assistantMessageEvent: { type: 'text_delta', delta: ' and more text' } }))).toHaveLength(0);
+    // A genuinely new occurrence fires again.
+    expect(e.ingest(ev('message_update', { assistantMessageEvent: { type: 'text_delta', delta: ' SENTINEL again' } }))).toHaveLength(1);
+  });
+
+  it('regex text conditions fire only on matches that include new text', () => {
+    const e = engine([{ type: 'text', pattern: 'DONE-\\d+', once: false }]);
+    expect(e.ingest(ev('message_update', { text: 'DONE-1' }))).toHaveLength(1);
+    expect(e.ingest(ev('agent_end'))).toHaveLength(0);
+    expect(e.ingest(ev('message_update', { text: ' still working' }))).toHaveLength(0);
+    const m = e.ingest(ev('message_update', { text: ' DONE-2' }));
+    expect(m).toHaveLength(1);
+    expect(m[0].evidence).toBe('DONE-2');
+  });
+
   it('throws on an invalid regex at resolve time', () => {
     expect(() => resolveConditions([{ type: 'text', pattern: '(' }])).toThrow();
   });

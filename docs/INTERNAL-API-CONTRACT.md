@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.47.0",
+  "contractVersion": "1.47.1",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,9 @@ Current contract:
 
 ### Changelog
 
+- **1.47.1** (patch) — `text` watch conditions (default `source: "assistant"`) now fire only on the assistant saying the text:
+  - user-role message text (a prompt echo: `message_start` with `role: "user"` or `message.role: "user"`, and any text replayed inside that user message, as Antigravity and OpenCode replay do) no longer feeds the assistant buffer, so a child reading an objective that contains the sentinel does not fire;
+  - a match is reported once per occurrence, on the event whose assistant text completes it. Before 1.47.1 every later event of the turn (`tool_execution_*`, `claude_sdk_raw`, further deltas) re-matched the same occurrence, so `once: false` conditions fired repeatedly (11 firings in 10 s observed on 2026-09-25). A regex condition reports the first match that reaches into the new text. `source: "any"` is unchanged (per-event text). No request or response shape changes.
 - **1.47.0** (minor, additive only — four orchestration improvements from the 2026-09-25 Claude-orchestrator validation matrix, section C). No existing field, default or behaviour changes for any runtime or client that does not opt in.
   - **C1 — session identity in runtime environments.** Every per-session runtime subprocess (Claude SDK and cli-direct, Antigravity's persistent `agy`, Command Code) now receives `PI_WEB_UI_SESSION_ID` (canonical internal id), `PI_WEB_UI_SESSION_ORIGIN` (`browser` | `internal-api` | `native-discovered`, from the registry `origin`, omitted when unknown) and `PI_WEB_UI_PARENT_SESSION_ID` (only when linked to a parent). Values inherited from the server's own environment are replaced or removed, never leaked. **The three names are a cross-repo contract (Agent OS reads them) — never rename.** Pi runs in-process and keeps `PI_SESSION_ID`; OpenCode (one shared `opencode serve`) and the channel backend (one shared PTY) have no per-session environment and do not receive them. Capability: `features.sessionEnvIdentity` (variable names + runtimes).
   - **C2 — final assistant text on run receipts.** `GET /runs/:runId` (and every receipt projection that returns the full receipt) gains `finalText` — the last assistant text of the run (text after its last tool call, else the last non-empty assistant text), tail-truncated to 4096 characters — plus `finalTextTruncated: boolean`. Both are absent when no assistant text was observed. The bounded session evidence bundle stays payload-free (it strips both). Capability: `features.runReceiptFinalText`.

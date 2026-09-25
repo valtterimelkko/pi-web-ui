@@ -109,6 +109,32 @@ function extractAnyText(event: NormalizedEvent): string {
   return '';
 }
 
+function roleOf(event: NormalizedEvent): 'user' | 'assistant' | 'unknown' {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const nested = data.message && typeof data.message === 'object' ? (data.message as Record<string, unknown>).role : undefined;
+  const role = typeof data.role === 'string' ? data.role : nested;
+  return role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'unknown';
+}
+
+/** Evidence for the first match in `haystack` that ends after `newFrom`, else null. */
+function matchText(cond: ResolvedCondition, haystack: string, newFrom: number): string | null {
+  if (cond.spec.contains) {
+    const needle = cond.spec.contains;
+    const start = Math.max(0, newFrom - needle.length + 1);
+    if (haystack.indexOf(needle, start) === -1) return null;
+    return truncate(`…${needle}…`);
+  }
+  if (cond.regex) {
+    const flags = cond.regex.flags.includes('g') ? cond.regex.flags : `${cond.regex.flags}g`;
+    const re = new RegExp(cond.regex.source, flags);
+    for (const m of haystack.matchAll(re)) {
+      if ((m.index ?? 0) + m[0].length > newFrom) return truncate(m[0] || cond.spec.pattern || 'match');
+    }
+    return null;
+  }
+  return null;
+}
+
 function shallowDataMatch(event: NormalizedEvent, match: Record<string, string | number | boolean>): boolean {
   const data = (event.data ?? {}) as Record<string, unknown>;
   return Object.entries(match).every(([k, v]) => data[k] === v);
@@ -122,6 +148,10 @@ function shallowDataMatch(event: NormalizedEvent, match: Record<string, string |
  */
 export class ConditionEngine {
   private assistantBuffer = '';
+  /** Buffer length before the current event's delta: matches must end past it. */
+  private previousLength = 0;
+  /** Role of the message currently streaming; user-role text never feeds the buffer. */
+  private messageRole: 'user' | 'other' = 'other';
 
   constructor(private readonly conditions: ResolvedCondition[]) {}
 
@@ -130,8 +160,15 @@ export class ConditionEngine {
     // from a previous turn cannot re-trigger a later turn's condition.
     if (event.type === 'agent_start') {
       this.assistantBuffer = '';
+      this.messageRole = 'other';
     }
-    const delta = extractAssistantDelta(event);
+    if (event.type === 'message_start') this.messageRole = roleOf(event) === 'user' ? 'user' : 'other';
+    // A prompt echo (user message_start, or a user text_delta replayed by
+    // Antigravity / OpenCode) is not the assistant saying the sentinel.
+    const userText = this.messageRole === 'user' || roleOf(event) === 'user';
+    const delta = userText ? '' : extractAssistantDelta(event);
+    if (event.type === 'message_end' && this.messageRole === 'user') this.messageRole = 'other';
+    this.previousLength = this.assistantBuffer.length;
     if (delta) this.assistantBuffer += delta;
 
     const matches: ConditionMatch[] = [];
@@ -170,21 +207,17 @@ export class ConditionEngine {
       }
 
       case 'text': {
-        // For text, prefer the accumulated buffer so matches can span deltas.
-        const haystack = cond.spec.source === 'any'
-          ? extractAnyText(event) || delta
-          : this.assistantBuffer;
-        if (!haystack) return null;
-        if (cond.spec.contains) {
-          if (!haystack.includes(cond.spec.contains)) return null;
-          return truncate(`…${cond.spec.contains}…`);
+        if (cond.spec.source === 'any') {
+          const haystack = extractAnyText(event) || delta;
+          if (!haystack) return null;
+          return matchText(cond, haystack, 0);
         }
-        if (cond.regex) {
-          const m = cond.regex.exec(haystack);
-          if (!m) return null;
-          return truncate(m[0] || cond.spec.pattern || 'match');
-        }
-        return null;
+        // Assistant text: search the accumulated buffer so matches can span
+        // deltas, but only when this event added text, and only for a match
+        // that reaches into the new text — an occurrence fires once, not on
+        // every later event of the turn.
+        if (!delta) return null;
+        return matchText(cond, this.assistantBuffer, this.previousLength);
       }
 
       // `deadline` is timer-driven by the WatchManager; events never match it.
