@@ -37,10 +37,25 @@ export interface ConditionMatch {
 
 const EVIDENCE_MAX = 200;
 
+/** Contract 1.47.0: bounds for the server-side `deadline` condition. */
+export const DEADLINE_MIN_SECONDS = 1;
+export const DEADLINE_MAX_SECONDS = 86_400;
+
+function validateDeadlineSpec(spec: WatchConditionSpec): void {
+  const n = spec.afterSeconds;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < DEADLINE_MIN_SECONDS || n > DEADLINE_MAX_SECONDS) {
+    throw new Error(`deadline.afterSeconds must be an integer between ${DEADLINE_MIN_SECONDS} and ${DEADLINE_MAX_SECONDS}`);
+  }
+  if (spec.once === false) {
+    throw new Error('deadline conditions fire exactly once; once:false is not supported');
+  }
+}
+
 /** Assign a stable id, normalize defaults, and pre-compile any regex. */
 export function resolveCondition(spec: WatchConditionSpec, index: number): ResolvedCondition {
   const id = spec.id && spec.id.trim() ? spec.id.trim() : `c${index}`;
   let regex: RegExp | undefined;
+  if (spec.type === 'deadline') validateDeadlineSpec(spec);
   if (spec.type === 'text' && spec.pattern) {
     // A bad pattern should fail loudly at registration time, not silently at
     // match time, so we let the RegExp constructor throw here.
@@ -172,6 +187,8 @@ export class ConditionEngine {
         return null;
       }
 
+      // `deadline` is timer-driven by the WatchManager; events never match it.
+      case 'deadline':
       default:
         return null;
     }

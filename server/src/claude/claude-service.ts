@@ -12,6 +12,7 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeProcessPool, resolveClaudeSessionPath } from './claude-process-pool.js';
 import { ClaudeSessionStore } from './claude-session-store.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
+import { sessionIdentityFromEntry } from '../session-env-identity.js';
 import { config } from '../config.js';
 import { ClaudeChannelService } from './claude-channel-service.js';
 import { ClaudeSdkService, type AskUserQuestionResolution, type AskUserQuestionCloseReason } from './claude-sdk-service.js';
@@ -525,6 +526,7 @@ export class ClaudeService {
         isFollowUp,
         resolvedLaunch,
         effort: mapThinkingLevelToEffort(entry.thinkingLevel),
+        sessionIdentity: sessionIdentityFromEntry(entry),
       },
       // onEvent: persist interesting events, capture confirmed session_id, and forward to caller
       async (event: NormalizedEvent) => {

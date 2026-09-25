@@ -557,6 +557,7 @@ POST /api/v1/sessions
 | `retention` | object | No | — | Required source-owned lease. `durable` preserves recoverability without forcing runtime residency; `resident` additionally keeps the runtime loaded. Requires `ownerId`; optional `ttlSeconds` (default 24h, max 7d) and `label`. Creation rolls back if the guarantee fails. |
 | `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
+| `agentOsCapture` | `"enabled"` \| `"disabled"` | No | unspecified | Contract 1.47.0: per-session Agent OS capture opt-in. Stored on the registry entry, echoed in the create response (and in batch-create result items) and on `GET /sessions/:id`, and exported to per-session runtime subprocesses as `PI_WEB_UI_AGENT_OS_CAPTURE` — each only when set. Any other value is `400`. Omitted = unspecified: Agent OS then decides by origin (it skips capture for unspecified `internal-api` sessions unless its host-wide `AGENT_OS_CAPTURE_API_SESSIONS=1` is set). Pi Web UI only records and exports it; it never acts on it. Also accepted per entry by `POST /sessions/batch`. |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. Only SDK-backed profiles are accepted (contract 1.46.0). |
 | `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role machinery. Raw flags, environment, executable paths, and native ids are never accepted. |
 | `commandCodeAttestation` | object | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role-attestation machinery; no longer required or verified. |
@@ -1141,6 +1142,22 @@ local busy, state-check, or receipt-persistence race rejects the reservation
 *before* runtime dispatch, its receipt remains as cancelled/failed evidence but
 the key is released so a later retry can perform the work.
 
+**Final assistant text (contract 1.47.0).** A receipt carries `finalText` —
+the last assistant text of the run (the text after its last tool call, else the
+last non-empty assistant text), tail-truncated to 4096 characters — and
+`finalTextTruncated: boolean`. Both are absent (not empty) when no assistant
+text was observed for the run, e.g. a tool-only turn or a run that never
+started. It is derived from the same normalized events the receipt already
+observes, so it is available for every runtime whose events reach the run
+(Pi, Claude, OpenCode, Antigravity, Command Code). User prompts echoed as text
+deltas are ignored. The session evidence bundle strips it to stay
+payload-free; read `GET /runs/:runId`. Feature-detect with
+`features.runReceiptFinalText`.
+
+```json
+{ "runId": "…", "status": "completed", "finalText": "All 12 tests pass.", "finalTextTruncated": false }
+```
+
 Receipts are persisted under `INTERNAL_API_RUN_RECEIPTS_DIR` (default
 `~/.pi-web-ui/run-receipts`). Retention targets terminal receipts older than 30
 days and terminal receipts beyond the newest 1,000 (an unexpired 24-hour
@@ -1165,6 +1182,34 @@ semantics; use detached `answers` when the work must survive observer loss.
 
 ---
 
+### Session identity in runtime environments (contract 1.47.0)
+
+Every per-session runtime subprocess Pi Web UI spawns receives the session's
+Pi Web UI identity, so the agent inside can address its own session (for
+`X-Parent-Session`, an `onFire` target, or a transcript lookup):
+
+| Variable | Value |
+|---|---|
+| `PI_WEB_UI_SESSION_ID` | canonical internal session id (the id used on `/api/v1/sessions/:id`) |
+| `PI_WEB_UI_SESSION_ORIGIN` | registry `origin`: `browser`, `internal-api` or `native-discovered`; omitted when unknown (legacy entries) |
+| `PI_WEB_UI_PARENT_SESSION_ID` | parent session id; present only when the session is linked to a parent |
+| `PI_WEB_UI_AGENT_OS_CAPTURE` | the session's `agentOsCapture` (`enabled` / `disabled`); present only when it was set at creation |
+
+Covered: Claude SDK and cli-direct (`claude -p`) processes, Antigravity's
+persistent `agy` process, and Command Code processes. Values inherited from the
+server's own environment are replaced or removed. Not covered: Pi sessions run
+in-process and keep their existing `PI_SESSION_ID`; OpenCode runs one shared
+`opencode serve` and the Claude channel backend one shared PTY, so neither has a
+per-session environment. A persistent `agy` process keeps the identity it was
+spawned with (parent linkage is set at creation, before the first prompt).
+These names are a cross-repo contract read by Agent OS — never rename them.
+Feature-detect with `features.sessionEnvIdentity` (and
+`features.sessionAgentOsCapture` for the capture variable). Pi sessions have no
+subprocess environment; Agent OS resolves their `agentOsCapture` from the
+registry entry by session id.
+
+---
+
 ### Capabilities
 
 ```
@@ -1174,6 +1219,15 @@ GET /api/v1/capabilities
 Use this first if you are building tools or running live validation.
 It reports runtime availability, Claude backend mode, and feature flags.
 For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/profile metadata from `/models` or session info when you need the exact selected provider profile.
+
+Contract 1.47.0 adds four feature objects (truthy when supported):
+`sessionEnvIdentity` (`variables`, `runtimes`), `runReceiptFinalText`
+(`field`, `truncatedField`, `maxChars: 4096`), `watchDeadlineCondition`
+(`conditionType: "deadline"`, `field: "afterSeconds"`, `minSeconds: 1`,
+`maxSeconds: 86400`) and `watchFireIfSettled` (`registerField:
+"fireIfSettled"`, `eventTypes: ["agent_end","goal_end"]`), plus
+`sessionAgentOsCapture` (`createField: "agentOsCapture"`, `values:
+["enabled","disabled"]`, `env: "PI_WEB_UI_AGENT_OS_CAPTURE"`).
 
 **Response (200):**
 ```json
@@ -2325,6 +2379,49 @@ Condition types (all generic): `event_type` (`eventType` + optional `dataMatch`)
 `once` (default `true`). Registering owns a source-owned `watch:<watchId>`
 residency claim by default so idle eviction cannot kill the subject mid-watch;
 it does not consume or release a human Web UI pin slot.
+
+**Server-side deadline (`deadline`, contract 1.47.0).** `{ "type": "deadline",
+"afterSeconds": N }` (integer 1..86400) is a timer, not an event predicate: it
+fires exactly once N seconds after registration and records a normal firing
+with `eventType: "deadline"` (evidence names the due instant). It works with
+`onFire` (a managed parent's model-free backstop) and for pure observers via
+`GET /watches/wait`. The condition echoes its persisted due instant as `dueAt`
+(epoch ms); after a restart a pending deadline re-arms for the same instant, and
+one that fell due while the server was down fires on boot with `reconciled:
+true`. It never dispatches anything to the subject and never marks it busy.
+`once:false` is rejected (400). Mixed with other conditions it follows the
+normal rules: a pure-observer watch completes only when every one-shot
+condition has fired, so an `agent_end` + `deadline` backstop watch records the
+deadline firing too unless you delete the watch after the child ends (with
+`onFire`, `maxWakeups` bounds the wakes).
+
+```json
+{ "conditions": [ { "id": "done", "type": "event_type", "eventType": "agent_end" },
+                  { "id": "backstop", "type": "deadline", "afterSeconds": 900 } ] }
+```
+
+**Fire if already settled (`fireIfSettled`, contract 1.47.0).** A completion
+watch registered after the child already finished would otherwise wait
+forever. With `"fireIfSettled": true` (default `false`), registration checks
+the subject: when it is idle (runtime not running) AND its most recent run
+receipt is terminal (`completed`, `failed`, `cancelled`, `interrupted`), each
+completion-type condition — `event_type` with `eventType` `agent_end` or
+`goal_end` — records one immediate firing marked `reconciled: true` (and
+`onFire` dispatches as for any firing). Conditions with a `dataMatch` are
+skipped (the predicate cannot be verified from state) and listed in
+`skippedConditionIds`. The 201 response then carries:
+
+```json
+"fireIfSettled": { "requested": true, "settled": true, "lastRunId": "…", "lastRunStatus": "completed",
+                   "firedConditionIds": ["c0"] }
+```
+
+When not settled, `settled: false` with `reason` (`busy`, `no_runs`,
+`last_run_not_terminal`, `settlement_unavailable`) and nothing is recorded; the
+watch keeps observing live events as usual. A subject that has never run
+through the Internal API (no receipts) is reported `no_runs`. `goal_end`
+caveat: an idle session with a terminal last run may still have a goal
+between turns — prefer a `dataMatch`-free `agent_end` for plain completion.
 
 **Opt-in wake (`onFire`, contract 1.22.0).** Without `onFire` a watch is a pure
 observer. With it, the first (policy-permitted) condition firing dispatches a

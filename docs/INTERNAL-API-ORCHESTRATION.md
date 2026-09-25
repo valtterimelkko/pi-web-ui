@@ -261,7 +261,9 @@ Use this when:
 - `GET /api/v1/sessions/:id/transcript?scope=visible_recent` for compact progress reads
 
 This gives you a runtime-agnostic output format and is usually the best way to
-consume child results. Do not use a compact recent projection to conclude that a
+consume child results. For a quick "what did the child say?" check, the run
+receipt (`GET /runs/:runId`) carries a bounded `finalText` (last assistant
+text, 4096-char tail) since contract 1.47.0 — no transcript call needed. Do not use a compact recent projection to conclude that a
 finished run had no answer; compare the full projection with receipt
 `outputEvidence`, diagnostics, and history when the result is empty or delayed.
 
@@ -331,6 +333,16 @@ exact lease id, and do not consume the Web UI's five-per-runtime human pin slots
 its own claim; replacing or deleting it releases only that watch claim. Retention
 is not execution admission, so preflight `/capacity` and handle final prompt
 `429` responses. For `suggested` goals, watch `goal_state` where `status=suggested` (non-terminal, `pendingSuggestion` awaiting owner approval) rather than `goal_end` (which fires only for terminal `achieved`/`failed`/`cleared`).
+
+**Orchestrator backstops and late registration (contract 1.47.0).** Register
+the completion watch *before* the detached prompt; when that is not possible
+(or after a stale-watch recovery), add `"fireIfSettled": true` so a child that
+already finished fires immediately (`reconciled: true`). A managed parent that
+cannot run its own timer can add `{"type":"deadline","afterSeconds":N}` to the
+watch as a server-side backstop — it fires once, survives restart, and wakes
+through `onFire` like any firing. A Claude, Antigravity or Command Code parent
+finds its own session id in `PI_WEB_UI_SESSION_ID` (use it for
+`X-Parent-Session` and as the `onFire` target).
 
 `detach:true` returns `202` immediately and the turn keeps running server-side
 even after you disconnect — so you can fire the task and close the connection.

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createLogger } from '../logging/logger.js';
+import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import { mapAgyUsage } from './agy-event-normalizer.js';
 import { parseAgyLine, type ParsedAgyLine } from './agy-event-types.js';
 
@@ -55,6 +56,8 @@ export interface AgyStreamProcessOptions {
   /** Every parsed stdout line (the service feeds its AgyEventNormalizer). */
   onEvent: (parsed: ParsedAgyLine) => void;
   spawnFn?: typeof spawn;
+  /** Contract 1.47.0: Pi Web UI session identity exported to the agy env. */
+  sessionIdentity?: SessionEnvIdentity;
 }
 
 const AGY_BINARY = process.env.AGY_BINARY || '/root/.local/bin/agy';
@@ -109,7 +112,10 @@ export class AgyStreamProcess {
   async start(): Promise<void> {
     if (this.child && !this.exited) return;
     const spawnFn = this.opts.spawnFn ?? spawn;
-    const env = { ...process.env, PATH: `/root/.local/bin:${process.env.PATH ?? ''}` };
+    const env = applySessionIdentityEnv(
+      { ...process.env, PATH: `/root/.local/bin:${process.env.PATH ?? ''}` },
+      this.opts.sessionIdentity,
+    );
     const child = spawnFn(AGY_BINARY, this.buildArgs(), {
       cwd: this.opts.cwd,
       env,

@@ -19,6 +19,7 @@ import {
   computeBackoffMs,
 } from './claude-transient-errors.js';
 import { createLogger } from '../logging/logger.js';
+import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 
 const logger = createLogger('ClaudeProcessPool');
 
@@ -41,6 +42,8 @@ export interface ClaudeProcessOptions {
    * 'xhigh'|'max'. When set, forwarded to the CLI. Z.ai maps these for GLM.
    */
   effort?: string;
+  /** Contract 1.47.0: Pi Web UI session identity exported to the subprocess env. */
+  sessionIdentity?: SessionEnvIdentity;
 }
 
 export type ClaudeEventHandler = (event: NormalizedEvent) => void;
@@ -141,14 +144,14 @@ export class ClaudeProcessPool {
     // ── Build environment ──────────────────────────────────────────────────
     // If a resolved profile is provided, use its env (already has API keys
     // stripped/set per profile). Otherwise, strip API keys to force subscription.
-    const claudeEnv: NodeJS.ProcessEnv = options.resolvedLaunch
+    const claudeEnv: NodeJS.ProcessEnv = applySessionIdentityEnv(options.resolvedLaunch
       ? options.resolvedLaunch.env
       : (() => {
           const env = { ...process.env };
           delete env.ANTHROPIC_API_KEY;     // CRITICAL: forces subscription auth
           delete env.ANTHROPIC_AUTH_TOKEN;  // CRITICAL: forces subscription auth
           return env;
-        })();
+        })(), options.sessionIdentity);
 
     // ── Determine executable and model ─────────────────────────────────────
     // Resolve the claude binary to an absolute path to avoid PATH resolution

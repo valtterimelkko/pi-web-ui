@@ -21,6 +21,7 @@ import type {
   SessionRuntime,
   WatchConditionSpec,
   WatchConditionState,
+  WatchFireIfSettledResult,
   WatchFiring,
   WatchOnFireAction,
   WatchResponse,
@@ -45,6 +46,21 @@ export interface WatchWakeDispatchInput {
   /** Stable per-attempt key so a retried dispatch cannot double-prompt. */
   idempotencyKey: string;
 }
+
+/**
+ * Contract 1.47.0 (C4): registration-time settlement of the watch subject —
+ * idle AND its most recent run terminal. Resolved by the route layer (it owns
+ * runtime busy state and run receipts); the watch layer stays registry-free.
+ */
+export interface SubjectSettlement {
+  settled: boolean;
+  reason?: string;
+  lastRunId?: string;
+  lastRunStatus?: string;
+}
+
+/** Completion-type event conditions eligible for `fireIfSettled`. */
+const SETTLED_COMPLETION_EVENT_TYPES = new Set(['agent_end', 'goal_end']);
 
 export type WatchWakeDispatchResult =
   | { status: 'dispatched'; runId?: string; deliveryKind?: WatchWakeDeliveryKind }
@@ -80,6 +96,8 @@ export interface WatchManagerDeps {
   persistenceRetryMs?: number;
   /** Execute one wake dispatch (run receipts, admission, injection checks live in the caller). */
   dispatchWake?: (input: WatchWakeDispatchInput) => Promise<WatchWakeDispatchResult>;
+  /** Contract 1.47.0 (C4): settlement source for `fireIfSettled`. Absent = unavailable (never settled). */
+  getSubjectSettlement?: (subject: { sessionId: string; sessionPath: string; runtime: SessionRuntime }) => Promise<SubjectSettlement>;
   /** Contract 1.34.0 surfacing: called on watch_registered / watch_fired when the watch has parent linkage. */
   surface?: (record: PersistedWatch, event: { type: 'watch_registered' | 'watch_fired'; timestamp: number; data: Record<string, unknown> }) => void;
 }
@@ -112,7 +130,12 @@ interface ActiveWatch {
   wakeChain: Promise<unknown>;
   /** At most one bounded transient retry timer per firing; cleared on teardown. */
   wakeRetryTimers: Set<NodeJS.Timeout>;
+  /** Contract 1.47.0: pending `deadline` condition timers; cleared on teardown/completion. */
+  deadlineTimers: Set<NodeJS.Timeout>;
 }
+
+/** Longest single setTimeout delay Node accepts without overflow. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 const DEFAULT_MAX_PER_CONDITION = 50;
 const DEFAULT_MAX_TOTAL = 500;
@@ -206,6 +229,7 @@ export class WatchManager {
   private readonly persistenceRetryMs: number;
   private readonly dispatchWake?: WatchManagerDeps['dispatchWake'];
   private readonly surface?: WatchManagerDeps['surface'];
+  private readonly getSubjectSettlement?: WatchManagerDeps['getSubjectSettlement'];
   /** Live watches keyed by sessionId. */
   private readonly active = new Map<string, ActiveWatch>();
   /** Minimal cross-watch backpressure: one in-flight steer dispatch per target. */
@@ -228,6 +252,7 @@ export class WatchManager {
     this.persistenceRetryMs = deps.persistenceRetryMs ?? 5_000;
     this.dispatchWake = deps.dispatchWake;
     this.surface = deps.surface;
+    this.getSubjectSettlement = deps.getSubjectSettlement;
   }
 
   /**
@@ -303,7 +328,7 @@ export class WatchManager {
           if (this.ensureObserver) {
             try { this.ensureObserver(record.sessionPath); } catch { /* non-fatal */ }
           }
-          this.activateWatch(record, resolved);
+          this.activateWatch(record, resolved, { rehydrating: true });
           // A watch whose once-conditions all fired before the crash never
           // persisted its completion — finish that bookkeeping now.
           if (!record.onFire && this.allOneShotConditionsFired(record)) {
@@ -394,6 +419,9 @@ export class WatchManager {
     } catch (err) {
       throw new WatchValidationError(err instanceof Error ? err.message : 'Invalid condition');
     }
+    if (request.fireIfSettled !== undefined && typeof request.fireIfSettled !== 'boolean') {
+      throw new WatchValidationError('fireIfSettled must be a boolean');
+    }
     // Structural wake-action validation (self-target, bounds, mode) also 400s.
     const onFire = request.onFire !== undefined
       ? validateOnFireAction(sessionId, request.onFire)
@@ -458,13 +486,16 @@ export class WatchManager {
       try { this.ensureObserver(sessionPath); } catch { /* non-fatal */ }
     }
 
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     const conditions: WatchConditionState[] = resolved.map((c) => ({
       id: c.id,
       type: c.type,
       spec: c.spec,
       fired: false,
       fireCount: 0,
+      // Contract 1.47.0: persist the absolute due instant so a restart keeps it.
+      ...(c.type === 'deadline' ? { dueAt: nowMs + (c.spec.afterSeconds as number) * 1000 } : {}),
     }));
 
     const record: PersistedWatch = {
@@ -505,7 +536,7 @@ export class WatchManager {
     // Commit the observer handover synchronously after durability, before any
     // awaited claim rotation. Events in that window belong to the new ledger.
     if (previousLive) this.teardown(sessionId);
-    this.activateWatch(record, resolved);
+    const live = this.activateWatch(record, resolved);
 
     // Durability commits the replacement. Only now rotate the old generation's
     // claims. Even same-id claims are explicitly released/reacquired under this
@@ -547,7 +578,137 @@ export class WatchManager {
       } catch { /* surfacing is best-effort */ }
     }
 
-    return { ...this.toResponse(record), replaced: previous !== undefined };
+    // Contract 1.47.0 (C4): opt-in fire-if-settled, evaluated after the new
+    // generation is live so a completion racing registration is still caught
+    // by the ordinary event path (once-semantics dedupe the two).
+    let fireIfSettled: WatchFireIfSettledResult | undefined;
+    if (request.fireIfSettled === true) {
+      fireIfSettled = await this.applyFireIfSettled(sessionId, live, { sessionId, sessionPath, runtime });
+    }
+
+    return {
+      ...this.toResponse(record),
+      replaced: previous !== undefined,
+      ...(fireIfSettled ? { fireIfSettled } : {}),
+    };
+  }
+
+  /**
+   * Record one immediate `reconciled` firing per completion-type condition
+   * when the subject is settled (idle + terminal last run). Conditions with a
+   * `dataMatch` are skipped: the predicate cannot be verified from state.
+   */
+  private async applyFireIfSettled(
+    sessionId: string,
+    live: ActiveWatch,
+    subject: { sessionId: string; sessionPath: string; runtime: SessionRuntime },
+  ): Promise<WatchFireIfSettledResult> {
+    let settlement: SubjectSettlement;
+    if (!this.getSubjectSettlement) {
+      settlement = { settled: false, reason: 'settlement_unavailable' };
+    } else {
+      try {
+        settlement = await this.getSubjectSettlement(subject);
+      } catch {
+        settlement = { settled: false, reason: 'settlement_unavailable' };
+      }
+    }
+    const result: WatchFireIfSettledResult = {
+      requested: true,
+      settled: settlement.settled === true,
+      ...(settlement.reason ? { reason: settlement.reason } : {}),
+      ...(settlement.lastRunId ? { lastRunId: settlement.lastRunId } : {}),
+      ...(settlement.lastRunStatus ? { lastRunStatus: settlement.lastRunStatus } : {}),
+      firedConditionIds: [],
+    };
+    if (!result.settled) return result;
+    if (this.active.get(sessionId) !== live || live.record.status !== 'active') return result;
+
+    const skipped: string[] = [];
+    let firedSomething = false;
+    for (const cond of live.record.conditions) {
+      if (cond.type !== 'event_type') continue;
+      const eventType = cond.spec.eventType;
+      if (!eventType || !SETTLED_COMPLETION_EVENT_TYPES.has(eventType)) continue;
+      if (cond.spec.dataMatch && Object.keys(cond.spec.dataMatch).length > 0) {
+        skipped.push(cond.id);
+        continue;
+      }
+      if (cond.spec.once !== false && cond.fired) continue;
+      const runNote = settlement.lastRunId
+        ? ` (last run ${settlement.lastRunId}${settlement.lastRunStatus ? ` ${settlement.lastRunStatus}` : ''})`
+        : '';
+      const recorded = this.recordFiring(sessionId, live, cond, {
+        eventType,
+        evidence: `settled at registration${runNote}`,
+        firedAt: Date.now(),
+        reconciled: true,
+      });
+      if (recorded) {
+        result.firedConditionIds.push(cond.id);
+        firedSomething = true;
+      }
+    }
+    if (skipped.length > 0) result.skippedConditionIds = skipped;
+    if (firedSomething) {
+      live.record.updatedAt = new Date().toISOString();
+      if (!live.record.onFire && this.allOneShotConditionsFired(live.record)) {
+        this.completeWatch(sessionId, live);
+      }
+      if (live.flushTimer) { clearTimeout(live.flushTimer); live.flushTimer = undefined; }
+      live.snapshotDirty = false;
+      // Registration firings are durable before the 201 answers.
+      await this.persistLiveNow(sessionId, live, 'firing');
+    }
+    return result;
+  }
+
+  /** Arm one timer per unfired `deadline` condition (contract 1.47.0). */
+  private armDeadlines(live: ActiveWatch, rehydrating: boolean): void {
+    const now = Date.now();
+    for (const cond of live.record.conditions) {
+      if (cond.type !== 'deadline' || cond.fired || typeof cond.dueAt !== 'number') continue;
+      const overdueAtBoot = rehydrating && cond.dueAt <= now;
+      this.scheduleDeadline(live, cond.id, cond.dueAt, overdueAtBoot);
+    }
+  }
+
+  private scheduleDeadline(live: ActiveWatch, conditionId: string, dueAt: number, reconciled: boolean): void {
+    const delay = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, dueAt - Date.now()));
+    const timer = setTimeout(() => {
+      live.deadlineTimers.delete(timer);
+      this.fireDeadline(live, conditionId, reconciled);
+    }, delay);
+    timer.unref?.();
+    live.deadlineTimers.add(timer);
+  }
+
+  private fireDeadline(live: ActiveWatch, conditionId: string, reconciled: boolean): void {
+    const { record } = live;
+    const sessionId = record.sessionId;
+    if (this.active.get(sessionId) !== live || record.status !== 'active') return;
+    const cond = record.conditions.find((c) => c.id === conditionId);
+    if (!cond || cond.fired || typeof cond.dueAt !== 'number') return;
+    // Timers may wake a hair early (or be capped for very long delays).
+    if (Date.now() < cond.dueAt) {
+      this.scheduleDeadline(live, conditionId, cond.dueAt, reconciled);
+      return;
+    }
+    const afterSeconds = cond.spec.afterSeconds;
+    const recorded = this.recordFiring(sessionId, live, cond, {
+      eventType: 'deadline',
+      evidence: `deadline ${afterSeconds}s elapsed (due ${new Date(cond.dueAt).toISOString()})`,
+      firedAt: Date.now(),
+      ...(reconciled ? { reconciled: true } : {}),
+    });
+    if (!recorded) return;
+    record.updatedAt = new Date().toISOString();
+    if (!record.onFire && this.allOneShotConditionsFired(record)) {
+      this.completeWatch(sessionId, live);
+    }
+    if (live.flushTimer) { clearTimeout(live.flushTimer); live.flushTimer = undefined; }
+    live.snapshotDirty = false;
+    this.persistLive(sessionId, live, 'firing');
   }
 
   /** Current watch for a session (live or reloaded-detached), if any. */
@@ -590,7 +751,11 @@ export class WatchManager {
     });
   }
 
-  private activateWatch(record: PersistedWatch, resolved: ResolvedCondition[]): ActiveWatch {
+  private activateWatch(
+    record: PersistedWatch,
+    resolved: ResolvedCondition[],
+    options: { rehydrating?: boolean } = {},
+  ): ActiveWatch {
     const live: ActiveWatch = {
       record,
       engine: new ConditionEngine(resolved),
@@ -599,6 +764,7 @@ export class WatchManager {
       snapshotDirty: false,
       wakeChain: Promise.resolve(),
       wakeRetryTimers: new Set(),
+      deadlineTimers: new Set(),
     };
     // The same event object may legitimately be published under BOTH broker
     // keys (session-watcher bridge: id + path). A dual-subscribed watch must
@@ -621,6 +787,7 @@ export class WatchManager {
       live.unsub.push(this.broker.subscribe(record.sessionPath, handler, true, 'watch'));
     }
     this.active.set(record.sessionId, live);
+    this.armDeadlines(live, options.rehydrating === true);
     return live;
   }
 
@@ -641,6 +808,8 @@ export class WatchManager {
     if (live.flushTimer) clearTimeout(live.flushTimer);
     for (const timer of live.wakeRetryTimers) clearTimeout(timer);
     live.wakeRetryTimers.clear();
+    for (const timer of live.deadlineTimers) clearTimeout(timer);
+    live.deadlineTimers.clear();
     this.active.delete(sessionId);
   }
 
@@ -666,55 +835,13 @@ export class WatchManager {
       for (const match of matches) {
         const cond = record.conditions.find((c) => c.id === match.conditionId);
         if (!cond) continue;
-        const isOnce = cond.spec.once !== false;
-        if (isOnce && cond.fired) continue;
-        if (cond.fireCount >= this.maxPerCondition) continue;
         if (record.firings.length >= this.maxTotal) break;
-
-        const firing: WatchFiring = {
-          conditionId: cond.id,
-          firedAt: match.eventType === event.type ? (event.timestamp ?? Date.now()) : Date.now(),
+        const recorded = this.recordFiring(sessionId, live, cond, {
           eventType: match.eventType,
           evidence: match.evidence,
-        };
-        record.firings.push(firing);
-        cond.fireCount += 1;
-        cond.lastFiredAt = firing.firedAt;
-        if (!cond.fired) {
-          cond.fired = true;
-          cond.firstFiredAt = firing.firedAt;
-        }
-        firedSomething = true;
-
-        // Contract 1.34.0 surfacing: a pure-observer watch (no onFire — e.g.
-        // the watch-wake extension's local-delivery flow) still announces its
-        // firing to the arming session's surfaces. onFire watches announce at
-        // successful dispatch instead, so deliveryKind can be included.
-        if (!record.onFire && this.surface && record.sourceSessionId) {
-          try {
-            this.surface(record, {
-              type: 'watch_fired',
-              timestamp: Date.now(),
-              data: {
-                sessionId: record.sourceSessionId,
-                watchId: record.watchId,
-                targetSessionId: record.sessionId,
-                conditionId: cond.id,
-                firedAt: firing.firedAt,
-              },
-            });
-          } catch { /* surfacing is best-effort */ }
-        }
-
-        // ── Opt-in wake dispatch (watch the child, wake the parent) ──
-        if (record.onFire) {
-          this.dispatchWakeForFiring(sessionId, live, {
-            conditionId: cond.id,
-            eventType: firing.eventType,
-            evidence: firing.evidence,
-            firedAt: firing.firedAt,
-          });
-        }
+          firedAt: match.eventType === event.type ? (event.timestamp ?? Date.now()) : Date.now(),
+        });
+        if (recorded) firedSomething = true;
       }
     }
 
@@ -735,6 +862,72 @@ export class WatchManager {
       live.snapshotDirty = true;
       this.schedulePersist(sessionId, live, SNAPSHOT_FLUSH_MS, 'snapshot');
     }
+  }
+
+  /**
+   * Append one firing to the ledger (honouring once-semantics and the ledger
+   * caps), announce it to surfaces, and dispatch the opt-in wake. Shared by
+   * the live event path, `deadline` timers and `fireIfSettled` (1.47.0).
+   * Persistence and completion are the caller's job. Returns whether a firing
+   * was recorded.
+   */
+  private recordFiring(
+    sessionId: string,
+    live: ActiveWatch,
+    cond: WatchConditionState,
+    input: { eventType: string; evidence: string; firedAt: number; reconciled?: boolean },
+  ): boolean {
+    const { record } = live;
+    const isOnce = cond.spec.once !== false;
+    if (isOnce && cond.fired) return false;
+    if (cond.fireCount >= this.maxPerCondition) return false;
+    if (record.firings.length >= this.maxTotal) return false;
+
+    const firing: WatchFiring = {
+      conditionId: cond.id,
+      firedAt: input.firedAt,
+      eventType: input.eventType,
+      evidence: input.evidence,
+      ...(input.reconciled ? { reconciled: true } : {}),
+    };
+    record.firings.push(firing);
+    cond.fireCount += 1;
+    cond.lastFiredAt = firing.firedAt;
+    if (!cond.fired) {
+      cond.fired = true;
+      cond.firstFiredAt = firing.firedAt;
+    }
+
+    // Contract 1.34.0 surfacing: a pure-observer watch (no onFire — e.g.
+    // the watch-wake extension's local-delivery flow) still announces its
+    // firing to the arming session's surfaces. onFire watches announce at
+    // successful dispatch instead, so deliveryKind can be included.
+    if (!record.onFire && this.surface && record.sourceSessionId) {
+      try {
+        this.surface(record, {
+          type: 'watch_fired',
+          timestamp: Date.now(),
+          data: {
+            sessionId: record.sourceSessionId,
+            watchId: record.watchId,
+            targetSessionId: record.sessionId,
+            conditionId: cond.id,
+            firedAt: firing.firedAt,
+          },
+        });
+      } catch { /* surfacing is best-effort */ }
+    }
+
+    // ── Opt-in wake dispatch (watch the child, wake the parent) ──
+    if (record.onFire) {
+      this.dispatchWakeForFiring(sessionId, live, {
+        conditionId: cond.id,
+        eventType: firing.eventType,
+        evidence: firing.evidence,
+        firedAt: firing.firedAt,
+      });
+    }
+    return true;
   }
 
   /**
@@ -911,6 +1104,8 @@ export class WatchManager {
     }
     for (const timer of live.wakeRetryTimers) clearTimeout(timer);
     live.wakeRetryTimers.clear();
+    for (const timer of live.deadlineTimers) clearTimeout(timer);
+    live.deadlineTimers.clear();
 
     void this.withSessionMutation(sessionId, async () => {
       if (this.active.get(sessionId) !== live) return;

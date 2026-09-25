@@ -23,6 +23,7 @@ import {
   type Phase7PiShadowState,
 } from '../phase7-pi-shadow.js';
 import { RunReceiptStore, type PersistedRunReceipt } from './run-receipt-store.js';
+import { FinalTextTracker } from './final-text.js';
 import { createLogger } from '../../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
 
@@ -118,6 +119,8 @@ interface ActiveRun {
   lease?: { release: () => void };
   phase7Shadow?: Phase7PiShadowState;
   outputEvidence: MutableRunOutputEvidence;
+  /** Contract 1.47.0: last assistant text of the run (bounded). */
+  finalText: FinalTextTracker;
 }
 
 /**
@@ -326,7 +329,10 @@ export class RunReceiptManager {
       ? event.timestamp
       : observedAtMs;
     const active = this.activeRuns.get(runId);
-    if (active) observeOutputEvent(active.outputEvidence, event);
+    if (active) {
+      observeOutputEvent(active.outputEvidence, event);
+      active.finalText.observe(event);
+    }
     const persistPhase7Shadow = Boolean(active?.phase7Shadow && (
       event.type === 'tool_execution_start' || event.type === 'agent_end'
     ));
@@ -385,6 +391,7 @@ export class RunReceiptManager {
         },
         tokenUsageObservation,
         active ? finalizeOutputEvidence(active.outputEvidence, true) : undefined,
+        active?.finalText.snapshot(),
       );
     })
       .then(() => undefined)
@@ -446,9 +453,11 @@ export class RunReceiptManager {
               : {}),
         }
       : undefined;
+    const finalText = active?.finalText.snapshot();
     const terminal = await this.store.transition(runId, status, {
       errorCode: outcome.errorCode,
       terminalAt,
+      ...(finalText ? { finalText: finalText.text, finalTextTruncated: finalText.truncated } : {}),
       ...(liveness ? { liveness } : {}),
       ...(outputEvidence ? { outputEvidence } : {}),
       ...(phase7Shadow ? { phase7Shadow } : {}),
@@ -632,6 +641,7 @@ export class RunReceiptManager {
       startedAtMs: record.startedAt ? Date.parse(record.startedAt) : undefined,
       lastActivityAtMs: acceptedAtMs,
       outputEvidence: mutableOutputEvidence(record.outputEvidence),
+      finalText: new FinalTextTracker(),
       ...(record.phase7Shadow ? { phase7Shadow: createPhase7PiShadowState(record.phase7Shadow, acceptedAtMs) } : {}),
     });
   }

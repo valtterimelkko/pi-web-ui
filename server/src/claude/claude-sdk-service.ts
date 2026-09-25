@@ -44,6 +44,7 @@ import {
   reauthContextFromProfile,
 } from './claude-auth-errors.js';
 import { createLogger } from '../logging/logger.js';
+import { applySessionIdentityEnv, sessionIdentityFromEntry, type SessionEnvIdentity } from '../session-env-identity.js';
 
 const logger = createLogger('ClaudeSdkService');
 
@@ -333,6 +334,7 @@ export class ClaudeSdkService {
         const sdkOptions = this.buildSdkOptions({
           resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController,
           sessionId, onEvent,
+          sessionIdentity: sessionIdentityFromEntry(entry),
         });
 
         // Streaming-input mode: the prompt is a pushable async iterable that
@@ -770,8 +772,10 @@ export class ClaudeSdkService {
     abortController: AbortController;
     sessionId: string;
     onEvent: (event: NormalizedEvent) => void;
+    /** Contract 1.47.0: Pi Web UI session identity exported to the Claude subprocess env. */
+    sessionIdentity?: SessionEnvIdentity;
   }): Options {
-    const { resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController, sessionId, onEvent } = opts;
+    const { resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController, sessionId, onEvent, sessionIdentity } = opts;
 
     // Map the Web UI thinking level to a Claude effort level. Applies to both
     // native Claude and GLM (Z.ai maps Claude-native effort levels itself).
@@ -790,7 +794,7 @@ export class ClaudeSdkService {
         cwd,
         model: resolved.model,
         ...(effort ? { effort } : {}),
-        env: resolved.env,
+        env: applySessionIdentityEnv(resolved.env, sessionIdentity),
         abortController,
         pathToClaudeCodeExecutable: claudePath,
         settingSources: resolved.sdkOptions.settingSources as Array<'user' | 'project' | 'local'>,
@@ -825,7 +829,7 @@ export class ClaudeSdkService {
       cwd,
       model,
       ...(effort ? { effort } : {}),
-      env: cleanEnv,
+      env: applySessionIdentityEnv(cleanEnv, sessionIdentity),
       abortController,
       pathToClaudeCodeExecutable: claudePath,
       settingSources: ['user', 'project'],

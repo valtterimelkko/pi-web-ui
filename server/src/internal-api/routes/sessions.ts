@@ -854,6 +854,30 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       } catch { /* unknown */ }
       return undefined;
     },
+    // Contract 1.47.0 (C4) fireIfSettled: the subject is settled when its
+    // runtime reports it idle AND its most recent run receipt is terminal.
+    getSubjectSettlement: async ({ sessionId, runtime }) => {
+      await runReceipts.init();
+      let busy: boolean;
+      if (runtime === 'commandcode') {
+        busy = commandCodeService?.isRunning(sessionId) ?? false;
+      } else {
+        const subjectEntry = await getNonCommandCodeRegistryEntry(sessionId);
+        busy = subjectEntry ? evidenceStatus(subjectEntry) === 'running' : false;
+      }
+      if (busy) return { settled: false, reason: 'busy' };
+      const runs = runReceipts.listBySession(sessionId);
+      if (runs.length === 0) return { settled: false, reason: 'no_runs' };
+      const last = runs.reduce((latest, run) => (
+        Date.parse(run.acceptedAt) >= Date.parse(latest.acceptedAt) ? run : latest
+      ));
+      const terminal = last.status === 'completed' || last.status === 'failed'
+        || last.status === 'cancelled' || last.status === 'interrupted';
+      if (!terminal) {
+        return { settled: false, reason: 'last_run_not_terminal', lastRunId: last.runId, lastRunStatus: last.status };
+      }
+      return { settled: true, lastRunId: last.runId, lastRunStatus: last.status };
+    },
     // Contract 1.34.0 watch surfacing: fan watch_registered / watch_fired out
     // to the arming session's broker key + browser bridge.
     surface: (record, event) => {
@@ -1285,6 +1309,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const rest = { ...receipt };
     delete (rest as Partial<RunReceipt>).cessation;
     delete (rest as Partial<RunReceipt>).workState;
+    // Contract 1.47.0: the bounded bundle stays payload-free; the reply text
+    // is read from GET /runs/:runId.
+    delete (rest as Partial<RunReceipt>).finalText;
+    delete (rest as Partial<RunReceipt>).finalTextTruncated;
     return rest;
   }
 
@@ -1314,6 +1342,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     detail.busy = liveStatus === 'running';
     detail.retention = retentionProtection(entry.id);
+    // Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in.
+    if (entry.agentOsCapture === 'enabled' || entry.agentOsCapture === 'disabled') {
+      detail.agentOsCapture = entry.agentOsCapture;
+    }
     return detail;
   }
 
@@ -1796,7 +1828,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           sdkType: base.runtime as SdkType,
           cwd: base.cwd,
           origin: 'internal-api',
+          // Contract 1.47.0 (Amendment 1): stored only when the caller set it.
+          ...(body.agentOsCapture ? { agentOsCapture: body.agentOsCapture } : {}),
         });
+        if (body.agentOsCapture) base.agentOsCapture = body.agentOsCapture;
       } catch (originError) {
         logger.warn('Failed to tag session origin:', originError);
       }
@@ -6834,13 +6869,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         });
         // Contract 1.30.0 origin provenance: best-effort tag mirroring the
         // single-session create path.
+        let agentOsCaptureStored: 'enabled' | 'disabled' | undefined;
         try {
           await sessionRegistry.upsert({
             id: created.sessionId,
             sdkType: created.runtime as SdkType,
             cwd: created.cwd,
             origin: 'internal-api',
+            ...(entry.agentOsCapture ? { agentOsCapture: entry.agentOsCapture } : {}),
           });
+          if (entry.agentOsCapture) agentOsCaptureStored = entry.agentOsCapture;
         } catch (originError) {
           logger.warn('Failed to tag batch session origin:', originError);
         }
@@ -6857,6 +6895,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           effort: created.effort as BatchCreateResultItem['effort'],
           defaultEffort: created.defaultEffort,
           cwd: created.cwd,
+          ...(agentOsCaptureStored ? { agentOsCapture: agentOsCaptureStored } : {}),
         };
         // Optional per-entry create-time pin (see POST /sessions pin field).
         if (entry.pin) {

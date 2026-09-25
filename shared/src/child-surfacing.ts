@@ -106,6 +106,8 @@ export interface RawWatchCondition {
   contains?: string;
   pattern?: string;
   source?: string;
+  /** Contract 1.47.0 `deadline` condition. */
+  afterSeconds?: number;
 }
 
 const MAX_TASK_CHARS = 200;
@@ -123,6 +125,7 @@ function quote(value: string | undefined): string {
 export function describeWatchCondition(cond: RawWatchCondition | undefined | null): string {
   if (!cond || typeof cond !== 'object') return 'unknown condition';
   if (cond.type === 'event_type' && cond.eventType) return `event ${cond.eventType}`;
+  if (cond.type === 'deadline' && typeof cond.afterSeconds === 'number') return `deadline ${cond.afterSeconds}s`;
   if (cond.type === 'tool' && cond.toolName) {
     const phase = cond.phase ? `@${cond.phase}` : '';
     const arg = cond.argIncludes ? ` argIncludes ${quote(cond.argIncludes)}` : '';

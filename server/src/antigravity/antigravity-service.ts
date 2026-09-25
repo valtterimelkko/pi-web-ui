@@ -8,6 +8,7 @@ import { turnsToReplayEvents } from './antigravity-history-replay.js';
 import { loadNativeAntigravityTurns } from './antigravity-native-reader.js';
 import { AntigravitySessionSubscribers } from './antigravity-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
+import { sessionIdentityFromEntry } from '../session-env-identity.js';
 import type { RegistryEntry } from '../session-registry.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
@@ -486,6 +487,7 @@ export class AntigravityService {
             for (const ev of norm.onParsed(parsed, Date.now())) emit(ev);
           },
           ...(this.streamSpawnFn ? { spawnFn: this.streamSpawnFn } : {}),
+          sessionIdentity: sessionIdentityFromEntry(entry),
         });
         await fresh.start();
         this.streamProcesses.set(sessionId, fresh);

@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.46.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.47.0' as const;
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -187,6 +187,8 @@ export interface CreateSessionRequest {
   };
   /** Contract 1.34.0 child surfacing: parent linkage (X-Parent-Session header wins over this). */
   parentSessionId?: string;
+  /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
+  agentOsCapture?: 'enabled' | 'disabled';
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy role field.
   invocationRole?: 'conductor-root' | 'implementation-child';
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy attestation field.
@@ -265,6 +267,8 @@ export interface BatchCreateEntry {
   /** Command Code role binding; raw permission flags are never accepted. */
   invocationRole?: 'conductor-root' | 'implementation-child';
   commandCodeAttestation?: CommandCodeRoleAttestationRequest;
+  /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
+  agentOsCapture?: 'enabled' | 'disabled';
 }
 
 export interface BatchCreateRequest {
@@ -286,6 +290,8 @@ export interface BatchCreateResultItem {
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
   pinnedUntil?: string;
+  /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
+  agentOsCapture?: 'enabled' | 'disabled';
   error?: { code: string; message: string };
 }
 
@@ -626,6 +632,8 @@ export interface CreateSessionResponse {
   createdAt: string;
   /** Parent session linkage when the caller identified itself (contract 1.34.0). */
   parentSessionId?: string;
+  /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
+  agentOsCapture?: 'enabled' | 'disabled';
   /** True when the session was pinned at creation (pin:true requested). */
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
@@ -705,6 +713,9 @@ export interface NativeSessionsResponse {
 
 export interface SessionDetail extends SessionInfo {
   backendMode?: RuntimeBackendMode;
+  /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
+  agentOsCapture?: 'enabled' | 'disabled';
+
   /** Authoritative answer to "is this session retention-protected, and until when?". Additive since 1.25.0. */
   retention?: {
     protected: boolean;
@@ -1065,6 +1076,14 @@ export interface RunReceipt {
   tokenUsage?: RunTokenUsage;
   /** Payload-free normalized-event output evidence; additive since 1.19.0. */
   outputEvidence?: RunOutputEvidence;
+  /**
+   * Contract 1.47.0: last assistant text of the run (the text after its last
+   * tool call, else the last non-empty assistant text), tail-truncated to 4096
+   * characters. Absent when no assistant text was observed for the run.
+   */
+  finalText?: string;
+  /** Contract 1.47.0: true when `finalText` was tail-truncated; present iff `finalText` is. */
+  finalTextTruncated?: boolean;
   /** Requested prompt mode (prompt / follow_up / steer). */
   mode?: PromptMode;
   /** Actual dispatch mode after state-aware promotion/rejection decisions. */
@@ -1253,6 +1272,28 @@ export interface CapabilitiesResponse {
     claudeBackendPolicy: {
       allowedBackends: ['sdk-subscription'];
     };
+    /** Contract 1.47.0 (C1): session identity exported to per-session runtime subprocess environments. */
+    sessionEnvIdentity: {
+      variables: {
+        sessionId: 'PI_WEB_UI_SESSION_ID';
+        origin: 'PI_WEB_UI_SESSION_ORIGIN';
+        parentSessionId: 'PI_WEB_UI_PARENT_SESSION_ID';
+      };
+      /** Runtimes whose subprocesses receive the variables (Pi keeps PI_SESSION_ID in-process). */
+      runtimes: Array<'claude' | 'antigravity' | 'commandcode'>;
+    };
+    /** Contract 1.47.0 (C2): bounded final assistant text on run receipts. */
+    runReceiptFinalText: { field: 'finalText'; truncatedField: 'finalTextTruncated'; maxChars: number };
+    /** Contract 1.47.0 (C3): server-side `deadline` watch condition. */
+    watchDeadlineCondition: { conditionType: 'deadline'; field: 'afterSeconds'; minSeconds: number; maxSeconds: number };
+    /** Contract 1.47.0 (C4): `fireIfSettled` watch registration option. */
+    watchFireIfSettled: { registerField: 'fireIfSettled'; eventTypes: string[] };
+    /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in on create. */
+    sessionAgentOsCapture: {
+      createField: 'agentOsCapture';
+      values: Array<'enabled' | 'disabled'>;
+      env: 'PI_WEB_UI_AGENT_OS_CAPTURE';
+    };
   };
   runtimes: {
     pi: RuntimeCapabilities;
@@ -1377,7 +1418,7 @@ export type InternalApiEventObserver = (event: NormalizedEvent) => void;
  * the common `NormalizedEvent` shape that every runtime already emits, so a
  * watch never needs per-runtime code.
  */
-export type WatchConditionType = 'event_type' | 'tool' | 'text';
+export type WatchConditionType = 'event_type' | 'tool' | 'text' | 'deadline';
 
 export interface WatchConditionSpec {
   /** Stable id for this condition. Auto-generated (`c0`, `c1`, …) if omitted. */
@@ -1409,6 +1450,16 @@ export interface WatchConditionSpec {
   /** Which text to scan: assistant output only (default), or any text the event carries. */
   source?: 'assistant' | 'any';
 
+  // type: 'deadline' (contract 1.47.0)
+  /**
+   * Server-side timer: fire exactly once this many seconds after registration
+   * (integer 1..86400). Recorded as a normal firing with `eventType:
+   * "deadline"`. The due time is persisted, so the deadline survives a server
+   * restart (an overdue deadline fires on boot, marked `reconciled: true`).
+   * `once: false` is rejected for this type.
+   */
+  afterSeconds?: number;
+
   /**
    * Fire only on the first match (default `true`). When `false`, every match
    * is appended to the ledger (capped to avoid unbounded growth).
@@ -1425,6 +1476,8 @@ export interface WatchConditionState {
   fireCount: number;
   firstFiredAt?: number;
   lastFiredAt?: number;
+  /** Contract 1.47.0: `deadline` conditions only — the persisted due instant (epoch ms). */
+  dueAt?: number;
 }
 
 export interface WatchFiring {
@@ -1434,6 +1487,27 @@ export interface WatchFiring {
   eventType: string;
   /** Short human-readable evidence (truncated to ~200 chars). */
   evidence: string;
+  /**
+   * Contract 1.47.0: present (`true`) only on firings recorded from state
+   * rather than a live event — `fireIfSettled` registration firings, and
+   * `deadline` firings delivered late because the server was down at due time.
+   */
+  reconciled?: boolean;
+}
+
+/** Contract 1.47.0: outcome of the `fireIfSettled` registration check (echoed only when requested). */
+export interface WatchFireIfSettledResult {
+  requested: true;
+  /** Subject idle AND its most recent run terminal at registration. */
+  settled: boolean;
+  /** Why the subject was not considered settled (`busy`, `no_runs`, `last_run_not_terminal`, `settlement_unavailable`, …). */
+  reason?: string;
+  lastRunId?: string;
+  lastRunStatus?: string;
+  /** Completion-type conditions that recorded an immediate reconciled firing. */
+  firedConditionIds: string[];
+  /** Completion-type conditions skipped because their `dataMatch` cannot be verified from state. */
+  skippedConditionIds?: string[];
 }
 
 export interface WatchSnapshot {
@@ -1522,6 +1596,13 @@ export interface RegisterWatchRequest {
    * this the watch remains a pure observer.
    */
   onFire?: WatchOnFireAction;
+  /**
+   * Contract 1.47.0 (default `false`): when the subject is idle and its most
+   * recent run is terminal at registration, every completion-type condition
+   * (`event_type` `agent_end` / `goal_end`, without `dataMatch`) records one
+   * immediate firing marked `reconciled: true`.
+   */
+  fireIfSettled?: boolean;
 }
 
 export interface WatchResponse {
@@ -1563,6 +1644,8 @@ export interface WatchResponse {
   /** Durable audit of every wake attempt (dispatched, failed, suppressed). */
   wakeAttempts: WatchWakeAttempt[];
   snapshot: WatchSnapshot;
+  /** Register response only, and only when `fireIfSettled: true` was requested (contract 1.47.0). */
+  fireIfSettled?: WatchFireIfSettledResult;
 }
 
 export interface DeleteWatchRequest {

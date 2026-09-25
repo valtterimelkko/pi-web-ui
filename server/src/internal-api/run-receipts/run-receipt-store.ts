@@ -12,6 +12,7 @@ import type {
   RunOutputEvidence,
 } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
+import { FINAL_TEXT_MAX_CHARS } from './final-text.js';
 
 const logger = createLogger('RunReceiptStore');
 
@@ -47,6 +48,8 @@ const ALLOWED_KEYS = new Set([
   'defaultEffort',
   'tokenUsage',
   'outputEvidence',
+  'finalText',
+  'finalTextTruncated',
   'mode',
   'dispatchMode',
   'status',
@@ -177,7 +180,7 @@ export class RunReceiptStore {
   async transition(
     runId: string,
     status: RunReceiptStatus,
-    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow' | 'outputEvidence'>> & {
+    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow' | 'outputEvidence' | 'finalText' | 'finalTextTruncated'>> & {
       /** Release a reservation that failed before runtime dispatch. */
       clearIdempotency?: boolean;
     } = {},
@@ -266,6 +269,7 @@ export class RunReceiptStore {
     observation?: Omit<RunTerminalObservation, 'late'>,
     tokenUsage?: RunTokenUsage,
     outputEvidence?: RunOutputEvidence,
+    finalText?: { text: string; truncated: boolean },
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -281,6 +285,11 @@ export class RunReceiptStore {
       // otherwise different snapshot.
       ...(tokenUsage && current.tokenUsage === undefined ? { tokenUsage } : {}),
       ...(outputEvidence && current.outputEvidence === undefined ? { outputEvidence } : {}),
+      // Contract 1.47.0: first observation wins here; finish() refreshes it
+      // from the live tracker while the run is still owned in-process.
+      ...(finalText && current.finalText === undefined
+        ? { finalText: finalText.text, finalTextTruncated: finalText.truncated }
+        : {}),
     };
     if (observation && current.liveness) {
       const terminalObservation: RunTerminalObservation = {
@@ -433,6 +442,14 @@ export class RunReceiptStore {
     }
     if (record.tokenUsage !== undefined) validateTokenUsage(record.tokenUsage, record.runtime);
     if (record.outputEvidence !== undefined) validateOutputEvidence(record.outputEvidence);
+    if (record.finalText !== undefined || record.finalTextTruncated !== undefined) {
+      if (typeof record.finalText !== 'string' || record.finalText.length > FINAL_TEXT_MAX_CHARS) {
+        throw new Error(`Invalid finalText (string of at most ${FINAL_TEXT_MAX_CHARS} characters required)`);
+      }
+      if (typeof record.finalTextTruncated !== 'boolean') {
+        throw new Error('Invalid finalTextTruncated (boolean required alongside finalText)');
+      }
+    }
     if (record.runtime !== 'commandcode' && ['effort', 'tokenUsage'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort/token usage fields require the Command Code runtime');
     if (record.mode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.mode)) {
       throw new Error('Invalid receipt mode');

@@ -76,6 +76,9 @@ const goalRuntimeRefine = (body: { runtime: string; goal?: unknown }, ctx: z.Ref
   }
 };
 
+/** Contract 1.47.0 (Amendment 1): absent = unspecified (Agent OS decides by origin). */
+export const agentOsCaptureSchema = z.enum(['enabled', 'disabled']);
+
 export const createSessionBodySchema = z.object({
   runtime: sessionRuntimeSchema,
   cwd: cwdSchema.optional(),
@@ -90,6 +93,8 @@ export const createSessionBodySchema = z.object({
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
   // Contract 1.34.0 child surfacing: explicit parent linkage (header wins).
   parentSessionId: z.string().min(1).max(200).optional(),
+  // Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in.
+  agentOsCapture: agentOsCaptureSchema.optional(),
   ...pinFields,
   ...goalField,
 }).strict().superRefine((body, ctx) => {
@@ -121,6 +126,7 @@ const batchCreateEntrySchema = z.object({
   effort: commandCodeEffortSchema.optional(),
   invocationRole: invocationRoleSchema.optional(),
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
+  agentOsCapture: agentOsCaptureSchema.optional(),
   ...pinFields,
   ...goalField,
 }).strict().superRefine((body, ctx) => {

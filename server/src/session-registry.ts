@@ -39,6 +39,8 @@ export interface RegistryEntry {
   parentSessionId?: string;
   /** Claude-specific: provider id (anthropic, zai, etc.) — never a secret */
   claudeProviderId?: string;
+  /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
+  agentOsCapture?: 'enabled' | 'disabled';
 }
 
 export interface SessionRegistry {
@@ -373,6 +375,7 @@ export class SessionRegistryManager {
         claudeProfileId: entry.claudeProfileId,
         claudeProfileBackend: entry.claudeProfileBackend,
         claudeProviderId: entry.claudeProviderId,
+        ...(entry.agentOsCapture ? { agentOsCapture: entry.agentOsCapture } : {}),
       };
       registry.entries.push(newEntry);
       this.addEntryToIndexes(newEntry);

@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
 import { buildCommandCodeArgs } from './command-code-config.js';
+import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import type { CommandCodeEffort, CommandCodeRuntimeModel } from './command-code-model-catalog.js';
 import { CommandCodeNdjsonParser, type ParsedCommandCodeEvent, type ParsedCommandCodeOutput } from './command-code-ndjson-parser.js';
 
@@ -24,6 +25,8 @@ export interface CommandCodeProcessRunInput {
   goalArming?: { modPath: string; options: Array<[string, string]> };
   /** Receives accepted NDJSON event frames before the child exits. */
   onEvent?: (event: ParsedCommandCodeEvent) => void;
+  /** Contract 1.47.0: Pi Web UI session identity exported to the child env. */
+  sessionIdentity?: SessionEnvIdentity;
 }
 
 export interface CommandCodeProcessRunResult {
@@ -104,7 +107,7 @@ export class CommandCodeProcessRunner {
       detached: true,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: controlledEnvironment(this.nativeHomeDir, input.sessionId),
+      env: applySessionIdentityEnv(controlledEnvironment(this.nativeHomeDir, input.sessionId), input.sessionIdentity),
     });
     const parser = new CommandCodeNdjsonParser({
       maxLineBytes: this.maxStdoutLineBytes,

@@ -13,6 +13,14 @@ import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import { config } from '../../config.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
+import {
+  PI_WEB_UI_SESSION_ID_ENV,
+  PI_WEB_UI_SESSION_ORIGIN_ENV,
+  PI_WEB_UI_PARENT_SESSION_ID_ENV,
+  PI_WEB_UI_AGENT_OS_CAPTURE_ENV,
+} from '../../session-env-identity.js';
+import { FINAL_TEXT_MAX_CHARS } from '../run-receipts/final-text.js';
+import { DEADLINE_MIN_SECONDS, DEADLINE_MAX_SECONDS } from '../watch/condition-evaluator.js';
 
 export interface CapabilitiesRoutesDeps {
   claudeService: ClaudeService;
@@ -77,6 +85,28 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         },
         piProviderPolicy: { blockedProviders: blockedPiProviders },
         claudeBackendPolicy: { allowedBackends: [INTERNAL_API_CLAUDE_BACKEND] },
+        // Contract 1.47.0: four additive orchestration capabilities.
+        sessionEnvIdentity: {
+          variables: {
+            sessionId: PI_WEB_UI_SESSION_ID_ENV,
+            origin: PI_WEB_UI_SESSION_ORIGIN_ENV,
+            parentSessionId: PI_WEB_UI_PARENT_SESSION_ID_ENV,
+          },
+          runtimes: ['claude', 'antigravity', 'commandcode'],
+        },
+        runReceiptFinalText: { field: 'finalText', truncatedField: 'finalTextTruncated', maxChars: FINAL_TEXT_MAX_CHARS },
+        watchDeadlineCondition: {
+          conditionType: 'deadline',
+          field: 'afterSeconds',
+          minSeconds: DEADLINE_MIN_SECONDS,
+          maxSeconds: DEADLINE_MAX_SECONDS,
+        },
+        watchFireIfSettled: { registerField: 'fireIfSettled', eventTypes: ['agent_end', 'goal_end'] },
+        sessionAgentOsCapture: {
+          createField: 'agentOsCapture',
+          values: ['enabled', 'disabled'],
+          env: PI_WEB_UI_AGENT_OS_CAPTURE_ENV,
+        },
       },
       runtimes: {
         pi: {

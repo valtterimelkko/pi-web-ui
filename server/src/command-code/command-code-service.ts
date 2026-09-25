@@ -40,6 +40,7 @@ import {
 } from './command-code-process-runner.js';
 import { randomUUID } from 'node:crypto';
 import { getSessionRegistry, type SessionRegistryManager } from '../session-registry.js';
+import { sessionIdentityFromEntry, type SessionEnvIdentity } from '../session-env-identity.js';
 import {
   CommandCodeSessionStore,
   canonicalCwd,
@@ -452,6 +453,7 @@ export class CommandCodeService {
         effort: record.effort,
         goalArming: await this.resolveGoalArming(sessionId),
         onEvent: queueStreamEvent,
+        sessionIdentity: await this.resolveSessionIdentity(sessionId),
       });
       await streamQueue;
       const adapted = result.parsed
@@ -880,6 +882,19 @@ export class CommandCodeService {
     catch (error) { throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'effort_unsupported'); }
     if (!levels.includes(effort)) throw new CommandCodeRuntimeError(`Command Code effort '${effort}' is not advertised for model ${model}`, 'effort_unsupported');
     return effort;
+  }
+
+  /**
+   * Contract 1.47.0 (C1): identity exported to the Command Code child env.
+   * Origin/parent come from the registry projection when present; the id is
+   * always this service's canonical session id.
+   */
+  private async resolveSessionIdentity(sessionId: string): Promise<SessionEnvIdentity> {
+    try {
+      const identity = sessionIdentityFromEntry(await this.sessionRegistry?.get(sessionId));
+      if (identity && identity.sessionId === sessionId) return identity;
+    } catch { /* registry projection is best-effort */ }
+    return { sessionId };
   }
 
   private async syncRegistryRecord(record: CommandCodeInternalSessionRecord): Promise<void> {
