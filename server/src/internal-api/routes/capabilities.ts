@@ -6,6 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
+import { INTERNAL_API_CLAUDE_BACKEND } from '../../claude/claude-backend-policy.js';
 import { getInternalApiContractInfo, SSE_EVENT_TYPES, type CapabilitiesResponse } from '../types.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
@@ -75,6 +76,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           deleteBodyField: 'expectedGeneration',
         },
         piProviderPolicy: { blockedProviders: blockedPiProviders },
+        claudeBackendPolicy: { allowedBackends: [INTERNAL_API_CLAUDE_BACKEND] },
       },
       runtimes: {
         pi: {

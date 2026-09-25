@@ -21,13 +21,19 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.45.0",
+  "contractVersion": "1.46.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.46.0** (minor, additive capability + ONE deliberate behaviour change: Claude runs SDK-only on the Internal API). Operator decision 2026-09-25: the Claude Agent SDK backend is the only Claude backend allowed for Internal API agent execution.
+  - **DELIBERATE BEHAVIOUR CHANGE: non-SDK Claude is refused.** Creating a Claude session (single, batch, or transfer `createNew`) that would bind to direct CLI (`claude -p`, `cli-direct` profiles, or the legacy profile-less path) or to the channel backend now answers **`403 CLAUDE_BACKEND_NOT_ALLOWED`** before anything is created. Before 1.46.0 an explicit non-SDK profile was honoured, and a bare alias with no native SDK profile, or with an unhealthy SDK, silently ran direct CLI. Prompting an existing non-SDK Claude session also answers `403 CLAUDE_BACKEND_NOT_ALLOWED`. This covers prompt, follow-up, steer, detached, batch prompt, watch wake, goal dispatch and transfer into an existing target. The batch/transfer item error code is the same.
+  - `GET /models?runtime=claude` lists only `sdk-subscription` profiles, and lists a bare alias only when it resolves to a native SDK profile.
+  - New error code `CLAUDE_BACKEND_NOT_ALLOWED` (403). New capability `features.claudeBackendPolicy.allowedBackends: ["sdk-subscription"]`.
+  - Consumer guidance: select Claude by an SDK `profile:<id>` from `/models`. Existing direct/channel sessions stay usable from the browser. Rollback: reverting the server restores the pre-1.46.0 behaviour. The Agent OS conductor already selects concrete `profile:` entries from `/models`, and its production profiles for Sonnet/Opus/Haiku/GLM are all SDK-backed.
 
 - **1.45.0** (minor, additive fields + ONE deliberate behaviour change — the silent no-op fixes) — orchestrators can now rely on the API to fail loudly instead of reporting success for things that did not happen (the 23 Sep conductor loss). Five wire-visible changes; four are additive, one is a deliberate behaviour change recorded here per house policy:
   - **DELIBERATE BEHAVIOUR CHANGE — goal actions no longer claim success when nothing applied.** On a Pi session, `POST /sessions/:id/goal` verifies at the command boundary that the requested transition actually happened (the goal-engine persists synchronously before its command returns). A command that ran but did not apply now answers **`409 GOAL_ACTION_NOT_APPLIED`** with `observedGoal` (the fresh projection), `extensionWarnings` (the extension's own notify text, e.g. the goal-engine's read-only warning) and a receipt that ends `failed` — where every version before 1.45.0 answered `200 accepted:true` with a `completed` receipt even when a fenced goal-engine refused mutation with only a warning toast. Honest no-ops are NEW but truthful: `clear` on an already-inactive goal (including achieved) answers `200` with `applied:false, reason:"already_inactive"`, `pause` on an already-paused goal with `reason:"already_paused"`, `resume` on a running goal with `reason:"not_paused"`; a verified `start` gains `applied:true` (including replacing an `achieved` goal). Busy-session queued commands keep the 1.27.0 accepted shape (the goal state may legitimately lag mid-run). Consumer guidance: any client that treated `200 accepted` as proof the goal changed must now handle the 409 (read `observedGoal`/`extensionWarnings`, resolve the fence, retry); clients that never relied on the false success are unaffected. Rollback: reverting the server restores the pre-1.45.0 silent-accepted behaviour. The Agent OS client was audited for this change before the bump (see the execution report; it surfaces refusal statuses rather than assuming success).

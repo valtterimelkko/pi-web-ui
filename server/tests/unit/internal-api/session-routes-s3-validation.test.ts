@@ -58,7 +58,10 @@ beforeEach(async () => {
   createAndSubscribePeak = 0;
 
   registry = Object.assign(vi.fn(), {
-    get: vi.fn(),
+    // Contract 1.46.0: a created Claude session must resolve to an SDK binding.
+    get: vi.fn(async (id: string) => (id === 'claude-x'
+      ? { id, sdkType: 'claude', cwd: '/root', claudeProfileBackend: 'sdk-subscription' }
+      : undefined)),
     getByPath: vi.fn(),
     listAll: vi.fn().mockResolvedValue([]),
     delete: vi.fn().mockResolvedValue(undefined),
@@ -102,7 +105,7 @@ function makeRoutes() {
   // Cast the whole deps object once (the mocks are partial by design); avoids
   // per-field `any` casts that would inflate the lint-warning count.
   return createSessionRoutes({
-    claudeService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'claude-x' }) },
+    claudeService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'claude-x' }), executionBackend: vi.fn(() => 'sdk-subscription') },
     opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'oc-x' }), setThinkingLevel: vi.fn() },
     antigravityService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'agy-x' }) },
     multiSessionManager,

@@ -29,6 +29,7 @@ import {
   reauthContextFromProfile,
 } from './claude-auth-errors.js';
 import { createLogger } from '../logging/logger.js';
+import { ClaudeBackendNotAllowedError, type ClaudeExecutionBackend } from './claude-backend-policy.js';
 
 const logger = createLogger('ClaudeService');
 
@@ -257,12 +258,17 @@ export class ClaudeService {
    *
    * When a profileId is provided (or a default profile exists), the session
    * is created with the profile's backend (sdk-subscription, cli-direct, or channel).
+   *
+   * `requireBackend` (Internal API) fails closed with
+   * ClaudeBackendNotAllowedError unless the resolved profile is SDK-backed, and
+   * never lets an unhealthy SDK fall through to direct CLI.
    */
   async createSession(
     cwd: string,
     model: string = 'sonnet',
     thinkingLevel?: string,
     profileId?: string,
+    options: { requireBackend?: 'sdk-subscription' } = {},
   ): Promise<{ sessionId: string; claudeSessionId: string }> {
     const explicitProfileRequested = profileId !== undefined;
     if (explicitProfileRequested && !profileId?.trim()) {
@@ -302,6 +308,15 @@ export class ClaudeService {
       }
     }
 
+    if (options.requireBackend === 'sdk-subscription') {
+      if (!profile) {
+        throw new ClaudeBackendNotAllowedError('direct', `no SDK profile resolves for model '${model}'`);
+      }
+      if (profile.backend !== 'sdk-subscription') {
+        throw new ClaudeBackendNotAllowedError(profile.backend, `profile '${profile.id}'`);
+      }
+    }
+
     // Resolve backend health once. Re-checking and then falling through creates
     // a race where an explicitly selected SDK/channel profile can silently run
     // through Direct CLI instead.
@@ -314,7 +329,7 @@ export class ClaudeService {
 
     // An explicit profile is an exact backend/provider binding. It must never
     // degrade to another backend when the requested route is unavailable.
-    if (explicitProfileRequested && profile) {
+    if ((explicitProfileRequested || options.requireBackend) && profile) {
       if (profile.backend === 'sdk-subscription' && !sdkHealthy) {
         throw new Error(`Explicit Claude profile '${profile.id}' requires the SDK subscription backend, which is unavailable or unhealthy.`);
       }
@@ -647,6 +662,20 @@ export class ClaudeService {
       return this.channelService?.loadSessionHistory(sessionId) ?? [];
     }
     return this.sessionStore.loadHistory(sessionId);
+  }
+
+  /**
+   * The backend a prompt for this session would actually execute on. Mirrors
+   * sendPromptReserved routing: a live channel session wins, and an
+   * sdk-subscription entry only runs on the SDK when the SDK service exists
+   * (otherwise it would fall through to direct CLI).
+   */
+  executionBackend(entry: { id: string; claudeProfileBackend?: string }): ClaudeExecutionBackend {
+    if (this.hasChannelSession(entry.id) || entry.claudeProfileBackend === 'channel') return 'channel';
+    if (this.sdkService && (this.sdkService.hasSession(entry.id) || entry.claudeProfileBackend === 'sdk-subscription')) {
+      return 'sdk-subscription';
+    }
+    return entry.claudeProfileBackend === 'cli-direct' ? 'cli-direct' : 'direct';
   }
 
   async getBackendMode(): Promise<'direct' | 'channel' | 'sdk'> {

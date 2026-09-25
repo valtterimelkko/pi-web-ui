@@ -142,6 +142,7 @@ import {
   blockedPiProvider,
   PiProviderNotAllowedError,
 } from '../pi-provider-policy.js';
+import { ClaudeBackendNotAllowedError } from '../../claude/claude-backend-policy.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -217,6 +218,13 @@ function delay(ms: number): Promise<void> {
 }
 
 type ExecutionOwnership = 'owner' | 'joined';
+
+/** Operator execution-policy refusals (both answer 403 with their own code). */
+type ExecutionPolicyError = PiProviderNotAllowedError | ClaudeBackendNotAllowedError;
+
+function isExecutionPolicyError(error: unknown): error is ExecutionPolicyError {
+  return error instanceof PiProviderNotAllowedError || error instanceof ClaudeBackendNotAllowedError;
+}
 
 /**
  * Contract 1.33.0: the stored model binding could not be re-applied at dispatch
@@ -908,9 +916,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (!entry) return { status: 'failed', errorCode: ErrorCode.SESSION_NOT_FOUND };
 
     const runtime = entry.sdkType as SessionRuntime;
-    const providerPolicyError = piProviderPolicyError(entry);
+    const providerPolicyError = executionPolicyError(entry);
     if (providerPolicyError) {
-      return { status: 'failed', errorCode: ErrorCode.PROVIDER_NOT_ALLOWED, detail: providerPolicyError.message };
+      return { status: 'failed', errorCode: providerPolicyError.code, detail: providerPolicyError.message };
     }
     const busy = isSessionBusy(entry);
     if (busy && mode === 'steer') {
@@ -1100,14 +1108,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return currentModel ? `${currentModel.provider}/${currentModel.id}` : entry.model;
   }
 
-  function piProviderPolicyError(entry: RegistryEntry): PiProviderNotAllowedError | undefined {
+  /**
+   * Operator execution policy for an existing session: blocked Pi providers,
+   * and (contract 1.46.0) any Claude session whose prompts would not run on
+   * the Claude Agent SDK backend.
+   */
+  function executionPolicyError(entry: RegistryEntry): ExecutionPolicyError | undefined {
+    if (entry.sdkType === 'claude') {
+      const backend = claudeService.executionBackend(entry);
+      return backend === 'sdk-subscription' ? undefined : new ClaudeBackendNotAllowedError(backend);
+    }
     if (entry.sdkType !== 'pi') return undefined;
     const provider = blockedPiProvider(currentRunModel(entry), blockedPiProviders);
     return provider ? new PiProviderNotAllowedError(provider) : undefined;
   }
 
-  function sendPiProviderPolicyError(res: ServerResponse, error: PiProviderNotAllowedError): void {
-    sendJson(res, 403, enrichedErrorBody(ErrorCode.PROVIDER_NOT_ALLOWED, error.message));
+  function sendExecutionPolicyError(res: ServerResponse, error: ExecutionPolicyError): void {
+    sendJson(res, 403, enrichedErrorBody(error.code, error.message));
   }
 
   function withPiModelLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
@@ -1461,7 +1478,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         assertPiModelAllowed(body.model, blockedPiProviders);
       } catch (error) {
         if (error instanceof PiProviderNotAllowedError) {
-          sendPiProviderPolicyError(res, error);
+          sendExecutionPolicyError(res, error);
           return;
         }
         throw error;
@@ -1536,10 +1553,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             profileId = model.slice('profile:'.length);
             model = undefined; // the profile determines the model
           }
-          const { sessionId } = await claudeService.createSession(cwd, model || 'sonnet', body.thinkingLevel, profileId);
-          let resolvedEntry: RegistryEntry | undefined;
+          let sessionId: string;
+          try {
+            ({ sessionId } = await claudeService.createSession(cwd, model || 'sonnet', body.thinkingLevel, profileId, { requireBackend: 'sdk-subscription' }));
+          } catch (error) {
+            if (error instanceof ClaudeBackendNotAllowedError) {
+              sendExecutionPolicyError(res, error);
+              return;
+            }
+            throw error;
+          }
+          // Contract 1.46.0: verify the concrete binding is SDK-backed; a
+          // session that bound anywhere else is discarded, never returned.
+          const resolvedEntry = await getNonCommandCodeRegistryEntry(sessionId);
+          const createdBackend = resolvedEntry ? claudeService.executionBackend(resolvedEntry) : 'direct';
+          if (createdBackend !== 'sdk-subscription') {
+            await cleanupRejectedCreatedSession(sessionId);
+            sendExecutionPolicyError(res, new ClaudeBackendNotAllowedError(createdBackend, 'created session did not bind to the SDK backend'));
+            return;
+          }
           if (profileId !== undefined) {
-            resolvedEntry = await getNonCommandCodeRegistryEntry(sessionId);
             if (!resolvedEntry
               || resolvedEntry.sdkType !== 'claude'
               || resolvedEntry.claudeProfileId !== profileId
@@ -1665,7 +1698,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               multiSessionManager.disposeLoadedSession(status.sessionPath);
               await deleteSessionFiles({ sdkType: 'pi', path: status.sessionPath, id: status.sessionId });
               await sessionRegistry.delete(status.sessionId);
-              sendPiProviderPolicyError(res, error);
+              sendExecutionPolicyError(res, error);
               return;
             }
             await cleanupRejectedCreatedSession(status.sessionId);
@@ -2921,8 +2954,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         : runReceipts.finish(runId, error
           ? {
               status: 'failed',
-              errorCode: error instanceof PiProviderNotAllowedError
-                ? ErrorCode.PROVIDER_NOT_ALLOWED
+              errorCode: isExecutionPolicyError(error)
+                ? error.code
                 : error instanceof PiModelBindingError
                   ? ErrorCode.MODEL_NOT_APPLIED
                   : runtimeErrorCode(error, runtime),
@@ -3347,9 +3380,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       }
 
-      const providerPolicyError = piProviderPolicyError(entry);
+      const providerPolicyError = executionPolicyError(entry);
       if (providerPolicyError) {
-        sendPiProviderPolicyError(res, providerPolicyError);
+        sendExecutionPolicyError(res, providerPolicyError);
         return;
       }
 
@@ -3462,12 +3495,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             dispatchMode,
           });
         } catch (error) {
-          const providerError = error instanceof PiProviderNotAllowedError ? error : undefined;
+          const providerError = isExecutionPolicyError(error) ? error : undefined;
           await runReceipts.finish(runId, {
             status: 'failed',
-            errorCode: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : ErrorCode.RUNTIME_ERROR,
+            errorCode: providerError ? providerError.code : ErrorCode.RUNTIME_ERROR,
           });
-          if (providerError) sendPiProviderPolicyError(res, providerError);
+          if (providerError) sendExecutionPolicyError(res, providerError);
           else sendJson(res, 500, { error: 'Runtime prompt failed', code: ErrorCode.RUNTIME_ERROR, runId });
         }
         return;
@@ -3593,11 +3626,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, dispatchMode, runId, admissionLease, joinedExecution ? 'joined' : 'owner', () => { runtimeDispatchStarted = true; });
       } catch (err) {
-        const providerError = err instanceof PiProviderNotAllowedError ? err : undefined;
+        const providerError = isExecutionPolicyError(err) ? err : undefined;
         // executePromptWithReceipt normally terminalizes before rejecting. This
         // defensive finalizer covers failures in response/stream setup that can
         // occur after markStarted but before the runtime is invoked.
-        const errorCode = providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : runtimeErrorCode(err instanceof Error ? err : new Error(String(err)), runtime);
+        const errorCode = providerError ? providerError.code : runtimeErrorCode(err instanceof Error ? err : new Error(String(err)), runtime);
         if (runtimeDispatchStarted) {
           await runReceipts.finish(runId, { status: 'failed', errorCode }).catch(() => undefined);
         } else {
@@ -3605,7 +3638,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         logger.errorObject('Prompt failed', err);
           if (!res.headersSent) {
-            if (providerError) sendPiProviderPolicyError(res, providerError);
+            if (providerError) sendExecutionPolicyError(res, providerError);
             else {
               sendJson(res, 500, {
                 error: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
@@ -4296,7 +4329,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               assertPiModelAllowed(body.modelId, blockedPiProviders);
             } catch (error) {
               if (error instanceof PiProviderNotAllowedError) {
-                sendPiProviderPolicyError(res, error);
+                sendExecutionPolicyError(res, error);
                 return;
               }
               throw error;
@@ -5750,6 +5783,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
 
       case 'claude': {
+        // Contract 1.46.0 defence in depth: every Internal API entry point
+        // checks the policy before dispatch; this is the last gate before the
+        // runtime, so nothing that reaches here can run a non-SDK backend.
+        const claudeEntry = await sessionRegistry.get(sessionId);
+        const claudeBackend = claudeEntry ? claudeService.executionBackend(claudeEntry) : 'direct';
+        if (claudeBackend !== 'sdk-subscription') throw new ClaudeBackendNotAllowedError(claudeBackend);
         // Contract 1.29.0: a steer joins the CURRENT running turn via the SDK
         // streaming-input channel. The receipt completes when the joined run
         // emits its next agent_end (mirrors the Pi endObserver pattern); if
@@ -6695,14 +6734,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Session transfer to Command Code is not supported through the Internal API'));
             return;
           }
-          const policyError = piProviderPolicyError(targetEntry);
+          const policyError = executionPolicyError(targetEntry);
           if (policyError) {
             const response: TransferSessionResponse = {
               success: false,
               sourceSessionId: sessionId,
               targetSessionId: targetEntry.id,
               createdNewSession: false,
-              targetRuntime: 'pi',
+              targetRuntime: targetEntry.sdkType as SessionRuntime,
               error: { code: policyError.code, message: policyError.message },
             };
             sendJson(res, 403, response);
@@ -6719,6 +6758,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         targetCwd: body.targetCwd ?? entry.cwd,
         scope: body.scope ?? 'visible_recent',
         sourceDisplayName: body.sourceDisplayName,
+        // Contract 1.46.0: a Claude target created here must be SDK-backed.
+        requireClaudeBackend: 'sdk-subscription',
       });
 
       if (result.success && result.createdNewSession && result.targetSessionId) {
@@ -6737,6 +6778,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const responseStatus = result.success
         ? 200
         : result.error?.code === ErrorCode.PROVIDER_NOT_ALLOWED
+          || result.error?.code === ErrorCode.CLAUDE_BACKEND_NOT_ALLOWED
           ? 403
           : 400;
       sendJson(res, responseStatus, response);
@@ -6977,7 +7019,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           throw error;
         }
 
-        const providerPolicyError = piProviderPolicyError(reg);
+        const providerPolicyError = executionPolicyError(reg);
         if (providerPolicyError) {
           return {
             index,
@@ -7157,14 +7199,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           tokens: collector.usage,
         };
       } catch (error) {
-        const providerError = error instanceof PiProviderNotAllowedError ? error : undefined;
+        const providerError = isExecutionPolicyError(error) ? error : undefined;
         return {
           index,
           sessionId: entry.sessionId,
           success: false,
           runId: reservedRunId,
           error: {
-            code: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : ErrorCode.RUNTIME_ERROR,
+            code: providerError ? providerError.code : ErrorCode.RUNTIME_ERROR,
             message: providerError?.message ?? 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
           },
         };

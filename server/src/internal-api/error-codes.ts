@@ -75,6 +75,9 @@ export const ErrorCode = {
   RETENTION_STORE_UNAVAILABLE: 'RETENTION_STORE_UNAVAILABLE',
   ADMISSION_CAPACITY_EXHAUSTED: 'ADMISSION_CAPACITY_EXHAUSTED',
   PROVIDER_NOT_ALLOWED: 'PROVIDER_NOT_ALLOWED',
+  // Contract 1.46.0: only the Claude Agent SDK backend may execute through the
+  // Internal API; direct CLI (`claude -p`) and channel-backed Claude are refused.
+  CLAUDE_BACKEND_NOT_ALLOWED: 'CLAUDE_BACKEND_NOT_ALLOWED',
   COMMANDCODE_CLI_MISSING: 'COMMANDCODE_CLI_MISSING',
   COMMANDCODE_AUTH_REQUIRED: 'COMMANDCODE_AUTH_REQUIRED',
   COMMANDCODE_MODEL_UNAVAILABLE: 'COMMANDCODE_MODEL_UNAVAILABLE',
@@ -376,6 +379,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'Operator policy blocks this provider on the local automation surface to prevent unintended usage charges.',
     hint: 'Choose a model returned by GET /api/v1/models; subscription provider openai-codex remains distinct from direct openai.',
     docs: 'docs/INTERNAL-API.md#pi-provider-execution-policy',
+  },
+  [ErrorCode.CLAUDE_BACKEND_NOT_ALLOWED]: {
+    httpStatus: 403,
+    description: 'The Claude session or selection does not run on the Claude Agent SDK backend, the only Claude backend allowed for Internal API agent execution.',
+    cause: 'Operator policy: direct CLI (claude -p, cli-direct profiles) and channel-backed Claude are refused on the automation surface; the SDK backend has typed events, cancellation, steering and AskUserQuestion callbacks.',
+    hint: 'Create the session with an SDK-backed selector from GET /api/v1/models (runtime=claude); existing direct or channel sessions stay usable from the browser.',
+    docs: 'docs/INTERNAL-API.md#claude-backend-execution-policy',
   },
   [ErrorCode.COMMANDCODE_CLI_MISSING]: {
     httpStatus: 503,

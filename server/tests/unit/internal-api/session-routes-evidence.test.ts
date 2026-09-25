@@ -88,6 +88,7 @@ function buildRoutes(entries: RegistryEntry[], pinDir?: string) {
     delete: vi.fn(),
   };
   const claudeService: any = {
+    executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
     getReplayEvents: vi.fn().mockResolvedValue([]),
     loadSessionHistory: vi.fn().mockResolvedValue([]),
     getSessionStats: vi.fn().mockResolvedValue(null),

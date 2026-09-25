@@ -81,6 +81,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
     };
 
     claudeService = {
+      executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
       isRunning: vi.fn(() => false),
       isAvailable: vi.fn().mockResolvedValue(true),
       hasSession: vi.fn(() => true),

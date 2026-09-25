@@ -123,6 +123,7 @@ describe('createSessionRoutes live-validation extensions', () => {
     };
 
     claudeService = {
+      executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
       isRunning: vi.fn(() => false),
       getSessionStats: vi.fn().mockResolvedValue({
         sessionId: 'claude-native-id',

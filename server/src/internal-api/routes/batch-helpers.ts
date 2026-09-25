@@ -24,6 +24,7 @@ import {
   assertResolvedPiModelAllowed,
   PiProviderNotAllowedError,
 } from '../pi-provider-policy.js';
+import { ClaudeBackendNotAllowedError } from '../../claude/claude-backend-policy.js';
 
 /** A runtime-level error with a stable contract code, thrown from batch
  * creation so the batch result surfaces the contracted code (e.g.
@@ -95,9 +96,21 @@ export async function createOneSession(params: {
         ? requestedModel.slice('profile:'.length)
         : undefined;
       const model = profileId !== undefined ? 'sonnet' : requestedModel;
-      const { sessionId } = await deps.claudeService.createSession(cwd, model, entry.thinkingLevel, profileId);
+      let sessionId: string;
+      try {
+        ({ sessionId } = await deps.claudeService.createSession(cwd, model, entry.thinkingLevel, profileId, { requireBackend: 'sdk-subscription' }));
+      } catch (error) {
+        if (error instanceof ClaudeBackendNotAllowedError) throw new RuntimeOpError(error.code, error.message);
+        throw error;
+      }
+      // Contract 1.46.0: only an SDK-bound Claude session may be returned.
+      const resolved = await deps.sessionRegistry.get(sessionId);
+      const createdBackend = resolved ? deps.claudeService.executionBackend(resolved) : 'direct';
+      if (createdBackend !== 'sdk-subscription') {
+        await deps.cleanupRejectedSession(sessionId);
+        throw new RuntimeOpError(ErrorCode.CLAUDE_BACKEND_NOT_ALLOWED, new ClaudeBackendNotAllowedError(createdBackend, 'created session did not bind to the SDK backend').message);
+      }
       if (profileId !== undefined) {
-        const resolved = await deps.sessionRegistry.get(sessionId);
         if (!resolved
           || resolved.sdkType !== 'claude'
           || resolved.claudeProfileId !== profileId

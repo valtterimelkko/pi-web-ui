@@ -71,6 +71,7 @@ describe('watch wake — full chain: firing → wake dispatch → run receipt (i
       getAgentSession: vi.fn(() => undefined), // no live agent session: dispatch will fail honestly after receipt
     };
     claudeService = {
+      executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
       isRunning: vi.fn(() => false),
       getBackendMode: vi.fn(async () => 'direct'),
       steer: vi.fn(() => false),
@@ -154,6 +155,29 @@ describe('watch wake — full chain: firing → wake dispatch → run receipt (i
     await routes.handleGetWatch(createJsonReq('GET', '/api/v1/sessions/child-1/watch'), get, 'child-1', new URLSearchParams());
     const watch = JSON.parse(get.body);
     expect(watch.wakeAttempts).toMatchObject([{ status: 'failed', errorCode: 'PROVIDER_NOT_ALLOWED' }]);
+  });
+
+  it('refuses a watch wake into a non-SDK Claude parent with CLAUDE_BACKEND_NOT_ALLOWED (contract 1.46.0)', async () => {
+    const claudeParent = { ...parentEntry, sdkType: 'claude', claudeProfileBackend: 'cli-direct' };
+    registry.get.mockImplementation(async (id: string) => id === 'child-1' ? childEntry : id === 'parent-1' ? claudeParent : undefined);
+    claudeService.executionBackend.mockReturnValue('cli-direct');
+    claudeService.isRunning.mockReturnValue(true);
+    claudeService.steer.mockReturnValue(true);
+
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/child-1/watch', {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent-1', message: 'claude child done', mode: 'steer', cooldownSeconds: 0 },
+      }),
+      createMockRes(), 'child-1',
+    );
+    for (const o of observers) o(ev('agent_end'));
+    await flush();
+
+    expect(claudeService.steer).not.toHaveBeenCalled();
+    const get = createMockRes();
+    await routes.handleGetWatch(createJsonReq('GET', '/api/v1/sessions/child-1/watch'), get, 'child-1', new URLSearchParams());
+    expect(JSON.parse(get.body).wakeAttempts).toMatchObject([{ status: 'failed', errorCode: 'CLAUDE_BACKEND_NOT_ALLOWED' }]);
   });
 
   it('steers a busy Claude SDK parent when the backend advertises steer support', async () => {

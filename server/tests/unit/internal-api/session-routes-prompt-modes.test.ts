@@ -109,6 +109,7 @@ describe('Internal API prompt mode dispatch semantics', () => {
       patchSessionMeta: vi.fn().mockResolvedValue(undefined),
     };
     claudeService = {
+      executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
       isAvailable: vi.fn().mockResolvedValue(true),
       isRunning: vi.fn(() => false),
       sendPrompt: vi.fn(),

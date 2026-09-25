@@ -450,6 +450,7 @@ describe('createModelsRoutes — handleListModels', () => {
       claudeService: {
         isAvailable: vi.fn().mockResolvedValue(true),
         getProfiles: vi.fn().mockReturnValue([
+          { id: 'sonnet-sdk', label: 'Sonnet SDK', backend: 'sdk-subscription', model: 'sonnet' },
           {
             id: 'native-sonnet',
             label: 'Native Sonnet',
@@ -459,7 +460,7 @@ describe('createModelsRoutes — handleListModels', () => {
           {
             id: 'native-haiku',
             label: 'Native Haiku',
-            backend: 'cli-direct',
+            backend: 'sdk-subscription',
             model: 'haiku',
           },
           {
@@ -487,13 +488,39 @@ describe('createModelsRoutes — handleListModels', () => {
       reasoning: true,
       thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     });
-    expect(models.find((model: any) => model.id === 'haiku')).toMatchObject({
+    expect(models.find((model: any) => model.id === 'profile:native-haiku')).toMatchObject({
       reasoning: true,
       thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
     });
     expect(models.find((model: any) => model.id === 'profile:native-sonnet').thinkingLevels).toContain('max');
     expect(models.find((model: any) => model.id === 'profile:native-haiku').thinkingLevels).not.toContain('max');
     expect(models.find((model: any) => model.id === 'profile:glm-sonnet').thinkingLevels).toContain('max');
+  });
+});
+
+describe('createModelsRoutes — Claude SDK-only policy (contract 1.46.0)', () => {
+  it('lists only SDK-backed Claude profiles and only aliases that resolve to a native SDK profile', async () => {
+    const routes = createModelsRoutes({
+      piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getProfiles: vi.fn().mockReturnValue([
+          { id: 'sonnet-sdk', label: 'Sonnet SDK', backend: 'sdk-subscription', model: 'sonnet' },
+          { id: 'glm-opus-sdk', label: 'GLM SDK', backend: 'sdk-subscription', model: 'opus', baseUrl: 'https://api.z.ai/api/anthropic' },
+          { id: 'sonnet-direct', label: 'Sonnet direct', backend: 'cli-direct', model: 'sonnet' },
+          { id: 'haiku-direct', label: 'Haiku direct', backend: 'cli-direct', model: 'haiku' },
+          { id: 'opus-channel', label: 'Opus channel', backend: 'channel', model: 'opus' },
+        ]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(createMockReq(undefined, 'GET', '/api/v1/models?runtime=claude'), res);
+
+    const ids = JSON.parse(res.body).models.claude.map((model: any) => model.id);
+    expect(ids).toEqual(['sonnet', 'profile:sonnet-sdk', 'profile:glm-opus-sdk']);
   });
 });
 
@@ -664,6 +691,7 @@ describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect
         isAvailable: vi.fn().mockResolvedValue(true),
         getProfiles: vi.fn(() => [
           { id: 'glm53-claude-sdk-native-profile', label: 'GLM 5.3 SDK', model: 'glm-5.3', backend: 'sdk-subscription', baseUrl: 'https://z.ai/api' },
+          { id: 'claude-sonnet-sdk-subscription', label: 'Sonnet SDK', model: 'sonnet', backend: 'sdk-subscription' },
         ]),
       } as any,
       opencodeService: {

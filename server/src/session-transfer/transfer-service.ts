@@ -3,6 +3,7 @@ import { constants as fsConstants } from 'fs';
 import path from 'path';
 import type { SessionRegistryManager, RegistryEntry } from '../session-registry.js';
 import type { ClaudeService } from '../claude/claude-service.js';
+import { ClaudeBackendNotAllowedError } from '../claude/claude-backend-policy.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
 import type { AntigravityService } from '../antigravity/antigravity-service.js';
 import type { CommandCodeService } from '../command-code/command-code-service.js';
@@ -568,9 +569,14 @@ export class TransferService {
           };
         }
         try {
-          const result = await this.config.claudeService.createSession(cwd);
+          const result = request.requireClaudeBackend
+            ? await this.config.claudeService.createSession(cwd, undefined, undefined, undefined, { requireBackend: request.requireClaudeBackend })
+            : await this.config.claudeService.createSession(cwd);
           return { success: true, sessionId: result.sessionId };
         } catch (err) {
+          if (err instanceof ClaudeBackendNotAllowedError) {
+            return { success: false, sessionId: '', error: { code: err.code, message: err.message } };
+          }
           return {
             success: false,
             sessionId: '',

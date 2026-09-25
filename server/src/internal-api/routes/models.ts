@@ -75,8 +75,11 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       // Claude models
       if (!runtimeFilter || runtimeFilter === 'claude') {
         if (await claudeService.isAvailable()) {
-          // Always include the base alias models for backward compat
-          result.claude = [
+          // Contract 1.46.0: only the Claude Agent SDK backend may execute via
+          // the Internal API, so advertise SDK profiles only, and a bare alias
+          // only when it resolves to a native (non-provider) SDK profile.
+          const sdkProfiles = claudeService.getProfiles().filter((profile) => profile.backend === 'sdk-subscription');
+          const aliasModels: ModelInfo[] = [
             {
               id: 'sonnet',
               selector: 'sonnet',
@@ -102,11 +105,12 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
               thinkingLevels: claudeThinkingLevels('haiku', 'anthropic'),
             },
           ];
+          result.claude = aliasModels.filter((alias) =>
+            sdkProfiles.some((profile) => !profile.baseUrl && profile.model === alias.id));
 
-          // When profiles are enabled, add profile-backed model entries
-          // with `profile:<id>` IDs so callers can select a specific profile.
-          const profiles = claudeService.getProfiles();
-          for (const profile of profiles) {
+          // Profile-backed entries with `profile:<id>` IDs so callers can
+          // select a specific SDK profile.
+          for (const profile of sdkProfiles) {
             const provider = profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic';
             const profileModel: ModelInfo = {
               id: `profile:${profile.id}`,

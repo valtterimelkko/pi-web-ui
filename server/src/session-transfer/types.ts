@@ -61,6 +61,8 @@ export interface TransferRequest {
   targetCwd?: string;
   scope: TransferScope;
   sourceDisplayName?: string;
+  /** Internal API (contract 1.46.0): a newly created Claude target must bind to this backend. */
+  requireClaudeBackend?: 'sdk-subscription';
 }
 
 export const TRANSFER_ERROR_CODES = {

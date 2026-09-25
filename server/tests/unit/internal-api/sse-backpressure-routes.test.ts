@@ -53,6 +53,7 @@ describe('SSE backpressure at the real session routes', () => {
     routes = createSessionRoutes({
       sessionRegistry: { get: vi.fn(async (id: string) => id === 'subject' ? entry : undefined), listAll: vi.fn(async () => [entry]) },
       claudeService: {
+        executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
         isRunning: vi.fn(() => false), getBackendMode: vi.fn(async () => 'sdk'),
         isAvailable: vi.fn(async () => true), abort,
         sendPrompt: vi.fn(async (_id: string, _message: string, event: typeof send, complete: typeof finish) => {

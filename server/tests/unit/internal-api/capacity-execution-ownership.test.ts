@@ -158,6 +158,7 @@ function makeHarness(options: HarnessOptions = {}) {
   };
 
   const claudeService: any = {
+    executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
     isRunning: vi.fn((sessionId: string) => running.has(sessionId)),
     getBackendMode: vi.fn(async () => 'sdk'),
     addApiObserver: vi.fn((sessionId: string, observer: EventObserver) => {

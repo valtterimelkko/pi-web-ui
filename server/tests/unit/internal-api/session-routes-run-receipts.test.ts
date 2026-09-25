@@ -91,6 +91,7 @@ describe('Internal API run receipt integration', () => {
       patchSessionMeta: vi.fn().mockResolvedValue(undefined),
     };
     claudeService = {
+      executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
       isRunning: vi.fn(() => false),
       sendPrompt: vi.fn(async (sessionId: string, _message: string, onEvent: (event: any) => void, onComplete: (error?: Error) => void) => {
         onEvent({ type: 'agent_start', sessionId, timestamp: Date.now(), data: {} });

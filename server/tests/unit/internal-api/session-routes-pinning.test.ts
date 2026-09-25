@@ -85,6 +85,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
     };
 
     claudeService = {
+      executionBackend: vi.fn(() => 'sdk-subscription'), // contract 1.46.0: these fixtures model SDK-backed Claude sessions
       isRunning: vi.fn(() => false),
       isAvailable: vi.fn().mockResolvedValue(true),
       createSession: vi.fn(async () => ({ sessionId: 'claude-1' })),

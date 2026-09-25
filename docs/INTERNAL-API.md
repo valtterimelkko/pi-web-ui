@@ -408,7 +408,41 @@ For Claude, automation clients can either:
 - select a base alias such as `sonnet`, or
 - select a specific provider profile via `model: "profile:<id>"`
 
-Profile-backed Claude entries may include `backend` and `claudeModel` metadata so callers can deliberately choose SDK vs direct vs channel-backed sessions.
+Profile-backed Claude entries include `backend` and `claudeModel` metadata. Since
+contract `1.46.0` only SDK-backed (`backend: "sdk-subscription"`) profiles are
+listed, and a bare alias is listed only when it resolves to a native SDK profile
+— see [Claude backend execution policy](#claude-backend-execution-policy).
+
+### Claude backend execution policy
+
+Since contract `1.46.0` (operator decision 2026-09-25) the Internal API runs
+Claude **only on the Claude Agent SDK backend** (`sdk-subscription`). It is
+superior for automation: typed events, session lifecycle control, cancellation,
+steering and `AskUserQuestion` callbacks. Direct CLI (`claude -p`, both the
+legacy profile-less path and `cli-direct` profiles) and channel-backed Claude
+are refused with HTTP `403` / `CLAUDE_BACKEND_NOT_ALLOWED`. The policy is fixed.
+There is no env override.
+
+- **Creation** (`POST /sessions`, `POST /sessions/batch`, transfer with
+  `createNew` to `claude`) resolves the selection and fails closed before any
+  session exists: an explicit non-SDK profile, a bare alias with no native SDK
+  profile, a non-SDK default profile, or disabled profiles are refused. An
+  unhealthy SDK backend never falls through to direct CLI. A created session
+  that is not SDK-bound is discarded and never returned.
+- **Execution** on an existing Claude session (prompt/follow-up/steer/detached,
+  batch prompt, watch wake, goal dispatch, transfer into an existing target) is
+  refused unless its prompts would actually route to the SDK. A live channel
+  session, or an `sdk-subscription` entry on a server without the SDK service,
+  is not SDK. The runtime dispatch boundary re-checks the policy, so nothing
+  can reach a non-SDK backend.
+- **Not affected:** the browser (WebSocket) keeps every Claude backend. Read
+  paths (list, info, transcript, evidence, events), abort, pinning and
+  model/thinking-level metadata changes stay available for any Claude session.
+  Adopted native Claude CLI sessions can be observed but not prompted.
+
+The allowed set is published at
+`/capabilities.features.claudeBackendPolicy.allowedBackends`
+(`["sdk-subscription"]`).
 
 ### Pi provider execution policy
 
@@ -523,7 +557,7 @@ POST /api/v1/sessions
 | `retention` | object | No | — | Required source-owned lease. `durable` preserves recoverability without forcing runtime residency; `resident` additionally keeps the runtime loaded. Requires `ownerId`; optional `ttlSeconds` (default 24h, max 7d) and `label`. Creation rolls back if the guarantee fails. |
 | `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
-| `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. |
+| `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. Only SDK-backed profiles are accepted (contract 1.46.0). |
 | `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role machinery. Raw flags, environment, executable paths, and native ids are never accepted. |
 | `commandCodeAttestation` | object | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role-attestation machinery; no longer required or verified. |
 
@@ -2525,7 +2559,7 @@ a watchable terminal event instead of per-run `agent_end` churn.
 | Runtime | Start | Pause | Resume | Clear | Notes |
 |---|---|---|---|---|---|
 | pi | `/goal "objective" …` | `/goal pause-now` (works **mid-run** — slash commands pass through on busy sessions) | `/goal resume` | `/goal clear` | Completion optional verification via `verifyCommand` |
-| claude | `/goal <condition>` (CLI loop blocks until the goal settles) | **server-side**: disarms auto-continue | **server-side**: re-arms + continuation prompt | `/goal clear` | Local-CLI backends only (default, sdk-subscription, cli-direct); channel unsupported. Verifier verdicts live in transcript `goal_status` attachments |
+| claude | `/goal <condition>` (CLI loop blocks until the goal settles) | **server-side**: disarms auto-continue | **server-side**: re-arms + continuation prompt | `/goal clear` | SDK backend only on the Internal API (contract 1.46.0 — other backends answer `403 CLAUDE_BACKEND_NOT_ALLOWED`). Verifier verdicts live in transcript `goal_status` attachments |
 | commandcode | goal-runner mod arms at the next run | **server-side**: control file; the mod early-stops | **server-side**: re-arm + continuation run | **server-side**: control file + record | `verifier=command` (deterministic) or `model` (sub-model judge) or `both`. Mod state file = truth channel |
 | antigravity (contract 1.38.0) | `POST /goal {action:"start"}` arms the server-side store and dispatches a goal prompt; `/goal <objective>` typed at the prompt boundary (HTTP or WebSocket) is intercepted as goal control — even while busy | **server-side**: disarms the sweeper (the in-flight turn still settles) | **server-side**: re-arms + continuation prompt | **server-side**: store record | No native CLI goal — fully server-owned: a turn-driven sweeper verifies each completed turn via `verifyCommand` (exit 0 = achieved) or the `GOAL_STATUS: ACHIEVED` self-report sentinel, then continues while unmet (budget `maxTurns` ≤ 100) |
 | opencode | out of scope (OpenCode keeps its own server bridge via the goal-engine plugin) | | | | `supported:false` |
