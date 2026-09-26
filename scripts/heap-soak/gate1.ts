@@ -177,6 +177,16 @@ export async function runGate1(): Promise<void> {
   const boardCheck = await boardWhoUnderRunDir(launch.paths.runDir);
   record('board pollution fix: zero board entries reference this run (while active)', boardCheck.ok, boardCheck.detail);
 
+  // Browser-like WS client (parent amendment 2026-09-26): connected
+  // throughout, received at least one broadcast message.
+  const wsStatusPath = path.join(launch.paths.runDir, 'ws-client-status.json');
+  const wsStatus = existsSync(wsStatusPath) ? JSON.parse(readFileSync(wsStatusPath, 'utf8')) : undefined;
+  record(
+    'browser-like WS client connected throughout the run',
+    Boolean(wsStatus?.connected) && (wsStatus?.connectCount ?? 0) >= 1,
+    wsStatus ? JSON.stringify(wsStatus) : 'ws-client-status.json missing',
+  );
+
   // Production-write audit: no changed file under the guarded roots
   // references this run id, run dir, or any child session id. Session ids
   // come from the events log (the driver runs in the supervisor's own

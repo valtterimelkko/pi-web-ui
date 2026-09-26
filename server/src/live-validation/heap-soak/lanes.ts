@@ -25,14 +25,16 @@ export const LANE_DEFINITIONS: LaneDefinition[] = [
     thinkingLevel: 'low',
     enabled: true,
     isBackbone: true,
-    // Measured live against the disposable server's own admission control
-    // (`[InternalAPI] admission: ... reservedPids/turn=96`, cgroup pids limit
-    // 512): 8 concurrent backbone turns alone reserves 8*96=768 pids, already
-    // over the 512 limit, and produced real
-    // `ADMISSION_CAPACITY_EXHAUSTED (pid_pressure)` rejections in a live Gate 1
-    // run. 4 (A) + 1 (B) = 5*96=480, leaving headroom under 512 for the
-    // server's own interactive/control reserves.
-    maxConcurrent: 4,
+    // First measured live against an artificial cgroup pids limit (512) this
+    // harness itself had set, well below the server's real admission budget
+    // (`[InternalAPI] admission: ... reservedPids/turn=96`, `apiTurnLimit=14`)
+    // and production's own TasksMax (8192) — 8 concurrent turns produced real
+    // `ADMISSION_CAPACITY_EXHAUSTED (pid_pressure)` rejections purely from
+    // that self-imposed cgroup ceiling, not from anything production would
+    // actually refuse. Parent amendment 2026-09-26: TasksMax raised to 8192
+    // (matching production) and this cap raised to 6, closer to production's
+    // real ~14-API-turn admission ceiling while B stays capped at 1.
+    maxConcurrent: 6,
   },
   {
     name: 'B',

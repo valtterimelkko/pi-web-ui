@@ -8,7 +8,7 @@ function baseState(): RunState {
     startedAt: new Date(0).toISOString(),
     endsAt: new Date(1_200_000).toISOString(),
     runDir: '/root/.pi-web-ui/validation/heap-soak/run-1',
-    server: { unitName: 'pi-web-ui-soak-server-run-1', socketPath: '/x/internal-api.sock', tokenPath: '/x/internal-api-token', inspectorPort: 9230, mainPid: 4242 },
+    server: { unitName: 'pi-web-ui-soak-server-run-1', socketPath: '/x/internal-api.sock', tokenPath: '/x/internal-api-token', inspectorPort: 9230, mainPid: 4242, httpPort: 3456 },
     supervisor: { unitName: 'pi-web-ui-soak-supervisor-run-1' },
     cycleCount: 3,
     laneBreakers: {

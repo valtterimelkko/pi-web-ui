@@ -19,6 +19,7 @@ import { productionGuardedPaths, diffChecksums } from '../../server/src/live-val
 import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
 import { runProductionWriteAudit } from './prod-audit-io.js';
 import { boardWhoUnderRunDir } from './board-check.js';
+import { BrowserLikeWsClient } from './browser-ws-client.js';
 import { hasEnoughFreeDisk } from '../../server/src/live-validation/heap-soak/disk.js';
 import { parseHeapSnapshotSummary } from '../../server/src/live-validation/heap-soak/snapshot-parse.js';
 import { LANE_DEFINITIONS, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
@@ -56,6 +57,19 @@ export async function runGate0(): Promise<Gate0Result> {
     launch = await launchDisposableServer(runId, 'micro'); // reuse the micro schedule's totalMs for the run-state window; preflight doesn't run the schedule
     record('isolation: run dir + agent dir outside production paths', true, `runDir=${launch.paths.runDir}`);
     record('disposable server boots under systemd-run', true, `unit=${launch.serverUnit} pid=${launch.serverMainPid}`);
+
+    // Registry seeding (parent amendment 2026-09-26): boot succeeded with the
+    // seeded registry above; now prove session listing works against it too.
+    try {
+      const listed = await launch.client.listSessions();
+      record(
+        'registry seeding: boot + session listing work with ~1,700 synthetic entries',
+        listed.sessions.length >= launch.seededRegistryCount,
+        `seeded=${launch.seededRegistryCount} listed=${listed.sessions.length}`,
+      );
+    } catch (error) {
+      record('registry seeding: boot + session listing work with ~1,700 synthetic entries', false, error instanceof Error ? error.message : String(error));
+    }
 
     const loopback = await assertInspectorLoopbackOnly(launch.inspectorPort).then((addr) => ({ ok: true, addr })).catch((e) => ({ ok: false, addr: String(e) }));
     record('inspector reachable on 127.0.0.1 only', loopback.ok, loopback.addr);
@@ -123,6 +137,15 @@ export async function runGate0(): Promise<Gate0Result> {
     // actually stopped any real `agent-os` process from registering one.
     const boardCheck = await boardWhoUnderRunDir(launch.paths.runDir);
     record('board pollution fix: zero board entries reference this run (while active)', boardCheck.ok, boardCheck.detail);
+
+    // Browser-like WS client (parent amendment 2026-09-26): a real login +
+    // authenticated /ws connection succeeds against the disposable server.
+    const wsClient = new BrowserLikeWsClient({ port: launch.httpPort });
+    await wsClient.start();
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const wsStats = wsClient.getStats();
+    record('browser-like WS client connects (login + authenticated /ws)', wsStats.connected, JSON.stringify(wsStats));
+    wsClient.close();
   } finally {
     if (launch) {
       const teardown = await teardownUnits(launch.serverUnit, launch.supervisorUnit);

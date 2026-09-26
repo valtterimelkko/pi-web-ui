@@ -35,6 +35,7 @@ import { snapshotComparisonSection } from './snapshot-diff.js';
 import { runProductionWriteAudit } from './prod-audit-io.js';
 import { boardWhoUnderRunDir } from './board-check.js';
 import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
+import { BrowserLikeWsClient } from './browser-ws-client.js';
 
 /** Default poll cadence for the zai quota guard: every 10 min in the full run, every 30s in the compressed micro schedule. */
 function quotaPollIntervalMs(mode: 'micro' | 'full'): number {
@@ -74,6 +75,15 @@ async function main(): Promise<void> {
 
   const client = new InternalApiClient({ socketPath: state.server.socketPath, tokenPath: state.server.tokenPath });
   const inspector = await InspectorClient.connect(state.server.inspectorPort);
+
+  // Browser-like WS client (parent amendment 2026-09-26, on by default): one
+  // long-lived authenticated socket for the whole run, exactly like a
+  // browser tab left open — the server-to-browser broadcast path is a known
+  // historical leak area. Reconnects on drop; a supervisor restart just
+  // means a brief reconnect, same as a real browser tab surviving a network
+  // blip. Status written to ws-client-status.json each sample tick.
+  const wsClient = new BrowserLikeWsClient({ port: state.server.httpPort });
+  await wsClient.start();
   await inspector.enable();
 
   mkdirSync(path.dirname(state.csvPath), { recursive: true });
@@ -168,6 +178,7 @@ async function main(): Promise<void> {
         sample.quotaPeakActive = lastQuotaReading?.peakActive;
         appendSampleRow(state.csvPath, HEAP_SAMPLE_CSV_HEADER, { ...sample });
         writeHeartbeat(path.join(state.runDir, 'sampler.heartbeat'));
+        writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
 
         if (sample.freeDiskGB !== undefined && sample.freeDiskGB < 20) {
           log({ ts: new Date().toISOString(), elapsedMs, lane: 'A', kind: 'anomaly', detail: `free disk ${sample.freeDiskGB.toFixed(1)}GB < 20GB` });
@@ -280,6 +291,8 @@ async function main(): Promise<void> {
   writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
   await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
 
+  writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
+  wsClient.close();
   inspector.close();
 }
 

@@ -4,7 +4,7 @@
  * systemd unit (with the production heap cap + --inspect), wait for it to be
  * observably up, and write the initial run-state.json.
  */
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
@@ -16,6 +16,7 @@ import { saveRunState } from './run-state-io.js';
 import { assertOutsideProductionPaths, productionGuardedPaths } from '../../server/src/live-validation/heap-soak/isolation.js';
 import { createAuditMarker } from './prod-audit-io.js';
 import { createBreakerState } from '../../server/src/live-validation/heap-soak/circuit-breaker.js';
+import { buildSyntheticRegistry, DEFAULT_SYNTHETIC_REGISTRY_COUNT } from '../../server/src/live-validation/heap-soak/registry-seed.js';
 import { LANE_DEFINITIONS } from '../../server/src/live-validation/heap-soak/lanes.js';
 import type { RunState } from '../../server/src/live-validation/heap-soak/run-state.js';
 import type { LaneName } from '../../server/src/live-validation/heap-soak/types.js';
@@ -30,6 +31,8 @@ export interface LaunchResult {
   tokenPath: string;
   client: InternalApiClient;
   auditMarkerPath: string;
+  seededRegistryCount: number;
+  httpPort: number;
 }
 
 async function findFreeTcpPort(): Promise<number> {
@@ -52,7 +55,13 @@ function repoRoot(): string {
   return path.resolve(here, '..', '..');
 }
 
-export async function launchDisposableServer(runId: string, mode: 'micro' | 'full'): Promise<LaunchResult> {
+export interface LaunchOptions {
+  /** Parent amendment 2026-09-26: mimic production's registry size. On by default. */
+  seedRegistry?: boolean;
+  seedRegistryCount?: number;
+}
+
+export async function launchDisposableServer(runId: string, mode: 'micro' | 'full', options: LaunchOptions = {}): Promise<LaunchResult> {
   const paths = resolveRunPaths(runId);
   mkdirSync(paths.runDir, { recursive: true, mode: 0o700 });
   mkdirSync(paths.workspace, { recursive: true });
@@ -61,6 +70,10 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   mkdirSync(paths.fakeHomeDir, { recursive: true, mode: 0o700 });
   mkdirSync(paths.boardStoreDir, { recursive: true });
   mkdirSync(paths.bgTasksDir, { recursive: true });
+  // validationDir itself is normally created lazily by validation-server.ts's
+  // own directory lock; created here too (idempotent) so the registry seed
+  // file below can be written before that unit starts.
+  mkdirSync(paths.validationDir, { recursive: true, mode: 0o700 });
 
   // Isolation: run dir must never alias a production path.
   assertOutsideProductionPaths(path.resolve(paths.runDir), productionGuardedPaths(homedir()));
@@ -73,7 +86,27 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   // audits the whole run rather than resetting the "since" window.
   const auditMarker = createAuditMarker(paths.runDir);
 
+  // Registry seeding (parent amendment 2026-09-26, on by default): mimic
+  // production's registry size (~1,700 entries) so the disposable server's
+  // boot and session-listing cost matches production rather than a
+  // near-empty registry. Written directly to the isolated registry path
+  // (join(validationDir, 'session-registry.json'), see
+  // buildValidationIsolationEnv) BEFORE the server boots, so it loads the
+  // seed on first read. Entries point at non-existent paths inside the run
+  // dir only.
+  const seedRegistry = options.seedRegistry ?? true;
+  let seededRegistryCount = 0;
+  if (seedRegistry) {
+    const count = options.seedRegistryCount ?? DEFAULT_SYNTHETIC_REGISTRY_COUNT;
+    const synthetic = buildSyntheticRegistry(paths.runDir, count);
+    writeFileSync(path.join(paths.validationDir, 'session-registry.json'), `${JSON.stringify(synthetic)}\n`);
+    seededRegistryCount = synthetic.entries.length;
+  }
+
   const inspectorPort = await findFreeTcpPort();
+  // Reserved explicitly (rather than left to validation-server.ts's own
+  // internal choice) so the browser-like WS client below knows it up front.
+  const httpPort = await findFreeTcpPort();
   const serverUnit = serverUnitName(runId);
   const supervisorUnit = supervisorUnitName(runId);
   const root = repoRoot();
@@ -85,7 +118,12 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
     workingDirectory: root,
     properties: {
       MemoryMax: '6G',
-      TasksMax: '512',
+      // Matches production (parent amendment 2026-09-26): production reserves
+      // 96 PIDs/turn and allows 14 API turns (~1344 projected pids at full
+      // admission), well within an 8192 cgroup pids limit — 512 here was an
+      // artificial cgroup constraint this harness invented, which throttled
+      // admission below what production actually allows.
+      TasksMax: '8192',
     },
     env: {
       NODE_OPTIONS: '--max-old-space-size=4096', // production's own heap cap
@@ -119,6 +157,7 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
       '--dir', paths.validationDir,
       '--compiled', // production-like: server/dist, not source
       '--inspect-port', String(inspectorPort),
+      '--port', String(httpPort),
     ],
   });
 
@@ -144,7 +183,7 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
     startedAt: new Date(now).toISOString(),
     endsAt: new Date(now + totalMs).toISOString(),
     runDir: paths.runDir,
-    server: { unitName: serverUnit, socketPath, tokenPath, inspectorPort, mainPid: serverMainPid },
+    server: { unitName: serverUnit, socketPath, tokenPath, inspectorPort, mainPid: serverMainPid, httpPort },
     supervisor: { unitName: supervisorUnit },
     cycleCount: 0,
     laneBreakers,
@@ -154,7 +193,7 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   };
   saveRunState(paths.runStatePath, runState);
 
-  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath };
+  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort };
 }
 
 export async function startSupervisorUnit(runId: string, paths: RunPaths, supervisorUnit: string): Promise<void> {

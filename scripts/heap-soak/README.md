@@ -230,6 +230,46 @@ id to an invalid one so every attempt fails — used to demonstrate the
 circuit-breaker + backbone-top-up behaviour end to end. It refuses to target
 the backbone lane. Never set this outside an explicit Gate 1 exercise.
 
+## Fidelity notes (parent amendment, 2026-09-26)
+
+- **`TasksMax=8192`, lane A `maxConcurrent=6`, lane B `maxConcurrent=1`**:
+  matches production's own admission ceiling (14 API turns × 96 reserved
+  pids/turn ≈ 1344, well inside 8192) rather than an artificial cgroup limit
+  this harness had invented (`TasksMax=512`, which produced real
+  `ADMISSION_CAPACITY_EXHAUSTED` rejections purely from that self-imposed
+  ceiling — see the bugs-found list below).
+- **Browser-like WS client** (`browser-ws-client.ts`, on by default): one
+  long-lived, reconnecting, authenticated `/ws` connection for the whole run
+  (`POST /api/auth/login` → cookie JWT → `ws://…/ws` with the matching
+  `Origin`/`Cookie` headers `decideWsUpgrade` requires) — exactly like a
+  browser tab left open. Status written to `<run>/ws-client-status.json`
+  each sample tick; the server-to-browser broadcast path is a known
+  historical leak area, so keeping one attached matters for this test even
+  though the client never issues session actions itself.
+- **Registry seeding** (`registry-seed.ts`, on by default, ~1,700 entries):
+  written directly to the isolated `session-registry.json` before the server
+  boots, so boot and session-listing cost matches production's registry size
+  rather than a near-empty disposable one. Entries point at non-existent
+  paths inside the run dir only.
+- **Known fidelity gap — the tsx loader**: the disposable server's dedicated
+  child process (`scripts/validation-server-child.ts`) always runs under
+  `node --import tsx …`, even in `--compiled` mode, because that file is
+  itself TypeScript and needs a loader to run at all — the `--compiled` flag
+  only changes what it *imports* (`server/dist/index.js` vs `server/src/index.ts`),
+  not how the child entry itself executes. Production runs plain
+  `node server/dist/index.js`. Closing this gap cleanly would mean either
+  duplicating `validation-server-child.ts`'s delicate process-group/
+  identity-record logic into a second, plain-JS entry point (a real
+  maintenance and correctness risk for teardown-critical code shared by every
+  other `validate:server` caller), or building an entirely separate launch
+  path that reimplements `scripts/validation-server.ts`'s port reservation,
+  directory locking and teardown recording a second time — out of proportion
+  to removing one loader layer. Documented here rather than risking either.
+  The tsx loader adds its own small, constant overhead/footprint that is
+  present throughout the run (not a source of *growth*), so it does not
+  change the heap-vs-uptime shape the soak is measuring, only its absolute
+  baseline slightly.
+
 ## Known limitations
 
 - `eventLoopLagMsProxy` is a CDP round-trip time, **not** a measurement of lag

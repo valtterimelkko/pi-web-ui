@@ -7,6 +7,8 @@ export interface RunStateServerInfo {
   inspectorPort: number;
   /** MainPID of the server unit, observed once at start and re-verified on reattach. */
   mainPid: number;
+  /** HTTP port (parent amendment 2026-09-26) — used by the browser-like WS client. */
+  httpPort: number;
 }
 
 export interface RunStateSupervisorInfo {
