@@ -346,7 +346,7 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
 | Baseline data snapshots | `/root/jev-session-eval/runs/piwebui-review-2026-09-26-data/` |
 | Soak harness | `scripts/heap-soak/` (CLI: `npx tsx scripts/heap-soak/cli.ts preflight|micro|start|status|stop|report`) |
 | Production facts | `~/.pi-web-ui/stop-audit.log`; `journalctl _PID=1 UNIT=pi-web-ui.service`; `GET /api/v1/capacity` |
-| Owner's Agent OS captures from the review | pending candidates `cand-0gnuybo3bq`, `cand-0gny36rl3t`, `cand-2pogxjh7gk`, `cand-4ljzs8qfin`, `cand-53hz776nzx`, `cand-5kfhn7c512`, `cand-60yt4fipab`, `cand-6husy6w66n`, `cand-6z5m0ozg7p`, `cand-36j5xixlub` (the last needs a correction; see the review §7) |
+| Owner's Agent OS captures from the review | pending candidates `cand-0gnuybo3bq`, `cand-0gny36rl3t`, `cand-2pogxjh7gk`, `cand-4ljzs8qfin`, `cand-53hz776nzx`, `cand-5kfhn7c512`, `cand-60yt4fipab`, `cand-6husy6w66n`, `cand-6z5m0ozg7p`, `cand-36j5xixlub` (corrected by `cand-yppzzcsbrp`); session-end set: `cand-vdw7vxafvz` (no time estimates), `cand-vtuzs529p5` (delegate code, verify), `cand-way3izcdwy` (horizon: soak running, next steps), `cand-wscddwcy01` (soak harness), `cand-xa3ftv25k0` (early heap signal), `cand-xrm28o1wt8` (review record and plan), `cand-y8kizkr1h6` (Agent OS isolation for validation children) |
 
 **How to hold a review moment:**
 1. Verify, don't trust. Re-run each finished step's live validation, or at least its cheapest decisive check. Read diffs, not reports: an `agent-os oracle` query shows which files an execution agent actually touched. Mark anything not re-run as `claimed`.
