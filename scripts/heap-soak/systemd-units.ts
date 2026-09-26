@@ -84,9 +84,19 @@ export async function stopUnit(unitName: string): Promise<void> {
   }
 }
 
-/** `systemctl kill` with a signal — used by Gate 1 to prove supervisor-restart-and-reattach. */
+/**
+ * `systemctl kill` with a signal — used by Gate 1 to prove supervisor-restart-
+ * and-reattach. `--kill-who=main` targets only the unit's main PID: the
+ * default (`--kill-who=all`, sending the signal to every process in the
+ * unit's cgroup including any short-lived auxiliary/control process) was
+ * observed live to fail with "Failed to send signal SIGKILL to auxiliary
+ * processes: Invalid argument" on this host/systemd version even though the
+ * main process itself was perfectly killable — main-only is also the more
+ * precise target for this use (kill exactly the supervisor process, not
+ * whatever else happens to share its cgroup).
+ */
 export async function killUnit(unitName: string, signal: string = 'SIGKILL'): Promise<void> {
-  await execFile('systemctl', ['kill', unitName, `--signal=${signal}`]);
+  await execFile('systemctl', ['kill', unitName, `--signal=${signal}`, '--kill-who=main']);
 }
 
 /** Wait until the unit's LoadState reaches 'not-found' (collected) or the deadline passes. */

@@ -25,7 +25,14 @@ export const LANE_DEFINITIONS: LaneDefinition[] = [
     thinkingLevel: 'low',
     enabled: true,
     isBackbone: true,
-    maxConcurrent: 8,
+    // Measured live against the disposable server's own admission control
+    // (`[InternalAPI] admission: ... reservedPids/turn=96`, cgroup pids limit
+    // 512): 8 concurrent backbone turns alone reserves 8*96=768 pids, already
+    // over the 512 limit, and produced real
+    // `ADMISSION_CAPACITY_EXHAUSTED (pid_pressure)` rejections in a live Gate 1
+    // run. 4 (A) + 1 (B) = 5*96=480, leaving headroom under 512 for the
+    // server's own interactive/control reserves.
+    maxConcurrent: 4,
   },
   {
     name: 'B',
@@ -39,7 +46,7 @@ export const LANE_DEFINITIONS: LaneDefinition[] = [
     ],
     enabled: true,
     isBackbone: false,
-    maxConcurrent: 2,
+    maxConcurrent: 1,
   },
   {
     name: 'C',

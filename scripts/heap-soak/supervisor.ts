@@ -104,8 +104,24 @@ async function main(): Promise<void> {
     saveRunState(runStatePath, state);
   };
 
-  /** Poll now, apply the hysteresis/failure state machine, ping ONCE per state change, persist. */
+  // Both loops (sampler timer + once-per-wave) call pollQuotaNow(); without
+  // serialising them, two overlapping polls can each read the SAME `previous`
+  // state, apply their own (different) reading, and race on the final write —
+  // observed live: a poll landing on a 'paused'-triggering reading got
+  // silently clobbered by a concurrent poll still computing from the stale
+  // 'throttled' state, so the logged transition skipped straight
+  // throttled -> normal instead of throttled -> paused -> normal. A single
+  // in-flight guard makes every caller either run the poll or await the one
+  // already running, never a second concurrent one.
+  let quotaPollInFlight: Promise<void> | undefined;
   async function pollQuotaNow(): Promise<void> {
+    if (quotaPollInFlight) return quotaPollInFlight;
+    quotaPollInFlight = pollQuotaNowUnlocked().finally(() => { quotaPollInFlight = undefined; });
+    return quotaPollInFlight;
+  }
+
+  /** Poll now, apply the hysteresis/failure state machine, ping ONCE per state change, persist. Never call directly — use pollQuotaNow(). */
+  async function pollQuotaNowUnlocked(): Promise<void> {
     const previous = quotaState;
     try {
       const reading = await pollZaiQuota();
