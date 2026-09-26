@@ -115,6 +115,7 @@ Within a stage, steps without a dependency may run in parallel with separate own
 - [ ] `report.md` states the post-GC heap slope overall and per phase, idle-return behaviour, peak heap, lag statistics and a verdict against the rule written in the report **before** the run started.
 - [ ] Snapshot comparison lists the top growing constructors, or explains precisely why it could not and leaves DevTools instructions.
 - [ ] No production state changed (checksums before and after); all soak units stopped; the run directory is preserved.
+- [ ] No synthetic data reached Agent OS: the production-write audit shows no soak-attributable writes under the Agent OS board store or memory vault, `~/.pi/agent`, or `~/.pi-web-ui` outside the run area, and `agent-os board who` lists no soak children during the run. The `agent-os-inject` extension stays loaded for realism, but its `agent-os` calls go to a local stub.
 **Not victory if:** the verdict is inferred from `heapUsed` without forced GC; the server was restarted mid-run; only one lane worked and it was never exercised with tool calls; the run ended early and the report does not say so.
 
 #### A2 — Production heap and lag telemetry with alerts
