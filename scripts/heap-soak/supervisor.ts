@@ -31,6 +31,7 @@ import { leastSquaresSlope, type SlopePoint } from '../../server/src/live-valida
 import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, nextStateOnPollFailure, type QuotaState, type ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
 import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
 import { buildReport, parseSampleCsv, renderReportMarkdown } from '../../server/src/live-validation/heap-soak/report.js';
+import { snapshotComparisonSection } from './snapshot-diff.js';
 
 /** Default poll cadence for the zai quota guard: every 10 min in the full run, every 30s in the compressed micro schedule. */
 function quotaPollIntervalMs(mode: 'micro' | 'full'): number {
@@ -247,7 +248,8 @@ async function main(): Promise<void> {
   const rows = parseSampleCsv(readFileSync(state.csvPath, 'utf8'));
   const events = readLaneEvents(state.eventsLogPath);
   const report = buildReport(rows, events, schedule, 'A');
-  const markdown = renderReportMarkdown(report, state.runId);
+  const snapshotSection = await snapshotComparisonSection(state.runDir);
+  const markdown = `${renderReportMarkdown(report, state.runId)}\n\n${snapshotSection}`;
   writeFileSync(path.join(state.runDir, 'report.md'), markdown);
   writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
   await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);

@@ -28,6 +28,16 @@ export interface RunPaths {
   snapshotDir: string;
   reportPath: string;
   reportJsonPath: string;
+  /** Fake $HOME for the disposable server process — redirects every os.homedir()-based path in
+   * copied Pi extensions (memory, goal-engine fallback, watch-wake fallback, compact-observability
+   * fallback, enhanced-plan-mode, commandcode-provider taste-learning) away from the real /root. */
+  fakeHomeDir: string;
+  agentOsStubLog: string;
+  agentOsInjectLog: string;
+  boardStoreDir: string;
+  goalHomeDir: string;
+  compactionLogPath: string;
+  bgTasksDir: string;
 }
 
 export function resolveRunPaths(runId: string): RunPaths {
@@ -45,6 +55,13 @@ export function resolveRunPaths(runId: string): RunPaths {
     snapshotDir: path.join(base, 'snapshots'),
     reportPath: path.join(base, 'report.md'),
     reportJsonPath: path.join(base, 'report.json'),
+    fakeHomeDir: path.join(base, 'fake-home'),
+    agentOsStubLog: path.join(base, 'agent-os-stub.jsonl'),
+    agentOsInjectLog: path.join(base, 'agent-os-inject.jsonl'),
+    boardStoreDir: path.join(base, 'board-store'),
+    goalHomeDir: path.join(base, 'fake-home'),
+    compactionLogPath: path.join(base, 'compaction-log.jsonl'),
+    bgTasksDir: path.join(base, 'bg-tasks'),
   };
 }
 

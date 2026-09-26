@@ -11,6 +11,8 @@ export interface ScheduleConfig {
   checkpointFractions: number[];
   /** How many snapshots to take, evenly spaced start/mid/.../end over totalMs. */
   snapshotCount: number;
+  /** Nominal sampler cadence — used both by the sampler loop and by the report's coverage check. */
+  sampleIntervalMs: number;
 }
 
 /** Production schedule: 24h, checkpoints at +1h/+6h/+12h/+18h, 3 snapshots (start/mid/end). */
@@ -20,6 +22,7 @@ export const FULL_SCHEDULE: ScheduleConfig = {
   totalMs: 24 * 3_600_000,
   checkpointFractions: [1 / 24, 6 / 24, 12 / 24, 18 / 24],
   snapshotCount: 3,
+  sampleIntervalMs: 120_000,
 };
 
 /** Micro-soak (Gate 1): ~20 minutes, same shape compressed ~72x. */
@@ -29,6 +32,7 @@ export const MICRO_SCHEDULE: ScheduleConfig = {
   totalMs: 20 * 60_000,
   checkpointFractions: [1 / 24, 6 / 24, 12 / 24, 18 / 24],
   snapshotCount: 2,
+  sampleIntervalMs: 10_000,
 };
 
 export type PhaseName = 'wave' | 'idle';

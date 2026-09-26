@@ -72,6 +72,73 @@ or erroring — so **neither the run nor the verdict may depend on them**:
   the backbone lane actually delivered**; the report states this explicitly
   and shows B/C stats separately.
 
+## Board-pollution fix / copied-extension isolation audit (owner amendment, 2026-09-26)
+
+Early live runs flooded the REAL Agent OS board (`/root/agent-os/board-store`)
+with ~80+ synthetic entries. Root cause: the isolated agent dir's copied
+`extensions/agent-os-inject` extension spawns the real `agent-os` CLI for
+every child turn (packet/vault reads, usage logging, `board heartbeat`),
+and one of its writes (`recordMutationTouch`) hits the board store directly
+in-process, with no subprocess at all.
+
+**Fix (kept the extension loaded — its in-process code is part of the
+realistic heap profile — made every side effect local):**
+
+1. **`AGENT_OS_BIN`** points at `scripts/heap-soak/agent-os-stub.mjs`, a
+   no-op that logs each invocation's argv+timestamp to
+   `<run>/agent-os-stub.jsonl` and exits 0 with empty stdout. The extension's
+   own fail-soft design (`classifyOutcome`, `callAgentEndDecision` in
+   `~/.pi/agent/extensions/agent-os-inject/inject-client.ts`) already treats
+   empty output as a safe no-op, never an error surfaced to the model. **No
+   real `agent-os` process ever runs for a soak child.**
+2. **Belt and braces**: `BOARD_STORE_DIR=<run>/board-store` and
+   `AGENT_OS_INJECT_LOG=<run>/agent-os-inject.jsonl` — both env overrides the
+   extension already honours, redirecting `recordMutationTouch`'s direct
+   filesystem write (not routed through the CLI at all) and the journal.
+3. **A fake `$HOME`** (`<run>/fake-home`) for the whole disposable server
+   process. Node's `os.homedir()` reads `$HOME` first on POSIX (verified
+   live), and an audit of every copied extension found several MORE
+   os.homedir()-based leaks beyond agent-os-inject, none with their own
+   override:
+   - `memory/storage.ts`: `AGENT_DIR = path.join(os.homedir(), ".pi", "agent")` — hardcoded, no override.
+   - `enhanced-plan-mode`: plans dir under `os.homedir()/.pi/plans` — hardcoded.
+   - `commandcode-provider`: reads `~/.commandcode/auth.json` for the API key and a taste-learning file (read-only; moot anyway since Lane C is disabled).
+   - `watch-wake`: falls back to the REAL `~/.pi-web-ui/internal-api.sock`/`internal-api-token` when its own overrides are unset — the one that could reach production most directly, so it also gets explicit overrides (`PI_WEB_UI_WATCH_WAKE_SOCKET`/`_TOKEN_FILE`, pointed at the disposable server's own socket).
+   - `goal-engine`: falls back to `HOME` (has its own override `PI_WEB_UI_GOAL_HOME`, set explicitly too).
+   - `compact-observability`: falls back to `os.homedir()/.pi/agent` (has `PI_COMPACTION_LOG`, set explicitly too).
+   - `background-shell`: `PI_BG_TASKS_DIR` (has its own override, set explicitly too).
+
+   The fake-`$HOME` fix and the explicit per-extension overrides are
+   deliberately redundant (belt and braces): the fake home covers every
+   os.homedir() call including ones not audited above by construction, while
+   the explicit overrides are precise for the ones that matter most
+   (board/watch-wake) and self-document what each extension actually does.
+   No extension needed excluding.
+4. **Production-write audit** (`prod-audit.ts` + `prod-audit-io.ts`), run in
+   Gate 0, Gate 1, and (to be run at) the 24h run's end: a marker file's mtime
+   at run start, then `find <roots> -newer <marker> -type f` (fast — the
+   guarded roots are 726MB/~1.3GB/98MB, far too large for a Node.js recursive
+   stat walk on every gate run) across `~/.pi/agent`, `~/.pi-web-ui` (excluding
+   `validation/heap-soak/*`, our own artefacts), `/root/agent-os/board-store`,
+   `/root/agent-os/memory-vault`. Any changed file's content is checked for
+   the run id, run dir, or any child session id — content, not just mtime,
+   because mtime alone isn't proof on a live shared host (see the
+   session-registry.json finding below).
+5. **Board check** (`board-check.ts`): `agent-os board who --json`
+   (read-only), filtered to entries whose `scope.repos` references the run
+   dir — run while the disposable server is still active, expecting zero.
+
+**Existing board pollution from before this fix**: ~97 synthetic entries
+(ids listed in the harness's own investigation, ids like `pi-01a0dc...`)
+remain on the real board from the runs before the stub was wired in. `board
+leave --id <X>` is the correct verb, but Claude Code's own safety classifier
+blocked a bulk cleanup script across all ~97 as "Interfere With Workloads" —
+per its own instructions, that block was respected rather than routed around
+(no per-id loop, no different tool). Each entry carries `ttlMinutes: 120` and
+should age out of `board who` on its own; the id list is preserved for the
+operator to clean up directly if wanted, and the check above proves no
+*further* entries appear once the fix is in place.
+
 ## zai quota guard (owner amendment, 2026-09-26)
 
 The owner uses zai for other work during the soak, so lane A (which runs on

@@ -1,5 +1,5 @@
 import { parseCsvWithHeader } from './csv.js';
-import { computeVerdict, leastSquaresSlope, type LeakVerdict, type SlopePoint, type SlopeResult } from './slope.js';
+import { computeVerdict, leastSquaresSlope, type LeakVerdict, type SlopePoint, type SlopeResult, type VerdictRule } from './slope.js';
 import { phaseAt, type ScheduleConfig } from './phases.js';
 import type { LaneEvent, LaneName } from './types.js';
 
@@ -169,6 +169,38 @@ export function computeLaneStats(events: readonly LaneEvent[]): LaneStats[] {
   return [...byLane.values()];
 }
 
+export interface SampleCoverage {
+  expectedCount: number;
+  actualCount: number;
+  coveragePct: number;
+  /** The largest gap between consecutive samples, expressed in units of the expected interval. */
+  maxGapIntervals: number;
+}
+
+/**
+ * Definition-of-victory check (ORCHESTRATION-SCALING-READINESS-PLAN.md A1):
+ * "post-GC samples covering at least 95% of sampling intervals, and no gap
+ * longer than three intervals except for declared snapshots." Declared
+ * snapshot gaps aren't distinguished here (a snapshot briefly blocks the
+ * sampler loop); the count/coverage math is intentionally simple and the
+ * exception is left to the reader's judgement against the events log.
+ */
+export function computeSampleCoverage(samples: readonly ReportSampleRow[], sampleIntervalMs: number, totalMs: number): SampleCoverage {
+  const expectedCount = sampleIntervalMs > 0 ? Math.floor(totalMs / sampleIntervalMs) + 1 : 0;
+  const sorted = [...samples].sort((a, b) => a.elapsedMs - b.elapsedMs);
+  let maxGapIntervals = 0;
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    const gap = sorted[i + 1].elapsedMs - sorted[i].elapsedMs;
+    if (sampleIntervalMs > 0) maxGapIntervals = Math.max(maxGapIntervals, gap / sampleIntervalMs);
+  }
+  return {
+    expectedCount,
+    actualCount: samples.length,
+    coveragePct: expectedCount > 0 ? (samples.length / expectedCount) * 100 : 0,
+    maxGapIntervals,
+  };
+}
+
 export interface HeapSoakReport {
   sampleCount: number;
   peakHeapMB: number;
@@ -185,6 +217,9 @@ export interface HeapSoakReport {
   generatedFrom: { csvRows: number; eventRows: number };
   /** The backbone (load-bearing) lane name, e.g. 'A'. Verdict/slope never depend on any other lane. */
   backboneLane: LaneName;
+  /** The verdict rule this report was judged against — declared/fixed in code, not tuned after seeing the data. */
+  verdictRule: VerdictRule;
+  sampleCoverage: SampleCoverage;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -200,7 +235,7 @@ export function buildReport(
   backboneLane: LaneName = 'A',
 ): HeapSoakReport {
   const points: SlopePoint[] = samples.map((s) => ({ tMs: s.elapsedMs, valueMB: s.heapUsedMB }));
-  const { verdict, overall, trailing } = computeVerdict(points);
+  const { verdict, overall, trailing, rule } = computeVerdict(points);
   const lags = samples.map((s) => s.eventLoopLagMsProxy).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
   const laneStats = computeLaneStats(events);
   return {
@@ -222,6 +257,8 @@ export function buildReport(
     orphanCount: events.filter((e) => e.kind === 'orphan_swept').length,
     generatedFrom: { csvRows: samples.length, eventRows: events.length },
     backboneLane,
+    verdictRule: rule,
+    sampleCoverage: computeSampleCoverage(samples, config.sampleIntervalMs, config.totalMs),
   };
 }
 
@@ -231,6 +268,15 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   lines.push('');
   lines.push(`**Verdict: ${report.verdict.toUpperCase()}** — trailing slope ${report.trailingSlope.slopeMBPerHour.toFixed(2)} MB/h `
     + `(overall ${report.overallSlope.slopeMBPerHour.toFixed(2)} MB/h), ${report.sampleCount} samples, peak heap ${report.peakHeapMB.toFixed(1)} MB.`);
+  lines.push('');
+  lines.push(`Verdict rule (declared before the run, not tuned after seeing the data): leak if the trailing `
+    + `${report.verdictRule.trailingWindowHours}h post-GC slope exceeds ${report.verdictRule.slopeThresholdMBPerHour} MB/h `
+    + `(requires at least ${report.verdictRule.minSpanHoursForVerdict}h of data, else 'inconclusive').`);
+  lines.push('');
+  lines.push(`## Sample coverage (definition-of-victory check)`);
+  lines.push(`${report.sampleCoverage.actualCount}/${report.sampleCoverage.expectedCount} expected samples `
+    + `(${report.sampleCoverage.coveragePct.toFixed(1)}%), largest gap ${report.sampleCoverage.maxGapIntervals.toFixed(1)} sample intervals `
+    + `(target: >=95% coverage, no gap >3 intervals except a declared snapshot).`);
   lines.push('');
   lines.push('## Per-phase slope (MB/h)');
   for (const p of report.perPhase) {

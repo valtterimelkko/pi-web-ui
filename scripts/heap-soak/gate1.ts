@@ -26,6 +26,9 @@ import { parseCsvWithHeader } from '../../server/src/live-validation/heap-soak/c
 import { FORCE_BAD_LANE_ENV_KEY } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { QUOTA_INJECT_ENV_KEY } from './quota-poll.js';
 import type { ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
+import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
+import { createAuditMarker, runProductionWriteAudit } from './prod-audit-io.js';
+import { boardWhoUnderRunDir } from './board-check.js';
 
 interface StatusFile {
   runId: string;
@@ -56,6 +59,7 @@ export async function runGate1(): Promise<void> {
   const before = computeChecksums(prodPaths);
 
   const launch = await launchDisposableServer(runId, 'micro');
+  const auditMarker = createAuditMarker(launch.paths.runDir);
   const statusPath = path.join(launch.paths.runDir, 'gate1-status.json');
   const status: StatusFile = { runId, step: 'launched', startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), steps: [], done: false };
   const record = (name: string, ok: boolean, detail: string) => {
@@ -135,7 +139,11 @@ export async function runGate1(): Promise<void> {
   const leaked = await launch.client.createSession({ runtime: 'pi', cwd: launch.paths.workspace, model: 'zai/glm-5.3-flash', source: `heap-soak:${runId}:deliberate-leak` });
   appendLaneEvent(launch.paths.eventsLogPath, { ts: new Date().toISOString(), elapsedMs: 0, lane: 'A', kind: 'child_created', sessionId: leaked.sessionId, detail: 'deliberately leaked for Gate 1(c)' });
   record('deliberately leaked a child', true, `sessionId=${leaked.sessionId}`);
-  const sweepDeadline = Date.now() + 120_000;
+  // The sweep runs once per driver cycle (wave 60s + idle 30s = ~90s on the
+  // micro schedule); a leak created just after one cycle's sweep already ran
+  // waits a full extra cycle. 300s (~3+ cycles) gives reliable margin — a
+  // live run measured 142s end-to-end (leak -> orphan_swept event).
+  const sweepDeadline = Date.now() + 300_000;
   let swept = false;
   while (Date.now() < sweepDeadline && !swept) {
     await sleep(5_000);
@@ -165,6 +173,28 @@ export async function runGate1(): Promise<void> {
   record('zai quota guard: normal->throttled->paused->normal observed, one event per transition', sawAllInOrder, `transitions seen: ${JSON.stringify(quotaTransitions)}`);
   record('zai quota guard: report shows per-state slope/duration', reportExists && /zai quota guard/i.test(reportMd), reportExists ? (reportMd.split('\n').find((l) => l.includes('duration')) ?? '(no per-state duration line found)') : 'report.md missing');
 
+  // Board-pollution fix (owner amendment 2026-09-26): while the run is still
+  // active, the board must show zero entries referencing this run.
+  const boardCheck = await boardWhoUnderRunDir(launch.paths.runDir);
+  record('board pollution fix: zero board entries reference this run (while active)', boardCheck.ok, boardCheck.detail);
+
+  // Production-write audit: no changed file under the guarded roots
+  // references this run id, run dir, or any child session id. Session ids
+  // come from the events log (the driver runs in the supervisor's own
+  // process, not this one).
+  const allSessionIds = readLaneEvents(launch.paths.eventsLogPath)
+    .filter((e) => e.kind === 'child_created' && e.sessionId)
+    .map((e) => e.sessionId as string);
+  const auditNeedles = buildAuditNeedles(runId, launch.paths.runDir, allSessionIds);
+  const audit = await runProductionWriteAudit(auditMarker, auditNeedles);
+  record(
+    'production-write audit: no changed file references this run',
+    audit.matches.length === 0,
+    audit.matches.length === 0
+      ? `${audit.changedFileCount} file(s) changed under the guarded roots; none referenced this run (${allSessionIds.length} session ids checked)`
+      : `LEAK: ${JSON.stringify(audit.matches)}`,
+  );
+
   const teardown = await teardownUnits(launch.serverUnit, launch.supervisorUnit);
   record('teardown: units stopped', teardown.serverGone && teardown.supervisorGone, JSON.stringify(teardown));
   try {
@@ -176,7 +206,9 @@ export async function runGate1(): Promise<void> {
 
   const after = computeChecksums(prodPaths);
   const mismatches = diffChecksums(before, after);
-  record('no production file changed', mismatches.length === 0, mismatches.length === 0 ? 'ok' : JSON.stringify(mismatches));
+  const registryPath = path.join(homedir(), '.pi-web-ui', 'session-registry.json');
+  const staticMismatches = mismatches.filter((m) => m.path !== registryPath);
+  record('no STATIC production file changed', staticMismatches.length === 0, staticMismatches.length === 0 ? 'ok' : JSON.stringify(staticMismatches));
 
   status.done = true;
   writeStatus(statusPath, status);

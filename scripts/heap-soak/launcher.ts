@@ -56,6 +56,9 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   mkdirSync(paths.workspace, { recursive: true });
   mkdirSync(paths.childWorkspaceRoot, { recursive: true });
   mkdirSync(paths.snapshotDir, { recursive: true });
+  mkdirSync(paths.fakeHomeDir, { recursive: true, mode: 0o700 });
+  mkdirSync(paths.boardStoreDir, { recursive: true });
+  mkdirSync(paths.bgTasksDir, { recursive: true });
 
   // Isolation: run dir must never alias a production path.
   assertOutsideProductionPaths(path.resolve(paths.runDir), productionGuardedPaths(homedir()));
@@ -81,8 +84,27 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
       NODE_OPTIONS: '--max-old-space-size=4096', // production's own heap cap
       PI_AGENT_DIR: agentDir,
       PI_CODING_AGENT_DIR: agentDir, // the Pi SDK reads this one, not PI_AGENT_DIR
-      HOME: homedir(),
+      // Board-pollution fix (owner amendment 2026-09-26): a FAKE $HOME
+      // redirects every os.homedir()-based path in the copied Pi extensions
+      // (memory/storage.ts's hardcoded AGENT_DIR, goal-engine's/watch-wake's/
+      // compact-observability's os.homedir() fallback, enhanced-plan-mode's
+      // plans dir, commandcode-provider's taste-learning read) away from the
+      // real /root — Node's os.homedir() reads $HOME first on POSIX. Belt and
+      // braces below with the explicit overrides these extensions also honour.
+      HOME: paths.fakeHomeDir,
       PATH: process.env.PATH ?? '/usr/bin:/bin',
+      // agent-os-inject: no real `agent-os` process may run for a soak child.
+      AGENT_OS_BIN: path.join(root, 'scripts', 'heap-soak', 'agent-os-stub.mjs'),
+      AGENT_OS_STUB_LOG: paths.agentOsStubLog,
+      AGENT_OS_INJECT_LOG: paths.agentOsInjectLog,
+      BOARD_STORE_DIR: paths.boardStoreDir,
+      // watch-wake extension: explicit isolation on top of the HOME redirect —
+      // this is the one that could otherwise reach the REAL production socket.
+      PI_WEB_UI_WATCH_WAKE_SOCKET: path.join(paths.validationDir, 'internal-api.sock'),
+      PI_WEB_UI_WATCH_WAKE_TOKEN_FILE: path.join(paths.validationDir, 'internal-api-token'),
+      PI_WEB_UI_GOAL_HOME: paths.goalHomeDir,
+      PI_COMPACTION_LOG: paths.compactionLogPath,
+      PI_BG_TASKS_DIR: paths.bgTasksDir,
     },
     executable: 'npx',
     args: [

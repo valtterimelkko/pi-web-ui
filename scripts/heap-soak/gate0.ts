@@ -5,8 +5,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { launchDisposableServer } from './launcher.js';
+import { runDir } from './paths.js';
 import { teardownUnits, assertUnitsAbsent, deleteRunDir } from './teardown.js';
 import { computeChecksums } from './checksum-io.js';
 import { getFreeDiskGB } from './disk-io.js';
@@ -15,6 +16,9 @@ import { InspectorClient, assertInspectorLoopbackOnly } from './inspector.js';
 import { runChildWithDeadline } from './driver.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { productionGuardedPaths, diffChecksums } from '../../server/src/live-validation/heap-soak/isolation.js';
+import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
+import { createAuditMarker, runProductionWriteAudit } from './prod-audit-io.js';
+import { boardWhoUnderRunDir } from './board-check.js';
 import { hasEnoughFreeDisk } from '../../server/src/live-validation/heap-soak/disk.js';
 import { parseHeapSnapshotSummary } from '../../server/src/live-validation/heap-soak/snapshot-parse.js';
 import { LANE_DEFINITIONS, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
@@ -43,6 +47,9 @@ export async function runGate0(): Promise<Gate0Result> {
   const before = computeChecksums(prodPaths);
   const registryPath = path.join(homedir(), '.pi-web-ui', 'session-registry.json');
   const harnessSessionIds: string[] = [];
+  const expectedRunDir = runDir(runId);
+  mkdirSync(expectedRunDir, { recursive: true, mode: 0o700 });
+  const auditMarker = createAuditMarker(expectedRunDir);
 
   let launch: Awaited<ReturnType<typeof launchDisposableServer>> | undefined;
   try {
@@ -111,6 +118,13 @@ export async function runGate0(): Promise<Gate0Result> {
     for (const lane of LANE_DEFINITIONS.filter((l) => !l.enabled)) {
       record(`lane ${lane.name} disabled`, true, lane.disabledReason ?? 'disabled', false);
     }
+
+    // Board-pollution fix (owner amendment 2026-09-26): while the run is
+    // still active (server up, children just ran), the board must show
+    // zero entries referencing this run — proof the AGENT_OS_BIN stub
+    // actually stopped any real `agent-os` process from registering one.
+    const boardCheck = await boardWhoUnderRunDir(launch.paths.runDir);
+    record('board pollution fix: zero board entries reference this run (while active)', boardCheck.ok, boardCheck.detail);
   } finally {
     if (launch) {
       const teardown = await teardownUnits(launch.serverUnit, launch.supervisorUnit);
@@ -122,6 +136,22 @@ export async function runGate0(): Promise<Gate0Result> {
       } catch (error) {
         record('teardown: units verified absent', false, error instanceof Error ? error.message : String(error));
       }
+
+      // Production-write audit (owner amendment 2026-09-26): find files
+      // changed under the guarded roots since the marker, and flag any whose
+      // CONTENT references this run — the precise proof, since mtime alone
+      // is not (see the session-registry.json finding below). Runs BEFORE
+      // deleteRunDir, which would otherwise remove the marker file itself.
+      const needles = buildAuditNeedles(runId, expectedRunDir, harnessSessionIds);
+      const audit = await runProductionWriteAudit(auditMarker, needles);
+      record(
+        'production-write audit: no changed file under ~/.pi/agent, ~/.pi-web-ui, board-store or memory-vault references this run',
+        audit.matches.length === 0,
+        audit.matches.length === 0
+          ? `${audit.changedFileCount} file(s) changed under the guarded roots during the run; none referenced this run`
+          : `LEAK: ${JSON.stringify(audit.matches)}`,
+      );
+
       deleteRunDir(launch.paths.runDir);
     }
   }
