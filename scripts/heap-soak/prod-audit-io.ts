@@ -20,7 +20,18 @@ export const PROD_AUDIT_ROOTS = [
   '/root/agent-os/memory-vault',
 ].filter((root) => existsSync(root));
 
-const EXCLUDE_PATH_GLOB = '*/validation/heap-soak/*'; // our own artefacts are expected to change; not a leak signal
+const EXCLUDE_PATH_GLOBS = [
+  '*/validation/heap-soak/*', // our own artefacts are expected to change; not a leak signal
+  // The Telegram ping is the ONE sanctioned production interaction (safety
+  // rules: "The only production interaction allowed is sending Telegram
+  // pings"). Its body deliberately names the run id so the operator can find
+  // it; the real delivery log/ingress spool naturally recording that sent
+  // message is proof the sanctioned channel worked, not a leak — excluded
+  // rather than silently weakening the check for anything else under
+  // ~/.pi-web-ui. (Found live: Gate 0's first post-fix run flagged
+  // ~/.pi-web-ui/notifications/delivery-log.json for exactly this reason.)
+  '*/notifications/*',
+];
 const MAX_FILE_BYTES_TO_GREP = 5_000_000; // skip anything bigger — binary/huge files are not soak-referencing text anyway
 
 export interface AuditMarker {
@@ -40,7 +51,7 @@ export async function findChangedFilesSince(marker: AuditMarker, roots: readonly
   try {
     const { stdout } = await execFile('find', [
       ...roots,
-      '-not', '-path', EXCLUDE_PATH_GLOB,
+      ...EXCLUDE_PATH_GLOBS.flatMap((glob) => ['-not', '-path', glob]),
       '-type', 'f',
       '-newer', marker.markerPath,
       '-print',
