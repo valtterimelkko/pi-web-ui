@@ -1,0 +1,190 @@
+#!/usr/bin/env npx tsx
+/**
+ * Supervisor process: runs as the `pi-web-ui-soak-supervisor-<run-id>`
+ * transient systemd unit (Restart=on-failure). On every start (fresh or
+ * restarted-after-kill) it:
+ *   1. Loads run-state.json (written by the launcher before this unit started).
+ *   2. Verifies the server unit is STILL the same running process
+ *      (decideReattach) — it NEVER restarts the server itself.
+ *   3. Runs the sampler loop and the driver loop concurrently until the
+ *      schedule's totalMs elapses, persisting run-state continuously so a
+ *      `systemctl kill` + systemd auto-restart resumes exactly where it left
+ *      off (same CSV, same breaker states, same cycle count).
+ */
+import path from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
+import { InspectorClient } from './inspector.js';
+import { getUnitStatus } from './systemd-units.js';
+import { loadRunState, saveRunState } from './run-state-io.js';
+import { appendLaneEvent, readLaneEvents } from './events-log.js';
+import { appendSampleRow } from './csv-io.js';
+import { notify } from './telegram.js';
+import { takeSample, writeHeartbeat } from './sampler.js';
+import { runWave, type DriverState } from './driver.js';
+import { sweepOrphans } from './orphan-sweep.js';
+import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
+import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
+import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
+import { leastSquaresSlope, type SlopePoint } from '../../server/src/live-validation/heap-soak/slope.js';
+import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
+import { buildReport, parseSampleCsv, renderReportMarkdown } from '../../server/src/live-validation/heap-soak/report.js';
+
+function getFlag(argv: string[], flag: string): string | undefined {
+  const i = argv.indexOf(flag);
+  return i >= 0 ? argv[i + 1] : undefined;
+}
+
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  const runStatePath = getFlag(argv, '--run-state');
+  if (!runStatePath) throw new Error('supervisor requires --run-state <path>');
+
+  const state = loadRunState(runStatePath);
+  const schedule: ScheduleConfig = state.mode === 'micro' ? MICRO_SCHEDULE : FULL_SCHEDULE;
+  const runStartMs = new Date(state.startedAt).getTime();
+
+  // Reattach check — NEVER restart the server, only confirm it is still the
+  // exact process this run-state was created for.
+  const serverStatus = await getUnitStatus(state.server.unitName);
+  const decision = decideReattach(state, { loadState: serverStatus.loadState, mainPid: serverStatus.mainPid });
+  const log = (event: LaneEvent) => appendLaneEvent(state.eventsLogPath, event);
+  const elapsedNow = () => Date.now() - runStartMs;
+
+  if (decision.action !== 'reattach') {
+    log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `${decision.action}: ${decision.reason}` });
+    await notify('blocked', 'disposable server unreachable', decision.reason);
+    process.exitCode = 1;
+    return;
+  }
+  console.error(`[supervisor] ${decision.reason}`);
+
+  const client = new InternalApiClient({ socketPath: state.server.socketPath, tokenPath: state.server.tokenPath });
+  const inspector = await InspectorClient.connect(state.server.inspectorPort);
+  await inspector.enable();
+
+  mkdirSync(path.dirname(state.csvPath), { recursive: true });
+  mkdirSync(path.join(state.runDir, 'children'), { recursive: true });
+
+  const lanes = applyForcedBadLanes(enabledLanes(LANE_DEFINITIONS));
+  const driverState: DriverState = { breakers: new Map(Object.entries(state.laneBreakers) as [import('../../server/src/live-validation/heap-soak/types.js').LaneName, import('../../server/src/live-validation/heap-soak/types.js').CircuitBreakerState][]) };
+
+  const checkpointOffsets = checkpointOffsetsMs(schedule);
+  const snapshotOffsets = snapshotOffsetsMs(schedule);
+  const firedCheckpoints = new Set(state.firedCheckpointOffsetsMs ?? []);
+  const firedSnapshots = new Set(state.firedSnapshotOffsetsMs ?? []);
+  let anomalyHeapPinged = false;
+  let stopped = false;
+
+  const persist = () => {
+    state.laneBreakers = Object.fromEntries(driverState.breakers) as typeof state.laneBreakers;
+    state.firedCheckpointOffsetsMs = [...firedCheckpoints];
+    state.firedSnapshotOffsetsMs = [...firedSnapshots];
+    state.lastSampleAt = new Date().toISOString();
+    saveRunState(runStatePath, state);
+  };
+
+  async function samplerLoop(): Promise<void> {
+    const sampleIntervalMs = state.mode === 'micro' ? 10_000 : 120_000;
+    while (!stopped && !isRunComplete(elapsedNow(), schedule)) {
+      const elapsedMs = elapsedNow();
+      const phase = phaseAt(elapsedMs, schedule);
+      try {
+        const sample = await takeSample({ inspector, client, runStartMs, phase, diskCheckPath: state.runDir });
+        appendSampleRow(state.csvPath, HEAP_SAMPLE_CSV_HEADER, { ...sample });
+        writeHeartbeat(path.join(state.runDir, 'sampler.heartbeat'));
+
+        if (sample.freeDiskGB !== undefined && sample.freeDiskGB < 20) {
+          log({ ts: new Date().toISOString(), elapsedMs, lane: 'A', kind: 'anomaly', detail: `free disk ${sample.freeDiskGB.toFixed(1)}GB < 20GB` });
+        }
+        const heapCapBytes = 4096 * 1024 * 1024;
+        if (sample.heapUsedBytes > 0.7 * heapCapBytes) {
+          if (!anomalyHeapPinged) {
+            anomalyHeapPinged = true;
+            await notify('blocked', 'post-GC heap > 70% of cap', `heapUsed=${(sample.heapUsedBytes / 1024 / 1024).toFixed(0)}MB at elapsed ${elapsedMs}ms`);
+          }
+        } else {
+          anomalyHeapPinged = false;
+        }
+      } catch (error) {
+        log({ ts: new Date().toISOString(), elapsedMs, lane: 'A', kind: 'anomaly', detail: `sample failed: ${error instanceof Error ? error.message : String(error)}` });
+      }
+
+      const dueCheckpoint = nextDueOffset(elapsedMs, checkpointOffsets, firedCheckpoints);
+      if (dueCheckpoint !== undefined) {
+        firedCheckpoints.add(dueCheckpoint);
+        persist();
+        const rows = parseSampleCsv(readFileSync(state.csvPath, 'utf8'));
+        const points: SlopePoint[] = rows.map((r) => ({ tMs: r.elapsedMs, valueMB: r.heapUsedMB }));
+        const slope = leastSquaresSlope(points);
+        await notify('milestone', `checkpoint +${Math.round(dueCheckpoint / 3_600_000)}h (elapsed ${Math.round(elapsedMs / 60_000)}min)`,
+          `post-GC slope so far: ${slope.slopeMBPerHour.toFixed(2)} MB/h over ${slope.sampleCount} samples. Lane breakers: ${JSON.stringify([...driverState.breakers.values()].map((b) => ({ lane: b.lane, open: b.open, ok: b.totalSuccesses, fail: b.totalFailures })))}`);
+      }
+      const dueSnapshot = nextDueOffset(elapsedMs, snapshotOffsets, firedSnapshots);
+      if (dueSnapshot !== undefined) {
+        firedSnapshots.add(dueSnapshot);
+        persist();
+        try {
+          mkdirSync(path.join(state.runDir, 'snapshots'), { recursive: true });
+          const snapshotPath = path.join(state.runDir, 'snapshots', `snapshot-${dueSnapshot}ms.heapsnapshot`);
+          const result = await inspector.takeHeapSnapshot(snapshotPath);
+          await notify('milestone', `heap snapshot at elapsed ${Math.round(elapsedMs / 60_000)}min`, `${result.chunkCount} chunks, ${result.bytesWritten} bytes -> ${snapshotPath}`);
+        } catch (error) {
+          log({ ts: new Date().toISOString(), elapsedMs, lane: 'A', kind: 'anomaly', detail: `snapshot failed: ${error instanceof Error ? error.message : String(error)}` });
+        }
+      }
+
+      persist();
+      await new Promise((resolve) => setTimeout(resolve, sampleIntervalMs));
+    }
+  }
+
+  async function driverLoop(): Promise<void> {
+    while (!stopped && !isRunComplete(elapsedNow(), schedule)) {
+      const waveResult = await runWave({
+        client,
+        runId: state.runId,
+        childWorkspaceRoot: path.join(state.runDir, 'children'),
+        lanes,
+        waveTargetConfig: DEFAULT_WAVE_TARGET_CONFIG,
+        logEvent: log,
+        runStartMs,
+      }, driverState, schedule.waveMs);
+      state.cycleCount += 1;
+      persist();
+
+      if (waveResult.anomaly) {
+        log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: 'backbone lane down: wave target missed with zero backbone completions' });
+        await notify('blocked', 'backbone lane down', `wave ${state.cycleCount}: completedByLane=${JSON.stringify(waveResult.completedByLane)}`);
+      }
+
+      // Orphan sweep once per cycle — the harness must never become the leak.
+      const events = readLaneEvents(state.eventsLogPath);
+      await sweepOrphans(client, events, log, elapsedNow);
+
+      if (isRunComplete(elapsedNow(), schedule)) break;
+      await new Promise((resolve) => setTimeout(resolve, schedule.idleMs));
+    }
+  }
+
+  await Promise.all([samplerLoop(), driverLoop()]);
+  stopped = true;
+  persist();
+
+  // Final report + done ping.
+  const rows = parseSampleCsv(readFileSync(state.csvPath, 'utf8'));
+  const events = readLaneEvents(state.eventsLogPath);
+  const report = buildReport(rows, events, schedule, 'A');
+  const markdown = renderReportMarkdown(report, state.runId);
+  writeFileSync(path.join(state.runDir, 'report.md'), markdown);
+  writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
+  await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
+
+  inspector.close();
+}
+
+main().catch(async (error) => {
+  console.error('[supervisor] Fatal:', error instanceof Error ? (error.stack ?? error.message) : String(error));
+  try { await notify('blocked', 'supervisor crashed', error instanceof Error ? error.message : String(error)); } catch { /* best-effort */ }
+  process.exit(1);
+});

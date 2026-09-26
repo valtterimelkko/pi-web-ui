@@ -200,6 +200,7 @@ async function main(): Promise<void> {
     console.error(` claude ws   : ${claudeWsPort}`);
     console.error(` claude hook : ${claudeHookPort}`);
     console.error(` opencode    : ${opencodePort}`);
+    console.error(` inspector   : ${inspectPort !== undefined ? `127.0.0.1:${inspectPort}` : '(disabled)'}`);
     console.error(` commandcode : ${commandCodeFixture ? (commandCodeBrowserFixture ? 'fixture enabled (browser/UI auth)' : 'deterministic fixture enabled') : commandCodeReal ? 'REAL CLI enabled' : 'disabled'}`);
     console.error('');
     console.error(' Point a validator at it, e.g.:');
@@ -228,6 +229,12 @@ async function main(): Promise<void> {
       PI_WEB_UI_VALIDATION_RECORD_DIR: validationDir,
       PI_WEB_UI_VALIDATION_BOUND_PORT: port,
     };
+    // Opt-in Node inspector for the dedicated server child, used by
+    // scripts/heap-soak/ to attach Chrome DevTools Protocol (forced GC,
+    // heap snapshots, process.memoryUsage()) to the exact process holding
+    // the heap under test. Loopback-only by construction (127.0.0.1); never
+    // widen this to 0.0.0.0. Off by default — no other caller passes it.
+    const inspectPort = explicitPort(validationArgs, '--inspect-port', 'PI_WEB_UI_VALIDATION_INSPECT_PORT');
     let child: ChildProcess;
     try {
       // The tsx loader runs in-process for this entry shape (single process,
@@ -236,7 +243,10 @@ async function main(): Promise<void> {
       // a fork() behaviour — so no loader flags reach this child; an earlier
       // double-loader failure here came from the child loading tsx's
       // programmatic API itself, not from inherited flags.
-      child = spawn(process.execPath, ['--import', 'tsx', childScript], { detached: true, stdio: 'inherit', env: childEnv });
+      child = spawn(process.execPath, [
+        ...(inspectPort !== undefined ? [`--inspect=127.0.0.1:${inspectPort}`] : []),
+        '--import', 'tsx', childScript,
+      ], { detached: true, stdio: 'inherit', env: childEnv });
     } catch (spawnError) {
       throw new Error(`Failed to spawn the dedicated validation server child: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}`);
     }
