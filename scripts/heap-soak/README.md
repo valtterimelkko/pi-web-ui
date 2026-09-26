@@ -43,8 +43,9 @@ it?** heapUsed alone is not proof of a leak — it includes uncollected garbage
 | Circuit breaker | `circuit-breaker.ts` | Per-lane consecutive-failure breaker with cooldown; pure state machine. |
 | Orphan sweep | `orphan-sweep.ts` + `orphans.ts` | Reconciles the events log's `child_created`/`child_deleted` pairs once per cycle; deletes anything still open. |
 | Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. |
-| Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase), idle-return-to-baseline, lane stats, verdict. |
-| Snapshot summary | `snapshot-parse.ts` | Minimal `.heapsnapshot` structural parser (node/edge counts, total self-size) — not a full retainer-graph analysis; compare snapshots in DevTools for that. |
+| Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase + per-quota-state), idle-return-to-baseline, sample coverage, the verdict rule itself, lane stats, verdict. |
+| Snapshot summary + diff | `snapshot-parse.ts` (pure) + `snapshot-diff.ts` + `snapshot-diff-worker.ts` | `.heapsnapshot` structural parser: headline totals, and `aggregateByConstructor`/`diffAggregates` for a first-vs-last self-size/count-by-constructor comparison (top growers). The actual parse runs in a separate `--max-old-space-size=8192` process so a large snapshot never pressures the caller; a size-guarded skip (with DevTools instructions) covers snapshots too big for that. |
+| Production-write audit + board check | `prod-audit.ts` (pure) + `prod-audit-io.ts` + `board-check.ts` | Fast `find -newer <marker>` scan across the guarded production roots, content-checked for this run's id/dir/session ids; `agent-os board who --json` filtered to this run's dir. See **Board-pollution fix** below. |
 
 ## Load model (owner amendment, 2026-09-26)
 
@@ -62,8 +63,8 @@ or erroring — so **neither the run nor the verdict may depend on them**:
   `nvidia/nemotron-3-super-120b-a12b:free`, `qwen/qwen3.8-27b:free`).
   Best-effort, capped at 2 concurrent children (`maxConcurrent`) so a slow
   free model can't pile up resident sessions.
-- **Lane C**: disabled. Pi has no `commandcode` model provider — see
-  **Lane C disabled** below.
+- **Lane C**: disabled — a live `commandcode` Pi provider *does* exist, but is
+  declined for narrower, evidence-based reasons — see **Lane C disabled** below.
 - Every child has a **hard per-turn deadline** (`childTurnDeadlineMs`, default
   90s); a child not done by then is aborted (best-effort delete) and counted
   as a lane timeout — the wave never waits on it. Wave boundaries are
@@ -115,7 +116,8 @@ realistic heap profile — made every side effect local):**
    (board/watch-wake) and self-document what each extension actually does.
    No extension needed excluding.
 4. **Production-write audit** (`prod-audit.ts` + `prod-audit-io.ts`), run in
-   Gate 0, Gate 1, and (to be run at) the 24h run's end: a marker file's mtime
+   Gate 0, Gate 1, and the 24h run's end (the supervisor's own final report):
+   a marker file's mtime
    at run start, then `find <roots> -newer <marker> -type f` (fast — the
    guarded roots are 726MB/~1.3GB/98MB, far too large for a Node.js recursive
    stat walk on every gate run) across `~/.pi/agent`, `~/.pi-web-ui` (excluding
@@ -234,8 +236,12 @@ the backbone lane. Never set this outside an explicit Gate 1 exercise.
   inside the target process's own event loop (Node exposes no CDP method for
   that as a passive read); it is a reasonable proxy but is always labelled as
   such in the CSV column name, sampler code, and report.
-- Snapshot comparison is limited to headline totals (node/edge counts, total
-  self-size) per snapshot; a full first-vs-last retainer/constructor diff is
-  left to DevTools' own snapshot comparison view — `report.ts` says so rather
-  than fabricating one.
+- Snapshot comparison groups by constructor name (object-type nodes) or node
+  type (everything else) — the standard cheap approximation most heap-diff
+  tools use, not a full retainer-graph/dominator analysis. If a snapshot pair
+  is too large for the comparison worker's heap, it says so precisely and
+  leaves DevTools instructions rather than guessing.
 - Command Code (Lane C) is disabled; see above.
+- The ~97 pre-fix board entries from before the board-pollution fix are not
+  cleaned up (Claude Code's safety classifier blocked the bulk removal); see
+  **Board-pollution fix** above.
