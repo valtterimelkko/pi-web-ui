@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { launchDisposableServer } from './launcher.js';
 import { runDir } from './paths.js';
 import { teardownUnits, assertUnitsAbsent, deleteRunDir } from './teardown.js';
@@ -17,7 +17,7 @@ import { runChildWithDeadline } from './driver.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { productionGuardedPaths, diffChecksums } from '../../server/src/live-validation/heap-soak/isolation.js';
 import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
-import { createAuditMarker, runProductionWriteAudit } from './prod-audit-io.js';
+import { runProductionWriteAudit } from './prod-audit-io.js';
 import { boardWhoUnderRunDir } from './board-check.js';
 import { hasEnoughFreeDisk } from '../../server/src/live-validation/heap-soak/disk.js';
 import { parseHeapSnapshotSummary } from '../../server/src/live-validation/heap-soak/snapshot-parse.js';
@@ -48,8 +48,6 @@ export async function runGate0(): Promise<Gate0Result> {
   const registryPath = path.join(homedir(), '.pi-web-ui', 'session-registry.json');
   const harnessSessionIds: string[] = [];
   const expectedRunDir = runDir(runId);
-  mkdirSync(expectedRunDir, { recursive: true, mode: 0o700 });
-  const auditMarker = createAuditMarker(expectedRunDir);
 
   let launch: Awaited<ReturnType<typeof launchDisposableServer>> | undefined;
   try {
@@ -143,7 +141,7 @@ export async function runGate0(): Promise<Gate0Result> {
       // is not (see the session-registry.json finding below). Runs BEFORE
       // deleteRunDir, which would otherwise remove the marker file itself.
       const needles = buildAuditNeedles(runId, expectedRunDir, harnessSessionIds);
-      const audit = await runProductionWriteAudit(auditMarker, needles);
+      const audit = await runProductionWriteAudit({ markerPath: launch.auditMarkerPath }, needles);
       record(
         'production-write audit: no changed file under ~/.pi/agent, ~/.pi-web-ui, board-store or memory-vault references this run',
         audit.matches.length === 0,

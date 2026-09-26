@@ -27,7 +27,7 @@ import { FORCE_BAD_LANE_ENV_KEY } from '../../server/src/live-validation/heap-so
 import { QUOTA_INJECT_ENV_KEY } from './quota-poll.js';
 import type { ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
 import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
-import { createAuditMarker, runProductionWriteAudit } from './prod-audit-io.js';
+import { runProductionWriteAudit } from './prod-audit-io.js';
 import { boardWhoUnderRunDir } from './board-check.js';
 
 interface StatusFile {
@@ -59,7 +59,6 @@ export async function runGate1(): Promise<void> {
   const before = computeChecksums(prodPaths);
 
   const launch = await launchDisposableServer(runId, 'micro');
-  const auditMarker = createAuditMarker(launch.paths.runDir);
   const statusPath = path.join(launch.paths.runDir, 'gate1-status.json');
   const status: StatusFile = { runId, step: 'launched', startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), steps: [], done: false };
   const record = (name: string, ok: boolean, detail: string) => {
@@ -186,7 +185,7 @@ export async function runGate1(): Promise<void> {
     .filter((e) => e.kind === 'child_created' && e.sessionId)
     .map((e) => e.sessionId as string);
   const auditNeedles = buildAuditNeedles(runId, launch.paths.runDir, allSessionIds);
-  const audit = await runProductionWriteAudit(auditMarker, auditNeedles);
+  const audit = await runProductionWriteAudit({ markerPath: launch.auditMarkerPath }, auditNeedles);
   record(
     'production-write audit: no changed file references this run',
     audit.matches.length === 0,

@@ -32,6 +32,9 @@ import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, next
 import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
 import { buildReport, parseSampleCsv, renderReportMarkdown } from '../../server/src/live-validation/heap-soak/report.js';
 import { snapshotComparisonSection } from './snapshot-diff.js';
+import { runProductionWriteAudit } from './prod-audit-io.js';
+import { boardWhoUnderRunDir } from './board-check.js';
+import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
 
 /** Default poll cadence for the zai quota guard: every 10 min in the full run, every 30s in the compressed micro schedule. */
 function quotaPollIntervalMs(mode: 'micro' | 'full'): number {
@@ -249,7 +252,27 @@ async function main(): Promise<void> {
   const events = readLaneEvents(state.eventsLogPath);
   const report = buildReport(rows, events, schedule, 'A');
   const snapshotSection = await snapshotComparisonSection(state.runDir);
-  const markdown = `${renderReportMarkdown(report, state.runId)}\n\n${snapshotSection}`;
+
+  // Production-write / board-pollution audit at the run's end (owner
+  // amendment 2026-09-26) — required "at the long run's end" in addition to
+  // Gate 0/Gate 1.
+  let auditSection = '## Production-write / board-pollution audit\n\nSkipped: no prodAuditMarkerPath in run-state.\n';
+  if (state.prodAuditMarkerPath) {
+    const allSessionIds = events.filter((e) => e.kind === 'child_created' && e.sessionId).map((e) => e.sessionId as string);
+    const needles = buildAuditNeedles(state.runId, state.runDir, allSessionIds);
+    const audit = await runProductionWriteAudit({ markerPath: state.prodAuditMarkerPath }, needles);
+    const board = await boardWhoUnderRunDir(state.runDir);
+    auditSection = [
+      '## Production-write / board-pollution audit',
+      '',
+      audit.matches.length === 0
+        ? `No leak: ${audit.changedFileCount} file(s) changed under the guarded production roots during the run; none referenced this run (${allSessionIds.length} session ids checked).`
+        : `**LEAK DETECTED**: ${JSON.stringify(audit.matches)}`,
+      board.ok ? `Board check: ${board.detail}` : `**BOARD POLLUTION**: ${board.detail}`,
+    ].join('\n');
+  }
+
+  const markdown = `${renderReportMarkdown(report, state.runId)}\n\n${snapshotSection}\n\n${auditSection}`;
   writeFileSync(path.join(state.runDir, 'report.md'), markdown);
   writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
   await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);

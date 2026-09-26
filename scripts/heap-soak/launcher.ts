@@ -14,6 +14,7 @@ import { startTransientUnit, waitForMainPid } from './systemd-units.js';
 import { InspectorClient } from './inspector.js';
 import { saveRunState } from './run-state-io.js';
 import { assertOutsideProductionPaths, productionGuardedPaths } from '../../server/src/live-validation/heap-soak/isolation.js';
+import { createAuditMarker } from './prod-audit-io.js';
 import { createBreakerState } from '../../server/src/live-validation/heap-soak/circuit-breaker.js';
 import { LANE_DEFINITIONS } from '../../server/src/live-validation/heap-soak/lanes.js';
 import type { RunState } from '../../server/src/live-validation/heap-soak/run-state.js';
@@ -28,6 +29,7 @@ export interface LaunchResult {
   socketPath: string;
   tokenPath: string;
   client: InternalApiClient;
+  auditMarkerPath: string;
 }
 
 async function findFreeTcpPort(): Promise<number> {
@@ -65,6 +67,11 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
 
   const { agentDir } = buildIsolatedAgentDir(paths.agentDir);
   assertOutsideProductionPaths(path.resolve(agentDir), productionGuardedPaths(homedir()));
+
+  // Production-write audit marker (owner amendment 2026-09-26): created ONCE
+  // here, at the true start of the run, so a later supervisor restart still
+  // audits the whole run rather than resetting the "since" window.
+  const auditMarker = createAuditMarker(paths.runDir);
 
   const inspectorPort = await findFreeTcpPort();
   const serverUnit = serverUnitName(runId);
@@ -143,10 +150,11 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
     laneBreakers,
     csvPath: paths.csvPath,
     eventsLogPath: paths.eventsLogPath,
+    prodAuditMarkerPath: auditMarker.markerPath,
   };
   saveRunState(paths.runStatePath, runState);
 
-  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client };
+  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath };
 }
 
 export async function startSupervisorUnit(runId: string, paths: RunPaths, supervisorUnit: string): Promise<void> {

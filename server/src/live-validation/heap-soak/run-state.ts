@@ -35,6 +35,8 @@ export interface RunState {
   quotaState?: 'normal' | 'throttled' | 'paused';
   quotaConsecutiveFailures?: number;
   lastQuotaPollAtMs?: number;
+  /** Production-write audit marker path (owner amendment 2026-09-26), created once at launch. */
+  prodAuditMarkerPath?: string;
 }
 
 export function serializeRunState(state: RunState): string {
