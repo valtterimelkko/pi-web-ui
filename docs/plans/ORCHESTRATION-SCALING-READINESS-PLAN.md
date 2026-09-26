@@ -2,7 +2,8 @@
 
 > **Status:** Stage A in progress (A1 soak harness being built). Nothing else started.
 > **Created:** 2026-09-26 from the Pi Web UI / Internal API deep review (owner-requested).
-> **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). Every **Review moment** below is held there, with the owner.
+> **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). **Review moments** are held with the owner, in that session or, if its context is exhausted, by a fresh Opus agent that first follows §7 (handoff).
+> **Evidence:** [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md).
 > **Primary repository:** `/root/pi-web-ui`. Companion when a step says so: `/root/agent-os` (contract mirror), `/root/.skills-global/skills-global` (orchestration skill).
 > **Production service:** `pi-web-ui.service` (port 3456). Restarts are owner-gated, one approval per restart or batch.
 
@@ -10,9 +11,9 @@
 
 - This is the **plan of record** for making Pi Web UI ready for substantially more Internal API orchestration. It resumes the direction of the paused Phases 8–9 of [`PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`](./PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md), but only through Stage D below and only after the owner authorises it at a review moment. Until then that plan's pause stands.
 - The capacity work of [`INTERNAL-API-CAPACITY-SCALING-AND-ORCHESTRATION-ROBUSTNESS-PLAN.md`](./INTERNAL-API-CAPACITY-SCALING-AND-ORCHESTRATION-ROBUSTNESS-PLAN.md) is executed and live (Tier 2: 16 active / 14 API turns). It is the baseline here, not open work.
-- Work runs in **stages**, and each stage ends at a **review moment** with the owner. An execution agent must not start the next stage before its review moment has happened and been recorded in §7.
+- Work runs in **stages**, and each stage ends at a **review moment** with the owner. An execution agent must not start the next stage before its review moment has happened and been recorded in §8.
 - **No time estimates.** Steps are ordered by dependency and priority. The only durations stated are real parameters of the work (a soak window, a sampling interval, a timeout).
-- Keep this file current. When a step starts, ships, is changed at a review moment, or is dropped, edit §7 in the same change.
+- Keep this file current. When a step starts, ships, is changed at a review moment, or is dropped, edit §9 (and §8 for review moments) in the same change.
 
 ## 1. Intent and rationale
 
@@ -23,6 +24,35 @@ The owner intends to scale Internal API orchestration up soon. The 2026-09-26 re
 3. **Orchestration costs parents too much.** Parents spend heavy effort on plumbing (hand-written curl, sleep loops, guessing request shapes) and had to correct child results in about four sessions in ten. 43% of children hit workspace problems.
 
 The goal is **more completed, verified child work per unit of parent effort, with bounded failure domains**. The goal is not the largest possible session count.
+
+### 1.1 The owner's intent, in full
+
+- **Why now.** The owner wants to use Internal API orchestration much more (parents dispatching children across runtimes and models), in the near future. The earlier resource-scaling plan paused its capacity phases because that load was not arriving. The premise has now changed from the owner's side.
+- **What "ready" means to the owner:**
+  - robust (children are not lost, stalled silently or killed by deploys);
+  - properly resourced (limits that actually bind are the ones that are watched);
+  - architecturally sound (one session cannot take down the rest);
+  - cheap to supervise (parents spend their effort on the task, not on plumbing).
+- **Evidence over assertion.** Decisions rest on measured production data and real session history, re-measured with the same instruments afterwards (§4, measurement discipline). A plausible story is not a finding until it is measured; the heap growth is treated as unproven until the soak.
+- **How the owner wants to work:**
+  - Execution agents, which the owner dispatches, do the building between review moments.
+  - The owner reviews at each review moment together with an Opus review agent. This is ideally the original review session; if its context is exhausted, a fresh Opus agent. §8 exists so a fresh agent loses nothing.
+  - The review agent's own effort goes to analysis, verification and plan-keeping, not to writing code. Code is delegated and then verified by reading diffs and re-running gates.
+- **Constraints the owner set:**
+  - no time estimates;
+  - production restarts owner-gated;
+  - OpenRouter only with explicit permission (granted for the soak only);
+  - never paid Command Code routes;
+  - GLM peak window respected;
+  - no synthetic sessions in Agent OS's board, worklog or vault.
+- **Not the intent:**
+  - adding capacity for its own sake;
+  - a big-bang rewrite;
+  - un-pausing the resource-scaling plan's Phase 8 without the owner's decision at R3.
+
+### 1.2 Where the evidence lives
+
+The full review, with method, numbers, audits, corrections and reproduction commands, is [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md). §2 below is its summary. Where they differ, the review file is the source of truth for evidence, and this plan is the source of truth for what to do.
 
 ## 2. Evidence baseline (2026-09-26)
 
@@ -133,7 +163,7 @@ Within a stage, steps without a dependency may run in parallel with separate own
 #### Review moment R1 (owner + review session)
 
 Inputs: A1 report and snapshot comparison, A2 status, current `/capacity`.
-Decide and record in §7: (a) whether there is a leak and its retainer, which sets B1's scope, or B1 is dropped; (b) the heap-cap choice for B2: raise `--max-old-space-size` towards the cgroup budget, lower `PI_MAX_SESSIONS`, or both, grounded in soak numbers; (c) whether Stage B proceeds as written.
+Decide and record in §8: (a) whether there is a leak and its retainer, which sets B1's scope, or B1 is dropped; (b) the heap-cap choice for B2: raise `--max-old-space-size` towards the cgroup budget, lower `PI_MAX_SESSIONS`, or both, grounded in soak numbers; (c) whether Stage B proceeds as written.
 
 ### Stage B — Contain the blast radius
 
@@ -295,11 +325,55 @@ Decide: close the programme, or open the next plan.
 - Remove orphaned `session-registry.json.*.tmp` files at boot (after confirming no writer holds them). Victory: test plus disposable boot proof.
 - Command Code admits one active turn. Revisit only if children are routed there. Victory: decision recorded at a review moment.
 
-## 7. Status ledger
+## 7. Handoff for the agent holding a review moment
+
+This section exists so a fresh Opus agent can hold any review moment with the same understanding as the original review session.
+
+**Read, in this order:**
+1. This plan: §1 intent, §3 decisions, §4 contract, §9 status ledger.
+2. [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md): evidence, audits, what was corrected and why.
+3. The evidence bundles of the steps finished since the last review moment, in `docs/plans/execution-reports/orchestration-scaling/`.
+4. For R1: `scripts/heap-soak/README.md` and the soak run directory `/root/.pi-web-ui/validation/heap-soak/<run-id>/` (`report.md`, `samples.csv`, `events.jsonl`, `snapshots/`, `run-state.json`).
+5. `agent-os recall "orchestration scaling readiness"` for anything captured since.
+
+**Durable locations:**
+
+| What | Where |
+| --- | --- |
+| Jev specs (same instruments for re-measurement) | `/root/jev-session-eval/specs/piwebui-*.toml` |
+| Baseline Jev runs | `/root/jev-session-eval/runs/piwebui-*-v2`, `…-operator-reports-v3` (gitignored, on disk) |
+| Analysis scripts | `/root/jev-session-eval/analyses/2026-09-26-piwebui-review/` (README lists usage) |
+| Baseline data snapshots | `/root/jev-session-eval/runs/piwebui-review-2026-09-26-data/` |
+| Soak harness | `scripts/heap-soak/` (CLI: `npx tsx scripts/heap-soak/cli.ts preflight|micro|start|status|stop|report`) |
+| Production facts | `~/.pi-web-ui/stop-audit.log`; `journalctl _PID=1 UNIT=pi-web-ui.service`; `GET /api/v1/capacity` |
+| Owner's Agent OS captures from the review | pending candidates `cand-0gnuybo3bq`, `cand-0gny36rl3t`, `cand-2pogxjh7gk`, `cand-4ljzs8qfin`, `cand-53hz776nzx`, `cand-5kfhn7c512`, `cand-60yt4fipab`, `cand-6husy6w66n`, `cand-6z5m0ozg7p`, `cand-36j5xixlub` (the last needs a correction; see the review §7) |
+
+**How to hold a review moment:**
+1. Verify, don't trust. Re-run each finished step's live validation, or at least its cheapest decisive check. Read diffs, not reports: an `agent-os oracle` query shows which files an execution agent actually touched. Mark anything not re-run as `claimed`.
+2. Re-measure with the named instruments and compare against §2 using the same definitions. State n and any change of population.
+3. Put each decision listed under that review moment to the owner, with a recommendation and its trade-offs. Record the decisions in §8 and, where they change intent, in §3.
+4. If the evidence changes the plan, rewrite the affected steps in place (no competing plan files), and note what changed and why in §8.
+5. Capture durable outcomes to Agent OS (the capture skill), then tell the owner which steps are cleared for execution agents.
+
+**Rules a fresh agent must not relearn the hard way:**
+- **Isolation traps:** a hand-rolled server on production dirs once deleted 276 production sessions. The Pi SDK reads `PI_CODING_AGENT_DIR`. Never set `SESSION_DIR`. `NOTIFICATIONS_DIR` is not isolated by `validate:server`. Keep workspaces under `/root`.
+- **Validation children pollute Agent OS unless isolated:** set `AGENT_OS_BIN`, put a PATH stub first, and set `BOARD_STORE_DIR`, `AGENT_OS_VAULT_ROOT` and a fake `HOME` (the soak harness shows how).
+- **Dependency installs:** this host runs `NODE_ENV=production`, so `npm install` prunes devDependencies; use `NODE_ENV=development npm install …`.
+- **Journal searches:** grepping the 3.8 GB journal over long windows times out; use the stop audit and PID-1 unit messages.
+
+## 8. Review moment log
+
+Record each review moment here: date, who held it (session id), inputs checked, decisions, plan changes.
+
+| Review moment | Date | Held by | Decisions and plan changes |
+| --- | --- | --- | --- |
+| (plan creation) | 2026-09-26 | `fc35fbf1-7f12-4962-9243-da710409fb56` | Plan created from the deep review. Soak design amended three times by the owner: free lanes are best-effort, the zai quota guard, and no synthetic data in Agent OS. |
+
+## 9. Status ledger
 
 | Step | Status | Evidence | Notes |
 |---|---|---|---|
-| A1 | in progress — harness being built by a delegated child; 24 h run not started | — | Rehearsal Gates 0/1 required before launch |
+| A1 | in progress — harness built on branch `heap-soak-harness` (worktree `.claude/worktrees/agent-a26207b83fecf3e94`), Gate 0 passed, Gate 1 final clean attempt running; review-session verification, merge and owner go pending; 24 h run not started | `docs/plans/execution-reports/orchestration-scaling/A1-harness.md` (on the branch) | Seven harness bugs found and fixed by rehearsals, including two Agent OS leak vectors; third vector (repo-anchored CLI) closed by the review session in `0b2d6fb1` |
 | A2 | not started | — | |
 | R1 | pending | — | Held in the owner review session |
 | B1–B4 | not started | — | |
