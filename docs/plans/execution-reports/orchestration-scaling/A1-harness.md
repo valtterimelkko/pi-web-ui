@@ -302,3 +302,19 @@ fix. For completeness, its full result:
 - The branch has **not** been merged or pushed.
 - No further Agent OS board cleanup was attempted (owner is handling this
   directly, per explicit instruction).
+
+## 11. Parent review (review session `fc35fbf1-…`, 2026-09-26)
+
+**Verified by the parent, not taken from reports:**
+- The heap-holding server process (the `--inspect` child, not the unit's npx wrapper) runs with `NODE_OPTIONS=--max-old-space-size=4096`, a fake `HOME`, an isolated `PI_CODING_AGENT_DIR`, `AGENT_OS_BIN` pointing at the stub, and a run-local `BOARD_STORE_DIR` (read from `/proc/<pid>/environ` during attempt 3).
+- Gate 1 attempt 4 `gate1-status.json`: `done: true`, 16/16 OK, read directly.
+- Master `npm run typecheck` exits 0; the typecheck failure reported earlier came from the worktree's `server/node_modules` setup.
+- The `scripts/validation-server.ts` change is additive, off by default and bound to loopback.
+
+**Parent changes:**
+- `0b2d6fb1`: a third Agent OS leak vector. A repo-anchored `npm --prefix /root/agent-os run agent-os …` call bypasses both `AGENT_OS_BIN` and the PATH stub, so `AGENT_OS_VAULT_ROOT` now points at an empty per-run vault.
+- `1b6615df`: heap-threshold snapshots at 1 GiB and 2 GiB post-GC heap, persisted in run-state (TDD, 4 tests). Reason: see below.
+
+**Interpretation correction.** §8 calls the Gate 1 slope "expected on a 20-min compressed schedule". It is not simply expected. Readings are post-forced-GC, and heap grew 146 → 620 MB, steadily through waves after warm-up (295 → 620 MB over the last 13 minutes), without returning during idle stretches, while 84 children were created and deleted (about 5–6 MB retained per child). That is an early signal consistent with production's uptime growth, not a conclusion: the run is short, includes warm-up, and the sampler and snapshot machinery may contribute. It is exactly what the 24 h run and the snapshot comparison must settle. At this rate a long run could reach the heap cap before the scheduled mid-run snapshot, hence the threshold snapshots.
+
+**Not re-run by the parent:** Gate 1 itself (its result was read from the status file). Gate 0 is re-run by the parent after merge, to cover `0b2d6fb1` and `1b6615df` on the merged tree.
