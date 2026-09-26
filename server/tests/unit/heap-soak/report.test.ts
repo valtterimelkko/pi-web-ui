@@ -5,6 +5,8 @@ import {
   idleReturnToBaseline,
   parseSampleCsv,
   perPhaseSlopes,
+  perQuotaStateSlopes,
+  quotaStateDurations,
   renderReportMarkdown,
   rowsToSamples,
   type ReportSampleRow,
@@ -67,6 +69,30 @@ describe('idleReturnToBaseline', () => {
     ];
     const checks = idleReturnToBaseline(samples, MICRO_SCHEDULE);
     expect(checks[0].returnedToBaseline).toBe(false);
+  });
+});
+
+describe('perQuotaStateSlopes / quotaStateDurations', () => {
+  const samples: ReportSampleRow[] = [
+    { ts: '', elapsedMs: 0, phase: 'wave', heapUsedMB: 100, eventLoopLagMsProxy: 1, quotaState: 'normal' },
+    { ts: '', elapsedMs: 3_600_000, phase: 'wave', heapUsedMB: 110, eventLoopLagMsProxy: 1, quotaState: 'normal' },
+    { ts: '', elapsedMs: 7_200_000, phase: 'idle', heapUsedMB: 111, eventLoopLagMsProxy: 1, quotaState: 'throttled' },
+    { ts: '', elapsedMs: 10_800_000, phase: 'idle', heapUsedMB: 111, eventLoopLagMsProxy: 1, quotaState: 'paused' },
+  ];
+
+  it('fits an independent slope per quota state', () => {
+    const byState = Object.fromEntries(perQuotaStateSlopes(samples).map((s) => [s.quotaState, s.slope]));
+    expect(byState.normal.slopeMBPerHour).toBeCloseTo(10, 3);
+  });
+
+  it('attributes duration to the earlier sample in each gap', () => {
+    const durations = Object.fromEntries(quotaStateDurations(samples).map((d) => [d.quotaState, d.durationMs]));
+    // gap(0->1)=3.6M attributed to 'normal', gap(1->2)=3.6M also attributed to
+    // sample[1]='normal' (so normal totals 7.2M), gap(2->3)=3.6M attributed to
+    // sample[2]='throttled'; the last sample ('paused') has no following gap.
+    expect(durations.normal).toBe(7_200_000);
+    expect(durations.throttled).toBe(3_600_000);
+    expect(durations.paused).toBeUndefined();
   });
 });
 

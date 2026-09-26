@@ -28,6 +28,10 @@ export interface HeapSample {
   registryEntryCount?: number;
   /** Free disk space on the artefact volume, in GB, at sample time. */
   freeDiskGB?: number;
+  /** zai quota guard (owner amendment 2026-09-26) — see zai-quota.ts. */
+  quotaState?: string;
+  quotaPercentLeft?: number;
+  quotaPeakActive?: boolean;
 }
 
 export const HEAP_SAMPLE_CSV_HEADER = [
@@ -45,6 +49,9 @@ export const HEAP_SAMPLE_CSV_HEADER = [
   'residentSessionCount',
   'registryEntryCount',
   'freeDiskGB',
+  'quotaState',
+  'quotaPercentLeft',
+  'quotaPeakActive',
 ] as const;
 
 export type HeapSampleField = (typeof HEAP_SAMPLE_CSV_HEADER)[number];
@@ -61,6 +68,7 @@ export type LaneEventKind =
   | 'orphan_swept'
   | 'top_up'
   | 'checkpoint'
+  | 'quota_state_change'
   | 'anomaly';
 
 export interface LaneEvent {

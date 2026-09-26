@@ -13,6 +13,7 @@ import { getFreeDiskGB } from './disk-io.js';
 import { notify } from './telegram.js';
 import { InspectorClient, assertInspectorLoopbackOnly } from './inspector.js';
 import { runChildWithDeadline } from './driver.js';
+import { pollZaiQuota } from './quota-poll.js';
 import { productionGuardedPaths, diffChecksums } from '../../server/src/live-validation/heap-soak/isolation.js';
 import { hasEnoughFreeDisk } from '../../server/src/live-validation/heap-soak/disk.js';
 import { parseHeapSnapshotSummary } from '../../server/src/live-validation/heap-soak/snapshot-parse.js';
@@ -72,6 +73,13 @@ export async function runGate0(): Promise<Gate0Result> {
 
     const ping = await notify('milestone', 'preflight', `run ${runId}`);
     record('telegram test ping accepted', ping.ok, ping.stdout.trim() || ping.stderr.trim() || '(no output captured)');
+
+    try {
+      const reading = await pollZaiQuota();
+      record('zai quota guard: real provider-usage poll', true, `percentLeft=${reading.percentLeft ?? 'n/a'} peakActive=${reading.peakActive} resetsAt=${reading.resetsAt ?? 'n/a'}`, false);
+    } catch (error) {
+      record('zai quota guard: real provider-usage poll', false, `best-effort: ${error instanceof Error ? error.message : String(error)}`, false);
+    }
 
     // Lane end-to-end checks. Lane A (backbone) is REQUIRED; B/C are best-effort.
     const lanes = enabledLanes(LANE_DEFINITIONS);

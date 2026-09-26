@@ -31,6 +31,10 @@ export interface RunState {
   /** Checkpoint/snapshot offsets (ms since start) already fired — tolerant of a supervisor restart. */
   firedCheckpointOffsetsMs?: number[];
   firedSnapshotOffsetsMs?: number[];
+  /** zai quota guard (owner amendment 2026-09-26) — persisted so a supervisor restart resumes the same state, not 'normal'. */
+  quotaState?: 'normal' | 'throttled' | 'paused';
+  quotaConsecutiveFailures?: number;
+  lastQuotaPollAtMs?: number;
 }
 
 export function serializeRunState(state: RunState): string {

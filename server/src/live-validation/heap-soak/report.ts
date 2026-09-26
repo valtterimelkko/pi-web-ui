@@ -10,6 +10,7 @@ export interface ReportSampleRow {
   heapUsedMB: number;
   eventLoopLagMsProxy: number;
   freeDiskGB?: number;
+  quotaState?: string;
 }
 
 export function rowsToSamples(rows: Record<string, string>[]): ReportSampleRow[] {
@@ -21,6 +22,7 @@ export function rowsToSamples(rows: Record<string, string>[]): ReportSampleRow[]
       heapUsedMB: Number(r.heapUsedBytes) / (1024 * 1024),
       eventLoopLagMsProxy: Number(r.eventLoopLagMsProxy),
       freeDiskGB: r.freeDiskGB ? Number(r.freeDiskGB) : undefined,
+      quotaState: r.quotaState || undefined,
     }))
     .filter((r) => Number.isFinite(r.elapsedMs) && Number.isFinite(r.heapUsedMB));
 }
@@ -51,6 +53,45 @@ export function perPhaseSlopes(samples: readonly ReportSampleRow[]): PerPhaseSlo
  * started the stretch at, using the ratio of the idle stretch's end/start
  * heapUsedMB against `toleranceRatio` (default 1.05 = within 5%).
  */
+export interface PerQuotaStateSlope {
+  quotaState: string;
+  slope: SlopeResult;
+}
+
+/**
+ * zai quota guard (owner amendment): reduced-load periods (throttled/paused)
+ * are labelled phases in the CSV via `quotaState`. Slope is fit independently
+ * per state so the heap-vs-uptime question stays answerable even while load
+ * is reduced or backbone-paused.
+ */
+export function perQuotaStateSlopes(samples: readonly ReportSampleRow[]): PerQuotaStateSlope[] {
+  const byState = new Map<string, SlopePoint[]>();
+  for (const s of samples) {
+    const key = s.quotaState ?? 'unknown';
+    const arr = byState.get(key) ?? [];
+    arr.push({ tMs: s.elapsedMs, valueMB: s.heapUsedMB });
+    byState.set(key, arr);
+  }
+  return [...byState.entries()].map(([quotaState, points]) => ({ quotaState, slope: leastSquaresSlope(points) }));
+}
+
+export interface QuotaStateDuration {
+  quotaState: string;
+  durationMs: number;
+}
+
+/** How long the run spent in each quota state, attributing each inter-sample gap to the EARLIER sample's state. */
+export function quotaStateDurations(samples: readonly ReportSampleRow[]): QuotaStateDuration[] {
+  const sorted = [...samples].sort((a, b) => a.elapsedMs - b.elapsedMs);
+  const totals = new Map<string, number>();
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    const key = sorted[i].quotaState ?? 'unknown';
+    const delta = sorted[i + 1].elapsedMs - sorted[i].elapsedMs;
+    totals.set(key, (totals.get(key) ?? 0) + Math.max(0, delta));
+  }
+  return [...totals.entries()].map(([quotaState, durationMs]) => ({ quotaState, durationMs }));
+}
+
 export interface IdleReturnCheck {
   startElapsedMs: number;
   endElapsedMs: number;
@@ -135,6 +176,8 @@ export interface HeapSoakReport {
   trailingSlope: SlopeResult;
   verdict: LeakVerdict;
   perPhase: PerPhaseSlope[];
+  perQuotaState: PerQuotaStateSlope[];
+  quotaStateDurations: QuotaStateDuration[];
   idleReturns: IdleReturnCheck[];
   lagStats: { meanMs: number; p95Ms: number; maxMs: number };
   laneStats: LaneStats[];
@@ -167,6 +210,8 @@ export function buildReport(
     trailingSlope: trailing,
     verdict,
     perPhase: perPhaseSlopes(samples),
+    perQuotaState: perQuotaStateSlopes(samples),
+    quotaStateDurations: quotaStateDurations(samples),
     idleReturns: idleReturnToBaseline(samples, config),
     lagStats: {
       meanMs: lags.length ? lags.reduce((a, b) => a + b, 0) / lags.length : 0,
@@ -190,6 +235,14 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   lines.push('## Per-phase slope (MB/h)');
   for (const p of report.perPhase) {
     lines.push(`- ${p.phase}: ${p.slope.slopeMBPerHour.toFixed(2)} MB/h (n=${p.slope.sampleCount}, r2=${Number.isFinite(p.slope.r2) ? p.slope.r2.toFixed(2) : 'n/a'})`);
+  }
+  lines.push('');
+  lines.push('## zai quota guard — per-state slope and duration');
+  lines.push('The heap-vs-uptime question stays answerable when load drops (throttled/paused); slope is fit independently per state.');
+  const durationByState = Object.fromEntries(report.quotaStateDurations.map((d) => [d.quotaState, d.durationMs]));
+  for (const p of report.perQuotaState) {
+    const durationMin = ((durationByState[p.quotaState] ?? 0) / 60_000).toFixed(1);
+    lines.push(`- ${p.quotaState}: ${p.slope.slopeMBPerHour.toFixed(2)} MB/h (n=${p.slope.sampleCount}), duration ${durationMin} min`);
   }
   lines.push('');
   lines.push('## Idle stretches returning to baseline');

@@ -24,6 +24,8 @@ import { appendLaneEvent, readLaneEvents } from './events-log.js';
 import { productionGuardedPaths, diffChecksums } from '../../server/src/live-validation/heap-soak/isolation.js';
 import { parseCsvWithHeader } from '../../server/src/live-validation/heap-soak/csv.js';
 import { FORCE_BAD_LANE_ENV_KEY } from '../../server/src/live-validation/heap-soak/lanes.js';
+import { QUOTA_INJECT_ENV_KEY } from './quota-poll.js';
+import type { ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
 
 interface StatusFile {
   runId: string;
@@ -66,7 +68,18 @@ export async function runGate1(): Promise<void> {
   writeStatus(statusPath, status);
   record('server launched', true, `unit=${launch.serverUnit} pid=${launch.serverMainPid}`);
 
-  await notify('milestone', 'micro-soak start', `run ${runId}; schedule=micro (~20min); lane B forced bad for the whole run to exercise the amendment`);
+  await notify('milestone', 'micro-soak start', `run ${runId}; schedule=micro (~20min); lane B forced bad for the whole run to exercise the amendment; injected zai quota sequence normal->throttled->paused->normal`);
+
+  // Injected zai-quota sequence (Gate 1(d)): normal -> throttled -> paused ->
+  // normal, each held for several polls so the state machine's hysteresis
+  // settles regardless of exactly which loop (sampler timer vs. per-wave)
+  // consumes a given entry.
+  const quotaSequence: ZaiQuotaReading[] = [
+    ...Array(4).fill({ percentLeft: 80, peakActive: false }), // normal (baseline)
+    ...Array(10).fill({ percentLeft: 45, peakActive: false }), // -> throttled (<=50%)
+    ...Array(10).fill({ percentLeft: 20, peakActive: false }), // -> paused (<=30%)
+    ...Array(20).fill({ percentLeft: 80, peakActive: false }), // -> normal (>=60%), held for the rest of the run
+  ];
 
   // Start the supervisor with lane B forced bad for the ENTIRE run — this
   // directly demonstrates requirement (b): the target is still met via A.
@@ -77,7 +90,13 @@ export async function runGate1(): Promise<void> {
     restart: 'on-failure',
     workingDirectory: repoRoot,
     properties: { MemoryMax: '1G', TasksMax: '128' },
-    env: { HOME: homedir(), PATH: process.env.PATH ?? '/usr/bin:/bin', [FORCE_BAD_LANE_ENV_KEY]: 'B' },
+    env: {
+      HOME: homedir(),
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      [FORCE_BAD_LANE_ENV_KEY]: 'B',
+      [QUOTA_INJECT_ENV_KEY]: JSON.stringify(quotaSequence),
+      HEAP_SOAK_QUOTA_POLL_INTERVAL_MS: '20000',
+    },
     executable: 'npx',
     args: ['tsx', 'scripts/heap-soak/supervisor.ts', '--run-state', launch.paths.runStatePath],
   });
@@ -135,6 +154,16 @@ export async function runGate1(): Promise<void> {
   const reportExists = existsSync(path.join(launch.paths.runDir, 'report.md'));
   const reportMd = reportExists ? readFileSync(path.join(launch.paths.runDir, 'report.md'), 'utf8') : '';
   record('report generated with a verdict line', reportExists && /Verdict:/.test(reportMd), reportExists ? reportMd.split('\n').find((l) => l.includes('Verdict:')) ?? '' : 'report.md missing');
+
+  // ── (d) zai quota guard: injected normal -> throttled -> paused -> normal, one ping per transition ──
+  const quotaTransitions = readLaneEvents(launch.paths.eventsLogPath)
+    .filter((e) => e.kind === 'quota_state_change')
+    .map((e) => e.detail);
+  const expectedOrder = ['normal -> throttled', 'throttled -> paused', 'paused -> normal'];
+  const sawAllInOrder = expectedOrder.every((expected) => quotaTransitions.includes(expected))
+    && expectedOrder.every((expected, i) => quotaTransitions.indexOf(expected) >= (i === 0 ? 0 : quotaTransitions.indexOf(expectedOrder[i - 1])));
+  record('zai quota guard: normal->throttled->paused->normal observed, one event per transition', sawAllInOrder, `transitions seen: ${JSON.stringify(quotaTransitions)}`);
+  record('zai quota guard: report shows per-state slope/duration', reportExists && /zai quota guard/i.test(reportMd), reportExists ? (reportMd.split('\n').find((l) => l.includes('duration')) ?? '(no per-state duration line found)') : 'report.md missing');
 
   const teardown = await teardownUnits(launch.serverUnit, launch.supervisorUnit);
   record('teardown: units stopped', teardown.serverGone && teardown.supervisorGone, JSON.stringify(teardown));

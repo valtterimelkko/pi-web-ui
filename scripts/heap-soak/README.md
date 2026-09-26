@@ -72,17 +72,71 @@ or erroring — so **neither the run nor the verdict may depend on them**:
   the backbone lane actually delivered**; the report states this explicitly
   and shows B/C stats separately.
 
+## zai quota guard (owner amendment, 2026-09-26)
+
+The owner uses zai for other work during the soak, so lane A (which runs on
+`zai/glm-5.3-flash`) must stay a polite consumer of the shared zai pool.
+
+- **Source**: `npm --prefix /root/agent-os run -s agent-os -- provider-usage --providers zai-glm --json`
+  (read-only, spends no tokens). `server/src/live-validation/heap-soak/zai-quota.ts`
+  parses the `zai-glm` row's `windows` ("5h left N%"), `resets` ("5h resets
+  \<ISO\>"), and the top-level `peakWindow.active` flag.
+- **Polling**: every `HEAP_SOAK_QUOTA_POLL_INTERVAL_MS` (default 30s in the
+  micro schedule, 10 min in the full run) via the sampler loop, **and**
+  unconditionally once before every wave via the driver loop
+  (`scripts/heap-soak/supervisor.ts`).
+- **States** (`nextQuotaState`, hysteresis): **normal** (>50% left) →
+  **throttled** (≤50%: lane A's per-wave target drops to a minimum, default 1)
+  → **paused** (≤30% left, or `peakWindow.active`: lane A stops entirely —
+  excluded from the wave's organic dispatch and its top-up target is 0; free
+  lanes, sampling, and the Internal API client keep going). Only returns to
+  **normal** at ≥60% left, or once the 5h window has reset AND the reading has
+  recovered above the throttled threshold — plain hysteresis, not a single
+  bouncy threshold.
+- **Failure handling**: a failed poll keeps the current state (logged as an
+  `anomaly` lane event); 3 consecutive failures move a `normal` state to
+  `throttled` until a good reading arrives.
+- **One Telegram ping per state change**, not per poll (`quota_state_change`
+  lane event + a `milestone`/`blocked` ping).
+- **CSV**: `quotaState`, `quotaPercentLeft`, `quotaPeakActive` columns on every
+  sample row. The report (`perQuotaStateSlopes`/`quotaStateDurations` in
+  `report.ts`) fits the post-GC slope independently per quota state and states
+  how long the run spent in each — the heap-vs-uptime question stays
+  answerable even while load is intentionally reduced.
+- **Test seam**: `HEAP_SOAK_INJECT_QUOTA_SEQUENCE` (env, a JSON array of
+  `ZaiQuotaReading`) substitutes the real command in `quota-poll.ts` — each
+  call advances one step, holding on the last entry once exhausted. Used by
+  Gate 1 to drive normal → throttled → paused → normal deterministically.
+
 ## Lane C disabled
 
-Pi's `~/.pi/agent/models.json` `providers` map has `openai-codex, glm-coding,
-kimi-subscription, zai, nvidia, github-copilot, clinepass, opencode-go,
-openrouter` — **no `commandcode` entry**. Command Code is a standalone-CLI
-runtime family in this repo (`server/src/command-code/*`), not an HTTP
-endpoint Pi's model resolution (`provider/model-name` → `getModelRuntime().getModel(provider, name)`
-in `server/src/pi/pi-service.ts`) can address without server code changes,
-which are out of scope for this harness. Lane C's weight is redistributed to
-A and B by `pickLane`'s normal "exclude unavailable lanes" behaviour (any
-disabled lane is simply never a candidate).
+A live `commandcode` Pi provider **does** exist — registered at runtime by
+the `~/.pi/agent/extensions/commandcode-provider` Pi extension (confirmed
+live: the disposable server's boot log lists `commandcode` under "Available
+providers (with auth)", meaning a Command Code API key resolved on this
+host). Lane C is disabled anyway, for reasons more specific than "no
+provider":
+
+1. Of the 3 free model ids named for lane C, only `poolside/laguna-s-2.1-free`
+   actually resolves in the live-generated catalogue
+   (`~/.pi/agent/extensions/commandcode-provider/models.ts`, 47 models).
+   `stealth/space-bunny-alpha` and `ling-3.0-flash-sante:free` are **absent**
+   from it — the lane can't be built as specified (with fallbacks) regardless.
+2. That catalogue reports `cost: {input:0,output:0}` **uniformly for every one
+   of the 47 models**, including unambiguously paid ones (Kimi-K3, GLM-5.3,
+   Qwen3.8-Max, DeepSeek-v4-Pro, …) — there is no machine-checkable signal
+   this harness could use to *guarantee* a 24h unattended run only ever
+   dispatches the one free id and never a paid one.
+3. The Command Code account has **~7% monthly credit left**. An accidental
+   paid call (a future catalogue regeneration reordering ids, a routing
+   quirk) is a real financial risk for a lane that is best-effort and
+   non-load-bearing by design (per the owner amendment above).
+
+Disabling is the conservative call the task explicitly allows ("if lane C
+cannot work cleanly, disable it and report why"). Lane C's weight is
+redistributed to A and B by `pickLane`'s normal "exclude unavailable lanes"
+behaviour (any disabled lane is simply never a candidate) — see
+`applyForcedBadLanes`/`enabledLanes` in `lanes.ts`.
 
 ## Commands
 

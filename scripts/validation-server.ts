@@ -147,6 +147,12 @@ async function main(): Promise<void> {
     ], path.join(os.tmpdir(), 'pi-web-ui-validation-port-locks'));
     process.once('exit', () => portReservation.release());
     const [port, claudeWsPort, claudeHookPort, opencodePort] = portReservation.ports.map(String);
+    // Opt-in Node inspector for the dedicated server child, used by
+    // scripts/heap-soak/ to attach Chrome DevTools Protocol (forced GC,
+    // heap snapshots, process.memoryUsage()) to the exact process holding
+    // the heap under test. Loopback-only by construction (127.0.0.1); never
+    // widen this to 0.0.0.0. Off by default — no other caller passes it.
+    const inspectPort = explicitPort(validationArgs, '--inspect-port', 'PI_WEB_UI_VALIDATION_INSPECT_PORT');
 
     for (const dir of [
       'watches',
@@ -229,12 +235,6 @@ async function main(): Promise<void> {
       PI_WEB_UI_VALIDATION_RECORD_DIR: validationDir,
       PI_WEB_UI_VALIDATION_BOUND_PORT: port,
     };
-    // Opt-in Node inspector for the dedicated server child, used by
-    // scripts/heap-soak/ to attach Chrome DevTools Protocol (forced GC,
-    // heap snapshots, process.memoryUsage()) to the exact process holding
-    // the heap under test. Loopback-only by construction (127.0.0.1); never
-    // widen this to 0.0.0.0. Off by default — no other caller passes it.
-    const inspectPort = explicitPort(validationArgs, '--inspect-port', 'PI_WEB_UI_VALIDATION_INSPECT_PORT');
     let child: ChildProcess;
     try {
       // The tsx loader runs in-process for this entry shape (single process,

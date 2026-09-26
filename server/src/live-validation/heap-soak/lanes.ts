@@ -43,18 +43,30 @@ export const LANE_DEFINITIONS: LaneDefinition[] = [
   },
   {
     name: 'C',
-    label: 'Command Code FREE models via Pi commandcode provider (best-effort; congested — never load-bearing)',
+    label: 'Command Code FREE models via Pi commandcode provider (declined — see disabledReason)',
     weight: 0.15,
     runtime: 'pi',
-    modelIds: ['commandcode/poolside/laguna-s-2.1-free', 'commandcode/stealth/space-bunny-alpha', 'commandcode/inclusionai/ling-3.0-flash-sante:free'],
+    modelIds: ['commandcode/poolside/laguna-s-2.1-free'],
     enabled: false,
     isBackbone: false,
-    maxConcurrent: 2,
+    maxConcurrent: 1,
     disabledReason:
-      'Pi has no `commandcode` model provider (checked live ~/.pi/agent/models.json providers: '
-      + 'openai-codex, glm-coding, kimi-subscription, zai, nvidia, github-copilot, clinepass, opencode-go, openrouter — '
-      + 'no commandcode entry); Command Code is a separate standalone-CLI runtime family in this repo '
-      + '(server/src/command-code/*), not an HTTP provider Pi can address via models.json without server code changes.',
+      'A live `commandcode` Pi provider DOES exist — it is registered at runtime by the '
+      + '~/.pi/agent/extensions/commandcode-provider Pi extension (confirmed live: the disposable server\'s '
+      + '"Available providers (with auth)" log line lists `commandcode`, meaning a Command Code API key was '
+      + 'resolvable on this host). But it is deliberately left disabled for this harness because: '
+      + '(1) of the 3 free model ids named for lane C, only `poolside/laguna-s-2.1-free` actually resolves in the '
+      + 'live-generated catalogue (~/.pi/agent/extensions/commandcode-provider/models.ts) — '
+      + '`stealth/space-bunny-alpha` and `ling-3.0-flash-sante:free` are absent from it entirely, so the lane '
+      + 'cannot be built as specified (with fallbacks) regardless; '
+      + '(2) that catalogue reports `cost: {input:0,output:0}` uniformly for EVERY one of its 47 models, including '
+      + 'unambiguously paid ones (e.g. Kimi-K3, GLM-5.3, Qwen3.8-Max, DeepSeek-v4-Pro) — so there is no '
+      + 'machine-checkable signal this harness could use to guarantee a 24h unattended run only ever dispatches '
+      + 'the one free id, never a paid one; '
+      + '(3) the account has ~7% monthly credit left, so an accidental paid call (a future catalogue regeneration '
+      + 'reordering ids, a routing/fallback quirk) is a real financial risk for a lane that is best-effort and '
+      + 'non-load-bearing by design. Disabling is the conservative call the task explicitly allows '
+      + '("if lane C cannot work cleanly, disable it and report why").',
   },
 ];
 

@@ -23,12 +23,21 @@ import { notify } from './telegram.js';
 import { takeSample, writeHeartbeat } from './sampler.js';
 import { runWave, type DriverState } from './driver.js';
 import { sweepOrphans } from './orphan-sweep.js';
+import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
 import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
 import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { leastSquaresSlope, type SlopePoint } from '../../server/src/live-validation/heap-soak/slope.js';
+import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, nextStateOnPollFailure, type QuotaState, type ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
 import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
 import { buildReport, parseSampleCsv, renderReportMarkdown } from '../../server/src/live-validation/heap-soak/report.js';
+
+/** Default poll cadence for the zai quota guard: every 10 min in the full run, every 30s in the compressed micro schedule. */
+function quotaPollIntervalMs(mode: 'micro' | 'full'): number {
+  const override = Number(process.env.HEAP_SOAK_QUOTA_POLL_INTERVAL_MS ?? '');
+  if (Number.isFinite(override) && override > 0) return override;
+  return mode === 'micro' ? 30_000 : 10 * 60_000;
+}
 
 function getFlag(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
@@ -76,21 +85,64 @@ async function main(): Promise<void> {
   let anomalyHeapPinged = false;
   let stopped = false;
 
+  // zai quota guard (owner amendment 2026-09-26). State is persisted so a
+  // supervisor restart resumes the same state rather than resetting to
+  // 'normal' (which would silently un-throttle/un-pause across a kill).
+  let quotaState: QuotaState = state.quotaState ?? 'normal';
+  let quotaConsecutiveFailures = state.quotaConsecutiveFailures ?? 0;
+  let lastQuotaPollAtMs = state.lastQuotaPollAtMs ?? 0;
+  let lastQuotaReading: ZaiQuotaReading | undefined;
+
   const persist = () => {
     state.laneBreakers = Object.fromEntries(driverState.breakers) as typeof state.laneBreakers;
     state.firedCheckpointOffsetsMs = [...firedCheckpoints];
     state.firedSnapshotOffsetsMs = [...firedSnapshots];
+    state.quotaState = quotaState;
+    state.quotaConsecutiveFailures = quotaConsecutiveFailures;
+    state.lastQuotaPollAtMs = lastQuotaPollAtMs;
     state.lastSampleAt = new Date().toISOString();
     saveRunState(runStatePath, state);
   };
+
+  /** Poll now, apply the hysteresis/failure state machine, ping ONCE per state change, persist. */
+  async function pollQuotaNow(): Promise<void> {
+    const previous = quotaState;
+    try {
+      const reading = await pollZaiQuota();
+      lastQuotaReading = reading;
+      quotaConsecutiveFailures = 0;
+      quotaState = nextQuotaState(quotaState, reading, DEFAULT_QUOTA_THRESHOLDS, Date.now());
+    } catch (error) {
+      const result = nextStateOnPollFailure(quotaState, quotaConsecutiveFailures);
+      quotaState = result.state;
+      quotaConsecutiveFailures = result.consecutiveFailures;
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `zai quota poll failed (${quotaConsecutiveFailures} consecutive): ${error instanceof Error ? error.message : String(error)}` });
+    }
+    lastQuotaPollAtMs = Date.now();
+    if (quotaState !== previous) {
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'quota_state_change', detail: `${previous} -> ${quotaState}` });
+      await notify(
+        quotaState === 'paused' ? 'blocked' : 'milestone',
+        `zai quota: ${previous} -> ${quotaState}`,
+        lastQuotaReading ? `percentLeft=${lastQuotaReading.percentLeft ?? 'n/a'} peakActive=${lastQuotaReading.peakActive}` : 'poll failed 3x',
+      );
+    }
+    persist();
+  }
 
   async function samplerLoop(): Promise<void> {
     const sampleIntervalMs = state.mode === 'micro' ? 10_000 : 120_000;
     while (!stopped && !isRunComplete(elapsedNow(), schedule)) {
       const elapsedMs = elapsedNow();
       const phase = phaseAt(elapsedMs, schedule);
+      if (Date.now() - lastQuotaPollAtMs >= quotaPollIntervalMs(state.mode)) {
+        await pollQuotaNow();
+      }
       try {
         const sample = await takeSample({ inspector, client, runStartMs, phase, diskCheckPath: state.runDir });
+        sample.quotaState = quotaState;
+        sample.quotaPercentLeft = lastQuotaReading?.percentLeft;
+        sample.quotaPeakActive = lastQuotaReading?.peakActive;
         appendSampleRow(state.csvPath, HEAP_SAMPLE_CSV_HEADER, { ...sample });
         writeHeartbeat(path.join(state.runDir, 'sampler.heartbeat'));
 
@@ -141,14 +193,18 @@ async function main(): Promise<void> {
 
   async function driverLoop(): Promise<void> {
     while (!stopped && !isRunComplete(elapsedNow(), schedule)) {
+      // "once before each wave", per the amendment — unconditional, regardless of the timer above.
+      await pollQuotaNow();
+      const effectiveTarget = effectiveBackboneTarget(DEFAULT_WAVE_TARGET_CONFIG.targetPerWave, quotaState);
       const waveResult = await runWave({
         client,
         runId: state.runId,
         childWorkspaceRoot: path.join(state.runDir, 'children'),
         lanes,
-        waveTargetConfig: DEFAULT_WAVE_TARGET_CONFIG,
+        waveTargetConfig: { ...DEFAULT_WAVE_TARGET_CONFIG, targetPerWave: effectiveTarget },
         logEvent: log,
         runStartMs,
+        backbonePaused: quotaState === 'paused',
       }, driverState, schedule.waveMs);
       state.cycleCount += 1;
       persist();

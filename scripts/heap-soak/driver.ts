@@ -44,6 +44,14 @@ export interface DriverOptions {
   runStartMs: number;
   /** Injectable for tests / deterministic lane selection; defaults to Math.random. */
   rng?: () => number;
+  /**
+   * zai quota guard (owner amendment 2026-09-26): when true, the backbone
+   * lane is excluded from ORGANIC per-iteration dispatch (it stays in `lanes`
+   * so top-up accounting still knows who the backbone is; top-up itself is
+   * separately suppressed by driving `waveTargetConfig.targetPerWave` to 0
+   * via `effectiveBackboneTarget`).
+   */
+  backbonePaused?: boolean;
 }
 
 export interface DriverState {
@@ -183,9 +191,10 @@ export async function runWave(
     }).catch(() => { set.delete(promise); });
   };
 
+  const dispatchCandidates = options.backbonePaused ? lanes.filter((l) => !l.isBackbone) : lanes;
   const waveEnd = Date.now() + waveMs;
   while (Date.now() < waveEnd) {
-    const lane = pickLane(lanes, state.breakers, Date.now(), options.rng);
+    const lane = pickLane(dispatchCandidates, state.breakers, Date.now(), options.rng);
     if (lane && inFlightCount(lane.name) < lane.maxConcurrent) {
       dispatch(lane);
     }
