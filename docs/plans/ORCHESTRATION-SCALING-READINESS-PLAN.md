@@ -44,7 +44,7 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 ## 3. Owner decisions recorded 2026-09-26
 
 - Scale-up of Internal API orchestration is intended in the near future.
-- A 24-hour heap soak runs first. Load uses the Pi runtime with `zai/glm-5.3-flash` (off-peak), OpenRouter free models (owner permission granted **for the soak only**) and Command Code free models via the Pi runtime (only in the soak's isolated config; never paid Command Code routes).
+- A 24-hour heap soak runs first. Load uses the Pi runtime with `zai/glm-5.3-flash` (off-peak) as the backbone, plus best-effort OpenRouter free models (owner permission granted **for the soak only**) and Command Code free models via the Pi runtime (only in the soak's isolated config; never paid Command Code routes). Free models can be congested (very slow or erroring), so neither the run nor its results may depend on them.
 - The soak must be robust: gated rehearsals before the long run, self-healing, reattach without restarting the server, early checkpoints, and a usable partial result.
 - Code for the soak harness is written by a delegated child and reviewed by the owner's review session.
 - No time estimates in chat or plans.
@@ -111,7 +111,7 @@ Within a stage, steps without a dependency may run in parallel with separate own
 **Definition of victory.**
 - [ ] Gate 0 and Gate 1 evidence re-run by the review session, both passing, including: supervisor killed and reattached to the same server PID with no CSV reset; a failing lane's circuit opens while load continues; the orphan sweep removes a planted child; production files checksummed unchanged.
 - [ ] The 24 h run completes with post-GC samples covering at least 95% of sampling intervals, and no gap longer than three intervals except for declared snapshots.
-- [ ] Load really happened: children created, prompted with at least one tool call each, and deleted in every cycle (counts in the report); at least two model lanes served work.
+- [ ] Load really happened: children created, prompted with at least one tool call each, and deleted in every cycle (counts in the report), meeting the per-cycle target. The GLM 5.3 Flash lane is the backbone and tops up any shortfall. The free OpenRouter and Command Code lanes are best-effort (often congested): their failures, timeouts and slowness are reported per lane, and neither the run's completion nor the verdict depends on them.
 - [ ] `report.md` states the post-GC heap slope overall and per phase, idle-return behaviour, peak heap, lag statistics and a verdict against the rule written in the report **before** the run started.
 - [ ] Snapshot comparison lists the top growing constructors, or explains precisely why it could not and leaves DevTools instructions.
 - [ ] No production state changed (checksums before and after); all soak units stopped; the run directory is preserved.
