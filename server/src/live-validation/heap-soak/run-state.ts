@@ -37,6 +37,8 @@ export interface RunState {
   lastQuotaPollAtMs?: number;
   /** Production-write audit marker path (owner amendment 2026-09-26), created once at launch. */
   prodAuditMarkerPath?: string;
+  /** Position in HEAP_SOAK_INJECT_QUOTA_SEQUENCE (Gate 1 test seam only) — persisted so a supervisor restart doesn't replay the sequence from the start. */
+  quotaInjectedIndex?: number;
 }
 
 export function serializeRunState(state: RunState): string {

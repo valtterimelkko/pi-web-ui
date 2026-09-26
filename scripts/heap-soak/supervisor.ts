@@ -96,6 +96,7 @@ async function main(): Promise<void> {
   let quotaConsecutiveFailures = state.quotaConsecutiveFailures ?? 0;
   let lastQuotaPollAtMs = state.lastQuotaPollAtMs ?? 0;
   let lastQuotaReading: ZaiQuotaReading | undefined;
+  let quotaInjectedIndex = state.quotaInjectedIndex ?? 0;
 
   const persist = () => {
     state.laneBreakers = Object.fromEntries(driverState.breakers) as typeof state.laneBreakers;
@@ -104,6 +105,7 @@ async function main(): Promise<void> {
     state.quotaState = quotaState;
     state.quotaConsecutiveFailures = quotaConsecutiveFailures;
     state.lastQuotaPollAtMs = lastQuotaPollAtMs;
+    state.quotaInjectedIndex = quotaInjectedIndex;
     state.lastSampleAt = new Date().toISOString();
     saveRunState(runStatePath, state);
   };
@@ -128,7 +130,8 @@ async function main(): Promise<void> {
   async function pollQuotaNowUnlocked(): Promise<void> {
     const previous = quotaState;
     try {
-      const reading = await pollZaiQuota();
+      const { reading, nextIndex } = await pollZaiQuota(quotaInjectedIndex);
+      quotaInjectedIndex = nextIndex;
       lastQuotaReading = reading;
       quotaConsecutiveFailures = 0;
       quotaState = nextQuotaState(quotaState, reading, DEFAULT_QUOTA_THRESHOLDS, Date.now());
