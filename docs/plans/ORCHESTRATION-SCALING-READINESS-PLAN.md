@@ -333,7 +333,7 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
 1. This plan: §1 intent, §3 decisions, §4 contract, §9 status ledger.
 2. [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md): evidence, audits, what was corrected and why.
 3. The evidence bundles of the steps finished since the last review moment, in `docs/plans/execution-reports/orchestration-scaling/`.
-4. For R1: `scripts/heap-soak/README.md` and the soak run directory `/root/.pi-web-ui/validation/heap-soak/<run-id>/` (`report.md`, `samples.csv`, `events.jsonl`, `snapshots/`, `run-state.json`).
+4. For R1: `scripts/heap-soak/README.md` and the soak run directory `/root/.pi-web-ui/validation/heap-soak/full-1790411484255-ec8b813c/` (`report.md`, `samples.csv`, `events.jsonl`, `snapshots/`, `run-state.json`). Check status with `npx tsx scripts/heap-soak/cli.ts status --run-id full-1790411484255-ec8b813c`. If `report.md` is missing after the window, run `… cli.ts report --run-id full-1790411484255-ec8b813c`; it works on partial data. If the server died mid-run, that is a result: read `events.jsonl` and the threshold snapshots. Compare snapshots by constructor (the report's snapshot section), and read `A1-harness.md` §11 for the early Gate 1 signal.
 5. `agent-os recall "orchestration scaling readiness"` for anything captured since.
 
 **Durable locations:**
@@ -368,12 +368,13 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | Review moment | Date | Held by | Decisions and plan changes |
 | --- | --- | --- | --- |
 | (plan creation) | 2026-09-26 | `fc35fbf1-7f12-4962-9243-da710409fb56` | Plan created from the deep review. Soak design amended three times by the owner: free lanes are best-effort, the zai quota guard, and no synthetic data in Agent OS. |
+| (soak launch) | 2026-09-26 | `fc35fbf1-7f12-4962-9243-da710409fb56` | Harness verified and merged; 24 h soak launched on owner go. Owner-approved cleanup: 97 synthetic `memory-vault/derived/inject/sessions/*.json` files from pre-fix rehearsals deleted (list in `/root/jev-session-eval/runs/piwebui-review-2026-09-26-data/vault-soak-files-removed.txt`); 6 usage-ledger recall lines left in place (append-only history). Owner's next steps: a fresh Opus session to re-check this plan's comprehensiveness, then a fresh Opus session for R1 once the soak window ends. |
 
 ## 9. Status ledger
 
 | Step | Status | Evidence | Notes |
 |---|---|---|---|
-| A1 | harness merged to master (`154c1f50`); Gate 0 and a clean Gate 1 (16/16) passed; parent Gate 0 re-run on master in progress; 24 h run awaiting owner go | [`A1-harness.md`](./execution-reports/orchestration-scaling/A1-harness.md) | Rehearsals found and fixed seven harness bugs and three Agent OS leak vectors. Early signal: post-GC heap 146 → 620 MB over 84 child create/delete cycles in the 20-min Gate 1 (not yet a conclusion) |
+| A1 | **24 h run in progress**: run `full-1790411484255-ec8b813c`, started 2026-09-26 08:31 UTC, window ends 2026-09-27 08:31 UTC (from master `4159e68d`). Harness merged (`154c1f50`); Gate 0 (child and parent re-run on master) and a clean Gate 1 (16/16) passed | [`A1-harness.md`](./execution-reports/orchestration-scaling/A1-harness.md); run dir `/root/.pi-web-ui/validation/heap-soak/full-1790411484255-ec8b813c/` | Early signal from Gate 1: post-GC heap 146 → 620 MB over 84 child create/delete cycles in 20 min (not yet a conclusion). R1 is due once the window ends |
 | A2 | not started | — | |
 | R1 | pending | — | Held in the owner review session |
 | B1–B4 | not started | — | |
