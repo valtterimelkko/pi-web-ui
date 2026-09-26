@@ -69,6 +69,7 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   mkdirSync(paths.childWorkspaceRoot, { recursive: true });
   mkdirSync(paths.snapshotDir, { recursive: true });
   mkdirSync(paths.fakeHomeDir, { recursive: true, mode: 0o700 });
+  mkdirSync(path.join(paths.fakeHomeDir, 'agent-os-memory-vault'), { recursive: true, mode: 0o700 });
   mkdirSync(paths.boardStoreDir, { recursive: true });
   mkdirSync(paths.bgTasksDir, { recursive: true });
   // validationDir itself is normally created lazily by validation-server.ts's
@@ -160,6 +161,12 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
       AGENT_OS_STUB_LOG: paths.agentOsStubLog,
       AGENT_OS_INJECT_LOG: paths.agentOsInjectLog,
       BOARD_STORE_DIR: paths.boardStoreDir,
+      // Third leak vector: a child can call the real CLI repo-anchored
+      // (`npm --prefix /root/agent-os run agent-os …`, the form the skills
+      // document), which bypasses both AGENT_OS_BIN and the PATH stub. Agent OS
+      // resolves its vault from AGENT_OS_VAULT_ROOT first, so any such call
+      // writes to this per-run vault instead of the real one.
+      AGENT_OS_VAULT_ROOT: path.join(paths.fakeHomeDir, 'agent-os-memory-vault'),
       // watch-wake extension: explicit isolation on top of the HOME redirect —
       // this is the one that could otherwise reach the REAL production socket.
       PI_WEB_UI_WATCH_WAKE_SOCKET: path.join(paths.validationDir, 'internal-api.sock'),
