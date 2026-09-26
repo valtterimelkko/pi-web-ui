@@ -32,6 +32,7 @@ import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, next
 import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
 import { buildReport, parseSampleCsv, renderReportMarkdown } from '../../server/src/live-validation/heap-soak/report.js';
 import { snapshotComparisonSection } from './snapshot-diff.js';
+import { nextHeapThresholdSnapshot } from '../../server/src/live-validation/heap-soak/heap-threshold-snapshots.js';
 import { runProductionWriteAudit } from './prod-audit-io.js';
 import { boardWhoUnderRunDir } from './board-check.js';
 import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
@@ -191,6 +192,19 @@ async function main(): Promise<void> {
           }
         } else {
           anomalyHeapPinged = false;
+        }
+        const thresholdMB = nextHeapThresholdSnapshot(sample.heapUsedBytes, state.firedHeapThresholdsMB ?? []);
+        if (thresholdMB !== undefined) {
+          state.firedHeapThresholdsMB = [...(state.firedHeapThresholdsMB ?? []), thresholdMB];
+          persist();
+          try {
+            mkdirSync(path.join(state.runDir, 'snapshots'), { recursive: true });
+            const snapshotPath = path.join(state.runDir, 'snapshots', `snapshot-heap-${thresholdMB}MB-${elapsedMs}ms.heapsnapshot`);
+            const result = await inspector.takeHeapSnapshot(snapshotPath);
+            await notify('milestone', `heap snapshot at post-GC heap >= ${thresholdMB}MB`, `${result.chunkCount} chunks, ${result.bytesWritten} bytes -> ${snapshotPath}`);
+          } catch (error) {
+            log({ ts: new Date().toISOString(), elapsedMs, lane: 'A', kind: 'anomaly', detail: `threshold snapshot failed: ${error instanceof Error ? error.message : String(error)}` });
+          }
         }
       } catch (error) {
         log({ ts: new Date().toISOString(), elapsedMs, lane: 'A', kind: 'anomaly', detail: `sample failed: ${error instanceof Error ? error.message : String(error)}` });

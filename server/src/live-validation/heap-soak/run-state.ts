@@ -33,6 +33,8 @@ export interface RunState {
   /** Checkpoint/snapshot offsets (ms since start) already fired — tolerant of a supervisor restart. */
   firedCheckpointOffsetsMs?: number[];
   firedSnapshotOffsetsMs?: number[];
+  /** Heap-threshold snapshots already taken (MB), see heap-threshold-snapshots.ts. */
+  firedHeapThresholdsMB?: number[];
   /** zai quota guard (owner amendment 2026-09-26) — persisted so a supervisor restart resumes the same state, not 'normal'. */
   quotaState?: 'normal' | 'throttled' | 'paused';
   quotaConsecutiveFailures?: number;
