@@ -16,6 +16,8 @@
 
 > ## Programme pause — 2026-08-20
 >
+> **Update 2026-09-26:** the owner now intends to scale Internal API orchestration. Resumption of Phase 8 is routed through [`ORCHESTRATION-SCALING-READINESS-PLAN.md`](./ORCHESTRATION-SCALING-READINESS-PLAN.md) (Stage D, authorised only at its review moment R3). Until then the pause below stands.
+>
 > **Phases 8 and 9 are paused by owner decision. This plan is not abandoned, not
 > failed, and not waiting for anyone to pick it up.** Everything already recorded
 > as complete stays complete and in service; nothing needs unwinding or

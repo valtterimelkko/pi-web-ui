@@ -1,7 +1,7 @@
 # Plan: Internal API Capacity Scaling & Multi-Agent Orchestration Robustness
 
 > **File:** `docs/plans/INTERNAL-API-CAPACITY-SCALING-AND-ORCHESTRATION-ROBUSTNESS-PLAN.md`  
-> **Status:** READY FOR EXECUTION — full end-to-end owner authority granted 2026-09-11; awaiting goal-engine start  
+> **Status:** EXECUTED 2026-09-11 — Tier 2 admission (16 active / 14 API turns) and service limits are live (`7dc2d2e6`; resolution recorded in `343577b8`). Follow-on work for heavier orchestration: [`ORCHESTRATION-SCALING-READINESS-PLAN.md`](./ORCHESTRATION-SCALING-READINESS-PLAN.md).  
 > **Target Service:** `pi-web-ui.service` (Port 3456)  
 > **Target Workload:** High-concurrency multi-agent orchestration, Benchmark 1 (`execute_children.py`), Benchmark 2 (`supervisor.py`), and parallel specialist subagent dispatch.  
 > **Related Incidents & Observations:** `docs/archive/observations/ADMISSION-CAPACITY-BOTTLENECK-OBSERVATION.md`, `docs/plans/execution-reports/INTERNAL-API-CAPACITY-REPAIR-2026-09-07.md`, commit `87e0b7b`.
