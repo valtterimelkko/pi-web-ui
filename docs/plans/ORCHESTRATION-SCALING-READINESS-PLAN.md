@@ -44,7 +44,7 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 ## 3. Owner decisions recorded 2026-09-26
 
 - Scale-up of Internal API orchestration is intended in the near future.
-- A 24-hour heap soak runs first. Load uses the Pi runtime with `zai/glm-5.3-flash` (off-peak) as the backbone, plus best-effort OpenRouter free models (owner permission granted **for the soak only**) and Command Code free models via the Pi runtime (only in the soak's isolated config; never paid Command Code routes). Free models can be congested (very slow or erroring), so neither the run nor its results may depend on them.
+- A 24-hour heap soak runs first. Load uses the Pi runtime with `zai/glm-5.3-flash` (off-peak) as the backbone, plus best-effort OpenRouter free models (owner permission granted **for the soak only**) and Command Code free models via the Pi runtime (only in the soak's isolated config; never paid Command Code routes). Free models can be congested (very slow or erroring), so neither the run nor its results may depend on them. The owner uses zai for other work during the soak, so the GLM lane obeys a 5-hour quota guard (read-only `agent-os provider-usage`): it throttles, then pauses, as remaining quota falls and during the GLM peak window, and resumes with hysteresis.
 - The soak must be robust: gated rehearsals before the long run, self-healing, reattach without restarting the server, early checkpoints, and a usable partial result.
 - Code for the soak harness is written by a delegated child and reviewed by the owner's review session.
 - No time estimates in chat or plans.
