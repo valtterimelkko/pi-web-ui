@@ -373,7 +373,7 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 
 | Step | Status | Evidence | Notes |
 |---|---|---|---|
-| A1 | in progress — harness built on branch `heap-soak-harness` (worktree `.claude/worktrees/agent-a26207b83fecf3e94`), Gate 0 passed, Gate 1 final clean attempt running; review-session verification, merge and owner go pending; 24 h run not started | `docs/plans/execution-reports/orchestration-scaling/A1-harness.md` (on the branch) | Seven harness bugs found and fixed by rehearsals, including two Agent OS leak vectors; third vector (repo-anchored CLI) closed by the review session in `0b2d6fb1` |
+| A1 | harness merged to master (`154c1f50`); Gate 0 and a clean Gate 1 (16/16) passed; parent Gate 0 re-run on master in progress; 24 h run awaiting owner go | [`A1-harness.md`](./execution-reports/orchestration-scaling/A1-harness.md) | Rehearsals found and fixed seven harness bugs and three Agent OS leak vectors. Early signal: post-GC heap 146 → 620 MB over 84 child create/delete cycles in the 20-min Gate 1 (not yet a conclusion) |
 | A2 | not started | — | |
 | R1 | pending | — | Held in the owner review session |
 | B1–B4 | not started | — | |
