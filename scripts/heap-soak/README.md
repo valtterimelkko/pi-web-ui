@@ -269,6 +269,22 @@ the backbone lane. Never set this outside an explicit Gate 1 exercise.
   present throughout the run (not a source of *growth*), so it does not
   change the heap-vs-uptime shape the soak is measuring, only its absolute
   baseline slightly.
+- **Second `agent-os` interception layer (found live in Gate 1 attempt 3,
+  2026-09-26)**: `AGENT_OS_BIN` only redirects the `agent-os-inject`
+  extension's own internal spawn calls to the no-op stub. That extension's
+  injected prompt text separately encourages the *model* to run `agent-os
+  recall`/`agent-os capture` itself as an ordinary bash tool call — that
+  resolves via `PATH`, not `AGENT_OS_BIN`, and in attempt 3 it reached the
+  real `/root/.npm-global/bin/agent-os` shim, writing a real child session id
+  (`01a0dc82-55ea-775c-a33b-a2887ed8e671`) into
+  `/root/agent-os/memory-vault/evidence/usage/usage-ledger.jsonl` — caught by
+  the production-write audit, which is exactly what it is for. Fixed by
+  creating `<run>/bin/agent-os`, a symlink to the same
+  `agent-os-stub.mjs` used for `AGENT_OS_BIN`, and prepending `<run>/bin` onto
+  the server unit's `PATH`. Any invocation of the bare `agent-os` command —
+  whether spawned by the extension via `AGENT_OS_BIN` or run directly by the
+  model via a bash tool call — now resolves to the stub first, regardless of
+  which mechanism launched it.
 
 ## Known limitations
 

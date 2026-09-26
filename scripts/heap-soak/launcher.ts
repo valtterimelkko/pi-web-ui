@@ -4,7 +4,7 @@
  * systemd unit (with the production heap cap + --inspect), wait for it to be
  * observably up, and write the initial run-state.json.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
@@ -62,6 +62,7 @@ export interface LaunchOptions {
 }
 
 export async function launchDisposableServer(runId: string, mode: 'micro' | 'full', options: LaunchOptions = {}): Promise<LaunchResult> {
+  const root = repoRoot();
   const paths = resolveRunPaths(runId);
   mkdirSync(paths.runDir, { recursive: true, mode: 0o700 });
   mkdirSync(paths.workspace, { recursive: true });
@@ -86,6 +87,23 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   // audits the whole run rather than resetting the "since" window.
   const auditMarker = createAuditMarker(paths.runDir);
 
+  // Second agent-os interception layer (found live in a Gate 1 attempt,
+  // 2026-09-26): AGENT_OS_BIN only redirects the agent-os-inject EXTENSION's
+  // own internal spawn calls. The extension's injected prompt text also
+  // encourages the MODEL to run `agent-os recall`/`capture` itself as a bash
+  // tool call — that resolves via PATH, not AGENT_OS_BIN, and reached the
+  // REAL /root/.npm-global/bin/agent-os shim, writing a real child session id
+  // into /root/agent-os/memory-vault/evidence/usage/usage-ledger.jsonl. Fixed
+  // by prepending a directory containing a same-named `agent-os` stub (the
+  // identical no-op script) onto PATH, so ANY invocation of the bare command
+  // — extension-spawned or model-run — resolves to the stub first.
+  const pathBinDir = path.join(paths.runDir, 'bin');
+  mkdirSync(pathBinDir, { recursive: true });
+  const stubTarget = path.join(pathBinDir, 'agent-os');
+  try { unlinkSync(stubTarget); } catch { /* fine if it doesn't exist yet */ }
+  symlinkSync(path.join(root, 'scripts', 'heap-soak', 'agent-os-stub.mjs'), stubTarget);
+  const isolatedPath = `${pathBinDir}:${process.env.PATH ?? '/usr/bin:/bin'}`;
+
   // Registry seeding (parent amendment 2026-09-26, on by default): mimic
   // production's registry size (~1,700 entries) so the disposable server's
   // boot and session-listing cost matches production rather than a
@@ -109,7 +127,6 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   const httpPort = await findFreeTcpPort();
   const serverUnit = serverUnitName(runId);
   const supervisorUnit = supervisorUnitName(runId);
-  const root = repoRoot();
 
   await startTransientUnit({
     unitName: serverUnit,
@@ -137,7 +154,7 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
       // real /root — Node's os.homedir() reads $HOME first on POSIX. Belt and
       // braces below with the explicit overrides these extensions also honour.
       HOME: paths.fakeHomeDir,
-      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      PATH: isolatedPath,
       // agent-os-inject: no real `agent-os` process may run for a soak child.
       AGENT_OS_BIN: path.join(root, 'scripts', 'heap-soak', 'agent-os-stub.mjs'),
       AGENT_OS_STUB_LOG: paths.agentOsStubLog,
