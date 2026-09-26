@@ -4,7 +4,7 @@
  * systemd unit (with the production heap cap + --inspect), wait for it to be
  * observably up, and write the initial run-state.json.
  */
-import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
@@ -185,9 +185,22 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   const socketPath = path.join(paths.validationDir, 'internal-api.sock');
   const tokenPath = path.join(paths.validationDir, 'internal-api-token');
   // Wait for the token file to exist (the server writes it during boot).
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
+  const tokenDeadline = Date.now() + 20_000;
+  while (Date.now() < tokenDeadline) {
     try { readFileSync(tokenPath); break; } catch { await new Promise((r) => setTimeout(r, 250)); }
+  }
+  // Also wait for the socket ITSELF to exist (found live via Gate 0's
+  // registry-seeding check, 2026-09-26): the server writes the token file
+  // well before it finishes booting far enough to bind the Unix socket
+  // (Command Code init + run-receipt recovery + session registry load all
+  // happen in between), so a caller that only waits on the token file can
+  // still hit `connect ENOENT` on the socket path. Waiting on both before
+  // handing back `client` means every caller downstream (Gate 0, Gate 1, the
+  // driver's first wave) is race-free, not just the ones that happen to run
+  // later in the checklist.
+  const socketDeadline = Date.now() + 20_000;
+  while (Date.now() < socketDeadline && !existsSync(socketPath)) {
+    await new Promise((r) => setTimeout(r, 250));
   }
   const client = new InternalApiClient({ socketPath, tokenPath });
 
