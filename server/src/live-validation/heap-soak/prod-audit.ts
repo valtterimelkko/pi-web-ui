@@ -4,18 +4,21 @@
  * production root is NOT itself proof of harness interference — these hosts
  * see real, ambient traffic (see isolation.ts's session-registry.json finding).
  * The precise proof is: a file that changed DURING the run and whose content
- * references a marker ONLY a soak child emits — the run's isolated cwd/run dir
- * path, or one of its server-issued child session ids.
+ * references a marker ONLY a soak child emits — the child's isolated workspace
+ * path (`<runDir>/children/<lane>-<id>`, the child's cwd) or one of its
+ * server-issued child session ids.
  *
- * B0 defect 5: the bare run id is deliberately NOT a marker. It appears in
- * operator sessions, Agent OS captures and reports that merely DISCUSS the run,
- * which produced seven false "LEAK DETECTED" hits in A1. A genuine
- * soak-attributable write carries the isolated cwd path or a session id.
+ * B0 defect 5: neither the bare run id NOR the bare run-dir path is a marker.
+ * Both appear in operator sessions, orchestration logs (e.g. the harness's own
+ * bg-task logs) and Agent OS captures that merely DISCUSS the run. The child
+ * workspace path is emitted by a soak child's own cwd; a file that mentions
+ * only the run dir is not flagged.
  *
  * File discovery (`find -newer`) and content grep are I/O
  * (scripts/heap-soak/prod-audit-io.ts); this module is the pure decision logic,
  * kept unit-testable.
  */
+import path from 'node:path';
 
 export interface NeedleMatch {
   path: string;
@@ -41,10 +44,10 @@ export function findNeedleMatches(
 }
 
 /**
- * Build the needle list for a run: its isolated run-dir path (which only soak
- * children's cwd/workspace uses) and every child session id created so far.
- * The bare run id is intentionally excluded — see the module doc comment.
+ * Build the needle list for a run: the child workspace path (which only a soak
+ * child's cwd uses) and every child session id created so far. Neither the bare
+ * run id nor the bare run-dir path is included — see the module doc comment.
  */
 export function buildAuditNeedles(runDir: string, sessionIds: readonly string[]): string[] {
-  return [runDir, ...sessionIds];
+  return [path.join(runDir, 'children'), ...sessionIds];
 }

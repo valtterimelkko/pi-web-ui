@@ -46,7 +46,7 @@ it?** heapUsed alone is not proof of a leak — it includes uncollected garbage
 | Server liveness | `liveness-io.ts` + `server-death.ts` (pure) | Reads the unit's `ActiveState`/`Result`/`ExecMainStatus` and a bounded journal tail, tests socket reachability, and decides death from the recorded unit/PID identity (never from the sampler's own failures). A transient socket blip is tolerated for up to 3 consecutive observations. |
 | Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase + per-quota-state), idle-return-to-baseline, sample coverage, the verdict rule itself, lane stats, verdict; and a prominent `SERVER DIED` header when the run ended as `server_died`. |
 | Snapshot summary + diff | `snapshot-parse.ts` (pure) + `snapshot-retainers.ts` (pure) + `snapshot-selection.ts` (pure) + `snapshot-diff.ts` + `snapshot-diff-worker.ts` | `.heapsnapshot` structural parser plus retainer-path BFS and a cut test. Uses the latest **valid** (non-empty, parseable) snapshot — a 0-byte declared snapshot is skipped and named — and runs the parse+analysis in a separate `--max-old-space-size=12288` process. |
-| Production-write audit + board check | `prod-audit.ts` (pure) + `prod-audit-io.ts` + `board-check.ts` | Fast `find -newer <marker>` scan across the guarded production roots, content-checked for markers only a soak child emits (the isolated run-dir path and child session ids — **not** the bare run id, which false-positives on operator discussion); `agent-os board who --json` filtered to this run's dir. |
+| Production-write audit + board check | `prod-audit.ts` (pure) + `prod-audit-io.ts` + `board-check.ts` | Fast `find -newer <marker>` scan across the guarded production roots, content-checked for markers only a soak child emits (the isolated **child-workspace** path `<runDir>/children/…` and child session ids — **neither** the bare run id **nor** the bare run-dir path, both of which false-positive on operator discussion and orchestration logs); `agent-os board who --json` filtered to this run's dir. |
 
 ## B0 harness fixes (2026-09-27)
 
@@ -81,9 +81,12 @@ fixes them:
    before the 4 GiB V8 heap cap binds. See `resources.ts` for the measured A1
    grounding and the arithmetic.
 5. **Production-write audit.** Attribution is by markers only a soak child
-   emits — the isolated run-dir/cwd path and child session ids — not the bare
-   run id, which false-positived on operator sessions and Agent OS captures
-   that merely discussed the run.
+   emits — the isolated child-workspace path (`<runDir>/children/…`, the
+   child's cwd) and child session ids — not the bare run id (which
+   false-positived on operator sessions and Agent OS captures that merely
+   discussed the run) and not the bare run-dir path (found live at B0: an
+   orchestration bg-task log and the operator transcript quote the run dir but
+   never a child workspace).
 6. **Extension overlays.** `start` and `micro` accept a repeatable
    `--extensions-overlay <dir>` (a single extension dir, or a directory of
    extension dirs). Overlays are copied on top of the isolated agent dir's

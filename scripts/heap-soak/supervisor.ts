@@ -227,6 +227,22 @@ async function main(): Promise<void> {
     persist();
   }
 
+  /**
+   * Independent liveness loop (B0 defect 1): a dedicated timer, so server
+   * death is detected within one interval even when the sampler is blocked on
+   * a dead inspector connection (observed live: a SIGKILL left the sampler's
+   * CDP calls waiting their full timeout, delaying the old in-loop check past
+   * the three-interval target).
+   */
+  async function livenessLoop(): Promise<void> {
+    const intervalMs = 10_000;
+    while (!stopped && !isRunComplete(elapsedNow(), schedule)) {
+      await checkServerLiveness();
+      if (stopped) break;
+      await interruptibleSleep(intervalMs);
+    }
+  }
+
   async function samplerLoop(): Promise<void> {
     const sampleIntervalMs = state.mode === 'micro' ? 10_000 : 120_000;
     while (!stopped && !isRunComplete(elapsedNow(), schedule)) {
@@ -346,7 +362,7 @@ async function main(): Promise<void> {
     }
   }
 
-  await Promise.all([samplerLoop(), driverLoop()]);
+  await Promise.all([samplerLoop(), driverLoop(), livenessLoop()]);
   stopped = true;
   persist();
 

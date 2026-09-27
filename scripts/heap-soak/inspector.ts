@@ -60,6 +60,7 @@ export function listInspectorTargets(port: number): Promise<InspectorTarget[]> {
 export class InspectorClient {
   private ws: WebSocket | undefined;
   private nextId = 1;
+  private closed = false;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private readonly chunkListeners = new Set<(params: { chunk: string }) => void>();
 
@@ -90,7 +91,22 @@ export class InspectorClient {
       this.ws.once('open', () => resolve());
       this.ws.once('error', reject);
       this.ws.on('message', (data) => this.handleMessage(data.toString()));
+      // Fail any in-flight CDP request the moment the connection drops. Without
+      // this, a killed server leaves each `send` waiting its full 30 s timeout,
+      // which delayed B0's server-death detection past the sampling window.
+      this.ws.on('close', () => {
+        this.closed = true;
+        this.rejectAllPending(new Error('inspector connection closed'));
+      });
+      this.ws.on('error', (error) => {
+        this.rejectAllPending(error instanceof Error ? error : new Error(String(error)));
+      });
     });
+  }
+
+  private rejectAllPending(error: Error): void {
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
   }
 
   private handleMessage(raw: string): void {
@@ -111,6 +127,7 @@ export class InspectorClient {
   send<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<T> {
     const ws = this.ws;
     if (!ws) throw new Error('InspectorClient is not connected');
+    if (this.closed) return Promise.reject(new Error('InspectorClient is closed'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
