@@ -243,7 +243,12 @@ interface SinkResolution {
  * the operator. A `file:` target is honoured only when it canonicalises inside
  * the run directory; anything else is refused (correction 02, finding 1).
  */
-function resolveAlertSink(env: NodeJS.ProcessEnv, metricsDir: string, warnings: string[]): SinkResolution {
+function resolveAlertSink(
+  env: NodeJS.ProcessEnv,
+  metricsDir: string,
+  warnings: string[],
+  productionMetricsRoot: string,
+): SinkResolution {
   const configured = env.OBSERVABILITY_HEALTH_ALERT_SINK?.trim();
   const validationMode = isValidationMode(env);
 
@@ -268,6 +273,16 @@ function resolveAlertSink(env: NodeJS.ProcessEnv, metricsDir: string, warnings: 
           description: 'none',
           suppressOperatorNotifications: true,
           refusedReason: `refusing alert sink ${canonical} from a validation server: it is outside the validation run directory (${canonicalRoot})`,
+        };
+      }
+      // Defence in depth (correction 03): even inside the run directory, a sink
+      // inside the production metrics root is production state.
+      if (isPathInside(canonical, productionMetricsRoot)) {
+        return {
+          sink: createNoopAlertSink(),
+          description: 'none',
+          suppressOperatorNotifications: true,
+          refusedReason: `refusing alert sink ${canonical} from a validation server: it is inside the production metrics root (${productionMetricsRoot})`,
         };
       }
       return { sink: createFileAlertSink(filePath), description: `file:${filePath}`, suppressOperatorNotifications: true };
@@ -315,19 +330,25 @@ export function createHealthTelemetryConfig(env: NodeJS.ProcessEnv = process.env
     MIN_HEALTH_METRICS_MAX_FILES, MAX_HEALTH_METRICS_MAX_FILES, warnings,
   );
   const thresholds = resolveHealthAlertThresholds(env);
-  const sink = resolveAlertSink(env, dir, warnings);
+  const canonicalProductionRoot = canonicalisePath(realProductionMetricsDir());
+  const sink = resolveAlertSink(env, dir, warnings, canonicalProductionRoot);
 
   if (isValidationMode(env)) {
     const canonicalRoot = canonicalisePath(validationRunDir(env));
     const canonicalDir = canonicalisePath(dir);
-    const canonicalProduction = canonicalisePath(realProductionMetricsDir());
     const refusals: string[] = [];
 
-    if (canonicalDir === canonicalProduction) {
+    if (canonicalDir === canonicalProductionRoot) {
       refusals.push(`refusing to write ${canonicalDir} from a validation server: it is the production metrics path`);
+    } else if (isPathInside(canonicalDir, canonicalProductionRoot)) {
+      // Correction 03: a validation root inside the production metrics root must
+      // not make production state "inside the run directory".
+      refusals.push(`refusing to write ${canonicalDir} from a validation server: it is inside the production metrics root (${canonicalProductionRoot})`);
     } else if (!isPathInside(canonicalDir, canonicalRoot)) {
       refusals.push(`refusing to write ${canonicalDir} from a validation server: it is outside the validation run directory (${canonicalRoot})`);
     }
+    // Defence in depth: the production metrics root is refused even when the run
+    // directory itself overlaps it (the sink check runs on canonical paths).
     if (sink.refusedReason) refusals.push(sink.refusedReason);
 
     if (refusals.length > 0) {

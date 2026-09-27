@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
+import { realProductionMetricsDir } from '../observability/health-telemetry-config.js';
 import { acquireProcessFileLock, type ProcessFileLock } from '../utils/process-file-lock.js';
 
 export interface ValidationDirectoryLock {
@@ -13,7 +14,11 @@ export interface ValidationPortReservation {
   release(): void;
 }
 
-export function assertSafeValidationDirectory(validationDir: string, productionPaths: string[]): void {
+export function assertSafeValidationDirectory(
+  validationDir: string,
+  productionPaths: string[],
+  productionMetricsDir: string = realProductionMetricsDir(),
+): void {
   const target = resolve(validationDir);
   const canonicalTarget = canonicalizeExistingAncestors(target);
   const productionRoots = productionPaths.map((entry) => {
@@ -25,6 +30,39 @@ export function assertSafeValidationDirectory(validationDir: string, productionP
   if (productionRoots.some(({ lexical, canonical }) => target === lexical || canonicalTarget === canonical)
     || aliasesProduction) {
     throw new Error(`Refusing to use production state directory for disposable validation: ${target}`);
+  }
+  assertValidationRootOutsideProductionMetrics(validationDir, productionMetricsDir);
+}
+
+/**
+ * Correction 03: a validation root that overlaps the production metrics
+ * directory makes the telemetry containment rule trust production state — run
+ * directories inside `~/.pi-web-ui/metrics` would then be "inside the run
+ * directory" and still write production history. Refused here, before any
+ * mkdir or lock, on canonical (symlink-resolved) paths.
+ *
+ * `productionMetricsDir` defaults to the real service home rather than the
+ * mutable `HOME`, which a disposable validation child is given a fake value for.
+ * Overlap in either direction is refused: a run root inside the metrics
+ * directory, and a run root that contains it (its metrics path would be
+ * production).
+ */
+export function assertValidationRootOutsideProductionMetrics(
+  validationDir: string,
+  productionMetricsDir: string = realProductionMetricsDir(),
+): void {
+  const target = resolve(validationDir);
+  const canonicalTarget = canonicalizeExistingAncestors(target);
+  const metricsRoot = resolve(productionMetricsDir);
+  const canonicalMetrics = canonicalizeExistingAncestors(metricsRoot);
+  const overlaps = canonicalTarget === canonicalMetrics
+    || canonicalTarget.startsWith(`${canonicalMetrics}/`)
+    || canonicalMetrics.startsWith(`${canonicalTarget}/`);
+  if (overlaps) {
+    throw new Error(
+      'Refusing to use a validation directory that overlaps the production metrics directory: '
+      + `${target} (production metrics: ${metricsRoot})`,
+    );
   }
 }
 

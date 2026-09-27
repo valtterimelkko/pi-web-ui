@@ -174,6 +174,37 @@ describe('validation-mode production-path confinement', () => {
     expect(config.suppressOperatorNotifications).toBe(true);
   });
 
+  // Correction 03, finding 1: a validation root that sits inside the production
+  // metrics directory must not make production state trusted — the sampler and
+  // its sink are refused even though they are "inside the run directory".
+  it('refuses a run directory that overlaps the real production metrics directory', () => {
+    const productionRoot = path.join(userInfo().homedir, '.pi-web-ui', 'metrics');
+    const recordDir = path.join(productionRoot, 'run-literal');
+    const config = createHealthTelemetryConfig({
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
+      OBSERVABILITY_METRICS_DIR: path.join(recordDir, 'metrics'),
+    } as NodeJS.ProcessEnv);
+    expect(config.enabled).toBe(false);
+    expect(config.suppressedReason).toContain(path.join(recordDir, 'metrics'));
+    expect(config.suppressedReason).toMatch(/production metrics/i);
+  });
+
+  it('refuses a capture sink inside the production metrics root even when it is inside the run directory', () => {
+    const productionRoot = path.join(userInfo().homedir, '.pi-web-ui', 'metrics');
+    const recordDir = path.join(productionRoot, 'run-literal');
+    const sinkPath = path.join(recordDir, 'alerts.jsonl');
+    const config = createHealthTelemetryConfig({
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
+      OBSERVABILITY_HEALTH_ALERT_SINK: `file:${sinkPath}`,
+    } as NodeJS.ProcessEnv);
+    expect(config.enabled).toBe(false);
+    // Both are named: the run directory's metrics path and the sink.
+    expect(config.suppressedReason).toContain(sinkPath);
+    expect(config.suppressedReason).toMatch(/production metrics/i);
+  });
+
   it('forces a non-delivering capture sink when notifications are requested in validation mode', async () => {
     const { recordDir, home } = await runFixture();
     const config = createHealthTelemetryConfig({

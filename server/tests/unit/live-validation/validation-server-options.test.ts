@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -39,6 +39,46 @@ describe('validation server concurrent launch options', () => {
 
     expect(() => assertSafeValidationDirectory(join(alias, 'future-run'), [join(production, 'internal-api.sock')]))
       .toThrow(/production state directory/i);
+  });
+
+  // Correction 03: a validation root that itself sits inside the production
+  // metrics directory would make the telemetry containment rule trust
+  // production state, so it is refused here — before any mkdir or lock.
+  it('rejects a validation directory inside the production metrics directory', () => {
+    const serviceHome = mkdtempSync(join(tmpdir(), 'pi-service-home-'));
+    cleanupPaths.push(serviceHome);
+    const metricsRoot = join(serviceHome, '.pi-web-ui', 'metrics');
+    mkdirSync(metricsRoot, { recursive: true });
+
+    expect(() => assertSafeValidationDirectory(join(metricsRoot, 'run-literal'), [], metricsRoot))
+      .toThrow(/production metrics directory/i);
+    expect(() => assertSafeValidationDirectory(metricsRoot, [], metricsRoot))
+      .toThrow(/production metrics directory/i);
+    // A validation root that *contains* the production metrics directory is
+    // just as dangerous (the metrics path below it would be production).
+    expect(() => assertSafeValidationDirectory(serviceHome, [], metricsRoot))
+      .toThrow(/production metrics directory/i);
+    // Unrelated run directories keep working.
+    expect(() => assertSafeValidationDirectory(join(serviceHome, 'runs', 'run-1'), [], metricsRoot))
+      .not.toThrow();
+  });
+
+  it('rejects a symlink alias of the production metrics directory', () => {
+    const serviceHome = mkdtempSync(join(tmpdir(), 'pi-service-home-alias-'));
+    cleanupPaths.push(serviceHome);
+    const metricsRoot = join(serviceHome, '.pi-web-ui', 'metrics');
+    mkdirSync(metricsRoot, { recursive: true });
+    const alias = join(serviceHome, 'metrics-alias');
+    symlinkSync(metricsRoot, alias, 'dir');
+
+    expect(() => assertSafeValidationDirectory(join(alias, 'run-1'), [], metricsRoot))
+      .toThrow(/production metrics directory/i);
+  });
+
+  it('defaults to the real service-home metrics directory, not HOME', () => {
+    const metricsRoot = join(userInfo().homedir, '.pi-web-ui', 'metrics');
+    expect(() => assertSafeValidationDirectory(join(metricsRoot, 'run-literal'), []))
+      .toThrow(/production metrics directory/i);
   });
 
   it('creates a short unique directory for every default launch', () => {
