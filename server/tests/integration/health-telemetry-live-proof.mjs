@@ -20,10 +20,15 @@
  *   node server/tests/integration/health-telemetry-live-proof.mjs \
  *     --dir <validation dir> --socket <dir>/internal-api.sock \
  *     --token <dir>/internal-api-token --inspect-port <port> --log <server log>
+ *
+ * Refusal mode (correction 02, finding 1): the server was started with a
+ * forbidden metrics directory or alert sink; prove it refused and wrote nothing:
+ *   node … --dir <dir> --log <log> --mode refusal --expect-refusal-text /root/.pi-web-ui/metrics
  */
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
+import { userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import WebSocket from 'ws';
@@ -39,7 +44,55 @@ const tokenPath = args.get('--token') ?? path.join(runDir, 'internal-api-token')
 const inspectPort = Number(args.get('--inspect-port'));
 const logPath = args.get('--log') ?? path.join(runDir, 'server.log');
 const journalWindowSeconds = Number(args.get('--journal-window-seconds') ?? 360);
-const productionMetricsDir = '/root/.pi-web-ui/metrics';
+const mode = args.get('--mode') ?? 'proof';
+const productionMetricsDir = path.join(userInfo().homedir, '.pi-web-ui', 'metrics');
+const productionNotificationsDir = path.join(userInfo().homedir, '.pi-web-ui', 'notifications');
+
+if (mode === 'refusal') {
+  const expectedRefusalText = args.get('--expect-refusal-text');
+  if (!runDir || !expectedRefusalText) {
+    console.error('refusal mode needs --dir and --expect-refusal-text');
+    process.exit(64);
+  }
+  const startedAt = Date.now();
+  const started = new Date(startedAt).toISOString();
+  const report = { mode, startedAt: started, runDir, expectedRefusalText, checks: {}, numbers: {}, receipts: [] };
+  const lines = readLines(logPath);
+  const disabledLine = lines.find((line) => line.includes('[HealthTelemetry] disabled:'));
+  const samplingLine = lines.find((line) => line.includes('[HealthTelemetry] metrics →'));
+  const metricsFile = path.join(runDir, 'metrics', 'health-metrics.jsonl');
+  const ingressDir = path.join(runDir, 'notifications', 'ingress');
+  const ingressFiles = existsSync(ingressDir) ? readdirSync(ingressDir) : [];
+  const productionNotificationWrites = existsSync(productionNotificationsDir)
+    ? readdirSync(productionNotificationsDir, { recursive: true })
+        .map((entry) => path.join(productionNotificationsDir, String(entry)))
+        .filter((entry) => { try { return statSync(entry).mtimeMs >= startedAt; } catch { return false; } })
+    : [];
+
+  const checks = {
+    'a refusal is logged and names the refused path': Boolean(disabledLine) && disabledLine.includes(expectedRefusalText),
+    'telemetry never started sampling': !samplingLine,
+    'no metrics file was created in the run directory': !existsSync(metricsFile),
+    'the production metrics path was not created': !existsSync(productionMetricsDir),
+    'no notification-ingress record was written': ingressFiles.length === 0,
+    'no production notification file was touched during the run': productionNotificationWrites.length === 0,
+  };
+  for (const [name, ok] of Object.entries(checks)) report.checks[name] = { ok, detail: ok ? 'ok' : 'failed' };
+  report.numbers = {
+    refusedLine: disabledLine ?? null,
+    samplingLine: samplingLine ?? null,
+    productionMetricsDirExists: existsSync(productionMetricsDir),
+    runMetricsFileExists: existsSync(metricsFile),
+    ingressFiles,
+    productionNotificationWrites,
+  };
+  report.finishedAt = new Date().toISOString();
+  report.ok = Object.values(checks).every(Boolean);
+  writeFileSync(path.join(runDir, 'refusal-report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  for (const [name, ok] of Object.entries(checks)) console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`);
+  console.log(`REFUSAL ${report.ok ? 'OK' : 'FAILED'} — report: ${path.join(runDir, 'refusal-report.json')}`);
+  process.exit(report.ok ? 0 : 1);
+}
 
 if (!runDir || !Number.isInteger(inspectPort)) {
   console.error('usage: node health-telemetry-live-proof.mjs --dir <dir> --inspect-port <port> [--socket <path>] [--token <path>] [--log <path>] [--journal-window-seconds <n>]');
