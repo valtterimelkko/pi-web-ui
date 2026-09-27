@@ -187,6 +187,14 @@ was only caught by live validation against a real rehydration.
 ### `agentSession.dispose()` must be try/catch guarded
 Disposing a worker session can throw if the worker crashed. `multi-session-manager.ts` wraps every `dispose()` in try/catch. If you add new dispose paths, do the same.
 
+### Every Pi session teardown must release PiService's references
+Every dispose/unload path (`disposeSession`, `unloadSession`, `stopSession`,
+`MultiSessionManager.dispose()`, `SessionPool` and `PiService.removeClient`)
+must funnel through `releasePiServiceRefs` → `PiService.releaseSessionRefs`.
+`removeEventHandler` alone leaves the `AgentSession` in `PiService.sessions` /
+`clientSessionMap` / `clientWebUIContexts`, so every deleted child stays resident
+(A1 soak: ~4.4 MB per Pi child created; B1).
+
 ### API-error grace timers must be cancelled on new events
 When a Pi Coding Agent message has `stopReason === 'error'`, a 60s grace timer starts. If no event arrives in 60s, a synthetic `agent_end` is emitted. Any new event must cancel this timer via `cancelApiErrorGraceTimer()`. Forgetting this causes premature session idle states.
 
