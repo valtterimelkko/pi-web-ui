@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -74,8 +74,8 @@ function telemetryOptions(overrides: {
 
 describe('resolveObservabilityMetricsDir', () => {
   it('defaults to the production metrics directory', () => {
-    expect(resolveObservabilityMetricsDir({ HOME: '/root' } as NodeJS.ProcessEnv)).toBe(
-      path.join('/root', '.pi-web-ui', 'metrics'),
+    expect(resolveObservabilityMetricsDir({} as NodeJS.ProcessEnv)).toBe(
+      path.join(homedir(), '.pi-web-ui', 'metrics'),
     );
   });
 
@@ -98,9 +98,8 @@ describe('resolveObservabilityMetricsDir', () => {
 describe('createHealthTelemetryConfig', () => {
   it('refuses to write the production metrics path while in validation mode', () => {
     const config = createHealthTelemetryConfig({
-      HOME: '/root',
       PI_WEB_UI_VALIDATION_MODE: 'true',
-      OBSERVABILITY_METRICS_DIR: path.join('/root', '.pi-web-ui', 'metrics'),
+      OBSERVABILITY_METRICS_DIR: path.join(homedir(), '.pi-web-ui', 'metrics'),
     } as NodeJS.ProcessEnv);
     expect(config.enabled).toBe(false);
     expect(config.suppressedReason).toMatch(/production metrics path/);
