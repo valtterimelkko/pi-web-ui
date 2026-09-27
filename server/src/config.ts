@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { parseBlockedPiProviders } from './internal-api/pi-provider-policy.js';
+import { createHealthTelemetryConfig } from './observability/health-telemetry-config.js';
+import { resolveMemoryJournalPolicyOptions } from './observability/memory-journal-policy.js';
 import os from 'os';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
@@ -339,9 +341,46 @@ export interface ServerConfig {
   notificationsMaxDeliveryAttempts: number;
   notificationsIngressPollMs: number;
   notificationsChannelTimeoutMs: number;
+  // ─── A2 heap/lag telemetry (docs/OBSERVABILITY.md § Heap and lag telemetry) ──
+  /** Whether the periodic health-metrics sampler runs (default true). */
+  observabilityMetricsEnabled: boolean;
+  /** Directory of the size-bounded rotating health-metrics file. */
+  observabilityMetricsDir: string;
+  /** Sampling cadence of the health-metrics file (ms). */
+  observabilityMetricsIntervalMs: number;
+  /** Rotation trigger: no metrics generation grows past this (bytes). */
+  observabilityMetricsMaxFileBytes: number;
+  /** Hard bound on kept generations, including the current file. */
+  observabilityMetricsMaxFiles: number;
+  /** Heap fraction of the real `heap_size_limit` that arms the heap alert. */
+  observabilityHealthAlertHeapFraction: number;
+  /** Heap fraction that clears the heap alert (hysteresis low water mark). */
+  observabilityHealthAlertHeapRecoverFraction: number;
+  /** Lag p99 (ms) that arms the event-loop alert. */
+  observabilityHealthAlertLagP99Ms: number;
+  /** Lag p99 (ms) that clears the event-loop alert. */
+  observabilityHealthAlertLagRecoverMs: number;
+  /** Resolved alert target (e.g. `ingress:<dir>`, `file:<path>`, `none`). */
+  observabilityHealthAlertSink: string;
+  /** `[MultiSessionManager] Memory:` significant-change threshold (MB). */
+  observabilityMemoryJournalMinDeltaMb: number;
+  /** `[MultiSessionManager] Memory:` heartbeat interval (ms). */
+  observabilityMemoryJournalHeartbeatMs: number;
+  /** Heartbeat line fires at or above this heap usage (MB). */
+  observabilityMemoryJournalHeapMb: number;
+  /** Heartbeat line fires above this resident-session count. */
+  observabilityMemoryJournalSessions: number;
   telegramBotToken?: string;
   telegramChatId?: string;
 }
+
+/**
+ * A2 journal-volume knobs for the `[MultiSessionManager] Memory:` line: log on
+ * significant change plus a low-frequency heartbeat instead of on every 30 s
+ * memory check (see docs/OBSERVABILITY.md). The resolver itself lives with the
+ * policy so the Pi runtime can build one without importing this module.
+ */
+export { resolveMemoryJournalPolicyOptions } from './observability/memory-journal-policy.js';
 
 function getRequiredEnvVar(name: string): string {
   const value = process.env[name];
@@ -352,6 +391,11 @@ function getRequiredEnvVar(name: string): string {
 }
 
 const isProduction = process.env.NODE_ENV === 'production';
+
+// A2 telemetry: resolved once, fail-fast — an invalid threshold or a validation
+// server pointed at the production metrics path must not boot silently wrong.
+const healthTelemetryConfig = createHealthTelemetryConfig(process.env);
+const memoryJournalOptions = resolveMemoryJournalPolicyOptions(process.env);
 
 export const config: ServerConfig = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -521,6 +565,20 @@ export const config: ServerConfig = {
   notificationsMaxDeliveryAttempts: parseInt(process.env.NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS || '5', 10),
   notificationsIngressPollMs: parsePositiveInteger(process.env.NOTIFICATIONS_INGRESS_POLL_MS, 5000, 'NOTIFICATIONS_INGRESS_POLL_MS'),
   notificationsChannelTimeoutMs: parsePositiveInteger(process.env.NOTIFICATIONS_CHANNEL_TIMEOUT_MS, 10000, 'NOTIFICATIONS_CHANNEL_TIMEOUT_MS'),
+  observabilityMetricsEnabled: healthTelemetryConfig.enabled,
+  observabilityMetricsDir: healthTelemetryConfig.dir,
+  observabilityMetricsIntervalMs: healthTelemetryConfig.intervalMs,
+  observabilityMetricsMaxFileBytes: healthTelemetryConfig.maxFileBytes,
+  observabilityMetricsMaxFiles: healthTelemetryConfig.maxFiles,
+  observabilityHealthAlertHeapFraction: healthTelemetryConfig.thresholds.heapFractionHigh,
+  observabilityHealthAlertHeapRecoverFraction: healthTelemetryConfig.thresholds.heapFractionLow,
+  observabilityHealthAlertLagP99Ms: healthTelemetryConfig.thresholds.lagP99HighMs,
+  observabilityHealthAlertLagRecoverMs: healthTelemetryConfig.thresholds.lagP99LowMs,
+  observabilityHealthAlertSink: healthTelemetryConfig.sinkDescription,
+  observabilityMemoryJournalMinDeltaMb: memoryJournalOptions.minDeltaMb,
+  observabilityMemoryJournalHeartbeatMs: memoryJournalOptions.heartbeatMs,
+  observabilityMemoryJournalHeapMb: memoryJournalOptions.heartbeatHeapMb,
+  observabilityMemoryJournalSessions: memoryJournalOptions.heartbeatSessions,
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || undefined,
   telegramChatId: process.env.TELEGRAM_CHAT_ID || undefined,
 };

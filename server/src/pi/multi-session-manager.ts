@@ -4,6 +4,8 @@ import { createLogger } from '../logging/logger.js';
 import { enrichSubagentEvent } from './event-forwarder.js';
 import { projectStreamingEventForTransport } from './stream-transport.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
+import { MemoryJournalPolicy, resolveMemoryJournalPolicyOptions } from '../observability/memory-journal-policy.js';
+import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { getHeapStatistics } from 'node:v8';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
@@ -126,6 +128,11 @@ export interface MultiSessionManagerOptions {
   memoryStats?: () => { heapUsedMb: number; heapLimitMb: number; rssMb: number; externalMb: number };
   /** Injectable shed monitor seam (tests); defaults to the process-wide monitor. */
   shedMonitor?: { isShedding: boolean; observeMemoryPressure(pressure: boolean): void };
+  /**
+   * A2 journal-volume policy for the `Memory:` line (tests); defaults to the
+   * configured significant-change-plus-heartbeat policy.
+   */
+  memoryJournalPolicy?: MemoryJournalPolicy;
 }
 
 /**
@@ -226,6 +233,7 @@ export class MultiSessionManager {
   // browser) while pressure persists.
   private readonly memoryStats: () => { heapUsedMb: number; heapLimitMb: number; rssMb: number; externalMb: number };
   private readonly shedMonitor: { isShedding: boolean; observeMemoryPressure(pressure: boolean): void };
+  private readonly memoryJournalPolicy: MemoryJournalPolicy;
   private static readonly MEMORY_SHED_ARM_RATIO = 0.8;
   private static readonly MEMORY_SHED_RECOVER_RATIO = 0.7;
 
@@ -246,6 +254,7 @@ export class MultiSessionManager {
     this.staleStreamingThresholdMs = options.staleStreamingThresholdMs ?? 15 * 60 * 1000;
     this.memoryStats = options.memoryStats ?? defaultMemoryStats;
     this.shedMonitor = options.shedMonitor ?? getEventLoopShedMonitor();
+    this.memoryJournalPolicy = options.memoryJournalPolicy ?? new MemoryJournalPolicy(resolveMemoryJournalPolicyOptions());
     
     // Start cleanup timer
     this.startCleanupTimer();
@@ -377,18 +386,28 @@ export class MultiSessionManager {
     if (this.memoryCheckTimer.unref) {
       this.memoryCheckTimer.unref();
     }
+
+    // A2 telemetry: publish this manager's resident-session count into the
+    // process-wide sampler and start it (idempotent — the sampler owns the
+    // bounded metrics file and the heap/lag alert latches).
+    const telemetry = getHealthTelemetry();
+    telemetry.registerSources({ residentSessions: () => this.sessions.size });
+    telemetry.start();
   }
   
   /**
-   * Log memory usage for monitoring
+   * Log memory usage for monitoring.
+   *
+   * A2 journal-volume policy: a line on significant heap change plus a
+   * low-frequency heartbeat, instead of one line per 30 s check while heap is
+   * high or more than five sessions are resident (see docs/OBSERVABILITY.md).
    */
   private logMemoryUsage(): void {
     const { heapUsedMb: heapUsedMB, heapLimitMb: heapLimitMB, rssMb: rssMB, externalMb: externalMB } = this.memoryStats();
 
     const sessionCount = this.sessions.size;
 
-    // Only log if memory is high or session count is significant
-    if (heapUsedMB > 500 || sessionCount > 5) {
+    if (this.memoryJournalPolicy.shouldLog({ heapUsedMb: heapUsedMB, sessionCount })) {
       logger.info(`[MultiSessionManager] Memory: heap=${heapUsedMB}MB/${heapTotalDisplay(heapLimitMB)}, rss=${rssMB}MB, external=${externalMB}MB, sessions=${sessionCount}`);
     }
 
