@@ -42,7 +42,7 @@ it?** heapUsed alone is not proof of a leak — it includes uncollected garbage
 | Driver | `driver.ts` + `lanes.ts` + `wave-target.ts` | Time-boxed waves of tool-using Pi children across model lanes; see **Load model** below. |
 | Circuit breaker | `circuit-breaker.ts` | Per-lane consecutive-failure breaker with cooldown; pure state machine. |
 | Orphan sweep | `orphan-sweep.ts` + `orphans.ts` | Reconciles the events log's `child_created`/`child_deleted` pairs once per cycle; deletes anything still open. |
-| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. Checks server liveness (unit state + MainPID + socket) every cycle; on death it stops the load driver and ends the run as `server_died` with the death evidence. |
+| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. Checks server liveness (unit state + MainPID + socket) every cycle; on death it stops the load driver and ends the run as `server_died` with the death evidence. If it restarts into an already-dead server, startup recovery terminalises idempotently from saved state — but a run already recorded `complete` is never reclassified (correction 03). |
 | Server liveness | `liveness-io.ts` + `server-death.ts` (pure) | Reads the unit's `ActiveState`/`Result`/`ExecMainStatus` and a bounded journal tail, tests socket reachability, and decides death from the recorded unit/PID identity (never from the sampler's own failures). A transient socket blip is tolerated for up to 3 consecutive observations. |
 | Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase + per-quota-state), idle-return-to-baseline, sample coverage, the verdict rule itself, lane stats, verdict; and a prominent `SERVER DIED` header when the run ended as `server_died`. |
 | Snapshot summary + diff | `snapshot-parse.ts` (pure) + `snapshot-retainers.ts` (pure) + `snapshot-selection.ts` (pure) + `snapshot-diff.ts` + `snapshot-diff-worker.ts` | `.heapsnapshot` structural parser plus retainer-path BFS and a cut test. Uses the latest **valid** (non-empty, parseable) snapshot — a 0-byte declared snapshot is skipped and named — and runs the parse+analysis in a separate `--max-old-space-size=12288` process. |
@@ -63,7 +63,15 @@ fixes them:
    sample, the unit's exit status and a bounded journal tail; `report.md`
    leads with it and the final Telegram message says "server died at … after
    …" instead of "complete". Coverage is measured against the observed
-   window, not the unrun schedule.
+   window, not the unrun schedule. A supervisor that **restarts into an
+   already-dead server** (it died during `Restart=on-failure`'s window)
+   terminalises idempotently at startup from saved state + unit identity; a
+   run already recorded `complete` is **never** reclassified as a death, and
+   `report` on a nonterminal run whose server is gone renders `server_died`,
+   not `complete`. The death/completion Telegram notice is sent **at least
+   once, normally once**: the notice is sent before its marker is persisted,
+   so a crash in between re-sends it on restart — an explicitly accepted
+   at-least-once guarantee, not exactly-once, with no outbox machinery.
 2. **Snapshot robustness.** The comparison uses the latest *valid* (non-empty)
    snapshot against the start one, skipping and naming any 0-byte/corrupt
    candidate and falling back to the heap-threshold snapshots. It adds a

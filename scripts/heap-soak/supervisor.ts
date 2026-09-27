@@ -25,7 +25,7 @@ import { runWave, type DriverState } from './driver.js';
 import { sweepOrphans } from './orphan-sweep.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
-import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath } from '../../server/src/live-validation/heap-soak/server-death.js';
+import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath, shouldSendFinalNotice, shouldTerminaliseOnStartupRecovery } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
 import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
 import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
@@ -73,8 +73,10 @@ async function main(): Promise<void> {
    * the normal run end and by STARTUP RECOVERY after a server death (B0
    * correction): a supervisor that restarts into a dead server must finalise
    * from saved state rather than leaving the run nonterminal for `report` to
-   * later default to `complete`. The death Telegram notice is sent at most once
-   * (guarded by `deathNoticeSentAt`).
+   * later default to `complete`. A run already recorded `complete` is never
+   * reclassified. The death/completion notice is sent AT LEAST ONCE (normally
+   * once): it is sent before its marker is persisted, so a crash in between
+   * re-sends it on restart (correction 03).
    */
   async function finaliseRun(): Promise<void> {
     const rows = existsSync(state.csvPath) ? parseSampleCsv(readFileSync(state.csvPath, 'utf8')) : [];
@@ -111,7 +113,7 @@ async function main(): Promise<void> {
     writeFileSync(path.join(state.runDir, 'report.md'), markdown);
     writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
     if (died && state.serverDeath) {
-      if (!state.deathNoticeSentAt) {
+      if (shouldSendFinalNotice('death', state)) {
         await notify(
           'blocked',
           `server died at ${formatElapsedMs(state.serverDeath.elapsedMs)} after start`,
@@ -122,8 +124,10 @@ async function main(): Promise<void> {
         state.deathNoticeSentAt = new Date().toISOString();
         saveRunState(runStatePath, state);
       }
-    } else {
+    } else if (shouldSendFinalNotice('completion', state)) {
       await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
+      state.completionNoticeSentAt = new Date().toISOString();
+      saveRunState(runStatePath, state);
     }
   }
 
@@ -139,7 +143,7 @@ async function main(): Promise<void> {
       getUnitJournalTail(state.server.unitName, 40),
     ]);
     const exitStatus = [exit.result, exit.execMainStatus && `exec-status=${exit.execMainStatus}`].filter(Boolean).join('/') || undefined;
-    const alreadyTerminal = state.terminalState === 'server_died' && state.serverDeath !== undefined;
+    const alreadyTerminal = !shouldTerminaliseOnStartupRecovery(state);
     if (!alreadyTerminal) {
       recordServerDeath(state, {
         reason: decision.reason,
@@ -153,8 +157,11 @@ async function main(): Promise<void> {
       saveRunState(runStatePath, state);
     }
     console.error(`[supervisor] startup recovery: ${decision.reason}`);
+    // Finalise whatever the terminal state is (death report + death notice, or
+    // an already-completed run's report/done notice) and exit cleanly. Exiting
+    // non-zero here would make systemd's Restart=on-failure loop the supervisor
+    // forever once the run is terminal.
     await finaliseRun();
-    process.exitCode = 1;
     return;
   }
   console.error(`[supervisor] ${decision.reason}`);

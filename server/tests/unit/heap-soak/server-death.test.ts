@@ -5,6 +5,8 @@ import {
   decideServerDeath,
   recordServerDeath,
   resolveReportedRunOutcome,
+  shouldSendFinalNotice,
+  shouldTerminaliseOnStartupRecovery,
   type ServerLivenessObservation,
 } from '../../../src/live-validation/heap-soak/server-death.js';
 import type { RunState } from '../../../src/live-validation/heap-soak/run-state.js';
@@ -99,6 +101,51 @@ describe('recordServerDeath', () => {
     recordServerDeath(state, { reason: 'second', detectedAt: 'second', elapsedMs: 2 });
     expect(state.serverDeath.reason).toBe('first');
     expect(state.serverDeath.detectedAt).toBe('first');
+  });
+
+  it('never reclassifies an already-completed run as a death (correction 03)', () => {
+    const state = runState();
+    state.terminalState = 'complete';
+    recordServerDeath(state, { reason: 'unit stopped later', detectedAt: 'later', elapsedMs: 99 });
+    expect(state.terminalState).toBe('complete');
+    expect(state.serverDeath).toBeUndefined();
+  });
+});
+
+describe('shouldTerminaliseOnStartupRecovery (correction 03)', () => {
+  it('terminalises a nonterminal run', () => {
+    expect(shouldTerminaliseOnStartupRecovery(runState())).toBe(true);
+  });
+  it('does not reclassify a completed run', () => {
+    const state = runState();
+    state.terminalState = 'complete';
+    expect(shouldTerminaliseOnStartupRecovery(state)).toBe(false);
+  });
+  it('does not re-terminalise an already-recorded death', () => {
+    const state = runState();
+    state.terminalState = 'server_died';
+    state.serverDeath = { detectedAt: 'd', elapsedMs: 1, reason: 'r' };
+    expect(shouldTerminaliseOnStartupRecovery(state)).toBe(false);
+  });
+  it('does terminalise a server_died state that is missing its evidence', () => {
+    const state = runState();
+    state.terminalState = 'server_died';
+    expect(shouldTerminaliseOnStartupRecovery(state)).toBe(true);
+  });
+});
+
+describe('shouldSendFinalNotice — at-least-once semantics (correction 03)', () => {
+  it('sends when no marker is persisted (so a pre-persist crash re-sends: at least once)', () => {
+    expect(shouldSendFinalNotice('death', runState())).toBe(true);
+    expect(shouldSendFinalNotice('completion', runState())).toBe(true);
+  });
+  it('does not send again once the marker is persisted (normally once)', () => {
+    const death = runState();
+    death.deathNoticeSentAt = 't';
+    expect(shouldSendFinalNotice('death', death)).toBe(false);
+    const completion = runState();
+    completion.completionNoticeSentAt = 't';
+    expect(shouldSendFinalNotice('completion', completion)).toBe(false);
   });
 });
 

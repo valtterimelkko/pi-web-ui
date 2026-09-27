@@ -117,8 +117,13 @@ export interface ServerDeathEvidence {
  * supervisor must be able to terminalise from what it can still observe. An
  * already-recorded death is never overwritten, so a restart cannot rewrite the
  * original detection time or evidence.
+ *
+ * Correction 03: a run already recorded as `complete` is NEVER reclassified as
+ * a death. The server's transient unit being gone later (a normal `stop`, a
+ * collected unit, or a genuine post-completion crash) is not a mid-run death.
  */
 export function recordServerDeath(state: RunState, evidence: ServerDeathEvidence): RunState {
+  if (state.terminalState === 'complete') return state;
   if (state.terminalState === 'server_died' && state.serverDeath) return state;
   state.terminalState = 'server_died';
   state.serverDeath = {
@@ -172,4 +177,26 @@ export function resolveReportedRunOutcome(
     };
   }
   return { terminalState: 'complete' };
+}
+
+/**
+ * Whether STARTUP RECOVERY should terminalise the run as `server_died`. False
+ * for a run already recorded `complete` (correction 03) and for one whose death
+ * was already recorded; true for a nonterminal run (or a death persisted
+ * without evidence).
+ */
+export function shouldTerminaliseOnStartupRecovery(state: RunState): boolean {
+  if (state.terminalState === 'complete') return false;
+  if (state.terminalState === 'server_died' && state.serverDeath) return false;
+  return true;
+}
+
+/**
+ * Whether a final notice should be sent. This is AT-LEAST-ONCE, not exactly-once:
+ * the notice is sent before its marker is persisted, so a crash in between
+ * re-sends it on restart. The marker only suppresses repeats in the normal
+ * (no-crash) path; no durable outbox is used by design (correction 03).
+ */
+export function shouldSendFinalNotice(kind: 'death' | 'completion', state: RunState): boolean {
+  return kind === 'death' ? !state.deathNoticeSentAt : !state.completionNoticeSentAt;
 }
