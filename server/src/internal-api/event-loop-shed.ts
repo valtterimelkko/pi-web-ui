@@ -3,6 +3,26 @@ import { getOperationalMetrics, type OperationalMetrics } from '../observability
 
 const logger = createLogger('EventLoopShed');
 
+/** Lag window exposed to A2 telemetry: the last 60 s at the 500 ms sampling cadence. */
+export const EVENT_LOOP_LAG_WINDOW_MS = 60_000;
+export const EVENT_LOOP_LAG_WINDOW_SAMPLES = 120;
+
+export interface EventLoopLagWindow {
+  windowMs: number;
+  sampleCount: number;
+  p50Ms: number;
+  p99Ms: number;
+  maxMs: number;
+}
+
+/** Nearest-rank percentile; total on empty input. */
+function nearestRank(values: readonly number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[index];
+}
+
 export interface EventLoopShedOptions {
   metrics?: OperationalMetrics;
   now?: () => number;
@@ -17,6 +37,9 @@ export class EventLoopShedMonitor {
   private readonly intervalMs: number;
   private recoverSince?: number;
   private timer?: ReturnType<typeof setInterval>;
+  /** A2: bounded ring of recent lag samples for p50/p99/max telemetry. */
+  private readonly lagSamples: Array<{ at: number; value: number } | undefined> = new Array(EVENT_LOOP_LAG_WINDOW_SAMPLES);
+  private lagCursor = 0;
 
   constructor(options: EventLoopShedOptions = {}) {
     this.metrics = options.metrics ?? getOperationalMetrics();
@@ -61,6 +84,8 @@ export class EventLoopShedMonitor {
 
   observeLag(lagMs: number, now = this.now()): void {
     this.metrics.recordEventLoopLag(lagMs);
+    this.lagSamples[this.lagCursor] = { at: now, value: Math.max(0, Math.round(lagMs)) };
+    this.lagCursor = (this.lagCursor + 1) % EVENT_LOOP_LAG_WINDOW_SAMPLES;
     if (!this.lagShedding && lagMs > 1_000) {
       this.lagShedding = true;
       this.recoverSince = undefined;
@@ -80,6 +105,26 @@ export class EventLoopShedMonitor {
     }
   }
 
+  /**
+   * A2 telemetry: p50/p99/max over the recent sampling window. Read-only and
+   * side-effect free (it never starts the monitor or mutates shed state).
+   */
+  readLagWindow(now = this.now()): EventLoopLagWindow {
+    const values: number[] = [];
+    for (const sample of this.lagSamples) {
+      if (!sample) continue;
+      if (sample.at <= now - EVENT_LOOP_LAG_WINDOW_MS) continue;
+      values.push(sample.value);
+    }
+    return {
+      windowMs: EVENT_LOOP_LAG_WINDOW_MS,
+      sampleCount: values.length,
+      p50Ms: nearestRank(values, 0.5),
+      p99Ms: nearestRank(values, 0.99),
+      maxMs: values.length === 0 ? 0 : Math.max(...values),
+    };
+  }
+
   close(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
@@ -87,6 +132,15 @@ export class EventLoopShedMonitor {
 }
 
 let globalMonitor: EventLoopShedMonitor | undefined;
+
+/**
+ * A2 telemetry: the current lag window, or `undefined` when no monitor exists
+ * yet. Deliberately does NOT create/start a monitor — a metrics read must have
+ * no lifecycle side effects.
+ */
+export function readEventLoopLagWindow(now?: number): EventLoopLagWindow | undefined {
+  return globalMonitor?.readLagWindow(now);
+}
 
 export function getEventLoopShedMonitor(): EventLoopShedMonitor {
   globalMonitor ??= new EventLoopShedMonitor();
