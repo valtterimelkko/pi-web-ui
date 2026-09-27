@@ -358,4 +358,85 @@ describe('PiService session release — every dispose/unload path', () => {
     expectNoReferenceTo(service, first.sessionId, firstHandlerKey);
     expect(service.getSession(switched.sessionId)).toBe(switched.session);
   });
+
+  // ---------------------------------------------------------------------------
+  // Correction round (reviewer findings 1-4)
+  // ---------------------------------------------------------------------------
+
+  it('findings 1: PiService.removeClient disposes a shared session only when the last owner leaves', () => {
+    const service = newService();
+    const session = fakeAgentSession('sid-shared', '/tmp/pi-sessions/sid-shared.jsonl');
+    internals(service).sessions.set('sid-shared', session);
+    internals(service).clientSessionMap.set('client-a', 'sid-shared');
+    internals(service).clientSessionMap.set('client-b', 'sid-shared');
+    internals(service).eventHandlers.set('client-a', () => {});
+    internals(service).eventHandlers.set('client-b', () => {});
+
+    service.removeClient('client-a');
+
+    // client-b still maps the session: it must not have been disposed or dropped.
+    expect(session.dispose).not.toHaveBeenCalled();
+    expect(service.getSession('sid-shared')).toBe(session);
+    expect(internals(service).clientSessionMap.has('client-a')).toBe(false);
+    expect(internals(service).eventHandlers.has('client-a')).toBe(false);
+    expect(internals(service).eventHandlers.has('client-b')).toBe(true);
+
+    service.removeClient('client-b');
+
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+    expect(service.getSession('sid-shared')).toBeUndefined();
+    expect(internals(service).clientSessionMap.has('client-b')).toBe(false);
+  });
+
+  it('findings 2: a rejected switchClientSession leaves no stale disposed session in the pool', async () => {
+    const service = newService();
+    const created = installFakeCreateSession(service);
+    const pool = new SessionPool(service);
+    pools.push(pool);
+    pool.setWebUIContextProvider((clientId) => ({ clientId, sendToClient: () => {} }));
+
+    const first = await pool.createClientSession('client-1', { cwd: '/work' });
+    const firstHandlerKey = soleHandlerKey(service);
+
+    vi.spyOn(service, 'createSession').mockRejectedValueOnce(new Error('open failed'));
+    await expect(pool.switchClientSession('client-1', '/work/broken.jsonl')).rejects.toThrow('open failed');
+
+    // The old session is disposed and released, and the pool must not still
+    // hand it back as if the switch had succeeded.
+    expect(created[0].dispose).toHaveBeenCalledTimes(1);
+    expect(pool.getClientSession('client-1')).toBeUndefined();
+    expectNoReferenceTo(service, first.sessionId, firstHandlerKey);
+  });
+
+  it('findings 3: a pre-mapping createSession rejection releases the temporary handler', async () => {
+    const service = newService();
+    const manager = newManager(service);
+    vi.spyOn(service, 'createSession').mockRejectedValueOnce(new Error('spawn failed'));
+
+    await expect(manager.createAndSubscribe('client-1', '/work')).rejects.toThrow('spawn failed');
+
+    expect(internals(service).eventHandlers.size).toBe(0);
+    expect(internals(service).clientSessionMap.size).toBe(0);
+  });
+
+  it('findings 4: cleanup drains clientWebUIContexts and the session pool', async () => {
+    const service = newService();
+    const created = installFakeCreateSession(service);
+    const pool = new SessionPool(service);
+    pools.push(pool);
+    pool.setWebUIContextProvider((clientId) => ({ clientId, sendToClient: () => {} }));
+
+    const clientSession = await pool.createClientSession('client-1', { cwd: '/work' });
+    expect(internals(service).clientWebUIContexts.size).toBe(1);
+
+    await service.cleanup();
+
+    expect(created[0].dispose).toHaveBeenCalledTimes(1);
+    expect(internals(service).sessions.size).toBe(0);
+    expect(internals(service).clientSessionMap.size).toBe(0);
+    expect(internals(service).eventHandlers.size).toBe(0);
+    expect(internals(service).clientWebUIContexts.size).toBe(0);
+    expect(pool.getActiveClients()).toEqual([]);
+    expect(service.getSession(clientSession.sessionId)).toBeUndefined();
+  });
 });
