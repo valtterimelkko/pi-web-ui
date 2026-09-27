@@ -64,6 +64,8 @@ export interface RunState {
   terminalState?: RunTerminalState;
   /** B0 defect 1: the recorded death evidence, when `terminalState === 'server_died'`. */
   serverDeath?: ServerDeathRecord;
+  /** B0 correction: set once the final Telegram death notice has been sent, so a restart never re-notifies. */
+  deathNoticeSentAt?: string;
   /** B0 defect 1: elapsed ms of the last sample successfully written to the CSV (used for honest coverage). */
   lastGoodSampleElapsedMs?: number;
   /** B0 defect 6: extension directories overlaid into the isolated agent dir before launch. */

@@ -1,8 +1,11 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseSampleCsv, buildReport, renderReportMarkdown, type BuildReportOptions } from '../../server/src/live-validation/heap-soak/report.js';
+import { resolveReportedRunOutcome } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { readLaneEvents } from './events-log.js';
 import { loadRunState } from './run-state-io.js';
+import { getUnitStatus } from './systemd-units.js';
+import { getUnitExitStatus, getUnitJournalTail } from './liveness-io.js';
 import { FULL_SCHEDULE, MICRO_SCHEDULE } from '../../server/src/live-validation/heap-soak/phases.js';
 import { runDir } from './paths.js';
 import { snapshotComparisonSection } from './snapshot-diff.js';
@@ -11,8 +14,12 @@ import { snapshotComparisonSection } from './snapshot-diff.js';
  * `report` command: works on any prefix of the CSV, so a partial/in-progress
  * run is still usable. Reads samples.csv + events.jsonl from a run directory
  * and prints the markdown report (also writing report.md/report.json there).
- * If run-state.json records a server death (B0 defect 1), the re-run report
- * leads with it too — regenerating a report must not lose the death.
+ *
+ * B0 correction: a NONTERMINAL run whose server is gone is a server death,
+ * never `complete`. Before this, a supervisor that died during its systemd
+ * restart window left the run nonterminal and a later `report` defaulted it to
+ * a full-schedule `complete`. A run that recorded `complete` stays complete
+ * even after its transient unit has been stopped or collected.
  */
 export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full'): Promise<string> {
   const dir = runDir(runId);
@@ -25,10 +32,31 @@ export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full')
   let options: BuildReportOptions = {};
   try {
     const state = loadRunState(path.join(dir, 'run-state.json'));
+    const serverStatus = await getUnitStatus(state.server.unitName);
+    // Only gather terminal evidence when the outcome could need it (a
+    // nonterminal run, or one whose death was persisted without evidence).
+    const alreadyResolved = (state.terminalState === 'server_died' && state.serverDeath) || state.terminalState === 'complete';
+    const [exit, journal] = alreadyResolved
+      ? [{ activeState: serverStatus.activeState, subState: serverStatus.subState, result: undefined, execMainStatus: undefined }, [] as string[]]
+      : await Promise.all([getUnitExitStatus(state.server.unitName), getUnitJournalTail(state.server.unitName, 40)]);
+    const exitStatus = [exit.result, exit.execMainStatus && `exec-status=${exit.execMainStatus}`].filter(Boolean).join('/') || undefined;
+    const elapsedMs = state.lastGoodSampleElapsedMs ?? Math.max(0, Date.now() - new Date(state.startedAt).getTime());
+    const outcome = resolveReportedRunOutcome(
+      state,
+      { loadState: serverStatus.loadState, activeState: serverStatus.activeState, mainPid: serverStatus.mainPid },
+      {
+        reason: `server unit ${state.server.unitName} is not running (LoadState=${serverStatus.loadState})`,
+        detectedAt: new Date().toISOString(),
+        elapsedMs,
+        activeState: serverStatus.activeState,
+        exitStatus,
+        journalLines: journal.slice(-40),
+      },
+    );
     options = {
-      ...(state.terminalState === 'server_died' && state.serverDeath
-        ? { terminalState: 'server_died' as const, serverDeath: state.serverDeath, coveredWindowMs: state.serverDeath.elapsedMs }
-        : {}),
+      terminalState: outcome.terminalState,
+      ...(outcome.serverDeath ? { serverDeath: outcome.serverDeath } : {}),
+      ...(outcome.coveredWindowMs !== undefined ? { coveredWindowMs: outcome.coveredWindowMs } : {}),
       ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
     };
   } catch { /* no/invalid run-state.json: a partial report without terminal state is still valid */ }

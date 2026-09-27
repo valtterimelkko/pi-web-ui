@@ -12,7 +12,7 @@
  *      off (same CSV, same breaker states, same cycle count).
  */
 import path from 'node:path';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
 import { InspectorClient } from './inspector.js';
 import { getUnitStatus } from './systemd-units.js';
@@ -25,7 +25,7 @@ import { runWave, type DriverState } from './driver.js';
 import { sweepOrphans } from './orphan-sweep.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
-import { decideServerDeath, nextSocketUnreachableCount } from '../../server/src/live-validation/heap-soak/server-death.js';
+import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
 import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
 import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
@@ -68,9 +68,92 @@ async function main(): Promise<void> {
   const log = (event: LaneEvent) => appendLaneEvent(state.eventsLogPath, event);
   const elapsedNow = () => Date.now() - runStartMs;
 
+  /**
+   * Write the terminal report and send the final ping, idempotently. Shared by
+   * the normal run end and by STARTUP RECOVERY after a server death (B0
+   * correction): a supervisor that restarts into a dead server must finalise
+   * from saved state rather than leaving the run nonterminal for `report` to
+   * later default to `complete`. The death Telegram notice is sent at most once
+   * (guarded by `deathNoticeSentAt`).
+   */
+  async function finaliseRun(): Promise<void> {
+    const rows = existsSync(state.csvPath) ? parseSampleCsv(readFileSync(state.csvPath, 'utf8')) : [];
+    const events = readLaneEvents(state.eventsLogPath);
+    const died = state.terminalState === 'server_died' && state.serverDeath !== undefined;
+    const report = buildReport(rows, events, schedule, 'A', {
+      ...(died && state.serverDeath
+        ? { terminalState: 'server_died' as const, serverDeath: state.serverDeath, coveredWindowMs: state.serverDeath.elapsedMs }
+        : { terminalState: 'complete' as const }),
+      ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
+    });
+    const snapshotSection = await snapshotComparisonSection(state.runDir);
+
+    // Production-write / board-pollution audit at the run's end (owner
+    // amendment 2026-09-26) — required "at the long run's end" in addition to
+    // Gate 0/Gate 1.
+    let auditSection = '## Production-write / board-pollution audit\n\nSkipped: no prodAuditMarkerPath in run-state.\n';
+    if (state.prodAuditMarkerPath) {
+      const allSessionIds = events.filter((e) => e.kind === 'child_created' && e.sessionId).map((e) => e.sessionId as string);
+      const needles = buildAuditNeedles(state.runDir, allSessionIds);
+      const audit = await runProductionWriteAudit({ markerPath: state.prodAuditMarkerPath }, needles);
+      const board = await boardWhoUnderRunDir(state.runDir);
+      auditSection = [
+        '## Production-write / board-pollution audit',
+        '',
+        audit.matches.length === 0
+          ? `No leak: ${audit.changedFileCount} file(s) changed under the guarded production roots during the run; none referenced this run's child workspace or any of its ${allSessionIds.length} child session ids.`
+          : `**LEAK DETECTED**: ${JSON.stringify(audit.matches)}`,
+        board.ok ? `Board check: ${board.detail}` : `**BOARD POLLUTION**: ${board.detail}`,
+      ].join('\n');
+    }
+
+    const markdown = `${renderReportMarkdown(report, state.runId)}\n\n${snapshotSection}\n\n${auditSection}`;
+    writeFileSync(path.join(state.runDir, 'report.md'), markdown);
+    writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
+    if (died && state.serverDeath) {
+      if (!state.deathNoticeSentAt) {
+        await notify(
+          'blocked',
+          `server died at ${formatElapsedMs(state.serverDeath.elapsedMs)} after start`,
+          `run ${state.runId}: server DIED ${formatElapsedMs(state.serverDeath.elapsedMs)} in (${state.serverDeath.reason}); `
+            + `run ended as server_died; last good sample ${formatElapsedMs(state.lastGoodSampleElapsedMs ?? 0)}; `
+            + `verdict=${report.verdict} peakHeap=${report.peakHeapMB.toFixed(0)}MB. See report.md.`,
+        );
+        state.deathNoticeSentAt = new Date().toISOString();
+        saveRunState(runStatePath, state);
+      }
+    } else {
+      await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
+    }
+  }
+
   if (decision.action !== 'reattach') {
-    log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `${decision.action}: ${decision.reason}` });
-    await notify('blocked', 'disposable server unreachable', decision.reason);
+    // STARTUP RECOVERY (B0 correction): the server is already gone on (re)start
+    // — it may have died during this supervisor's systemd restart window, or a
+    // previous supervisor may have persisted the death but not finished. Pull
+    // the still-observable terminal evidence, terminalise idempotently, and
+    // finalise (report + one Telegram notice) instead of leaving the run
+    // nonterminal for a later `report` to default to `complete`.
+    const [exit, journal] = await Promise.all([
+      getUnitExitStatus(state.server.unitName),
+      getUnitJournalTail(state.server.unitName, 40),
+    ]);
+    const exitStatus = [exit.result, exit.execMainStatus && `exec-status=${exit.execMainStatus}`].filter(Boolean).join('/') || undefined;
+    const alreadyTerminal = state.terminalState === 'server_died' && state.serverDeath !== undefined;
+    if (!alreadyTerminal) {
+      recordServerDeath(state, {
+        reason: decision.reason,
+        detectedAt: new Date().toISOString(),
+        elapsedMs: state.lastGoodSampleElapsedMs ?? elapsedNow(),
+        activeState: serverStatus.activeState,
+        exitStatus,
+        journalLines: journal.slice(-40),
+      });
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `server died (startup recovery): ${decision.reason}` });
+      saveRunState(runStatePath, state);
+    }
+    console.error(`[supervisor] startup recovery: ${decision.reason}`);
+    await finaliseRun();
     process.exitCode = 1;
     return;
   }
@@ -149,17 +232,16 @@ async function main(): Promise<void> {
     ]);
     const exitStatus = [exit.result, exit.execMainStatus && `exec-status=${exit.execMainStatus}`].filter(Boolean).join('/') || undefined;
     const detectedAt = new Date().toISOString();
-    state.terminalState = 'server_died';
-    state.serverDeath = {
+    recordServerDeath(state, {
+      reason,
       detectedAt,
       elapsedMs: elapsedNow(),
-      reason,
       activeState: observation.activeState,
       exitStatus,
       journalLines: journal.slice(-40),
-    };
+    });
     state.lastGoodSampleElapsedMs = lastGoodSampleElapsedMs;
-    log({ ts: detectedAt, elapsedMs: state.serverDeath.elapsedMs, lane: 'A', kind: 'anomaly', detail: `server died: ${reason}` });
+    log({ ts: detectedAt, elapsedMs: state.serverDeath?.elapsedMs ?? elapsedNow(), lane: 'A', kind: 'anomaly', detail: `server died: ${reason}` });
     persist();
   }
 
@@ -364,53 +446,12 @@ async function main(): Promise<void> {
 
   await Promise.all([samplerLoop(), driverLoop(), livenessLoop()]);
   stopped = true;
+  // A run that reached this point without a detected death completed normally.
+  // Persisting `complete` means a later `report` (or a restart) can never
+  // mistake a finished run for an unrecovered death.
+  if (state.terminalState !== 'server_died') state.terminalState = 'complete';
   persist();
-
-  // Final report + final ping.
-  const rows = parseSampleCsv(readFileSync(state.csvPath, 'utf8'));
-  const events = readLaneEvents(state.eventsLogPath);
-  const died = state.terminalState === 'server_died' && state.serverDeath !== undefined;
-  const report = buildReport(rows, events, schedule, 'A', {
-    ...(died && state.serverDeath
-      ? { terminalState: 'server_died' as const, serverDeath: state.serverDeath, coveredWindowMs: state.serverDeath.elapsedMs }
-      : {}),
-    ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
-  });
-  const snapshotSection = await snapshotComparisonSection(state.runDir);
-
-  // Production-write / board-pollution audit at the run's end (owner
-  // amendment 2026-09-26) — required "at the long run's end" in addition to
-  // Gate 0/Gate 1.
-  let auditSection = '## Production-write / board-pollution audit\n\nSkipped: no prodAuditMarkerPath in run-state.\n';
-  if (state.prodAuditMarkerPath) {
-    const allSessionIds = events.filter((e) => e.kind === 'child_created' && e.sessionId).map((e) => e.sessionId as string);
-    const needles = buildAuditNeedles(state.runDir, allSessionIds);
-    const audit = await runProductionWriteAudit({ markerPath: state.prodAuditMarkerPath }, needles);
-    const board = await boardWhoUnderRunDir(state.runDir);
-    auditSection = [
-      '## Production-write / board-pollution audit',
-      '',
-      audit.matches.length === 0
-        ? `No leak: ${audit.changedFileCount} file(s) changed under the guarded production roots during the run; none referenced this run's isolated run-dir path or any of its ${allSessionIds.length} child session ids.`
-        : `**LEAK DETECTED**: ${JSON.stringify(audit.matches)}`,
-      board.ok ? `Board check: ${board.detail}` : `**BOARD POLLUTION**: ${board.detail}`,
-    ].join('\n');
-  }
-
-  const markdown = `${renderReportMarkdown(report, state.runId)}\n\n${snapshotSection}\n\n${auditSection}`;
-  writeFileSync(path.join(state.runDir, 'report.md'), markdown);
-  writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
-  if (died && state.serverDeath) {
-    await notify(
-      'blocked',
-      `server died at ${formatElapsedMs(state.serverDeath.elapsedMs)} after start`,
-      `run ${state.runId}: server DIED ${formatElapsedMs(state.serverDeath.elapsedMs)} in (${state.serverDeath.reason}); `
-        + `run ended as server_died; last good sample ${formatElapsedMs(lastGoodSampleElapsedMs)}; `
-        + `verdict=${report.verdict} peakHeap=${report.peakHeapMB.toFixed(0)}MB. See report.md.`,
-    );
-  } else {
-    await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
-  }
+  await finaliseRun();
 
   writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
   wsClient.close();

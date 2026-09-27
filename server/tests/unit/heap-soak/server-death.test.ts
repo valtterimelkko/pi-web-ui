@@ -3,6 +3,8 @@ import {
   SOCKET_UNREACHABLE_STRIKES,
   classifyServerLiveness,
   decideServerDeath,
+  recordServerDeath,
+  resolveReportedRunOutcome,
   type ServerLivenessObservation,
 } from '../../../src/live-validation/heap-soak/server-death.js';
 import type { RunState } from '../../../src/live-validation/heap-soak/run-state.js';
@@ -79,5 +81,53 @@ describe('decideServerDeath', () => {
     const decision = decideServerDeath(runState(), obs({ socketReachable: false }), SOCKET_UNREACHABLE_STRIKES);
     expect(decision.died).toBe(true);
     expect(decision.reason).toMatch(/socket is unreachable/i);
+  });
+});
+
+describe('recordServerDeath', () => {
+  it('terminalises a nonterminal run with the death evidence', () => {
+    const state = runState();
+    recordServerDeath(state, { reason: 'unit gone', detectedAt: '2026-09-27T13:53:36Z', elapsedMs: 45_585, activeState: 'deactivating', exitStatus: 'signal/9', journalLines: ['line'] });
+    expect(state.terminalState).toBe('server_died');
+    expect(state.serverDeath).toMatchObject({ reason: 'unit gone', elapsedMs: 45_585, activeState: 'deactivating', exitStatus: 'signal/9', journalLines: ['line'] });
+  });
+
+  it('is idempotent: an existing death is never overwritten', () => {
+    const state = runState();
+    state.terminalState = 'server_died';
+    state.serverDeath = { detectedAt: 'first', elapsedMs: 1, reason: 'first' };
+    recordServerDeath(state, { reason: 'second', detectedAt: 'second', elapsedMs: 2 });
+    expect(state.serverDeath.reason).toBe('first');
+    expect(state.serverDeath.detectedAt).toBe('first');
+  });
+});
+
+describe('resolveReportedRunOutcome', () => {
+  const obsGone = { loadState: 'not-found', activeState: 'inactive', mainPid: undefined };
+  const obsAlive = { loadState: 'active', activeState: 'active', mainPid: 4242 };
+  const evidence = { detectedAt: '2026-09-27T13:53:36Z', elapsedMs: 45_585, reason: 'server unit gone' };
+
+  it('uses a persisted server death', () => {
+    const state = runState();
+    state.terminalState = 'server_died';
+    state.serverDeath = { detectedAt: 'd', elapsedMs: 5, reason: 'r' };
+    expect(resolveReportedRunOutcome(state, obsGone, evidence).terminalState).toBe('server_died');
+  });
+
+  it('keeps a completed run complete even after its server has since stopped', () => {
+    const state = runState();
+    state.terminalState = 'complete';
+    expect(resolveReportedRunOutcome(state, obsGone, evidence).terminalState).toBe('complete');
+  });
+
+  it('renders a nonterminal run whose server is gone as server_died, never complete', () => {
+    const outcome = resolveReportedRunOutcome(runState(), obsGone, evidence);
+    expect(outcome.terminalState).toBe('server_died');
+    expect(outcome.serverDeath?.reason).toBe('server unit gone');
+    expect(outcome.coveredWindowMs).toBe(45_585);
+  });
+
+  it('renders a nonterminal run whose server is still the recorded process as complete', () => {
+    expect(resolveReportedRunOutcome(runState(), obsAlive, evidence).terminalState).toBe('complete');
   });
 });

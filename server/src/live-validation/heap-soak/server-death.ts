@@ -18,7 +18,8 @@
  *
  * Pure and unit-tested; the systemd/journal I/O lives in scripts/heap-soak/.
  */
-import type { RunState } from './run-state.js';
+import type { RunState, RunTerminalState, ServerDeathRecord } from './run-state.js';
+import { decideReattach } from './run-state.js';
 
 export interface ServerLivenessObservation {
   /** `systemctl show -p LoadState`. */
@@ -93,4 +94,82 @@ export function decideServerDeath(
  */
 export function nextSocketUnreachableCount(previousCount: number, observation: ServerLivenessObservation): number {
   return observation.socketReachable ? 0 : previousCount + 1;
+}
+
+/** The evidence recorded when a death is terminalised (gathered by the caller from systemd/journal). */
+export interface ServerDeathEvidence {
+  reason: string;
+  /** ISO timestamp the death was detected/finalised. */
+  detectedAt: string;
+  /** Milliseconds since run start. */
+  elapsedMs: number;
+  activeState?: string;
+  exitStatus?: string;
+  journalLines?: string[];
+}
+
+/**
+ * Terminalise a run as `server_died` from saved run state, idempotently.
+ *
+ * Used both by the in-run liveness loop and by STARTUP RECOVERY: if the server
+ * died during the supervisor's systemd restart window (or the supervisor
+ * restarted after persisting the death but before finalising), a fresh
+ * supervisor must be able to terminalise from what it can still observe. An
+ * already-recorded death is never overwritten, so a restart cannot rewrite the
+ * original detection time or evidence.
+ */
+export function recordServerDeath(state: RunState, evidence: ServerDeathEvidence): RunState {
+  if (state.terminalState === 'server_died' && state.serverDeath) return state;
+  state.terminalState = 'server_died';
+  state.serverDeath = {
+    detectedAt: evidence.detectedAt,
+    elapsedMs: evidence.elapsedMs,
+    reason: evidence.reason,
+    activeState: evidence.activeState,
+    exitStatus: evidence.exitStatus,
+    journalLines: evidence.journalLines,
+  };
+  return state;
+}
+
+export interface ReportedRunOutcome {
+  terminalState: RunTerminalState;
+  serverDeath?: ServerDeathRecord;
+  /** Window (ms) a report should measure coverage/verdict against. */
+  coveredWindowMs?: number;
+}
+
+/**
+ * Decide how a `report` renders a run. A **nonterminal** run whose server is
+ * gone is a server death, never `complete` (B0 correction: a supervisor that
+ * died in its restart window used to leave the run nonterminal, and `report`
+ * then defaulted it to a full-schedule `complete`). A run that recorded
+ * `complete` stays complete even after its transient server unit has since
+ * been stopped or collected.
+ */
+export function resolveReportedRunOutcome(
+  state: RunState,
+  observation: { loadState: string; activeState?: string; mainPid?: number },
+  evidence: ServerDeathEvidence,
+): ReportedRunOutcome {
+  if (state.terminalState === 'server_died' && state.serverDeath) {
+    return { terminalState: 'server_died', serverDeath: state.serverDeath, coveredWindowMs: state.serverDeath.elapsedMs };
+  }
+  if (state.terminalState === 'complete') return { terminalState: 'complete' };
+  const decision = decideReattach(state, { loadState: observation.loadState, mainPid: observation.mainPid });
+  if (decision.action !== 'reattach') {
+    return {
+      terminalState: 'server_died',
+      serverDeath: {
+        detectedAt: evidence.detectedAt,
+        elapsedMs: evidence.elapsedMs,
+        reason: evidence.reason,
+        activeState: evidence.activeState,
+        exitStatus: evidence.exitStatus,
+        journalLines: evidence.journalLines,
+      },
+      coveredWindowMs: evidence.elapsedMs,
+    };
+  }
+  return { terminalState: 'complete' };
 }
