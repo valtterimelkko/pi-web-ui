@@ -295,9 +295,22 @@ tail -n 1 ~/.pi-web-ui/metrics/health-metrics.jsonl | jq '.heapLimitBytes'
 ```
 
 `validate:server` sets `PI_WEB_UI_VALIDATION_MODE=true`, which moves the default
-under the run directory (`<validation dir>/metrics`). A validation server that is
-somehow pointed at the production metrics path **refuses to start the sampler**
-and says so in its log — a disposable run can never overwrite production history.
+under the run directory (`<validation dir>/metrics`). An explicit
+`OBSERVABILITY_METRICS_DIR` is honoured **only if it canonicalises inside that
+run directory**; anything else — the real production metrics directory, any path
+outside the run directory, or a path that reaches outside through a symlink —
+**disables the sampler** and writes a loud line naming the refused path:
+
+```
+[HealthTelemetry] disabled: refusing to write /root/.pi-web-ui/metrics from a validation server: it is the production metrics path
+[HealthTelemetry] disabled: refusing to write /srv/other/metrics from a validation server: it is outside the validation run directory (/root/a2-validation/run5/validation)
+```
+
+The production boundary is **not** `HOME`: a disposable child is given a fake
+`HOME`, so `os.homedir()` would call the real production path “not production”.
+The real production directory is derived from the account database
+(`os.userInfo().homedir`), and containment is decided on resolved
+(realpath-followed) paths.
 
 ### Alerts with hysteresis
 
@@ -322,6 +335,12 @@ Each transition is logged and delivered:
 [HealthTelemetry] heap_pressure recovery: heap pressure cleared: 74.1% of the 4288 MB V8 heap limit (recovered below 75.0%)
 ```
 
+Alerting does not depend on the metrics file: if an append fails (EACCES, ENOSPC,
+an unreadable directory) the failure is logged, counted
+(`HealthTelemetry.appendFailures`), and the latches are still evaluated and
+delivered. A disk problem must never silence the alert that says the process is
+in trouble.
+
 Delivery reuses the notification layer — no second Telegram client:
 
 - `OBSERVABILITY_HEALTH_ALERT_SINK=notifications` (the production default)
@@ -333,6 +352,17 @@ Delivery reuses the notification layer — no second Telegram client:
   capture file. This is the default under `PI_WEB_UI_VALIDATION_MODE=true`, and
   the startup line says so: `alerts → file:… (operator notifications suppressed)`.
 - `OBSERVABILITY_HEALTH_ALERT_SINK=none` disables delivery (the log lines stay).
+
+**In validation mode the sink is always non-delivering.** `notifications` is
+ignored (with a warning naming the override) and any `file:` target must
+canonicalise inside the run directory; one that escapes is refused and disables
+telemetry. So a disposable server that inherits `NOTIFICATIONS_ENABLED` and
+Telegram credentials still cannot message the operator:
+
+```
+[HealthTelemetry] OBSERVABILITY_HEALTH_ALERT_SINK=notifications is ignored in validation mode: alerts are captured to a file and operator notifications are suppressed.
+[HealthTelemetry] disabled: refusing alert sink /root/.pi-web-ui/metrics/alerts.jsonl from a validation server: it is outside the validation run directory (/root/a2-validation/run5r2/validation)
+```
 
 ### The `Memory:` journal line
 
@@ -363,26 +393,29 @@ still answers “what was the heap?”, and
 
 ### Knobs
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `OBSERVABILITY_METRICS_ENABLED` | `true` | Master switch for the sampler. |
-| `OBSERVABILITY_METRICS_DIR` | `~/.pi-web-ui/metrics` | Absolute directory for the metrics file. |
-| `OBSERVABILITY_METRICS_INTERVAL_MS` | `30000` | Sampling cadence. |
-| `OBSERVABILITY_METRICS_MAX_FILE_BYTES` | `5242880` | Rotation trigger per generation. |
-| `OBSERVABILITY_METRICS_MAX_FILES` | `5` | Generations kept (including the current file). |
-| `OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION` | `0.85` | Heap alert high water mark (fraction of `heap_size_limit`). |
-| `OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` | `0.75` | Heap alert low water mark (must be lower). |
-| `OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` | `500` | Lag alert high water mark (ms). |
-| `OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` | `200` | Lag alert low water mark (must be lower). |
-| `OBSERVABILITY_HEALTH_ALERT_SINK` | `notifications` | `notifications`, `file:<absolute path>` or `none`. |
-| `OBSERVABILITY_MEMORY_JOURNAL_MIN_DELTA_MB` | `100` | Significant heap change for a `Memory:` line. |
-| `OBSERVABILITY_MEMORY_JOURNAL_HEARTBEAT_MS` | `1800000` | `Memory:` heartbeat interval. |
-| `OBSERVABILITY_MEMORY_JOURNAL_HEAP_MB` | `500` | Heartbeat only from this heap usage. |
-| `OBSERVABILITY_MEMORY_JOURNAL_SESSIONS` | `5` | Heartbeat only above this resident-session count. |
+| Variable | Default | Bounds / allowed values | Meaning |
+|---|---|---|---|
+| `OBSERVABILITY_METRICS_ENABLED` | `true` | `true`/`false` | Master switch for the sampler. |
+| `OBSERVABILITY_METRICS_DIR` | `~/.pi-web-ui/metrics` | absolute path; in validation mode must resolve inside the run directory | Directory for the metrics file. |
+| `OBSERVABILITY_METRICS_INTERVAL_MS` | `30000` | `1000`–`3600000` | Sampling cadence. |
+| `OBSERVABILITY_METRICS_MAX_FILE_BYTES` | `5242880` | `1024`–`268435456` | Rotation trigger per generation. |
+| `OBSERVABILITY_METRICS_MAX_FILES` | `5` | `1`–`100` | Generations kept (including the current file). |
+| `OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION` | `0.85` | `(0, 1]` | Heap alert high water mark (fraction of `heap_size_limit`). |
+| `OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` | `0.75` | below the high mark | Heap alert low water mark. |
+| `OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` | `500` | `>= 0` | Lag alert high water mark (ms). |
+| `OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` | `200` | below the high mark | Lag alert low water mark. |
+| `OBSERVABILITY_HEALTH_ALERT_SINK` | `notifications` | `notifications`, `file:<absolute path>`, `none` | Alert delivery target (forced to a capture file in validation mode). |
+| `OBSERVABILITY_MEMORY_JOURNAL_MIN_DELTA_MB` | `100` | `>= 0` | Significant heap change for a `Memory:` line. |
+| `OBSERVABILITY_MEMORY_JOURNAL_HEARTBEAT_MS` | `1800000` | `>= 1` | `Memory:` heartbeat interval. |
+| `OBSERVABILITY_MEMORY_JOURNAL_HEAP_MB` | `500` | `>= 0` | Heartbeat only from this heap usage. |
+| `OBSERVABILITY_MEMORY_JOURNAL_SESSIONS` | `5` | `>= 0` | Heartbeat only above this resident-session count. |
 
-Invalid values fail fast at start-up (a non-hysteretic band, a relative metrics
-directory, an unknown sink). An unreadable or failing source hides a single
-field as `null`/`0`; telemetry never takes the control plane down.
+Out-of-range or non-integer sampling/rotation values **fall back to the default
+and are logged as a warning** at start-up; the interval bound exists because Node
+clamps a `setInterval` delay above `2**31-1` ms to 1 ms (a 30 s sampler would
+become a busy loop). A non-hysteretic alert band, a relative metrics directory or
+an unknown sink value fail fast instead. An unreadable or failing source hides a
+single field as `null`/`0`; telemetry never takes the control plane down.
 
 ### For admission work (B2)
 
@@ -399,7 +432,9 @@ disposable-server driver, deliberately not a vitest test) boots under a lowered
 threshold band and proves: the file grows at the configured cadence and rotates
 within its bound; one heap alert and one recovery, driven by a real heap rise
 and a real CDP-forced GC; alerts captured to a file rather than messaged; and
-journal lines per hour under the same load as the pre-A2 gate. See
+journal lines per hour under the same load as the pre-A2 gate. Its refusal mode
+(`--mode refusal --expect-refusal-text <path>`) proves a forbidden metrics
+directory or alert sink disables telemetry and writes nothing. See
 [`plans/execution-reports/orchestration-scaling/A2.md`](./plans/execution-reports/orchestration-scaling/A2.md)
 for the exact commands and the recorded numbers.
 
