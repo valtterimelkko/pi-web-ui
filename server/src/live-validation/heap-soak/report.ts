@@ -1,6 +1,7 @@
 import { parseCsvWithHeader } from './csv.js';
 import { computeVerdict, leastSquaresSlope, type LeakVerdict, type SlopePoint, type SlopeResult, type VerdictRule } from './slope.js';
 import { phaseAt, type ScheduleConfig } from './phases.js';
+import type { RunTerminalState, ServerDeathRecord } from './run-state.js';
 import type { LaneEvent, LaneName } from './types.js';
 
 export interface ReportSampleRow {
@@ -173,6 +174,8 @@ export interface SampleCoverage {
   expectedCount: number;
   actualCount: number;
   coveragePct: number;
+  /** Window (ms) coverage is measured against: the full schedule, or the observed window when a run ends early. */
+  windowMs: number;
   /** The largest gap between consecutive samples, expressed in units of the expected interval. */
   maxGapIntervals: number;
 }
@@ -197,6 +200,7 @@ export function computeSampleCoverage(samples: readonly ReportSampleRow[], sampl
     expectedCount,
     actualCount: samples.length,
     coveragePct: expectedCount > 0 ? (samples.length / expectedCount) * 100 : 0,
+    windowMs: totalMs,
     maxGapIntervals,
   };
 }
@@ -220,6 +224,27 @@ export interface HeapSoakReport {
   /** The verdict rule this report was judged against — declared/fixed in code, not tuned after seeing the data. */
   verdictRule: VerdictRule;
   sampleCoverage: SampleCoverage;
+  /** How the run ended (B0 defect 1): a normal `complete`, or a terminal `server_died`. */
+  terminalState: RunTerminalState;
+  /** The recorded death evidence when `terminalState === 'server_died'`. */
+  serverDeath?: ServerDeathRecord;
+  /** B0 defect 6: extension overlay directories applied to the isolated agent dir. */
+  extensionsOverlays?: string[];
+}
+
+/** Optional terminal-state + observed-window input for {@link buildReport}. */
+export interface BuildReportOptions {
+  terminalState?: RunTerminalState;
+  serverDeath?: ServerDeathRecord;
+  /** B0 defect 6: overlay source dirs to record in the report. */
+  extensionsOverlays?: readonly string[];
+  /**
+   * The elapsed window the run actually covered. When a server death ends a
+   * run early, coverage must be measured against the observed window rather
+   * than the full schedule — otherwise a dead run reports a fake 20% coverage
+   * that hides the fact the run stopped.
+   */
+  coveredWindowMs?: number;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -233,11 +258,13 @@ export function buildReport(
   events: readonly LaneEvent[],
   config: ScheduleConfig,
   backboneLane: LaneName = 'A',
+  options: BuildReportOptions = {},
 ): HeapSoakReport {
   const points: SlopePoint[] = samples.map((s) => ({ tMs: s.elapsedMs, valueMB: s.heapUsedMB }));
   const { verdict, overall, trailing, rule } = computeVerdict(points);
   const lags = samples.map((s) => s.eventLoopLagMsProxy).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
   const laneStats = computeLaneStats(events);
+  const coveredWindowMs = options.coveredWindowMs ?? config.totalMs;
   return {
     sampleCount: samples.length,
     peakHeapMB: samples.reduce((max, s) => Math.max(max, s.heapUsedMB), 0),
@@ -258,7 +285,10 @@ export function buildReport(
     generatedFrom: { csvRows: samples.length, eventRows: events.length },
     backboneLane,
     verdictRule: rule,
-    sampleCoverage: computeSampleCoverage(samples, config.sampleIntervalMs, config.totalMs),
+    sampleCoverage: computeSampleCoverage(samples, config.sampleIntervalMs, coveredWindowMs),
+    terminalState: options.terminalState ?? 'complete',
+    ...(options.serverDeath ? { serverDeath: options.serverDeath } : {}),
+    ...(options.extensionsOverlays && options.extensionsOverlays.length > 0 ? { extensionsOverlays: [...options.extensionsOverlays] } : {}),
   };
 }
 
@@ -266,9 +296,33 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   const lines: string[] = [];
   lines.push(`# Heap soak report — ${runId}`);
   lines.push('');
+  if (report.terminalState === 'server_died' && report.serverDeath) {
+    const d = report.serverDeath;
+    lines.push(`## ⛔ SERVER DIED — this run did NOT complete`);
+    lines.push('');
+    lines.push(`The disposable server under test died ${formatElapsedMs(d.elapsedMs)} into the run, at ${d.detectedAt}. ` +
+      `The supervisor detected it and ended the run as \`server_died\`; the load driver was stopped. ` +
+      `All numbers below cover only the window up to the death and are NOT a 24 h result.`);
+    lines.push('');
+    lines.push(`- Reason: ${d.reason}`);
+    if (d.activeState) lines.push(`- Unit state at detection: ${d.activeState}`);
+    if (d.exitStatus) lines.push(`- Unit exit status: ${d.exitStatus}`);
+    if (d.journalLines && d.journalLines.length > 0) {
+      lines.push('- Last journal lines:');
+      lines.push('');
+      lines.push('```');
+      for (const line of d.journalLines) lines.push(line);
+      lines.push('```');
+    }
+    lines.push('');
+  }
   lines.push(`**Verdict: ${report.verdict.toUpperCase()}** — trailing slope ${report.trailingSlope.slopeMBPerHour.toFixed(2)} MB/h `
     + `(overall ${report.overallSlope.slopeMBPerHour.toFixed(2)} MB/h), ${report.sampleCount} samples, peak heap ${report.peakHeapMB.toFixed(1)} MB.`);
   lines.push('');
+  if (report.extensionsOverlays && report.extensionsOverlays.length > 0) {
+    lines.push(`Extensions overlay (B0): ${report.extensionsOverlays.map((d) => `\`${d}\``).join(', ')}.`);
+    lines.push('');
+  }
   lines.push(`Verdict rule (declared before the run, not tuned after seeing the data): leak if the trailing `
     + `${report.verdictRule.trailingWindowHours}h post-GC slope exceeds ${report.verdictRule.slopeThresholdMBPerHour} MB/h `
     + `(requires at least ${report.verdictRule.minSpanHoursForVerdict}h of data, else 'inconclusive').`);
@@ -277,6 +331,10 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   lines.push(`${report.sampleCoverage.actualCount}/${report.sampleCoverage.expectedCount} expected samples `
     + `(${report.sampleCoverage.coveragePct.toFixed(1)}%), largest gap ${report.sampleCoverage.maxGapIntervals.toFixed(1)} sample intervals `
     + `(target: >=95% coverage, no gap >3 intervals except a declared snapshot).`);
+  if (report.terminalState === 'server_died') {
+    lines.push('');
+    lines.push(`Coverage is measured against the observed window (${formatElapsedMs(report.sampleCoverage.windowMs)}), not the unrun schedule — the server died.`);
+  }
   lines.push('');
   lines.push('## Per-phase slope (MB/h)');
   for (const p of report.perPhase) {
@@ -310,4 +368,12 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   lines.push('');
   lines.push(`Orphans swept overall: ${report.orphanCount}`);
   return lines.join('\n');
+}
+
+/** Human-readable elapsed duration for the report header (e.g. "5 h 03 min"). */
+export function formatElapsedMs(ms: number): string {
+  const totalMinutes = Math.max(0, Math.round(ms / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours} h ${String(minutes).padStart(2, '0')} min` : `${minutes} min`;
 }

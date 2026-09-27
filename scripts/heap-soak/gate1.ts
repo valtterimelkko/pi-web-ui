@@ -17,11 +17,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { launchDisposableServer } from './launcher.js';
 import { teardownUnits, assertUnitsAbsent } from './teardown.js';
-import { computeChecksums } from './checksum-io.js';
+import { computeChecksums, hashDirectoryTree } from './checksum-io.js';
 import { notify } from './telegram.js';
 import { getUnitStatus, killUnit, startTransientUnit, waitForMainPid } from './systemd-units.js';
 import { appendLaneEvent, readLaneEvents } from './events-log.js';
-import { productionGuardedPaths, diffChecksums } from '../../server/src/live-validation/heap-soak/isolation.js';
+import { productionGuardedPaths, diffChecksums, sha256Hex } from '../../server/src/live-validation/heap-soak/isolation.js';
+import { EXTENSION_ENTRY_FILES } from '../../server/src/live-validation/heap-soak/extensions-overlay.js';
 import { parseCsvWithHeader } from '../../server/src/live-validation/heap-soak/csv.js';
 import { FORCE_BAD_LANE_ENV_KEY } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { QUOTA_INJECT_ENV_KEY } from './quota-poll.js';
@@ -53,12 +54,15 @@ async function csvRowCount(csvPath: string): Promise<number> {
   return parseCsvWithHeader(readFileSync(csvPath, 'utf8')).rows.length;
 }
 
-export async function runGate1(): Promise<void> {
+export async function runGate1(options: { extensionsOverlays?: readonly string[] } = {}): Promise<void> {
   const runId = `micro-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const prodPaths = productionGuardedPaths(homedir());
   const before = computeChecksums(prodPaths);
+  // B0 defect 6: prove an overlay never touches the real extensions directory.
+  const productionExtensionsDir = path.join(homedir(), '.pi', 'agent', 'extensions');
+  const productionExtensionsHashBefore = hashDirectoryTree(productionExtensionsDir);
 
-  const launch = await launchDisposableServer(runId, 'micro');
+  const launch = await launchDisposableServer(runId, 'micro', { extensionsOverlays: options.extensionsOverlays });
   const statusPath = path.join(launch.paths.runDir, 'gate1-status.json');
   const status: StatusFile = { runId, step: 'launched', startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), steps: [], done: false };
   const record = (name: string, ok: boolean, detail: string) => {
@@ -70,6 +74,14 @@ export async function runGate1(): Promise<void> {
   };
   writeStatus(statusPath, status);
   record('server launched', true, `unit=${launch.serverUnit} pid=${launch.serverMainPid}`);
+
+  // B0 defect 6 positive control: the overlaid extension file is present in the
+  // ISOLATED agent dir (never the production one).
+  for (const applied of launch.extensionsOverlaysApplied) {
+    const entryFile = EXTENSION_ENTRY_FILES.map((name) => path.join(applied.dest, name)).find((candidate) => existsSync(candidate));
+    const checksum = entryFile ? sha256Hex(readFileSync(entryFile)) : 'MISSING';
+    record(`extensions overlay applied: ${applied.name} present in isolated agent dir`, Boolean(entryFile), entryFile ? `${entryFile} sha256=${checksum}` : `no index.* under ${applied.dest}`);
+  }
 
   await notify('milestone', 'micro-soak start', `run ${runId}; schedule=micro (~20min); lane B forced bad for the whole run to exercise the amendment; injected zai quota sequence normal->throttled->paused->normal`);
 
@@ -194,7 +206,7 @@ export async function runGate1(): Promise<void> {
   const allSessionIds = readLaneEvents(launch.paths.eventsLogPath)
     .filter((e) => e.kind === 'child_created' && e.sessionId)
     .map((e) => e.sessionId as string);
-  const auditNeedles = buildAuditNeedles(runId, launch.paths.runDir, allSessionIds);
+  const auditNeedles = buildAuditNeedles(launch.paths.runDir, allSessionIds);
   const audit = await runProductionWriteAudit({ markerPath: launch.auditMarkerPath }, auditNeedles);
   record(
     'production-write audit: no changed file references this run',
@@ -218,6 +230,15 @@ export async function runGate1(): Promise<void> {
   const registryPath = path.join(homedir(), '.pi-web-ui', 'session-registry.json');
   const staticMismatches = mismatches.filter((m) => m.path !== registryPath);
   record('no STATIC production file changed', staticMismatches.length === 0, staticMismatches.length === 0 ? 'ok' : JSON.stringify(staticMismatches));
+
+  if (launch.extensionsOverlaysApplied.length > 0) {
+    const productionExtensionsHashAfter = hashDirectoryTree(productionExtensionsDir);
+    record(
+      'extensions overlay: production ~/.pi/agent/extensions untouched (checksum before/after)',
+      productionExtensionsHashBefore === productionExtensionsHashAfter,
+      `before=${productionExtensionsHashBefore} after=${productionExtensionsHashAfter}`,
+    );
+  }
 
   status.done = true;
   writeStatus(statusPath, status);

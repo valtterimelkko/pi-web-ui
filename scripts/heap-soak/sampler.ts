@@ -20,7 +20,6 @@ export async function takeSample(ctx: SampleContext): Promise<HeapSample> {
 
   let activeTurns: number | undefined;
   let stalledRuns: number | undefined;
-  let residentSessionCount: number | undefined;
   let registryEntryCount: number | undefined;
   try {
     const capacity = await ctx.client.getCapacity();
@@ -28,8 +27,16 @@ export async function takeSample(ctx: SampleContext): Promise<HeapSample> {
     stalledRuns = capacity.stalledRuns;
   } catch { /* capacity is best-effort telemetry, never fatal to a sample */ }
   try {
+    // Registry size only. The disposable server's `GET /sessions` returns the
+    // seeded registry (~1,700 entries, mimicking production), NOT the live
+    // in-memory Pi session count. B0 defect 3: the old `residentSessionCount`
+    // wrote this same number under a second name. No existing server source
+    // exposes a live resident-session count (capacity has no such field;
+    // diagnostics' session counts are registry-derived;
+    // MultiSessionManager.getMemoryStats().sessionCount is never routed), so
+    // the column is dropped rather than duplicated. See B0.md and
+    // sampler-fields.test.ts.
     const sessions = await ctx.client.listSessions();
-    residentSessionCount = sessions.sessions.length;
     registryEntryCount = sessions.sessions.length;
   } catch { /* same */ }
 
@@ -50,7 +57,6 @@ export async function takeSample(ctx: SampleContext): Promise<HeapSample> {
     eventLoopLagMsProxy: lagMs,
     activeTurns,
     stalledRuns,
-    residentSessionCount,
     registryEntryCount,
     freeDiskGB,
   };

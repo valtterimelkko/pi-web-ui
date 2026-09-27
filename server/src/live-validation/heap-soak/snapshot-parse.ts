@@ -29,11 +29,20 @@ export interface ConstructorAggregate {
  * pure/synchronous so it stays unit-testable without spawning anything.
  */
 export function aggregateByConstructor(jsonText: string): ConstructorAggregate[] {
-  const parsed = JSON.parse(jsonText) as {
-    snapshot?: { meta?: { node_fields?: string[]; node_types?: unknown[][] } };
-    nodes?: number[];
-    strings?: string[];
-  };
+  return aggregateParsedByConstructor(JSON.parse(jsonText));
+}
+
+/**
+ * Same aggregation as {@link aggregateByConstructor}, but from an already-parsed
+ * snapshot. The large-heap worker parses each snapshot once and reuses the
+ * parsed object for the retainer analysis, so it must not be forced to parse a
+ * multi-hundred-MB document twice.
+ */
+export function aggregateParsedByConstructor(parsed: {
+  snapshot?: { meta?: { node_fields?: string[]; node_types?: unknown[][] } };
+  nodes?: number[];
+  strings?: string[];
+}): ConstructorAggregate[] {
   if (!parsed.snapshot || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.strings)) {
     throw new Error('Not a valid .heapsnapshot document (missing snapshot/nodes/strings)');
   }

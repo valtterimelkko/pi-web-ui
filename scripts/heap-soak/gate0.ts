@@ -163,7 +163,7 @@ export async function runGate0(): Promise<Gate0Result> {
       // CONTENT references this run — the precise proof, since mtime alone
       // is not (see the session-registry.json finding below). Runs BEFORE
       // deleteRunDir, which would otherwise remove the marker file itself.
-      const needles = buildAuditNeedles(runId, expectedRunDir, harnessSessionIds);
+      const needles = buildAuditNeedles(expectedRunDir, harnessSessionIds);
       const audit = await runProductionWriteAudit({ markerPath: launch.auditMarkerPath }, needles);
       record(
         'production-write audit: no changed file under ~/.pi/agent, ~/.pi-web-ui, board-store or memory-vault references this run',

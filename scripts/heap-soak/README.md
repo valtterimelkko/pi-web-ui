@@ -42,10 +42,64 @@ it?** heapUsed alone is not proof of a leak — it includes uncollected garbage
 | Driver | `driver.ts` + `lanes.ts` + `wave-target.ts` | Time-boxed waves of tool-using Pi children across model lanes; see **Load model** below. |
 | Circuit breaker | `circuit-breaker.ts` | Per-lane consecutive-failure breaker with cooldown; pure state machine. |
 | Orphan sweep | `orphan-sweep.ts` + `orphans.ts` | Reconciles the events log's `child_created`/`child_deleted` pairs once per cycle; deletes anything still open. |
-| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. |
-| Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase + per-quota-state), idle-return-to-baseline, sample coverage, the verdict rule itself, lane stats, verdict. |
-| Snapshot summary + diff | `snapshot-parse.ts` (pure) + `snapshot-diff.ts` + `snapshot-diff-worker.ts` | `.heapsnapshot` structural parser: headline totals, and `aggregateByConstructor`/`diffAggregates` for a first-vs-last self-size/count-by-constructor comparison (top growers). The actual parse runs in a separate `--max-old-space-size=8192` process so a large snapshot never pressures the caller; a size-guarded skip (with DevTools instructions) covers snapshots too big for that. |
-| Production-write audit + board check | `prod-audit.ts` (pure) + `prod-audit-io.ts` + `board-check.ts` | Fast `find -newer <marker>` scan across the guarded production roots, content-checked for this run's id/dir/session ids; `agent-os board who --json` filtered to this run's dir. See **Board-pollution fix** below. |
+| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. Checks server liveness (unit state + MainPID + socket) every cycle; on death it stops the load driver and ends the run as `server_died` with the death evidence. If it restarts into an already-dead server, startup recovery terminalises idempotently from saved state — but a run already recorded `complete` is never reclassified (correction 03). |
+| Server liveness | `liveness-io.ts` + `server-death.ts` (pure) | Reads the unit's `ActiveState`/`Result`/`ExecMainStatus` and a bounded journal tail, tests socket reachability, and decides death from the recorded unit/PID identity (never from the sampler's own failures). A transient socket blip is tolerated for up to 3 consecutive observations. |
+| Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase + per-quota-state), idle-return-to-baseline, sample coverage, the verdict rule itself, lane stats, verdict; and a prominent `SERVER DIED` header when the run ended as `server_died`. |
+| Snapshot summary + diff | `snapshot-parse.ts` (pure) + `snapshot-retainers.ts` (pure) + `snapshot-selection.ts` (pure) + `snapshot-diff.ts` + `snapshot-diff-worker.ts` | `.heapsnapshot` structural parser plus retainer-path BFS and a cut test. Uses the latest **valid** (non-empty, parseable) snapshot — a 0-byte declared snapshot is skipped and named — and runs the parse+analysis in a separate `--max-old-space-size=12288` process. |
+| Production-write audit + board check | `prod-audit.ts` (pure) + `prod-audit-io.ts` + `board-check.ts` | Fast `find -newer <marker>` scan across the guarded production roots, content-checked for markers only a soak child emits (the isolated **child-workspace** path `<runDir>/children/…` and child session ids — **neither** the bare run id **nor** the bare run-dir path, both of which false-positive on operator discussion and orchestration logs); `agent-os board who --json` filtered to this run's dir. |
+
+## B0 harness fixes (2026-09-27)
+
+The A1 soak exposed harness defects that made it an untrustworthy instrument
+(see `docs/plans/execution-reports/orchestration-scaling/A1-soak.md` §6). B0
+fixes them:
+
+1. **Server-death detection.** The supervisor checks the server unit's
+   `ActiveState`/MainPID and the Internal API socket's reachability every
+   cycle. Death is proved from the recorded unit/PID identity, never from a
+   failed sample; a still-active unit with an unreachable socket is tolerated
+   for up to three consecutive observations. On death the load driver stops
+   and the run ends as `server_died`, recording the death time, the last good
+   sample, the unit's exit status and a bounded journal tail; `report.md`
+   leads with it and the final Telegram message says "server died at … after
+   …" instead of "complete". Coverage is measured against the observed
+   window, not the unrun schedule. A supervisor that **restarts into an
+   already-dead server** (it died during `Restart=on-failure`'s window)
+   terminalises idempotently at startup from saved state + unit identity; a
+   run already recorded `complete` is **never** reclassified as a death, and
+   `report` on a nonterminal run whose server is gone renders `server_died`,
+   not `complete`. The death/completion Telegram notice is sent **at least
+   once, normally once**: the notice is sent before its marker is persisted,
+   so a crash in between re-sends it on restart — an explicitly accepted
+   at-least-once guarantee, not exactly-once, with no outbox machinery.
+2. **Snapshot robustness.** The comparison uses the latest *valid* (non-empty)
+   snapshot against the start one, skipping and naming any 0-byte/corrupt
+   candidate and falling back to the heap-threshold snapshots. It adds a
+   retainer-path summary (shortest BFS chain per instance of the top growing
+   constructors, and always `AgentSession`) plus a cut test showing reachable
+   bytes/instances with and without the top retaining structures.
+3. **Sampler columns.** `residentSessionCount` and `registryEntryCount` were
+   both the `GET /sessions` length. `residentSessionCount` is dropped — no
+   existing server source exposes a live in-memory Pi session count (see
+   `sampler-fields.test.ts` and B0.md). The ~1,700 sessions listed at t=0 are
+   the deliberate registry seed (`registry-seed.ts`), not a foreign-registry
+   leak.
+4. **Soak memory limit.** The unit now runs `MemoryMax=12G`/`MemoryHigh=10G`
+   (was `MemoryMax=6G`), chosen so cgroup admission cannot throttle the load
+   before the 4 GiB V8 heap cap binds. See `resources.ts` for the measured A1
+   grounding and the arithmetic.
+5. **Production-write audit.** Attribution is by markers only a soak child
+   emits — the isolated child-workspace path (`<runDir>/children/…`, the
+   child's cwd) and child session ids — not the bare run id (which
+   false-positived on operator sessions and Agent OS captures that merely
+   discussed the run) and not the bare run-dir path (found live at B0: an
+   orchestration bg-task log and the operator transcript quote the run dir but
+   never a child workspace).
+6. **Extension overlays.** `start` and `micro` accept a repeatable
+   `--extensions-overlay <dir>` (a single extension dir, or a directory of
+   extension dirs). Overlays are copied on top of the isolated agent dir's
+   production extensions, recorded in `run-state.json`, and never touch
+   `~/.pi/agent/extensions`.
 
 ## Load model (owner amendment, 2026-09-26)
 
@@ -211,12 +265,17 @@ behaviour (any disabled lane is simply never a candidate) — see
 
 ```
 npx tsx scripts/heap-soak/cli.ts preflight                     # Gate 0
-npx tsx scripts/heap-soak/cli.ts micro                         # Gate 1 (~20 min + teardown)
-npx tsx scripts/heap-soak/cli.ts start [--run-id <id>]          # the real 24h run
+npx tsx scripts/heap-soak/cli.ts micro [--extensions-overlay <dir>]   # Gate 1 (~20 min + teardown)
+npx tsx scripts/heap-soak/cli.ts start [--run-id <id>] [--extensions-overlay <dir>]  # the real 24h run
 npx tsx scripts/heap-soak/cli.ts status --run-id <id>
 npx tsx scripts/heap-soak/cli.ts stop  --run-id <id>            # stop both units; run dir is kept
 npx tsx scripts/heap-soak/cli.ts report --run-id <id> [--mode micro|full]
 ```
+
+`--extensions-overlay` is repeatable: each value is either a single extension
+directory (containing `index.ts`/`index.js`/…) or a directory whose immediate
+subdirectories are extension directories. Overlays land under
+`<run>/agent-dir/extensions/` only.
 
 Artefacts for a run: `~/.pi-web-ui/validation/heap-soak/<run-id>/` —
 `samples.csv`, `events.jsonl`, `run-state.json`, `snapshots/*.heapsnapshot`,
@@ -232,12 +291,14 @@ the backbone lane. Never set this outside an explicit Gate 1 exercise.
 
 ## Fidelity notes (parent amendment, 2026-09-26)
 
-- **`TasksMax=8192`, lane A `maxConcurrent=6`, lane B `maxConcurrent=1`**:
-  matches production's own admission ceiling (14 API turns × 96 reserved
-  pids/turn ≈ 1344, well inside 8192) rather than an artificial cgroup limit
-  this harness had invented (`TasksMax=512`, which produced real
-  `ADMISSION_CAPACITY_EXHAUSTED` rejections purely from that self-imposed
-  ceiling — see the bugs-found list below).
+- **`MemoryMax=12G`/`MemoryHigh=10G` + `TasksMax=8192`, lane A `maxConcurrent=6`, lane B `maxConcurrent=1`**:
+  `TasksMax` matches production's own admission ceiling (14 API turns × 96
+  reserved pids/turn ≈ 1344, well inside 8192) rather than an artificial cgroup
+  limit this harness had invented (`TasksMax=512`). `MemoryMax`/`MemoryHigh`
+  were raised from `6G` at B0 so admission's `memory_pressure` does not throttle
+  the load before the 4 GiB V8 heap cap binds (A1 refused 574 prompts from
+  minute 21 because of the 6 GiB cap) — see the **B0 harness fixes** section and
+  `resources.ts`.
 - **Browser-like WS client** (`browser-ws-client.ts`, on by default): one
   long-lived, reconnecting, authenticated `/ws` connection for the whole run
   (`POST /api/auth/login` → cookie JWT → `ws://…/ws` with the matching

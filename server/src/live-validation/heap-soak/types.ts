@@ -24,7 +24,12 @@ export interface HeapSample {
   eventLoopLagMsProxy: number;
   activeTurns?: number;
   stalledRuns?: number;
-  residentSessionCount?: number;
+  /**
+   * Registry size (GET /sessions length). B0 defect 3: there is intentionally
+   * no `residentSessionCount` column — no existing server source exposes the
+   * live, in-memory Pi session count, and the old value was just this registry
+   * size duplicated under a second name. See sampler-fields.test.ts.
+   */
   registryEntryCount?: number;
   /** Free disk space on the artefact volume, in GB, at sample time. */
   freeDiskGB?: number;
@@ -46,7 +51,6 @@ export const HEAP_SAMPLE_CSV_HEADER = [
   'eventLoopLagMsProxy',
   'activeTurns',
   'stalledRuns',
-  'residentSessionCount',
   'registryEntryCount',
   'freeDiskGB',
   'quotaState',
