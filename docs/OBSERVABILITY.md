@@ -245,6 +245,164 @@ server/Pi-liveness compatibility signal; use `runtimeHealth` or
 `GET /api/v1/capabilities` when deciding whether a specific optional runtime is
 usable.
 
+## Heap and lag telemetry (A2)
+
+The server samples its own heap and event-loop health on a fixed cadence, appends
+one bounded JSONL line per sample, and raises an operator alert with hysteresis
+when heap or lag crosses a threshold. Added by A2 of the
+[Orchestration Scaling Readiness Plan](./plans/ORCHESTRATION-SCALING-READINESS-PLAN.md)
+so heap can be *seen* in production instead of reconstructed from the journal,
+and so admission work (B2) has one reusable reading of the limits that actually
+bind (`heap_size_limit`, not the committed heap).
+
+Implementation: `server/src/observability/health-readings.ts` (one reading),
+`health-metrics-file.ts` (bounded rotating sink), `health-alerts.ts` (hysteresis
+latches), `health-telemetry-config.ts` (env resolution + alert delivery),
+`health-telemetry.ts` (the sampler). The lag window comes from
+`server/src/internal-api/event-loop-shed.ts` (`readEventLoopLagWindow()`, a
+read-only 60 s ring; reading it never starts a monitor).
+
+### The metrics file
+
+The default location is `~/.pi-web-ui/metrics/health-metrics.jsonl`
+(`OBSERVABILITY_METRICS_DIR` to move it). One line per sample, newest last:
+
+| Field | Meaning |
+|---|---|
+| `at`, `atMs`, `uptimeSec` | When the sample was taken; process uptime (the leak axis). |
+| `heapUsedBytes`, `heapTotalBytes` | `process.memoryUsage()`. |
+| `heapLimitBytes`, `heapFraction` | The real V8 `heap_size_limit` and `heapUsed / limit` — the ratio the heap alert and B2 admission use. |
+| `rssBytes`, `externalBytes` | Process RSS and external (buffer/native) memory. |
+| `lagP50Ms`, `lagP99Ms`, `lagMaxMs`, `lagWindowMs`, `lagSampleCount` | Event-loop lag percentiles over the last 60 s at the 500 ms shed-monitor cadence. |
+| `activeTurns`, `activeTurnsByClass` | Active turns, by runtime label by default; by admission class (P0–P3) when admission registers its snapshot. `{}` means no source could see them — never a misleading zero per class. |
+| `residentSessions` | Sessions loaded in the Pi `MultiSessionManager`, registered by that manager. `null` when unmeasured. |
+| `registryEntries` | Session-registry entries. `null` when no unique registry instance exists. |
+
+Rotation is size-bounded, not count-only: the current file is
+`health-metrics.jsonl`, older generations are `health-metrics.1.jsonl`,
+`.2.jsonl`, … Keeping at most `OBSERVABILITY_METRICS_MAX_FILES` generations, each
+at most `OBSERVABILITY_METRICS_MAX_FILE_BYTES`, bounds the directory at roughly
+`maxFiles × maxFileBytes` (a single line longer than the byte bound is never
+split, so a JSONL line always parses).
+
+```bash
+# The last hour of heap and lag, one line per sample:
+tail -n 120 ~/.pi-web-ui/metrics/health-metrics.jsonl | \
+  jq -c '{at, heapFraction, lagP99Ms, residentSessions, activeTurns}'
+
+# Heap ceiling actually in force (compare with --max-old-space-size):
+tail -n 1 ~/.pi-web-ui/metrics/health-metrics.jsonl | jq '.heapLimitBytes'
+```
+
+`validate:server` sets `PI_WEB_UI_VALIDATION_MODE=true`, which moves the default
+under the run directory (`<validation dir>/metrics`). A validation server that is
+somehow pointed at the production metrics path **refuses to start the sampler**
+and says so in its log — a disposable run can never overwrite production history.
+
+### Alerts with hysteresis
+
+Two independent latches, evaluated against the same reading:
+
+| Alert | Arms when | Clears when |
+|---|---|---|
+| `heap_pressure` | `heapFraction >= OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION` (default `0.85` of `heap_size_limit`) | `heapFraction <= OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` (default `0.75`) |
+| `event_loop_lag` | `lagP99Ms >= OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` (default `500`) | `lagP99Ms <= OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` (default `200`) |
+
+Semantics: **one alert on the crossing and one recovery message on the
+clearing**, never one message per sample. Any value between the two thresholds
+is a dead band that changes nothing, which is what stops a reading that
+oscillates around the trigger from flapping. Because a recovery must be earned,
+a latch always has two thresholds and a start-up validation refuses a band whose
+low water mark is not below its high water mark.
+
+Each transition is logged and delivered:
+
+```
+[HealthTelemetry] heap_pressure alert: heap pressure: 87.3% of the 4288 MB V8 heap limit (alert above 85.0%)
+[HealthTelemetry] heap_pressure recovery: heap pressure cleared: 74.1% of the 4288 MB V8 heap limit (recovered below 75.0%)
+```
+
+Delivery reuses the notification layer — no second Telegram client:
+
+- `OBSERVABILITY_HEALTH_ALERT_SINK=notifications` (the production default)
+  writes a delivery-ready notification-ingress record that the server's own
+  `NotificationManager` claims and delivers through the configured Telegram
+  channel. If `NOTIFICATIONS_ENABLED` is false, the record stays in the bounded
+  spool and nothing is sent.
+- `OBSERVABILITY_HEALTH_ALERT_SINK=file:<absolute path>` appends JSONL to a
+  capture file. This is the default under `PI_WEB_UI_VALIDATION_MODE=true`, and
+  the startup line says so: `alerts → file:… (operator notifications suppressed)`.
+- `OBSERVABILITY_HEALTH_ALERT_SINK=none` disables delivery (the log lines stay).
+
+### The `Memory:` journal line
+
+`[MultiSessionManager] Memory:` used to be written on every 30 s memory check
+whenever heap was above 500 MB or more than five sessions were resident — up to
+120 lines per hour, which is why heap history had to be dug out of a 3.8 GB
+journal. It now follows a significant-change-plus-heartbeat policy
+(`server/src/observability/memory-journal-policy.ts`):
+
+1. the first sample always logs, so every boot has a baseline line;
+2. a heap change of at least `OBSERVABILITY_MEMORY_JOURNAL_MIN_DELTA_MB`
+   (default `100`) logs;
+3. crossing into or out of the “more than
+   `OBSERVABILITY_MEMORY_JOURNAL_SESSIONS` resident” regime logs;
+4. otherwise a heartbeat logs every
+   `OBSERVABILITY_MEMORY_JOURNAL_HEARTBEAT_MS` (default 30 min) **while the
+   server is worth heart-beating about** — heap at or above
+   `OBSERVABILITY_MEMORY_JOURNAL_HEAP_MB` (default `500`) or many sessions
+   resident.
+
+An idle server therefore stays silent instead of trading a noisy gate for a
+steady drip. Volume was measured on a disposable server under the same load
+before and after (six resident Pi sessions, heap above 500 MB): 120 lines/hour
+before, and a handful of *causal* lines (boot, session-regime, heap-change)
+with no steady-state lines after. `journalctl -u pi-web-ui | grep 'Memory:'`
+still answers “what was the heap?”, and
+`~/.pi-web-ui/metrics/health-metrics.jsonl` now answers it per sample.
+
+### Knobs
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OBSERVABILITY_METRICS_ENABLED` | `true` | Master switch for the sampler. |
+| `OBSERVABILITY_METRICS_DIR` | `~/.pi-web-ui/metrics` | Absolute directory for the metrics file. |
+| `OBSERVABILITY_METRICS_INTERVAL_MS` | `30000` | Sampling cadence. |
+| `OBSERVABILITY_METRICS_MAX_FILE_BYTES` | `5242880` | Rotation trigger per generation. |
+| `OBSERVABILITY_METRICS_MAX_FILES` | `5` | Generations kept (including the current file). |
+| `OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION` | `0.85` | Heap alert high water mark (fraction of `heap_size_limit`). |
+| `OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` | `0.75` | Heap alert low water mark (must be lower). |
+| `OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` | `500` | Lag alert high water mark (ms). |
+| `OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` | `200` | Lag alert low water mark (must be lower). |
+| `OBSERVABILITY_HEALTH_ALERT_SINK` | `notifications` | `notifications`, `file:<absolute path>` or `none`. |
+| `OBSERVABILITY_MEMORY_JOURNAL_MIN_DELTA_MB` | `100` | Significant heap change for a `Memory:` line. |
+| `OBSERVABILITY_MEMORY_JOURNAL_HEARTBEAT_MS` | `1800000` | `Memory:` heartbeat interval. |
+| `OBSERVABILITY_MEMORY_JOURNAL_HEAP_MB` | `500` | Heartbeat only from this heap usage. |
+| `OBSERVABILITY_MEMORY_JOURNAL_SESSIONS` | `5` | Heartbeat only above this resident-session count. |
+
+Invalid values fail fast at start-up (a non-hysteretic band, a relative metrics
+directory, an unknown sink). An unreadable or failing source hides a single
+field as `null`/`0`; telemetry never takes the control plane down.
+
+### For admission work (B2)
+
+`getHealthReadings()` returns the process-wide reading and
+`readHeapPressure()` the narrow projection (`heapUsedBytes`, `heapLimitBytes`,
+`heapFraction`, `lagP99Ms`, `lagMaxMs`) that admission needs; both are in
+`server/src/observability/health-readings.ts`. Admission should import those
+rather than re-deriving heap pressure from `process.memoryUsage()`.
+
+### Re-running the A2 live proof
+
+`server/tests/integration/health-telemetry-live-proof.mjs` (a manual
+disposable-server driver, deliberately not a vitest test) boots under a lowered
+threshold band and proves: the file grows at the configured cadence and rotates
+within its bound; one heap alert and one recovery, driven by a real heap rise
+and a real CDP-forced GC; alerts captured to a file rather than messaged; and
+journal lines per hour under the same load as the pre-A2 gate. See
+[`plans/execution-reports/orchestration-scaling/A2.md`](./plans/execution-reports/orchestration-scaling/A2.md)
+for the exact commands and the recorded numbers.
+
 ## Manual browser diagnostic bundle
 
 The browser keeps a small in-memory ring of connection lifecycle, abnormal
