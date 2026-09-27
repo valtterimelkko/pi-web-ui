@@ -847,11 +847,20 @@ export class MultiSessionManager {
       : undefined;
     const resolvedWebUIContext: WebUIContext | undefined = extensionWebUIContext;
 
-    const agentSession = await this.piService.createSession({
-      clientId: tempClientId,
-      cwd,
-      webUIContext: resolvedWebUIContext as any,
-    });
+    let agentSession: AgentSession;
+    try {
+      agentSession = await this.piService.createSession({
+        clientId: tempClientId,
+        cwd,
+        webUIContext: resolvedWebUIContext as any,
+      });
+    } catch (error) {
+      // A rejection before PiService mapped the session leaves only the
+      // temporary handler installed above; drop it so repeated creation
+      // failures do not accumulate handler entries (reviewer finding 3).
+      this.piService.removeEventHandler(tempClientId);
+      throw error;
+    }
 
     const resolvedSessionPath = agentSession.sessionFile;
     if (!resolvedSessionPath) {

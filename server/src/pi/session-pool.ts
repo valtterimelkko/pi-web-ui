@@ -78,10 +78,14 @@ export class SessionPool {
   async switchClientSession(clientId: string, sessionPath: string): Promise<ClientSession> {
     const existing = this.clientSessions.get(clientId);
     
-    // Dispose existing session if any, releasing every PiService-owned reference
+    // Dispose the current session and drop its pool entry BEFORE attempting the
+    // replacement. If opening the target then fails, the pool must not keep (and
+    // return) an AgentSession that has already been disposed and released
+    // (reviewer finding 2).
     if (existing) {
       existing.session.dispose();
       this.piService.releaseSessionRefs(existing.clientId, existing.sessionId);
+      this.clientSessions.delete(clientId);
     }
     
     // Get Web UI context for extension binding
@@ -134,8 +138,7 @@ export class SessionPool {
     if (!clientSession) {
       this.piService.releaseSessionRefs(clientId, '');
       return;
-    }
-    // Dispose the session unless another client entry still shares it, then
+    }    // Dispose the session unless another client entry still shares it, then
     // release every PiService-owned reference for this exact identity.
     const shared = Array.from(this.clientSessions.values()).some(
       (other) => other.sessionId === clientSession.sessionId,
