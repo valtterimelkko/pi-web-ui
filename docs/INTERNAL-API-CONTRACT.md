@@ -21,13 +21,18 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.47.1",
+  "contractVersion": "1.48.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.48.0** (minor, additive only — session display names and harness-native ids). `GET /api/v1/sessions` list items and `GET /api/v1/sessions/:id` (and `/info`) gain two optional fields. No existing field, default or behaviour changes; a client that ignores unknown fields is unaffected.
+  - `displayName` — the operator's front-end rename, live-resolved per request from the same web UI preferences (`web-ui-prefs.json`) the notification headers already use. Absent when the session has no rename, so a rename made in the front end appears on the next request with **no restart** (this route reads the name; it never writes it).
+  - `nativeSessionId` — the harness's own session id, by the entry's `sdkType`: Claude `claudeSessionId`, Antigravity `antigravityConversationId`, Command Code `commandCodeNativeSessionId`, OpenCode `opencodeSessionId`, and for Pi the Pi session id. Absent when the runtime has not recorded one (never guessed). On session detail the runtime-specific branches may still supply the live service value; the registry value is the fallback and the only source for an unloaded Pi session and for Antigravity.
+  - Capabilities: `features.sessionDisplayName: true` and `features.sessionNativeSessionId: true`. Consumer guidance: feature-detect via `/capabilities`; clients that ignore unknown fields are unaffected. Rollback: reverting the server removes both fields — nothing is persisted by this route, and both are derived at read time.
 
 - **1.47.1** (patch) — `text` watch conditions (default `source: "assistant"`) now fire only on the assistant saying the text:
   - user-role message text (a prompt echo: `message_start` with `role: "user"` or `message.role: "user"`, and any text replayed inside that user message, as Antigravity and OpenCode replay do) no longer feeds the assistant buffer, so a child reading an objective that contains the sentinel does not fire;

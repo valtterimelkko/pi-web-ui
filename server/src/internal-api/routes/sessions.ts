@@ -1211,6 +1211,60 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : undefined;
   }
 
+  /**
+   * Contract 1.48.0 (B5): the harness's own session id for a registry entry,
+   * by `sdkType`. Pi's registry id IS the Pi session id; the other runtimes
+   * carry it in a runtime-specific field. Undefined when the registry has not
+   * recorded one (the field is then absent, never guessed).
+   */
+  function nativeSessionIdForEntry(entry: RegistryEntry): string | undefined {
+    switch (entry.sdkType) {
+      case 'claude': return entry.claudeSessionId || undefined;
+      case 'antigravity': return entry.antigravityConversationId || undefined;
+      case 'opencode': return entry.opencodeSessionId || undefined;
+      case 'commandcode': return entry.commandCodeNativeSessionId || undefined;
+      case 'pi': return entry.id || undefined;
+      default: return undefined;
+    }
+  }
+
+  /**
+   * Contract 1.48.0 (B5): the operator's front-end rename, read live from the
+   * same web UI preferences the notification header uses (`resolveLabel`).
+   * Keyed by every identity a record can carry — the front end writes the
+   * session path as `legacyKey`, while a key-based write uses the stable
+   * `runtime:id` key. Never throws: an unreadable or absent prefs file simply
+   * yields no names. A rename therefore shows on the next request with no
+   * restart.
+   */
+  async function loadDisplayNameIndex(): Promise<Map<string, string>> {
+    const index = new Map<string, string>();
+    try {
+      const prefs = await readPreferences(preferencesPath);
+      for (const [key, record] of Object.entries(prefs.sessions)) {
+        const name = record.displayName;
+        if (typeof name !== 'string' || !name.trim()) continue;
+        const trimmed = name.trim();
+        index.set(key, trimmed);
+        const id = key.slice(key.indexOf(':') + 1);
+        if (id) index.set(id, trimmed);
+        if (record.legacyKey) index.set(record.legacyKey, trimmed);
+      }
+    } catch {
+      // no prefs file / unreadable → no display names
+    }
+    return index;
+  }
+
+  function displayNameFor(index: Map<string, string>, ...identities: Array<string | undefined>): string | undefined {
+    for (const identity of identities) {
+      if (!identity) continue;
+      const name = index.get(identity);
+      if (name !== undefined) return name;
+    }
+    return undefined;
+  }
+
   function commandCodeSessionInfo(record: CommandCodeInternalSessionRecord): SessionInfo {
     return {
       sessionId: record.sessionId,
@@ -1227,6 +1281,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       firstMessage: record.firstMessage,
       createdAt: record.createdAt,
       lastActivity: record.updatedAt,
+      // Contract 1.48.0 (B5): the Command Code native resume/session id.
+      ...(record.nativeSessionId ? { nativeSessionId: record.nativeSessionId } : {}),
     };
   }
 
@@ -1234,10 +1290,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     await runReceipts.init();
     const latest = runReceipts.listBySession(record.sessionId)
       .sort((a, b) => Date.parse(b.terminalAt ?? b.acceptedAt) - Date.parse(a.terminalAt ?? a.acceptedAt))[0];
+    const displayName = displayNameFor(await loadDisplayNameIndex(), record.sessionId);
     return {
       ...commandCodeSessionInfo(record),
       backendMode: 'subprocess',
-      nativeSessionId: record.nativeSessionId,
+      ...(displayName !== undefined ? { displayName } : {}),
       status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
       ...(latest?.tokenUsage ? { tokenUsage: latest.tokenUsage } : {}),
     };
@@ -2038,8 +2095,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
       const cwdFilter = query.get('cwd');
 
-      const [archivedIndex, resolver] = await Promise.all([
+      const [archivedIndex, displayNames, resolver] = await Promise.all([
         loadArchivedKeyIndex(),
+        loadDisplayNameIndex(),
         buildRegistryResolver(sessionRegistry),
       ]);
       const archivedFor = (sessionPath: string): boolean => archivedIndex.get(toV2Key(sessionPath, resolver).key) ?? false;
@@ -2048,6 +2106,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const sessions: SessionInfo[] = all.map((entry) => {
         // §6: surface live liveness, not stale registry status.
         const liveStatus = evidenceStatus(entry);
+        // Contract 1.48.0 (B5): additive identity fields, resolved live per request.
+        const nativeSessionId = nativeSessionIdForEntry(entry);
+        const displayName = displayNameFor(displayNames, entry.path, entry.id);
         return {
           sessionId: entry.id,
           sessionPath: entry.path,
@@ -2064,16 +2125,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           lastActivity: entry.lastActivity,
           archived: archivedFor(entry.path || entry.id),
           source: entry.origin ?? 'unknown',
+          ...(displayName !== undefined ? { displayName } : {}),
+          ...(nativeSessionId !== undefined ? { nativeSessionId } : {}),
         };
       });
       if (commandCodeService && commandCodeService.isEnabled()) {
         const commandCodeSessions = await commandCodeService.listSessions();
         sessions.push(...commandCodeSessions.map((record: CommandCodeInternalSessionRecord) => {
           const info = commandCodeSessionInfo(record);
+          const displayName = displayNameFor(displayNames, record.sessionId);
           return {
             ...info,
             archived: archivedFor(info.sessionPath),
             source: 'unknown' as const,
+            ...(displayName !== undefined ? { displayName } : {}),
           };
         }));
       }
@@ -2192,6 +2257,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry) return null;
 
+    // Contract 1.48.0 (B5): additive identity fields, resolved live per request.
+    // The runtime-specific branches below may overwrite `nativeSessionId` with
+    // the live service value; the registry value is the fallback and is the
+    // only source for an unloaded session (e.g. Pi) or Antigravity.
+    const displayName = displayNameFor(await loadDisplayNameIndex(), entry.path, entry.id);
+    const registryNativeSessionId = nativeSessionIdForEntry(entry);
+
     const detail: SessionDetail = {
       sessionId: entry.id,
       sessionPath: entry.path,
@@ -2205,6 +2277,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       firstMessage: entry.firstMessage,
       createdAt: entry.createdAt,
       lastActivity: entry.lastActivity,
+      ...(displayName !== undefined ? { displayName } : {}),
+      ...(registryNativeSessionId !== undefined ? { nativeSessionId: registryNativeSessionId } : {}),
     };
 
     if (entry.sdkType === 'claude') {

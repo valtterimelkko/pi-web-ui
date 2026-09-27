@@ -616,7 +616,7 @@ not just live ones. Liveness comes from the `busy` flag or a recent
 
 Results are deterministically ordered **newest-first** by `lastActivity`. With
 no params the response is unchanged from earlier contracts (same fields, now
-plus the two additive fields below).
+plus the additive fields below).
 
 **Additive per-entry fields (since contract 1.30.0):**
 
@@ -628,6 +628,21 @@ plus the two additive fields below).
   or `unknown` (created before origin tracking existed — all pre-1.30.0
   entries). Use it to separate real work from smoke/validation sessions going
   forward.
+
+**Additive identity fields (since contract 1.48.0):**
+
+- `displayName` (string) — the operator's front-end rename, read live from the
+  same web UI preferences the notification headers use. Absent when the session
+  has no rename; a rename made in the front end appears on the next request with
+  no restart. Read-only: this route never writes the name.
+- `nativeSessionId` (string) — the harness's own session id, by the entry's
+  runtime: Claude `claudeSessionId`, Antigravity `antigravityConversationId`,
+  Command Code `commandCodeNativeSessionId`, OpenCode `opencodeSessionId`, and
+  for Pi the Pi session id. Absent when the runtime has not recorded one.
+
+Both fields are advertised by `GET /api/v1/capabilities` as
+`features.sessionDisplayName` and `features.sessionNativeSessionId` —
+feature-detect there rather than assuming the fields exist.
 
 **Response (200):**
 ```json
@@ -647,7 +662,9 @@ plus the two additive fields below).
       "createdAt": "2026-04-28T12:00:00.000Z",
       "lastActivity": "2026-04-28T12:05:00.000Z",
       "archived": false,
-      "source": "internal-api"
+      "source": "internal-api",
+      "displayName": "Release smoke checks",
+      "nativeSessionId": "claude-native-id"
     }
   ]
 }
@@ -827,6 +844,7 @@ Both endpoints now return enriched runtime metadata where available. For a profi
   "executionInstanceId": "glm53-claude-sdk",
   "backendMode": "sdk",
   "nativeSessionId": "claude-native-id",
+  "displayName": "Release smoke checks",
   "sessionFile": "/root/.pi-web-ui/claude-sessions/a1b2c3d4-....jsonl",
   "cwd": "/home/user/myproject",
   "model": "sonnet",

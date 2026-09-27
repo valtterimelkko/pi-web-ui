@@ -85,6 +85,10 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         },
         piProviderPolicy: { blockedProviders: blockedPiProviders },
         claudeBackendPolicy: { allowedBackends: [INTERNAL_API_CLAUDE_BACKEND] },
+        // Contract 1.48.0 (B5): session list items and detail carry the
+        // operator's front-end display name and the harness-native session id.
+        sessionDisplayName: true,
+        sessionNativeSessionId: true,
         // Contract 1.47.0: four additive orchestration capabilities.
         sessionEnvIdentity: {
           variables: {

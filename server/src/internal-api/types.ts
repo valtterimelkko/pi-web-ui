@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.47.1' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.48.0' as const; // next minor: session displayName + nativeSessionId (B5)
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -679,6 +679,16 @@ export interface SessionInfo {
    *  SessionWatcher), or 'unknown' for entries created before origin
    *  tracking. Additive since 1.30.0. */
   source?: 'browser' | 'internal-api' | 'native-discovered' | 'unknown';
+  /** The operator's front-end rename, live-resolved from the same web UI
+   *  preferences the notification header uses. Absent when the session has no
+   *  rename. Additive since 1.48.0. */
+  displayName?: string;
+  /** The harness's own session id, by `sdkType`: Claude `claudeSessionId`,
+   *  Antigravity `antigravityConversationId`, Command Code
+   *  `commandCodeNativeSessionId`, OpenCode `opencodeSessionId`, and for Pi the
+   *  Pi session id. Absent when the runtime has not recorded one. Additive
+   *  since 1.48.0. */
+  nativeSessionId?: string;
 }
 
 /** One natively-discovered (direct-CLI) session returned by the bounded
@@ -724,7 +734,6 @@ export interface SessionDetail extends SessionInfo {
   };
   /** Latest run-scoped usage observed from a terminal result, when available. */
   tokenUsage?: RunTokenUsage;
-  nativeSessionId?: string;
   sessionFile?: string;
   tokens?: {
     input: number;
@@ -1272,6 +1281,10 @@ export interface CapabilitiesResponse {
     claudeBackendPolicy: {
       allowedBackends: ['sdk-subscription'];
     };
+    /** Contract 1.48.0 (B5): `displayName` + `nativeSessionId` are added to
+     *  session list items and session detail. */
+    sessionDisplayName: true;
+    sessionNativeSessionId: true;
     /** Contract 1.47.0 (C1): session identity exported to per-session runtime subprocess environments. */
     sessionEnvIdentity: {
       variables: {

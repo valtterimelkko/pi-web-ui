@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.47.1',
+        contractVersion: '1.48.0',
       },
       features: {
         // Contract 1.34.0: child-orchestration surfacing (background subagents,
@@ -105,6 +105,9 @@ describe('createCapabilitiesRoutes', () => {
         watchDeadlineCondition: { conditionType: 'deadline', field: 'afterSeconds', minSeconds: 1, maxSeconds: 86400 },
         watchFireIfSettled: { registerField: 'fireIfSettled', eventTypes: ['agent_end', 'goal_end'] },
         sessionAgentOsCapture: { createField: 'agentOsCapture', values: ['enabled', 'disabled'], env: 'PI_WEB_UI_AGENT_OS_CAPTURE' },
+        // Contract 1.48.0 (B5): session list/detail carry displayName + nativeSessionId.
+        sessionDisplayName: true,
+        sessionNativeSessionId: true,
       },
       runtimes: {
         pi: {
