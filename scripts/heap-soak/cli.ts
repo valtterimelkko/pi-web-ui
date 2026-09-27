@@ -20,6 +20,15 @@ function getFlag(argv: string[], flag: string): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined;
 }
 
+/** Collect every occurrence of a repeatable flag, in order. */
+function getFlags(argv: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === flag && argv[i + 1] !== undefined) values.push(argv[i + 1]);
+  }
+  return values;
+}
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   switch (command) {
@@ -33,12 +42,12 @@ async function main(): Promise<void> {
       return;
     }
     case 'micro': {
-      await runGate1();
+      await runGate1({ extensionsOverlays: getFlags(rest, '--extensions-overlay') });
       process.exit(0);
       return;
     }
     case 'start': {
-      console.log(await runStart(getFlag(rest, '--run-id')));
+      console.log(await runStart(getFlag(rest, '--run-id'), { extensionsOverlays: getFlags(rest, '--extensions-overlay') }));
       process.exit(0);
       return;
     }

@@ -15,6 +15,25 @@ export interface RunStateSupervisorInfo {
   unitName: string;
 }
 
+/** How a run ended. `server_died` is terminal: the disposable server process under test vanished. */
+export type RunTerminalState = 'complete' | 'server_died';
+
+/** Evidence recorded when the disposable server dies mid-run (B0 defect 1). */
+export interface ServerDeathRecord {
+  /** ISO timestamp the death was detected by the supervisor. */
+  detectedAt: string;
+  /** Milliseconds since run start at detection. */
+  elapsedMs: number;
+  /** Why the death was declared (unit state, MainPID change, or sustained socket unreachability). */
+  reason: string;
+  /** systemd ActiveState/SubState at detection, when known. */
+  activeState?: string;
+  /** systemd Result and/or ExecMainStatus, when known (e.g. 'exit-code/1'). */
+  exitStatus?: string;
+  /** Bounded tail of the server unit's journal at detection. */
+  journalLines?: string[];
+}
+
 export interface RunState {
   runId: string;
   mode: 'micro' | 'full';
@@ -41,6 +60,14 @@ export interface RunState {
   lastQuotaPollAtMs?: number;
   /** Production-write audit marker path (owner amendment 2026-09-26), created once at launch. */
   prodAuditMarkerPath?: string;
+  /** B0 defect 1: how the run ended. Absent means the run has not terminated (or predates B0). */
+  terminalState?: RunTerminalState;
+  /** B0 defect 1: the recorded death evidence, when `terminalState === 'server_died'`. */
+  serverDeath?: ServerDeathRecord;
+  /** B0 defect 1: elapsed ms of the last sample successfully written to the CSV (used for honest coverage). */
+  lastGoodSampleElapsedMs?: number;
+  /** B0 defect 6: extension directories overlaid into the isolated agent dir before launch. */
+  extensionsOverlays?: string[];
   /** Position in HEAP_SOAK_INJECT_QUOTA_SEQUENCE (Gate 1 test seam only) — persisted so a supervisor restart doesn't replay the sequence from the start. */
   quotaInjectedIndex?: number;
 }

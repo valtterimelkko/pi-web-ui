@@ -9,6 +9,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
 import { buildIsolatedAgentDir } from './agent-dir.js';
+import { applyExtensionsOverlays, type AppliedExtensionOverlay } from '../../server/src/live-validation/heap-soak/extensions-overlay.js';
 import { resolveRunPaths, serverUnitName, supervisorUnitName, type RunPaths } from './paths.js';
 import { startTransientUnit, waitForMainPid } from './systemd-units.js';
 import { InspectorClient } from './inspector.js';
@@ -18,6 +19,7 @@ import { createAuditMarker } from './prod-audit-io.js';
 import { createBreakerState } from '../../server/src/live-validation/heap-soak/circuit-breaker.js';
 import { buildSyntheticRegistry, DEFAULT_SYNTHETIC_REGISTRY_COUNT } from '../../server/src/live-validation/heap-soak/registry-seed.js';
 import { LANE_DEFINITIONS } from '../../server/src/live-validation/heap-soak/lanes.js';
+import { resolveSoakMemoryLimits } from '../../server/src/live-validation/heap-soak/resources.js';
 import type { RunState } from '../../server/src/live-validation/heap-soak/run-state.js';
 import type { LaneName } from '../../server/src/live-validation/heap-soak/types.js';
 
@@ -33,6 +35,8 @@ export interface LaunchResult {
   auditMarkerPath: string;
   seededRegistryCount: number;
   httpPort: number;
+  /** B0 defect 6: extensions overlaid into the isolated agent dir (empty when none were given). */
+  extensionsOverlaysApplied: AppliedExtensionOverlay[];
 }
 
 async function findFreeTcpPort(): Promise<number> {
@@ -59,6 +63,13 @@ export interface LaunchOptions {
   /** Parent amendment 2026-09-26: mimic production's registry size. On by default. */
   seedRegistry?: boolean;
   seedRegistryCount?: number;
+  /**
+   * B0 defect 6: extension directory (or directory-of-extension-directories)
+   * paths overlaid into the isolated agent dir after the production copy, so a
+   * soak can exercise an extension fix before it is deployed. Recorded in
+   * run-state.json and the report.
+   */
+  extensionsOverlays?: readonly string[];
 }
 
 export async function launchDisposableServer(runId: string, mode: 'micro' | 'full', options: LaunchOptions = {}): Promise<LaunchResult> {
@@ -82,6 +93,14 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
 
   const { agentDir } = buildIsolatedAgentDir(paths.agentDir);
   assertOutsideProductionPaths(path.resolve(agentDir), productionGuardedPaths(homedir()));
+
+  // B0 defect 6: overlay any extension fix directories on top of the copied
+  // production extensions, inside the isolated agent dir only.
+  const extensionsOverlays = [...(options.extensionsOverlays ?? [])];
+  let extensionsOverlaysApplied: AppliedExtensionOverlay[] = [];
+  if (extensionsOverlays.length > 0) {
+    extensionsOverlaysApplied = applyExtensionsOverlays(agentDir, extensionsOverlays).applied;
+  }
 
   // Production-write audit marker (owner amendment 2026-09-26): created ONCE
   // here, at the true start of the run, so a later supervisor restart still
@@ -128,6 +147,10 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   const httpPort = await findFreeTcpPort();
   const serverUnit = serverUnitName(runId);
   const supervisorUnit = supervisorUnitName(runId);
+  // B0 defect 4: pick a cgroup cap large enough that admission's memory_pressure
+  // does not throttle the load profile before the 4 GiB V8 heap cap binds.
+  // See resources.ts for the measured A1 grounding and the arithmetic.
+  const memoryLimits = resolveSoakMemoryLimits();
 
   await startTransientUnit({
     unitName: serverUnit,
@@ -135,7 +158,8 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
     restart: 'no', // the server must NEVER be auto-restarted — that would reset the heap under test
     workingDirectory: root,
     properties: {
-      MemoryMax: '6G',
+      MemoryMax: `${memoryLimits.memoryMaxMiB}M`,
+      MemoryHigh: `${memoryLimits.memoryHighMiB}M`,
       // Matches production (parent amendment 2026-09-26): production reserves
       // 96 PIDs/turn and allows 14 API turns (~1344 projected pids at full
       // admission), well within an 8192 cgroup pids limit — 512 here was an
@@ -227,10 +251,11 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
     csvPath: paths.csvPath,
     eventsLogPath: paths.eventsLogPath,
     prodAuditMarkerPath: auditMarker.markerPath,
+    ...(extensionsOverlays.length > 0 ? { extensionsOverlays } : {}),
   };
   saveRunState(paths.runStatePath, runState);
 
-  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort };
+  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort, extensionsOverlaysApplied };
 }
 
 export async function startSupervisorUnit(runId: string, paths: RunPaths, supervisorUnit: string): Promise<void> {

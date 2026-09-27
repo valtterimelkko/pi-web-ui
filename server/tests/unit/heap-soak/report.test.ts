@@ -129,4 +129,35 @@ describe('buildReport / renderReportMarkdown', () => {
     expect(report.backboneLane).toBe('A');
     expect(markdown).toMatch(/Backbone \(load-bearing\) lane: \*\*A\*\*/);
   });
+
+  it('defaults to a complete run covering the full schedule window', () => {
+    const report = buildReport([], [], MICRO_SCHEDULE);
+    expect(report.terminalState).toBe('complete');
+    expect(report.serverDeath).toBeUndefined();
+    expect(report.sampleCoverage.windowMs).toBe(MICRO_SCHEDULE.totalMs);
+  });
+
+  it('carries a server death and leads the markdown with it', () => {
+    const fiveHours = 5 * 3_600_000;
+    const samples: ReportSampleRow[] = Array.from({ length: 6 }, (_, i) => ({
+      ts: '', elapsedMs: Math.round((i / 5) * fiveHours), phase: 'wave', heapUsedMB: 100 + i * 10, eventLoopLagMsProxy: 1,
+    }));
+    const serverDeath = { detectedAt: '2026-09-26T13:34:40.000Z', elapsedMs: fiveHours, reason: 'server unit is not loaded/active', activeState: 'failed', exitStatus: 'exit-code/1', journalLines: ['FATAL ERROR: Reached heap limit'] };
+    const report = buildReport(samples, [], MICRO_SCHEDULE, 'A', { terminalState: 'server_died', serverDeath, coveredWindowMs: fiveHours });
+    expect(report.terminalState).toBe('server_died');
+    expect(report.serverDeath).toEqual(serverDeath);
+    // Coverage is scoped to the window actually observed, not the unrun full schedule.
+    expect(report.sampleCoverage.windowMs).toBe(fiveHours);
+    const markdown = renderReportMarkdown(report, 'run-dead');
+    expect(markdown).toContain('SERVER DIED');
+    expect(markdown).toContain('FATAL ERROR: Reached heap limit');
+    expect(markdown.indexOf('SERVER DIED')).toBeLessThan(markdown.indexOf('Verdict:'));
+  });
+
+  it('records extension overlays in the report', () => {
+    const report = buildReport([], [], MICRO_SCHEDULE, 'A', { extensionsOverlays: ['/src/fix/subagent'] });
+    expect(report.extensionsOverlays).toEqual(['/src/fix/subagent']);
+    expect(renderReportMarkdown(report, 'run-x')).toContain('Extensions overlay');
+    expect(renderReportMarkdown(report, 'run-x')).toContain('/src/fix/subagent');
+  });
 });

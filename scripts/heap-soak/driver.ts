@@ -45,6 +45,13 @@ export interface DriverOptions {
   /** Injectable for tests / deterministic lane selection; defaults to Math.random. */
   rng?: () => number;
   /**
+   * B0 defect 1: returns true once the run has been stopped (e.g. the
+   * disposable server died). The wave loop checks it between dispatches and
+   * the top-up loop between children, so load stops promptly instead of
+   * running out a full wave against a dead socket.
+   */
+  isStopped?: () => boolean;
+  /**
    * zai quota guard (owner amendment 2026-09-26): when true, the backbone
    * lane is excluded from ORGANIC per-iteration dispatch (it stays in `lanes`
    * so top-up accounting still knows who the backbone is; top-up itself is
@@ -194,6 +201,7 @@ export async function runWave(
   const dispatchCandidates = options.backbonePaused ? lanes.filter((l) => !l.isBackbone) : lanes;
   const waveEnd = Date.now() + waveMs;
   while (Date.now() < waveEnd) {
+    if (options.isStopped?.()) break;
     const lane = pickLane(dispatchCandidates, state.breakers, Date.now(), options.rng);
     if (lane && inFlightCount(lane.name) < lane.maxConcurrent) {
       dispatch(lane);
@@ -207,6 +215,7 @@ export async function runWave(
   const shortfall = computeTopUpCount({ completedByLane }, options.waveTargetConfig, backbone.name);
   let toppedUp = 0;
   for (let i = 0; i < shortfall; i++) {
+    if (options.isStopped?.()) break;
     const result = await runChildWithDeadline(options, backbone, backbone.modelIds[0], options.waveTargetConfig.childTurnDeadlineMs);
     const breaker = state.breakers.get(backbone.name) ?? createBreakerState(backbone.name);
     state.breakers.set(backbone.name, result.success ? recordSuccess(breaker) : recordFailure(breaker, Date.now()));

@@ -1,12 +1,20 @@
 /**
  * Production-write audit (owner amendment 2026-09-26, board-pollution
- * incident): a file changing under a guarded production root is NOT itself
- * proof of harness interference — these hosts see real, ambient traffic (see
- * isolation.ts's session-registry.json finding). The precise proof is:
- * a file that changed DURING the run and whose content references this run
- * (its run id, run dir, or one of its child session ids). File discovery
- * (`find -newer`) and content grep are I/O (scripts/heap-soak/prod-audit-io.ts);
- * this module is the pure decision logic, kept unit-testable.
+ * incident; attribution corrected at B0): a file changing under a guarded
+ * production root is NOT itself proof of harness interference — these hosts
+ * see real, ambient traffic (see isolation.ts's session-registry.json finding).
+ * The precise proof is: a file that changed DURING the run and whose content
+ * references a marker ONLY a soak child emits — the run's isolated cwd/run dir
+ * path, or one of its server-issued child session ids.
+ *
+ * B0 defect 5: the bare run id is deliberately NOT a marker. It appears in
+ * operator sessions, Agent OS captures and reports that merely DISCUSS the run,
+ * which produced seven false "LEAK DETECTED" hits in A1. A genuine
+ * soak-attributable write carries the isolated cwd path or a session id.
+ *
+ * File discovery (`find -newer`) and content grep are I/O
+ * (scripts/heap-soak/prod-audit-io.ts); this module is the pure decision logic,
+ * kept unit-testable.
  */
 
 export interface NeedleMatch {
@@ -32,7 +40,11 @@ export function findNeedleMatches(
   return matches;
 }
 
-/** Build the needle list for a run: its id, its run dir, and every child session id created so far. */
-export function buildAuditNeedles(runId: string, runDir: string, sessionIds: readonly string[]): string[] {
-  return [runId, runDir, ...sessionIds];
+/**
+ * Build the needle list for a run: its isolated run-dir path (which only soak
+ * children's cwd/workspace uses) and every child session id created so far.
+ * The bare run id is intentionally excluded — see the module doc comment.
+ */
+export function buildAuditNeedles(runDir: string, sessionIds: readonly string[]): string[] {
+  return [runDir, ...sessionIds];
 }

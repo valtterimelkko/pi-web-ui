@@ -25,12 +25,14 @@ import { runWave, type DriverState } from './driver.js';
 import { sweepOrphans } from './orphan-sweep.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
+import { decideServerDeath, nextSocketUnreachableCount } from '../../server/src/live-validation/heap-soak/server-death.js';
+import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
 import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
 import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { leastSquaresSlope, type SlopePoint } from '../../server/src/live-validation/heap-soak/slope.js';
 import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, nextStateOnPollFailure, type QuotaState, type ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
 import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
-import { buildReport, parseSampleCsv, renderReportMarkdown } from '../../server/src/live-validation/heap-soak/report.js';
+import { buildReport, parseSampleCsv, renderReportMarkdown, formatElapsedMs } from '../../server/src/live-validation/heap-soak/report.js';
 import { snapshotComparisonSection } from './snapshot-diff.js';
 import { nextHeapThresholdSnapshot } from '../../server/src/live-validation/heap-soak/heap-threshold-snapshots.js';
 import { runProductionWriteAudit } from './prod-audit-io.js';
@@ -99,6 +101,67 @@ async function main(): Promise<void> {
   const firedSnapshots = new Set(state.firedSnapshotOffsetsMs ?? []);
   let anomalyHeapPinged = false;
   let stopped = false;
+  let socketUnreachableCount = 0;
+  let lastGoodSampleElapsedMs = state.lastGoodSampleElapsedMs ?? 0;
+
+  /**
+   * Sleep that returns early once the run has been stopped (e.g. by a
+   * detected server death), so ending a dead run never waits out a full 2 min
+   * sampling interval or 5 min idle window before the report is written.
+   */
+  function interruptibleSleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      if (stopped) { resolve(); return; }
+      const deadline = Date.now() + ms;
+      const tick = (): void => {
+        if (stopped || Date.now() >= deadline) { resolve(); return; }
+        setTimeout(tick, Math.min(500, ms));
+      };
+      setTimeout(tick, Math.min(500, ms));
+    });
+  }
+
+  /**
+   * Check the disposable server's liveness (unit state + MainPID + socket
+   * reachability) and end the run as `server_died` if it is gone. Proved from
+   * the recorded unit/PID identity, never from the sampler's own failures.
+   */
+  async function checkServerLiveness(): Promise<void> {
+    if (stopped) return;
+    try {
+      const status = await getUnitStatus(state.server.unitName);
+      const socketReachable = await isSocketReachable(state.server.socketPath);
+      const observation = { loadState: status.loadState, activeState: status.activeState, mainPid: status.mainPid, socketReachable };
+      socketUnreachableCount = nextSocketUnreachableCount(socketUnreachableCount, observation);
+      const decision = decideServerDeath(state, observation, socketUnreachableCount);
+      if (decision.died) await handleServerDeath(decision.reason ?? 'server died', observation);
+    } catch (error) {
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `server liveness check failed: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  }
+
+  async function handleServerDeath(reason: string, observation: { activeState: string }): Promise<void> {
+    if (stopped) return;
+    stopped = true;
+    const [exit, journal] = await Promise.all([
+      getUnitExitStatus(state.server.unitName),
+      getUnitJournalTail(state.server.unitName, 40),
+    ]);
+    const exitStatus = [exit.result, exit.execMainStatus && `exec-status=${exit.execMainStatus}`].filter(Boolean).join('/') || undefined;
+    const detectedAt = new Date().toISOString();
+    state.terminalState = 'server_died';
+    state.serverDeath = {
+      detectedAt,
+      elapsedMs: elapsedNow(),
+      reason,
+      activeState: observation.activeState,
+      exitStatus,
+      journalLines: journal.slice(-40),
+    };
+    state.lastGoodSampleElapsedMs = lastGoodSampleElapsedMs;
+    log({ ts: detectedAt, elapsedMs: state.serverDeath.elapsedMs, lane: 'A', kind: 'anomaly', detail: `server died: ${reason}` });
+    persist();
+  }
 
   // zai quota guard (owner amendment 2026-09-26). State is persisted so a
   // supervisor restart resumes the same state rather than resetting to
@@ -167,6 +230,8 @@ async function main(): Promise<void> {
   async function samplerLoop(): Promise<void> {
     const sampleIntervalMs = state.mode === 'micro' ? 10_000 : 120_000;
     while (!stopped && !isRunComplete(elapsedNow(), schedule)) {
+      await checkServerLiveness();
+      if (stopped) break;
       const elapsedMs = elapsedNow();
       const phase = phaseAt(elapsedMs, schedule);
       if (Date.now() - lastQuotaPollAtMs >= quotaPollIntervalMs(state.mode)) {
@@ -178,6 +243,8 @@ async function main(): Promise<void> {
         sample.quotaPercentLeft = lastQuotaReading?.percentLeft;
         sample.quotaPeakActive = lastQuotaReading?.peakActive;
         appendSampleRow(state.csvPath, HEAP_SAMPLE_CSV_HEADER, { ...sample });
+        lastGoodSampleElapsedMs = elapsedMs;
+        state.lastGoodSampleElapsedMs = elapsedMs;
         writeHeartbeat(path.join(state.runDir, 'sampler.heartbeat'));
         writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
 
@@ -208,6 +275,10 @@ async function main(): Promise<void> {
         }
       } catch (error) {
         log({ ts: new Date().toISOString(), elapsedMs, lane: 'A', kind: 'anomaly', detail: `sample failed: ${error instanceof Error ? error.message : String(error)}` });
+        // A failed sample is only a symptom. Re-check the unit/PID identity in
+        // case the underlying cause is a server death (A1: the supervisor kept
+        // sampling a dead socket for 19 h without ever checking the unit).
+        await checkServerLiveness();
       }
 
       const dueCheckpoint = nextDueOffset(elapsedMs, checkpointOffsets, firedCheckpoints);
@@ -235,7 +306,7 @@ async function main(): Promise<void> {
       }
 
       persist();
-      await new Promise((resolve) => setTimeout(resolve, sampleIntervalMs));
+      await interruptibleSleep(sampleIntervalMs);
     }
   }
 
@@ -253,6 +324,7 @@ async function main(): Promise<void> {
         logEvent: log,
         runStartMs,
         backbonePaused: quotaState === 'paused',
+        isStopped: () => stopped,
       }, driverState, schedule.waveMs);
       state.cycleCount += 1;
       persist();
@@ -262,12 +334,15 @@ async function main(): Promise<void> {
         await notify('blocked', 'backbone lane down', `wave ${state.cycleCount}: completedByLane=${JSON.stringify(waveResult.completedByLane)}`);
       }
 
+      // Server death: stop the load driver rather than sweeping orphans against a dead socket.
+      if (stopped) break;
+
       // Orphan sweep once per cycle — the harness must never become the leak.
       const events = readLaneEvents(state.eventsLogPath);
       await sweepOrphans(client, events, log, elapsedNow);
 
-      if (isRunComplete(elapsedNow(), schedule)) break;
-      await new Promise((resolve) => setTimeout(resolve, schedule.idleMs));
+      if (stopped || isRunComplete(elapsedNow(), schedule)) break;
+      await interruptibleSleep(schedule.idleMs);
     }
   }
 
@@ -275,10 +350,16 @@ async function main(): Promise<void> {
   stopped = true;
   persist();
 
-  // Final report + done ping.
+  // Final report + final ping.
   const rows = parseSampleCsv(readFileSync(state.csvPath, 'utf8'));
   const events = readLaneEvents(state.eventsLogPath);
-  const report = buildReport(rows, events, schedule, 'A');
+  const died = state.terminalState === 'server_died' && state.serverDeath !== undefined;
+  const report = buildReport(rows, events, schedule, 'A', {
+    ...(died && state.serverDeath
+      ? { terminalState: 'server_died' as const, serverDeath: state.serverDeath, coveredWindowMs: state.serverDeath.elapsedMs }
+      : {}),
+    ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
+  });
   const snapshotSection = await snapshotComparisonSection(state.runDir);
 
   // Production-write / board-pollution audit at the run's end (owner
@@ -287,14 +368,14 @@ async function main(): Promise<void> {
   let auditSection = '## Production-write / board-pollution audit\n\nSkipped: no prodAuditMarkerPath in run-state.\n';
   if (state.prodAuditMarkerPath) {
     const allSessionIds = events.filter((e) => e.kind === 'child_created' && e.sessionId).map((e) => e.sessionId as string);
-    const needles = buildAuditNeedles(state.runId, state.runDir, allSessionIds);
+    const needles = buildAuditNeedles(state.runDir, allSessionIds);
     const audit = await runProductionWriteAudit({ markerPath: state.prodAuditMarkerPath }, needles);
     const board = await boardWhoUnderRunDir(state.runDir);
     auditSection = [
       '## Production-write / board-pollution audit',
       '',
       audit.matches.length === 0
-        ? `No leak: ${audit.changedFileCount} file(s) changed under the guarded production roots during the run; none referenced this run (${allSessionIds.length} session ids checked).`
+        ? `No leak: ${audit.changedFileCount} file(s) changed under the guarded production roots during the run; none referenced this run's isolated run-dir path or any of its ${allSessionIds.length} child session ids.`
         : `**LEAK DETECTED**: ${JSON.stringify(audit.matches)}`,
       board.ok ? `Board check: ${board.detail}` : `**BOARD POLLUTION**: ${board.detail}`,
     ].join('\n');
@@ -303,7 +384,17 @@ async function main(): Promise<void> {
   const markdown = `${renderReportMarkdown(report, state.runId)}\n\n${snapshotSection}\n\n${auditSection}`;
   writeFileSync(path.join(state.runDir, 'report.md'), markdown);
   writeFileSync(path.join(state.runDir, 'report.json'), JSON.stringify(report, null, 2));
-  await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
+  if (died && state.serverDeath) {
+    await notify(
+      'blocked',
+      `server died at ${formatElapsedMs(state.serverDeath.elapsedMs)} after start`,
+      `run ${state.runId}: server DIED ${formatElapsedMs(state.serverDeath.elapsedMs)} in (${state.serverDeath.reason}); `
+        + `run ended as server_died; last good sample ${formatElapsedMs(lastGoodSampleElapsedMs)}; `
+        + `verdict=${report.verdict} peakHeap=${report.peakHeapMB.toFixed(0)}MB. See report.md.`,
+    );
+  } else {
+    await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
+  }
 
   writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
   wsClient.close();
