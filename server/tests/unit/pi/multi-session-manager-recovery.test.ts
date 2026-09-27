@@ -44,6 +44,7 @@ describe('MultiSessionManager.recoverSession — browser re-attach and single-fl
     getSession: ReturnType<typeof vi.fn>;
     setEventHandler: ReturnType<typeof vi.fn>;
     removeEventHandler: ReturnType<typeof vi.fn>;
+  releaseSessionRefs: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -59,6 +60,7 @@ describe('MultiSessionManager.recoverSession — browser re-attach and single-fl
       getSession: vi.fn(() => session),
       setEventHandler: vi.fn(),
       removeEventHandler: vi.fn(),
+    releaseSessionRefs: vi.fn(),
     };
     manager = new MultiSessionManager(piService as never, () => {}, { idleSessionTimeoutMs: 600_000 });
     await manager.subscribeClient('first-client', session.sessionFile);

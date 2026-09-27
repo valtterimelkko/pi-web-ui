@@ -854,16 +854,27 @@ export class PiService {
 
   removeClient(clientId: string): void {
     const sessionId = this.clientSessionMap.get(clientId);
+    const session = sessionId ? this.sessions.get(sessionId) : undefined;
+    // Dispose only when this client was the last owner of the session id. A
+    // sibling client still mapping the same id keeps a live session; disposing
+    // here would kill it and leave a dead object in `sessions` (reviewer
+    // finding 1).
+    let siblingStillOwns = false;
     if (sessionId) {
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        session.dispose();
-        this.sessions.delete(sessionId);
+      for (const [key, mapped] of this.clientSessionMap.entries()) {
+        if (key !== clientId && mapped === sessionId) {
+          siblingStillOwns = true;
+          break;
+        }
       }
-      this.clientSessionMap.delete(clientId);
     }
-    this.eventHandlers.delete(clientId);
-    this.clientWebUIContexts.delete(clientId);
+    if (session && !siblingStillOwns) {
+      session.dispose();
+    }
+    // Canonical release (B1 heap retainer 1): drops eventHandlers /
+    // clientSessionMap / clientWebUIContexts for this client, and the sessions
+    // entry once no other owner still maps that session id (identity-safe).
+    this.releaseSessionRefs(clientId, sessionId ?? '');
   }
 
   /**
@@ -881,12 +892,22 @@ export class PiService {
   }
 
   async cleanup(): Promise<void> {
+    // Drain the session pool first so pooled sessions are disposed and their
+    // PiService-owned references released (this also clears clientWebUIContexts
+    // via removeClient). Reviewer finding 4: previously the pool kept its
+    // clientSessions map after cleanup, strongly retaining disposed sessions.
+    if (this.sessionPool) {
+      for (const clientId of this.sessionPool.getActiveClients()) {
+        this.sessionPool.removeClient(clientId);
+      }
+    }
     for (const session of this.sessions.values()) {
       session.dispose();
     }
     this.sessions.clear();
     this.clientSessionMap.clear();
     this.eventHandlers.clear();
+    this.clientWebUIContexts.clear();
   }
 }
 

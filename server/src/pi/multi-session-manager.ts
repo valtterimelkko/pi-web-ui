@@ -570,6 +570,21 @@ export class MultiSessionManager {
   }
   
   /**
+   * B1 heap retainer fix (A1 soak §3, retainer 1): the single teardown funnel
+   * for a loaded Pi session. Every dispose/unload path routes through here so
+   * that `PiService` loses every reference it owns for this exact
+   * handler/session identity. `removeEventHandler` alone left the `AgentSession`
+   * strongly referenced in `PiService.sessions` / `clientSessionMap` /
+   * `clientWebUIContexts`, so every deleted child stayed resident (about 4.4 MB
+   * per child). `releaseSessionRefs` is identity-safe: a sibling owner still
+   * mapping the same session id keeps the `sessions` entry alive.
+   */
+  private releasePiServiceRefs(handlerKey: string, sessionId: string): void {
+    this.piService.removeEventHandler(handlerKey);
+    this.piService.releaseSessionRefs(handlerKey, sessionId);
+  }
+
+  /**
    * Dispose a single session
    */
   private disposeSession(sessionPath: string): void {
@@ -585,8 +600,8 @@ export class MultiSessionManager {
       logger.error(`[MultiSessionManager] Error disposing session ${sessionPath}:`, error);
     }
     
-    // Remove event handler
-    this.piService.removeEventHandler(activeSession.handlerKey);
+    // Release the event handler and every other PiService-owned reference
+    this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
     
     // Remove from sessions map
     this.sessions.delete(sessionPath);
@@ -739,8 +754,8 @@ export class MultiSessionManager {
       logger.error(`[MultiSessionManager] Error unloading session ${sessionPath}:`, error);
     }
     
-    // Remove event handler
-    this.piService.removeEventHandler(activeSession.handlerKey);
+    // Release the event handler and every other PiService-owned reference
+    this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
 
     this.sessions.delete(sessionPath);
     this.extensionUiSnapshots.delete(sessionPath);
@@ -832,15 +847,24 @@ export class MultiSessionManager {
       : undefined;
     const resolvedWebUIContext: WebUIContext | undefined = extensionWebUIContext;
 
-    const agentSession = await this.piService.createSession({
-      clientId: tempClientId,
-      cwd,
-      webUIContext: resolvedWebUIContext as any,
-    });
+    let agentSession: AgentSession;
+    try {
+      agentSession = await this.piService.createSession({
+        clientId: tempClientId,
+        cwd,
+        webUIContext: resolvedWebUIContext as any,
+      });
+    } catch (error) {
+      // A rejection before PiService mapped the session leaves only the
+      // temporary handler installed above; drop it so repeated creation
+      // failures do not accumulate handler entries (reviewer finding 3).
+      this.piService.removeEventHandler(tempClientId);
+      throw error;
+    }
 
     const resolvedSessionPath = agentSession.sessionFile;
     if (!resolvedSessionPath) {
-      this.piService.removeEventHandler(tempClientId);
+      this.releasePiServiceRefs(tempClientId, agentSession.sessionId);
       agentSession.dispose();
       throw new Error('Failed to create session file');
     }
@@ -2042,10 +2066,10 @@ export class MultiSessionManager {
       );
     }
 
-    // Remove event handler + every other PiService-owned reference for this
-    // exact session identity (WS-path memory robustness F4).
-    this.piService.removeEventHandler(activeSession.handlerKey);
-    this.piService.releaseSessionRefs?.(activeSession.handlerKey, activeSession.sessionId);
+    // Release the event handler and every other PiService-owned reference for
+    // this exact session identity (WS-path memory robustness F4, completed for
+    // every dispose/unload path by the B1 heap-retainer fix).
+    this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
 
     // Remove from sessions map
     this.sessions.delete(sessionPath);
@@ -2079,17 +2103,17 @@ export class MultiSessionManager {
     // Stop cleanup timer
     this.stopCleanupTimer();
     
-    // Dispose all sessions
+    // Dispose all sessions and release every PiService-owned reference
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
       try {
         activeSession.agentSession.dispose();
-        this.piService.removeEventHandler(activeSession.handlerKey);
       } catch (error) {
         logger.error(
           `[MultiSessionManager] Error disposing session ${sessionPath}:`,
           error
         );
       }
+      this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
     }
 
     // Clear all maps
