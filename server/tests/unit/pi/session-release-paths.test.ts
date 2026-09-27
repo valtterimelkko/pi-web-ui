@@ -280,6 +280,50 @@ describe('PiService session release — every dispose/unload path', () => {
     expectFullyReleased(service, client.sessionId, 'client-1');
   });
 
+  it('a disposed AgentSession becomes collectable (run with NODE_OPTIONS=--expose-gc)', async (ctx) => {
+    if (typeof global.gc !== 'function') {
+      ctx.skip('run with NODE_OPTIONS=--expose-gc to assert collectability');
+      return;
+    }
+    // Deliberately plain stubs (no vi.fn/mock history) so the only references
+    // to the session are the production ones under test.
+    const service = new PiService();
+    services.push(service);
+    let counter = 0;
+    (service as unknown as { createSession: (options: { clientId: string; sessionPath?: string }) => Promise<unknown> }).createSession =
+      async (options) => {
+        counter += 1;
+        const sessionId = `gc-sid-${counter}`;
+        const session = {
+          sessionId,
+          sessionFile: `/tmp/pi-sessions/${sessionId}.jsonl`,
+          sessionPath: `/tmp/pi-sessions/${sessionId}.jsonl`,
+          dispose() {},
+          abort() {},
+          subscribe() {},
+          setModel() {},
+          getContextUsage() {},
+        };
+        internals(service).clientSessionMap.set(options.clientId, sessionId);
+        internals(service).eventHandlers.set(options.clientId, () => {});
+        internals(service).sessions.set(sessionId, session);
+        return session;
+      };
+    const manager = newManager(service);
+    const status = await manager.createAndSubscribe('client-1', '/work');
+    const sessionRef = new WeakRef(internals(service).sessions.values().next().value as object);
+
+    manager.disposeLoadedSession(status.sessionPath);
+
+    let collected = false;
+    for (let i = 0; i < 10 && !collected; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      global.gc!();
+      collected = sessionRef.deref() === undefined;
+    }
+    expect(collected).toBe(true);
+  });
+
   it('SessionPool.createClientSession releases the session it replaces', async () => {
     const service = newService();
     const created = installFakeCreateSession(service);
