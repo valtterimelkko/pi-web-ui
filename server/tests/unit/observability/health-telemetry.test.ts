@@ -1,5 +1,5 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { mkdtemp, readFile, readdir, rm, mkdir, symlink } from 'node:fs/promises';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -60,6 +60,7 @@ function telemetryOptions(overrides: {
       sink: overrides.sink ?? createNoopAlertSink(),
       sinkDescription: 'test',
       suppressOperatorNotifications: false,
+      warnings: [],
     },
     sources: {
       now: overrides.now ?? (() => 1_700_000_000_000),
@@ -73,9 +74,11 @@ function telemetryOptions(overrides: {
 }
 
 describe('resolveObservabilityMetricsDir', () => {
-  it('defaults to the production metrics directory', () => {
-    expect(resolveObservabilityMetricsDir({} as NodeJS.ProcessEnv)).toBe(
-      path.join(homedir(), '.pi-web-ui', 'metrics'),
+  it('defaults to the real production metrics directory, independent of HOME', () => {
+    // HOME is mutable (a validation child gets a fake one); the production
+    // boundary must come from the account database instead.
+    expect(resolveObservabilityMetricsDir({ HOME: '/tmp/fake-home' } as NodeJS.ProcessEnv)).toBe(
+      path.join(userInfo().homedir, '.pi-web-ui', 'metrics'),
     );
   });
 
@@ -95,14 +98,111 @@ describe('resolveObservabilityMetricsDir', () => {
   });
 });
 
+// ─── Correction 02, finding 1: production-path confinement in validation mode ──
+//
+// The production boundary must not be derived from the mutable HOME: a
+// validation child gets a fake HOME, so `os.homedir()`-based comparisons are
+// useless there. The confinement rule is canonical/symlink-resolved containment
+// inside the validation run directory, plus the real production metrics dir as
+// an explicitly forbidden target.
+describe('validation-mode production-path confinement', () => {
+  async function runFixture() {
+    const root = await tempDir();
+    const recordDir = path.join(root, 'validation');
+    const home = path.join(root, 'home');
+    await mkdir(path.join(recordDir, 'metrics'), { recursive: true });
+    await mkdir(home, { recursive: true });
+    return { root, recordDir, home };
+  }
+
+  it('refuses an explicit production metrics directory under a fake HOME', async () => {
+    const { recordDir, home } = await runFixture();
+    // The real (getpwuid) production metrics dir, whatever HOME says.
+    const productionDir = path.join(userInfo().homedir, '.pi-web-ui', 'metrics');
+    const config = createHealthTelemetryConfig({
+      HOME: home,
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
+      OBSERVABILITY_METRICS_DIR: productionDir,
+    } as NodeJS.ProcessEnv);
+    expect(config.enabled).toBe(false);
+    expect(config.dir).toBe(productionDir);
+    expect(config.suppressedReason).toContain(productionDir);
+    expect(config.suppressedReason).toMatch(/validation run directory|production/);
+  });
+
+  it('refuses an explicit production file: alert sink', async () => {
+    const { recordDir, home } = await runFixture();
+    const productionSink = path.join(userInfo().homedir, '.pi-web-ui', 'metrics', 'alerts.jsonl');
+    const config = createHealthTelemetryConfig({
+      HOME: home,
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
+      OBSERVABILITY_HEALTH_ALERT_SINK: `file:${productionSink}`,
+    } as NodeJS.ProcessEnv);
+    expect(config.enabled).toBe(false);
+    expect(config.suppressedReason).toContain(productionSink);
+  });
+
+  it('refuses a metrics directory that reaches outside through a symlink', async () => {
+    const { root, recordDir, home } = await runFixture();
+    const outside = path.join(root, 'outside-metrics');
+    await mkdir(outside, { recursive: true });
+    // <recordDir>/escape -> <root>/outside-metrics (an alias of a path outside the run dir)
+    await symlink(outside, path.join(recordDir, 'escape'), 'dir');
+    const config = createHealthTelemetryConfig({
+      HOME: home,
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
+      OBSERVABILITY_METRICS_DIR: path.join(recordDir, 'escape'),
+    } as NodeJS.ProcessEnv);
+    expect(config.enabled).toBe(false);
+    // The reason names the resolved target the write would have reached.
+    expect(config.suppressedReason).toContain(path.join(root, 'outside-metrics'));
+    expect(config.suppressedReason).toMatch(/outside the validation run directory/);
+  });
+
+  it('keeps a canonical path inside the run directory enabled', async () => {
+    const { recordDir, home } = await runFixture();
+    const config = createHealthTelemetryConfig({
+      HOME: home,
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
+      OBSERVABILITY_METRICS_DIR: path.join(recordDir, 'metrics', 'nested'),
+    } as NodeJS.ProcessEnv);
+    expect(config.enabled).toBe(true);
+    expect(config.suppressOperatorNotifications).toBe(true);
+  });
+
+  it('forces a non-delivering capture sink when notifications are requested in validation mode', async () => {
+    const { recordDir, home } = await runFixture();
+    const config = createHealthTelemetryConfig({
+      HOME: home,
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
+      NOTIFICATIONS_DIR: path.join(recordDir, 'notifications'),
+      NOTIFICATIONS_ENABLED: 'true',
+      TELEGRAM_BOT_TOKEN: 'would-be-secret',
+      TELEGRAM_CHAT_ID: 'would-be-chat',
+      OBSERVABILITY_HEALTH_ALERT_SINK: 'notifications',
+    } as NodeJS.ProcessEnv);
+    expect(config.enabled).toBe(true);
+    expect(config.suppressOperatorNotifications).toBe(true);
+    expect(config.sinkDescription).toBe(`file:${path.join(recordDir, 'metrics', 'alerts.jsonl')}`);
+    expect(config.warnings.join(' ')).toContain('OBSERVABILITY_HEALTH_ALERT_SINK');
+  });
+});
+
 describe('createHealthTelemetryConfig', () => {
   it('refuses to write the production metrics path while in validation mode', () => {
+    const recordDir = path.join(tmpdir(), `a2-telemetry-guard-${process.pid}`);
     const config = createHealthTelemetryConfig({
       PI_WEB_UI_VALIDATION_MODE: 'true',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: recordDir,
       OBSERVABILITY_METRICS_DIR: path.join(homedir(), '.pi-web-ui', 'metrics'),
     } as NodeJS.ProcessEnv);
     expect(config.enabled).toBe(false);
-    expect(config.suppressedReason).toMatch(/production metrics path/);
+    expect(config.suppressedReason).toMatch(/validation run directory|production/);
   });
 
   it('defaults the alert sink to the notification ingress spool with hysteresis thresholds', () => {
@@ -143,6 +243,50 @@ describe('createHealthTelemetryConfig', () => {
       maxFiles: 4,
       thresholds: { heapFractionHigh: 0.05, heapFractionLow: 0.04, lagP99HighMs: 800, lagP99LowMs: 300 },
     });
+  });
+});
+
+describe('createHealthTelemetryConfig bounds (correction 02, finding 4)', () => {
+  it('falls back to the default interval with a warning when the value is out of range', () => {
+    const config = createHealthTelemetryConfig({ OBSERVABILITY_METRICS_INTERVAL_MS: '10' } as NodeJS.ProcessEnv);
+    expect(config.intervalMs).toBe(30_000);
+    expect(config.warnings.join(' ')).toContain('OBSERVABILITY_METRICS_INTERVAL_MS');
+  });
+
+  it('rejects an interval above the safe timer range instead of clamping to 1 ms', () => {
+    const config = createHealthTelemetryConfig({ OBSERVABILITY_METRICS_INTERVAL_MS: '2147483648' } as NodeJS.ProcessEnv);
+    expect(config.intervalMs).toBe(30_000);
+    expect(config.warnings.join(' ')).toContain('OBSERVABILITY_METRICS_INTERVAL_MS');
+  });
+
+  it('documents why: Node clamps a setInterval delay above 2**31-1 to 1 ms', async () => {
+    let fired = 0;
+    const timer = setInterval(() => { fired += 1; }, 2 ** 31);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    clearInterval(timer);
+    expect(fired).toBeGreaterThan(0);
+  });
+
+  it('bounds the rotation settings and rejects unsafe integers', () => {
+    const tiny = createHealthTelemetryConfig({ OBSERVABILITY_METRICS_MAX_FILE_BYTES: '10', OBSERVABILITY_METRICS_MAX_FILES: '100000' } as NodeJS.ProcessEnv);
+    expect(tiny.maxFileBytes).toBe(5 * 1024 * 1024);
+    expect(tiny.maxFiles).toBe(5);
+    expect(tiny.warnings.join(' ')).toContain('OBSERVABILITY_METRICS_MAX_FILE_BYTES');
+    expect(tiny.warnings.join(' ')).toContain('OBSERVABILITY_METRICS_MAX_FILES');
+
+    const unsafe = createHealthTelemetryConfig({ OBSERVABILITY_METRICS_MAX_FILE_BYTES: '1e20', OBSERVABILITY_METRICS_MAX_FILES: '4.5' } as NodeJS.ProcessEnv);
+    expect(unsafe.maxFileBytes).toBe(5 * 1024 * 1024);
+    expect(unsafe.maxFiles).toBe(5);
+    expect(unsafe.warnings).toHaveLength(2);
+  });
+
+  it('keeps valid in-range values without warnings', () => {
+    const config = createHealthTelemetryConfig({
+      OBSERVABILITY_METRICS_INTERVAL_MS: '1000',
+      OBSERVABILITY_METRICS_MAX_FILE_BYTES: '4096',
+      OBSERVABILITY_METRICS_MAX_FILES: '3',
+    } as NodeJS.ProcessEnv);
+    expect(config).toMatchObject({ intervalMs: 1_000, maxFileBytes: 4_096, maxFiles: 3, warnings: [] });
   });
 });
 
@@ -202,6 +346,28 @@ describe('HealthTelemetry', () => {
       const content = await readFile(path.join(dir, name), 'utf8');
       expect(Buffer.byteLength(content)).toBeLessThanOrEqual(600);
     }
+  });
+
+  it('evaluates and delivers alerts even when the metrics append fails (correction 02, finding 3)', async () => {
+    const dir = await tempDir();
+    const alerts: HealthAlert[] = [];
+    // 0.9 of 100_000 is above the 0.8 high water mark: an alert is due.
+    const state: MemoryState = { heapUsed: 90_000, heapTotal: 95_000, rss: 100_000, external: 1 };
+    const metricsFile = {
+      currentPath: path.join(dir, 'health-metrics.jsonl'),
+      append: async () => { throw new Error('EACCES: permission denied'); },
+    } as unknown as import('../../../src/observability/health-metrics-file.js').RotatingMetricsFile;
+    const telemetry = new HealthTelemetry({ ...telemetryOptions({ dir, state, sink: async (alert) => { alerts.push(alert); } }), metricsFile });
+
+    const readings = await telemetry.sampleOnce();
+
+    expect(readings?.heapFraction).toBe(0.9);
+    expect(alerts.map((alert) => `${alert.kind}:${alert.transition}`)).toEqual(['heap_pressure:alert']);
+    expect(telemetry.appendFailures).toBe(1);
+    // And the failure does not wedge the next sample either.
+    const again = await telemetry.sampleOnce();
+    expect(again).toBeDefined();
+    expect(telemetry.appendFailures).toBe(2);
   });
 
   it('samples on the configured interval once started and stops cleanly', async () => {

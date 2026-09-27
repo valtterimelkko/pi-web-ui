@@ -52,6 +52,7 @@ export class HealthTelemetry {
   private sources: HealthReadingSources;
   private timer?: ReturnType<typeof setInterval>;
   private sampling = false;
+  private failedAppends = 0;
 
   constructor(options: HealthTelemetryOptions) {
     this.config = options.config;
@@ -81,13 +82,30 @@ export class HealthTelemetry {
     return this.file.currentPath;
   }
 
+  /** Metrics lines that could not be persisted (alerts are unaffected). */
+  get appendFailures(): number {
+    return this.failedAppends;
+  }
+
   /** Registers process sources (merged; a later registrar cannot drop a field). */
   registerSources(sources: HealthReadingSources): void {
     this.sources = { ...this.sources, ...sources };
   }
 
   start(): void {
-    if (!this.config.enabled || this.timer) return;
+    // The refusal and the knob warnings are logged even when telemetry is
+    // disabled: a silently not-running sampler is exactly what the guard must
+    // never look like.
+    for (const warning of this.config.warnings) {
+      logger.warn(`[HealthTelemetry] ${warning}`);
+    }
+    if (!this.config.enabled) {
+      if (this.config.suppressedReason) {
+        logger.error(`[HealthTelemetry] disabled: ${this.config.suppressedReason}`);
+      }
+      return;
+    }
+    if (this.timer) return;
     logger.info(
       `[HealthTelemetry] metrics → ${this.file.currentPath} every ${this.config.intervalMs}ms; ` +
       `alerts → ${this.config.sinkDescription}${this.config.suppressOperatorNotifications ? ' (operator notifications suppressed)' : ''}`,
@@ -106,23 +124,44 @@ export class HealthTelemetry {
   async sampleOnce(): Promise<HealthReadings | undefined> {
     if (!this.config.enabled || this.sampling) return undefined;
     this.sampling = true;
+    let readings: HealthReadings | undefined;
     try {
-      const readings = collectHealthReadings({
+      readings = collectHealthReadings({
         ...getRegisteredHealthReadingSources(),
         ...this.sources,
         ...await this.resolvedAsyncSources(),
       });
+    } catch (error) {
+      // Reading collection is fail-open by construction; a failure here means a
+      // source broke its contract. Telemetry must never take the control plane
+      // down, and the sample is skipped.
+      logger.warn(`[HealthTelemetry] sample failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.sampling = false;
+      return undefined;
+    }
+
+    // Persistence and alerting are independent (correction 02, finding 3): a
+    // full disk or an unreadable metrics directory must not silence the alert
+    // that says the process is in trouble.
+    try {
       await this.file.append(JSON.stringify(readings));
+    } catch (error) {
+      this.failedAppends += 1;
+      logger.warn(
+        `[HealthTelemetry] metrics append failed (${this.file.currentPath}, ${this.failedAppends} so far): ` +
+        `${error instanceof Error ? error.message : String(error)} — alerts continue`,
+      );
+    }
+
+    try {
       const alerts = this.evaluator.evaluate(readings);
       for (const alert of alerts) await this.deliver(alert);
-      return readings;
     } catch (error) {
-      // Telemetry must never take the control plane down.
-      logger.warn(`[HealthTelemetry] sample failed: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
+      logger.warn(`[HealthTelemetry] alert evaluation failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       this.sampling = false;
     }
+    return readings;
   }
 
   private async deliver(alert: HealthAlert): Promise<void> {

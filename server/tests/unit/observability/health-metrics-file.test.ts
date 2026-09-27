@@ -80,6 +80,46 @@ describe('RotatingMetricsFile', () => {
     expect(await readdir(dir)).toHaveLength(2);
   });
 
+  it('keeps line integrity, the byte bound and the generation bound under concurrent appends across rotations (correction 02, finding 5)', async () => {
+    const dir = await tempDir();
+    const maxFileBytes = 200;
+    const maxFiles = 3;
+    const file = new RotatingMetricsFile({ dir, maxFileBytes, maxFiles });
+    const appended = Array.from({ length: 40 }, (_, index) => `line-${String(index).padStart(4, '0')}`);
+
+    // All appends are issued at once: the serialisation must hold while the
+    // limit forces a rotation every 20 lines (each line is 10 bytes).
+    await Promise.all(appended.map((line) => file.append(`${line}\n`)));
+
+    const names = (await readdir(dir)).sort();
+    expect(names.length).toBeLessThanOrEqual(maxFiles);
+    expect(names).toContain('health-metrics.jsonl');
+
+    let retained: string[] = [];
+    for (const name of names) {
+      const text = await readFile(path.join(dir, name), 'utf8');
+      // Byte bound per generation, never crossed by a partial line.
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(maxFileBytes);
+      expect(text === '' || text.endsWith('\n')).toBe(true);
+      retained = retained.concat(text.split('\n').filter((line) => line !== ''));
+    }
+
+    // Every retained line is a whole, unique line...
+    expect(retained.every((line) => /^line-\d{4}$/.test(line))).toBe(true);
+    expect(new Set(retained).size).toBe(retained.length);
+    // ...and rotation dropped the oldest lines only: the retained set is a
+    // contiguous suffix of the append order.
+    const start = appended.indexOf(retained[0]);
+    expect(start).toBeGreaterThan(-1);
+    const sortedByFile = ['health-metrics.2.jsonl', 'health-metrics.1.jsonl', 'health-metrics.jsonl'];
+    const inReadOrder: string[] = [];
+    for (const name of sortedByFile) {
+      const text = await readFile(path.join(dir, name), 'utf8').catch(() => '');
+      inReadOrder.push(...text.split('\n').filter((line) => line !== ''));
+    }
+    expect(inReadOrder).toEqual(appended.slice(start));
+  });
+
   it('serialises concurrent appends without interleaving lines', async () => {
     const dir = await tempDir();
     const file = new RotatingMetricsFile({ dir, maxFileBytes: 1_000_000, maxFiles: 2 });
