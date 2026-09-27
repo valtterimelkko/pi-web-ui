@@ -858,12 +858,14 @@ export class PiService {
       const session = this.sessions.get(sessionId);
       if (session) {
         session.dispose();
-        this.sessions.delete(sessionId);
       }
-      this.clientSessionMap.delete(clientId);
     }
-    this.eventHandlers.delete(clientId);
-    this.clientWebUIContexts.delete(clientId);
+    // Canonical release (B1 heap retainer 1): drops eventHandlers /
+    // clientSessionMap / clientWebUIContexts for this client, and the sessions
+    // entry once no other owner still maps that session id (identity-safe).
+    // Previously this path deleted the sessions entry unconditionally, which
+    // could tear down a sibling owner's session.
+    this.releaseSessionRefs(clientId, sessionId ?? '');
   }
 
   /**

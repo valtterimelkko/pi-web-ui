@@ -206,6 +206,9 @@ function createFakePiService(harness: Harness) {
     removeEventHandler: vi.fn((key: string) => {
       handlers.delete(key);
     }),
+    releaseSessionRefs: vi.fn((key: string) => {
+      handlers.delete(key);
+    }),
   };
 }
 

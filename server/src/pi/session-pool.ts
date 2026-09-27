@@ -39,9 +39,11 @@ export class SessionPool {
     // Check if client already has a session - dispose it and create a new one
     const existing = this.clientSessions.get(clientId);
     if (existing) {
-      // Dispose the old session
+      // Dispose the old session and release every PiService-owned reference for
+      // it (B1 heap retainer 1): removing only the event handler left the
+      // AgentSession in PiService.sessions forever.
       existing.session.dispose();
-      this.piService.removeEventHandler(clientId);
+      this.piService.releaseSessionRefs(existing.clientId, existing.sessionId);
       this.clientSessions.delete(clientId);
     }
 
@@ -76,10 +78,10 @@ export class SessionPool {
   async switchClientSession(clientId: string, sessionPath: string): Promise<ClientSession> {
     const existing = this.clientSessions.get(clientId);
     
-    // Dispose existing session if any
+    // Dispose existing session if any, releasing every PiService-owned reference
     if (existing) {
       existing.session.dispose();
-      this.piService.removeEventHandler(clientId);
+      this.piService.releaseSessionRefs(existing.clientId, existing.sessionId);
     }
     
     // Get Web UI context for extension binding
@@ -127,8 +129,25 @@ export class SessionPool {
   }
 
   removeClient(clientId: string): void {
+    const clientSession = this.clientSessions.get(clientId);
     this.clientSessions.delete(clientId);
-    this.piService.removeEventHandler(clientId);
+    if (!clientSession) {
+      this.piService.releaseSessionRefs(clientId, '');
+      return;
+    }
+    // Dispose the session unless another client entry still shares it, then
+    // release every PiService-owned reference for this exact identity.
+    const shared = Array.from(this.clientSessions.values()).some(
+      (other) => other.sessionId === clientSession.sessionId,
+    );
+    if (!shared) {
+      try {
+        clientSession.session.dispose();
+      } catch (error) {
+        logger.error(`[SessionPool] Error disposing session for ${clientId}:`, error);
+      }
+    }
+    this.piService.releaseSessionRefs(clientSession.clientId, clientSession.sessionId);
   }
 
   getActiveClients(): string[] {

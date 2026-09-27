@@ -48,6 +48,7 @@ interface MockPiService {
   getSession: ReturnType<typeof vi.fn>;
   setEventHandler: ReturnType<typeof vi.fn>;
   removeEventHandler: ReturnType<typeof vi.fn>;
+  releaseSessionRefs: ReturnType<typeof vi.fn>;
 }
 
 // Mock the pi-coding-agent module
@@ -112,6 +113,7 @@ function createMockPiService(overrides: Partial<MockPiService> = {}): MockPiServ
     getSession: vi.fn(),
     setEventHandler: vi.fn(),
     removeEventHandler: vi.fn(),
+    releaseSessionRefs: vi.fn(),
     ...overrides,
   };
 }

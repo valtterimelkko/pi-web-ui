@@ -42,6 +42,7 @@ function createMockPiService(session: ReturnType<typeof createMockAgentSession>)
     getSession: vi.fn(() => session),
     setEventHandler: vi.fn(),
     removeEventHandler: vi.fn(),
+    releaseSessionRefs: vi.fn(),
   };
 }
 

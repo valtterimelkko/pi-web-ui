@@ -372,6 +372,7 @@ describe('MultiSessionManager steering and the extension input event (real Agent
       getSession: vi.fn(),
       setEventHandler: vi.fn(),
       removeEventHandler: vi.fn(),
+    releaseSessionRefs: vi.fn(),
     };
     msm = new MultiSessionManager(fakePiService as never, () => {});
   });
