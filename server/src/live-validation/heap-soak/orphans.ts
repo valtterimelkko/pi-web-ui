@@ -77,6 +77,86 @@ export function classifyDeleteError(error: unknown): DeleteErrorOutcome {
 }
 
 /**
+ * Server-side orphan reconciliation (B0.1 correction 04).
+ *
+ * The event-log reconciliation above only knows sessions that produced an
+ * event. If the supervisor is killed while a `createSession` is in flight, the
+ * session is created on the server but `child_created` is never logged, so the
+ * sweep misses it and it survives — the parent traced exactly this in run 4
+ * (Gate 1's SIGKILL of the supervisor at 22:43:34, session
+ * `01a0ea30-…`, cwd `children/A-5527047e`, never prompted). The restarted
+ * supervisor's trackers are empty, so the server's own session list is the only
+ * remaining source of truth.
+ */
+
+/** The subset of a server `SessionInfo` this reconciliation needs. */
+export interface ServerSessionRef {
+  sessionId: string;
+  cwd?: string;
+  createdAt?: string;
+}
+
+/** Every session id that appears anywhere in the events log — the harness's full known set. */
+export function trackedSessionIds(events: readonly LaneEvent[]): Set<string> {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (event.sessionId) ids.add(event.sessionId);
+  }
+  return ids;
+}
+
+function stripTrailingSlash(value: string): string {
+  return value.length > 1 ? value.replace(/\/+$/, '') : value;
+}
+
+/** True when `cwd` is the child-workspace root itself or a directory under it (never a prefix-sharing sibling). */
+export function isUnderChildWorkspace(cwd: string | undefined, childWorkspaceRoot: string): boolean {
+  if (!cwd) return false;
+  const root = stripTrailingSlash(childWorkspaceRoot);
+  const target = stripTrailingSlash(cwd);
+  return target === root || target.startsWith(`${root}/`);
+}
+
+export interface UntrackedOrphanInput {
+  /** Absolute `<runDir>/children` for THIS run. */
+  childWorkspaceRoot: string;
+  /** Session ids the harness already knows (events, in-flight, swept). */
+  tracked: ReadonlySet<string>;
+  nowMs: number;
+  /** A session younger than this is held back (its create may still be resolving). */
+  graceMs: number;
+}
+
+export interface UntrackedOrphanSelection {
+  sweepable: string[];
+  skippedYoung: string[];
+}
+
+/**
+ * Server sessions under this run's children cwd that the harness has no record
+ * of (and that are past the grace window). Pure: the caller lists the server
+ * and performs the deletes.
+ */
+export function findUntrackedChildrenSessions(
+  entries: readonly ServerSessionRef[],
+  input: UntrackedOrphanInput,
+): UntrackedOrphanSelection {
+  const sweepable: string[] = [];
+  const skippedYoung: string[] = [];
+  for (const entry of entries) {
+    if (!entry.sessionId || input.tracked.has(entry.sessionId)) continue;
+    if (!isUnderChildWorkspace(entry.cwd, input.childWorkspaceRoot)) continue;
+    const createdMs = entry.createdAt ? Date.parse(entry.createdAt) : Number.NaN;
+    if (Number.isFinite(createdMs) && input.nowMs - createdMs < input.graceMs) {
+      skippedYoung.push(entry.sessionId);
+      continue;
+    }
+    sweepable.push(entry.sessionId);
+  }
+  return { sweepable, skippedYoung };
+}
+
+/**
  * Regression invariant for the accounting fix: session ids that have BOTH an
  * `orphan_swept` and a later `child_failed` event. A correct harness reports
  * none — the sweep's own deletions are counted as `orphan_swept`.

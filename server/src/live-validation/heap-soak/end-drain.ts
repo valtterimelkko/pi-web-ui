@@ -108,6 +108,14 @@ export interface RetentionVerdictInput {
   liveChildrenAtSnapshot?: number;
   /** Unresolved session creations at the moment of the snapshot. */
   pendingCreatesAtSnapshot?: number;
+  /**
+   * Correction 04: live sessions still registered on the server under this
+   * run's children cwd that the harness has no record of (an untracked orphan
+   * from a lost supervisor). They are LIVE, not retained-deleted.
+   */
+  untrackedServerSessions?: number;
+  /** Correction 04: raw count of the server's sessions registered under this run's children cwd at the snapshot. */
+  serverChildrenSessionCount?: number;
   /** Whether the pre-snapshot drain completed. */
   drainDrained?: boolean;
   /** Instances verified as held by a known bounded slot in THIS snapshot. */
@@ -118,8 +126,12 @@ export interface RetentionVerdict {
   agentSessionCount: number;
   liveChildrenAtSnapshot?: number;
   pendingCreatesAtSnapshot: number;
+  untrackedServerSessions: number;
+  serverChildrenSessionCount?: number;
+  /** Harness-known live plus untracked server-side sessions. */
+  liveOnServerAtSnapshot?: number;
   verifiedKnownSlotInstances: number;
-  /** AgentSessions beyond the live children and the verified bounded slots; undefined when no verdict can be given. */
+  /** AgentSessions beyond the live-on-server sessions and the verified bounded slots; undefined when no verdict can be given. */
   retainedDeletedChildren?: number;
   /** Why no verdict can be given, when `retainedDeletedChildren` is undefined. */
   notComputedReason?: string;
@@ -127,11 +139,17 @@ export interface RetentionVerdict {
 
 export function computeRetainedDeletedChildren(input: RetentionVerdictInput): RetentionVerdict {
   const pendingCreatesAtSnapshot = Math.max(0, input.pendingCreatesAtSnapshot ?? 0);
+  const untrackedServerSessions = Math.max(0, input.untrackedServerSessions ?? 0);
   const verifiedKnownSlotInstances = Math.max(0, input.verifiedKnownSlotInstances);
   const base = {
     agentSessionCount: input.agentSessionCount,
     ...(input.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: input.liveChildrenAtSnapshot } : {}),
     pendingCreatesAtSnapshot,
+    untrackedServerSessions,
+    ...(input.serverChildrenSessionCount !== undefined ? { serverChildrenSessionCount: input.serverChildrenSessionCount } : {}),
+    ...(input.liveChildrenAtSnapshot !== undefined
+      ? { liveOnServerAtSnapshot: input.liveChildrenAtSnapshot + untrackedServerSessions }
+      : {}),
     verifiedKnownSlotInstances,
   };
 
@@ -144,7 +162,7 @@ export function computeRetainedDeletedChildren(input: RetentionVerdictInput): Re
   if (input.drainDrained === false || pendingCreatesAtSnapshot > 0) {
     return { ...base, notComputedReason: `the pre-snapshot drain was incomplete (${input.liveChildrenAtSnapshot} live children, ${pendingCreatesAtSnapshot} pending creates) — retained deleted children cannot be separated from still-live ones` };
   }
-  return { ...base, retainedDeletedChildren: Math.max(0, input.agentSessionCount - input.liveChildrenAtSnapshot - verifiedKnownSlotInstances) };
+  return { ...base, retainedDeletedChildren: Math.max(0, input.agentSessionCount - (input.liveChildrenAtSnapshot + untrackedServerSessions) - verifiedKnownSlotInstances) };
 }
 
 /** The report.md lines stating the end-snapshot retention verdict. */
@@ -162,6 +180,11 @@ export function renderRetentionVerdict(input: RetentionVerdictInput): string[] {
     lines.push(`- Known bounded retained slot: ${slot.instances} declared (${slot.name}); verified in this snapshot: ${verdict.verifiedKnownSlotInstances}`);
   }
   lines.push(`- Live children at the moment of the snapshot (in-flight + created-without-terminal-delete): ${verdict.liveChildrenAtSnapshot}`);
+  lines.push(`- Untracked server-side sessions under this run's children cwd: ${verdict.untrackedServerSessions}`);
+  if (verdict.serverChildrenSessionCount !== undefined) {
+    lines.push(`- Sessions still registered on the server under this run's children cwd: ${verdict.serverChildrenSessionCount}`);
+  }
+  lines.push(`- Live on the server (harness-known live + untracked): ${verdict.liveOnServerAtSnapshot}`);
   if (verdict.pendingCreatesAtSnapshot > 0) {
     lines.push(`- Pending child creations at the moment of the snapshot (session id not yet known): ${verdict.pendingCreatesAtSnapshot}`);
   }

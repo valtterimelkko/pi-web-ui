@@ -96,6 +96,12 @@ export interface RunState {
   liveChildrenAtEndSnapshotIds?: string[];
   /** B0.1 correction 03 item 1: session creations dispatched but unresolved at the snapshot (session ids unknown). */
   pendingCreatesAtEndSnapshot?: number;
+  /** B0.1 correction 04: server sessions under this run's children cwd with no harness record at the snapshot (live, not retained). */
+  untrackedServerSessionsAtEndSnapshot?: number;
+  /** B0.1 correction 04: raw count of the server's sessions registered under this run's children cwd at the snapshot. */
+  serverChildrenSessionsAtEndSnapshot?: number;
+  /** B0.1 correction 04: untracked orphans (no harness record) swept during the run. */
+  untrackedOrphansSwept?: number;
   /** B0.1 correction: whether the pre-snapshot drain completed or hit its bound. */
   endSnapshotDrain?: { drained: boolean; timeoutMs: number; pendingCreates?: number };
   /** B0.1 defect 3: when the supervisor stopped the disposable server after completion. */

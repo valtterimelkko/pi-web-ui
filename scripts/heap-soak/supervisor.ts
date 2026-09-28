@@ -22,10 +22,10 @@ import { appendSampleRow } from './csv-io.js';
 import { notify } from './telegram.js';
 import { takeSample, writeHeartbeat } from './sampler.js';
 import { runWave, type DriverState } from './driver.js';
-import { sweepOrphans } from './orphan-sweep.js';
+import { sweepOrphans, sweepUntrackedServerSessions } from './orphan-sweep.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
-import { computeOpenSessionIds } from '../../server/src/live-validation/heap-soak/orphans.js';
+import { computeOpenSessionIds, isUnderChildWorkspace, trackedSessionIds } from '../../server/src/live-validation/heap-soak/orphans.js';
 import { endDrainTimeoutMs, evaluateDrain, type DrainStatus } from '../../server/src/live-validation/heap-soak/end-drain.js';
 import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath, shouldSendFinalNotice, shouldTerminaliseOnStartupRecovery } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
@@ -115,6 +115,8 @@ async function main(): Promise<void> {
       ...(state.endSnapshotPath !== undefined ? { expectedEndSnapshotPath: state.endSnapshotPath } : {}),
       ...(state.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
       ...(state.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
+      ...(state.untrackedServerSessionsAtEndSnapshot !== undefined ? { untrackedServerSessions: state.untrackedServerSessionsAtEndSnapshot } : {}),
+      ...(state.serverChildrenSessionsAtEndSnapshot !== undefined ? { serverChildrenSessionCount: state.serverChildrenSessionsAtEndSnapshot } : {}),
       ...(state.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
     });
 
@@ -325,6 +327,45 @@ async function main(): Promise<void> {
     return evaluateDrain({ inFlight: driverState.inFlight, openSessionIds: computeOpenSessionIds(events), pendingCreateCount: driverState.pendingCreates.size });
   }
 
+  /** The harness's full known session-id set: every id in the events log plus live in-flight ids. */
+  function knownSessionIds(): Set<string> {
+    const tracked = trackedSessionIds(readLaneEvents(state.eventsLogPath));
+    for (const id of driverState.inFlight) tracked.add(id);
+    for (const id of driverState.swept) tracked.add(id);
+    return tracked;
+  }
+
+  async function listServerSessions(): Promise<{ sessionId: string; cwd?: string; createdAt?: string }[]> {
+    try {
+      const { sessions } = await client.listSessions();
+      return sessions.map((s) => ({ sessionId: s.sessionId, cwd: s.cwd, createdAt: s.createdAt }));
+    } catch (error) {
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `server session list failed (untracked-orphan reconciliation skipped): ${error instanceof Error ? error.message : String(error)}` });
+      return [];
+    }
+  }
+
+  /** The run's child-workspace root — every driver child's cwd is under it. */
+  const childWorkspaceRoot = path.join(state.runDir, 'children');
+  let untrackedOrphansSwept = 0;
+
+  /**
+   * B0.1 correction 04: server-side orphan reconciliation. A session whose
+   * `createSession` was in flight when the supervisor was killed has no
+   * `child_created` event, so the event-log sweep misses it. The server's own
+   * session list is the only source of truth for those.
+   */
+  async function reconcileUntrackedServerOrphans(): Promise<void> {
+    const entries = await listServerSessions();
+    if (entries.length === 0) return;
+    const result = await sweepUntrackedServerSessions(client, entries, log, elapsedNow, {
+      childWorkspaceRoot,
+      tracked: knownSessionIds(),
+    });
+    untrackedOrphansSwept += result.swept.length;
+    if (result.swept.length > 0) console.error(`[supervisor] untracked-orphan sweep deleted ${result.swept.length} session(s)`);
+  }
+
   /**
    * B0.1 correction (2026-09-28): wait for the load to drain before the end
    * snapshot. The old code snapshotted as soon as the window closed, while a
@@ -344,6 +385,10 @@ async function main(): Promise<void> {
     }
     console.error(`[supervisor] pre-snapshot drain: drained=${status.drained} after ${timeoutMs}ms bound (live=${status.liveChildren.length})`);
     await sweepOrphans(client, readLaneEvents(state.eventsLogPath), log, elapsedNow, { inFlight: driverState.inFlight, swept: driverState.swept });
+    // Correction 04: also reconcile against the server's own session list, so a
+    // child whose createSession was in flight across a supervisor kill is not
+    // left running (and later misread as retention).
+    await reconcileUntrackedServerOrphans();
     return currentDrainStatus();
   }
 
@@ -363,6 +408,14 @@ async function main(): Promise<void> {
     state.liveChildrenAtEndSnapshotIds = drain.liveChildren.slice(0, 50);
     state.pendingCreatesAtEndSnapshot = drain.pendingCreateCount;
     state.endSnapshotDrain = { drained: drain.drained, timeoutMs: endDrainTimeoutMs(schedule), pendingCreates: drain.pendingCreateCount };
+    // Correction 04: record the server's own view at the snapshot instant, so
+    // the report can separate still-live (untracked) sessions from retention.
+    const serverEntries = await listServerSessions();
+    const serverChildren = serverEntries.filter((entry) => isUnderChildWorkspace(entry.cwd, childWorkspaceRoot));
+    const trackedNow = knownSessionIds();
+    state.serverChildrenSessionsAtEndSnapshot = serverChildren.length;
+    state.untrackedServerSessionsAtEndSnapshot = serverChildren.filter((entry) => !trackedNow.has(entry.sessionId)).length;
+    state.untrackedOrphansSwept = untrackedOrphansSwept;
     log({
       ts: new Date().toISOString(),
       elapsedMs: elapsedNow(),
@@ -567,6 +620,9 @@ async function main(): Promise<void> {
       // Orphan sweep once per cycle — the harness must never become the leak.
       const events = readLaneEvents(state.eventsLogPath);
       await sweepOrphans(client, events, log, elapsedNow, { inFlight: driverState.inFlight, swept: driverState.swept });
+      // Correction 04: server-side reconciliation on every cycle too, so an
+      // untracked orphan from a supervisor kill is swept promptly.
+      await reconcileUntrackedServerOrphans();
 
       if (stopped || isRunComplete(elapsedNow(), schedule)) break;
       await interruptibleSleep(schedule.idleMs);

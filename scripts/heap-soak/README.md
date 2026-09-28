@@ -204,6 +204,32 @@ worth fixing properly:
    renders a `TEARDOWN ANOMALY` section and the completion Telegram notice says
    so. Teardown now runs before finalisation so both carry the result.
 
+## Correction 04 (parent verification, 2026-09-28) — untracked orphans, not retention
+
+The parent traced run 4's "Retained deleted children: 1" to a session created
+while Gate 1 killed the supervisor: the in-flight `createSession` never logged
+`child_created`, so the events-log sweep could not see it, and it survived as a
+**live undeleted orphan** (misread as retention).
+
+- **Server-side orphan reconciliation.** `sweepUntrackedServerSessions`
+  (`orphan-sweep.ts`) lists the server's sessions (`GET /api/v1/sessions`),
+  selects those whose cwd is under THIS run's `children/` root, that the harness
+  has no record of (`trackedSessionIds(events)` ∪ in-flight) and that are past a
+  30 s grace window, and deletes them as `orphan_swept` with `detail: untracked`.
+  It runs on every cycle and once more in the end drain. Correction 03's rule
+  still applies: only a confirmed not-found terminalises; a transient failure is
+  left open.
+- **Accounting.** At the snapshot the supervisor records the server's session
+  count under the run's children cwd and the untracked subset
+  (`serverChildrenSessionsAtEndSnapshot`, `untrackedServerSessionsAtEndSnapshot`,
+  `untrackedOrphansSwept`). `report.md` reports three figures — **live on the
+  server** (harness-known live + untracked), the **verified known slot**, and
+  **retained deleted** — and `retained deleted = AgentSessions − live-on-server
+  − verified slot`. A session the server still lists is never called retained.
+- **Tests.** `untracked-orphans.test.ts` covers the reconciliation, including
+  the supervisor-restart-during-create sequence at the pure-logic level, and
+  `end-drain.test.ts` covers the accounting classification.
+
 ## Load model (owner amendment, 2026-09-26)
 
 Free-tier models (OpenRouter, Command Code) are congested in practice — slow

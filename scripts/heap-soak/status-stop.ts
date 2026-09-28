@@ -28,7 +28,7 @@ export async function runStatus(runId: string): Promise<string> {
       ? `end snapshot: FAILED — ${state.endSnapshotError}`
       : 'end snapshot: not taken yet';
   const drainLine = state.endSnapshotDrain
-    ? `pre-snapshot drain: drained=${state.endSnapshotDrain.drained} (bound ${state.endSnapshotDrain.timeoutMs}ms) liveChildrenAtEndSnapshot=${state.liveChildrenAtEndSnapshot ?? 'unknown'} pendingCreates=${state.pendingCreatesAtEndSnapshot ?? state.endSnapshotDrain.pendingCreates ?? 0}${state.liveChildrenAtEndSnapshotIds && state.liveChildrenAtEndSnapshotIds.length > 0 ? ` ids=${state.liveChildrenAtEndSnapshotIds.slice(0, 5).join(',')}` : ''}`
+    ? `pre-snapshot drain: drained=${state.endSnapshotDrain.drained} (bound ${state.endSnapshotDrain.timeoutMs}ms) liveChildrenAtEndSnapshot=${state.liveChildrenAtEndSnapshot ?? 'unknown'} pendingCreates=${state.pendingCreatesAtEndSnapshot ?? state.endSnapshotDrain.pendingCreates ?? 0} untrackedServerSessions=${state.untrackedServerSessionsAtEndSnapshot ?? 'unknown'} serverChildrenSessions=${state.serverChildrenSessionsAtEndSnapshot ?? 'unknown'} untrackedOrphansSwept=${state.untrackedOrphansSwept ?? 0}${state.liveChildrenAtEndSnapshotIds && state.liveChildrenAtEndSnapshotIds.length > 0 ? ` ids=${state.liveChildrenAtEndSnapshotIds.slice(0, 5).join(',')}` : ''}`
     : 'pre-snapshot drain: not recorded';
   const teardownLine = state.teardownAnomaly
     ? `TEARDOWN ANOMALY: ${state.teardownAnomaly}`

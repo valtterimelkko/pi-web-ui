@@ -128,6 +128,10 @@ export interface SnapshotComparisonOptions {
   expectedEndSnapshotPath?: string;
   liveChildrenAtSnapshot?: number;
   pendingCreatesAtSnapshot?: number;
+  /** Correction 04: server sessions under this run's children cwd with no harness record (live, not retained). */
+  untrackedServerSessions?: number;
+  /** Correction 04: raw server count under this run's children cwd. */
+  serverChildrenSessionCount?: number;
   drainDrained?: boolean;
 }
 
@@ -151,6 +155,8 @@ export async function snapshotComparisonSection(
         ...(options.expectedEndSnapshotPath !== undefined ? { expectedEndSnapshotPath: options.expectedEndSnapshotPath } : {}),
         ...(options.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: options.liveChildrenAtSnapshot } : {}),
         ...(options.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: options.pendingCreatesAtSnapshot } : {}),
+        ...(options.untrackedServerSessions !== undefined ? { untrackedServerSessions: options.untrackedServerSessions } : {}),
+        ...(options.serverChildrenSessionCount !== undefined ? { serverChildrenSessionCount: options.serverChildrenSessionCount } : {}),
         ...(options.drainDrained !== undefined ? { drainDrained: options.drainDrained } : {}),
       });
     }
@@ -167,6 +173,8 @@ export function renderSnapshotDiffMarkdown(
     expectedEndSnapshotPath?: string;
     liveChildrenAtSnapshot?: number;
     pendingCreatesAtSnapshot?: number;
+    untrackedServerSessions?: number;
+    serverChildrenSessionCount?: number;
     drainDrained?: boolean;
   } = {},
   topN = 15,
@@ -188,6 +196,8 @@ export function renderSnapshotDiffMarkdown(
     ...(context.expectedEndSnapshotPath !== undefined ? { expectedEndSnapshotName: path.basename(context.expectedEndSnapshotPath) } : {}),
     ...(context.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: context.liveChildrenAtSnapshot } : {}),
     ...(context.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: context.pendingCreatesAtSnapshot } : {}),
+    ...(context.untrackedServerSessions !== undefined ? { untrackedServerSessions: context.untrackedServerSessions } : {}),
+    ...(context.serverChildrenSessionCount !== undefined ? { serverChildrenSessionCount: context.serverChildrenSessionCount } : {}),
     ...(context.drainDrained !== undefined ? { drainDrained: context.drainDrained } : {}),
     verifiedKnownSlotInstances,
   }));

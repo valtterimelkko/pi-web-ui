@@ -99,6 +99,23 @@ describe('computeRetainedDeletedChildren (correction 03 item 3)', () => {
     expect(pending.retainedDeletedChildren).toBeUndefined();
     expect(pending.notComputedReason).toMatch(/pending creates/);
   });
+
+  it('subtracts untracked server-side orphans from retained, so a live undeleted orphan is never called retained (correction 04)', () => {
+    // Run 4's case: AgentSession=2, verified known slot=1, and the second
+    // instance is an untracked orphan still registered on the server.
+    const withOrphan = computeRetainedDeletedChildren({ ...base, agentSessionCount: 2, liveChildrenAtSnapshot: 0, untrackedServerSessions: 1, verifiedKnownSlotInstances: 1 });
+    expect(withOrphan.liveOnServerAtSnapshot).toBe(1);
+    expect(withOrphan.retainedDeletedChildren).toBe(0);
+    // Without the orphan figure the same snapshot looks like retention — which
+    // is exactly why the reconciliation and this input exist.
+    expect(computeRetainedDeletedChildren({ ...base, agentSessionCount: 2, liveChildrenAtSnapshot: 0, verifiedKnownSlotInstances: 1 }).retainedDeletedChildren).toBe(1);
+  });
+
+  it('still reports genuine retention when the snapshot outnumbers live-on-server and the verified slot', () => {
+    const verdict = computeRetainedDeletedChildren({ ...base, agentSessionCount: 4, liveChildrenAtSnapshot: 0, untrackedServerSessions: 1, verifiedKnownSlotInstances: 1 });
+    expect(verdict.liveOnServerAtSnapshot).toBe(1);
+    expect(verdict.retainedDeletedChildren).toBe(2);
+  });
 });
 
 describe('renderRetentionVerdict', () => {
@@ -108,6 +125,20 @@ describe('renderRetentionVerdict', () => {
     const text = renderRetentionVerdict({ ...base, agentSessionCount: 1, liveChildrenAtSnapshot: 0 }).join('\n');
     expect(text).toMatch(/AgentSession instances in the end snapshot: 1/);
     expect(text).toMatch(/Live children at the moment of the snapshot[^:]*: 0/);
+    expect(text).toMatch(/Retained deleted children: 0/);
+  });
+
+  it('prints the three figures: live on the server (harness-known + untracked), verified slot, retained deleted (correction 04)', () => {
+    const text = renderRetentionVerdict({
+      ...base,
+      agentSessionCount: 2,
+      liveChildrenAtSnapshot: 0,
+      untrackedServerSessions: 1,
+      serverChildrenSessionCount: 1,
+      verifiedKnownSlotInstances: 1,
+    }).join('\n');
+    expect(text).toMatch(/Live on the server \(harness-known live \+ untracked\): 1/);
+    expect(text).toMatch(/Sessions still registered on the server under this run's children cwd: 1/);
     expect(text).toMatch(/Retained deleted children: 0/);
   });
 

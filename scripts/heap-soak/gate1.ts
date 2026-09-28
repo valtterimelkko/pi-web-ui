@@ -187,6 +187,9 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
     serverStopVerifiedGone?: boolean;
     serverStopAttempts?: number;
     teardownAnomaly?: string;
+    untrackedServerSessionsAtEndSnapshot?: number;
+    serverChildrenSessionsAtEndSnapshot?: number;
+    untrackedOrphansSwept?: number;
   };
   record(
     'B0.1 build commit recorded in run-state.json and report.md',
@@ -212,6 +215,10 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
   const liveMatch = /Live children at the moment of the snapshot[^:]*: (\d+)/.exec(reportMd);
   const verifiedSlotMatch = /verified in this snapshot: (\d+)/.exec(reportMd);
   const retainedMatch = /Retained deleted children: (\d+)/.exec(reportMd);
+  const liveOnServerMatch = /Live on the server \(harness-known live \+ untracked\): (\d+)/.exec(reportMd);
+  const untrackedMatch = /Untracked server-side sessions under this run's children cwd: (\d+)/.exec(reportMd);
+  const serverChildrenMatch = /Sessions still registered on the server under this run's children cwd: (\d+)/.exec(reportMd);
+  const untrackedSweptEvents = readLaneEvents(launch.paths.eventsLogPath).filter((e) => e.kind === 'orphan_swept' && (e.detail ?? '').includes('untracked'));
   record(
     'B0.1c pre-snapshot drain recorded in run-state.json',
     runStateAfter.endSnapshotDrain !== undefined && runStateAfter.liveChildrenAtEndSnapshot !== undefined,
@@ -223,10 +230,22 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
     reportMd.split('\n').find((l) => l.includes('Retained deleted children:')) ?? '(missing)',
   );
   record(
-    'B0.1c retention verdict is arithmetically consistent (agentSession - live - verified slot = retained)',
-    agentSessionMatch !== null && liveMatch !== null && verifiedSlotMatch !== null && retainedMatch !== null
-      && Number(retainedMatch[1]) === Math.max(0, Number(agentSessionMatch[1]) - Number(liveMatch[1]) - Number(verifiedSlotMatch[1])),
-    `agentSession=${agentSessionMatch?.[1] ?? 'n/a'} liveChildrenAtSnapshot=${runStateAfter.liveChildrenAtEndSnapshot ?? liveMatch?.[1] ?? 'n/a'} verifiedKnownSlot=${verifiedSlotMatch?.[1] ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'} (known bounded slot is excluded only when the retainer chains prove it)`,
+    'B0.1c retention verdict is arithmetically consistent (agentSession - live-on-server - verified slot = retained)',
+    agentSessionMatch !== null && liveOnServerMatch !== null && verifiedSlotMatch !== null && retainedMatch !== null
+      && Number(retainedMatch[1]) === Math.max(0, Number(agentSessionMatch[1]) - Number(liveOnServerMatch[1]) - Number(verifiedSlotMatch[1])),
+    `agentSession=${agentSessionMatch?.[1] ?? 'n/a'} liveOnServer=${liveOnServerMatch?.[1] ?? 'n/a'} (harness-known live=${liveMatch?.[1] ?? 'n/a'}, untracked=${untrackedMatch?.[1] ?? 'n/a'}) verifiedKnownSlot=${verifiedSlotMatch?.[1] ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
+  );
+
+  // ── Correction 04: untracked orphans are reconciled against the server ──
+  record(
+    'B0.1c no untracked orphan left on the server (or swept with detail untracked)',
+    runStateAfter.untrackedServerSessionsAtEndSnapshot === 0 && untrackedMatch !== null,
+    `untrackedServerSessionsAtEndSnapshot=${runStateAfter.untrackedServerSessionsAtEndSnapshot ?? '(none)'} untrackedOrphansSwept=${runStateAfter.untrackedOrphansSwept ?? '(none)'} serverChildrenSessionsAtSnapshot=${runStateAfter.serverChildrenSessionsAtEndSnapshot ?? '(none)'} untracked-swept events=${untrackedSweptEvents.length}`,
+  );
+  record(
+    'B0.1c report reports the three figures and Retained deleted children is 0',
+    untrackedMatch !== null && serverChildrenMatch !== null && liveOnServerMatch !== null && retainedMatch !== null && Number(retainedMatch[1]) === 0,
+    `liveOnServer=${liveOnServerMatch?.[1] ?? 'n/a'} untracked=${untrackedMatch?.[1] ?? 'n/a'} serverChildrenSessions=${serverChildrenMatch?.[1] ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
   );
 
   // ── Correction 03: pending creates recorded, teardown result in the report ──

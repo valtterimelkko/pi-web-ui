@@ -91,6 +91,8 @@ export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full')
     ...(state?.endSnapshotPath !== undefined ? { expectedEndSnapshotPath: state.endSnapshotPath } : {}),
     ...(state?.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
     ...(state?.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
+    ...(state?.untrackedServerSessionsAtEndSnapshot !== undefined ? { untrackedServerSessions: state.untrackedServerSessionsAtEndSnapshot } : {}),
+    ...(state?.serverChildrenSessionsAtEndSnapshot !== undefined ? { serverChildrenSessionCount: state.serverChildrenSessionsAtEndSnapshot } : {}),
     ...(state?.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
   });
   const markdown = `${renderReportMarkdown(report, runId)}\n\n${snapshotSection}`;
