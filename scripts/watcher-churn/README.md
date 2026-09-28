@@ -61,3 +61,19 @@ node --max-old-space-size=12288 --import tsx scripts/watcher-churn/summarize.ts 
   --targets Timeout,Stats,Date,FSWatcher,SessionWatcher \
   --out-md summary.md --label my-run
 ```
+
+## Live-session load profile (`live-load.ts`)
+
+Separation of deleted-file retention from live-session cost: `live-load.ts`
+generates a large realistic session file, appends a real entry at a stream
+cadence, and reports the watcher's complete-file read count, the total time
+inside `readSessionInfo` and a real event-loop-delay histogram — no server and
+no model tokens. It is how the B1.1 correction measured that removing
+`awaitWriteFinish` initially made a large appended session start back-to-back
+complete-file reads (see `docs/plans/execution-reports/orchestration-scaling/B1.1.md` §11).
+
+```bash
+npx tsx scripts/watcher-churn/live-load.ts \
+  --watcher server/src/pi/session-watcher.ts \
+  --label my-build --file-mb 80 --append-ms 50 --duration-ms 30000
+```
