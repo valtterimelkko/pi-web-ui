@@ -46,7 +46,7 @@ This is small and linear with churn, far below any threshold, but it is unbounde
 3. **Orphan sweep races live children.** All 167 lane-A `SESSION_NOT_FOUND` failures had a tool call seen, then `orphan_swept`, then the driver's own delete or poll. The harness counts its own sweep as a child failure. That is harness accounting, not a server fault.
 4. RSS rose ~940 → ~1,160 MB at hour 12 and stayed. This coincides with the 12 h snapshot. Heap was unaffected. This is noted, not investigated.
 
-## 6. Proposed plan changes (for owner review — not yet applied)
+## 6. Proposed plan changes (applied at the 2026-09-28 interim review; see the plan §8)
 
 1. **B1 → shipped** on this evidence. Record the bounded `backgroundStatusCtx` slot as accepted.
 2. **New small item (or B1.1): SessionWatcher unlink cleanup.** TDD: add→unlink inside the debounce window leaves `debounceTimers` empty. Assess chokidar `awaitWriteFinish` retention for unlinked files.

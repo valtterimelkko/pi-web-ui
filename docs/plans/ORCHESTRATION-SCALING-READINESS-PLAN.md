@@ -1,6 +1,6 @@
 # Orchestration Scaling Readiness Plan
 
-> **Status:** R1 held 2026-09-27 (§8). Wave 1 (B0, B1, A2) is shipped to master and independently reviewed. The B1 24 h confirmation soak `full-1790523945117-ea387201` is running on the fixed build (early result: heap flat). R2 follows the soak. The server-side fixes reach production only at an owner-approved restart.
+> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) is shipped and in production since the owner-approved restart on 2026-09-27 17:39 UTC. The B1 24 h confirmation soak passed (heap flat at ~200 MB post-GC over 8,092 children). **Next: the interim wave (B0.1, B1.1, B1.2), then wave 2 (B2–B4), then R2.** Server-side fixes reach production only at an owner-approved restart.
 > **Created:** 2026-09-26 from the Pi Web UI / Internal API deep review (owner-requested).
 > **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). **Review moments** are held with the owner, in that session or, if its context is exhausted, by a fresh Opus agent that first follows §7 (handoff).
 > **Evidence:** [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md).
@@ -68,6 +68,8 @@ The full review, with method, numbers, audits, corrections and reproduction comm
 | Operator reports | 206 malfunction reports: orchestration 27%, voice 16%, stuck sessions 13%, performance 12%; 74% described as recurring; about a third fixed in-session | Jev spec `piwebui-operator-reports` |
 | Restarts | 63% deploys; about half checked for active children first | Jev spec `piwebui-restarts` |
 | Heap soak (A1, added at R1) | post-GC heap 146 → 4,044 MB in 5 h 03 min (≈514 MB/h), then V8 heap OOM; ≈4.4 MB retained per Pi child created; lag p95 1 ms; retainers `PiService.sessions` (dispose/unload paths skip `releaseSessionRefs`) and the `subagent` extension's per-session `process.once("exit")` | [`A1-soak.md`](./execution-reports/orchestration-scaling/A1-soak.md) |
+| Confirmation soak (B1 build, added 2026-09-28) | 24 h alive; post-GC heap 143 → ~195 MB warm-up in the first four hours, then flat at ~200 MB (trailing slope 0.31 MB/h); 8,092 children; peak 242 MB; lag max 130 ms. Residual: file-watcher state for deleted session files grows ~0.16 MB/h | [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md) |
+| Production health telemetry (A2, added 2026-09-28) | First 22 h after the 2026-09-27 17:39 restart: heap healthy (sampled 88–515 MB). Event-loop lag p99 ≥ 300 ms in 17 distinct minutes (maximum 919 ms), all with 0–3 active API turns and most while resident sessions jumped (for example 3 → 20). The soak's API-only load never reproduced this | `~/.pi-web-ui/metrics/health-metrics.jsonl` |
 | Known defects | follow-up to a busy session can become `TURN_STALLED` after the 900 s window and never be delivered (22 never-executed runs in the journal); contract 1.15→1.47 in about eight weeks | journal, git log |
 
 Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277`). Runs are in `/root/jev-session-eval/runs/piwebui-*-v2` and `…-operator-reports-v3` (gitignored). Jev judgements are group-calibrated; the numbers above were audited against raw sessions, and two misleading measures (child "cut off", "polling") were replaced by code counts.
@@ -89,6 +91,15 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
   - a new B0 fixes the soak harness first;
   - B2 must keep session disposal available at critical memory.
 - The B1 confirmation soak also serves as A1's rerun.
+
+**Owner decisions recorded 2026-09-28 (interim review, after the confirmation soak):**
+- B1 is shipped. The subagent extension's single last-context slot (`backgroundStatusCtx`, one `AgentSession`) is accepted as bounded.
+- **Heap cap: unchanged.** Keep `--max-old-space-size=4096` and `PI_MAX_SESSIONS=20`. The fixed build's floor is ~200 MB post-GC with a 242 MB peak, far below the cap. This settles the heap-cap question deferred from R1, so R2 no longer decides it.
+- **An interim wave runs before wave 2**, as three bounded steps. None needs a 24 h soak.
+  - B0.1: harness fixes.
+  - B1.1: the residual file-watcher growth, proven with synthetic churn.
+  - B1.2: attribute and remove production event-loop lag spikes. This comes first because B2's lag gate would otherwise refuse API work because of browser activity.
+- **Long soaks are expensive; keep them to a minimum.** E2's final soak is the only 24 h soak left in the plan. D1's contained-build check uses a bounded run. Other validation uses synthetic, fast checks wherever they can decide the question.
 
 ## 4. Execution contract (applies to every step)
 
@@ -114,11 +125,13 @@ Stage A  Measure            A1 heap soak (24 h)  ‖  A2 production heap/lag tel
             │
          ── Review moment R1 (held 2026-09-27): leak proven, two retainers named; heap cap deferred to R2 ──
             │
-Stage B  Contain            B0 soak-harness fixes (before the confirmation soak)
-                            B1 fix both retainers → confirmation soak (also A1's rerun)
-                            B2 heap- and lag-aware admission, disposal kept available; heap cap set at R2
-                            B3 per-run budgets (runaway generation cannot starve the loop)
-                            B4 drain-then-restart deploys
+Stage B  Contain            Wave 1 (shipped): B0 soak-harness fixes; B1 fix both retainers → confirmation soak (passed)
+                            ── interim review (held 2026-09-28): heap cap unchanged; interim wave added ──
+                            Interim wave: B0.1 harness follow-ups; B1.1 watcher cleanup (synthetic proof);
+                                          B1.2 attribute and remove production lag spikes
+                            Wave 2: B2 heap- and lag-aware admission, disposal kept available (lag gate after B1.2)
+                                    B3 per-run budgets (runaway generation cannot starve the loop)
+                                    B4 drain-then-restart deploys
             │
          ── Review moment R2: confirm soak on the Stage B build; go/no-go for Stage C ──
             │
@@ -141,7 +154,8 @@ Stage E  Prove and keep     E1 recurring-defect ledger (runs alongside from Stag
 
 Within a stage, steps without a dependency may run in parallel with separate owners. Stated dependencies:
 - B1's confirmation soak needs B0 and both B1 fixes merged;
-- B2's heap-cap choice needs the confirmation soak (R2), but its admission logic can be built alongside B1;
+- B2's heap-cap choice was settled at the 2026-09-28 interim review (unchanged). Its `heap_pressure` gate can be built at any time. Its `event_loop_lag` threshold waits for B1.2's attribution, so that browser-side stalls do not trigger API refusals;
+- B0.1, B1.1 and B1.2 touch disjoint paths (`scripts/heap-soak/`; `server/src/pi/session-watcher.ts`; the lag source B1.2 names), so they can run in parallel worktrees. B3 and B4 may start alongside the interim wave;
 - A2 is independent and is worth landing early: it gives the production before-and-after for B1;
 - B3 and B4 are independent of B0–B2;
 - B0 and B1 touch disjoint paths (`scripts/heap-soak/` against `server/src/pi/` plus `pi-enhancement`), so they can run in parallel worktrees;
@@ -212,6 +226,21 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
 - [ ] The audit gives no false positive when an operator session mentions the run ID.
 **Not victory if:** death detection relies on the sampler's own failures alone, or the retainer summary exists only as a separate manual script.
 
+#### B0.1 — Harness follow-ups (added after wave 1; widened at the 2026-09-28 interim review)
+
+**Intent.** The harness is used at least twice more: D1's bounded run and E2's final 24 h soak. Those runs must not need hand repairs.
+**Scope.** `scripts/heap-soak/*`, `server/src/live-validation/heap-soak/*`, the harness README. Nothing in the production server.
+**Defects to fix** (found in the confirmation soak, [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md) §5):
+1. **Stale `dist`:** the launcher runs `server/dist` without checking that it matches HEAD. Refuse a stale build or rebuild it, and record the build commit in `run-state.json` and `report.md`.
+2. **End snapshot never fires:** the last snapshot offset equals the run length, but the sampler loop exits first. Take the end snapshot after the window closes and before teardown, and compare start against end in the report.
+3. **Completed run leaves the server up:** after a `complete` run, stop the server unit, or keep it up only behind an explicit flag and say so in the Telegram message.
+4. **Orphan-sweep race:** the sweep deletes children the driver is still tracking, and the harness counts its own deletion as a child failure (all 167 `SESSION_NOT_FOUND` failures). Count swept children separately, or sweep only children no longer tracked.
+5. **Bounded run length:** a `full` run takes a window length (for example `--hours <n>`), so D1 can run a bounded soak with the same instrument.
+**Definition of victory.**
+- [ ] A failing test first for each defect.
+- [ ] A disposable `micro` run shows: the build commit recorded; an end snapshot taken and compared; the server unit gone after completion; zero `SESSION_NOT_FOUND` failures caused by the sweep; a planted stale `dist` refused.
+**Not victory if:** the end snapshot is still a manual step, or the stale-build check only warns.
+
 #### B1 — Fix what retains memory (retainers named at R1)
 
 **Intent.** Remove the growth, rather than only admitting around it.
@@ -238,12 +267,60 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
   - the retainer summary shows no deleted child retained. If growth remains, name the third retainer.
 - [ ] The extension fix is deployed to `~/.pi/agent/extensions` through the store's normal path. A production restart to pick up both fixes is owner-gated.
 **Not victory if:** growth is "fixed" by raising limits or adding periodic restarts; only one retainer is fixed; the soak ran on a build missing either fix.
+**Outcome (2026-09-28): shipped.**
+- Confirmation soak `full-1790523945117-ea387201`: 24 h with the server alive; post-GC heap flat at ~200 MB after a four-hour warm-up; 8,092 children.
+- The end snapshot holds no deleted child except one bounded extension slot (accepted).
+- A third, small retainer remains (file-watcher state, ~0.16 MB/h). It becomes B1.1.
+- Evidence: [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md).
+
+#### B1.1 — Session-watcher cleanup for deleted files (added at the 2026-09-28 interim review)
+
+**Intent.** Remove the last measured unbounded growth before wave 2, without another long soak.
+**Finding.** The confirmation soak's 12 h and end snapshots show `Timeout`, `Date`, `Stats` and `FSWatcher` counts growing with child churn. The retainer paths run through `SessionWatcher.debounceTimers` and chokidar's `awaitWriteFinish` pending-writes map.
+- In `server/src/pi/session-watcher.ts`, the `unlink` branch clears a pending debounce timer but never deletes its map entry. Every session file created and deleted inside the debounce window leaves a dead entry for good. This was found by reading the code and is not yet test-proven.
+- Chokidar (`^3.5.3`) appears to keep pending-write state for files deleted before they stabilise.
+- Growth is small (~0.16 MB/h at soak churn) but linear in children created. It is the E1 class "a fix claims every path but wires one".
+**Approach.**
+- A failing test first: add then unlink inside the debounce window leaves `debounceTimers` (and the per-path state) empty.
+- Fix the unlink path.
+- Then test chokidar's retention for files deleted before they stabilise. If it retains, remove the dependency on `awaitWriteFinish` (the watcher already debounces and reads the header itself), or upgrade chokidar if that version is proven clean. Record which.
+**Validation: synthetic, no model tokens.** On a disposable validation server, a churn script writes and deletes session JSONL files in the watched sessions directory. It uses thousands of files: some deleted inside the debounce window, some after, some before they stabilise. It takes a forced-GC heap snapshot before and after, and uses the harness's retainer summary.
+**Definition of victory.**
+- [ ] Unit tests fail on the old code and pass on the new, one per retention path fixed.
+- [ ] Synthetic churn on the old build shows retained watcher state growing with the file count (positive control). On the new build, the same churn leaves watcher-held `Timeout`/`Stats`/`Date` counts and the watcher maps back at their pre-churn values.
+- [ ] A harness `micro` run with real Pi children on the new build shows the same counts flat between its start and end snapshots.
+- [ ] Watcher behaviour unchanged: add, change and unlink events still reach the registry (existing watcher tests pass, plus one live add/unlink check).
+**Not victory if:** only the debounce map is fixed while chokidar state still grows, or the proof needs a 24 h soak.
+
+#### B1.2 — Attribute and remove production event-loop lag spikes (added at the 2026-09-28 interim review)
+
+**Intent.** Find what stalls the production event loop for 300–900 ms, fix it, and give B2's lag gate a threshold that reflects API risk, not browser activity.
+**Finding (A2 telemetry, first 22 h after the 2026-09-27 restart).**
+- Lag p99 was ≥ 300 ms in 17 distinct minutes, with a maximum of 919 ms.
+- Every one of those minutes had 0–3 active API turns.
+- Most coincided with resident sessions jumping, for example 3 → 20 within minutes at 23:16 UTC.
+- The API-only soak never exceeded 130 ms.
+- The earlier session-load performance finding points the same way: opening a Pi session bypassed the cached registry and scanned the whole session store. This is a correlation and a hypothesis, not attribution.
+**Approach.**
+1. **Attribute.**
+   - Correlate the spike minutes with the journal and diagnostics (session opens, replays, registry scans, compaction).
+   - Add bounded instrumentation: named spans around the suspected synchronous paths, and a record of any span over a threshold, with its name, to the diagnostics or metrics file.
+   - Reproduce on a disposable server with a synthetic, production-sized session corpus and a browser-like client opening many sessions at once.
+   - If the disposable reproduction does not reproduce the spikes, ship the instrumentation alone at an owner-approved restart and attribute from real traffic.
+2. **Fix** the dominant cause, test first: move it off the loop (worker or streaming), make it incremental, or add yields. Re-run the same reproduction.
+3. **Set** the proposed `event_loop_lag` threshold for B2 from the measured post-fix distribution.
+**Definition of victory.**
+- [ ] Attribution names the operation behind most spike minutes, with span evidence, not timing correlation alone.
+- [ ] The disposable reproduction shows p99 ≥ 300 ms on the old build (positive control) and under the proposed B2 threshold on the new build, with the same corpus and client.
+- [ ] Instrumentation is bounded, tested, and documented in `docs/OBSERVABILITY.md`.
+- [ ] After an owner-approved restart, production telemetry over a stated observation window shows fewer spike minutes than the 2026-09-27/28 baseline (17 in 22 h), with the comparison written into the evidence bundle.
+**Not victory if:** the threshold is raised instead of the stall removed; the fix is shown only with mocks; the attribution rests on timing overlap.
 
 #### B2 — Heap- and lag-aware admission, heap cap aligned
 
 **Intent.** Admission refuses new API work before the process is in danger, using the limits that actually bind.
 **Scope.** `server/src/internal-api/admission-controller.ts`, capacity route and types, config, systemd unit or `.env.production` for the chosen cap, docs, contract.
-**Approach.** Add refusal reasons `heap_pressure` (projected heap against a configurable fraction of `heap_size_limit`) and `event_loop_lag` (sustained lag above threshold). Expose both on `GET /api/v1/capacity`. Keep the P0/P1 control reserve working under pressure. Apply the heap-cap decision from R2 (deferred there at R1).
+**Approach.** Add refusal reasons `heap_pressure` (projected heap against a configurable fraction of `heap_size_limit`) and `event_loop_lag` (sustained lag above threshold). Expose both on `GET /api/v1/capacity`. Keep the P0/P1 control reserve working under pressure. The heap cap stays at 4 GiB with `PI_MAX_SESSIONS=20` (2026-09-28 interim review), so `heap_pressure` works against the current `heap_size_limit`. The `event_loop_lag` threshold comes from B1.2's post-fix measurements. The mechanism may be built earlier, but its threshold is not set from pre-B1.2 data.
 **R1 evidence for this step.**
 - In A1, admission refused only on cgroup pressure, because the soak unit had a 6 GiB `MemoryMax`. With production's 18 GiB it would have admitted everything until the 4 GiB heap OOM.
 - At the critical floor, `wrapControl` returned `503 CONTROL_CRITICAL` to DELETE: it refused the one operation that frees memory.
@@ -254,7 +331,7 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
 - [ ] Unit tests: session disposal succeeds at the critical floor, while creates and prompts are refused under `heap_pressure`.
 - [ ] Disposable live proof: with lowered thresholds, a P2 create/prompt gets `503 ADMISSION_CAPACITY_EXHAUSTED` with the new reason and `Retry-After`; admission recovers when pressure clears; a P0/P1 control call succeeds while P2 is refused; a DELETE succeeds at the critical floor.
 - [ ] Contract bump and docs; Agent OS mirror updated.
-- [ ] After an owner-approved restart, production `/capacity` shows the new fields with sane values, and the heap cap matches the R2 decision.
+- [ ] After an owner-approved restart, production `/capacity` shows the new fields with sane values, and the heap cap is unchanged (4 GiB).
 **Not victory if:** only the capacity output changed and admission does not act on it.
 
 #### B3 — Per-run budgets against runaway generations
@@ -279,12 +356,12 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
 
 #### Review moment R2
 
-Inputs: B0–B4 evidence bundles; the B1 confirmation soak (24 h, per R1); A2 production telemetry, ideally spanning the production restart that picked up B1.
+Inputs: B0.1, B1.1, B1.2 and B2–B4 evidence bundles; the B1 confirmation soak (already evaluated, [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md)); A2 production telemetry spanning the restarts that picked up the interim wave and wave 2.
 Decide:
 - go/no-go for Stage C;
-- the heap-cap choice deferred from R1 (raise `--max-old-space-size`, lower `PI_MAX_SESSIONS`, or neither), from the confirmation soak's per-session heap and peak;
-- any threshold changes;
-- whether B1 needs another round (a third retainer).
+- B2's heap and lag thresholds, checked against production telemetry;
+- whether production lag and watcher growth are closed or need another round.
+(The heap-cap choice and the third-retainer question were settled at the 2026-09-28 interim review.)
 
 ### Stage C — Parent ergonomics and child quality
 
@@ -356,7 +433,7 @@ Decide: whether Stage D proceeds; authorise resuming Phase 8 of the resource-sca
 **Definition of victory.**
 - [ ] Design note updated in `docs/PROCESS-ISOLATION-DESIGN.md`, reviewed at R3/R4.
 - [ ] Disposable adversarial proof: a child forced past its heap limit, or into an event-loop hang, kills only its worker; the main process lag stays under the B2 threshold; other children keep streaming; the parent receives a terminal state.
-- [ ] The A1 soak harness run against the contained build shows main-process heap flat under the same load.
+- [ ] A bounded run of the soak harness (B0.1's window-length option, not a 24 h window) against the contained build shows main-process heap flat under the same load. The A1 build reached 1 GiB in about 20 minutes, so hours, not a day, are enough to see a regression.
 - [ ] Production rollout only after R4, owner-gated.
 
 #### D2 — Decompose the sessions route module
@@ -378,14 +455,19 @@ Decide: production rollout of contained routing, and its observation gate.
 **Intent.** Stop the 74% of operator-reported problems that recur (stuck after compaction, performance, orchestration).
 **Approach.** A short ledger in `docs/` of recurring defect classes, each with a pointer to a regression test once fixed. When a class recurs, its test is added before the fix.
 **Definition of victory.**
-- [ ] The ledger exists with the classes from the 2026-09-26 operator-reports run, plus "a fix claims every path but wires one". Found at R1: `91effe69` fixed one of three dispose paths. The B1 per-path tests are its regression tests.
+- [ ] The ledger exists with the classes from the 2026-09-26 operator-reports run, plus "a fix claims every path but wires one". Found at R1: `91effe69` fixed one of three dispose paths. The B1 per-path tests are its regression tests. The session watcher's unlink path is the second instance (2026-09-28), and B1.1's tests are its regression tests.
 - [ ] Each fixed class links a regression test that fails on the pre-fix code.
 
 #### E2 — Final re-measure
 
-**Approach.** A second 24 h soak with the A1 harness on the final build, plus a re-run of all five Jev specs over the period since Stage C shipped.
+**Approach.**
+- One final 24 h soak with the A1 harness on the final build. It is the only remaining 24 h soak in the plan.
+- Its load adds B1.2's browser-like session-open reproduction alongside the API children, so lag regressions show up, not only heap.
+- Plus a re-run of all five Jev specs over the period since Stage C shipped.
+- Plus a production-telemetry comparison against the §2 A2 baseline.
 **Definition of victory.**
-- [ ] Soak verdict: no growth beyond the A1 threshold, or growth explained and bounded.
+- [ ] Soak verdict: no growth beyond the A1 threshold, or growth explained and bounded; lag under B2's threshold throughout.
+- [ ] Production telemetry: spike-minute count and heap floor compared with the §2 baseline over a stated window.
 - [ ] Jev comparison table against §2, with the same model pin and specs, and deltas stated with n.
 
 #### Review moment R5
@@ -405,9 +487,9 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
 1. This plan: §1 intent, §3 decisions, §4 contract, §9 status ledger.
 2. [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md): evidence, audits, what was corrected and why.
 3. The evidence bundles of the steps finished since the last review moment, in `docs/plans/execution-reports/orchestration-scaling/`.
-4. For R2: [`A1-soak.md`](./execution-reports/orchestration-scaling/A1-soak.md) first (the R1 analysis, retainers, harness defects), then the B0/B1 bundles and the confirmation soak's run directory.
-   - Verify the soak server stayed alive throughout (unit journal), rather than trusting the report.
-   - Re-run the retainer summary on its snapshots.
+4. For R2: [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md) first (the confirmation soak, residual growth, harness defects, production lag evidence), then the B0.1/B1.1/B1.2 and B2–B4 bundles, then production telemetry (`~/.pi-web-ui/metrics/health-metrics.jsonl`) compared with the §2 A2 baseline. [`A1-soak.md`](./execution-reports/orchestration-scaling/A1-soak.md) holds the R1 analysis and retainers.
+   - For any soak: verify the soak server stayed alive throughout (unit journal), rather than trusting the report.
+   - Re-run the retainer summary on its snapshots. Until B0.1 ships, the harness does not take the end snapshot. Take it through the inspector before `cli.ts stop` (method in `B1-confirmation-soak.md` §5).
    Historical (R1): `scripts/heap-soak/README.md` and the soak run directory `/root/.pi-web-ui/validation/heap-soak/full-1790411484255-ec8b813c/` (`report.md`, `samples.csv`, `events.jsonl`, `snapshots/`, `run-state.json`). Check status with `npx tsx scripts/heap-soak/cli.ts status --run-id full-1790411484255-ec8b813c`. If `report.md` is missing after the window, run `… cli.ts report --run-id full-1790411484255-ec8b813c`; it works on partial data. If the server died mid-run, that is a result: read `events.jsonl` and the threshold snapshots. Compare snapshots by constructor (the report's snapshot section), and read `A1-harness.md` §11 for the early Gate 1 signal.
 5. `agent-os recall "orchestration scaling readiness"` for anything captured since.
 
@@ -422,7 +504,9 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
 | Soak harness | `scripts/heap-soak/` (CLI: `npx tsx scripts/heap-soak/cli.ts preflight|micro|start|status|stop|report`) |
 | A1 soak run and R1 retainer analysis | `/root/.pi-web-ui/validation/heap-soak/full-1790411484255-ec8b813c/` (`analysis/retainers.mjs`, `analysis/cut2.mjs`: run with `node --max-old-space-size=14000 <script> <snapshot> …`); write-up [`A1-soak.md`](./execution-reports/orchestration-scaling/A1-soak.md) |
 | R1 Agent OS captures (session `38c5e91e-…`) | pending `cand-vdfe26jqoo` (soak result), `cand-wciwwujtl7` (retainer 1), `cand-x9sdyy1bj2` (retainer 2, `project-pi-enhancement`), `cand-2jzse2quu8` (harness defects), `cand-13vcqtm014` (B2 findings), `cand-3hjd6rdqtl` (horizon), `cand-4ebrxoznhs` (snapshot method) |
-| Production facts | `~/.pi-web-ui/stop-audit.log`; `journalctl _PID=1 UNIT=pi-web-ui.service`; `GET /api/v1/capacity` |
+| Confirmation soak run | `/root/.pi-web-ui/validation/heap-soak/full-1790523945117-ea387201/` (`report.md`, `samples.csv`, `events.jsonl`, `snapshots/` including `snapshot-end-manual.heapsnapshot`); write-up [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md) |
+| Interim-review Agent OS captures (session `d5db9012-…`) | pending `cand-klet82zrol` (soak passed), `cand-lopvoxnts7` (watcher retainer), `cand-m6gpkqo80p` (harness defects), `cand-mog9fizhe9` (production lag), `cand-n6627w4caj` (horizon) |
+| Production facts | `~/.pi-web-ui/stop-audit.log`; `journalctl _PID=1 UNIT=pi-web-ui.service`; `GET /api/v1/capacity`; A2 telemetry `~/.pi-web-ui/metrics/health-metrics.jsonl` (one line per 30 s, lag over a 60 s window) |
 | Owner's Agent OS captures from the review | pending candidates `cand-0gnuybo3bq`, `cand-0gny36rl3t`, `cand-2pogxjh7gk`, `cand-4ljzs8qfin`, `cand-53hz776nzx`, `cand-5kfhn7c512`, `cand-60yt4fipab`, `cand-6husy6w66n`, `cand-6z5m0ozg7p`, `cand-36j5xixlub` (corrected by `cand-yppzzcsbrp`); session-end set: `cand-vdw7vxafvz` (no time estimates), `cand-vtuzs529p5` (delegate code, verify), `cand-way3izcdwy` (horizon: soak running, next steps), `cand-wscddwcy01` (soak harness), `cand-xa3ftv25k0` (early heap signal), `cand-xrm28o1wt8` (review record and plan), `cand-y8kizkr1h6` (Agent OS isolation for validation children) |
 
 **How to hold a review moment:**
@@ -440,6 +524,8 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
 - **Completion messages are not proof of life.** A1's harness sent "complete" 19 h after its server died. Check the subject's unit journal before believing a long run's result.
 - **"All paths" claims need a per-path check.** `91effe69` said every dispose path was fixed and wired one. Grep the sibling call sites a fix claims to cover.
 - **Constructor diffs do not name a leak; retainer paths and cut tests do.** When cutting one suspected retainer frees nothing, look for a second.
+- **The soak's load is API-only.** It proves heap behaviour, not production lag. Production lag came from outside the API path (§2, B1.2).
+- **Keep long soaks rare.** The owner will not support many 24 h runs. Prefer synthetic proofs (file churn, bounded create/delete loops, `micro` runs) whenever they decide the question.
 
 ## 8. Review moment log
 
@@ -451,18 +537,22 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | (soak launch) | 2026-09-26 | `fc35fbf1-7f12-4962-9243-da710409fb56` | Harness verified and merged; 24 h soak launched on owner go. Owner-approved cleanup: 97 synthetic `memory-vault/derived/inject/sessions/*.json` files from pre-fix rehearsals deleted (list in `/root/jev-session-eval/runs/piwebui-review-2026-09-26-data/vault-soak-files-removed.txt`); 6 usage-ledger recall lines left in place (append-only history). Owner's next steps: a fresh Opus session to re-check this plan's comprehensiveness, then a fresh Opus session for R1 once the soak window ends. |
 | R1 | 2026-09-27 | `38c5e91e-6849-4f04-8b6b-301eb79468ab` (fresh Opus; "Int api program") | **Inputs checked:** `report.md`, `run-state.json`, `events.jsonl`, the soak unit's journal (V8 OOM at 13:34:40 UTC), the start and 1 GiB/2 GiB threshold snapshots (constructor diff, retainer paths, cut test), the code of the dispose paths, and commit `91effe69`. Not checked: A2 (not started) and production checksums. **Decisions (owner accepted the recommendations):** (a) leak proven, two retainers, B1 fixes both; (b) heap cap unchanged, decided at R2 from the confirmation soak; (c) Stage B proceeds. A1 is accepted as complete with deviations and is not repeated; the B1 confirmation soak (24 h) is its rerun. **Plan changes:** §1 item 2 and §2 updated with the soak result; §3 records the R1 decisions; new B0 (harness fixes); B1 rewritten around the named retainers, a cross-repo fix in `pi-enhancement`, and a host-side listener-count test; B2 amended (disposal available at critical memory, creates gated by heap, cap from R2); R2 inputs and decisions updated; E1 seeded with the "claims every path, wires one" class; §7 read-order and rules updated. Evidence: [`A1-soak.md`](./execution-reports/orchestration-scaling/A1-soak.md). |
 | Wave 1 execution | 2026-09-27 | `38c5e91e-…` (orchestrating) | Children on `clinepass/cline-pass/deepseek-v4.1-flash` (owner-authorised to use the remaining Cline Pass quota). An independent reviewer, GPT-6 Luna via `openai-codex` (owner-authorised), ran per lane, and the parent verified every lane. B0, B1 and A2 are merged; the extension fix is deployed. Owner instructions: no production restart until the owner picks a moment (another agent uses the Internal API); review stop after the 24 h confirmation soak. Plan change: B0.1 (stale-`dist` guard) added as an open follow-up. |
+| Interim review (after the confirmation soak) | 2026-09-28 | `d5db9012-5cb3-44af-99b9-06a3f8dd43ca` (Opus; "Int API Program 2", continuing `38c5e91e` after it crashed) | **Inputs checked:** the confirmation soak's `report.md`, `run-state.json`, `events.jsonl` and unit journal (one start, no OOM); start, 12 h and a manually taken end snapshot (constructor counts, `AgentSession` retainer, watcher retainer paths); `session-watcher.ts`; production `server/dist` build time against the restart (B1 present in production); A2 production telemetry (journal `Memory:` lines 120/h → 1/h; lag spike minutes). **Decisions (owner):** B1 shipped; heap cap unchanged; an interim wave before wave 2; long soaks kept to a minimum. **Plan changes:** status line; §2 rows for the confirmation soak and production telemetry; §3 decisions; §5 sequence and dependencies; new B0.1 (widened), B1.1 and B1.2; B1 outcome; B2 cap and lag-threshold source; R2 inputs and decisions; D1 bounded soak; E2 as the only remaining 24 h soak, with a browser-like load and a telemetry comparison; E1 second instance; §7 read-order, locations and rules. Evidence: [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md). |
 
 ## 9. Status ledger
 
 | Step | Status | Evidence | Notes |
 |---|---|---|---|
 | A1 | **complete with deviations; verdict accepted at R1**. Run `full-1790411484255-ec8b813c`: server V8 heap OOM after 5 h 03 min (146 → 4,044 MB post-GC); coverage 20.8%; harness missed the death | [`A1-harness.md`](./execution-reports/orchestration-scaling/A1-harness.md), [`A1-soak.md`](./execution-reports/orchestration-scaling/A1-soak.md); run dir `/root/.pi-web-ui/validation/heap-soak/full-1790411484255-ec8b813c/` | Not repeated; the B1 confirmation soak is its rerun |
-| A2 | **merged (`2471b964`); production item pending an owner-approved restart** | [`A2.md`](./execution-reports/orchestration-scaling/A2.md); reviews `/root/orch-ops/orchestration-scaling/reviews/a2-luna-review.md` | Disposable proof: one alert then one recovery, bounded rotation, `Memory:` lines 120/h → 0/h. Independent review found validation-mode escapes (production metrics path, notification override, validation root inside production metrics); all fixed and re-verified by the parent |
+| A2 | **shipped** (`2471b964`; in production since the 2026-09-27 17:39 UTC restart; production gate checked 2026-09-28: metrics file present and growing, journal `Memory:` lines 120/h → 1/h) | [`A2.md`](./execution-reports/orchestration-scaling/A2.md); reviews `/root/orch-ops/orchestration-scaling/reviews/a2-luna-review.md` | Disposable proof: one alert then one recovery, bounded rotation, `Memory:` lines 120/h → 0/h. Independent review found validation-mode escapes (production metrics path, notification override, validation root inside production metrics); all fixed and re-verified by the parent |
 | R1 | **held 2026-09-27** | §8 | Leak proven, two retainers named; heap cap deferred to R2; Stage B cleared |
 | B0 | **shipped** (`054c9d99`) | [`B0.md`](./execution-reports/orchestration-scaling/B0.md); reviews `…/reviews/b0-luna-review.md` | Positive controls re-checked by the parent (server death, restart after death, empty snapshot, audit, overlay). **New defect found after merge:** the launcher runs `server/dist` from its own checkout without checking that the build matches HEAD. A pre-fix `dist` made the first post-merge micro-soak and soak look leaky. Open follow-up B0.1: refuse or rebuild a stale `dist` (record the build commit). |
-| B1 | **merged** (`5bbc95a6`; `pi-enhancement` `97a7106`, deployed to `~/.pi/agent/extensions` 2026-09-27 16:21 UTC); confirmation soak running | [`B1.md`](./execution-reports/orchestration-scaling/B1.md); reviews `…/reviews/b1-luna-review.md` | Early soak result on the fixed build: 282 children at 35 min, post-GC heap 150 → 230 MB and flat; 687 children at 1.5 h, still 150–240 MB (the A1 build reached 1 GiB in about 20 min). Residual accepted at review: `SessionPool` cleanup of two pool clients on one path at process shutdown. The server fix reaches production at an owner-approved restart. |
-| B2 | not started, **cleared** | — | Admission logic can be built alongside B1; heap cap waits for R2 |
-| B3–B4 | not started, **cleared** | — | Independent of B0–B2 |
+| B0.1 | not started, **cleared** (interim wave) | — | Widened 2026-09-28: stale `dist`, end snapshot, teardown, sweep-race accounting, bounded window length |
+| B1 | **shipped** (`5bbc95a6`; `pi-enhancement` `97a7106`, deployed to `~/.pi/agent/extensions` 2026-09-27 16:21 UTC; in production since the 2026-09-27 17:39 UTC restart) | [`B1.md`](./execution-reports/orchestration-scaling/B1.md); [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md); reviews `…/reviews/b1-luna-review.md` | Confirmation soak `full-1790523945117-ea387201` passed: 24 h alive, post-GC ~200 MB flat, 8,092 children, trailing slope 0.31 MB/h. Accepted residuals: `SessionPool` shutdown cleanup (at review); one bounded extension slot. Third small retainer → B1.1 |
+| B1.1 | not started, **cleared** (interim wave) | — | Session-watcher unlink cleanup plus chokidar pending-write retention; synthetic churn proof |
+| B1.2 | not started, **cleared** (interim wave) | — | Attribute and remove production lag spikes (17 spike minutes in 22 h, max 919 ms); sets B2's lag threshold |
+| B2 | not started, **cleared** | — | Heap cap settled (unchanged). `heap_pressure` can be built now; `event_loop_lag` threshold after B1.2 |
+| B3–B4 | not started, **cleared** | — | Independent of B0–B2; may run alongside the interim wave |
 | C1–C6 | not started | — | |
 | D1–D2 | not started | — | Needs R3 authorisation |
 | E1–E2 | not started | — | |
