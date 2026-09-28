@@ -94,10 +94,16 @@ export class SessionWatcher extends EventEmitter {
       // debug:where and ordinary session listing, not replayed into the
       // registry as a boot-time rescan.
       ignoreInitial: true,
-      awaitWriteFinish: {
-        stabilityThreshold: 300,
-        pollInterval: 100,
-      },
+      // Deliberately NO `awaitWriteFinish` (B1.1). Chokidar 3.6.0's
+      // `_remove()` has an early return when a pending `add` is still in its
+      // await-write window: it calls `cancelWait()` and returns *before*
+      // deleting the path from `_watched`, closing the per-file `fs.watch`
+      // (its `FSWatcher`) and emitting the unlink. Any session file created and
+      // deleted inside the stability window therefore leaves a permanent
+      // FSWatcher + Stats/Date closure behind, which is exactly the residual
+      // growth the confirmation soak measured. With this option removed the
+      // watcher already debounces (500 ms) and reads the header itself, so the
+      // library-side stability wait adds no correctness.
       persistent: true,
     });
 
@@ -160,6 +166,11 @@ export class SessionWatcher extends EventEmitter {
     // For 'unlink', emit immediately. Retire the state before awaiting an
     // in-flight read so a replacement file at the same path gets fresh state.
     if (type === 'unlink') {
+      // Retire the debounce slot with its timer (B1.1): clearing the timeout
+      // alone leaves a dead entry in the map for every file added and unlinked
+      // inside the debounce window, which retains the fired Timeout and its
+      // captured per-path state for ever.
+      this.debounceTimers.delete(filePath);
       const state = this.readStateByPath.get(filePath);
       const fallbackSessionId = state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? this.extractSessionId(filePath);
       this.readStateByPath.delete(filePath);
