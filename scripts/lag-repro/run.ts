@@ -42,6 +42,7 @@ interface Args {
   sizeScale: number;
   runDir?: string;
   port?: number;
+  repeatPool: number;
   keep: boolean;
   generateOnly: boolean;
 }
@@ -58,6 +59,10 @@ function parseArgs(argv: string[]): Args {
     sizeScale: Number(value('size-scale') ?? 0.05),
     runDir: value('run-dir'),
     port: value('port') ? Number(value('port')) : undefined,
+    // 0 = every cycle opens new cwds (new-cwd distribution). >0 = cycle over
+    // only this many sessions per tab, so every open after the first revisits a
+    // warm cwd (repeat-cwd distribution).
+    repeatPool: Number(value('repeat-pool') ?? 0),
     keep: argv.includes('--keep'),
     generateOnly: argv.includes('--generate-only'),
   };
@@ -262,9 +267,10 @@ async function main(): Promise<void> {
     const tabResults = await Promise.all(
       Array.from({ length: tabs }, (_, tab) => {
         const slice = corpus.sessions.filter((_, index) => index % tabs === tab).map((session) => session.path);
+        const sessionPaths = args.repeatPool > 0 ? slice.slice(0, args.repeatPool) : slice;
         return runBrowserLoad({
           port,
-          sessionPaths: slice,
+          sessionPaths,
           cycles: args.cycles,
           sessionsPerCycle: args.perCycle,
           gapMs: 1_400,
@@ -291,7 +297,7 @@ async function main(): Promise<void> {
 
     const attributionLines = await readAttributionLines(unitName);
     const metrics = summariseMetrics(join(runDir, 'metrics', 'health-metrics.jsonl'), loadStartedAtMs, attributionLines);
-    const report = { ...summary, tabs, drive, metrics, loadStartedAtMs };
+    const report = { ...summary, tabs, repeatPool: args.repeatPool, drive, metrics, loadStartedAtMs };
     writeFileSync(join(runDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
     console.log(JSON.stringify(report, null, 2));
   } finally {

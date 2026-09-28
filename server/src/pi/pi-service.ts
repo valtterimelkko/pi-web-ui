@@ -28,6 +28,7 @@ import {
 import { createLogger } from '../logging/logger.js';
 import { readSessionIdentity } from './session-cwd.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
+import { getExtensionFactoryCache } from './extension-factory-cache.js';
 
 const logger = createLogger('PiService');
 
@@ -378,9 +379,33 @@ export class PiService {
   private async createSessionResourceLoader(cwd: string): Promise<DefaultResourceLoader> {
     const agentDir = config.piAgentDir || `${process.cwd()}/.pi/agent`;
     const loader = new DefaultResourceLoader({ cwd, agentDir });
+    // B1.2: hand the process-cached global extension factories to the SDK's own
+    // module cache for this session's real cwd before the loader resolves them,
+    // so the loader reuses the imported factory instead of re-transpiling it.
+    // Each session still gets fresh Extension objects and its own runtime
+    // (initializeExtension runs per load). Fail-open and inert when the SDK
+    // patch is absent — the loader then does exactly what it did before.
+    await this.seedGlobalExtensionFactories(cwd, agentDir);
     await loader.reload();
     this.logExtensions(loader.getExtensions());
     return loader;
+  }
+
+  /**
+   * Seed the SDK module cache with the cached global extension factories.
+   * Never throws: a failure here must degrade to the unpatched path, not block
+   * session creation.
+   */
+  private async seedGlobalExtensionFactories(cwd: string, agentDir: string): Promise<void> {
+    try {
+      const cache = await getExtensionFactoryCache();
+      await cache.seed(cwd, agentDir);
+    } catch (error) {
+      logger.warn(
+        `[PiService] global extension factory seeding failed for cwd ${cwd}: ` +
+        `${error instanceof Error ? error.message : String(error)} — continuing with the unpatched loader path`,
+      );
+    }
   }
 
   async createSession(options: CreateSessionOptions): Promise<AgentSession> {
