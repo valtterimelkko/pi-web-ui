@@ -107,6 +107,33 @@ Important files:
 - session lifecycle is actively managed by the app
 - worker isolation, idle cleanup, stale-stream handling, and pinning are important here
 
+**Global extension loading (B1.2)**
+
+Every Pi session is created with its own `DefaultResourceLoader`, and the SDK's
+extension **module cache is single-slot and cwd-keyed** — it is cleared whenever
+the cwd differs, so a session opened in a different cwd re-imports (~780 KB of
+TypeScript across the global extensions) with jiti `moduleCache: false`. On
+production that was a 0.3–1.7 s synchronous block per open, and it was the
+dominant cause of the A2 event-loop lag spikes (300–919 ms with 0–3 active API
+turns; see [`plans/execution-reports/orchestration-scaling/B1.2.md`](./plans/execution-reports/orchestration-scaling/B1.2.md)).
+
+`server/src/pi/extension-factory-cache.ts` keeps one imported factory per
+**global** extension path (`<agentDir>/extensions`) for the process, invalidates
+it when the entry file or anything in its directory changes, and seeds the SDK's
+own module cache for the session's real cwd before each loader reload. The SDK
+still calls `initializeExtension` per load, so every session keeps its own
+`Extension` objects and its own extension runtime — the isolation property a
+per-cwd loader cache would have broken. Project-local (`<cwd>/.pi/extensions`),
+configured and package extensions are **not** cached: they keep loading per real
+cwd, as do skills, prompt templates, themes and project context.
+
+Seeding uses an additive accessor exported by
+`scripts/patch-pi-coding-agent-extension-factory.mjs` (a guarded postinstall
+patch in the same style as `scripts/patch-pi-ai-toolstream.mjs`). When the patch
+is absent the cache is inert: the server logs one warning and uses the
+unpatched per-session path, so a missing patch degrades to today's behaviour
+rather than breaking sessions.
+
 ### 2. Claude Code path
 
 **What it is**

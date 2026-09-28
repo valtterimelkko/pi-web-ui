@@ -27,6 +27,8 @@ import {
 } from './pi-openrouter-refresh.js';
 import { createLogger } from '../logging/logger.js';
 import { readSessionIdentity } from './session-cwd.js';
+import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
+import { getExtensionFactoryCache, runExtensionLoadCriticalSection } from './extension-factory-cache.js';
 
 const logger = createLogger('PiService');
 
@@ -302,7 +304,9 @@ export class PiService {
     // the REST/Internal API model projections. The SDK's higher-level
     // createAgentSessionServices() performs this same flush; PiService creates
     // the shared ModelRuntime itself, so it must do the flush explicitly.
-    await this.resourceLoader.reload();
+    await runExtensionLoadCriticalSection(async () => {
+      await this.resourceLoader.reload();
+    });
     const extensionsResult = this.resourceLoader.getExtensions();
     for (const { name, config: providerConfig, extensionPath } of extensionsResult.runtime?.pendingProviderRegistrations ?? []) {
       try {
@@ -376,35 +380,67 @@ export class PiService {
 
   private async createSessionResourceLoader(cwd: string): Promise<DefaultResourceLoader> {
     const agentDir = config.piAgentDir || `${process.cwd()}/.pi/agent`;
-    const loader = new DefaultResourceLoader({ cwd, agentDir });
-    await loader.reload();
-    this.logExtensions(loader.getExtensions());
-    return loader;
+    // B1.2: seed the process-cached global extension factories into the SDK's
+    // own module cache for this session's real cwd, then resolve. Seed and
+    // resolve must be ONE critical section: the SDK's extension module cache is
+    // a single process-global cwd slot, so a concurrent session open in another
+    // cwd would change the slot mid-interval, clearing this session's seeded
+    // factories and forcing both sessions to re-import on the event loop.
+    // Fail-open and inert when the SDK patch is absent — the loader then does
+    // exactly what it did before. Inside the section, each session still gets
+    // fresh Extension objects and its own runtime (initializeExtension runs per
+    // load).
+    return runExtensionLoadCriticalSection(async () => {
+      const loader = new DefaultResourceLoader({ cwd, agentDir });
+      await this.seedGlobalExtensionFactories(cwd, agentDir);
+      await loader.reload();
+      this.logExtensions(loader.getExtensions());
+      return loader;
+    });
+  }
+
+  /**
+   * Seed the SDK module cache with the cached global extension factories.
+   * Never throws: a failure here must degrade to the unpatched path, not block
+   * session creation.
+   */
+  private async seedGlobalExtensionFactories(cwd: string, agentDir: string): Promise<void> {
+    try {
+      const cache = await getExtensionFactoryCache();
+      await cache.seed(cwd, agentDir);
+    } catch (error) {
+      logger.warn(
+        `[PiService] global extension factory seeding failed for cwd ${cwd}: ` +
+        `${error instanceof Error ? error.message : String(error)} — continuing with the unpatched loader path`,
+      );
+    }
   }
 
   async createSession(options: CreateSessionOptions): Promise<AgentSession> {
-    await this.initialize();
+    const attributor = getLoopStallAttributor();
+    await attributor.spanAsync('pi.service.initialize', () => this.initialize());
     const modelRuntime = this.getModelRuntime();
     const cwd = options.cwd || process.cwd();
-    
+
     // Create session manager based on options
     let sessionManager: SessionManager;
-    
+
     if (options.inMemory) {
       sessionManager = SessionManager.inMemory();
     } else if (options.sessionPath) {
+      const requestedSessionPath = options.sessionPath;
       const fs = await import('fs/promises');
       let fileExists = false;
       try {
-        await fs.access(options.sessionPath);
+        await fs.access(requestedSessionPath);
         fileExists = true;
       } catch {
         fileExists = false;
       }
 
       if (fileExists) {
-        const expectedId = await assertPiSessionFileIdentity(options.sessionPath, { knownToExist: true });
-        sessionManager = SessionManager.open(options.sessionPath, config.sessionDir);
+        const expectedId = await assertPiSessionFileIdentity(requestedSessionPath, { knownToExist: true });
+        sessionManager = attributor.span('pi.session.open_file', () => SessionManager.open(requestedSessionPath, config.sessionDir));
         if (sessionManager.getSessionId() !== expectedId) {
           throw new PiSessionIdentityError(
             'SESSION_IDENTITY_MISMATCH',
@@ -420,7 +456,7 @@ export class PiService {
           );
         }
         logger.info(`[PiService.createSession] Explicitly creating session file with cwd: ${cwd}`);
-        sessionManager = SessionManager.create(cwd, config.sessionDir);
+        sessionManager = attributor.span('pi.session.create_file', () => SessionManager.create(cwd, config.sessionDir));
         const createdId = sessionManager.getSessionId();
         if (!expectedId || createdId !== expectedId) {
           throw new PiSessionIdentityError(
@@ -432,22 +468,22 @@ export class PiService {
         forceFlushSessionManager(sessionManager);
       }
     } else if (options.continueRecent) {
-      sessionManager = await SessionManager.continueRecent(cwd, config.sessionDir);
+      sessionManager = attributor.span('pi.session.continue_recent', () => SessionManager.continueRecent(cwd, config.sessionDir));
     } else {
-      sessionManager = SessionManager.create(cwd, config.sessionDir);
+      sessionManager = attributor.span('pi.session.create_file', () => SessionManager.create(cwd, config.sessionDir));
       // Force immediate write to disk so session file exists before anything else needs it
       // (SDK defers writing until first assistant message by default)
       forceFlushSessionManager(sessionManager);
     }
 
-    const sessionResourceLoader = await this.createSessionResourceLoader(cwd);
+    const sessionResourceLoader = await attributor.spanAsync('pi.session.resource_loader', () => this.createSessionResourceLoader(cwd));
 
-    const { session } = await createAgentSession({
+    const { session } = await attributor.spanAsync('pi.session.create_agent_session', () => createAgentSession({
       sessionManager,
       modelRuntime,
       resourceLoader: sessionResourceLoader,
       cwd,
-    });
+    }));
 
     // SessionManager identity was validated before createAgentSession. Do not
     // perform a post-open dispose-on-mismatch check: dispose may persist SDK
@@ -532,7 +568,16 @@ export class PiService {
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
-    await session.reload();
+    // Round-2 review finding 1: `session.reload()` calls
+    // `DefaultResourceLoader.reload()`, which CLEARS the SDK's process-global
+    // extension cache when that loader was already loaded. It must therefore run
+    // in the same critical section as seed→load, or a reload in one session can
+    // invalidate another session's seeded factories mid-sequence. This is the
+    // path behind the normal `ctx.reload()` adapter
+    // (extension-ui-adapter.ts → piService.reloadSession).
+    await runExtensionLoadCriticalSection(async () => {
+      await session.reload();
+    });
   }
 
   async navigateSessionTree(

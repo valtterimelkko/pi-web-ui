@@ -10,7 +10,7 @@
     "packages/internal-api-mcp"
   ],
   "scripts": {
-    "postinstall": "node scripts/patch-pi-ai-toolstream.mjs",
+    "postinstall": "node scripts/patch-pi-ai-toolstream.mjs && node scripts/patch-pi-coding-agent-extension-factory.mjs",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "npm run dev --workspace=server",
     "dev:client": "npm run dev --workspace=client",

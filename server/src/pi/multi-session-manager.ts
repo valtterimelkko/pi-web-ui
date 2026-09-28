@@ -7,6 +7,7 @@ import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
 import { MemoryJournalPolicy, resolveMemoryJournalPolicyOptions } from '../observability/memory-journal-policy.js';
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { getHeapStatistics } from 'node:v8';
+import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 const logger = createLogger('MultiSessionManager');
@@ -868,11 +869,11 @@ export class MultiSessionManager {
 
     let agentSession: AgentSession;
     try {
-      agentSession = await this.piService.createSession({
+      agentSession = await getLoopStallAttributor().spanAsync('pi.multi.create_session', () => this.piService.createSession({
         clientId: tempClientId,
         cwd,
         webUIContext: resolvedWebUIContext as any,
-      });
+      }));
     } catch (error) {
       // A rejection before PiService mapped the session leaves only the
       // temporary handler installed above; drop it so repeated creation
@@ -1018,13 +1019,13 @@ export class MultiSessionManager {
           }
         : undefined;
 
-      const agentSession = await this.piService.createSession({
+      const agentSession = await getLoopStallAttributor().spanAsync('pi.multi.rehydrate_session', () => this.piService.createSession({
         clientId: `multi-${sessionPath}`,
         sessionPath,
         allowCreate: false,
         cwd,
         webUIContext: extensionWebUIContext as any,
-      });
+      }));
 
       if (extensionWebUIContext) {
         extensionWebUIContext.sessionId ??= agentSession.sessionId;
