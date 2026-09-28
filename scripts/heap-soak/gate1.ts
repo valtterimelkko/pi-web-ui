@@ -181,7 +181,12 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
     build?: { headSha?: string; fresh?: boolean; reason?: string };
     liveChildrenAtEndSnapshot?: number;
     liveChildrenAtEndSnapshotIds?: string[];
-    endSnapshotDrain?: { drained: boolean; timeoutMs: number };
+    pendingCreatesAtEndSnapshot?: number;
+    endSnapshotDrain?: { drained: boolean; timeoutMs: number; pendingCreates?: number };
+    serverStoppedAt?: string;
+    serverStopVerifiedGone?: boolean;
+    serverStopAttempts?: number;
+    teardownAnomaly?: string;
   };
   record(
     'B0.1 build commit recorded in run-state.json and report.md',
@@ -219,6 +224,18 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
     'B0.1c end snapshot AgentSession count matches the live count (+ known bounded slot)',
     agentSessionMatch !== null && retainedMatch !== null && Number(retainedMatch[1]) === 0,
     `agentSessionInstances=${agentSessionMatch?.[1] ?? 'n/a'} liveChildrenAtSnapshot=${runStateAfter.liveChildrenAtEndSnapshot ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
+  );
+
+  // ── Correction 03: pending creates recorded, teardown result in the report ──
+  record(
+    'B0.1c pending session creations recorded at the end snapshot',
+    runStateAfter.pendingCreatesAtEndSnapshot !== undefined,
+    `pendingCreatesAtEndSnapshot=${runStateAfter.pendingCreatesAtEndSnapshot ?? '(none)'} drain=${JSON.stringify(runStateAfter.endSnapshotDrain ?? null)}`,
+  );
+  record(
+    'B0.1c report states the teardown outcome',
+    reportMd.includes('## Teardown') && /[Vv]erified gone: true/.test(reportMd) && !reportMd.includes('TEARDOWN ANOMALY'),
+    reportMd.split('\n').find((l) => l.includes('Verified gone:')) ?? '(no verified-gone line)',
   );
 
   // ── B0.1 defect 3: the supervisor tore the server unit down at completion ──

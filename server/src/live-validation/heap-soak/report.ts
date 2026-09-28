@@ -2,6 +2,7 @@ import { parseCsvWithHeader } from './csv.js';
 import { computeVerdict, leastSquaresSlope, type LeakVerdict, type SlopePoint, type SlopeResult, type VerdictRule } from './slope.js';
 import { phaseAt, type ScheduleConfig } from './phases.js';
 import { sweptChildFailures } from './orphans.js';
+import { renderTeardownMarkdown, type TeardownReport } from './run-teardown.js';
 import type { BuildRecord } from './build-freshness.js';
 import type { RunTerminalState, ServerDeathRecord } from './run-state.js';
 import type { LaneEvent, LaneName } from './types.js';
@@ -242,6 +243,8 @@ export interface HeapSoakReport {
   windowHours?: number;
   /** B0.1 defect 1: the checkout HEAD and the build-freshness check result for the `dist` under test. */
   build?: BuildRecord;
+  /** B0.1 correction 03 item 8: the disposable-server teardown outcome. */
+  teardown?: TeardownReport;
 }
 
 /** Optional terminal-state + observed-window input for {@link buildReport}. */
@@ -254,6 +257,8 @@ export interface BuildReportOptions {
   windowHours?: number;
   /** B0.1 defect 1: the checkout/build-freshness record to render at the top of the report. */
   build?: BuildRecord;
+  /** B0.1 correction 03 item 8: the teardown outcome to render. */
+  teardown?: TeardownReport;
   /**
    * The elapsed window the run actually covered. When a server death ends a
    * run early, coverage must be measured against the observed window rather
@@ -308,6 +313,7 @@ export function buildReport(
     ...(options.extensionsOverlays && options.extensionsOverlays.length > 0 ? { extensionsOverlays: [...options.extensionsOverlays] } : {}),
     ...(options.windowHours !== undefined ? { windowHours: options.windowHours } : {}),
     ...(options.build ? { build: options.build } : {}),
+    ...(options.teardown ? { teardown: options.teardown } : {}),
   };
 }
 
@@ -396,6 +402,10 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   lines.push('');
   lines.push(`Orphans swept overall: ${report.orphanCount}`);
   lines.push(`Swept children mis-counted as child failures: ${report.sweptChildFailures}`);
+  if (report.teardown) {
+    lines.push('');
+    lines.push(...renderTeardownMarkdown(report.teardown));
+  }
   return lines.join('\n');
 }
 

@@ -58,6 +58,25 @@ export function classifyChildFailure(input: { sessionId?: string; sweptByHarness
 }
 
 /**
+ * How a session DELETE failed. `already-gone` is only a confirmed not-found
+ * (HTTP 404 / `SESSION_NOT_FOUND`); every other failure is `transient` and the
+ * session must stay OPEN — a timeout or 5xx must never be recorded as a
+ * `child_deleted`, or the drain/sweep would treat a still-live child as gone
+ * (B0.1 correction 03 item 2).
+ */
+export type DeleteErrorOutcome = 'already-gone' | 'transient';
+
+export function classifyDeleteError(error: unknown): DeleteErrorOutcome {
+  if (error && typeof error === 'object') {
+    const code = (error as { code?: unknown }).code;
+    const statusCode = (error as { statusCode?: unknown }).statusCode;
+    if (code === 'SESSION_NOT_FOUND') return 'already-gone';
+    if (statusCode === 404) return 'already-gone';
+  }
+  return 'transient';
+}
+
+/**
  * Regression invariant for the accounting fix: session ids that have BOTH an
  * `orphan_swept` and a later `child_failed` event. A correct harness reports
  * none — the sweep's own deletions are counted as `orphan_swept`.

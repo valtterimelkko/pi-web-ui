@@ -25,15 +25,18 @@ async function git(root: string, args: string[]): Promise<string | undefined> {
   }
 }
 
-/** Oldest existing compiled-artefact mtime (ms), or undefined when none exists. */
-function oldestCompiledMtimeMs(root: string): number | undefined {
+/** Oldest existing compiled-artefact mtime (ms) plus any listed artefact that is absent. */
+function inspectCompiledArtefacts(root: string): { mtimeMs?: number; missing: string[] } {
   const mtimes: number[] = [];
+  const missing: string[] = [];
   for (const rel of COMPILED_ARTEFACT_PATHS) {
     try {
       mtimes.push(statSync(path.join(root, rel)).mtimeMs);
-    } catch { /* missing artefact: the pure check refuses when none exist */ }
+    } catch {
+      missing.push(rel);
+    }
   }
-  return mtimes.length === 0 ? undefined : Math.min(...mtimes);
+  return { ...(mtimes.length > 0 ? { mtimeMs: Math.min(...mtimes) } : {}), missing };
 }
 
 /**
@@ -58,19 +61,28 @@ export async function inspectCheckoutBuild(root: string): Promise<BuildRecord> {
     newestSourceCommitSha = sha || undefined;
   }
 
-  const compiledMtimeMs = oldestCompiledMtimeMs(root);
-  // A `git status` we could not read is not evidence of a clean tree, but
-  // treating it as dirty would hide the more honest "git history unreadable"
-  // refusal; the pure check covers the both-unreadable case explicitly.
+  const compiled = inspectCompiledArtefacts(root);
+  // Correction 03 item 5: a `git status` we could not read means the tree's
+  // cleanliness is UNKNOWN, and unknown must refuse — never fall back to
+  // "clean" (or to the misleading "dirty" refusal).
+  const sourceTreeStateKnown = status !== undefined;
   const sourceTreeDirty = status !== undefined && status.length > 0;
-  const freshness = checkBuildFreshness({ compiledMtimeMs, newestSourceCommitMs, sourceTreeDirty });
+  const freshness = checkBuildFreshness({
+    ...(compiled.mtimeMs !== undefined ? { compiledMtimeMs: compiled.mtimeMs } : {}),
+    ...(compiled.missing.length > 0 ? { compiledMissing: compiled.missing } : {}),
+    ...(newestSourceCommitMs !== undefined ? { newestSourceCommitMs } : {}),
+    sourceTreeDirty,
+    sourceTreeStateKnown,
+  });
 
   return {
     ...(headSha ? { headSha } : {}),
     ...(newestSourceCommitMs !== undefined ? { newestSourceCommitMs } : {}),
     ...(newestSourceCommitSha ? { newestSourceCommitSha } : {}),
-    ...(compiledMtimeMs !== undefined ? { compiledMtimeMs } : {}),
+    ...(compiled.mtimeMs !== undefined ? { compiledMtimeMs: compiled.mtimeMs } : {}),
+    ...(compiled.missing.length > 0 ? { compiledMissing: compiled.missing } : {}),
     sourceTreeDirty,
+    sourceTreeStateKnown,
     checkedAt: new Date().toISOString(),
     reason: freshness.reason,
     fresh: freshness.fresh,

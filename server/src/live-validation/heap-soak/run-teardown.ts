@@ -46,16 +46,53 @@ export interface CompletionNoticeInput {
   peakHeapMB: number;
   keepServer: boolean;
   serverUnit?: string;
+  /** Set when the disposable server unit could not be confirmed gone (correction 03 item 8). */
+  teardownAnomaly?: string;
 }
 
 /**
  * The completion Telegram body. When the server is kept up the message must
- * say so explicitly (B0.1 defect 3), so an operator is never left guessing
- * whether a unit is still holding the host's resources.
+ * say so explicitly (B0.1 defect 3), and a failed teardown must be surfaced
+ * rather than hidden behind a successful-looking completion (correction 03
+ * item 8).
  */
 export function completionNoticeBody(input: CompletionNoticeInput): string {
-  const base = `verdict=${input.verdict} trailingSlope=${input.trailingSlopeMBPerHour.toFixed(2)}MB/h peakHeap=${input.peakHeapMB.toFixed(0)}MB`;
-  if (!input.keepServer) return base;
-  const unit = input.serverUnit ?? 'the disposable server unit';
-  return `${base}; SERVER LEFT RUNNING (${TEARDOWN_KEEP_SERVER_ENV_KEY}=1): ${unit} — stop it with \`cli.ts stop\` when the inspection is done`;
+  let body = `verdict=${input.verdict} trailingSlope=${input.trailingSlopeMBPerHour.toFixed(2)}MB/h peakHeap=${input.peakHeapMB.toFixed(0)}MB`;
+  if (input.keepServer) {
+    const unit = input.serverUnit ?? 'the disposable server unit';
+    body += `; SERVER LEFT RUNNING (${TEARDOWN_KEEP_SERVER_ENV_KEY}=1): ${unit} — stop it with \`cli.ts stop\` when the inspection is done`;
+  }
+  if (input.teardownAnomaly) {
+    body += `; TEARDOWN ANOMALY: ${input.teardownAnomaly}`;
+  }
+  return body;
+}
+
+/** The teardown outcome recorded in run-state.json and rendered in report.md. */
+export interface TeardownReport {
+  serverUnit: string;
+  /** ISO time the supervisor finished its stop attempts. */
+  stoppedAt?: string;
+  /** true only when the unit was confirmed gone (`systemctl` LoadState=not-found). */
+  verifiedGone?: boolean;
+  /** How many `stopUnit` attempts were made. */
+  attempts?: number;
+  /** Set when the unit was still present after the bound. */
+  anomaly?: string;
+}
+
+/** The report.md teardown section (correction 03 item 8). */
+export function renderTeardownMarkdown(teardown: TeardownReport): string[] {
+  const lines = ['## Teardown', ''];
+  if (teardown.anomaly || teardown.verifiedGone === false) {
+    lines.push(`**TEARDOWN ANOMALY**: ${teardown.anomaly ?? `server unit \`${teardown.serverUnit}\` was not verified gone`}.`);
+    lines.push('');
+    lines.push('The run is complete, but the disposable server unit may still be running; stop it with `cli.ts stop` before starting another run.');
+    return lines;
+  }
+  lines.push(`- Server unit: \`${teardown.serverUnit}\``);
+  if (teardown.stoppedAt) lines.push(`- Stopped at: ${teardown.stoppedAt}`);
+  if (teardown.attempts !== undefined) lines.push(`- Stop attempts: ${teardown.attempts}`);
+  lines.push(`- Verified gone: ${teardown.verifiedGone ?? 'unknown'}`);
+  return lines;
 }

@@ -99,9 +99,23 @@ async function main(): Promise<void> {
       ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
       ...(state.windowHours !== undefined ? { windowHours: state.windowHours } : {}),
       ...(state.build ? { build: state.build } : {}),
+      ...(state.serverStoppedAt !== undefined || state.teardownAnomaly !== undefined
+        ? {
+            teardown: {
+              serverUnit: state.server.unitName,
+              ...(state.serverStoppedAt !== undefined ? { stoppedAt: state.serverStoppedAt } : {}),
+              ...(state.serverStopVerifiedGone !== undefined ? { verifiedGone: state.serverStopVerifiedGone } : {}),
+              ...(state.serverStopAttempts !== undefined ? { attempts: state.serverStopAttempts } : {}),
+              ...(state.teardownAnomaly !== undefined ? { anomaly: state.teardownAnomaly } : {}),
+            },
+          }
+        : {}),
     });
     const snapshotSection = await snapshotComparisonSection(state.runDir, {
+      ...(state.endSnapshotPath !== undefined ? { expectedEndSnapshotPath: state.endSnapshotPath } : {}),
       ...(state.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
+      ...(state.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
+      ...(state.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
     });
 
     // Production-write / board-pollution audit at the run's end (owner
@@ -145,6 +159,7 @@ async function main(): Promise<void> {
         peakHeapMB: report.peakHeapMB,
         keepServer,
         serverUnit: state.server.unitName,
+        ...(state.teardownAnomaly !== undefined ? { teardownAnomaly: state.teardownAnomaly } : {}),
       }));
       state.completionNoticeSentAt = new Date().toISOString();
       saveRunState(runStatePath, state);
@@ -205,8 +220,9 @@ async function main(): Promise<void> {
   const lanes = applyForcedBadLanes(enabledLanes(LANE_DEFINITIONS));
   const driverState: DriverState = {
     breakers: new Map(Object.entries(state.laneBreakers) as [import('../../server/src/live-validation/heap-soak/types.js').LaneName, import('../../server/src/live-validation/heap-soak/types.js').CircuitBreakerState][]),
-    // B0.1 defect 4: shared with the orphan sweep so it never deletes a child a wave's straggler still owns.
+    // B0.1 defect 4 / correction 03 item 1: shared with the orphan sweep and the end drain so neither deletes nor ignores a child a wave's straggler still owns (including an unresolved create).
     inFlight: new Set<string>(),
+    pendingCreates: new Set<string>(),
     swept: new Set<string>(),
   };
 
@@ -306,7 +322,7 @@ async function main(): Promise<void> {
    */
   function currentDrainStatus(): DrainStatus {
     const events = readLaneEvents(state.eventsLogPath);
-    return evaluateDrain({ inFlight: driverState.inFlight, openSessionIds: computeOpenSessionIds(events) });
+    return evaluateDrain({ inFlight: driverState.inFlight, openSessionIds: computeOpenSessionIds(events), pendingCreateCount: driverState.pendingCreates.size });
   }
 
   /**
@@ -345,13 +361,14 @@ async function main(): Promise<void> {
     const drain = await drainBeforeEndSnapshot();
     state.liveChildrenAtEndSnapshot = drain.liveChildren.length;
     state.liveChildrenAtEndSnapshotIds = drain.liveChildren.slice(0, 50);
-    state.endSnapshotDrain = { drained: drain.drained, timeoutMs: endDrainTimeoutMs(schedule) };
+    state.pendingCreatesAtEndSnapshot = drain.pendingCreateCount;
+    state.endSnapshotDrain = { drained: drain.drained, timeoutMs: endDrainTimeoutMs(schedule), pendingCreates: drain.pendingCreateCount };
     log({
       ts: new Date().toISOString(),
       elapsedMs: elapsedNow(),
       lane: 'A',
       kind: drain.drained ? 'checkpoint' : 'anomaly',
-      detail: `end snapshot drain: drained=${drain.drained} liveChildren=${drain.liveChildren.length}${drain.liveChildren.length > 0 ? ` ids=${drain.liveChildren.slice(0, 10).join(',')}` : ''}`,
+      detail: `end snapshot drain: drained=${drain.drained} liveChildren=${drain.liveChildren.length} pendingCreates=${drain.pendingCreateCount}${drain.liveChildren.length > 0 ? ` ids=${drain.liveChildren.slice(0, 10).join(',')}` : ''}`,
     });
     try {
       await inspector.collectGarbage();
@@ -564,13 +581,43 @@ async function main(): Promise<void> {
   if (state.terminalState !== 'server_died') state.terminalState = 'complete';
   persist();
 
-  // B0.1 defect 2: end snapshot after the window closes, before finalisation
-  // (so report.md's snapshot section compares start against end) and before
-  // teardown. Skipped only when the server died — there is then no live heap
-  // to snapshot.
+  // B0.1 defect 2 / correction 02: end snapshot after the window closes, before
+  // finalisation (so report.md's snapshot section compares start against end)
+  // and before teardown. Skipped only when the server died — there is then no
+  // live heap to snapshot.
   if (state.terminalState === 'complete') {
     await takeEndSnapshot();
     persist();
+  }
+
+  // B0.1 correction 03 item 8: tear down BEFORE finalisation, so the report and
+  // the completion notice carry the teardown result (including a failure), and
+  // retry within a bound rather than reporting a clean run over a unit that is
+  // still present. A dead run has nothing to stop; `server_died` handling is
+  // unchanged and is never reclassified.
+  const teardown = decideRunTeardown({ keepServer, terminalState: state.terminalState ?? 'complete' });
+  console.error(`[supervisor] teardown: ${teardown.reason}`);
+  if (teardown.stopServer) {
+    const maxAttempts = 3;
+    let gone = false;
+    let attempts = 0;
+    while (!gone && attempts < maxAttempts) {
+      attempts += 1;
+      await stopUnit(state.server.unitName);
+      gone = await waitForUnitGone(state.server.unitName, 15_000);
+      if (!gone) {
+        log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `teardown attempt ${attempts}/${maxAttempts}: server unit ${state.server.unitName} still present` });
+      }
+    }
+    state.serverStoppedAt = new Date().toISOString();
+    state.serverStopVerifiedGone = gone;
+    state.serverStopAttempts = attempts;
+    if (!gone) {
+      state.teardownAnomaly = `server unit ${state.server.unitName} is STILL PRESENT after ${attempts} stop attempt(s)`;
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `TEARDOWN ANOMALY: ${state.teardownAnomaly}` });
+    }
+    saveRunState(runStatePath, state);
+    console.error(`[supervisor] server unit ${state.server.unitName} stop: verified gone=${gone} after ${attempts} attempt(s)`);
   }
 
   await finaliseRun();
@@ -578,21 +625,6 @@ async function main(): Promise<void> {
   writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
   wsClient.close();
   inspector.close();
-
-  // B0.1 defect 3: stop the disposable server at completion (after the end
-  // snapshot) unless explicitly asked to keep it. A dead run has nothing to
-  // stop. `server_died` handling above is unchanged: the run still ends as
-  // server_died, with its death evidence, and is never reclassified.
-  const teardown = decideRunTeardown({ keepServer, terminalState: state.terminalState ?? 'complete' });
-  console.error(`[supervisor] teardown: ${teardown.reason}`);
-  if (teardown.stopServer) {
-    await stopUnit(state.server.unitName);
-    const gone = await waitForUnitGone(state.server.unitName, 15_000);
-    state.serverStoppedAt = new Date().toISOString();
-    state.serverStopVerifiedGone = gone;
-    saveRunState(runStatePath, state);
-    console.error(`[supervisor] server unit ${state.server.unitName} stopped (verified gone=${gone})`);
-  }
 }
 
 main().catch(async (error) => {

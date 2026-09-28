@@ -22,7 +22,7 @@ import {
   type SnapshotFileInfo,
 } from '../../server/src/live-validation/heap-soak/snapshot-selection.js';
 import type { ConstructorRetainerAnalysis, CutTestResult } from '../../server/src/live-validation/heap-soak/snapshot-retainers.js';
-import { renderRetentionVerdict } from '../../server/src/live-validation/heap-soak/end-drain.js';
+import { countKnownSlotRetentions, renderRetentionVerdict } from '../../server/src/live-validation/heap-soak/end-drain.js';
 
 const execFile = promisify(execFileCb);
 
@@ -123,9 +123,17 @@ export function findFirstLastSnapshots(snapshotDir: string): { firstPath: string
  * Full section: pick the start + latest-valid after candidates, try each until
  * one parses, and render the comparison. Names any skipped (empty) snapshots.
  */
+export interface SnapshotComparisonOptions {
+  /** The recorded end-snapshot path; the retention verdict is given only when the analysed snapshot IS this one (correction 03 item 4). */
+  expectedEndSnapshotPath?: string;
+  liveChildrenAtSnapshot?: number;
+  pendingCreatesAtSnapshot?: number;
+  drainDrained?: boolean;
+}
+
 export async function snapshotComparisonSection(
   runDir: string,
-  options: { liveChildrenAtSnapshot?: number } = {},
+  options: SnapshotComparisonOptions = {},
 ): Promise<string> {
   const files = listSnapshotFiles(path.join(runDir, 'snapshots'));
   const selection = selectSnapshotCandidates(files);
@@ -140,7 +148,10 @@ export async function snapshotComparisonSection(
       return renderSnapshotDiffMarkdown(result, {
         skipped: selection.skipped,
         attempts,
+        ...(options.expectedEndSnapshotPath !== undefined ? { expectedEndSnapshotPath: options.expectedEndSnapshotPath } : {}),
         ...(options.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: options.liveChildrenAtSnapshot } : {}),
+        ...(options.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: options.pendingCreatesAtSnapshot } : {}),
+        ...(options.drainDrained !== undefined ? { drainDrained: options.drainDrained } : {}),
       });
     }
     attempts.push(`${candidate.name}: ${result.reason}`);
@@ -150,19 +161,35 @@ export async function snapshotComparisonSection(
 
 export function renderSnapshotDiffMarkdown(
   result: SnapshotDiffResult,
-  context: { skipped?: { name: string; reason: string }[]; attempts?: string[]; liveChildrenAtSnapshot?: number } = {},
+  context: {
+    skipped?: { name: string; reason: string }[];
+    attempts?: string[];
+    expectedEndSnapshotPath?: string;
+    liveChildrenAtSnapshot?: number;
+    pendingCreatesAtSnapshot?: number;
+    drainDrained?: boolean;
+  } = {},
   topN = 15,
 ): string {
   const lines = ['## Snapshot comparison (first vs latest valid) — top growers by self-size delta', ''];
   lines.push(`Compared against: \`${result.usedAfterName}\`.`);
-  // B0.1 correction: state the retention verdict next to the live count, so an
-  // end snapshot taken while children were still live cannot be mistaken for
-  // retention evidence.
-  const agentSessionCount = result.retainers.find((r) => r.constructor === 'AgentSession')?.instances ?? 0;
+  // B0.1 corrections 02/03: state the retention verdict next to the live count,
+  // but only for the actual end snapshot (a fallback snapshot must not be
+  // labelled as the end snapshot), and exclude the known bounded slot only when
+  // the retainer chains prove it holds an instance.
+  const agentSessionAnalysis = result.retainers.find((r) => r.constructor === 'AgentSession');
+  const agentSessionCount = agentSessionAnalysis?.instances ?? 0;
+  const verifiedKnownSlotInstances = countKnownSlotRetentions(agentSessionAnalysis?.chains ?? []);
   lines.push('');
   lines.push(...renderRetentionVerdict({
     agentSessionCount,
+    analysisIsEndSnapshot: context.expectedEndSnapshotPath !== undefined && result.usedAfterPath === context.expectedEndSnapshotPath,
+    analysedSnapshotName: result.usedAfterName,
+    ...(context.expectedEndSnapshotPath !== undefined ? { expectedEndSnapshotName: path.basename(context.expectedEndSnapshotPath) } : {}),
     ...(context.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: context.liveChildrenAtSnapshot } : {}),
+    ...(context.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: context.pendingCreatesAtSnapshot } : {}),
+    ...(context.drainDrained !== undefined ? { drainDrained: context.drainDrained } : {}),
+    verifiedKnownSlotInstances,
   }));
   if (context.skipped && context.skipped.length > 0) {
     lines.push('');

@@ -72,12 +72,26 @@ export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full')
       ...(outcome.serverDeath ? { serverDeath: outcome.serverDeath } : {}),
       ...(outcome.coveredWindowMs !== undefined ? { coveredWindowMs: outcome.coveredWindowMs } : {}),
       ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
+      ...(state.serverStoppedAt !== undefined || state.teardownAnomaly !== undefined
+        ? {
+            teardown: {
+              serverUnit: state.server.unitName,
+              ...(state.serverStoppedAt !== undefined ? { stoppedAt: state.serverStoppedAt } : {}),
+              ...(state.serverStopVerifiedGone !== undefined ? { verifiedGone: state.serverStopVerifiedGone } : {}),
+              ...(state.serverStopAttempts !== undefined ? { attempts: state.serverStopAttempts } : {}),
+              ...(state.teardownAnomaly !== undefined ? { anomaly: state.teardownAnomaly } : {}),
+            },
+          }
+        : {}),
     };
   }
 
   const report = buildReport(rows, events, schedule, 'A', options);
   const snapshotSection = await snapshotComparisonSection(dir, {
+    ...(state?.endSnapshotPath !== undefined ? { expectedEndSnapshotPath: state.endSnapshotPath } : {}),
     ...(state?.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
+    ...(state?.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
+    ...(state?.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
   });
   const markdown = `${renderReportMarkdown(report, runId)}\n\n${snapshotSection}`;
   writeFileSync(path.join(dir, 'report.md'), markdown);

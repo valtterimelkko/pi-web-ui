@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { completionNoticeBody, decideRunTeardown, parseKeepServerFlag } from '../../../src/live-validation/heap-soak/run-teardown.js';
+import { completionNoticeBody, decideRunTeardown, parseKeepServerFlag, renderTeardownMarkdown } from '../../../src/live-validation/heap-soak/run-teardown.js';
 
 describe('decideRunTeardown (B0.1 defect 3)', () => {
   it('stops the disposable server after a completed run by default', () => {
@@ -44,5 +44,31 @@ describe('completionNoticeBody', () => {
     const body = completionNoticeBody({ ...base, keepServer: true });
     expect(body).toMatch(/LEFT RUNNING/);
     expect(body).toContain(base.serverUnit);
+  });
+
+  it('surfaces a teardown anomaly in the completion notice (correction 03 item 8)', () => {
+    const body = completionNoticeBody({ ...base, keepServer: false, teardownAnomaly: 'server unit still present after 3 stop attempts' });
+    expect(body).toMatch(/TEARDOWN ANOMALY/);
+    expect(body).toContain('still present after 3 stop attempts');
+  });
+});
+
+describe('renderTeardownMarkdown (correction 03 item 8)', () => {
+  it('states a verified teardown', () => {
+    const text = renderTeardownMarkdown({ serverUnit: 'pi-web-ui-soak-server-run-1', stoppedAt: '2026-09-28T21:39:44.136Z', verifiedGone: true, attempts: 1 }).join('\n');
+    expect(text).toMatch(/## Teardown/);
+    expect(text).toMatch(/[Vv]erified gone: true/);
+    expect(text).not.toMatch(/TEARDOWN ANOMALY/);
+  });
+
+  it('renders a prominent anomaly when the unit was not verified gone', () => {
+    const text = renderTeardownMarkdown({
+      serverUnit: 'pi-web-ui-soak-server-run-1',
+      verifiedGone: false,
+      attempts: 3,
+      anomaly: 'server unit pi-web-ui-soak-server-run-1 is STILL PRESENT after 3 stop attempts',
+    }).join('\n');
+    expect(text).toMatch(/TEARDOWN ANOMALY/);
+    expect(text).toMatch(/STILL PRESENT/);
   });
 });

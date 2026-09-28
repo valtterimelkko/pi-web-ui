@@ -195,4 +195,13 @@ describe('buildReport / renderReportMarkdown', () => {
     expect(report.sweptChildFailures).toBe(1);
     expect(renderReportMarkdown(report, 'run-sweep')).toMatch(/Swept children mis-counted as child failures: 1/);
   });
+
+  it('renders a teardown section and surfaces a teardown anomaly (correction 03 item 8)', () => {
+    const clean = buildReport([], [], MICRO_SCHEDULE, 'A', { teardown: { serverUnit: 'pi-web-ui-soak-server-run-1', stoppedAt: '2026-09-28T21:39:44.136Z', verifiedGone: true, attempts: 1 } });
+    expect(renderReportMarkdown(clean, 'run-td')).toMatch(/## Teardown/);
+    expect(renderReportMarkdown(clean, 'run-td')).toMatch(/[Vv]erified gone: true/);
+    const bad = buildReport([], [], MICRO_SCHEDULE, 'A', { teardown: { serverUnit: 'pi-web-ui-soak-server-run-1', verifiedGone: false, attempts: 3, anomaly: 'still present after 3 stop attempts' } });
+    expect(renderReportMarkdown(bad, 'run-td')).toMatch(/TEARDOWN ANOMALY/);
+    expect(renderReportMarkdown(bad, 'run-td')).toContain('still present after 3 stop attempts');
+  });
 });

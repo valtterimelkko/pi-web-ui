@@ -119,7 +119,13 @@ by Gate 1.
    when the git state cannot be read. The decision uses
    `git log -1 --format=%ct -- server/src shared/src` (no build-script change).
    The checkout HEAD and the check result are recorded in `run-state.json` and
-   at the top of `report.md`. Fix a refusal with `npm run build`.
+   at the top of `report.md`. Fix a refusal with `npm run build`. **Heuristic,
+   not proof (review item 7):** the check compares the compiled-artefact mtime
+   with the newest commit's committer time (`%ct`, second resolution). It
+   catches a `dist` built before a later `server/src`/`shared/src` commit and a
+   dirty tree; it is not build provenance — a build from modified files in the
+   same second, a backdated commit, or a copied mtime defeats it. A stronger
+   identity would need a build-script change, which is out of scope here.
 2. **End snapshot.** The declared end offset equalled `totalMs`, but the
    sampler loop exits on `isRunComplete(elapsed >= totalMs)` first, so it never
    fired (only 0 h and 12 h were ever captured). `snapshotOffsetsMs` is split
@@ -161,6 +167,42 @@ by Gate 1.
    `totalMs`, so both scale; `report.md` and `run-state.json` record the
    window. `cli.ts plan [--hours <n>]` is a dry run that prints the scaled
    schedule without starting anything, and `status` prints it for a live run.
+
+## Review correction 03 (2026-09-28) — independent review + parent adjudication
+
+Luna's review returned REJECT; the parent accepted all five majors and all
+three minors. This harness runs D1's bounded soak and E2's final 24 h soak
+unattended, so a finding that can make a report say "clean" when it is not is
+worth fixing properly:
+
+1. **Pending creates are visible to the drain.** `driver.ts` registers a
+   dispatched `createSession()` in `ChildTracking.pendingCreates` before it is
+   awaited, and `evaluateDrain` is not drained while any create is unresolved
+   (`pendingCreateCount`). The count is recorded as
+   `pendingCreatesAtEndSnapshot` and shown in the report.
+2. **Only a confirmed not-found terminalises a child.** `orphan-sweep.ts` uses
+   `classifyDeleteError` (404 / `SESSION_NOT_FOUND` → already gone; anything
+   else → transient). A transient failure is retried (3 attempts), then the
+   session is **left open** and reported as `failedTransient` — never written as
+   a `child_deleted` — so the drain counts it as live.
+3. **The known slot is subtracted only when proven.** `countKnownSlotRetentions`
+   counts instances whose retainer chain actually passes through
+   `backgroundStatusCtx`, capped at the declared slot; without that proof the
+   instance is reported as unclassified retained instead of being excused.
+4. **The retention verdict is only for the real end snapshot.**
+   `snapshotComparisonSection` takes `expectedEndSnapshotPath`; if the analysed
+   snapshot (a fallback after a corrupt/failed end snapshot) is not that file,
+   the report says so and gives **no verdict**.
+5. **Unknown cleanliness refuses.** A failed/timed-out `git status` is `unknown`,
+   not clean, and the guard refuses.
+6. **Every listed compiled artefact is required.** A missing
+   `server/dist/index.js` or `shared/dist/index.js` is named and refuses.
+7. **The mtime-vs-commit check is documented as a heuristic** (see item 1 above,
+   the harness README and the evidence bundle).
+8. **A failed teardown is surfaced.** `stopUnit` is retried (3 attempts); if the
+   unit is still present, `run-state.json` records `teardownAnomaly`, `report.md`
+   renders a `TEARDOWN ANOMALY` section and the completion Telegram notice says
+   so. Teardown now runs before finalisation so both carry the result.
 
 ## Load model (owner amendment, 2026-09-26)
 

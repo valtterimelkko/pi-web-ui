@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyChildFailure,
+  classifyDeleteError,
   computeOpenSessionIds,
   partitionSweepCandidates,
   sweptChildFailures,
@@ -69,5 +70,27 @@ describe('sweptChildFailures', () => {
     const events = [ev('child_created', 's1'), ev('child_created', 's2'), ev('child_deleted', 's2')];
     const open = computeOpenSessionIds(events);
     expect(partitionSweepCandidates(open, new Set(['s2'])).sweepable).toEqual(['s1']);
+  });
+});
+
+describe('classifyDeleteError (correction 03 item 2)', () => {
+  it('terminalises only a confirmed not-found (404 / SESSION_NOT_FOUND)', () => {
+    expect(classifyDeleteError({ statusCode: 404, code: 'SESSION_NOT_FOUND', message: 'Session not found' })).toBe('already-gone');
+    expect(classifyDeleteError({ statusCode: 404, message: 'not found' })).toBe('already-gone');
+  });
+
+  it('treats a request timeout as transient, so the session stays open', () => {
+    expect(classifyDeleteError(new Error('Internal API DELETE /api/v1/sessions/x timed out after 30000ms'))).toBe('transient');
+  });
+
+  it('treats a 5xx as transient', () => {
+    expect(classifyDeleteError({ statusCode: 503, message: 'Service Unavailable' })).toBe('transient');
+    expect(classifyDeleteError({ statusCode: 500, code: 'INTERNAL_ERROR', message: 'boom' })).toBe('transient');
+  });
+
+  it('treats any unknown error shape as transient (never silently terminalises)', () => {
+    expect(classifyDeleteError(undefined)).toBe('transient');
+    expect(classifyDeleteError('ECONNRESET')).toBe('transient');
+    expect(classifyDeleteError({})).toBe('transient');
   });
 });

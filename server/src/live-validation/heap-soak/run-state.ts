@@ -94,12 +94,18 @@ export interface RunState {
   liveChildrenAtEndSnapshot?: number;
   /** B0.1 correction: bounded id list of the live children above (first 50). */
   liveChildrenAtEndSnapshotIds?: string[];
+  /** B0.1 correction 03 item 1: session creations dispatched but unresolved at the snapshot (session ids unknown). */
+  pendingCreatesAtEndSnapshot?: number;
   /** B0.1 correction: whether the pre-snapshot drain completed or hit its bound. */
-  endSnapshotDrain?: { drained: boolean; timeoutMs: number };
+  endSnapshotDrain?: { drained: boolean; timeoutMs: number; pendingCreates?: number };
   /** B0.1 defect 3: when the supervisor stopped the disposable server after completion. */
   serverStoppedAt?: string;
   /** B0.1 defect 3: whether the `systemctl stop` + wait confirmed the unit is gone. */
   serverStopVerifiedGone?: boolean;
+  /** B0.1 correction 03 item 8: how many `systemctl stop` attempts were made. */
+  serverStopAttempts?: number;
+  /** B0.1 correction 03 item 8: set when the server unit was still present after the bound (surfaced in report.md and the completion notice). */
+  teardownAnomaly?: string;
 }
 
 export function serializeRunState(state: RunState): string {
