@@ -210,11 +210,11 @@ describe('ExtensionFactoryCache — share-safe allowlist (major 1)', () => {
     expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toContain('auto-compact-75');
     expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toContain('todo');
     // Refactored to per-session scope (B1.3) — now cached.
-    for (const added of ['memory', 'goal-engine', 'parallel-orchestrator', 'web-tools']) {
+    for (const added of ['memory', 'goal-engine', 'parallel-orchestrator', 'web-tools', 'enhanced-plan-mode']) {
       expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toContain(added);
     }
     // Still carry per-session module state — must stay uncached until B1.3 finishes them.
-    for (const denied of ['subagent', 'enhanced-plan-mode']) {
+    for (const denied of ['subagent']) {
       expect(DEFAULT_SHARE_SAFE_EXTENSIONS).not.toContain(denied);
     }
   });

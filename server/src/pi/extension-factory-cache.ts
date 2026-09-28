@@ -58,10 +58,11 @@ const DEFAULT_MAX_SCAN_DIRS = 128;
  * `process.on/once`, no module-level timer. Findings (file:line):
  *
  *   per-session state still NOT cached (B1.3 remaining):
- *     enhanced-plan-mode    index.ts:81 module `state` object; index.ts:576 `let piRef`
  *     subagent              index.ts:85/90/91/93 `let`s; index.ts:113 singleton
- *                           BackgroundTaskManager; runtime.ts:142 mutationQueues Map
- *   refactored to per-session scope and now cached (B1.3, pi-enhancement 8a4b768):
+ *                           BackgroundTaskManager — see the B1.3 question: making it
+ *                           share-safe changes user-visible background-task scope
+ *   refactored to per-session scope and now cached (B1.3, pi-enhancement 8a4b768 / 9ad45d2):
+ *     enhanced-plan-mode    `state` + `piRef` moved into the factory closure
  *     memory                `let state` moved into the factory closure
  *     goal-engine           auto-continue.ts error/overflow maps moved into
  *                           registerAutoContinueHooks (status-ui.ts:6 WeakMap is
@@ -85,6 +86,7 @@ export const DEFAULT_SHARE_SAFE_EXTENSIONS: readonly string[] = [
   'cli-anything',
   'commandcode-provider',
   'compact-observability',
+  'enhanced-plan-mode',
   'goal-engine',
   'memory',
   'parallel-orchestrator',
