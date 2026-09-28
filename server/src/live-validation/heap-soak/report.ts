@@ -1,6 +1,9 @@
 import { parseCsvWithHeader } from './csv.js';
 import { computeVerdict, leastSquaresSlope, type LeakVerdict, type SlopePoint, type SlopeResult, type VerdictRule } from './slope.js';
 import { phaseAt, type ScheduleConfig } from './phases.js';
+import { sweptChildFailures } from './orphans.js';
+import { renderTeardownMarkdown, type TeardownReport } from './run-teardown.js';
+import type { BuildRecord } from './build-freshness.js';
 import type { RunTerminalState, ServerDeathRecord } from './run-state.js';
 import type { LaneEvent, LaneName } from './types.js';
 
@@ -218,6 +221,12 @@ export interface HeapSoakReport {
   lagStats: { meanMs: number; p95Ms: number; maxMs: number };
   laneStats: LaneStats[];
   orphanCount: number;
+  /**
+   * B0.1 defect 4: session ids with both an `orphan_swept` and a later
+   * `child_failed` event — the harness counting its own sweep as a child
+   * failure. A correct harness reports zero here.
+   */
+  sweptChildFailures: number;
   generatedFrom: { csvRows: number; eventRows: number };
   /** The backbone (load-bearing) lane name, e.g. 'A'. Verdict/slope never depend on any other lane. */
   backboneLane: LaneName;
@@ -230,6 +239,12 @@ export interface HeapSoakReport {
   serverDeath?: ServerDeathRecord;
   /** B0 defect 6: extension overlay directories applied to the isolated agent dir. */
   extensionsOverlays?: string[];
+  /** B0.1 defect 5: the requested `--hours` window for a full run (absent for micro/no explicit window). */
+  windowHours?: number;
+  /** B0.1 defect 1: the checkout HEAD and the build-freshness check result for the `dist` under test. */
+  build?: BuildRecord;
+  /** B0.1 correction 03 item 8: the disposable-server teardown outcome. */
+  teardown?: TeardownReport;
 }
 
 /** Optional terminal-state + observed-window input for {@link buildReport}. */
@@ -238,6 +253,12 @@ export interface BuildReportOptions {
   serverDeath?: ServerDeathRecord;
   /** B0 defect 6: overlay source dirs to record in the report. */
   extensionsOverlays?: readonly string[];
+  /** B0.1 defect 5: the requested `--hours` window length for a full run. */
+  windowHours?: number;
+  /** B0.1 defect 1: the checkout/build-freshness record to render at the top of the report. */
+  build?: BuildRecord;
+  /** B0.1 correction 03 item 8: the teardown outcome to render. */
+  teardown?: TeardownReport;
   /**
    * The elapsed window the run actually covered. When a server death ends a
    * run early, coverage must be measured against the observed window rather
@@ -282,6 +303,7 @@ export function buildReport(
     },
     laneStats,
     orphanCount: events.filter((e) => e.kind === 'orphan_swept').length,
+    sweptChildFailures: sweptChildFailures(events).length,
     generatedFrom: { csvRows: samples.length, eventRows: events.length },
     backboneLane,
     verdictRule: rule,
@@ -289,6 +311,9 @@ export function buildReport(
     terminalState: options.terminalState ?? 'complete',
     ...(options.serverDeath ? { serverDeath: options.serverDeath } : {}),
     ...(options.extensionsOverlays && options.extensionsOverlays.length > 0 ? { extensionsOverlays: [...options.extensionsOverlays] } : {}),
+    ...(options.windowHours !== undefined ? { windowHours: options.windowHours } : {}),
+    ...(options.build ? { build: options.build } : {}),
+    ...(options.teardown ? { teardown: options.teardown } : {}),
   };
 }
 
@@ -319,6 +344,15 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   lines.push(`**Verdict: ${report.verdict.toUpperCase()}** — trailing slope ${report.trailingSlope.slopeMBPerHour.toFixed(2)} MB/h `
     + `(overall ${report.overallSlope.slopeMBPerHour.toFixed(2)} MB/h), ${report.sampleCount} samples, peak heap ${report.peakHeapMB.toFixed(1)} MB.`);
   lines.push('');
+  if (report.build) {
+    const b = report.build;
+    lines.push(`**Build:** commit \`${b.headSha ?? 'unknown'}\` — freshness check: ${b.fresh ? 'FRESH' : '**STALE**'} — ${b.reason}`);
+    lines.push('');
+  }
+  if (report.windowHours !== undefined) {
+    lines.push(`**Window:** ${report.windowHours} h (requested via \`--hours\`); checkpoints and snapshot offsets scaled to it.`);
+    lines.push('');
+  }
   if (report.extensionsOverlays && report.extensionsOverlays.length > 0) {
     lines.push(`Extensions overlay (B0): ${report.extensionsOverlays.map((d) => `\`${d}\``).join(', ')}.`);
     lines.push('');
@@ -367,6 +401,11 @@ export function renderReportMarkdown(report: HeapSoakReport, runId: string): str
   }
   lines.push('');
   lines.push(`Orphans swept overall: ${report.orphanCount}`);
+  lines.push(`Swept children mis-counted as child failures: ${report.sweptChildFailures}`);
+  if (report.teardown) {
+    lines.push('');
+    lines.push(...renderTeardownMarkdown(report.teardown));
+  }
   return lines.join('\n');
 }
 

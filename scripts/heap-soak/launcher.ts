@@ -20,6 +20,9 @@ import { createBreakerState } from '../../server/src/live-validation/heap-soak/c
 import { buildSyntheticRegistry, DEFAULT_SYNTHETIC_REGISTRY_COUNT } from '../../server/src/live-validation/heap-soak/registry-seed.js';
 import { LANE_DEFINITIONS } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { resolveSoakMemoryLimits } from '../../server/src/live-validation/heap-soak/resources.js';
+import { DEFAULT_FULL_RUN_HOURS, MICRO_SCHEDULE, fullScheduleForHours } from '../../server/src/live-validation/heap-soak/phases.js';
+import type { BuildRecord } from '../../server/src/live-validation/heap-soak/build-freshness.js';
+import { assertFreshBuild, inspectCheckoutBuild } from './build-freshness-io.js';
 import type { RunState } from '../../server/src/live-validation/heap-soak/run-state.js';
 import type { LaneName } from '../../server/src/live-validation/heap-soak/types.js';
 
@@ -37,6 +40,13 @@ export interface LaunchResult {
   httpPort: number;
   /** B0 defect 6: extensions overlaid into the isolated agent dir (empty when none were given). */
   extensionsOverlaysApplied: AppliedExtensionOverlay[];
+  /** B0.1 defect 1: the checkout HEAD + build-freshness record the run started on. */
+  build: BuildRecord;
+}
+
+/** How many hours a `full` run should cover (B0.1 defect 5). Defaults to the 24 h schedule. */
+export function fullRunHours(options: { hours?: number }): number {
+  return options.hours ?? DEFAULT_FULL_RUN_HOURS;
 }
 
 async function findFreeTcpPort(): Promise<number> {
@@ -70,10 +80,21 @@ export interface LaunchOptions {
    * run-state.json and the report.
    */
   extensionsOverlays?: readonly string[];
+  /** B0.1 defect 5: `full` window length in hours (validated; defaults to 24). Ignored for `micro`. */
+  hours?: number;
+  /** B0.1 defect 3: keep the disposable server up after a completed run (recorded; the supervisor acts on it). */
+  keepServer?: boolean;
 }
 
 export async function launchDisposableServer(runId: string, mode: 'micro' | 'full', options: LaunchOptions = {}): Promise<LaunchResult> {
   const root = repoRoot();
+
+  // B0.1 defect 1: never launch against a `dist` that does not match the
+  // checkout. Refuse (not warn) before creating any run directory or unit, so
+  // a stale build cannot produce a misleading soak.
+  const build = await inspectCheckoutBuild(root);
+  assertFreshBuild(build);
+
   const paths = resolveRunPaths(runId);
   mkdirSync(paths.runDir, { recursive: true, mode: 0o700 });
   mkdirSync(paths.workspace, { recursive: true });
@@ -237,7 +258,7 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
 
   const laneBreakers = Object.fromEntries(LANE_DEFINITIONS.map((l) => [l.name, createBreakerState(l.name)])) as Record<LaneName, ReturnType<typeof createBreakerState>>;
   const now = Date.now();
-  const totalMs = mode === 'micro' ? 20 * 60_000 : 24 * 3_600_000;
+  const totalMs = mode === 'micro' ? MICRO_SCHEDULE.totalMs : fullScheduleForHours(fullRunHours(options)).totalMs;
   const runState: RunState = {
     runId,
     mode,
@@ -251,11 +272,14 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
     csvPath: paths.csvPath,
     eventsLogPath: paths.eventsLogPath,
     prodAuditMarkerPath: auditMarker.markerPath,
+    build,
+    ...(mode === 'full' ? { windowHours: fullRunHours(options) } : {}),
+    ...(options.keepServer ? { keepServer: true } : {}),
     ...(extensionsOverlays.length > 0 ? { extensionsOverlays } : {}),
   };
   saveRunState(paths.runStatePath, runState);
 
-  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort, extensionsOverlaysApplied };
+  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort, extensionsOverlaysApplied, build };
 }
 
 export async function startSupervisorUnit(runId: string, paths: RunPaths, supervisorUnit: string): Promise<void> {

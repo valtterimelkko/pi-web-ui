@@ -13,7 +13,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { launchDisposableServer } from './launcher.js';
 import { teardownUnits, assertUnitsAbsent } from './teardown.js';
@@ -28,6 +28,8 @@ import { FORCE_BAD_LANE_ENV_KEY } from '../../server/src/live-validation/heap-so
 import { QUOTA_INJECT_ENV_KEY } from './quota-poll.js';
 import type { ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
 import { buildAuditNeedles } from '../../server/src/live-validation/heap-soak/prod-audit.js';
+import { sweptChildFailures } from '../../server/src/live-validation/heap-soak/orphans.js';
+import { MICRO_SCHEDULE } from '../../server/src/live-validation/heap-soak/phases.js';
 import { runProductionWriteAudit } from './prod-audit-io.js';
 import { boardWhoUnderRunDir } from './board-check.js';
 
@@ -54,7 +56,7 @@ async function csvRowCount(csvPath: string): Promise<number> {
   return parseCsvWithHeader(readFileSync(csvPath, 'utf8')).rows.length;
 }
 
-export async function runGate1(options: { extensionsOverlays?: readonly string[] } = {}): Promise<void> {
+export async function runGate1(options: { extensionsOverlays?: readonly string[]; keepServer?: boolean } = {}): Promise<void> {
   const runId = `micro-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const prodPaths = productionGuardedPaths(homedir());
   const before = computeChecksums(prodPaths);
@@ -62,7 +64,7 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
   const productionExtensionsDir = path.join(homedir(), '.pi', 'agent', 'extensions');
   const productionExtensionsHashBefore = hashDirectoryTree(productionExtensionsDir);
 
-  const launch = await launchDisposableServer(runId, 'micro', { extensionsOverlays: options.extensionsOverlays });
+  const launch = await launchDisposableServer(runId, 'micro', { extensionsOverlays: options.extensionsOverlays, ...(options.keepServer ? { keepServer: true } : {}) });
   const statusPath = path.join(launch.paths.runDir, 'gate1-status.json');
   const status: StatusFile = { runId, step: 'launched', startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), steps: [], done: false };
   const record = (name: string, ok: boolean, detail: string) => {
@@ -173,6 +175,111 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
   const reportExists = existsSync(path.join(launch.paths.runDir, 'report.md'));
   const reportMd = reportExists ? readFileSync(path.join(launch.paths.runDir, 'report.md'), 'utf8') : '';
   record('report generated with a verdict line', reportExists && /Verdict:/.test(reportMd), reportExists ? reportMd.split('\n').find((l) => l.includes('Verdict:')) ?? '' : 'report.md missing');
+
+  // ── B0.1 defect 1: the build the run started on is recorded ──
+  const runStateAfter = JSON.parse(readFileSync(launch.paths.runStatePath, 'utf8')) as {
+    build?: { headSha?: string; fresh?: boolean; reason?: string };
+    liveChildrenAtEndSnapshot?: number;
+    liveChildrenAtEndSnapshotIds?: string[];
+    pendingCreatesAtEndSnapshot?: number;
+    endSnapshotDrain?: { drained: boolean; timeoutMs: number; pendingCreates?: number };
+    serverStoppedAt?: string;
+    serverStopVerifiedGone?: boolean;
+    serverStopAttempts?: number;
+    teardownAnomaly?: string;
+    untrackedServerSessionsAtEndSnapshot?: number;
+    serverChildrenSessionsAtEndSnapshot?: number;
+    serverSessionsListOkAtEndSnapshot?: boolean;
+    serverSessionsListError?: string;
+    untrackedOrphansSwept?: number;
+  };
+  record(
+    'B0.1 build commit recorded in run-state.json and report.md',
+    Boolean(runStateAfter.build?.headSha) && reportMd.includes(`Build:** commit \`${runStateAfter.build?.headSha}\``),
+    `run-state headSha=${runStateAfter.build?.headSha ?? '(none)'} fresh=${runStateAfter.build?.fresh ?? '(none)'}; report Build line: ${reportMd.split('\n').find((l) => l.startsWith('**Build:**')) ?? '(none)'}`,
+  );
+
+  // ── B0.1 defect 2: the end snapshot was taken after the window and compared ──
+  const endSnapshotPath = path.join(launch.paths.runDir, 'snapshots', `snapshot-${MICRO_SCHEDULE.totalMs}ms.heapsnapshot`);
+  const endSnapshotSize = existsSync(endSnapshotPath) ? statSync(endSnapshotPath).size : 0;
+  record('B0.1 end snapshot taken after the window', endSnapshotSize > 0, `${endSnapshotPath} size=${endSnapshotSize}`);
+  record(
+    'B0.1 report compares start vs end (end snapshot named)',
+    /Snapshot comparison/.test(reportMd) && reportMd.includes(path.basename(endSnapshotPath)),
+    reportMd.includes(path.basename(endSnapshotPath)) ? `${path.basename(endSnapshotPath)} named in report.md` : 'end snapshot NOT named in report.md',
+  );
+  const retainerHeading = reportMd.split('\n').find((l) => l.includes('retainer chains')) ?? '(no retainer-chains section)';
+  record('B0.1 report carries the retainer summary for the end snapshot', reportMd.includes('retainer chains'), retainerHeading);
+
+  // ── B0.1 correction: the end snapshot is taken after the load drained, and the
+  // report states the retention verdict next to the recorded live count ──
+  const agentSessionMatch = /AgentSession instances in the end snapshot: (\d+)/.exec(reportMd);
+  const liveMatch = /Live children at the moment of the snapshot[^:]*: (\d+)/.exec(reportMd);
+  const verifiedSlotMatch = /verified in this snapshot: (\d+)/.exec(reportMd);
+  const retainedMatch = /Retained deleted children: (\d+)/.exec(reportMd);
+  const liveOnServerMatch = /Live on the server \(harness-known live \+ untracked\): (\d+)/.exec(reportMd);
+  const untrackedMatch = /Untracked server-side sessions under this run's children cwd: (\d+)/.exec(reportMd);
+  const serverChildrenMatch = /Sessions still registered on the server under this run's children cwd: (\d+)/.exec(reportMd);
+  const untrackedSweptEvents = readLaneEvents(launch.paths.eventsLogPath).filter((e) => e.kind === 'orphan_swept' && (e.detail ?? '').includes('untracked'));
+  record(
+    'B0.1c pre-snapshot drain recorded in run-state.json',
+    runStateAfter.endSnapshotDrain !== undefined && runStateAfter.liveChildrenAtEndSnapshot !== undefined,
+    `drain=${JSON.stringify(runStateAfter.endSnapshotDrain)} liveChildrenAtEndSnapshot=${runStateAfter.liveChildrenAtEndSnapshot ?? '(none)'} ids=${JSON.stringify(runStateAfter.liveChildrenAtEndSnapshotIds ?? [])}`,
+  );
+  record(
+    'B0.1c report states the retained-deleted-children verdict',
+    retainedMatch !== null && reportMd.includes('Live children at the moment of the snapshot'),
+    reportMd.split('\n').find((l) => l.includes('Retained deleted children:')) ?? '(missing)',
+  );
+  record(
+    'B0.1c retention verdict is arithmetically consistent (agentSession - live-on-server - verified slot = retained)',
+    agentSessionMatch !== null && liveOnServerMatch !== null && verifiedSlotMatch !== null && retainedMatch !== null
+      && Number(retainedMatch[1]) === Math.max(0, Number(agentSessionMatch[1]) - Number(liveOnServerMatch[1]) - Number(verifiedSlotMatch[1])),
+    `agentSession=${agentSessionMatch?.[1] ?? 'n/a'} liveOnServer=${liveOnServerMatch?.[1] ?? 'n/a'} (harness-known live=${liveMatch?.[1] ?? 'n/a'}, untracked=${untrackedMatch?.[1] ?? 'n/a'}) verifiedKnownSlot=${verifiedSlotMatch?.[1] ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
+  );
+
+  // ── Correction 04/05: untracked orphans are reconciled against the server, and
+  // a failed server list can never pass as zero ──
+  record(
+    'B0.1c no untracked orphan left on the server (or swept with detail untracked)',
+    runStateAfter.serverSessionsListOkAtEndSnapshot === true
+      && runStateAfter.untrackedServerSessionsAtEndSnapshot === 0
+      && untrackedMatch !== null,
+    `serverSessionsListOk=${runStateAfter.serverSessionsListOkAtEndSnapshot ?? '(none)'}${runStateAfter.serverSessionsListError ? ` error=${runStateAfter.serverSessionsListError}` : ''} untrackedServerSessionsAtEndSnapshot=${runStateAfter.untrackedServerSessionsAtEndSnapshot ?? '(unknown)'} untrackedOrphansSwept=${runStateAfter.untrackedOrphansSwept ?? '(none)'} serverChildrenSessionsAtSnapshot=${runStateAfter.serverChildrenSessionsAtEndSnapshot ?? '(unknown)'} untracked-swept events=${untrackedSweptEvents.length}`,
+  );
+  record(
+    'B0.1c report reports the three figures and Retained deleted children is 0',
+    untrackedMatch !== null && serverChildrenMatch !== null && liveOnServerMatch !== null && retainedMatch !== null && Number(retainedMatch[1]) === 0,
+    `liveOnServer=${liveOnServerMatch?.[1] ?? 'n/a'} untracked=${untrackedMatch?.[1] ?? 'n/a'} serverChildrenSessions=${serverChildrenMatch?.[1] ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
+  );
+
+  // ── Correction 03: pending creates recorded, teardown result in the report ──
+  record(
+    'B0.1c pending session creations recorded at the end snapshot',
+    runStateAfter.pendingCreatesAtEndSnapshot !== undefined,
+    `pendingCreatesAtEndSnapshot=${runStateAfter.pendingCreatesAtEndSnapshot ?? '(none)'} drain=${JSON.stringify(runStateAfter.endSnapshotDrain ?? null)}`,
+  );
+  record(
+    'B0.1c report states the teardown outcome',
+    reportMd.includes('## Teardown') && /[Vv]erified gone: true/.test(reportMd) && !reportMd.includes('TEARDOWN ANOMALY'),
+    reportMd.split('\n').find((l) => l.includes('Verified gone:')) ?? '(no verified-gone line)',
+  );
+
+  // ── B0.1 defect 3: the supervisor tore the server unit down at completion ──
+  let serverGoneAfterComplete = false;
+  const serverGoneDeadline = Date.now() + 30_000;
+  while (Date.now() < serverGoneDeadline && !serverGoneAfterComplete) {
+    const status = await getUnitStatus(launch.serverUnit);
+    serverGoneAfterComplete = status.loadState === 'not-found';
+    if (!serverGoneAfterComplete) await sleep(2_000);
+  }
+  const serverStateAfterComplete = await getUnitStatus(launch.serverUnit);
+  record('B0.1 server unit stopped by the supervisor at completion', serverGoneAfterComplete, `loadState=${serverStateAfterComplete.loadState} (no hand-run \`stop\`)`);
+
+  // ── B0.1 defect 4: zero sweeps counted as child failures ──
+  const misCountedSweeps = sweptChildFailures(readLaneEvents(launch.paths.eventsLogPath));
+  const laneAFailures = readLaneEvents(launch.paths.eventsLogPath).filter((e) => e.kind === 'child_failed');
+  record('B0.1 zero swept children counted as child failures', misCountedSweeps.length === 0, `mis-counted=${JSON.stringify(misCountedSweeps)} total child_failed events=${laneAFailures.length}`);
 
   // ── (d) zai quota guard: injected normal -> throttled -> paused -> normal, one ping per transition ──
   const quotaTransitions = readLaneEvents(launch.paths.eventsLogPath)

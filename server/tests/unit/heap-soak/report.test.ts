@@ -160,4 +160,48 @@ describe('buildReport / renderReportMarkdown', () => {
     expect(renderReportMarkdown(report, 'run-x')).toContain('Extensions overlay');
     expect(renderReportMarkdown(report, 'run-x')).toContain('/src/fix/subagent');
   });
+
+  it('records the requested window length (B0.1 defect 5)', () => {
+    const report = buildReport([], [], MICRO_SCHEDULE, 'A', { windowHours: 6 });
+    expect(report.windowHours).toBe(6);
+    const markdown = renderReportMarkdown(report, 'run-6h');
+    expect(markdown).toMatch(/Window:\*\* 6 h/);
+  });
+
+  it('records the checkout HEAD and the build-freshness check (B0.1 defect 1)', () => {
+    const build = {
+      headSha: 'f367763f33f34bba82c075e3b36115563d64e5aa',
+      newestSourceCommitMs: 1_790_529_385_000,
+      compiledMtimeMs: 1_790_529_500_000,
+      sourceTreeDirty: false,
+      checkedAt: '2026-09-28T12:00:00.000Z',
+      reason: 'server/dist is newer than the newest commit touching server/src or shared/src',
+    };
+    const report = buildReport([], [], MICRO_SCHEDULE, 'A', { build });
+    expect(report.build).toEqual(build);
+    const markdown = renderReportMarkdown(report, 'run-build');
+    expect(markdown).toContain('f367763f33f34bba82c075e3b36115563d64e5aa');
+    expect(markdown).toMatch(/Build:/);
+    expect(markdown).toMatch(/freshness/);
+  });
+
+  it('reports the number of harness sweeps mis-counted as child failures (B0.1 defect 4)', () => {
+    const events: LaneEvent[] = [
+      { ts: '', elapsedMs: 0, lane: 'A', kind: 'child_created', sessionId: 's1' },
+      { ts: '', elapsedMs: 0, lane: 'A', kind: 'orphan_swept', sessionId: 's1' },
+      { ts: '', elapsedMs: 0, lane: 'A', kind: 'child_failed', sessionId: 's1' },
+    ];
+    const report = buildReport([], events, MICRO_SCHEDULE);
+    expect(report.sweptChildFailures).toBe(1);
+    expect(renderReportMarkdown(report, 'run-sweep')).toMatch(/Swept children mis-counted as child failures: 1/);
+  });
+
+  it('renders a teardown section and surfaces a teardown anomaly (correction 03 item 8)', () => {
+    const clean = buildReport([], [], MICRO_SCHEDULE, 'A', { teardown: { serverUnit: 'pi-web-ui-soak-server-run-1', stoppedAt: '2026-09-28T21:39:44.136Z', verifiedGone: true, attempts: 1 } });
+    expect(renderReportMarkdown(clean, 'run-td')).toMatch(/## Teardown/);
+    expect(renderReportMarkdown(clean, 'run-td')).toMatch(/[Vv]erified gone: true/);
+    const bad = buildReport([], [], MICRO_SCHEDULE, 'A', { teardown: { serverUnit: 'pi-web-ui-soak-server-run-1', verifiedGone: false, attempts: 3, anomaly: 'still present after 3 stop attempts' } });
+    expect(renderReportMarkdown(bad, 'run-td')).toMatch(/TEARDOWN ANOMALY/);
+    expect(renderReportMarkdown(bad, 'run-td')).toContain('still present after 3 stop attempts');
+  });
 });

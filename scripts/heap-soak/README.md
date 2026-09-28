@@ -36,13 +36,13 @@ it?** heapUsed alone is not proof of a leak — it includes uncollected garbage
 
 | Piece | File | What it does |
 |---|---|---|
-| Launcher | `launcher.ts` | Builds the isolated agent dir, starts the server as a transient systemd unit with `--inspect=127.0.0.1:<port>` + the production heap cap, writes `run-state.json`. |
+| Launcher | `launcher.ts` | Builds the isolated agent dir, **refuses to start on a stale/unverifiable `dist`** (B0.1), starts the server as a transient systemd unit with `--inspect=127.0.0.1:<port>` + the production heap cap, writes `run-state.json` (checkout HEAD, build check, window hours). |
 | Inspector client | `inspector.ts` | CDP over the Node inspector: forced GC, `process.memoryUsage()`, heap snapshots, a round-trip-time lag proxy. |
 | Sampler | `sampler.ts` + `csv-io.ts` | One sample = forced GC → memory reading → lag proxy → capacity/health/session-count → disk check → CSV row + heartbeat file. |
 | Driver | `driver.ts` + `lanes.ts` + `wave-target.ts` | Time-boxed waves of tool-using Pi children across model lanes; see **Load model** below. |
 | Circuit breaker | `circuit-breaker.ts` | Per-lane consecutive-failure breaker with cooldown; pure state machine. |
-| Orphan sweep | `orphan-sweep.ts` + `orphans.ts` | Reconciles the events log's `child_created`/`child_deleted` pairs once per cycle; deletes anything still open. |
-| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. Checks server liveness (unit state + MainPID + socket) every cycle; on death it stops the load driver and ends the run as `server_died` with the death evidence. If it restarts into an already-dead server, startup recovery terminalises idempotently from saved state — but a run already recorded `complete` is never reclassified (correction 03). |
+| Orphan sweep | `orphan-sweep.ts` + `orphans.ts` | Reconciles the events log's `child_created`/`child_deleted` pairs once per cycle; deletes anything still open **that no in-flight driver cycle still tracks**, and accounts any swept-while-tracked session as `orphan_swept`, never `child_failed` (B0.1). |
+| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. Checks server liveness (unit state + MainPID + socket) every cycle; on death it stops the load driver and ends the run as `server_died` with the death evidence. If it restarts into an already-dead server, startup recovery terminalises idempotently from saved state — but a run already recorded `complete` is never reclassified (correction 03). **After the window it takes the end snapshot (forced GC first), finalises the report, then stops the disposable server** unless `--keep-server`/`HEAP_SOAK_KEEP_SERVER` asks otherwise (B0.1). |
 | Server liveness | `liveness-io.ts` + `server-death.ts` (pure) | Reads the unit's `ActiveState`/`Result`/`ExecMainStatus` and a bounded journal tail, tests socket reachability, and decides death from the recorded unit/PID identity (never from the sampler's own failures). A transient socket blip is tolerated for up to 3 consecutive observations. |
 | Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase + per-quota-state), idle-return-to-baseline, sample coverage, the verdict rule itself, lane stats, verdict; and a prominent `SERVER DIED` header when the run ended as `server_died`. |
 | Snapshot summary + diff | `snapshot-parse.ts` (pure) + `snapshot-retainers.ts` (pure) + `snapshot-selection.ts` (pure) + `snapshot-diff.ts` + `snapshot-diff-worker.ts` | `.heapsnapshot` structural parser plus retainer-path BFS and a cut test. Uses the latest **valid** (non-empty, parseable) snapshot — a 0-byte declared snapshot is skipped and named — and runs the parse+analysis in a separate `--max-old-space-size=12288` process. |
@@ -100,6 +100,160 @@ fixes them:
    extension dirs). Overlays are copied on top of the isolated agent dir's
    production extensions, recorded in `run-state.json`, and never touch
    `~/.pi/agent/extensions`.
+
+## B0.1 harness fixes (2026-09-28)
+
+The B1 confirmation soak exposed five harness defects that would have forced
+hand repairs before D1's bounded run and E2's final 24 h soak (see
+[`B1-confirmation-soak.md`](../../docs/plans/execution-reports/orchestration-scaling/B1-confirmation-soak.md)
+§5). B0.1 fixes them; every one is unit-tested on the pure logic and exercised
+by Gate 1.
+
+1. **Stale `dist` guard.** The launcher runs `server/dist` (`--compiled`) from
+   its own checkout, so a `dist` that predates a `server/src`/`shared/src`
+   commit silently measures the wrong code (wave 1 lost a soak this way).
+   `build-freshness.ts` (pure) + `build-freshness-io.ts` (git/stat I/O) now
+   **refuse to start** — never warn — when no compiled artefact exists, when
+   `server/src`/`shared/src` has uncommitted changes, when the newest commit
+   touching those trees is newer than the oldest compiled artefact mtime, or
+   when the git state cannot be read. The decision uses
+   `git log -1 --format=%ct -- server/src shared/src` (no build-script change).
+   The checkout HEAD and the check result are recorded in `run-state.json` and
+   at the top of `report.md`. Fix a refusal with `npm run build`. **Heuristic,
+   not proof (review item 7):** the check compares the compiled-artefact mtime
+   with the newest commit's committer time (`%ct`, second resolution). It
+   catches a `dist` built before a later `server/src`/`shared/src` commit and a
+   dirty tree; it is not build provenance — a build from modified files in the
+   same second, a backdated commit, or a copied mtime defeats it. A stronger
+   identity would need a build-script change, which is out of scope here.
+2. **End snapshot.** The declared end offset equalled `totalMs`, but the
+   sampler loop exits on `isRunComplete(elapsed >= totalMs)` first, so it never
+   fired (only 0 h and 12 h were ever captured). `snapshotOffsetsMs` is split
+   into in-window offsets (`interimSnapshotOffsetsMs`) and the end offset
+   (`endSnapshotOffsetMs`); the supervisor takes the end snapshot **after the
+   window closes and before finalisation**, with a forced GC first, and records
+   it in run-state. `report.md` therefore compares start against end (falling
+   back to the latest valid snapshot) and runs the retainer summary on the end
+   snapshot. **Correction (2026-09-28):** the window closing does not mean the
+   load has stopped — a wave's stragglers were still mid-lifecycle when the
+   first version snapshotted, so the end snapshot showed live children rather
+   than retention. The supervisor now **drains first** (`end-drain.ts`): it
+   waits, bounded by `endDrainTimeoutMs` (max(one wave, 2 min)), until nothing
+   is in flight and every created child has a terminal delete, then runs one
+   final orphan sweep, then snapshots. It records
+   `liveChildrenAtEndSnapshot` (count + bounded ids) in `run-state.json`, and
+   `report.md` prints the snapshot's `AgentSession` count next to that live
+   count with the verdict **`Retained deleted children: N`**, naming the one
+   known bounded extension slot (`backgroundStatusCtx`) instead of hiding it.
+   On timeout the still-live children are recorded rather than waited for for
+   ever.
+3. **Teardown.** A completed run used to leave the server unit up until
+   `cli.ts stop` was run by hand. The supervisor now stops the disposable
+   server at completion, after the end snapshot. Keep it up only with
+   `--keep-server` (or `HEAP_SOAK_KEEP_SERVER=1`), and then the completion
+   Telegram message says `SERVER LEFT RUNNING`. `server_died` runs still end as
+   `server_died` and are never reclassified.
+4. **Orphan-sweep race.** All 167 lane-A `SESSION_NOT_FOUND` failures in the
+   confirmation soak followed `child_created` -> `child_tool_call_seen` ->
+   `orphan_swept` -> the driver's own follow-up failing: the sweep deleted
+   children a wave's stragglers still owned, and the harness counted its own
+   deletion as a child failure. The driver now tracks in-flight session ids
+   (`DriverState.inFlight`) and the sweep skips them (they delete themselves in
+   their own `finally`); if a swept session nevertheless fails later, it is
+   recorded as `orphan_swept`, not `child_failed`. `report.md` reports "swept
+   children mis-counted as child failures", which a correct run leaves at 0.
+5. **Bounded run length.** `start` accepts `--hours <n>` (whole number,
+   1–168; default 24). Checkpoints and snapshot offsets are fractions of
+   `totalMs`, so both scale; `report.md` and `run-state.json` record the
+   window. `cli.ts plan [--hours <n>]` is a dry run that prints the scaled
+   schedule without starting anything, and `status` prints it for a live run.
+
+## Review correction 03 (2026-09-28) — independent review + parent adjudication
+
+Luna's review returned REJECT; the parent accepted all five majors and all
+three minors. This harness runs D1's bounded soak and E2's final 24 h soak
+unattended, so a finding that can make a report say "clean" when it is not is
+worth fixing properly:
+
+1. **Pending creates are visible to the drain.** `driver.ts` registers a
+   dispatched `createSession()` in `ChildTracking.pendingCreates` before it is
+   awaited, and `evaluateDrain` is not drained while any create is unresolved
+   (`pendingCreateCount`). The count is recorded as
+   `pendingCreatesAtEndSnapshot` and shown in the report.
+2. **Only a confirmed not-found terminalises a child.** `orphan-sweep.ts` uses
+   `classifyDeleteError` (404 / `SESSION_NOT_FOUND` → already gone; anything
+   else → transient). A transient failure is retried (3 attempts), then the
+   session is **left open** and reported as `failedTransient` — never written as
+   a `child_deleted` — so the drain counts it as live.
+3. **The known slot is subtracted only when proven.** `countKnownSlotRetentions`
+   counts instances whose retainer chain actually passes through
+   `backgroundStatusCtx`, capped at the declared slot; without that proof the
+   instance is reported as unclassified retained instead of being excused.
+4. **The retention verdict is only for the real end snapshot.**
+   `snapshotComparisonSection` takes `expectedEndSnapshotPath`; if the analysed
+   snapshot (a fallback after a corrupt/failed end snapshot) is not that file,
+   the report says so and gives **no verdict**.
+5. **Unknown cleanliness refuses.** A failed/timed-out `git status` is `unknown`,
+   not clean, and the guard refuses.
+6. **Every listed compiled artefact is required.** A missing
+   `server/dist/index.js` or `shared/dist/index.js` is named and refuses.
+7. **The mtime-vs-commit check is documented as a heuristic** (see item 1 above,
+   the harness README and the evidence bundle).
+8. **A failed teardown is surfaced.** `stopUnit` is retried (3 attempts); if the
+   unit is still present, `run-state.json` records `teardownAnomaly`, `report.md`
+   renders a `TEARDOWN ANOMALY` section and the completion Telegram notice says
+   so. Teardown now runs before finalisation so both carry the result.
+
+## Correction 04 (parent verification, 2026-09-28) — untracked orphans, not retention
+
+The parent traced run 4's "Retained deleted children: 1" to a session created
+while Gate 1 killed the supervisor: the in-flight `createSession` never logged
+`child_created`, so the events-log sweep could not see it, and it survived as a
+**live undeleted orphan** (misread as retention).
+
+- **Server-side orphan reconciliation.** `sweepUntrackedServerSessions`
+  (`orphan-sweep.ts`) lists the server's sessions (`GET /api/v1/sessions`),
+  selects those whose cwd is under THIS run's `children/` root, that the harness
+  has no record of (`trackedSessionIds(events)` ∪ in-flight) and that are past a
+  30 s grace window, and deletes them as `orphan_swept` with `detail: untracked`.
+  It runs on every cycle and once more in the end drain. Correction 03's rule
+  still applies: only a confirmed not-found terminalises; a transient failure is
+  left open.
+- **Accounting.** At the snapshot the supervisor records the server's session
+  count under the run's children cwd and the untracked subset
+  (`serverChildrenSessionsAtEndSnapshot`, `untrackedServerSessionsAtEndSnapshot`,
+  `untrackedOrphansSwept`). `report.md` reports three figures — **live on the
+  server** (harness-known live + untracked), the **verified known slot**, and
+  **retained deleted** — and `retained deleted = AgentSessions − live-on-server
+  − verified slot`. A session the server still lists is never called retained.
+- **Tests.** `untracked-orphans.test.ts` covers the reconciliation, including
+  the supervisor-restart-during-create sequence at the pure-logic level, and
+  `end-drain.test.ts` covers the accounting classification.
+
+## Correction 05 (independent review round 2, 2026-09-28) — two fail-open majors closed
+
+Luna round 2 closed all eight round-1 findings and raised two fail-open majors
+in correction 04's reconciliation. Both are fixed (unit tests are sufficient;
+the review did not require another micro):
+
+1. **A failed session list must not read as zero.** `listServerSessions` now
+   retries three times and validates the response shape
+   (`parseServerSessionList`); it returns `{ok: false, error}` on failure —
+   **never `[]`**. Mid-run reconciliation skips and logs
+   (`untracked-orphan reconciliation SKIPPED: … NOT treated as zero`). At the
+   end snapshot, `summarizeServerChildSessions` yields **UNKNOWN** counts
+   (fields absent, `run-state.serverSessionsListOkAtEndSnapshot=false`,
+   `serverSessionsListError`) and `report.md` prints
+   `Server-side session counts: UNKNOWN` and withholds the retention verdict.
+   Gate 1's zero-orphan check requires
+   `serverSessionsListOkAtEndSnapshot === true`, so an unavailable list fails
+   the control rather than passing it.
+2. **Unknown age fails closed.** `findUntrackedChildrenSessions` treats a
+   missing, malformed or future-dated `createdAt` as **not yet past the grace
+   window** and holds the session back (`skippedUnknownAge`, logged); a
+   just-created child whose list entry has no valid timestamp is never deleted.
+   `parseServerSessionList` validates the API response shape and drops/counts
+   malformed entries.
 
 ## Load model (owner amendment, 2026-09-26)
 
@@ -265,12 +419,17 @@ behaviour (any disabled lane is simply never a candidate) — see
 
 ```
 npx tsx scripts/heap-soak/cli.ts preflight                     # Gate 0
-npx tsx scripts/heap-soak/cli.ts micro [--extensions-overlay <dir>]   # Gate 1 (~20 min + teardown)
-npx tsx scripts/heap-soak/cli.ts start [--run-id <id>] [--extensions-overlay <dir>]  # the real 24h run
+npx tsx scripts/heap-soak/cli.ts micro [--keep-server] [--extensions-overlay <dir>]   # Gate 1 (~20 min + teardown)
+npx tsx scripts/heap-soak/cli.ts plan [--hours <n>]            # dry-run the scaled full schedule
+npx tsx scripts/heap-soak/cli.ts start [--run-id <id>] [--hours <n>] [--keep-server] [--extensions-overlay <dir>]  # the real run (default 24h)
 npx tsx scripts/heap-soak/cli.ts status --run-id <id>
 npx tsx scripts/heap-soak/cli.ts stop  --run-id <id>            # stop both units; run dir is kept
 npx tsx scripts/heap-soak/cli.ts report --run-id <id> [--mode micro|full]
 ```
+
+A run stops its own server unit at completion (`--keep-server` opts out); `stop`
+remains for a run that is still in flight or was kept up on purpose. `start`
+refuses to launch on a stale `dist` — run `npm run build` first.
 
 `--extensions-overlay` is repeatable: each value is either a single extension
 directory (containing `index.ts`/`index.js`/…) or a directory whose immediate

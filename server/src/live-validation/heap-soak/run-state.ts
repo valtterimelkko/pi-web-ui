@@ -1,4 +1,5 @@
 import type { CircuitBreakerState, LaneName } from './types.js';
+import type { BuildRecord } from './build-freshness.js';
 
 export interface RunStateServerInfo {
   unitName: string;
@@ -74,6 +75,47 @@ export interface RunState {
   extensionsOverlays?: string[];
   /** Position in HEAP_SOAK_INJECT_QUOTA_SEQUENCE (Gate 1 test seam only) — persisted so a supervisor restart doesn't replay the sequence from the start. */
   quotaInjectedIndex?: number;
+  /** B0.1 defect 5: the requested `--hours` window for a `full` run (absent for micro). */
+  windowHours?: number;
+  /** B0.1 defect 1: the checkout HEAD and build-freshness check the run started on. */
+  build?: BuildRecord;
+  /** B0.1 defect 3: explicit request to keep the server up after completion (else the supervisor stops it). */
+  keepServer?: boolean;
+  /** B0.1 defect 2: recorded once the post-window end snapshot has been taken. */
+  endSnapshotMs?: number;
+  endSnapshotPath?: string;
+  /** B0.1 defect 2: why the end snapshot could not be taken (recorded rather than swallowed). */
+  endSnapshotError?: string;
+  /**
+   * B0.1 correction: live children (in-flight + created-without-terminal-delete)
+   * remaining at the moment the end snapshot was taken. The end snapshot must
+   * show these, not retention; 0 means the load drained cleanly.
+   */
+  liveChildrenAtEndSnapshot?: number;
+  /** B0.1 correction: bounded id list of the live children above (first 50). */
+  liveChildrenAtEndSnapshotIds?: string[];
+  /** B0.1 correction 03 item 1: session creations dispatched but unresolved at the snapshot (session ids unknown). */
+  pendingCreatesAtEndSnapshot?: number;
+  /** B0.1 correction 04: server sessions under this run's children cwd with no harness record at the snapshot (live, not retained). */
+  untrackedServerSessionsAtEndSnapshot?: number;
+  /** B0.1 correction 04: raw count of the server's sessions registered under this run's children cwd at the snapshot. */
+  serverChildrenSessionsAtEndSnapshot?: number;
+  /** B0.1 correction 05: whether the server session list was available at the snapshot (false => counts unknown, no verdict). */
+  serverSessionsListOkAtEndSnapshot?: boolean;
+  /** B0.1 correction 05: why the server session list was unavailable, when it was. */
+  serverSessionsListError?: string;
+  /** B0.1 correction 04: untracked orphans (no harness record) swept during the run. */
+  untrackedOrphansSwept?: number;
+  /** B0.1 correction: whether the pre-snapshot drain completed or hit its bound. */
+  endSnapshotDrain?: { drained: boolean; timeoutMs: number; pendingCreates?: number };
+  /** B0.1 defect 3: when the supervisor stopped the disposable server after completion. */
+  serverStoppedAt?: string;
+  /** B0.1 defect 3: whether the `systemctl stop` + wait confirmed the unit is gone. */
+  serverStopVerifiedGone?: boolean;
+  /** B0.1 correction 03 item 8: how many `systemctl stop` attempts were made. */
+  serverStopAttempts?: number;
+  /** B0.1 correction 03 item 8: set when the server unit was still present after the bound (surfaced in report.md and the completion notice). */
+  teardownAnomaly?: string;
 }
 
 export function serializeRunState(state: RunState): string {

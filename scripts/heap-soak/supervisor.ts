@@ -15,23 +15,26 @@ import path from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
 import { InspectorClient } from './inspector.js';
-import { getUnitStatus } from './systemd-units.js';
+import { getUnitStatus, stopUnit, waitForUnitGone } from './systemd-units.js';
 import { loadRunState, saveRunState } from './run-state-io.js';
 import { appendLaneEvent, readLaneEvents } from './events-log.js';
 import { appendSampleRow } from './csv-io.js';
 import { notify } from './telegram.js';
 import { takeSample, writeHeartbeat } from './sampler.js';
 import { runWave, type DriverState } from './driver.js';
-import { sweepOrphans } from './orphan-sweep.js';
+import { sweepOrphans, sweepUntrackedServerSessions } from './orphan-sweep.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
+import { computeOpenSessionIds, parseServerSessionList, summarizeServerChildSessions, trackedSessionIds, type ServerSessionListing } from '../../server/src/live-validation/heap-soak/orphans.js';
+import { endDrainTimeoutMs, evaluateDrain, type DrainStatus } from '../../server/src/live-validation/heap-soak/end-drain.js';
 import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath, shouldSendFinalNotice, shouldTerminaliseOnStartupRecovery } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
 import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
 import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { leastSquaresSlope, type SlopePoint } from '../../server/src/live-validation/heap-soak/slope.js';
 import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, nextStateOnPollFailure, type QuotaState, type ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
-import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
+import { DEFAULT_FULL_RUN_HOURS, MICRO_SCHEDULE, checkpointOffsetsMs, endSnapshotOffsetMs, fullScheduleForHours, interimSnapshotOffsetsMs, isRunComplete, nextDueOffset, phaseAt, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
+import { TEARDOWN_KEEP_SERVER_ENV_KEY, completionNoticeBody, decideRunTeardown, parseKeepServerFlag } from '../../server/src/live-validation/heap-soak/run-teardown.js';
 import { buildReport, parseSampleCsv, renderReportMarkdown, formatElapsedMs } from '../../server/src/live-validation/heap-soak/report.js';
 import { snapshotComparisonSection } from './snapshot-diff.js';
 import { nextHeapThresholdSnapshot } from '../../server/src/live-validation/heap-soak/heap-threshold-snapshots.js';
@@ -54,12 +57,19 @@ function getFlag(argv: string[], flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  const runStatePath = getFlag(argv, '--run-state');
-  if (!runStatePath) throw new Error('supervisor requires --run-state <path>');
+  const runStatePathArg = getFlag(argv, '--run-state');
+  if (!runStatePathArg) throw new Error('supervisor requires --run-state <path>');
+  // Named as a non-optional string so the narrowing survives into the hoisted
+  // nested functions below (TypeScript widens a `const` narrowed only by an
+  // early throw when it is captured by a function declaration).
+  const runStatePath: string = runStatePathArg;
 
   const state = loadRunState(runStatePath);
-  const schedule: ScheduleConfig = state.mode === 'micro' ? MICRO_SCHEDULE : FULL_SCHEDULE;
+  // B0.1 defect 5: a `full` run's window is whatever run-state recorded (--hours), defaulting to 24 h; micro keeps its compressed schedule.
+  const schedule: ScheduleConfig = state.mode === 'micro' ? MICRO_SCHEDULE : fullScheduleForHours(state.windowHours ?? DEFAULT_FULL_RUN_HOURS);
   const runStartMs = new Date(state.startedAt).getTime();
+  // B0.1 defect 3: the server is stopped at completion unless an operator explicitly asked to keep it.
+  const keepServer = state.keepServer === true || parseKeepServerFlag(process.env[TEARDOWN_KEEP_SERVER_ENV_KEY]);
 
   // Reattach check — NEVER restart the server, only confirm it is still the
   // exact process this run-state was created for.
@@ -87,8 +97,30 @@ async function main(): Promise<void> {
         ? { terminalState: 'server_died' as const, serverDeath: state.serverDeath, coveredWindowMs: state.serverDeath.elapsedMs }
         : { terminalState: 'complete' as const }),
       ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
+      ...(state.windowHours !== undefined ? { windowHours: state.windowHours } : {}),
+      ...(state.build ? { build: state.build } : {}),
+      ...(state.serverStoppedAt !== undefined || state.teardownAnomaly !== undefined
+        ? {
+            teardown: {
+              serverUnit: state.server.unitName,
+              ...(state.serverStoppedAt !== undefined ? { stoppedAt: state.serverStoppedAt } : {}),
+              ...(state.serverStopVerifiedGone !== undefined ? { verifiedGone: state.serverStopVerifiedGone } : {}),
+              ...(state.serverStopAttempts !== undefined ? { attempts: state.serverStopAttempts } : {}),
+              ...(state.teardownAnomaly !== undefined ? { anomaly: state.teardownAnomaly } : {}),
+            },
+          }
+        : {}),
     });
-    const snapshotSection = await snapshotComparisonSection(state.runDir);
+    const snapshotSection = await snapshotComparisonSection(state.runDir, {
+      ...(state.endSnapshotPath !== undefined ? { expectedEndSnapshotPath: state.endSnapshotPath } : {}),
+      ...(state.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
+      ...(state.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
+      ...(state.untrackedServerSessionsAtEndSnapshot !== undefined ? { untrackedServerSessions: state.untrackedServerSessionsAtEndSnapshot } : {}),
+      ...(state.serverChildrenSessionsAtEndSnapshot !== undefined ? { serverChildrenSessionCount: state.serverChildrenSessionsAtEndSnapshot } : {}),
+      ...(state.serverSessionsListOkAtEndSnapshot !== undefined ? { serverSessionsListOk: state.serverSessionsListOkAtEndSnapshot } : {}),
+      ...(state.serverSessionsListError !== undefined ? { serverSessionsListError: state.serverSessionsListError } : {}),
+      ...(state.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
+    });
 
     // Production-write / board-pollution audit at the run's end (owner
     // amendment 2026-09-26) — required "at the long run's end" in addition to
@@ -125,7 +157,14 @@ async function main(): Promise<void> {
         saveRunState(runStatePath, state);
       }
     } else if (shouldSendFinalNotice('completion', state)) {
-      await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
+      await notify('done', `run ${state.runId} complete`, completionNoticeBody({
+        verdict: report.verdict,
+        trailingSlopeMBPerHour: report.trailingSlope.slopeMBPerHour,
+        peakHeapMB: report.peakHeapMB,
+        keepServer,
+        serverUnit: state.server.unitName,
+        ...(state.teardownAnomaly !== undefined ? { teardownAnomaly: state.teardownAnomaly } : {}),
+      }));
       state.completionNoticeSentAt = new Date().toISOString();
       saveRunState(runStatePath, state);
     }
@@ -183,10 +222,17 @@ async function main(): Promise<void> {
   mkdirSync(path.join(state.runDir, 'children'), { recursive: true });
 
   const lanes = applyForcedBadLanes(enabledLanes(LANE_DEFINITIONS));
-  const driverState: DriverState = { breakers: new Map(Object.entries(state.laneBreakers) as [import('../../server/src/live-validation/heap-soak/types.js').LaneName, import('../../server/src/live-validation/heap-soak/types.js').CircuitBreakerState][]) };
+  const driverState: DriverState = {
+    breakers: new Map(Object.entries(state.laneBreakers) as [import('../../server/src/live-validation/heap-soak/types.js').LaneName, import('../../server/src/live-validation/heap-soak/types.js').CircuitBreakerState][]),
+    // B0.1 defect 4 / correction 03 item 1: shared with the orphan sweep and the end drain so neither deletes nor ignores a child a wave's straggler still owns (including an unresolved create).
+    inFlight: new Set<string>(),
+    pendingCreates: new Set<string>(),
+    swept: new Set<string>(),
+  };
 
   const checkpointOffsets = checkpointOffsetsMs(schedule);
-  const snapshotOffsets = snapshotOffsetsMs(schedule);
+  // B0.1 defect 2: the sampler loop can only reach offsets strictly inside the window; the end offset is taken explicitly after it.
+  const snapshotOffsets = interimSnapshotOffsetsMs(schedule);
   const firedCheckpoints = new Set(state.firedCheckpointOffsetsMs ?? []);
   const firedSnapshots = new Set(state.firedSnapshotOffsetsMs ?? []);
   let anomalyHeapPinged = false;
@@ -272,6 +318,157 @@ async function main(): Promise<void> {
     state.lastSampleAt = new Date().toISOString();
     saveRunState(runStatePath, state);
   };
+
+  /**
+   * B0.1 correction: live children right now — still tracked by an in-flight
+   * `runChild`, or created without a terminal `child_deleted`/`orphan_swept`
+   * event yet.
+   */
+  function currentDrainStatus(): DrainStatus {
+    const events = readLaneEvents(state.eventsLogPath);
+    return evaluateDrain({ inFlight: driverState.inFlight, openSessionIds: computeOpenSessionIds(events), pendingCreateCount: driverState.pendingCreates.size });
+  }
+
+  /** The harness's full known session-id set: every id in the events log plus live in-flight ids. */
+  function knownSessionIds(): Set<string> {
+    const tracked = trackedSessionIds(readLaneEvents(state.eventsLogPath));
+    for (const id of driverState.inFlight) tracked.add(id);
+    for (const id of driverState.swept) tracked.add(id);
+    return tracked;
+  }
+
+  async function listServerSessions(): Promise<ServerSessionListing> {
+    const maxAttempts = 3;
+    let lastError = 'unknown error';
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const raw = await client.listSessions();
+        const parsed = parseServerSessionList(raw);
+        if (parsed.ok) return { ok: true, sessions: parsed.sessions };
+        lastError = parsed.error ?? 'invalid server session list response shape';
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    // Correction 05: a failed list is NOT an empty list — the caller must treat
+    // the server-side counts as unknown, never as zero.
+    return { ok: false, sessions: [], error: lastError };
+  }
+
+  /** The run's child-workspace root — every driver child's cwd is under it. */
+  const childWorkspaceRoot = path.join(state.runDir, 'children');
+  let untrackedOrphansSwept = 0;
+
+  /**
+   * B0.1 correction 04: server-side orphan reconciliation. A session whose
+   * `createSession` was in flight when the supervisor was killed has no
+   * `child_created` event, so the event-log sweep misses it. The server's own
+   * session list is the only source of truth for those.
+   */
+  async function reconcileUntrackedServerOrphans(): Promise<void> {
+    const listing = await listServerSessions();
+    if (!listing.ok) {
+      // Correction 05: never treat a failed list as an empty one.
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `untracked-orphan reconciliation SKIPPED: server session list unavailable after retries (${listing.error ?? 'unknown'}) — NOT treated as zero` });
+      return;
+    }
+    if (listing.sessions.length === 0) return;
+    const result = await sweepUntrackedServerSessions(client, listing.sessions, log, elapsedNow, {
+      childWorkspaceRoot,
+      tracked: knownSessionIds(),
+    });
+    untrackedOrphansSwept += result.swept.length;
+    if (result.swept.length > 0) console.error(`[supervisor] untracked-orphan sweep deleted ${result.swept.length} session(s)`);
+  }
+
+  /**
+   * B0.1 correction (2026-09-28): wait for the load to drain before the end
+   * snapshot. The old code snapshotted as soon as the window closed, while a
+   * wave's stragglers were still mid-lifecycle, so the snapshot showed live
+   * children (the parent's verification found 5) and could not answer
+   * "no deleted child retained". Bounded by `endDrainTimeoutMs`; on timeout the
+   * still-live children are recorded, not waited for for ever. A final orphan
+   * sweep then deletes anything left that no in-flight cycle still owns.
+   */
+  async function drainBeforeEndSnapshot(): Promise<DrainStatus> {
+    const timeoutMs = endDrainTimeoutMs(schedule);
+    const deadline = Date.now() + timeoutMs;
+    let status = currentDrainStatus();
+    while (!status.drained && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      status = currentDrainStatus();
+    }
+    console.error(`[supervisor] pre-snapshot drain: drained=${status.drained} after ${timeoutMs}ms bound (live=${status.liveChildren.length})`);
+    await sweepOrphans(client, readLaneEvents(state.eventsLogPath), log, elapsedNow, { inFlight: driverState.inFlight, swept: driverState.swept });
+    // Correction 04: also reconcile against the server's own session list, so a
+    // child whose createSession was in flight across a supervisor kill is not
+    // left running (and later misread as retention).
+    await reconcileUntrackedServerOrphans();
+    return currentDrainStatus();
+  }
+
+  /**
+   * B0.1 defect 2: the declared end snapshot, taken after the window closes and
+   * before finalisation. Forced GC first (never a raw heapUsed), then the
+   * snapshot, so the report's start-vs-end comparison and retainer summary use
+   * a real end-of-run heap rather than the 12 h (or start) one. B0.1 correction:
+   * the load is drained first and the live-child count at the snapshot is
+   * recorded, so the comparison's `AgentSession` count can be read against it.
+   */
+  async function takeEndSnapshot(): Promise<void> {
+    const offset = endSnapshotOffsetMs(schedule);
+    if (firedSnapshots.has(offset)) return;
+    const drain = await drainBeforeEndSnapshot();
+    state.liveChildrenAtEndSnapshot = drain.liveChildren.length;
+    state.liveChildrenAtEndSnapshotIds = drain.liveChildren.slice(0, 50);
+    state.pendingCreatesAtEndSnapshot = drain.pendingCreateCount;
+    state.endSnapshotDrain = { drained: drain.drained, timeoutMs: endDrainTimeoutMs(schedule), pendingCreates: drain.pendingCreateCount };
+    // Correction 04/05: record the server's own view at the snapshot instant,
+    // but only when the list was actually available — a failed list records
+    // UNKNOWN counts (never 0) and withholds the retention verdict.
+    const listing = await listServerSessions();
+    const counts = summarizeServerChildSessions(listing, childWorkspaceRoot, knownSessionIds());
+    state.serverSessionsListOkAtEndSnapshot = counts.ok;
+    state.untrackedOrphansSwept = untrackedOrphansSwept;
+    if (counts.ok) {
+      state.serverChildrenSessionsAtEndSnapshot = counts.serverChildrenSessionCount;
+      state.untrackedServerSessionsAtEndSnapshot = counts.untrackedServerSessions;
+      delete state.serverSessionsListError;
+    } else {
+      delete state.serverChildrenSessionsAtEndSnapshot;
+      delete state.untrackedServerSessionsAtEndSnapshot;
+      state.serverSessionsListError = counts.error ?? listing.error ?? 'unknown';
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `end-snapshot server session list unavailable (${state.serverSessionsListError}) — server-side counts recorded as UNKNOWN and the retention verdict withheld` });
+    }
+    log({
+      ts: new Date().toISOString(),
+      elapsedMs: elapsedNow(),
+      lane: 'A',
+      kind: drain.drained ? 'checkpoint' : 'anomaly',
+      detail: `end snapshot drain: drained=${drain.drained} liveChildren=${drain.liveChildren.length} pendingCreates=${drain.pendingCreateCount}${drain.liveChildren.length > 0 ? ` ids=${drain.liveChildren.slice(0, 10).join(',')}` : ''}`,
+    });
+    try {
+      await inspector.collectGarbage();
+      mkdirSync(path.join(state.runDir, 'snapshots'), { recursive: true });
+      const snapshotPath = path.join(state.runDir, 'snapshots', `snapshot-${offset}ms.heapsnapshot`);
+      const result = await inspector.takeHeapSnapshot(snapshotPath);
+      firedSnapshots.add(offset);
+      state.endSnapshotMs = offset;
+      state.endSnapshotPath = snapshotPath;
+      delete state.endSnapshotError;
+      log({
+        ts: new Date().toISOString(),
+        elapsedMs: elapsedNow(),
+        lane: 'A',
+        kind: 'checkpoint',
+        detail: `end snapshot taken after the window: ${result.chunkCount} chunks, ${result.bytesWritten} bytes -> ${snapshotPath}`,
+      });
+    } catch (error) {
+      state.endSnapshotError = error instanceof Error ? error.message : String(error);
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `end snapshot failed: ${state.endSnapshotError}` });
+    }
+  }
 
   // Both loops (sampler timer + once-per-wave) call pollQuotaNow(); without
   // serialising them, two overlapping polls can each read the SAME `previous`
@@ -429,7 +626,10 @@ async function main(): Promise<void> {
         logEvent: log,
         runStartMs,
         backbonePaused: quotaState === 'paused',
-        isStopped: () => stopped,
+        // B0.1 defect 5: a bounded run's window must actually bound the load —
+        // the wave loop otherwise overruns it by up to one waveMs before the
+        // driver re-checks isRunComplete.
+        isStopped: () => stopped || isRunComplete(elapsedNow(), schedule),
       }, driverState, schedule.waveMs);
       state.cycleCount += 1;
       persist();
@@ -444,7 +644,10 @@ async function main(): Promise<void> {
 
       // Orphan sweep once per cycle — the harness must never become the leak.
       const events = readLaneEvents(state.eventsLogPath);
-      await sweepOrphans(client, events, log, elapsedNow);
+      await sweepOrphans(client, events, log, elapsedNow, { inFlight: driverState.inFlight, swept: driverState.swept });
+      // Correction 04: server-side reconciliation on every cycle too, so an
+      // untracked orphan from a supervisor kill is swept promptly.
+      await reconcileUntrackedServerOrphans();
 
       if (stopped || isRunComplete(elapsedNow(), schedule)) break;
       await interruptibleSleep(schedule.idleMs);
@@ -458,11 +661,54 @@ async function main(): Promise<void> {
   // mistake a finished run for an unrecovered death.
   if (state.terminalState !== 'server_died') state.terminalState = 'complete';
   persist();
-  await finaliseRun();
 
+  // B0.1 defect 2 / correction 02: end snapshot after the window closes, before
+  // finalisation (so report.md's snapshot section compares start against end)
+  // and before teardown. Skipped only when the server died — there is then no
+  // live heap to snapshot.
+  if (state.terminalState === 'complete') {
+    await takeEndSnapshot();
+    persist();
+  }
+
+  // B0.1 correction 03 item 8: capture the in-run WS status and close the
+  // browser-like client and the inspector BEFORE teardown, so stopping the
+  // disposable server cannot be mistaken for the client having dropped during
+  // the run. Teardown then runs before finalisation, so the report and the
+  // completion notice carry its result (including a failure), and it is
+  // retried within a bound rather than reporting a clean run over a unit that
+  // is still present. A dead run has nothing to stop; `server_died` handling is
+  // unchanged and is never reclassified.
   writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
   wsClient.close();
   inspector.close();
+
+  const teardown = decideRunTeardown({ keepServer, terminalState: state.terminalState ?? 'complete' });
+  console.error(`[supervisor] teardown: ${teardown.reason}`);
+  if (teardown.stopServer) {
+    const maxAttempts = 3;
+    let gone = false;
+    let attempts = 0;
+    while (!gone && attempts < maxAttempts) {
+      attempts += 1;
+      await stopUnit(state.server.unitName);
+      gone = await waitForUnitGone(state.server.unitName, 15_000);
+      if (!gone) {
+        log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `teardown attempt ${attempts}/${maxAttempts}: server unit ${state.server.unitName} still present` });
+      }
+    }
+    state.serverStoppedAt = new Date().toISOString();
+    state.serverStopVerifiedGone = gone;
+    state.serverStopAttempts = attempts;
+    if (!gone) {
+      state.teardownAnomaly = `server unit ${state.server.unitName} is STILL PRESENT after ${attempts} stop attempt(s)`;
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `TEARDOWN ANOMALY: ${state.teardownAnomaly}` });
+    }
+    saveRunState(runStatePath, state);
+    console.error(`[supervisor] server unit ${state.server.unitName} stop: verified gone=${gone} after ${attempts} attempt(s)`);
+  }
+
+  await finaliseRun();
 }
 
 main().catch(async (error) => {

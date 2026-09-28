@@ -6,7 +6,8 @@ import { readLaneEvents } from './events-log.js';
 import { loadRunState } from './run-state-io.js';
 import { getUnitStatus } from './systemd-units.js';
 import { getUnitExitStatus, getUnitJournalTail } from './liveness-io.js';
-import { FULL_SCHEDULE, MICRO_SCHEDULE } from '../../server/src/live-validation/heap-soak/phases.js';
+import { DEFAULT_FULL_RUN_HOURS, MICRO_SCHEDULE, fullScheduleForHours } from '../../server/src/live-validation/heap-soak/phases.js';
+import type { RunState } from '../../server/src/live-validation/heap-soak/run-state.js';
 import { runDir } from './paths.js';
 import { snapshotComparisonSection } from './snapshot-diff.js';
 
@@ -20,6 +21,9 @@ import { snapshotComparisonSection } from './snapshot-diff.js';
  * restart window left the run nonterminal and a later `report` defaulted it to
  * a full-schedule `complete`. A run that recorded `complete` stays complete
  * even after its transient unit has been stopped or collected.
+ *
+ * B0.1 defect 5: a bounded (`--hours`) full run is reported against its own
+ * recorded window, not the 24 h default.
  */
 export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full'): Promise<string> {
   const dir = runDir(runId);
@@ -28,10 +32,19 @@ export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full')
   if (!existsSync(csvPath)) throw new Error(`No samples.csv found for run ${runId} at ${csvPath}`);
   const rows = parseSampleCsv(readFileSync(csvPath, 'utf8'));
   const events = readLaneEvents(eventsPath);
-  const schedule = mode === 'micro' ? MICRO_SCHEDULE : FULL_SCHEDULE;
-  let options: BuildReportOptions = {};
+
+  let state: RunState | undefined;
   try {
-    const state = loadRunState(path.join(dir, 'run-state.json'));
+    state = loadRunState(path.join(dir, 'run-state.json'));
+  } catch { /* no/invalid run-state.json: a partial report without terminal state is still valid */ }
+
+  const schedule = mode === 'micro' ? MICRO_SCHEDULE : fullScheduleForHours(state?.windowHours ?? DEFAULT_FULL_RUN_HOURS);
+  let options: BuildReportOptions = {
+    ...(state?.windowHours !== undefined ? { windowHours: state.windowHours } : {}),
+    ...(state?.build ? { build: state.build } : {}),
+  };
+
+  if (state) {
     const serverStatus = await getUnitStatus(state.server.unitName);
     // Only gather terminal evidence when the outcome could need it (a
     // nonterminal run, or one whose death was persisted without evidence).
@@ -54,14 +67,36 @@ export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full')
       },
     );
     options = {
+      ...options,
       terminalState: outcome.terminalState,
       ...(outcome.serverDeath ? { serverDeath: outcome.serverDeath } : {}),
       ...(outcome.coveredWindowMs !== undefined ? { coveredWindowMs: outcome.coveredWindowMs } : {}),
       ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
+      ...(state.serverStoppedAt !== undefined || state.teardownAnomaly !== undefined
+        ? {
+            teardown: {
+              serverUnit: state.server.unitName,
+              ...(state.serverStoppedAt !== undefined ? { stoppedAt: state.serverStoppedAt } : {}),
+              ...(state.serverStopVerifiedGone !== undefined ? { verifiedGone: state.serverStopVerifiedGone } : {}),
+              ...(state.serverStopAttempts !== undefined ? { attempts: state.serverStopAttempts } : {}),
+              ...(state.teardownAnomaly !== undefined ? { anomaly: state.teardownAnomaly } : {}),
+            },
+          }
+        : {}),
     };
-  } catch { /* no/invalid run-state.json: a partial report without terminal state is still valid */ }
+  }
+
   const report = buildReport(rows, events, schedule, 'A', options);
-  const snapshotSection = await snapshotComparisonSection(dir);
+  const snapshotSection = await snapshotComparisonSection(dir, {
+    ...(state?.endSnapshotPath !== undefined ? { expectedEndSnapshotPath: state.endSnapshotPath } : {}),
+    ...(state?.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
+    ...(state?.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
+    ...(state?.untrackedServerSessionsAtEndSnapshot !== undefined ? { untrackedServerSessions: state.untrackedServerSessionsAtEndSnapshot } : {}),
+    ...(state?.serverChildrenSessionsAtEndSnapshot !== undefined ? { serverChildrenSessionCount: state.serverChildrenSessionsAtEndSnapshot } : {}),
+    ...(state?.serverSessionsListOkAtEndSnapshot !== undefined ? { serverSessionsListOk: state.serverSessionsListOkAtEndSnapshot } : {}),
+    ...(state?.serverSessionsListError !== undefined ? { serverSessionsListError: state.serverSessionsListError } : {}),
+    ...(state?.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
+  });
   const markdown = `${renderReportMarkdown(report, runId)}\n\n${snapshotSection}`;
   writeFileSync(path.join(dir, 'report.md'), markdown);
   writeFileSync(path.join(dir, 'report.json'), JSON.stringify(report, null, 2));

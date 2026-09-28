@@ -24,6 +24,7 @@ import {
 } from '../../server/src/live-validation/heap-soak/circuit-breaker.js';
 import { backboneLane as pickBackbone, pickLane } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { computeTopUpCount, isBackboneDownAnomaly } from '../../server/src/live-validation/heap-soak/wave-target.js';
+import { classifyChildFailure } from '../../server/src/live-validation/heap-soak/orphans.js';
 import type {
   CircuitBreakerState,
   LaneDefinition,
@@ -61,14 +62,30 @@ export interface DriverOptions {
   backbonePaused?: boolean;
 }
 
-export interface DriverState {
+export interface DriverState extends ChildTracking {
   breakers: Map<LaneName, CircuitBreakerState>;
+}
+
+/**
+ * B0.1 defect 4 / correction 03 item 1: the in-flight/swept/pending bookkeeping
+ * shared by the driver, the orphan sweep and the end drain. `inFlight` holds
+ * session ids whose `runChild` call has not yet finished (and therefore still
+ * owns the session); `pendingCreates` holds tokens for dispatched
+ * `createSession` calls that have not resolved yet (their session ids are
+ * unknown), so a child created just before the window closed is visible to the
+ * drain; `swept` holds ids the sweep deleted, so a later failure for one of
+ * them is accounted as `orphan_swept` rather than a child failure.
+ */
+export interface ChildTracking {
+  inFlight: Set<string>;
+  pendingCreates: Set<string>;
+  swept: Set<string>;
 }
 
 export function createDriverState(lanes: LaneDefinition[]): DriverState {
   const breakers = new Map<LaneName, CircuitBreakerState>();
   for (const lane of lanes) breakers.set(lane.name, createBreakerState(lane.name));
-  return { breakers };
+  return { breakers, inFlight: new Set(), pendingCreates: new Set(), swept: new Set() };
 }
 
 const TOOL_PROMPT =
@@ -88,12 +105,36 @@ async function runChild(
   options: DriverOptions,
   lane: LaneDefinition,
   modelId: string,
+  tracking: ChildTracking,
 ): Promise<ChildResult> {
   const childId = randomUUID().slice(0, 8);
   const cwd = path.join(options.childWorkspaceRoot, `${lane.name}-${childId}`);
   mkdirSync(cwd, { recursive: true });
   const elapsed = () => Date.now() - options.runStartMs;
   let sessionId: string | undefined;
+  // Correction 03 item 1: register the dispatched creation BEFORE awaiting it,
+  // so a session created just before the window closed cannot be invisible to
+  // the end drain (whose session-id-based tracking starts only once the create
+  // resolves).
+  const createToken = `${lane.name}:${childId}`;
+  tracking.pendingCreates.add(createToken);
+  /**
+   * B0.1 defect 4: if the sweep already deleted this session, the failure is
+   * the harness's own doing and is recorded as `orphan_swept`, never a child
+   * failure. (With the sweep skipping in-flight ids this should not happen;
+   * it is the accounting safety net.)
+   */
+  const logFailure = (detail: string) => {
+    const sweptByHarness = sessionId !== undefined && tracking.swept.has(sessionId);
+    options.logEvent({
+      ts: new Date().toISOString(),
+      elapsedMs: elapsed(),
+      lane: lane.name,
+      kind: classifyChildFailure({ sessionId, sweptByHarness }),
+      sessionId,
+      detail: sweptByHarness ? `harness sweep removed this child before it finished: ${detail}` : detail,
+    });
+  };
   try {
     const created = await options.client.createSession({
       runtime: 'pi',
@@ -102,6 +143,8 @@ async function runChild(
       source: `${HEAP_SOAK_SOURCE_TAG_PREFIX}${options.runId}`,
     });
     sessionId = created.sessionId;
+    tracking.pendingCreates.delete(createToken);
+    tracking.inFlight.add(sessionId);
     options.logEvent({ ts: new Date().toISOString(), elapsedMs: elapsed(), lane: lane.name, kind: 'child_created', sessionId, detail: modelId });
 
     // Register a durable watch too, matching production orchestration usage —
@@ -117,7 +160,7 @@ async function runChild(
     const events = await options.client.promptStream(sessionId, { message: TOOL_PROMPT, verbosity: 'full' });
     const sawToolCall = events.some((e) => e.type === 'tool_execution_start');
     if (!sawToolCall) {
-      options.logEvent({ ts: new Date().toISOString(), elapsedMs: elapsed(), lane: lane.name, kind: 'child_failed', sessionId, detail: 'no tool_execution_start event observed' });
+      logFailure('no tool_execution_start event observed');
       return { success: false, timedOut: false, sessionId, reason: 'no-tool-call' };
     }
     options.logEvent({ ts: new Date().toISOString(), elapsedMs: elapsed(), lane: lane.name, kind: 'child_tool_call_seen', sessionId });
@@ -128,10 +171,12 @@ async function runChild(
     return { success: true, timedOut: false, sessionId };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    options.logEvent({ ts: new Date().toISOString(), elapsedMs: elapsed(), lane: lane.name, kind: 'child_failed', sessionId, detail: reason.slice(0, 200) });
+    logFailure(reason.slice(0, 200));
     return { success: false, timedOut: false, sessionId, reason };
   } finally {
+    tracking.pendingCreates.delete(createToken);
     if (sessionId) {
+      tracking.inFlight.delete(sessionId);
       try {
         await options.client.deleteSession(sessionId);
         options.logEvent({ ts: new Date().toISOString(), elapsedMs: elapsed(), lane: lane.name, kind: 'child_deleted', sessionId });
@@ -146,12 +191,13 @@ export async function runChildWithDeadline(
   lane: LaneDefinition,
   modelId: string,
   deadlineMs: number,
+  tracking: ChildTracking = { inFlight: new Set(), pendingCreates: new Set(), swept: new Set() },
 ): Promise<ChildResult> {
   let timedOut = false;
   const timeout = new Promise<ChildResult>((resolve) => {
     setTimeout(() => { timedOut = true; resolve({ success: false, timedOut: true, reason: 'deadline-exceeded' }); }, deadlineMs);
   });
-  const result = await Promise.race([runChild(options, lane, modelId), timeout]);
+  const result = await Promise.race([runChild(options, lane, modelId, tracking), timeout]);
   if (timedOut) {
     options.logEvent({ ts: new Date().toISOString(), elapsedMs: Date.now() - options.runStartMs, lane: lane.name, kind: 'child_timeout' });
   }
@@ -186,7 +232,7 @@ export async function runWave(
   const dispatch = (lane: LaneDefinition) => {
     const modelId = lane.modelIds[0];
     attemptedByLane[lane.name] = (attemptedByLane[lane.name] ?? 0) + 1;
-    const promise = runChildWithDeadline(options, lane, modelId, options.waveTargetConfig.childTurnDeadlineMs);
+    const promise = runChildWithDeadline(options, lane, modelId, options.waveTargetConfig.childTurnDeadlineMs, state);
     const set = inFlight.get(lane.name) ?? new Set();
     set.add(promise);
     inFlight.set(lane.name, set);
@@ -216,7 +262,7 @@ export async function runWave(
   let toppedUp = 0;
   for (let i = 0; i < shortfall; i++) {
     if (options.isStopped?.()) break;
-    const result = await runChildWithDeadline(options, backbone, backbone.modelIds[0], options.waveTargetConfig.childTurnDeadlineMs);
+    const result = await runChildWithDeadline(options, backbone, backbone.modelIds[0], options.waveTargetConfig.childTurnDeadlineMs, state);
     const breaker = state.breakers.get(backbone.name) ?? createBreakerState(backbone.name);
     state.breakers.set(backbone.name, result.success ? recordSuccess(breaker) : recordFailure(breaker, Date.now()));
     if (result.success) {

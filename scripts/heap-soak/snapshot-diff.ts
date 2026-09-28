@@ -22,6 +22,7 @@ import {
   type SnapshotFileInfo,
 } from '../../server/src/live-validation/heap-soak/snapshot-selection.js';
 import type { ConstructorRetainerAnalysis, CutTestResult } from '../../server/src/live-validation/heap-soak/snapshot-retainers.js';
+import { countKnownSlotRetentions, renderRetentionVerdict } from '../../server/src/live-validation/heap-soak/end-drain.js';
 
 const execFile = promisify(execFileCb);
 
@@ -122,7 +123,25 @@ export function findFirstLastSnapshots(snapshotDir: string): { firstPath: string
  * Full section: pick the start + latest-valid after candidates, try each until
  * one parses, and render the comparison. Names any skipped (empty) snapshots.
  */
-export async function snapshotComparisonSection(runDir: string): Promise<string> {
+export interface SnapshotComparisonOptions {
+  /** The recorded end-snapshot path; the retention verdict is given only when the analysed snapshot IS this one (correction 03 item 4). */
+  expectedEndSnapshotPath?: string;
+  liveChildrenAtSnapshot?: number;
+  pendingCreatesAtSnapshot?: number;
+  /** Correction 04: server sessions under this run's children cwd with no harness record (live, not retained). */
+  untrackedServerSessions?: number;
+  /** Correction 04: raw server count under this run's children cwd. */
+  serverChildrenSessionCount?: number;
+  /** Correction 05: false when the server session list was unavailable (counts unknown, no verdict). */
+  serverSessionsListOk?: boolean;
+  serverSessionsListError?: string;
+  drainDrained?: boolean;
+}
+
+export async function snapshotComparisonSection(
+  runDir: string,
+  options: SnapshotComparisonOptions = {},
+): Promise<string> {
   const files = listSnapshotFiles(path.join(runDir, 'snapshots'));
   const selection = selectSnapshotCandidates(files);
   if (!selection.start || selection.afterCandidates.length === 0) {
@@ -133,7 +152,18 @@ export async function snapshotComparisonSection(runDir: string): Promise<string>
   for (const candidate of selection.afterCandidates) {
     const result = await compareSnapshots(selection.start.path, candidate.path);
     if (result.ok) {
-      return renderSnapshotDiffMarkdown(result, { skipped: selection.skipped, attempts });
+      return renderSnapshotDiffMarkdown(result, {
+        skipped: selection.skipped,
+        attempts,
+        ...(options.expectedEndSnapshotPath !== undefined ? { expectedEndSnapshotPath: options.expectedEndSnapshotPath } : {}),
+        ...(options.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: options.liveChildrenAtSnapshot } : {}),
+        ...(options.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: options.pendingCreatesAtSnapshot } : {}),
+        ...(options.untrackedServerSessions !== undefined ? { untrackedServerSessions: options.untrackedServerSessions } : {}),
+        ...(options.serverChildrenSessionCount !== undefined ? { serverChildrenSessionCount: options.serverChildrenSessionCount } : {}),
+        ...(options.serverSessionsListOk !== undefined ? { serverSessionsListOk: options.serverSessionsListOk } : {}),
+        ...(options.serverSessionsListError !== undefined ? { serverSessionsListError: options.serverSessionsListError } : {}),
+        ...(options.drainDrained !== undefined ? { drainDrained: options.drainDrained } : {}),
+      });
     }
     attempts.push(`${candidate.name}: ${result.reason}`);
   }
@@ -142,11 +172,44 @@ export async function snapshotComparisonSection(runDir: string): Promise<string>
 
 export function renderSnapshotDiffMarkdown(
   result: SnapshotDiffResult,
-  context: { skipped?: { name: string; reason: string }[]; attempts?: string[] } = {},
+  context: {
+    skipped?: { name: string; reason: string }[];
+    attempts?: string[];
+    expectedEndSnapshotPath?: string;
+    liveChildrenAtSnapshot?: number;
+    pendingCreatesAtSnapshot?: number;
+    untrackedServerSessions?: number;
+    serverChildrenSessionCount?: number;
+    serverSessionsListOk?: boolean;
+    serverSessionsListError?: string;
+    drainDrained?: boolean;
+  } = {},
   topN = 15,
 ): string {
   const lines = ['## Snapshot comparison (first vs latest valid) — top growers by self-size delta', ''];
   lines.push(`Compared against: \`${result.usedAfterName}\`.`);
+  // B0.1 corrections 02/03: state the retention verdict next to the live count,
+  // but only for the actual end snapshot (a fallback snapshot must not be
+  // labelled as the end snapshot), and exclude the known bounded slot only when
+  // the retainer chains prove it holds an instance.
+  const agentSessionAnalysis = result.retainers.find((r) => r.constructor === 'AgentSession');
+  const agentSessionCount = agentSessionAnalysis?.instances ?? 0;
+  const verifiedKnownSlotInstances = countKnownSlotRetentions(agentSessionAnalysis?.chains ?? []);
+  lines.push('');
+  lines.push(...renderRetentionVerdict({
+    agentSessionCount,
+    analysisIsEndSnapshot: context.expectedEndSnapshotPath !== undefined && result.usedAfterPath === context.expectedEndSnapshotPath,
+    analysedSnapshotName: result.usedAfterName,
+    ...(context.expectedEndSnapshotPath !== undefined ? { expectedEndSnapshotName: path.basename(context.expectedEndSnapshotPath) } : {}),
+    ...(context.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: context.liveChildrenAtSnapshot } : {}),
+    ...(context.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: context.pendingCreatesAtSnapshot } : {}),
+    ...(context.untrackedServerSessions !== undefined ? { untrackedServerSessions: context.untrackedServerSessions } : {}),
+    ...(context.serverChildrenSessionCount !== undefined ? { serverChildrenSessionCount: context.serverChildrenSessionCount } : {}),
+    ...(context.serverSessionsListOk !== undefined ? { serverSessionsListOk: context.serverSessionsListOk } : {}),
+    ...(context.serverSessionsListError !== undefined ? { serverSessionsListError: context.serverSessionsListError } : {}),
+    ...(context.drainDrained !== undefined ? { drainDrained: context.drainDrained } : {}),
+    verifiedKnownSlotInstances,
+  }));
   if (context.skipped && context.skipped.length > 0) {
     lines.push('');
     lines.push(`Skipped ${context.skipped.length} invalid snapshot(s): ${context.skipped.map((s) => `\`${s.name}\` (${s.reason})`).join(', ')}.`);
