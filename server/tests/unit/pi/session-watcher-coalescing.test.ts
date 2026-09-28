@@ -314,9 +314,12 @@ describe('SessionWatcher read coalescing', () => {
     await watcher.stop();
   });
 
-  it('emits no sessionId for an unlink when no complete header was ever captured', async () => {
+  it('emits no sessionId for an unlink whose name is not a valid Pi session file', async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-partial-'));
-    const filePath = path.join(tempDir, 'timestamp_partial-header.jsonl');
+    // No `_<id>.jsonl` suffix: piSessionIdFromFilename cannot derive an id and
+    // no header was captured, so the unlink deliberately carries no sessionId
+    // (correction 04 — a valid `timestamp_<uuid>.jsonl` name does carry one).
+    const filePath = path.join(tempDir, 'partial-header.jsonl');
     await writeFile(filePath, '{"type":"sess'); // truncated header, parse fails
 
     const watcher = new SessionWatcher(tempDir);

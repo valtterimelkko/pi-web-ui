@@ -161,4 +161,25 @@ describe('sessionStore — create-and-pin in one go', () => {
 
     expect(useSessionStore.getState().sessions).toHaveLength(0);
   });
+
+  it('removes the session on an id-less unlink when only the top-level path is present', () => {
+    const state = useSessionStore.getState();
+    state.handleServerMessage({
+      type: 'session_created',
+      sessionId: 'new-2',
+      sessionPath: '/sessions/new-2.jsonl',
+      sdkType: 'pi',
+    });
+    expect(useSessionStore.getState().sessions).toHaveLength(1);
+
+    // An unknown/partial session id no longer suppresses the unlink: the client
+    // must still remove by the event's top-level path (correction 04).
+    state.handleServerMessage({
+      type: 'session_update',
+      changeType: 'unlink',
+      path: '/sessions/new-2.jsonl',
+    });
+
+    expect(useSessionStore.getState().sessions).toHaveLength(0);
+  });
 });

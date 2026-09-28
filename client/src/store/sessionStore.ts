@@ -2367,20 +2367,25 @@ export const useSessionStore = create<SessionState>()(
               break;
             }
             
-            const { changeType, sessionId, info } = msg as unknown as {
+            const { changeType, sessionId, info, path: eventPath } = msg as unknown as {
               changeType: 'add' | 'change' | 'unlink';
-              sessionId: string;
+              sessionId?: string;
+              path?: string;
               info?: Session;
             };
             
             if (changeType === 'unlink') {
-              // Remove deleted session (use path for matching)
+              // Remove deleted session. Match by the event's top-level path as
+              // well as `info.path`/id: an unlink for a genuinely unknown id
+              // carries no sessionId and no info (correction 04), and the
+              // watcher always publishes the path.
               set((state) => {
                 const transferReadySessionIds = { ...state.transferReadySessionIds };
-                delete transferReadySessionIds[sessionId];
+                if (sessionId) delete transferReadySessionIds[sessionId];
                 if (info?.id) delete transferReadySessionIds[info.id];
+                const removedPath = info?.path ?? eventPath;
                 return {
-                  sessions: state.sessions.filter((s) => s.path !== info?.path && s.id !== sessionId),
+                  sessions: state.sessions.filter((s) => s.path !== removedPath && s.id !== sessionId),
                   transferReadySessionIds,
                 };
               });

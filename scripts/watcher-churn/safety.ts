@@ -1,5 +1,5 @@
 /**
- * Fail-closed guard for the B1.1 churn harness (review minor 7).
+ * Fail-closed guard for the B1.1 churn harness (review minors 7 and r2 major 2).
  *
  * The churn writes synthetic session JSONL files and persistent `churn-ws-*`
  * directories into whatever `--sessions-dir` it is given. A path mistake would
@@ -7,8 +7,13 @@
  * refuses a protected root and requires positive evidence that the target is a
  * disposable validation directory — unless the caller passes an explicit
  * override.
+ *
+ * All decisions are made on **canonical (realpath) paths**: a symlink inside a
+ * marked validation directory that points at a protected root must not pass
+ * either check, and the resolved sessions directory must remain inside the
+ * resolved validation directory that carries the marker.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -37,18 +42,51 @@ export function defaultExcludedMarkerDirs(sessionsDir: string): string[] {
   return [path.parse(path.resolve(sessionsDir)).root, os.tmpdir(), os.homedir()];
 }
 
-export function isDisposableValidationDir(sessionsDir: string, options: DisposableDirOptions = {}): boolean {
+/**
+ * Resolve symlinks as far as the path exists, then append the non-existent tail
+ * lexically. `realpathSync` alone throws for a not-yet-created sessions dir.
+ */
+export function realpathWithMissingTail(target: string): string {
+  let current = path.resolve(target);
+  const tail: string[] = [];
+  while (!existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    tail.unshift(path.basename(current));
+    current = parent;
+  }
+  const resolved = realpathSync(current);
+  return tail.length === 0 ? resolved : path.join(resolved, ...tail);
+}
+
+/**
+ * The nearest ancestor (canonicalised) that carries a disposable marker and is
+ * not an excluded directory. Returns undefined when there is none.
+ */
+export function findDisposableValidationRoot(
+  sessionsDir: string,
+  options: DisposableDirOptions = {},
+): string | undefined {
   const excluded = new Set(
-    (options.excludedDirs ?? defaultExcludedMarkerDirs(sessionsDir)).map((dir) => path.resolve(dir)),
+    (options.excludedDirs ?? defaultExcludedMarkerDirs(sessionsDir)).map(realpathWithMissingTail),
   );
-  let dir = path.resolve(sessionsDir);
+  let dir = realpathWithMissingTail(sessionsDir);
   for (let i = 0; i < (options.maxAncestors ?? 4); i += 1) {
-    if (!excluded.has(dir) && DISPOSABLE_MARKERS.some((marker) => existsSync(path.join(dir, marker)))) return true;
+    if (!excluded.has(dir) && DISPOSABLE_MARKERS.some((marker) => existsSync(path.join(dir, marker)))) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return false;
+  return undefined;
+}
+
+export function isDisposableValidationDir(sessionsDir: string, options: DisposableDirOptions = {}): boolean {
+  return findDisposableValidationRoot(sessionsDir, options) !== undefined;
+}
+
+export function isWithin(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 export interface SafetyVerdict {
@@ -57,41 +95,57 @@ export interface SafetyVerdict {
 }
 
 /**
- * Pure decision used by both the guard and its test: a protected root is always
- * refused; otherwise a disposable-validation marker must be present in an
- * ancestor, or the caller must explicitly override.
+ * Pure decision over canonical paths (used by the guard and its tests). A
+ * protected real target is always refused; otherwise the resolved sessions
+ * directory must sit inside the resolved marker-carrying validation directory,
+ * or the caller must explicitly override.
  */
 export function checkSessionsDirSafety(input: {
-  sessionsDir: string;
-  homeDir?: string;
+  realSessionsDir: string;
+  realProtectedRoots: string[];
+  realDisposableRoot?: string;
   allowUnsafe?: boolean;
-  hasDisposableMarker: boolean;
 }): SafetyVerdict {
-  const resolved = path.resolve(input.sessionsDir);
-  for (const root of protectedSessionRoots(input.homeDir ?? os.homedir())) {
-    if (resolved === root || resolved.startsWith(`${root}${path.sep}`)) {
-      return { ok: false, reason: `refusing protected sessions dir ${resolved} (under ${root})` };
+  const sessionsDir = path.resolve(input.realSessionsDir);
+  for (const root of input.realProtectedRoots) {
+    if (isWithin(sessionsDir, path.resolve(root))) {
+      return { ok: false, reason: `refusing protected sessions dir ${sessionsDir} (under ${root})` };
     }
   }
   if (input.allowUnsafe) return { ok: true };
-  if (!input.hasDisposableMarker) {
+  if (!input.realDisposableRoot) {
     return {
       ok: false,
       reason:
-        `refusing ${resolved}: no disposable-validation marker ` +
+        `refusing ${sessionsDir}: no disposable-validation marker ` +
         `(${DISPOSABLE_MARKERS.join(' / ')}) found in an ancestor; ` +
         `pass --allow-unsafe-sessions-dir to override`,
+    };
+  }
+  if (!isWithin(sessionsDir, path.resolve(input.realDisposableRoot))) {
+    return {
+      ok: false,
+      reason:
+        `refusing ${sessionsDir}: resolved target is outside the marked ` +
+        `disposable validation directory ${input.realDisposableRoot}`,
     };
   }
   return { ok: true };
 }
 
-/** Throwing wrapper used by the CLI. */
-export function assertSessionsDirSafe(sessionsDir: string, options: { allowUnsafe?: boolean } = {}): void {
+/** Throwing wrapper used by the CLI. `protectedRoots` is a test seam. */
+export function assertSessionsDirSafe(
+  sessionsDir: string,
+  options: { allowUnsafe?: boolean; protectedRoots?: string[] } = {},
+): void {
+  const realSessionsDir = realpathWithMissingTail(sessionsDir);
+  const realProtectedRoots = (options.protectedRoots ?? protectedSessionRoots()).map(realpathWithMissingTail);
+  const realDisposableRoot = findDisposableValidationRoot(sessionsDir);
   const verdict = checkSessionsDirSafety({
-    sessionsDir,
+    realSessionsDir,
+    realProtectedRoots,
+    realDisposableRoot,
     allowUnsafe: options.allowUnsafe,
-    hasDisposableMarker: isDisposableValidationDir(sessionsDir),
   });
   if (!verdict.ok) throw new Error(verdict.reason);
 }
