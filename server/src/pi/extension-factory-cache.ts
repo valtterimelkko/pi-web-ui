@@ -57,15 +57,18 @@ const DEFAULT_MAX_SCAN_DIRS = 128;
  * `const` bound to a `Map`/`Set`/`WeakMap`/array/object/class instance, no
  * `process.on/once`, no module-level timer. Findings (file:line):
  *
- *   per-session / mutable module state (NOT cached):
+ *   per-session state still NOT cached (B1.3 remaining):
  *     enhanced-plan-mode    index.ts:81 module `state` object; index.ts:576 `let piRef`
- *     goal-engine           auto-continue.ts:264/267/268 Maps; status-ui.ts:6 WeakMap
- *     memory                index.ts:52 `let state`
- *     parallel-orchestrator index.ts:49/50 Maps
  *     subagent              index.ts:85/90/91/93 `let`s; index.ts:113 singleton
  *                           BackgroundTaskManager; runtime.ts:142 mutationQueues Map
- *     web-tools             index.ts:43 shared content cache Map (and a command
- *                           that clears it globally)
+ *   refactored to per-session scope and now cached (B1.3, pi-enhancement 8a4b768):
+ *     memory                `let state` moved into the factory closure
+ *     goal-engine           auto-continue.ts error/overflow maps moved into
+ *                           registerAutoContinueHooks (status-ui.ts:6 WeakMap is
+ *                           keyed by the per-session UI object)
+ *     web-tools             index.ts:43 request-keyed TTL content cache (class c)
+ *     parallel-orchestrator index.ts:49/50 registries keyed by global
+ *                           orchestration/worktree id (class c)
  *   share-safe (cached): everything else — agent-discovery, agent-os-inject,
  *     auto-compact-75, background-shell, cli-anything, commandcode-provider,
  *     compact-observability, subagent-evaluator, watch-wake, todo.
@@ -82,9 +85,13 @@ export const DEFAULT_SHARE_SAFE_EXTENSIONS: readonly string[] = [
   'cli-anything',
   'commandcode-provider',
   'compact-observability',
+  'goal-engine',
+  'memory',
+  'parallel-orchestrator',
   'subagent-evaluator',
   'watch-wake',
   'todo',
+  'web-tools',
 ];
 
 /** Process-wide serialisation of seed → loader.reload() (review major 2). */

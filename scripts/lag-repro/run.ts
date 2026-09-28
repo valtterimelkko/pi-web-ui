@@ -22,7 +22,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -44,6 +45,7 @@ interface Args {
   port?: number;
   repeatPool: number;
   extensionCommand: string;
+  extensionsOverlay?: string;
   keep: boolean;
   generateOnly: boolean;
 }
@@ -67,6 +69,9 @@ function parseArgs(argv: string[]): Args {
     // Live disposable check: a real session executes this extension slash command
     // (extension commands run without an LLM turn). Empty string skips it.
     extensionCommand: value('extension-command') ?? '/webtools-clear-cache',
+    // B1.3: overlay the extension sources under test (never the deployed copies)
+    // into the isolated agent dir. Defaults to the pi-enhancement B1.3 worktree.
+    extensionsOverlay: value('extensions-overlay') ?? '/root/.worktrees/orch-scaling/b1-3-pi-enhancement',
     keep: argv.includes('--keep'),
     generateOnly: argv.includes('--generate-only'),
   };
@@ -84,8 +89,16 @@ async function freePort(): Promise<number> {
   });
 }
 
-/** Copy only the config allowlist from the real agent dir (never sessions/ or memory/). */
-function buildIsolatedAgentDir(destDir: string): void {
+/** The six extensions B1.3 makes share-safe; overlaid from the worktree under test. */
+const OVERLAY_EXTENSIONS = ['enhanced-plan-mode', 'goal-engine', 'memory', 'parallel-orchestrator', 'subagent', 'web-tools'];
+
+/**
+ * Copy only the config allowlist from the real agent dir (never sessions/ or
+ * memory/), then OVERLAY the extensions under test from `overlay` so the
+ * disposable server loads exactly the sources being evaluated, never the
+ * deployed copies. Returns a content hash of the overlaid extensions.
+ */
+function buildIsolatedAgentDir(destDir: string, overlay?: string): string | undefined {
   const sourceDir = join(homedir(), '.pi', 'agent');
   mkdirSync(destDir, { recursive: true, mode: 0o700 });
   for (const entry of ['auth.json', 'models.json', 'settings.json', 'extensions']) {
@@ -93,6 +106,28 @@ function buildIsolatedAgentDir(destDir: string): void {
     if (!existsSync(source)) continue;
     cpSync(source, join(destDir, entry), { recursive: true, dereference: true });
   }
+  if (!overlay || !existsSync(overlay)) return undefined;
+  const hash = createHash('sha256');
+  const overlaid: string[] = [];
+  for (const name of OVERLAY_EXTENSIONS) {
+    const source = join(overlay, name);
+    if (!existsSync(source)) continue;
+    const target = join(destDir, 'extensions', name);
+    rmSync(target, { recursive: true, force: true });
+    cpSync(source, target, { recursive: true, dereference: true });
+    overlaid.push(name);
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else hash.update(`${full}:${readFileSync(full).length}
+`);
+      }
+    };
+    walk(target);
+  }
+  process.stderr.write(`[overlay] ${overlaid.join(', ')} from ${overlay}\n`);
+  return hash.digest('hex').slice(0, 16);
 }
 
 async function startUnit(options: {
@@ -231,7 +266,7 @@ async function main(): Promise<void> {
 
   mkdirSync(runDir, { recursive: true });
   mkdirSync(join(runDir, 'home'), { recursive: true });
-  buildIsolatedAgentDir(join(runDir, 'agent'));
+  const extensionsOverlayHash = buildIsolatedAgentDir(join(runDir, 'agent'), args.extensionsOverlay);
 
   const corpus: CorpusSummary = await generateCorpus({
     cwdRoot: join(runDir, 'cwds'),
@@ -246,6 +281,8 @@ async function main(): Promise<void> {
     unitName,
     port,
     commit: (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim(),
+    extensionsOverlay: args.extensionsOverlay,
+    extensionsOverlayHash,
     corpus: { cwdCount: corpus.cwdCount, fileCount: corpus.fileCount, totalBytes: corpus.totalBytes, biggestBytes: corpus.biggestBytes },
   };
   process.stderr.write(`[corpus] ${JSON.stringify(summary.corpus)}\n`);
