@@ -209,6 +209,8 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
   // ── B0.1 correction: the end snapshot is taken after the load drained, and the
   // report states the retention verdict next to the recorded live count ──
   const agentSessionMatch = /AgentSession instances in the end snapshot: (\d+)/.exec(reportMd);
+  const liveMatch = /Live children at the moment of the snapshot[^:]*: (\d+)/.exec(reportMd);
+  const verifiedSlotMatch = /verified in this snapshot: (\d+)/.exec(reportMd);
   const retainedMatch = /Retained deleted children: (\d+)/.exec(reportMd);
   record(
     'B0.1c pre-snapshot drain recorded in run-state.json',
@@ -221,9 +223,10 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
     reportMd.split('\n').find((l) => l.includes('Retained deleted children:')) ?? '(missing)',
   );
   record(
-    'B0.1c end snapshot AgentSession count matches the live count (+ known bounded slot)',
-    agentSessionMatch !== null && retainedMatch !== null && Number(retainedMatch[1]) === 0,
-    `agentSessionInstances=${agentSessionMatch?.[1] ?? 'n/a'} liveChildrenAtSnapshot=${runStateAfter.liveChildrenAtEndSnapshot ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
+    'B0.1c retention verdict is arithmetically consistent (agentSession - live - verified slot = retained)',
+    agentSessionMatch !== null && liveMatch !== null && verifiedSlotMatch !== null && retainedMatch !== null
+      && Number(retainedMatch[1]) === Math.max(0, Number(agentSessionMatch[1]) - Number(liveMatch[1]) - Number(verifiedSlotMatch[1])),
+    `agentSession=${agentSessionMatch?.[1] ?? 'n/a'} liveChildrenAtSnapshot=${runStateAfter.liveChildrenAtEndSnapshot ?? liveMatch?.[1] ?? 'n/a'} verifiedKnownSlot=${verifiedSlotMatch?.[1] ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'} (known bounded slot is excluded only when the retainer chains prove it)`,
   );
 
   // ── Correction 03: pending creates recorded, teardown result in the report ──

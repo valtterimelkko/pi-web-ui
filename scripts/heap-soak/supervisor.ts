@@ -590,11 +590,18 @@ async function main(): Promise<void> {
     persist();
   }
 
-  // B0.1 correction 03 item 8: tear down BEFORE finalisation, so the report and
-  // the completion notice carry the teardown result (including a failure), and
-  // retry within a bound rather than reporting a clean run over a unit that is
-  // still present. A dead run has nothing to stop; `server_died` handling is
+  // B0.1 correction 03 item 8: capture the in-run WS status and close the
+  // browser-like client and the inspector BEFORE teardown, so stopping the
+  // disposable server cannot be mistaken for the client having dropped during
+  // the run. Teardown then runs before finalisation, so the report and the
+  // completion notice carry its result (including a failure), and it is
+  // retried within a bound rather than reporting a clean run over a unit that
+  // is still present. A dead run has nothing to stop; `server_died` handling is
   // unchanged and is never reclassified.
+  writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
+  wsClient.close();
+  inspector.close();
+
   const teardown = decideRunTeardown({ keepServer, terminalState: state.terminalState ?? 'complete' });
   console.error(`[supervisor] teardown: ${teardown.reason}`);
   if (teardown.stopServer) {
@@ -621,10 +628,6 @@ async function main(): Promise<void> {
   }
 
   await finaliseRun();
-
-  writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
-  wsClient.close();
-  inspector.close();
 }
 
 main().catch(async (error) => {
