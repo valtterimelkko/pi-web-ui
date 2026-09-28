@@ -12,9 +12,10 @@
  *  1. build one large realistic JSONL session file (generated, never copied);
  *  2. append one realistic entry at a streaming cadence for `--duration-ms`;
  *  3. let it go quiet;
- *  4. report the watcher's complete-file read count, the total time spent
- *     inside `readSessionInfo` (the event-loop blocking proxy) and a real
- *     event-loop-delay histogram (`perf_hooks.monitorEventLoopDelay`).
+ *  4. report the watcher's complete-file read count, the aggregate wall-clock
+ *     read latency (not event-loop blocking time) and a real
+ *     event-loop-delay histogram (`perf_hooks.monitorEventLoopDelay`), which is
+ *     what lag claims must be based on.
  *
  * Run it once per build:
  *   npx tsx scripts/watcher-churn/live-load.ts \
@@ -100,17 +101,22 @@ async function main(): Promise<void> {
   let events = 0;
   watcher.on('session_update', () => { events += 1; });
 
-  // Time the complete-file reads, which are what blocks the event loop.
+  // Time the complete-file reads. This is *aggregate wall-clock read latency*
+  // (it includes asynchronous filesystem waiting), NOT event-loop blocking time;
+  // lag claims must come from the `monitorEventLoopDelay` histogram below.
   const originalRead = watcher.readSessionInfo.bind(watcher);
   let readCalls = 0;
-  let totalReadNs = 0;
+  let aggregateReadNs = 0;
+  let maxReadNs = 0;
   watcher.readSessionInfo = async (p: string) => {
     readCalls += 1;
     const start = process.hrtime.bigint();
     try {
       return await originalRead(p);
     } finally {
-      totalReadNs += Number(process.hrtime.bigint() - start);
+      const elapsed = Number(process.hrtime.bigint() - start);
+      aggregateReadNs += elapsed;
+      if (elapsed > maxReadNs) maxReadNs = elapsed;
     }
   };
 
@@ -141,7 +147,9 @@ async function main(): Promise<void> {
     completeFileReads: readCalls,
     debugFullReadCount: watcher.debugFullReadCount,
     debugBoundedHeaderReadCount: watcher.debugBoundedHeaderReadCount,
-    totalReadTimeMs: +(totalReadNs / 1e6).toFixed(0),
+    /** Aggregate wall-clock latency of all complete-file reads (includes async fs wait). */
+    aggregateReadLatencyMs: +(aggregateReadNs / 1e6).toFixed(0),
+    maxReadLatencyMs: +(maxReadNs / 1e6).toFixed(0),
     events,
     eventLoopDelay: {
       meanMs: ms(histogram.mean),

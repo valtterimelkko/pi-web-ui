@@ -33,6 +33,19 @@ export interface ChurnCaseResult extends ChurnCasePlan {
   elapsedMs: number;
   written: number;
   deleted: number;
+  /**
+   * Measured per-file lifetimes (delete time minus write completion time).
+   * These are the *actually delivered* delays; the plan's `waitMs` is only the
+   * target, and chokidar's directory-read/add latency is build-dependent.
+   */
+  lifetimeMs: { min: number; p50: number; p95: number; max: number };
+}
+
+function summarizeLifetimes(values: number[]): { min: number; p50: number; p95: number; max: number } {
+  if (values.length === 0) return { min: 0, p50: 0, p95: 0, max: 0 };
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (fraction: number) => sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))];
+  return { min: sorted[0], p50: at(0.5), p95: at(0.95), max: sorted[sorted.length - 1] };
 }
 
 export interface ChurnOptions {
@@ -87,17 +100,20 @@ export async function prepareChurnDirectories(sessionsDir: string, directories: 
 }
 
 function buildPlans(filesPerCase: number): ChurnCasePlan[] {
+  // Delays are measured from WRITE COMPLETION and are *intended* cohorts, not
+  // event-aligned ones: on the old `awaitWriteFinish` build chokidar declares an
+  // add ~300 ms after it observes the file, so the same wall-clock delay lands
+  // in a different phase than on the corrected build. `runChurn` records the
+  // measured lifetime percentile per case so the comparison is honest about it.
   return [
-    // ~300 ms: the file is seen by chokidar's directory read, but deleted before
-    // `awaitWriteFinish` declares the add stable, so the per-file watcher, its
-    // `_watched` entry and its `Stats`/`Date` listener closure are retained.
+    // ~300 ms: intended to land before chokidar's old awaitWriteFinish add, so
+    // the per-file watcher / `_watched` entry / `Stats` closure are retained on
+    // the old build.
     { case: 'before-stability', files: filesPerCase, waitMs: 300, batchSize: 40 },
-    // ~700 ms: chokidar declared the add stable (~300 ms after it was seen), and
-    // the unlink lands after the add but inside `SessionWatcher`'s 500 ms
-    // debounce window — the debounce map entry is retained.
+    // ~700 ms: intended to land after the add but inside SessionWatcher's 500 ms
+    // debounce window on the old build.
     { case: 'inside-debounce', files: filesPerCase, waitMs: 700, batchSize: 40 },
-    // ~1200 ms: the debounce fired and emitted the add before the unlink, so
-    // nothing should be retained by either build (the control case).
+    // ~1200 ms: intended control — the debounce fired and emitted before unlink.
     { case: 'after-debounce', files: filesPerCase, waitMs: 1200, batchSize: 40 },
   ];
 }
@@ -128,24 +144,33 @@ export async function runChurn(
     let written = 0;
     let deleted = 0;
     let fileIndex = 0;
+    const lifetimesMs: number[] = [];
     while (fileIndex < plan.files) {
-      const batch: string[] = [];
+      const batch: Array<{ filePath: string; writtenAt: number }> = [];
       const batchCount = Math.min(plan.batchSize, plan.files - fileIndex);
       for (let i = 0; i < batchCount; i += 1) {
         const dir = childDirs[(fileIndex + i) % childDirs.length];
         const id = randomUUID();
         const filePath = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${id}.jsonl`);
         await writeFile(filePath, sessionContent(id));
-        batch.push(filePath);
+        batch.push({ filePath, writtenAt: Date.now() });
       }
       written += batch.length;
       await sleep(plan.waitMs);
-      await Promise.all(batch.map((filePath) => rm(filePath, { force: true })));
+      const deletedAt = Date.now();
+      await Promise.all(batch.map(({ filePath }) => rm(filePath, { force: true })));
+      for (const { writtenAt } of batch) lifetimesMs.push(deletedAt - writtenAt);
       deleted += batch.length;
       fileIndex += batchCount;
       progress(`  ${plan.case}: ${fileIndex}/${plan.files} written+deleted`);
     }
-    results.push({ ...plan, elapsedMs: Date.now() - caseStarted, written, deleted });
+    results.push({
+      ...plan,
+      elapsedMs: Date.now() - caseStarted,
+      written,
+      deleted,
+      lifetimeMs: summarizeLifetimes(lifetimesMs),
+    });
   }
 
   return {

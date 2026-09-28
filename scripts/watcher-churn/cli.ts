@@ -22,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { InspectorClient, assertInspectorLoopbackOnly } from '../heap-soak/inspector.js';
 import { prepareChurnDirectories, runChurn, type ChurnCase, type ChurnResult } from './churn.js';
+import { assertSessionsDirSafe } from './safety.js';
 
 const CHURN_CASES: ChurnCase[] = ['before-stability', 'inside-debounce', 'after-debounce'];
 
@@ -36,6 +37,7 @@ interface CliArgs {
   cases?: ChurnCase[];
   waits?: Partial<Record<ChurnCase, number>>;
   batchSizes?: Partial<Record<ChurnCase, number>>;
+  allowUnsafeSessionsDir: boolean;
 }
 
 function getFlag(args: string[], flag: string): string | undefined {
@@ -66,6 +68,7 @@ function parseArgs(argv: string[]): CliArgs {
     cases: getFlag(argv, '--cases')?.split(',').map((s) => s.trim()).filter(Boolean) as ChurnCase[] | undefined,
     waits: parsePerCaseNumbers(argv, '--wait-ms'),
     batchSizes: parsePerCaseNumbers(argv, '--batch-size'),
+    allowUnsafeSessionsDir: argv.includes('--allow-unsafe-sessions-dir'),
   };
 }
 
@@ -128,11 +131,19 @@ function renderVerdict(verdict: Verdict): string {
   lines.push('');
   lines.push(`session-watcher-held growth total: ${verdict.sessionWatcherHeldGrowthTotal}`);
   lines.push(`any-watcher-held growth total: ${verdict.watcherHeldGrowthTotal}`);
+  lines.push('');
+  lines.push('per-case measured lifetime (delete time minus write completion):');
+  for (const c of verdict.churn.cases) {
+    lines.push(`  ${c.case.padEnd(18)} target=${c.waitMs}ms measured p50=${c.lifetimeMs.p50}ms p95=${c.lifetimeMs.p95}ms max=${c.lifetimeMs.max}ms (${c.written} files)`);
+  }
   return lines.join('\n');
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  // Fail closed before creating anything: the churn writes synthetic session
+  // files into this directory and must never touch a production sessions root.
+  assertSessionsDirSafe(args.sessionsDir, { allowUnsafe: args.allowUnsafeSessionsDir });
   mkdirSync(args.outDir, { recursive: true });
 
   const bound = await assertInspectorLoopbackOnly(args.inspectPort);

@@ -11,11 +11,17 @@ forced-GC heap snapshots taken through the server's loopback inspector.
    per-file retention, not new directory watches).
 2. Forced-GC heap snapshot **before**.
 3. Churns files in three cases (see `churn.ts`):
-   - `before-stability` — created and deleted inside chokidar's former 300 ms
-     `awaitWriteFinish` window (the add was never declared stable);
-   - `inside-debounce` — deleted while `SessionWatcher`'s 500 ms debounce timer
-     is pending;
-   - `after-debounce` — deleted after the debounce fired.
+   - `before-stability` — created and deleted ~300 ms after write completion;
+   - `inside-debounce` — ~700 ms after write completion;
+   - `after-debounce` — ~1200 ms after write completion.
+
+   These delays are measured from **write completion** and are *intended*
+   cohorts, not event-aligned ones: on the old `awaitWriteFinish` build chokidar
+   declares an add ~300 ms after it observes the file, so the same wall-clock
+   delay lands in a different phase than on the corrected build. The driver
+   records the **measured** per-file lifetime percentile for each case, and
+   `verdict.txt` prints it, so the comparison is honest about the alignment; the
+   aggregate old-grows/new-zero result is the load-bearing one.
 4. Settles, forced-GC, heap snapshot **after**.
 5. `summarize.ts` (imports the heap-soak read-only retainer module owned by lane
    b0-1) reports `Timeout`/`Stats`/`Date`/`FSWatcher` instance counts, how many

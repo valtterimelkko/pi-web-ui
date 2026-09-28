@@ -218,6 +218,171 @@ describe('SessionWatcher read coalescing', () => {
     expect(counters.debugBoundedHeaderReadCount).toBe(1);
     await watcher.stop();
   });
+
+  it('emits fresh metadata when a window closes while a slow read is still in flight', async () => {
+    vi.useFakeTimers();
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-stale-'));
+    const filePath = path.join(tempDir, 'stale_session.jsonl');
+    await writeFile(filePath, sessionContent('stale-session', 'v1'));
+
+    const watcher = new SessionWatcher(tempDir);
+    const invoke = watcher as unknown as { handleChange(type: 'change', filePath: string): void };
+    const originalRead = watcher.readSessionInfo.bind(watcher);
+    const staleOracle = await originalRead(filePath);
+    await appendFile(filePath, JSON.stringify({
+      type: 'message',
+      id: 'message-2',
+      timestamp: 4,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'v2' }] },
+    }) + '\n');
+    const freshOracle = await originalRead(filePath);
+    expect(freshOracle.messageCount).toBeGreaterThan(staleOracle.messageCount);
+
+    const firstRead = deferred<SessionInfo>();
+    const secondRead = deferred<SessionInfo>();
+    let calls = 0;
+    watcher.readSessionInfo = () => {
+      calls += 1;
+      return calls === 1 ? firstRead.promise : secondRead.promise;
+    };
+    const events: SessionChangeEvent[] = [];
+    watcher.on('session_update', (event: SessionChangeEvent) => events.push(event));
+
+    invoke.handleChange('change', filePath); // window #1
+    await vi.advanceTimersByTimeAsync(500); // closes; read #1 starts and stays pending
+    expect(calls).toBe(1);
+
+    invoke.handleChange('change', filePath); // window #2 while read #1 is pending
+    await vi.advanceTimersByTimeAsync(500); // window #2 closes and joins read #1
+    expect(calls).toBe(1);
+
+    firstRead.resolve(staleOracle);
+    await flushMicrotasks();
+    // The window that joined the stale read must not strand its invalidation.
+    expect(calls).toBe(2);
+    secondRead.resolve(freshOracle);
+    await flushMicrotasks();
+
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events.at(-1)?.info?.messageCount).toBe(freshOracle.messageCount);
+    const state = (watcher as unknown as { readStateByPath: Map<string, { revalidateQueued: boolean }> })
+      .readStateByPath.get(filePath);
+    expect(state?.revalidateQueued).toBe(false);
+    await watcher.stop();
+  });
+
+  it('uses the newest captured header id for a same-path replacement unlink', async () => {
+    vi.useFakeTimers();
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-replace-'));
+    const filePath = path.join(tempDir, 'replacement.jsonl');
+    await writeFile(filePath, sessionContent('old-header-id', 'old'));
+
+    const watcher = new SessionWatcher(tempDir);
+    const invoke = watcher as unknown as {
+      handleChange(type: 'add' | 'change' | 'unlink', filePath: string): void;
+    };
+    const firstRead = deferred<SessionInfo>();
+    watcher.readSessionInfo = () => firstRead.promise;
+    const events: SessionChangeEvent[] = [];
+    watcher.on('session_update', (event: SessionChangeEvent) => events.push(event));
+
+    invoke.handleChange('add', filePath);
+    await vi.advanceTimersByTimeAsync(500); // read #1 starts and stays pending
+
+    // A same-path replacement captures a new id while read #1 is still pending.
+    await writeFile(filePath, sessionContent('new-header-id', 'new'));
+    invoke.handleChange('change', filePath);
+
+    // Read #1 resolves with the OLD id afterwards; it must not overwrite the
+    // freshly captured identity (B1.1 correction 03).
+    firstRead.resolve({
+      id: 'old-header-id',
+      path: filePath,
+      cwd: '/tmp/session-workspace',
+      firstMessage: 'old',
+      messageCount: 1,
+      createdAt: new Date(1),
+      lastActivity: new Date(2),
+    });
+    await flushMicrotasks();
+
+    await rm(filePath);
+    invoke.handleChange('unlink', filePath);
+    await flushMicrotasks();
+
+    expect(events.find((event) => event.type === 'unlink')?.sessionId).toBe('new-header-id');
+    await watcher.stop();
+  });
+
+  it('emits no sessionId for an unlink when no complete header was ever captured', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-partial-'));
+    const filePath = path.join(tempDir, 'timestamp_partial-header.jsonl');
+    await writeFile(filePath, '{"type":"sess'); // truncated header, parse fails
+
+    const watcher = new SessionWatcher(tempDir);
+    const invoke = watcher as unknown as { handleChange(type: 'add' | 'unlink', filePath: string): void };
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    watcher.on('session_update', (event) => events.push(event));
+
+    invoke.handleChange('add', filePath);
+    await rm(filePath);
+    invoke.handleChange('unlink', filePath);
+    await flushMicrotasks();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('unlink');
+    expect(events[0]?.sessionId).toBeUndefined();
+    await watcher.stop();
+  });
+
+  it('emits unlink with the captured id immediately during an in-flight read and clears pendingInfoByPath', async () => {
+    vi.useFakeTimers();
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-pending-unlink-'));
+    const filePath = path.join(tempDir, 'pending-unlink.jsonl');
+    await writeFile(filePath, sessionContent('pending-unlink-id', 'x'));
+
+    const watcher = new SessionWatcher(tempDir);
+    const invoke = watcher as unknown as { handleChange(type: 'add' | 'unlink', filePath: string): void };
+    const pendingRead = deferred<SessionInfo>();
+    let calls = 0;
+    watcher.readSessionInfo = () => {
+      calls += 1;
+      return pendingRead.promise;
+    };
+    const events: SessionChangeEvent[] = [];
+    watcher.on('session_update', (event: SessionChangeEvent) => events.push(event));
+
+    invoke.handleChange('add', filePath);
+    await vi.advanceTimersByTimeAsync(500); // window closes, read starts and stays pending
+    expect(calls).toBe(1);
+    const maps = watcher as unknown as {
+      pendingInfoByPath: Map<string, unknown>;
+      readStateByPath: Map<string, unknown>;
+    };
+    expect(maps.pendingInfoByPath.size).toBe(1);
+
+    await rm(filePath);
+    invoke.handleChange('unlink', filePath);
+    await flushMicrotasks();
+
+    // The obsolete read must not delay the unlink; the projection is dropped now.
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'unlink', sessionId: 'pending-unlink-id' });
+    expect(maps.pendingInfoByPath.size).toBe(0);
+
+    pendingRead.resolve({
+      id: 'pending-unlink-id',
+      path: filePath,
+      cwd: '/tmp/session-workspace',
+      firstMessage: 'x',
+      messageCount: 1,
+      createdAt: new Date(1),
+      lastActivity: new Date(2),
+    });
+    await flushMicrotasks();
+    expect(maps.readStateByPath.size).toBe(0);
+    await watcher.stop();
+  });
 });
 
 describe('SessionWatcher real chokidar path', () => {
