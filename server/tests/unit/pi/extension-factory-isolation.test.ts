@@ -339,3 +339,63 @@ describe('B1.2 seed→reload critical section (review major 2)', () => {
     expect(events.slice(0, 2)).toEqual([`enter:${cwdA}`, `enter:${cwdB}`]);
   });
 });
+
+/**
+ * Round-2 review finding 1: `session.reload()` clears the SDK's process-global
+ * extension cache, so it must run in the same critical section as seed→load.
+ */
+describe('B1.2 reload paths share the seed→load critical section', () => {
+  it('runs PiService.reloadSession inside the critical section', async () => {
+    const { PiService } = await import('../../../src/pi/pi-service.js');
+    const service = new PiService();
+    const order: string[] = [];
+    const sessions = (service as unknown as { sessions: Map<string, unknown> }).sessions;
+    sessions.set('s1', {
+      reload: async () => {
+        order.push('reload:start');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        order.push('reload:end');
+      },
+    });
+
+    const open = runExtensionLoadCriticalSection(async () => {
+      order.push('open:start');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push('open:end');
+    });
+    const reload = service.reloadSession('s1');
+    await Promise.all([open, reload]);
+
+    expect(order).toEqual(['open:start', 'open:end', 'reload:start', 'reload:end']);
+  });
+
+  it('keeps the cache effective when a reload races a session open', async () => {
+    const events: string[] = [];
+    const open = runExtensionLoadCriticalSection(async () => {
+      events.push('open:enter');
+      await cache.seed(cwdB, agentDir);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const loader = new DefaultResourceLoader({ cwd: cwdB, agentDir });
+      await loader.reload();
+      events.push('open:exit');
+      return loader.getExtensions().extensions;
+    });
+    // A reload of an already-loaded loader (what session.reload() does): it calls
+    // clearExtensionCache() internally, so it must not interleave with the open.
+    const reload = runExtensionLoadCriticalSection(async () => {
+      events.push('reload:enter');
+      const loader = new DefaultResourceLoader({ cwd: cwdA, agentDir });
+      await loader.reload();
+      await loader.reload();
+      events.push('reload:exit');
+      return loader.getExtensions().extensions;
+    });
+
+    const [opened, reloaded] = await Promise.all([open, reload]);
+    expect(opened).toHaveLength(1);
+    expect(reloaded).toHaveLength(1);
+    // Whole intervals, not interleaved halves.
+    expect(events).toEqual(['open:enter', 'open:exit', 'reload:enter', 'reload:exit']);
+    expect(cache.stats.imports).toBe(1);
+  });
+});

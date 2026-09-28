@@ -153,6 +153,7 @@ export interface ExtensionFactoryCacheStats {
   reimports: number;
   pruned: number;
   overBudget: boolean;
+  unfingerprintable: number;
 }
 
 interface CacheEntry {
@@ -186,7 +187,11 @@ async function defaultStat(path: string): Promise<{ mtimeMs: number; size: numbe
  * `resolveExtensionEntries`: a package.json `pi.extensions` list wins, then
  * index.ts, then index.js. No recursion beyond one level.
  */
-async function resolveExtensionEntries(dir: string, deps: Required<Pick<ExtensionFactoryCacheDeps, 'stat' | 'readFile'>>): Promise<string[]> {
+async function resolveExtensionEntries(
+  dir: string,
+  deps: Required<Pick<ExtensionFactoryCacheDeps, 'stat' | 'readFile'>>,
+  opBudget?: () => boolean,
+): Promise<string[]> {
   const packageJsonPath = join(dir, 'package.json');
   if (await deps.stat(packageJsonPath)) {
     try {
@@ -195,6 +200,7 @@ async function resolveExtensionEntries(dir: string, deps: Required<Pick<Extensio
       if (Array.isArray(declared) && declared.every((entry) => typeof entry === 'string') && declared.length > 0) {
         const entries: string[] = [];
         for (const relative of declared) {
+          if (opBudget && opBudget()) break;
           const candidate = resolve(dir, relative);
           if (await deps.stat(candidate)) entries.push(candidate);
         }
@@ -205,6 +211,7 @@ async function resolveExtensionEntries(dir: string, deps: Required<Pick<Extensio
     }
   }
   for (const name of ['index.ts', 'index.js']) {
+    if (opBudget && opBudget()) return [];
     const candidate = join(dir, name);
     if (await deps.stat(candidate)) return [candidate];
   }
@@ -252,24 +259,34 @@ export function extensionId(entryPath: string, extensionsDir: string): string {
 }
 
 export interface ExtensionTreeScan {
-  /** Resolved entry paths the SDK's discovery would load. */
+  /** Resolved entry paths the SDK's discovery would load (fingerprintable only). */
   entryPaths: string[];
-  /** One fingerprint over every file in the tree (any change invalidates all). */
+  /** One fingerprint over every fingerprintable file in the tree. */
   fingerprint: string;
   overBudget: boolean;
   dirsVisited: number;
   entriesVisited: number;
+  /** Filesystem operations performed (readdir + stat), for budget tests. */
+  fsOps: number;
+  /** Extension ids excluded from caching because their subtree contains a symlink. */
+  unfingerprintable: string[];
 }
 
+const fingerprintPart = (path: string, info: { mtimeMs: number; size: number } | undefined): string =>
+  `${path}:${info?.mtimeMs ?? 'missing'}:${info?.size ?? 0}`;
+
 /**
- * Walk the whole global extensions tree once, producing (a) the entry paths the
- * SDK would load and (b) a single freshness fingerprint over every file found.
- * Deliberately fingerprints the WHOLE tree rather than each extension's
- * directory: a loose-file entry or a `package.json`-declared entry that imports
- * a sibling helper must be re-imported when that helper changes (review minor 3).
+ * Walk the global extensions tree ONCE, under one shared budget, producing the
+ * SDK's entry paths and a freshness fingerprint. Round-2 review fixes:
  *
- * Bounded on BOTH axes (review minor 4): directories visited and entries read.
- * Over budget, the caller declines to cache at all rather than traversing an
+ *  - discovery is integrated into the budgeted walk (it used to readdir/stat the
+ *    whole top level before the budget was consulted), and every readdir/stat is
+ *    counted (`fsOps`) so the bound is testable;
+ *  - a directory symlink is never followed and its extension is excluded from
+ *    caching (`unfingerprintable`), because a helper edited beneath an unchanged
+ *    directory symlink would otherwise leave the fingerprint unchanged.
+ *
+ * Over budget the caller declines to cache at all rather than traversing an
  * unbounded tree.
  */
 export async function scanExtensionsTree(
@@ -279,44 +296,95 @@ export async function scanExtensionsTree(
 ): Promise<ExtensionTreeScan> {
   const statFn = overrides.stat ?? defaultStat;
   const readdirFn = overrides.readdir ?? defaultReaddir;
+  const readFileFn = overrides.readFile ?? ((path: string) => readFile(path, 'utf-8'));
   const extensionsDir = join(agentDir, 'extensions');
-  const entryPaths = await discoverGlobalExtensionPaths(agentDir, overrides);
   const parts: string[] = [];
-  const queue = [extensionsDir];
+  const entryPaths: string[] = [];
+  const unfingerprintable = new Set<string>();
   let dirsVisited = 0;
   let entriesVisited = 0;
+  let fsOps = 0;
   let overBudget = false;
-  while (queue.length > 0) {
-    if (dirsVisited >= budget.maxDirs) {
-      overBudget = true;
-      break;
+
+  const statB = async (path: string) => { fsOps += 1; return statFn(path); };
+  const readdirB = async (dir: string) => { fsOps += 1; return readdirFn(dir); };
+  const empty: ExtensionTreeScan = { entryPaths: [], fingerprint: '', overBudget: false, dirsVisited: 0, entriesVisited: 0, fsOps: 1, unfingerprintable: [] };
+
+  let top: ExtensionDirEntry[];
+  try {
+    top = await readdirB(extensionsDir);
+  } catch {
+    return empty;
+  }
+  top.sort((a, b) => a.name.localeCompare(b.name));
+
+  // queue entries carry their top-level extension id, so a symlink found deep in
+  // a subtree can exclude exactly that extension.
+  const queue: Array<{ dir: string; id: string }> = [];
+  for (const entry of top) {
+    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    if (entriesVisited >= budget.maxEntries) { overBudget = true; break; }
+    const full = join(extensionsDir, entry.name);
+    const info = await statB(full);
+    parts.push(fingerprintPart(full, info));
+    entriesVisited += 1;
+    const id = entry.name.replace(/\.(ts|js)$/, '');
+    if (entry.isSymbolicLink) {
+      // Never follow a symlinked extension: its subtree cannot be fingerprinted.
+      unfingerprintable.add(id);
+      continue;
     }
+    if (entry.isFile && extensionName(entry.name)) {
+      entryPaths.push(full);
+      continue;
+    }
+    if (entry.isDirectory) {
+      const resolved = await resolveExtensionEntries(full, { stat: statB, readFile: readFileFn }, () => overBudget || entriesVisited >= budget.maxEntries);
+      entryPaths.push(...resolved);
+      if (entriesVisited >= budget.maxEntries) overBudget = true;
+      queue.push({ dir: full, id });
+    }
+  }
+
+  // Fingerprint walk over the same budget; directory symlinks are not followed.
+  while (queue.length > 0) {
+    if (dirsVisited >= budget.maxDirs) { overBudget = true; break; }
     const current = queue.shift();
     if (current === undefined) break;
     dirsVisited += 1;
     let entries: ExtensionDirEntry[];
     try {
-      entries = await readdirFn(current);
+      entries = await readdirB(current.dir);
     } catch {
       continue;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (entry.name === 'node_modules' || entry.name === '.git') continue;
-      if (entriesVisited >= budget.maxEntries) {
-        overBudget = true;
-        break;
-      }
-      const full = join(current, entry.name);
-      const info = await statFn(full);
-      parts.push(`${full}:${info?.mtimeMs ?? 'missing'}:${info?.size ?? 0}`);
+      if (entriesVisited >= budget.maxEntries) { overBudget = true; break; }
+      const full = join(current.dir, entry.name);
+      const info = await statB(full);
+      parts.push(fingerprintPart(full, info));
       entriesVisited += 1;
-      if (entry.isDirectory) queue.push(full);
+      if (entry.isSymbolicLink) {
+        unfingerprintable.add(current.id);
+        continue;
+      }
+      if (entry.isDirectory) queue.push({ dir: full, id: current.id });
     }
     if (overBudget) break;
   }
+
   parts.sort();
-  return { entryPaths, fingerprint: parts.join('|'), overBudget, dirsVisited, entriesVisited };
+  return {
+    entryPaths: entryPaths.filter((path) => !unfingerprintable.has(extensionId(path, extensionsDir))),
+    fingerprint: parts.join('|'),
+    overBudget,
+    dirsVisited,
+    entriesVisited,
+    fsOps,
+    unfingerprintable: [...unfingerprintable],
+  };
 }
 
 export class ExtensionFactoryCache {
@@ -327,7 +395,7 @@ export class ExtensionFactoryCache {
   private readonly entries = new Map<string, CacheEntry>();
   private importFactory?: (extensionPath: string) => Promise<unknown | undefined>;
   private seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
-  private counters: ExtensionFactoryCacheStats = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false };
+  private counters: ExtensionFactoryCacheStats = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false, unfingerprintable: 0 };
   private scanEntryCount = 0;
   private overBudgetWarned = false;
   constructor(deps: ExtensionFactoryCacheDeps = {}) {
@@ -368,6 +436,7 @@ export class ExtensionFactoryCache {
     const extensionsDir = join(agentDir, 'extensions');
     const scan = await scanExtensionsTree(agentDir, this.deps, { maxDirs: this.maxScanDirs, maxEntries: this.maxScanEntries });
     this.scanEntryCount = Math.min(scan.entriesVisited, this.maxScanEntries);
+    this.counters.unfingerprintable = scan.unfingerprintable.length;
     const allowed = scan.entryPaths.filter((path) => this.allowlist.has(extensionId(path, extensionsDir)));
     this.counters.discovered = scan.entryPaths.length;
     this.counters.allowlisted = allowed.length;
@@ -446,7 +515,7 @@ export class ExtensionFactoryCache {
 
   reset(): void {
     this.entries.clear();
-    this.counters = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false };
+    this.counters = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false, unfingerprintable: 0 };
     this.overBudgetWarned = false;
     this.scanEntryCount = 0;
   }

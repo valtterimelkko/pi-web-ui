@@ -323,3 +323,74 @@ describe('runExtensionLoadCriticalSection (major 2)', () => {
     await expect(runExtensionLoadCriticalSection(async () => 'ok')).resolves.toBe('ok');
   });
 });
+
+describe('ExtensionFactoryCache — round-2 review guards', () => {
+  it('bounds filesystem operations during discovery, not only the overBudget flag', async () => {
+    // 100 sibling extension directories; the budget must be enforced while the
+    // top-level directory is being enumerated, before every entry is stat'd
+    // (round-2 review: discovery used to run unbounded first).
+    const dirs: Record<string, string[]> = { [`${AGENT}/extensions`]: [] };
+    for (let i = 0; i < 100; i += 1) {
+      dirs[`${AGENT}/extensions`].push(`d${i}`);
+      dirs[`${AGENT}/extensions/d${i}`] = ['index.ts'];
+    }
+    const files: Record<string, { mtimeMs: number; size?: number }> = {};
+    for (let i = 0; i < 100; i += 1) files[`${AGENT}/extensions/d${i}/index.ts`] = { mtimeMs: i };
+    const base = fakeFs({ dirs, files });
+    let stats = 0;
+    let readdirs = 0;
+    const cache = new ExtensionFactoryCache({
+      readdir: async (dir) => { readdirs += 1; return base.deps.readdir(dir); },
+      stat: async (path) => { stats += 1; return base.deps.stat(path); },
+      readFile: base.deps.readFile,
+      importFactory: async () => ({}),
+      seedFactory: () => true,
+      maxScanDirs: 2,
+      maxScanEntries: 2,
+    });
+    const entries = await cache.load(AGENT);
+    expect(entries).toEqual([]);
+    expect(cache.stats.overBudget).toBe(true);
+    // readdir(extensions) + a bounded number of stats for at most the budgeted
+    // entries (each directory entry may probe package.json/index.ts).
+    expect(stats + readdirs).toBeLessThanOrEqual(12);
+    expect(stats).toBeLessThan(20);
+  });
+
+  it('leaves a symlinked extension uncached and reports it', async () => {
+    const { deps } = fakeFs({
+      dirs: {
+        [`${AGENT}/extensions`]: ['linked', 'plain'],
+        [`${AGENT}/extensions/plain`]: ['index.ts'],
+      },
+      files: {
+        [`${AGENT}/extensions/plain/index.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/linked/index.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/linked/helper.ts`]: { mtimeMs: 1 },
+      },
+    });
+    // Mark 'linked' as a symlinked directory entry.
+    const linkedReaddir = async (dir: string) => {
+      const entries = await deps.readdir!(dir);
+      if (dir === `${AGENT}/extensions`) {
+        return entries.map((entry) => entry.name === 'linked'
+          ? { ...entry, isDirectory: false, isSymbolicLink: true }
+          : entry);
+      }
+      return entries;
+    };
+    const importFactory = vi.fn(async (p: string) => ({ p }));
+    const cache = new ExtensionFactoryCache({
+      readdir: linkedReaddir,
+      stat: deps.stat,
+      readFile: deps.readFile,
+      importFactory,
+      seedFactory: () => true,
+      allowlist: ['linked', 'plain'],
+    });
+    const entries = await cache.load(AGENT);
+    expect(entries.map((entry) => entry.path)).toEqual([`${AGENT}/extensions/plain/index.ts`]);
+    expect(importFactory).toHaveBeenCalledTimes(1);
+    expect(cache.stats.unfingerprintable).toBe(1);
+  });
+});

@@ -304,7 +304,9 @@ export class PiService {
     // the REST/Internal API model projections. The SDK's higher-level
     // createAgentSessionServices() performs this same flush; PiService creates
     // the shared ModelRuntime itself, so it must do the flush explicitly.
-    await this.resourceLoader.reload();
+    await runExtensionLoadCriticalSection(async () => {
+      await this.resourceLoader.reload();
+    });
     const extensionsResult = this.resourceLoader.getExtensions();
     for (const { name, config: providerConfig, extensionPath } of extensionsResult.runtime?.pendingProviderRegistrations ?? []) {
       try {
@@ -566,7 +568,16 @@ export class PiService {
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
-    await session.reload();
+    // Round-2 review finding 1: `session.reload()` calls
+    // `DefaultResourceLoader.reload()`, which CLEARS the SDK's process-global
+    // extension cache when that loader was already loaded. It must therefore run
+    // in the same critical section as seed→load, or a reload in one session can
+    // invalidate another session's seeded factories mid-sequence. This is the
+    // path behind the normal `ctx.reload()` adapter
+    // (extension-ui-adapter.ts → piService.reloadSession).
+    await runExtensionLoadCriticalSection(async () => {
+      await session.reload();
+    });
   }
 
   async navigateSessionTree(
