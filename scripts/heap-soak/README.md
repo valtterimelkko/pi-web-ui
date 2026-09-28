@@ -128,7 +128,19 @@ by Gate 1.
    window closes and before finalisation**, with a forced GC first, and records
    it in run-state. `report.md` therefore compares start against end (falling
    back to the latest valid snapshot) and runs the retainer summary on the end
-   snapshot.
+   snapshot. **Correction (2026-09-28):** the window closing does not mean the
+   load has stopped — a wave's stragglers were still mid-lifecycle when the
+   first version snapshotted, so the end snapshot showed live children rather
+   than retention. The supervisor now **drains first** (`end-drain.ts`): it
+   waits, bounded by `endDrainTimeoutMs` (max(one wave, 2 min)), until nothing
+   is in flight and every created child has a terminal delete, then runs one
+   final orphan sweep, then snapshots. It records
+   `liveChildrenAtEndSnapshot` (count + bounded ids) in `run-state.json`, and
+   `report.md` prints the snapshot's `AgentSession` count next to that live
+   count with the verdict **`Retained deleted children: N`**, naming the one
+   known bounded extension slot (`backgroundStatusCtx`) instead of hiding it.
+   On timeout the still-live children are recorded rather than waited for for
+   ever.
 3. **Teardown.** A completed run used to leave the server unit up until
    `cli.ts stop` was run by hand. The supervisor now stops the disposable
    server at completion, after the end snapshot. Keep it up only with

@@ -22,6 +22,7 @@ import {
   type SnapshotFileInfo,
 } from '../../server/src/live-validation/heap-soak/snapshot-selection.js';
 import type { ConstructorRetainerAnalysis, CutTestResult } from '../../server/src/live-validation/heap-soak/snapshot-retainers.js';
+import { renderRetentionVerdict } from '../../server/src/live-validation/heap-soak/end-drain.js';
 
 const execFile = promisify(execFileCb);
 
@@ -122,7 +123,10 @@ export function findFirstLastSnapshots(snapshotDir: string): { firstPath: string
  * Full section: pick the start + latest-valid after candidates, try each until
  * one parses, and render the comparison. Names any skipped (empty) snapshots.
  */
-export async function snapshotComparisonSection(runDir: string): Promise<string> {
+export async function snapshotComparisonSection(
+  runDir: string,
+  options: { liveChildrenAtSnapshot?: number } = {},
+): Promise<string> {
   const files = listSnapshotFiles(path.join(runDir, 'snapshots'));
   const selection = selectSnapshotCandidates(files);
   if (!selection.start || selection.afterCandidates.length === 0) {
@@ -133,7 +137,11 @@ export async function snapshotComparisonSection(runDir: string): Promise<string>
   for (const candidate of selection.afterCandidates) {
     const result = await compareSnapshots(selection.start.path, candidate.path);
     if (result.ok) {
-      return renderSnapshotDiffMarkdown(result, { skipped: selection.skipped, attempts });
+      return renderSnapshotDiffMarkdown(result, {
+        skipped: selection.skipped,
+        attempts,
+        ...(options.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: options.liveChildrenAtSnapshot } : {}),
+      });
     }
     attempts.push(`${candidate.name}: ${result.reason}`);
   }
@@ -142,11 +150,20 @@ export async function snapshotComparisonSection(runDir: string): Promise<string>
 
 export function renderSnapshotDiffMarkdown(
   result: SnapshotDiffResult,
-  context: { skipped?: { name: string; reason: string }[]; attempts?: string[] } = {},
+  context: { skipped?: { name: string; reason: string }[]; attempts?: string[]; liveChildrenAtSnapshot?: number } = {},
   topN = 15,
 ): string {
   const lines = ['## Snapshot comparison (first vs latest valid) — top growers by self-size delta', ''];
   lines.push(`Compared against: \`${result.usedAfterName}\`.`);
+  // B0.1 correction: state the retention verdict next to the live count, so an
+  // end snapshot taken while children were still live cannot be mistaken for
+  // retention evidence.
+  const agentSessionCount = result.retainers.find((r) => r.constructor === 'AgentSession')?.instances ?? 0;
+  lines.push('');
+  lines.push(...renderRetentionVerdict({
+    agentSessionCount,
+    ...(context.liveChildrenAtSnapshot !== undefined ? { liveChildrenAtSnapshot: context.liveChildrenAtSnapshot } : {}),
+  }));
   if (context.skipped && context.skipped.length > 0) {
     lines.push('');
     lines.push(`Skipped ${context.skipped.length} invalid snapshot(s): ${context.skipped.map((s) => `\`${s.name}\` (${s.reason})`).join(', ')}.`);

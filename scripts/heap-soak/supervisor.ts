@@ -25,6 +25,8 @@ import { runWave, type DriverState } from './driver.js';
 import { sweepOrphans } from './orphan-sweep.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
+import { computeOpenSessionIds } from '../../server/src/live-validation/heap-soak/orphans.js';
+import { endDrainTimeoutMs, evaluateDrain, type DrainStatus } from '../../server/src/live-validation/heap-soak/end-drain.js';
 import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath, shouldSendFinalNotice, shouldTerminaliseOnStartupRecovery } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
 import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
@@ -55,8 +57,12 @@ function getFlag(argv: string[], flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  const runStatePath = getFlag(argv, '--run-state');
-  if (!runStatePath) throw new Error('supervisor requires --run-state <path>');
+  const runStatePathArg = getFlag(argv, '--run-state');
+  if (!runStatePathArg) throw new Error('supervisor requires --run-state <path>');
+  // Named as a non-optional string so the narrowing survives into the hoisted
+  // nested functions below (TypeScript widens a `const` narrowed only by an
+  // early throw when it is captured by a function declaration).
+  const runStatePath: string = runStatePathArg;
 
   const state = loadRunState(runStatePath);
   // B0.1 defect 5: a `full` run's window is whatever run-state recorded (--hours), defaulting to 24 h; micro keeps its compressed schedule.
@@ -94,7 +100,9 @@ async function main(): Promise<void> {
       ...(state.windowHours !== undefined ? { windowHours: state.windowHours } : {}),
       ...(state.build ? { build: state.build } : {}),
     });
-    const snapshotSection = await snapshotComparisonSection(state.runDir);
+    const snapshotSection = await snapshotComparisonSection(state.runDir, {
+      ...(state.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
+    });
 
     // Production-write / board-pollution audit at the run's end (owner
     // amendment 2026-09-26) — required "at the long run's end" in addition to
@@ -292,14 +300,59 @@ async function main(): Promise<void> {
   };
 
   /**
+   * B0.1 correction: live children right now — still tracked by an in-flight
+   * `runChild`, or created without a terminal `child_deleted`/`orphan_swept`
+   * event yet.
+   */
+  function currentDrainStatus(): DrainStatus {
+    const events = readLaneEvents(state.eventsLogPath);
+    return evaluateDrain({ inFlight: driverState.inFlight, openSessionIds: computeOpenSessionIds(events) });
+  }
+
+  /**
+   * B0.1 correction (2026-09-28): wait for the load to drain before the end
+   * snapshot. The old code snapshotted as soon as the window closed, while a
+   * wave's stragglers were still mid-lifecycle, so the snapshot showed live
+   * children (the parent's verification found 5) and could not answer
+   * "no deleted child retained". Bounded by `endDrainTimeoutMs`; on timeout the
+   * still-live children are recorded, not waited for for ever. A final orphan
+   * sweep then deletes anything left that no in-flight cycle still owns.
+   */
+  async function drainBeforeEndSnapshot(): Promise<DrainStatus> {
+    const timeoutMs = endDrainTimeoutMs(schedule);
+    const deadline = Date.now() + timeoutMs;
+    let status = currentDrainStatus();
+    while (!status.drained && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      status = currentDrainStatus();
+    }
+    console.error(`[supervisor] pre-snapshot drain: drained=${status.drained} after ${timeoutMs}ms bound (live=${status.liveChildren.length})`);
+    await sweepOrphans(client, readLaneEvents(state.eventsLogPath), log, elapsedNow, { inFlight: driverState.inFlight, swept: driverState.swept });
+    return currentDrainStatus();
+  }
+
+  /**
    * B0.1 defect 2: the declared end snapshot, taken after the window closes and
    * before finalisation. Forced GC first (never a raw heapUsed), then the
    * snapshot, so the report's start-vs-end comparison and retainer summary use
-   * a real end-of-run heap rather than the 12 h (or start) one.
+   * a real end-of-run heap rather than the 12 h (or start) one. B0.1 correction:
+   * the load is drained first and the live-child count at the snapshot is
+   * recorded, so the comparison's `AgentSession` count can be read against it.
    */
   async function takeEndSnapshot(): Promise<void> {
     const offset = endSnapshotOffsetMs(schedule);
     if (firedSnapshots.has(offset)) return;
+    const drain = await drainBeforeEndSnapshot();
+    state.liveChildrenAtEndSnapshot = drain.liveChildren.length;
+    state.liveChildrenAtEndSnapshotIds = drain.liveChildren.slice(0, 50);
+    state.endSnapshotDrain = { drained: drain.drained, timeoutMs: endDrainTimeoutMs(schedule) };
+    log({
+      ts: new Date().toISOString(),
+      elapsedMs: elapsedNow(),
+      lane: 'A',
+      kind: drain.drained ? 'checkpoint' : 'anomaly',
+      detail: `end snapshot drain: drained=${drain.drained} liveChildren=${drain.liveChildren.length}${drain.liveChildren.length > 0 ? ` ids=${drain.liveChildren.slice(0, 10).join(',')}` : ''}`,
+    });
     try {
       await inspector.collectGarbage();
       mkdirSync(path.join(state.runDir, 'snapshots'), { recursive: true });

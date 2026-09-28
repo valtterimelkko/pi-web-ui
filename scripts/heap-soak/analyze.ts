@@ -76,7 +76,9 @@ export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full')
   }
 
   const report = buildReport(rows, events, schedule, 'A', options);
-  const snapshotSection = await snapshotComparisonSection(dir);
+  const snapshotSection = await snapshotComparisonSection(dir, {
+    ...(state?.liveChildrenAtEndSnapshot !== undefined ? { liveChildrenAtSnapshot: state.liveChildrenAtEndSnapshot } : {}),
+  });
   const markdown = `${renderReportMarkdown(report, runId)}\n\n${snapshotSection}`;
   writeFileSync(path.join(dir, 'report.md'), markdown);
   writeFileSync(path.join(dir, 'report.json'), JSON.stringify(report, null, 2));

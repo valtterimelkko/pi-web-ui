@@ -177,7 +177,12 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
   record('report generated with a verdict line', reportExists && /Verdict:/.test(reportMd), reportExists ? reportMd.split('\n').find((l) => l.includes('Verdict:')) ?? '' : 'report.md missing');
 
   // ── B0.1 defect 1: the build the run started on is recorded ──
-  const runStateAfter = JSON.parse(readFileSync(launch.paths.runStatePath, 'utf8')) as { build?: { headSha?: string; fresh?: boolean; reason?: string } };
+  const runStateAfter = JSON.parse(readFileSync(launch.paths.runStatePath, 'utf8')) as {
+    build?: { headSha?: string; fresh?: boolean; reason?: string };
+    liveChildrenAtEndSnapshot?: number;
+    liveChildrenAtEndSnapshotIds?: string[];
+    endSnapshotDrain?: { drained: boolean; timeoutMs: number };
+  };
   record(
     'B0.1 build commit recorded in run-state.json and report.md',
     Boolean(runStateAfter.build?.headSha) && reportMd.includes(`Build:** commit \`${runStateAfter.build?.headSha}\``),
@@ -195,6 +200,26 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
   );
   const retainerHeading = reportMd.split('\n').find((l) => l.includes('retainer chains')) ?? '(no retainer-chains section)';
   record('B0.1 report carries the retainer summary for the end snapshot', reportMd.includes('retainer chains'), retainerHeading);
+
+  // ── B0.1 correction: the end snapshot is taken after the load drained, and the
+  // report states the retention verdict next to the recorded live count ──
+  const agentSessionMatch = /AgentSession instances in the end snapshot: (\d+)/.exec(reportMd);
+  const retainedMatch = /Retained deleted children: (\d+)/.exec(reportMd);
+  record(
+    'B0.1c pre-snapshot drain recorded in run-state.json',
+    runStateAfter.endSnapshotDrain !== undefined && runStateAfter.liveChildrenAtEndSnapshot !== undefined,
+    `drain=${JSON.stringify(runStateAfter.endSnapshotDrain)} liveChildrenAtEndSnapshot=${runStateAfter.liveChildrenAtEndSnapshot ?? '(none)'} ids=${JSON.stringify(runStateAfter.liveChildrenAtEndSnapshotIds ?? [])}`,
+  );
+  record(
+    'B0.1c report states the retained-deleted-children verdict',
+    retainedMatch !== null && reportMd.includes('Live children at the moment of the snapshot'),
+    reportMd.split('\n').find((l) => l.includes('Retained deleted children:')) ?? '(missing)',
+  );
+  record(
+    'B0.1c end snapshot AgentSession count matches the live count (+ known bounded slot)',
+    agentSessionMatch !== null && retainedMatch !== null && Number(retainedMatch[1]) === 0,
+    `agentSessionInstances=${agentSessionMatch?.[1] ?? 'n/a'} liveChildrenAtSnapshot=${runStateAfter.liveChildrenAtEndSnapshot ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
+  );
 
   // ── B0.1 defect 3: the supervisor tore the server unit down at completion ──
   let serverGoneAfterComplete = false;

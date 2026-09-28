@@ -27,6 +27,9 @@ export async function runStatus(runId: string): Promise<string> {
     : state.endSnapshotError
       ? `end snapshot: FAILED — ${state.endSnapshotError}`
       : 'end snapshot: not taken yet';
+  const drainLine = state.endSnapshotDrain
+    ? `pre-snapshot drain: drained=${state.endSnapshotDrain.drained} (bound ${state.endSnapshotDrain.timeoutMs}ms) liveChildrenAtEndSnapshot=${state.liveChildrenAtEndSnapshot ?? 'unknown'}${state.liveChildrenAtEndSnapshotIds && state.liveChildrenAtEndSnapshotIds.length > 0 ? ` ids=${state.liveChildrenAtEndSnapshotIds.slice(0, 5).join(',')}` : ''}`
+    : 'pre-snapshot drain: not recorded';
   const teardownLine = state.serverStoppedAt
     ? `server stopped: ${state.serverStoppedAt} verifiedGone=${state.serverStopVerifiedGone ?? 'unknown'}`
     : state.keepServer ? 'server kept up (HEAP_SOAK_KEEP_SERVER set)' : 'server not yet stopped';
@@ -43,6 +46,7 @@ export async function runStatus(runId: string): Promise<string> {
     `started: ${state.startedAt}  ends: ${state.endsAt}`,
     scheduleLine,
     endSnapshotLine,
+    drainLine,
     teardownLine,
     buildLine,
   ].join('\n');
