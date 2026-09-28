@@ -21,3 +21,54 @@ export function computeOpenSessionIds(events: readonly LaneEvent[]): string[] {
   }
   return createdOrder.filter((id) => !deleted.has(id));
 }
+
+/**
+ * Orphan-sweep race (B0.1 defect 4). The confirmation soak's 167 lane-A
+ * `SESSION_NOT_FOUND` failures all followed the same sequence:
+ * `child_created` -> `child_tool_call_seen` -> `orphan_swept` -> the driver's
+ * own follow-up prompt or delete failed. The sweep was deleting children a
+ * wave's stragglers still owned, and the harness then counted its own deletion
+ * as a child failure.
+ *
+ * The fix has two halves:
+ *   1. the sweep only touches sessions no in-flight driver cycle still tracks
+ *      (this partition); and
+ *   2. if a swept session nevertheless fails later, it is accounted as
+ *      `orphan_swept`, not `child_failed` (see {@link classifyChildFailure}).
+ */
+export function partitionSweepCandidates(
+  openSessionIds: readonly string[],
+  inFlight: ReadonlySet<string>,
+): { sweepable: string[]; skippedInFlight: string[] } {
+  const sweepable: string[] = [];
+  const skippedInFlight: string[] = [];
+  for (const sessionId of openSessionIds) {
+    if (inFlight.has(sessionId)) skippedInFlight.push(sessionId);
+    else sweepable.push(sessionId);
+  }
+  return { sweepable, skippedInFlight };
+}
+
+/**
+ * Which event kind a child failure should be recorded under: the harness's own
+ * sweep deleting a session is `orphan_swept`, never a child failure.
+ */
+export function classifyChildFailure(input: { sessionId?: string; sweptByHarness: boolean }): 'child_failed' | 'orphan_swept' {
+  return input.sessionId !== undefined && input.sweptByHarness ? 'orphan_swept' : 'child_failed';
+}
+
+/**
+ * Regression invariant for the accounting fix: session ids that have BOTH an
+ * `orphan_swept` and a later `child_failed` event. A correct harness reports
+ * none — the sweep's own deletions are counted as `orphan_swept`.
+ */
+export function sweptChildFailures(events: readonly LaneEvent[]): string[] {
+  const swept = new Set<string>();
+  const misCounted: string[] = [];
+  for (const e of events) {
+    if (!e.sessionId) continue;
+    if (e.kind === 'orphan_swept') swept.add(e.sessionId);
+    else if (e.kind === 'child_failed' && swept.has(e.sessionId) && !misCounted.includes(e.sessionId)) misCounted.push(e.sessionId);
+  }
+  return misCounted;
+}

@@ -1,4 +1,5 @@
 import type { CircuitBreakerState, LaneName } from './types.js';
+import type { BuildRecord } from './build-freshness.js';
 
 export interface RunStateServerInfo {
   unitName: string;
@@ -74,6 +75,21 @@ export interface RunState {
   extensionsOverlays?: string[];
   /** Position in HEAP_SOAK_INJECT_QUOTA_SEQUENCE (Gate 1 test seam only) — persisted so a supervisor restart doesn't replay the sequence from the start. */
   quotaInjectedIndex?: number;
+  /** B0.1 defect 5: the requested `--hours` window for a `full` run (absent for micro). */
+  windowHours?: number;
+  /** B0.1 defect 1: the checkout HEAD and build-freshness check the run started on. */
+  build?: BuildRecord;
+  /** B0.1 defect 3: explicit request to keep the server up after completion (else the supervisor stops it). */
+  keepServer?: boolean;
+  /** B0.1 defect 2: recorded once the post-window end snapshot has been taken. */
+  endSnapshotMs?: number;
+  endSnapshotPath?: string;
+  /** B0.1 defect 2: why the end snapshot could not be taken (recorded rather than swallowed). */
+  endSnapshotError?: string;
+  /** B0.1 defect 3: when the supervisor stopped the disposable server after completion. */
+  serverStoppedAt?: string;
+  /** B0.1 defect 3: whether the `systemctl stop` + wait confirmed the unit is gone. */
+  serverStopVerifiedGone?: boolean;
 }
 
 export function serializeRunState(state: RunState): string {

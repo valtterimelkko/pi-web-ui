@@ -35,6 +35,40 @@ export const MICRO_SCHEDULE: ScheduleConfig = {
   sampleIntervalMs: 10_000,
 };
 
+/**
+ * Bounded full-run window (B0.1 defect 5). `start` accepts `--hours <n>` so
+ * D1 can run a bounded soak with the same instrument as E2's final 24 h run.
+ * The default stays 24 h.
+ */
+export const DEFAULT_FULL_RUN_HOURS = 24;
+/** A sane minimum: below an hour no checkpoint/snapshot cadence is meaningful, and the GLM warm-up dominates. */
+export const MIN_FULL_RUN_HOURS = 1;
+/** A week is the ceiling — a longer window would be an unattended-run risk, not a soak. */
+export const MAX_FULL_RUN_HOURS = 168;
+
+export type FullRunHoursParse = { ok: true; hours: number } | { ok: false; error: string };
+
+/** Validate a `--hours` value: a positive whole number of hours inside [MIN, MAX]. */
+export function parseFullRunHours(raw: string | number | undefined): FullRunHoursParse {
+  if (raw === undefined || String(raw).trim() === '') {
+    return { ok: false, error: '--hours requires a value (a whole number of hours)' };
+  }
+  const value = Number(String(raw).trim());
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    return { ok: false, error: `--hours must be a whole number of hours (got ${JSON.stringify(String(raw))})` };
+  }
+  if (value < MIN_FULL_RUN_HOURS) return { ok: false, error: `--hours must be at least ${MIN_FULL_RUN_HOURS} hour(s)` };
+  if (value > MAX_FULL_RUN_HOURS) return { ok: false, error: `--hours must be at most ${MAX_FULL_RUN_HOURS} hours` };
+  return { ok: true, hours: value };
+}
+
+/** The full schedule rescaled to `hours`. Checkpoints and snapshot offsets are fractions of totalMs, so both scale. */
+export function fullScheduleForHours(hours: number): ScheduleConfig {
+  const parsed = parseFullRunHours(hours);
+  if (!parsed.ok) throw new RangeError(parsed.error);
+  return { ...FULL_SCHEDULE, totalMs: parsed.hours * 3_600_000 };
+}
+
 export type PhaseName = 'wave' | 'idle';
 
 export function phaseAt(elapsedMs: number, config: ScheduleConfig): PhaseName {
@@ -55,6 +89,49 @@ export function snapshotOffsetsMs(config: ScheduleConfig): number[] {
   const offsets: number[] = [];
   for (let i = 0; i < n; i++) offsets.push(Math.round((i / (n - 1)) * config.totalMs));
   return offsets;
+}
+
+/**
+ * B0.1 defect 2: the declared snapshot offsets that the sampler loop can
+ * actually reach — everything strictly before the window closes. The offset
+ * equal to `totalMs` never fired (the loop exits on `isRunComplete` first), so
+ * it is taken explicitly after the window instead of being left to the loop.
+ */
+export function interimSnapshotOffsetsMs(config: ScheduleConfig): number[] {
+  return snapshotOffsetsMs(config).filter((offset) => offset < config.totalMs);
+}
+
+/** The declared end-snapshot offset (== the window length), taken after the window closes and before teardown. */
+export function endSnapshotOffsetMs(config: ScheduleConfig): number {
+  return config.totalMs;
+}
+
+/** A dry-run description of the schedule a `start --hours <n>` would run — printed by `cli.ts plan`. */
+export interface FullRunPlan {
+  mode: 'full';
+  hours: number;
+  totalMs: number;
+  waveMs: number;
+  idleMs: number;
+  sampleIntervalMs: number;
+  checkpointOffsetsMs: number[];
+  interimSnapshotOffsetsMs: number[];
+  endSnapshotOffsetMs: number;
+}
+
+export function fullRunPlan(hours: number): FullRunPlan {
+  const schedule = fullScheduleForHours(hours);
+  return {
+    mode: 'full',
+    hours,
+    totalMs: schedule.totalMs,
+    waveMs: schedule.waveMs,
+    idleMs: schedule.idleMs,
+    sampleIntervalMs: schedule.sampleIntervalMs,
+    checkpointOffsetsMs: checkpointOffsetsMs(schedule),
+    interimSnapshotOffsetsMs: interimSnapshotOffsetsMs(schedule),
+    endSnapshotOffsetMs: endSnapshotOffsetMs(schedule),
+  };
 }
 
 /**
