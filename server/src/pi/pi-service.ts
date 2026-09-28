@@ -27,6 +27,7 @@ import {
 } from './pi-openrouter-refresh.js';
 import { createLogger } from '../logging/logger.js';
 import { readSessionIdentity } from './session-cwd.js';
+import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
 
 const logger = createLogger('PiService');
 
@@ -383,28 +384,30 @@ export class PiService {
   }
 
   async createSession(options: CreateSessionOptions): Promise<AgentSession> {
-    await this.initialize();
+    const attributor = getLoopStallAttributor();
+    await attributor.spanAsync('pi.service.initialize', () => this.initialize());
     const modelRuntime = this.getModelRuntime();
     const cwd = options.cwd || process.cwd();
-    
+
     // Create session manager based on options
     let sessionManager: SessionManager;
-    
+
     if (options.inMemory) {
       sessionManager = SessionManager.inMemory();
     } else if (options.sessionPath) {
+      const requestedSessionPath = options.sessionPath;
       const fs = await import('fs/promises');
       let fileExists = false;
       try {
-        await fs.access(options.sessionPath);
+        await fs.access(requestedSessionPath);
         fileExists = true;
       } catch {
         fileExists = false;
       }
 
       if (fileExists) {
-        const expectedId = await assertPiSessionFileIdentity(options.sessionPath, { knownToExist: true });
-        sessionManager = SessionManager.open(options.sessionPath, config.sessionDir);
+        const expectedId = await assertPiSessionFileIdentity(requestedSessionPath, { knownToExist: true });
+        sessionManager = attributor.span('pi.session.open_file', () => SessionManager.open(requestedSessionPath, config.sessionDir));
         if (sessionManager.getSessionId() !== expectedId) {
           throw new PiSessionIdentityError(
             'SESSION_IDENTITY_MISMATCH',
@@ -420,7 +423,7 @@ export class PiService {
           );
         }
         logger.info(`[PiService.createSession] Explicitly creating session file with cwd: ${cwd}`);
-        sessionManager = SessionManager.create(cwd, config.sessionDir);
+        sessionManager = attributor.span('pi.session.create_file', () => SessionManager.create(cwd, config.sessionDir));
         const createdId = sessionManager.getSessionId();
         if (!expectedId || createdId !== expectedId) {
           throw new PiSessionIdentityError(
@@ -432,22 +435,22 @@ export class PiService {
         forceFlushSessionManager(sessionManager);
       }
     } else if (options.continueRecent) {
-      sessionManager = await SessionManager.continueRecent(cwd, config.sessionDir);
+      sessionManager = attributor.span('pi.session.continue_recent', () => SessionManager.continueRecent(cwd, config.sessionDir));
     } else {
-      sessionManager = SessionManager.create(cwd, config.sessionDir);
+      sessionManager = attributor.span('pi.session.create_file', () => SessionManager.create(cwd, config.sessionDir));
       // Force immediate write to disk so session file exists before anything else needs it
       // (SDK defers writing until first assistant message by default)
       forceFlushSessionManager(sessionManager);
     }
 
-    const sessionResourceLoader = await this.createSessionResourceLoader(cwd);
+    const sessionResourceLoader = await attributor.spanAsync('pi.session.resource_loader', () => this.createSessionResourceLoader(cwd));
 
-    const { session } = await createAgentSession({
+    const { session } = await attributor.spanAsync('pi.session.create_agent_session', () => createAgentSession({
       sessionManager,
       modelRuntime,
       resourceLoader: sessionResourceLoader,
       cwd,
-    });
+    }));
 
     // SessionManager identity was validated before createAgentSession. Do not
     // perform a post-open dispose-on-mismatch check: dispose may persist SDK

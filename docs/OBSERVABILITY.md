@@ -425,6 +425,45 @@ single field as `null`/`0`; telemetry never takes the control plane down.
 `server/src/observability/health-readings.ts`. Admission should import those
 rather than re-deriving heap pressure from `process.memoryUsage()`.
 
+### Attributing a lag spike (B1.2)
+
+The A2 lag reading says *that* the loop stalled; it cannot say *what* was on the
+loop. `server/src/observability/loop-stall-attribution.ts` adds that second half
+with two measured, bounded instruments:
+
+- **named spans** (`span()` for synchronous work, `spanAsync()` for an awaited
+  operation) around the session-open paths — `pi.session.resource_loader`,
+  `pi.session.open_file`, `pi.session.create_file`,
+  `pi.session.create_agent_session`, `pi.multi.create_session`,
+  `pi.multi.rehydrate_session`, `pi.browser.load_session_messages`;
+- a **loop-stall sampler**: a self-rescheduling 25 ms timer measures how late it
+  actually ran. A late tick *is* a blocked event loop (timers could not run),
+  and the innermost active span label at that instant names what was on it.
+  This is a measurement, not a timing correlation: it cannot attribute a stall
+  to an operation that was merely happening nearby.
+
+Recorded lines (rate-limited to at most one per label per 5 s, so a stall storm
+cannot itself become the stall) go through the central logger and therefore land
+in the diagnostics ring buffer — `GET /api/v1/diagnostics?component=LoopAttribution`:
+
+```
+[LoopAttribution] async span 696.4 ms: pi.session.resource_loader
+[LoopAttribution] event-loop stall 716 ms attributed to pi.multi.rehydrate_session
+```
+
+Bounds and cost: enter/exit is a stack push/pop with no allocation; two
+`performance.now()` calls per span; only spans at or above 100 ms
+(`spanThresholdMs`) and stalls at or above 50 ms (`stallThresholdMs`) are
+retained, in 50-entry rings; label cardinality is capped (64, overflow folds
+into `<other>`); the sampling timer is `unref()`d. The attributor is inert under
+`VITEST` (the sampler runs, the logger is not wired) and is started lazily by
+`getLoopStallAttributor()` on first use, exactly like the shed monitor.
+`readLoopStallAttribution()` returns the snapshot without creating or starting
+anything. Unit coverage and the measured bounds are in
+`server/tests/unit/observability/loop-stall-attribution.test.ts`; the
+reproduction harness is `scripts/lag-repro/run.ts` (see
+[`plans/execution-reports/orchestration-scaling/B1.2.md`](./plans/execution-reports/orchestration-scaling/B1.2.md)).
+
 ### Re-running the A2 live proof
 
 `server/tests/integration/health-telemetry-live-proof.mjs` (a manual

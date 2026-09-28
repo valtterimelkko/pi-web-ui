@@ -19,6 +19,7 @@ import {
 import { SessionPool } from '../pi/session-pool.js';
 import { readSessionCwd } from '../pi/session-cwd.js';
 import { parsePiSessionHistory } from '../pi/session-history.js';
+import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
 import { readBackgroundTasksSnapshot } from '../internal-api/background-children.js';
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager } from '../pi/multi-session-manager.js';
@@ -2983,6 +2984,10 @@ export class WebSocketConnectionManager {
    * Returns messages and file modification timestamp for cache invalidation
    */
   private async loadSessionMessages(sessionPath: string): Promise<{ messages: SessionMessage[]; fileTimestamp: number }> {
+    return getLoopStallAttributor().spanAsync('pi.browser.load_session_messages', () => this.readSessionMessages(sessionPath));
+  }
+
+  private async readSessionMessages(sessionPath: string): Promise<{ messages: SessionMessage[]; fileTimestamp: number }> {
     try {
       if (!sessionPath) {
         return { messages: [], fileTimestamp: 0 };
