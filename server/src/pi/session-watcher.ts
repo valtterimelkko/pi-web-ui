@@ -7,6 +7,7 @@ import { createLogger } from '../logging/logger.js';
 import type { SessionRegistryManager } from '../session-registry.js';
 import { archiveStaleDiscoveredSession } from '../session-cleanup.js';
 import { config } from '../config.js';
+import { strictPiSessionIdFromFilename } from './session-identity.js';
 
 const logger = createLogger('SessionWatcher');
 
@@ -40,6 +41,10 @@ interface SessionReadState {
   cached: SessionInfo | null;
   revalidateQueued: boolean;
   inFlight: Promise<SessionInfo | null> | null;
+  /** Incremented on every successful synchronous header capture. */
+  capturedGeneration: number;
+  /** The capture generation when the in-flight read started. */
+  readGeneration: number;
 }
 
 export class SessionWatcher extends EventEmitter {
@@ -94,10 +99,16 @@ export class SessionWatcher extends EventEmitter {
       // debug:where and ordinary session listing, not replayed into the
       // registry as a boot-time rescan.
       ignoreInitial: true,
-      awaitWriteFinish: {
-        stabilityThreshold: 300,
-        pollInterval: 100,
-      },
+      // Deliberately NO `awaitWriteFinish` (B1.1). Chokidar 3.6.0's
+      // `_remove()` has an early return when a pending `add` is still in its
+      // await-write window: it calls `cancelWait()` and returns *before*
+      // deleting the path from `_watched`, closing the per-file `fs.watch`
+      // (its `FSWatcher`) and emitting the unlink. Any session file created and
+      // deleted inside the stability window therefore leaves a permanent
+      // FSWatcher + Stats/Date closure behind, which is exactly the residual
+      // growth the confirmation soak measured. With this option removed the
+      // watcher already debounces (500 ms) and reads the header itself, so the
+      // library-side stability wait adds no correctness.
       persistent: true,
     });
 
@@ -160,17 +171,34 @@ export class SessionWatcher extends EventEmitter {
     // For 'unlink', emit immediately. Retire the state before awaiting an
     // in-flight read so a replacement file at the same path gets fresh state.
     if (type === 'unlink') {
+      // Retire the debounce slot with its timer (B1.1): clearing the timeout
+      // alone leaves a dead entry in the map for every file added and unlinked
+      // inside the debounce window, which retains the fired Timeout and its
+      // captured per-path state for ever.
+      this.debounceTimers.delete(filePath);
       const state = this.readStateByPath.get(filePath);
-      const fallbackSessionId = state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? this.extractSessionId(filePath);
+      // Newest successfully captured header identity wins (B1.1 correction 03):
+      // the synchronous capture is newer than any cached complete read, so a
+      // same-path replacement's new id is not overridden by the old one. When
+      // no header was ever captured — every file present at start, since
+      // `ignoreInitial` suppresses its add — fall back to the canonical Pi
+      // filename id (`timestamp_<uuid>.jsonl`) before giving up (correction 04).
+      // Only a strict Pi name qualifies (correction 05), so a malformed name can
+      // never be misrouted to another session's id.
+      const capturedSessionId = this.sessionIdsByPath.get(filePath) ?? state?.cached?.id ?? strictPiSessionIdFromFilename(filePath);
       this.readStateByPath.delete(filePath);
       this.sessionIdsByPath.delete(filePath);
-      void this.emitChange(type, filePath, state, fallbackSessionId);
+      // Drop the compatibility projection now: an obsolete read must not delay
+      // the unlink or keep this map populated until it settles.
+      this.pendingInfoByPath.delete(filePath);
+      void this.emitChange(type, filePath, state, capturedSessionId);
       return;
     }
 
     // Capture the header ID synchronously while chokidar still guarantees the
     // path exists; this closes the add→unlink debounce race.
     this.debugBoundedHeaderReadCount += 1;
+    let capturedHeaderId: string | undefined;
     try {
       const fd = openSync(filePath, 'r');
       try {
@@ -179,7 +207,7 @@ export class SessionWatcher extends EventEmitter {
         const firstLine = buffer.subarray(0, bytes).toString('utf8').split('\n', 1)[0];
         const header = JSON.parse(firstLine) as { type?: unknown; id?: unknown };
         if (header.type === 'session' && typeof header.id === 'string' && header.id.trim()) {
-          this.sessionIdsByPath.set(filePath, header.id);
+          capturedHeaderId = header.id;
         }
       } finally {
         closeSync(fd);
@@ -190,13 +218,25 @@ export class SessionWatcher extends EventEmitter {
       cached: null,
       revalidateQueued: false,
       inFlight: null,
+      capturedGeneration: 0,
+      readGeneration: 0,
     };
     this.readStateByPath.set(filePath, state);
+    if (capturedHeaderId !== undefined) {
+      // The synchronous capture is the newest identity source. A complete read
+      // started earlier must not overwrite it (B1.1 correction 03) — otherwise
+      // a same-path replacement's new id can be replaced by a stale read of the
+      // previous (or a partially-written) file.
+      this.sessionIdsByPath.set(filePath, capturedHeaderId);
+      state.capturedGeneration += 1;
+    }
+    // Coalesce complete-file reads to the debounce window (B1.1 correction).
+    // Starting a read on a raw notification meant a continuously-appended
+    // large session kept the read chain alive for the whole turn — each read
+    // being fs.readFile of the whole file plus a synchronous JSON.parse of
+    // every line. The debounced emit below starts at most one read, once the
+    // path has gone quiet for the debounce delay.
     state.revalidateQueued = true;
-    // A completed read can cover all notifications in the current debounce
-    // window; defer that invalidation to the debounced emit. If a read is
-    // already active, ensureRead() simply returns the covering promise.
-    if (!hadDebounceTimer || state.inFlight) void this.ensureRead(filePath, state);
 
     // Debounce add/change events
     const timer = setTimeout(() => {
@@ -212,7 +252,7 @@ export class SessionWatcher extends EventEmitter {
   private getOrCreateReadState(filePath: string): SessionReadState {
     const existing = this.readStateByPath.get(filePath);
     if (existing) return existing;
-    const state: SessionReadState = { cached: null, revalidateQueued: false, inFlight: null };
+    const state: SessionReadState = { cached: null, revalidateQueued: false, inFlight: null, capturedGeneration: 0, readGeneration: 0 };
     this.readStateByPath.set(filePath, state);
     return state;
   }
@@ -223,6 +263,9 @@ export class SessionWatcher extends EventEmitter {
     if (!state.revalidateQueued) return Promise.resolve(state.cached);
 
     state.revalidateQueued = false;
+    // Remember which capture generation this read observes, so a capture that
+    // happens while it is running is never overwritten by its (older) result.
+    state.readGeneration = state.capturedGeneration;
     this.debugFullReadCount += 1;
     let readResult: Promise<SessionInfo>;
     try {
@@ -256,17 +299,32 @@ export class SessionWatcher extends EventEmitter {
     if (this.stopped || this.readStateByPath.get(filePath) !== state) return;
 
     state.cached = info;
-    if (info) this.sessionIdsByPath.set(filePath, info.id);
-    // A notification that arrived while this read was active invalidated the
-    // result. One boolean gives exactly one trailing read without a promise
-    // backlog; further changes can set it again while that read is active.
-    if (state.revalidateQueued) void this.ensureRead(filePath, state);
+    if (info && state.capturedGeneration === state.readGeneration) {
+      this.sessionIdsByPath.set(filePath, info.id);
+    }
+    // No trailing read is chained here (B1.1 correction). A change that landed
+    // during this read reset the debounce window, and that window's emit will
+    // perform the next single read — so a continuously-appended file gets at
+    // most one read per quiet period instead of back-to-back full parses.
   }
 
-  /** Wait for the cached result after any one trailing invalidation read settles. */
+  /**
+   * Read for the window that just closed, plus at most a bounded follow-up.
+   *
+   * Coalescing bounds reads to one per quiet period (see `handleChange`), but a
+   * window can close while an earlier window's read is still in flight, and the
+   * emit would otherwise join that stale read and strand its invalidation
+   * (B1.1 correction 03). The `debounceTimers` guard means a follow-up read is
+   * taken only when a change landed during the read and **no newer window is
+   * already queued to cover it** — so continuous appends still start no read at
+   * all, and there is never a back-to-back chain on raw notifications.
+   */
   private async waitForSettledRead(filePath: string, state: SessionReadState): Promise<SessionInfo | null> {
     let info = await this.ensureRead(filePath, state);
-    while (!this.stopped && this.readStateByPath.get(filePath) === state && (state.inFlight || state.revalidateQueued)) {
+    while (!this.stopped
+      && this.readStateByPath.get(filePath) === state
+      && state.revalidateQueued
+      && !this.debounceTimers.has(filePath)) {
       info = await this.ensureRead(filePath, state);
     }
     return info;
@@ -282,16 +340,32 @@ export class SessionWatcher extends EventEmitter {
     fallbackSessionId?: string,
   ): Promise<void> {
     const state = stateArg ?? this.readStateByPath.get(filePath);
-    const sessionId = fallbackSessionId ?? state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? this.extractSessionId(filePath);
+    const immediateSessionId = fallbackSessionId ?? state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? strictPiSessionIdFromFilename(filePath);
     const cwd = this.extractCwd(filePath);
 
     if (type === 'unlink') {
+      // A captured header identity is authoritative and immediate: prefer the
+      // newest capture over a stale cached read, and do not hold the unlink
+      // behind an obsolete in-flight read (B1.1 correction 03).
+      if (immediateSessionId !== undefined) {
+        if (this.stopped) return;
+        this.emit('session_update', {
+          type,
+          path: filePath,
+          sessionId: immediateSessionId,
+          cwd,
+        } satisfies SessionChangeEvent);
+        return;
+      }
+      // No captured identity: wait only for a read already in flight. With none,
+      // emit no sessionId — the filename (`timestamp_uuid`) is not a session id
+      // and would mislabel the unlink for consumers.
       const info = state?.inFlight ? await state.inFlight : state?.cached;
       if (this.stopped) return;
       this.emit('session_update', {
         type,
         path: filePath,
-        sessionId: info?.id ?? sessionId,
+        sessionId: info?.id,
         cwd,
       } satisfies SessionChangeEvent);
       return;
@@ -304,7 +378,7 @@ export class SessionWatcher extends EventEmitter {
     const event: SessionChangeEvent = {
       type,
       path: filePath,
-      sessionId,
+      sessionId: immediateSessionId ?? this.extractSessionId(filePath),
       cwd,
     };
 
@@ -321,7 +395,9 @@ export class SessionWatcher extends EventEmitter {
 
       event.sessionId = info.id;
       event.cwd = info.cwd;
-      this.sessionIdsByPath.set(filePath, info.id);
+      // `finishRead` owns the (generation-guarded) identity update. Adopting the
+      // read's id unconditionally here would overwrite a newer synchronous
+      // header capture with a stale read result (B1.1 correction 03).
       if (this.registry) {
         try {
           // Contract 1.30.0 origin provenance: a file the registry has never
@@ -412,7 +488,7 @@ export class SessionWatcher extends EventEmitter {
     let messageCount = 0;
     let createdAt: Date | null = null;
     let lastActivity: Date | null = null;
-    let canonicalId = this.extractSessionId(filePath);
+    let canonicalId = strictPiSessionIdFromFilename(filePath) ?? this.extractSessionId(filePath);
     let canonicalCwd = this.extractCwd(filePath);
 
     // Helper to check if content is an injected skill body. Defect 11 (Part 3):

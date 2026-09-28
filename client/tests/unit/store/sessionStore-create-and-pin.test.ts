@@ -161,4 +161,48 @@ describe('sessionStore — create-and-pin in one go', () => {
 
     expect(useSessionStore.getState().sessions).toHaveLength(0);
   });
+
+  it('removes the session on an id-less unlink when only the top-level path is present', () => {
+    const state = useSessionStore.getState();
+    state.handleServerMessage({
+      type: 'session_created',
+      sessionId: 'new-2',
+      sessionPath: '/sessions/new-2.jsonl',
+      sdkType: 'pi',
+    });
+    expect(useSessionStore.getState().sessions).toHaveLength(1);
+
+    // An unknown/partial session id no longer suppresses the unlink: the client
+    // must still remove by the event's top-level path (correction 04).
+    state.handleServerMessage({
+      type: 'session_update',
+      changeType: 'unlink',
+      path: '/sessions/new-2.jsonl',
+    });
+
+    expect(useSessionStore.getState().sessions).toHaveLength(0);
+  });
+
+  it('clears transfer readiness when a path-only unlink removes the session', () => {
+    const state = useSessionStore.getState();
+    state.handleServerMessage({
+      type: 'session_created',
+      sessionId: 'ready-1',
+      sessionPath: '/sessions/ready-1.jsonl',
+      sdkType: 'pi',
+    });
+    state.markTransferReady('ready-1');
+    expect(useSessionStore.getState().isTransferReady('ready-1')).toBe(true);
+
+    // Id-less, path-only unlink: the client resolves the row by path and must
+    // clear its transfer-ready flag too (correction 05).
+    state.handleServerMessage({
+      type: 'session_update',
+      changeType: 'unlink',
+      path: '/sessions/ready-1.jsonl',
+    });
+
+    expect(useSessionStore.getState().sessions).toHaveLength(0);
+    expect(useSessionStore.getState().isTransferReady('ready-1')).toBe(false);
+  });
 });

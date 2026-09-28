@@ -161,4 +161,88 @@ describe('SessionWatcher canonical metadata', () => {
 
     expect(info.firstMessage).toBe('find the docs for X');
   });
+
+  it('emits the canonical UUID for a valid-name unlink when no header was ever captured', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-uuid-partial-'));
+    const uuid = '01a0e9ec-36e0-74b4-930e-0e5a311deaa1';
+    const sessionPath = path.join(tempDir, `2026-09-28T21-29-27-008Z_${uuid}.jsonl`);
+    await writeFile(sessionPath, '{"type":"sess'); // truncated header
+
+    const watcher = new SessionWatcher(tempDir);
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    watcher.on('session_update', (event) => events.push(event));
+    const invoke = watcher as unknown as { handleChange(type: 'add' | 'unlink', filePath: string): void };
+
+    invoke.handleChange('add', sessionPath);
+    await rm(sessionPath);
+    invoke.handleChange('unlink', sessionPath);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.find((event) => event.type === 'unlink')?.sessionId).toBe(uuid);
+    await watcher.stop();
+  });
+
+  it('emits the canonical UUID for a pre-existing valid-name file deleted after watcher start (ignoreInitial)', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-preexisting-'));
+    const uuid = '01a0e9ec-36e0-74b4-930e-0e5a311deaa1';
+    const sessionPath = path.join(tempDir, `2026-09-28T21-29-27-008Z_${uuid}.jsonl`);
+    await writeFile(sessionPath, JSON.stringify({ type: 'session', id: uuid, cwd: '/tmp/preexisting', timestamp: 1 }) + '\n');
+
+    const watcher = new SessionWatcher(tempDir);
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    watcher.on('session_update', (event) => events.push(event));
+    watcher.start();
+    const native = (watcher as unknown as { watcher: { once(event: string, listener: () => void): void } }).watcher;
+    await new Promise<void>((resolve) => native.once('ready', resolve));
+
+    // ignoreInitial: true means the pre-existing file never emitted an add, so
+    // no header was ever captured; the unlink must still carry the canonical id.
+    await rm(sessionPath);
+    const deadline = Date.now() + 5_000;
+    while (!events.some((event) => event.type === 'unlink') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(events.find((event) => event.type === 'unlink')?.sessionId).toBe(uuid);
+    await watcher.stop();
+  });
+
+  it('emits no sessionId for an unlink whose name is not a valid Pi session file', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-invalid-name-'));
+    const sessionPath = path.join(tempDir, 'plainname.jsonl');
+    await writeFile(sessionPath, '{"type":"sess');
+
+    const watcher = new SessionWatcher(tempDir);
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    watcher.on('session_update', (event) => events.push(event));
+    const invoke = watcher as unknown as { handleChange(type: 'add' | 'unlink', filePath: string): void };
+
+    invoke.handleChange('add', sessionPath);
+    await rm(sessionPath);
+    invoke.handleChange('unlink', sessionPath);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.find((event) => event.type === 'unlink')?.sessionId).toBeUndefined();
+    await watcher.stop();
+  });
+
+  it('emits no sessionId for a UUID-suffixed name with a malformed Pi timestamp prefix', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-lax-prefix-'));
+    const uuid = '01a0ea30-131a-774f-9f3c-642abb70790e';
+    const sessionPath = path.join(tempDir, `not-a-pi-timestamp_${uuid}.jsonl`);
+    await writeFile(sessionPath, '{"type":"sess');
+
+    const watcher = new SessionWatcher(tempDir);
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    watcher.on('session_update', (event) => events.push(event));
+    const invoke = watcher as unknown as { handleChange(type: 'add' | 'unlink', filePath: string): void };
+
+    invoke.handleChange('add', sessionPath);
+    await rm(sessionPath);
+    invoke.handleChange('unlink', sessionPath);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.find((event) => event.type === 'unlink')?.sessionId).toBeUndefined();
+    await watcher.stop();
+  });
 });

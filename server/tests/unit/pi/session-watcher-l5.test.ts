@@ -70,7 +70,7 @@ describe('L5: SessionWatcher listener cleanup + no post-shutdown broadcast', () 
   it('an in-flight metadata read cannot repopulate maps after stop', async () => {
     const file = path.join(tempDir, 'x.jsonl');
     await writeFile(file, JSON.stringify({ type: 'session', id: 'x', cwd: tempDir }) + '\n');
-    const w = new SessionWatcher(tempDir);
+    const w = new SessionWatcher(tempDir, undefined, { debounceDelay: 5 });
     w.start();
     let resolveRead!: (value: Awaited<ReturnType<SessionWatcher['readSessionInfo']>>) => void;
     const pending = new Promise<Awaited<ReturnType<SessionWatcher['readSessionInfo']>>>((resolve) => {
@@ -80,6 +80,8 @@ describe('L5: SessionWatcher listener cleanup + no post-shutdown broadcast', () 
 
     const invoke = w as unknown as { handleChange(type: 'add', filePath: string): void };
     invoke.handleChange('add', file);
+    // The read starts only when the debounce window closes (B1.1 correction).
+    await new Promise((r) => setTimeout(r, 30));
     await w.stop();
     resolveRead({
       id: 'x', path: file, cwd: tempDir, firstMessage: '', messageCount: 0,

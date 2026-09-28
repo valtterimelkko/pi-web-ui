@@ -2367,20 +2367,29 @@ export const useSessionStore = create<SessionState>()(
               break;
             }
             
-            const { changeType, sessionId, info } = msg as unknown as {
+            const { changeType, sessionId, info, path: eventPath } = msg as unknown as {
               changeType: 'add' | 'change' | 'unlink';
-              sessionId: string;
+              sessionId?: string;
+              path?: string;
               info?: Session;
             };
             
             if (changeType === 'unlink') {
-              // Remove deleted session (use path for matching)
+              // Remove deleted session. Match by the event's top-level path as
+              // well as `info.path`/id: an unlink for a genuinely unknown id
+              // carries no sessionId and no info (correction 04). Resolve the
+              // removed row's id by path first so its transfer-readiness flag is
+              // cleared too (correction 05) — a path-only unlink must not leave
+              // a stale key behind.
               set((state) => {
                 const transferReadySessionIds = { ...state.transferReadySessionIds };
-                delete transferReadySessionIds[sessionId];
-                if (info?.id) delete transferReadySessionIds[info.id];
+                const removedPath = info?.path ?? eventPath;
+                const removedRow = removedPath ? state.sessions.find((s) => s.path === removedPath) : undefined;
+                for (const id of [sessionId, info?.id, removedRow?.id]) {
+                  if (id) delete transferReadySessionIds[id];
+                }
                 return {
-                  sessions: state.sessions.filter((s) => s.path !== info?.path && s.id !== sessionId),
+                  sessions: state.sessions.filter((s) => s.path !== removedPath && s.id !== sessionId),
                   transferReadySessionIds,
                 };
               });

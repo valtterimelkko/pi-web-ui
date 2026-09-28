@@ -10,6 +10,7 @@ import type { Api, Model } from '@earendil-works/pi-ai';
 import { config } from '../config.js';
 import type { SessionInfo } from '@pi-web-ui/shared';
 import { createWebUIContext, createCommandContextActions, type WebUIContext } from './extension-ui-adapter.js';
+import { piSessionIdFromFilename } from './session-identity.js';
 import type { SessionPool } from './session-pool.js';
 import {
   fetchOpenRouterCatalogue,
@@ -82,9 +83,7 @@ export class PiSessionIdentityError extends Error {
 }
 
 function sessionIdFromFilename(sessionPath: string): string | undefined {
-  const filename = sessionPath.split(/[\\/]/).pop();
-  const match = filename?.match(/_([^_]+)\.jsonl$/);
-  return match?.[1];
+  return piSessionIdFromFilename(sessionPath);
 }
 
 /**

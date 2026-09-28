@@ -12,6 +12,7 @@ import { config } from './config.js';
 import { WebSocketConnectionManager } from './websocket/index.js';
 import { handleWebSocketUpgrade } from './websocket/upgrade-handler.js';
 import { initializePiService, startSessionWatcher, getPiService, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
+import { publishSessionUpdateToBroker } from './session-broker-bridge.js';
 import { SessionCleanupService } from './session-cleanup.js';
 import { getSessionRegistry } from './session-registry.js';
 import { createFatalErrorHandlers } from './fatal-error-handlers.js';
@@ -128,27 +129,8 @@ async function initialize(): Promise<void> {
       // the watch layer dedupes the shared object. Distinct copies per key so
       // broker replay buffers hold independent records.
       const broker = internalApiServer?.getEventBroker();
-      if (broker && event.sessionId) {
-        const base = {
-          type: 'session_update',
-          timestamp: Date.now(),
-          data: {
-            changeType: event.type,
-            sessionId: event.sessionId,
-            path: event.path,
-            ...(event.cwd ? { cwd: event.cwd } : {}),
-            ...(event.info ? {
-              messageCount: event.info.messageCount,
-              lastActivity: event.info.lastActivity.toISOString(),
-            } : {}),
-          },
-        } as import('@pi-web-ui/shared').NormalizedEvent;
-        try {
-          broker.publish(event.path, base);
-          if (event.sessionId !== event.path) {
-            broker.publish(event.sessionId, { ...base });
-          }
-        } catch { /* bridging is best-effort */ }
+      if (broker) {
+        publishSessionUpdateToBroker(broker, event);
       }
     });
 
