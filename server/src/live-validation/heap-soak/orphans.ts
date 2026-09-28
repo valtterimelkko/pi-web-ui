@@ -130,12 +130,19 @@ export interface UntrackedOrphanInput {
 export interface UntrackedOrphanSelection {
   sweepable: string[];
   skippedYoung: string[];
+  /** Correction 05: held back because the age is unknown — missing, malformed or future `createdAt`. */
+  skippedUnknownAge: string[];
 }
 
 /**
  * Server sessions under this run's children cwd that the harness has no record
  * of (and that are past the grace window). Pure: the caller lists the server
  * and performs the deletes.
+ *
+ * Correction 05: an unknown age FAILS CLOSED. A missing, malformed or
+ * future-dated `createdAt` is not proof that the session is past the grace
+ * window, so it is held back (never swept) — a just-created child whose list
+ * entry lacks a valid timestamp must not be deleted.
  */
 export function findUntrackedChildrenSessions(
   entries: readonly ServerSessionRef[],
@@ -143,17 +150,92 @@ export function findUntrackedChildrenSessions(
 ): UntrackedOrphanSelection {
   const sweepable: string[] = [];
   const skippedYoung: string[] = [];
+  const skippedUnknownAge: string[] = [];
   for (const entry of entries) {
     if (!entry.sessionId || input.tracked.has(entry.sessionId)) continue;
     if (!isUnderChildWorkspace(entry.cwd, input.childWorkspaceRoot)) continue;
     const createdMs = entry.createdAt ? Date.parse(entry.createdAt) : Number.NaN;
-    if (Number.isFinite(createdMs) && input.nowMs - createdMs < input.graceMs) {
+    const ageKnown = Number.isFinite(createdMs) && createdMs <= input.nowMs;
+    if (!ageKnown) {
+      skippedUnknownAge.push(entry.sessionId);
+      continue;
+    }
+    if (input.nowMs - createdMs < input.graceMs) {
       skippedYoung.push(entry.sessionId);
       continue;
     }
     sweepable.push(entry.sessionId);
   }
-  return { sweepable, skippedYoung };
+  return { sweepable, skippedYoung, skippedUnknownAge };
+}
+
+export interface ServerSessionListParse {
+  ok: boolean;
+  sessions: ServerSessionRef[];
+  /** Entries dropped because they were not `{ sessionId: string, … }`. */
+  malformed: number;
+  error?: string;
+}
+
+/**
+ * Correction 05: validate the `GET /api/v1/sessions` response shape. A response
+ * that is not `{ sessions: [...] }` is a LIST FAILURE (`ok: false`), never an
+ * empty list — otherwise a transient failure would read as verified zero
+ * server-side children. Malformed entries are dropped and counted.
+ */
+export function parseServerSessionList(raw: unknown): ServerSessionListParse {
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { sessions?: unknown }).sessions)) {
+    return { ok: false, sessions: [], malformed: 0, error: 'server session list response shape was not { sessions: [...] }' };
+  }
+  const sessions: ServerSessionRef[] = [];
+  let malformed = 0;
+  for (const entry of (raw as { sessions: unknown[] }).sessions) {
+    if (!entry || typeof entry !== 'object') { malformed += 1; continue; }
+    const record = entry as { sessionId?: unknown; cwd?: unknown; createdAt?: unknown };
+    if (typeof record.sessionId !== 'string' || record.sessionId.length === 0) { malformed += 1; continue; }
+    sessions.push({
+      sessionId: record.sessionId,
+      ...(typeof record.cwd === 'string' ? { cwd: record.cwd } : {}),
+      ...(typeof record.createdAt === 'string' ? { createdAt: record.createdAt } : {}),
+    });
+  }
+  return { ok: true, sessions, malformed };
+}
+
+/** The supervisor's view of a session-list attempt: success/failure kept separate from the entries. */
+export interface ServerSessionListing {
+  ok: boolean;
+  sessions: readonly ServerSessionRef[];
+  error?: string;
+}
+
+export interface ServerChildSessionCounts {
+  ok: boolean;
+  /** Only present when `ok` — undefined means UNKNOWN, never zero. */
+  serverChildrenSessionCount?: number;
+  /** Only present when `ok` — undefined means UNKNOWN, never zero. */
+  untrackedServerSessions?: number;
+  error?: string;
+}
+
+/**
+ * Correction 05 supervisor seam: a failed list yields UNKNOWN counts (fields
+ * absent), so the caller cannot persist 0/0 and hand out a verdict.
+ */
+export function summarizeServerChildSessions(
+  listing: ServerSessionListing,
+  childWorkspaceRoot: string,
+  tracked: ReadonlySet<string>,
+): ServerChildSessionCounts {
+  if (!listing.ok) {
+    return { ok: false, ...(listing.error !== undefined ? { error: listing.error } : {}) };
+  }
+  const children = listing.sessions.filter((entry) => isUnderChildWorkspace(entry.cwd, childWorkspaceRoot));
+  return {
+    ok: true,
+    serverChildrenSessionCount: children.length,
+    untrackedServerSessions: children.filter((entry) => !tracked.has(entry.sessionId)).length,
+  };
 }
 
 /**

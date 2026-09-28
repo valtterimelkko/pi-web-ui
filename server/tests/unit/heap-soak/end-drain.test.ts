@@ -91,6 +91,31 @@ describe('computeRetainedDeletedChildren (correction 03 item 3)', () => {
     expect(verdict.notComputedReason).toMatch(/not the recorded end snapshot/);
   });
 
+  it('refuses the verdict when the server session list was unavailable (correction 05)', () => {
+    const verdict = computeRetainedDeletedChildren({ ...base, serverSessionsListOk: false, serverSessionsListError: 'timed out', agentSessionCount: 1, liveChildrenAtSnapshot: 0, verifiedKnownSlotInstances: 1 });
+    expect(verdict.retainedDeletedChildren).toBeUndefined();
+    expect(verdict.notComputedReason).toMatch(/server session list was unavailable/i);
+  });
+
+  it('still computes the verdict when the list was available', () => {
+    expect(computeRetainedDeletedChildren({ ...base, serverSessionsListOk: true, agentSessionCount: 1, liveChildrenAtSnapshot: 0, verifiedKnownSlotInstances: 1 }).retainedDeletedChildren).toBe(0);
+  });
+
+  it('never treats a failed session list as zero server-side children in the report (correction 05)', () => {
+    const text = renderRetentionVerdict({
+      ...base,
+      serverSessionsListOk: false,
+      serverSessionsListError: 'connect ECONNREFUSED',
+      agentSessionCount: 1,
+      liveChildrenAtSnapshot: 0,
+      verifiedKnownSlotInstances: 1,
+    }).join('\n');
+    expect(text).toMatch(/UNKNOWN/);
+    expect(text).toMatch(/Retained deleted children: not computed/);
+    expect(text).not.toMatch(/Retained deleted children: \d/);
+    expect(text).toContain('connect ECONNREFUSED');
+  });
+
   it('refuses the verdict when the drain was incomplete or creates were pending (correction 03 items 1/2)', () => {
     const incomplete = computeRetainedDeletedChildren({ ...base, drainDrained: false, agentSessionCount: 3, liveChildrenAtSnapshot: 2, verifiedKnownSlotInstances: 0 });
     expect(incomplete.retainedDeletedChildren).toBeUndefined();

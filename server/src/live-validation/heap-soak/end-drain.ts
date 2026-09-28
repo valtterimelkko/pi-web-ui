@@ -116,6 +116,13 @@ export interface RetentionVerdictInput {
   untrackedServerSessions?: number;
   /** Correction 04: raw count of the server's sessions registered under this run's children cwd at the snapshot. */
   serverChildrenSessionCount?: number;
+  /**
+   * Correction 05: whether the server session list was available at the
+   * snapshot. `false` means the server-side counts are UNKNOWN, and no verdict
+   * may be given (a transient list failure must never read as zero).
+   */
+  serverSessionsListOk?: boolean;
+  serverSessionsListError?: string;
   /** Whether the pre-snapshot drain completed. */
   drainDrained?: boolean;
   /** Instances verified as held by a known bounded slot in THIS snapshot. */
@@ -159,6 +166,9 @@ export function computeRetainedDeletedChildren(input: RetentionVerdictInput): Re
   if (input.liveChildrenAtSnapshot === undefined) {
     return { ...base, notComputedReason: 'the live-child count at the snapshot was not recorded (run predates the drain correction)' };
   }
+  if (input.serverSessionsListOk === false) {
+    return { ...base, notComputedReason: `the server session list was unavailable at the snapshot${input.serverSessionsListError ? ` (${input.serverSessionsListError})` : ''}, so the server-side counts are unknown and retained deleted children cannot be computed` };
+  }
   if (input.drainDrained === false || pendingCreatesAtSnapshot > 0) {
     return { ...base, notComputedReason: `the pre-snapshot drain was incomplete (${input.liveChildrenAtSnapshot} live children, ${pendingCreatesAtSnapshot} pending creates) — retained deleted children cannot be separated from still-live ones` };
   }
@@ -180,11 +190,15 @@ export function renderRetentionVerdict(input: RetentionVerdictInput): string[] {
     lines.push(`- Known bounded retained slot: ${slot.instances} declared (${slot.name}); verified in this snapshot: ${verdict.verifiedKnownSlotInstances}`);
   }
   lines.push(`- Live children at the moment of the snapshot (in-flight + created-without-terminal-delete): ${verdict.liveChildrenAtSnapshot}`);
-  lines.push(`- Untracked server-side sessions under this run's children cwd: ${verdict.untrackedServerSessions}`);
-  if (verdict.serverChildrenSessionCount !== undefined) {
-    lines.push(`- Sessions still registered on the server under this run's children cwd: ${verdict.serverChildrenSessionCount}`);
+  if (input.serverSessionsListOk === false) {
+    lines.push(`- Server-side session counts: UNKNOWN — the server session list was unavailable at the snapshot${input.serverSessionsListError ? ` (${input.serverSessionsListError})` : ''}`);
+  } else {
+    lines.push(`- Untracked server-side sessions under this run's children cwd: ${verdict.untrackedServerSessions}`);
+    if (verdict.serverChildrenSessionCount !== undefined) {
+      lines.push(`- Sessions still registered on the server under this run's children cwd: ${verdict.serverChildrenSessionCount}`);
+    }
+    lines.push(`- Live on the server (harness-known live + untracked): ${verdict.liveOnServerAtSnapshot}`);
   }
-  lines.push(`- Live on the server (harness-known live + untracked): ${verdict.liveOnServerAtSnapshot}`);
   if (verdict.pendingCreatesAtSnapshot > 0) {
     lines.push(`- Pending child creations at the moment of the snapshot (session id not yet known): ${verdict.pendingCreatesAtSnapshot}`);
   }

@@ -25,7 +25,7 @@ import { runWave, type DriverState } from './driver.js';
 import { sweepOrphans, sweepUntrackedServerSessions } from './orphan-sweep.js';
 import { pollZaiQuota } from './quota-poll.js';
 import { decideReattach } from '../../server/src/live-validation/heap-soak/run-state.js';
-import { computeOpenSessionIds, isUnderChildWorkspace, trackedSessionIds } from '../../server/src/live-validation/heap-soak/orphans.js';
+import { computeOpenSessionIds, parseServerSessionList, summarizeServerChildSessions, trackedSessionIds, type ServerSessionListing } from '../../server/src/live-validation/heap-soak/orphans.js';
 import { endDrainTimeoutMs, evaluateDrain, type DrainStatus } from '../../server/src/live-validation/heap-soak/end-drain.js';
 import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath, shouldSendFinalNotice, shouldTerminaliseOnStartupRecovery } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
@@ -117,6 +117,8 @@ async function main(): Promise<void> {
       ...(state.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
       ...(state.untrackedServerSessionsAtEndSnapshot !== undefined ? { untrackedServerSessions: state.untrackedServerSessionsAtEndSnapshot } : {}),
       ...(state.serverChildrenSessionsAtEndSnapshot !== undefined ? { serverChildrenSessionCount: state.serverChildrenSessionsAtEndSnapshot } : {}),
+      ...(state.serverSessionsListOkAtEndSnapshot !== undefined ? { serverSessionsListOk: state.serverSessionsListOkAtEndSnapshot } : {}),
+      ...(state.serverSessionsListError !== undefined ? { serverSessionsListError: state.serverSessionsListError } : {}),
       ...(state.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
     });
 
@@ -335,14 +337,23 @@ async function main(): Promise<void> {
     return tracked;
   }
 
-  async function listServerSessions(): Promise<{ sessionId: string; cwd?: string; createdAt?: string }[]> {
-    try {
-      const { sessions } = await client.listSessions();
-      return sessions.map((s) => ({ sessionId: s.sessionId, cwd: s.cwd, createdAt: s.createdAt }));
-    } catch (error) {
-      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `server session list failed (untracked-orphan reconciliation skipped): ${error instanceof Error ? error.message : String(error)}` });
-      return [];
+  async function listServerSessions(): Promise<ServerSessionListing> {
+    const maxAttempts = 3;
+    let lastError = 'unknown error';
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const raw = await client.listSessions();
+        const parsed = parseServerSessionList(raw);
+        if (parsed.ok) return { ok: true, sessions: parsed.sessions };
+        lastError = parsed.error ?? 'invalid server session list response shape';
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
+    // Correction 05: a failed list is NOT an empty list — the caller must treat
+    // the server-side counts as unknown, never as zero.
+    return { ok: false, sessions: [], error: lastError };
   }
 
   /** The run's child-workspace root — every driver child's cwd is under it. */
@@ -356,9 +367,14 @@ async function main(): Promise<void> {
    * session list is the only source of truth for those.
    */
   async function reconcileUntrackedServerOrphans(): Promise<void> {
-    const entries = await listServerSessions();
-    if (entries.length === 0) return;
-    const result = await sweepUntrackedServerSessions(client, entries, log, elapsedNow, {
+    const listing = await listServerSessions();
+    if (!listing.ok) {
+      // Correction 05: never treat a failed list as an empty one.
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `untracked-orphan reconciliation SKIPPED: server session list unavailable after retries (${listing.error ?? 'unknown'}) — NOT treated as zero` });
+      return;
+    }
+    if (listing.sessions.length === 0) return;
+    const result = await sweepUntrackedServerSessions(client, listing.sessions, log, elapsedNow, {
       childWorkspaceRoot,
       tracked: knownSessionIds(),
     });
@@ -408,14 +424,23 @@ async function main(): Promise<void> {
     state.liveChildrenAtEndSnapshotIds = drain.liveChildren.slice(0, 50);
     state.pendingCreatesAtEndSnapshot = drain.pendingCreateCount;
     state.endSnapshotDrain = { drained: drain.drained, timeoutMs: endDrainTimeoutMs(schedule), pendingCreates: drain.pendingCreateCount };
-    // Correction 04: record the server's own view at the snapshot instant, so
-    // the report can separate still-live (untracked) sessions from retention.
-    const serverEntries = await listServerSessions();
-    const serverChildren = serverEntries.filter((entry) => isUnderChildWorkspace(entry.cwd, childWorkspaceRoot));
-    const trackedNow = knownSessionIds();
-    state.serverChildrenSessionsAtEndSnapshot = serverChildren.length;
-    state.untrackedServerSessionsAtEndSnapshot = serverChildren.filter((entry) => !trackedNow.has(entry.sessionId)).length;
+    // Correction 04/05: record the server's own view at the snapshot instant,
+    // but only when the list was actually available — a failed list records
+    // UNKNOWN counts (never 0) and withholds the retention verdict.
+    const listing = await listServerSessions();
+    const counts = summarizeServerChildSessions(listing, childWorkspaceRoot, knownSessionIds());
+    state.serverSessionsListOkAtEndSnapshot = counts.ok;
     state.untrackedOrphansSwept = untrackedOrphansSwept;
+    if (counts.ok) {
+      state.serverChildrenSessionsAtEndSnapshot = counts.serverChildrenSessionCount;
+      state.untrackedServerSessionsAtEndSnapshot = counts.untrackedServerSessions;
+      delete state.serverSessionsListError;
+    } else {
+      delete state.serverChildrenSessionsAtEndSnapshot;
+      delete state.untrackedServerSessionsAtEndSnapshot;
+      state.serverSessionsListError = counts.error ?? listing.error ?? 'unknown';
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `end-snapshot server session list unavailable (${state.serverSessionsListError}) — server-side counts recorded as UNKNOWN and the retention verdict withheld` });
+    }
     log({
       ts: new Date().toISOString(),
       elapsedMs: elapsedNow(),

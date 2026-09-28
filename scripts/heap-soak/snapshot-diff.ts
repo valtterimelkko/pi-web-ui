@@ -132,6 +132,9 @@ export interface SnapshotComparisonOptions {
   untrackedServerSessions?: number;
   /** Correction 04: raw server count under this run's children cwd. */
   serverChildrenSessionCount?: number;
+  /** Correction 05: false when the server session list was unavailable (counts unknown, no verdict). */
+  serverSessionsListOk?: boolean;
+  serverSessionsListError?: string;
   drainDrained?: boolean;
 }
 
@@ -157,6 +160,8 @@ export async function snapshotComparisonSection(
         ...(options.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: options.pendingCreatesAtSnapshot } : {}),
         ...(options.untrackedServerSessions !== undefined ? { untrackedServerSessions: options.untrackedServerSessions } : {}),
         ...(options.serverChildrenSessionCount !== undefined ? { serverChildrenSessionCount: options.serverChildrenSessionCount } : {}),
+        ...(options.serverSessionsListOk !== undefined ? { serverSessionsListOk: options.serverSessionsListOk } : {}),
+        ...(options.serverSessionsListError !== undefined ? { serverSessionsListError: options.serverSessionsListError } : {}),
         ...(options.drainDrained !== undefined ? { drainDrained: options.drainDrained } : {}),
       });
     }
@@ -175,6 +180,8 @@ export function renderSnapshotDiffMarkdown(
     pendingCreatesAtSnapshot?: number;
     untrackedServerSessions?: number;
     serverChildrenSessionCount?: number;
+    serverSessionsListOk?: boolean;
+    serverSessionsListError?: string;
     drainDrained?: boolean;
   } = {},
   topN = 15,
@@ -198,6 +205,8 @@ export function renderSnapshotDiffMarkdown(
     ...(context.pendingCreatesAtSnapshot !== undefined ? { pendingCreatesAtSnapshot: context.pendingCreatesAtSnapshot } : {}),
     ...(context.untrackedServerSessions !== undefined ? { untrackedServerSessions: context.untrackedServerSessions } : {}),
     ...(context.serverChildrenSessionCount !== undefined ? { serverChildrenSessionCount: context.serverChildrenSessionCount } : {}),
+    ...(context.serverSessionsListOk !== undefined ? { serverSessionsListOk: context.serverSessionsListOk } : {}),
+    ...(context.serverSessionsListError !== undefined ? { serverSessionsListError: context.serverSessionsListError } : {}),
     ...(context.drainDrained !== undefined ? { drainDrained: context.drainDrained } : {}),
     verifiedKnownSlotInstances,
   }));

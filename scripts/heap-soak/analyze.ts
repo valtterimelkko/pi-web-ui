@@ -93,6 +93,8 @@ export async function runAnalyze(runId: string, mode: 'micro' | 'full' = 'full')
     ...(state?.pendingCreatesAtEndSnapshot !== undefined ? { pendingCreatesAtSnapshot: state.pendingCreatesAtEndSnapshot } : {}),
     ...(state?.untrackedServerSessionsAtEndSnapshot !== undefined ? { untrackedServerSessions: state.untrackedServerSessionsAtEndSnapshot } : {}),
     ...(state?.serverChildrenSessionsAtEndSnapshot !== undefined ? { serverChildrenSessionCount: state.serverChildrenSessionsAtEndSnapshot } : {}),
+    ...(state?.serverSessionsListOkAtEndSnapshot !== undefined ? { serverSessionsListOk: state.serverSessionsListOkAtEndSnapshot } : {}),
+    ...(state?.serverSessionsListError !== undefined ? { serverSessionsListError: state.serverSessionsListError } : {}),
     ...(state?.endSnapshotDrain !== undefined ? { drainDrained: state.endSnapshotDrain.drained } : {}),
   });
   const markdown = `${renderReportMarkdown(report, runId)}\n\n${snapshotSection}`;

@@ -100,6 +100,10 @@ export interface RunState {
   untrackedServerSessionsAtEndSnapshot?: number;
   /** B0.1 correction 04: raw count of the server's sessions registered under this run's children cwd at the snapshot. */
   serverChildrenSessionsAtEndSnapshot?: number;
+  /** B0.1 correction 05: whether the server session list was available at the snapshot (false => counts unknown, no verdict). */
+  serverSessionsListOkAtEndSnapshot?: boolean;
+  /** B0.1 correction 05: why the server session list was unavailable, when it was. */
+  serverSessionsListError?: string;
   /** B0.1 correction 04: untracked orphans (no harness record) swept during the run. */
   untrackedOrphansSwept?: number;
   /** B0.1 correction: whether the pre-snapshot drain completed or hit its bound. */

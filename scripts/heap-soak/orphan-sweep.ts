@@ -47,6 +47,8 @@ export interface UntrackedSweepResult {
   alreadyGone: string[];
   failedTransient: string[];
   skippedYoung: string[];
+  /** Correction 05: held back because their age is unknown (missing/malformed/future createdAt). */
+  skippedUnknownAge: string[];
 }
 
 const DEFAULT_MAX_DELETE_ATTEMPTS = 3;
@@ -154,7 +156,7 @@ export async function sweepUntrackedServerSessions(
 ): Promise<UntrackedSweepResult> {
   const maxAttempts = options.maxDeleteAttempts ?? DEFAULT_MAX_DELETE_ATTEMPTS;
   const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-  const { sweepable, skippedYoung } = findUntrackedChildrenSessions(entries, {
+  const { sweepable, skippedYoung, skippedUnknownAge } = findUntrackedChildrenSessions(entries, {
     childWorkspaceRoot: options.childWorkspaceRoot,
     tracked: options.tracked,
     nowMs: Date.now(),
@@ -188,5 +190,11 @@ export async function sweepUntrackedServerSessions(
       detail: `untracked-orphan sweep held back ${skippedYoung.length} session(s) inside the grace window`,
     });
   }
-  return { swept, alreadyGone, failedTransient, skippedYoung };
+  if (skippedUnknownAge.length > 0) {
+    logEvent({
+      ts: new Date().toISOString(), elapsedMs: elapsedMs(), lane: 'A', kind: 'anomaly',
+      detail: `untracked-orphan sweep held back ${skippedUnknownAge.length} session(s) with unknown age (missing/malformed/future createdAt — failing closed)`,
+    });
+  }
+  return { swept, alreadyGone, failedTransient, skippedYoung, skippedUnknownAge };
 }

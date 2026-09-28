@@ -189,6 +189,8 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
     teardownAnomaly?: string;
     untrackedServerSessionsAtEndSnapshot?: number;
     serverChildrenSessionsAtEndSnapshot?: number;
+    serverSessionsListOkAtEndSnapshot?: boolean;
+    serverSessionsListError?: string;
     untrackedOrphansSwept?: number;
   };
   record(
@@ -236,11 +238,14 @@ export async function runGate1(options: { extensionsOverlays?: readonly string[]
     `agentSession=${agentSessionMatch?.[1] ?? 'n/a'} liveOnServer=${liveOnServerMatch?.[1] ?? 'n/a'} (harness-known live=${liveMatch?.[1] ?? 'n/a'}, untracked=${untrackedMatch?.[1] ?? 'n/a'}) verifiedKnownSlot=${verifiedSlotMatch?.[1] ?? 'n/a'} retainedDeletedChildren=${retainedMatch?.[1] ?? 'n/a'}`,
   );
 
-  // ── Correction 04: untracked orphans are reconciled against the server ──
+  // ── Correction 04/05: untracked orphans are reconciled against the server, and
+  // a failed server list can never pass as zero ──
   record(
     'B0.1c no untracked orphan left on the server (or swept with detail untracked)',
-    runStateAfter.untrackedServerSessionsAtEndSnapshot === 0 && untrackedMatch !== null,
-    `untrackedServerSessionsAtEndSnapshot=${runStateAfter.untrackedServerSessionsAtEndSnapshot ?? '(none)'} untrackedOrphansSwept=${runStateAfter.untrackedOrphansSwept ?? '(none)'} serverChildrenSessionsAtSnapshot=${runStateAfter.serverChildrenSessionsAtEndSnapshot ?? '(none)'} untracked-swept events=${untrackedSweptEvents.length}`,
+    runStateAfter.serverSessionsListOkAtEndSnapshot === true
+      && runStateAfter.untrackedServerSessionsAtEndSnapshot === 0
+      && untrackedMatch !== null,
+    `serverSessionsListOk=${runStateAfter.serverSessionsListOkAtEndSnapshot ?? '(none)'}${runStateAfter.serverSessionsListError ? ` error=${runStateAfter.serverSessionsListError}` : ''} untrackedServerSessionsAtEndSnapshot=${runStateAfter.untrackedServerSessionsAtEndSnapshot ?? '(unknown)'} untrackedOrphansSwept=${runStateAfter.untrackedOrphansSwept ?? '(none)'} serverChildrenSessionsAtSnapshot=${runStateAfter.serverChildrenSessionsAtEndSnapshot ?? '(unknown)'} untracked-swept events=${untrackedSweptEvents.length}`,
   );
   record(
     'B0.1c report reports the three figures and Retained deleted children is 0',

@@ -230,6 +230,31 @@ while Gate 1 killed the supervisor: the in-flight `createSession` never logged
   the supervisor-restart-during-create sequence at the pure-logic level, and
   `end-drain.test.ts` covers the accounting classification.
 
+## Correction 05 (independent review round 2, 2026-09-28) — two fail-open majors closed
+
+Luna round 2 closed all eight round-1 findings and raised two fail-open majors
+in correction 04's reconciliation. Both are fixed (unit tests are sufficient;
+the review did not require another micro):
+
+1. **A failed session list must not read as zero.** `listServerSessions` now
+   retries three times and validates the response shape
+   (`parseServerSessionList`); it returns `{ok: false, error}` on failure —
+   **never `[]`**. Mid-run reconciliation skips and logs
+   (`untracked-orphan reconciliation SKIPPED: … NOT treated as zero`). At the
+   end snapshot, `summarizeServerChildSessions` yields **UNKNOWN** counts
+   (fields absent, `run-state.serverSessionsListOkAtEndSnapshot=false`,
+   `serverSessionsListError`) and `report.md` prints
+   `Server-side session counts: UNKNOWN` and withholds the retention verdict.
+   Gate 1's zero-orphan check requires
+   `serverSessionsListOkAtEndSnapshot === true`, so an unavailable list fails
+   the control rather than passing it.
+2. **Unknown age fails closed.** `findUntrackedChildrenSessions` treats a
+   missing, malformed or future-dated `createdAt` as **not yet past the grace
+   window** and holds the session back (`skippedUnknownAge`, logged); a
+   just-created child whose list entry has no valid timestamp is never deleted.
+   `parseServerSessionList` validates the API response shape and drops/counts
+   malformed entries.
+
 ## Load model (owner amendment, 2026-09-26)
 
 Free-tier models (OpenRouter, Command Code) are congested in practice — slow
