@@ -7,7 +7,7 @@ import { createLogger } from '../logging/logger.js';
 import type { SessionRegistryManager } from '../session-registry.js';
 import { archiveStaleDiscoveredSession } from '../session-cleanup.js';
 import { config } from '../config.js';
-import { piSessionIdFromFilename } from './session-identity.js';
+import { strictPiSessionIdFromFilename } from './session-identity.js';
 
 const logger = createLogger('SessionWatcher');
 
@@ -183,7 +183,9 @@ export class SessionWatcher extends EventEmitter {
       // no header was ever captured — every file present at start, since
       // `ignoreInitial` suppresses its add — fall back to the canonical Pi
       // filename id (`timestamp_<uuid>.jsonl`) before giving up (correction 04).
-      const capturedSessionId = this.sessionIdsByPath.get(filePath) ?? state?.cached?.id ?? piSessionIdFromFilename(filePath);
+      // Only a strict Pi name qualifies (correction 05), so a malformed name can
+      // never be misrouted to another session's id.
+      const capturedSessionId = this.sessionIdsByPath.get(filePath) ?? state?.cached?.id ?? strictPiSessionIdFromFilename(filePath);
       this.readStateByPath.delete(filePath);
       this.sessionIdsByPath.delete(filePath);
       // Drop the compatibility projection now: an obsolete read must not delay
@@ -338,7 +340,7 @@ export class SessionWatcher extends EventEmitter {
     fallbackSessionId?: string,
   ): Promise<void> {
     const state = stateArg ?? this.readStateByPath.get(filePath);
-    const immediateSessionId = fallbackSessionId ?? state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? piSessionIdFromFilename(filePath);
+    const immediateSessionId = fallbackSessionId ?? state?.cached?.id ?? this.sessionIdsByPath.get(filePath) ?? strictPiSessionIdFromFilename(filePath);
     const cwd = this.extractCwd(filePath);
 
     if (type === 'unlink') {
@@ -486,7 +488,7 @@ export class SessionWatcher extends EventEmitter {
     let messageCount = 0;
     let createdAt: Date | null = null;
     let lastActivity: Date | null = null;
-    let canonicalId = piSessionIdFromFilename(filePath) ?? this.extractSessionId(filePath);
+    let canonicalId = strictPiSessionIdFromFilename(filePath) ?? this.extractSessionId(filePath);
     let canonicalCwd = this.extractCwd(filePath);
 
     // Helper to check if content is an injected skill body. Defect 11 (Part 3):

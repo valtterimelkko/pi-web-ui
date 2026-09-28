@@ -151,7 +151,7 @@ async function main(): Promise<void> {
 
   // Fixed child directories first, so the baseline snapshot already includes
   // their directory watches — any later FSWatcher growth is per-file retention.
-  await prepareChurnDirectories(args.sessionsDir, args.directories);
+  await prepareChurnDirectories(args.sessionsDir, args.directories, { safety: { allowUnsafe: args.allowUnsafeSessionsDir } });
 
   const inspector = await InspectorClient.connect(args.inspectPort, 20_000);
   await inspector.enable();

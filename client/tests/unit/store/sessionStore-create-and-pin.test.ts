@@ -182,4 +182,27 @@ describe('sessionStore — create-and-pin in one go', () => {
 
     expect(useSessionStore.getState().sessions).toHaveLength(0);
   });
+
+  it('clears transfer readiness when a path-only unlink removes the session', () => {
+    const state = useSessionStore.getState();
+    state.handleServerMessage({
+      type: 'session_created',
+      sessionId: 'ready-1',
+      sessionPath: '/sessions/ready-1.jsonl',
+      sdkType: 'pi',
+    });
+    state.markTransferReady('ready-1');
+    expect(useSessionStore.getState().isTransferReady('ready-1')).toBe(true);
+
+    // Id-less, path-only unlink: the client resolves the row by path and must
+    // clear its transfer-ready flag too (correction 05).
+    state.handleServerMessage({
+      type: 'session_update',
+      changeType: 'unlink',
+      path: '/sessions/ready-1.jsonl',
+    });
+
+    expect(useSessionStore.getState().sessions).toHaveLength(0);
+    expect(useSessionStore.getState().isTransferReady('ready-1')).toBe(false);
+  });
 });

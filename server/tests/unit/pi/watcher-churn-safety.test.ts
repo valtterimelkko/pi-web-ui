@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import {
   isDisposableValidationDir,
   protectedSessionRoots,
 } from '../../../../scripts/watcher-churn/safety.js';
+import { prepareChurnDirectories } from '../../../../scripts/watcher-churn/churn.js';
 
 /**
  * B1.1 corrections 03/04, review minors 7 and r2 major 2: the churn harness
@@ -109,5 +111,47 @@ describe('watcher-churn sessions-dir safety guard', () => {
 
     // A stray marker in an excluded ancestor must not whitelist the target.
     expect(isDisposableValidationDir(sessionsDir, { excludedDirs: [tempDir] })).toBe(false);
+  });
+
+  it('refuses a dangling symlink component below the validation root', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'churn-safety-dangling-'));
+    const validationDir = path.join(tempDir, 'validation');
+    await mkdir(validationDir, { recursive: true });
+    await writeFile(path.join(validationDir, '.validation-server.lock'), '');
+    const fixtureProtected = path.join(tempDir, 'fixture-protected');
+    await mkdir(fixtureProtected, { recursive: true });
+    const link = path.join(validationDir, 'pi-sessions');
+    await symlink(path.join(fixtureProtected, 'created-later'), link, 'dir'); // dangling
+
+    expect(() => assertSessionsDirSafe(link, { protectedRoots: [fixtureProtected] })).toThrow(/symlinked path component/);
+  });
+
+  it('re-checks before the first write and refuses a symlink whose target appeared after the check', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'churn-safety-toctou-'));
+    const validationDir = path.join(tempDir, 'validation');
+    await mkdir(validationDir, { recursive: true });
+    await writeFile(path.join(validationDir, '.validation-server.lock'), '');
+    const fixtureProtected = path.join(tempDir, 'fixture-protected');
+    await mkdir(fixtureProtected, { recursive: true });
+    const link = path.join(validationDir, 'pi-sessions');
+    await symlink(path.join(fixtureProtected, 'created-later'), link, 'dir'); // dangling at check time
+
+    // Simulate the target being created between the CLI-level check and the write.
+    await mkdir(path.join(fixtureProtected, 'created-later'), { recursive: true });
+
+    await expect(prepareChurnDirectories(link, 3, { safety: { allowUnsafe: false } })).rejects.toThrow();
+    expect(existsSync(path.join(fixtureProtected, 'created-later', 'churn-ws-0'))).toBe(false);
+  });
+
+  it('prepares churn directories inside a marked, symlink-free validation directory', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'churn-safety-positive-'));
+    const validationDir = path.join(tempDir, 'validation');
+    const sessionsDir = path.join(validationDir, 'pi-sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(path.join(validationDir, '.validation-server.lock'), '');
+
+    const dirs = await prepareChurnDirectories(sessionsDir, 2, { safety: {} });
+    expect(dirs).toHaveLength(2);
+    expect(existsSync(path.join(sessionsDir, 'churn-ws-0'))).toBe(true);
   });
 });

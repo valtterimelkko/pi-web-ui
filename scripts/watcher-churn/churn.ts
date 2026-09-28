@@ -17,6 +17,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { assertSessionsDirSafe } from './safety.js';
 
 export type ChurnCase = 'before-stability' | 'inside-debounce' | 'after-debounce';
 
@@ -89,7 +90,17 @@ function sessionContent(id: string): string {
 }
 
 /** Create the fixed child directories before the baseline snapshot. */
-export async function prepareChurnDirectories(sessionsDir: string, directories: number): Promise<string[]> {
+export async function prepareChurnDirectories(
+  sessionsDir: string,
+  directories: number,
+  options: { safety?: { allowUnsafe?: boolean } } = {},
+): Promise<string[]> {
+  if (options.safety) {
+    // Re-check immediately before the first write (correction 05): a dangling
+    // symlink target could have been created since the CLI-level check, and
+    // realpath would have treated the dangling link as a missing tail.
+    assertSessionsDirSafe(sessionsDir, { allowUnsafe: options.safety.allowUnsafe });
+  }
   const dirs: string[] = [];
   for (let i = 0; i < directories; i += 1) {
     const dir = path.join(sessionsDir, `churn-ws-${i}`);

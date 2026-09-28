@@ -225,4 +225,24 @@ describe('SessionWatcher canonical metadata', () => {
     expect(events.find((event) => event.type === 'unlink')?.sessionId).toBeUndefined();
     await watcher.stop();
   });
+
+  it('emits no sessionId for a UUID-suffixed name with a malformed Pi timestamp prefix', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-lax-prefix-'));
+    const uuid = '01a0ea30-131a-774f-9f3c-642abb70790e';
+    const sessionPath = path.join(tempDir, `not-a-pi-timestamp_${uuid}.jsonl`);
+    await writeFile(sessionPath, '{"type":"sess');
+
+    const watcher = new SessionWatcher(tempDir);
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    watcher.on('session_update', (event) => events.push(event));
+    const invoke = watcher as unknown as { handleChange(type: 'add' | 'unlink', filePath: string): void };
+
+    invoke.handleChange('add', sessionPath);
+    await rm(sessionPath);
+    invoke.handleChange('unlink', sessionPath);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.find((event) => event.type === 'unlink')?.sessionId).toBeUndefined();
+    await watcher.stop();
+  });
 });

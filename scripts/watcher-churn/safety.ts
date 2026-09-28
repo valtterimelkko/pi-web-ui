@@ -13,7 +13,7 @@
  * either check, and the resolved sessions directory must remain inside the
  * resolved validation directory that carries the marker.
  */
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -89,6 +89,33 @@ export function isWithin(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/**
+ * Refuse the target when any path component strictly below `stopAt` is a
+ * symlink, using `lstat` so a **dangling** link is caught too. `realpath`
+ * silently treats a dangling link as a missing tail, which left a TOCTOU window:
+ * the target could be created after the check and before the first write, and
+ * the write then followed the link (correction 05).
+ */
+export function assertNoSymlinkComponents(target: string, stopAt: string): void {
+  const stop = path.resolve(stopAt);
+  let current = path.resolve(target);
+  for (;;) {
+    if (current === stop) return;
+    let stats;
+    try {
+      stats = lstatSync(current);
+    } catch {
+      stats = undefined;
+    }
+    if (stats?.isSymbolicLink()) {
+      throw new Error(`refusing symlinked path component ${current} (checked with lstat, dangling or not)`);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
 export interface SafetyVerdict {
   ok: boolean;
   reason?: string;
@@ -148,4 +175,9 @@ export function assertSessionsDirSafe(
     allowUnsafe: options.allowUnsafe,
   });
   if (!verdict.ok) throw new Error(verdict.reason);
+  if (!options.allowUnsafe && realDisposableRoot) {
+    // The target must not be reached through a symlink below the validation
+    // root; re-checked again immediately before the first write (churn.ts).
+    assertNoSymlinkComponents(sessionsDir, realDisposableRoot);
+  }
 }
