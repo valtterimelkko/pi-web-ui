@@ -28,7 +28,7 @@ import {
 import { createLogger } from '../logging/logger.js';
 import { readSessionIdentity } from './session-cwd.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
-import { getExtensionFactoryCache } from './extension-factory-cache.js';
+import { getExtensionFactoryCache, runExtensionLoadCriticalSection } from './extension-factory-cache.js';
 
 const logger = createLogger('PiService');
 
@@ -378,17 +378,23 @@ export class PiService {
 
   private async createSessionResourceLoader(cwd: string): Promise<DefaultResourceLoader> {
     const agentDir = config.piAgentDir || `${process.cwd()}/.pi/agent`;
-    const loader = new DefaultResourceLoader({ cwd, agentDir });
-    // B1.2: hand the process-cached global extension factories to the SDK's own
-    // module cache for this session's real cwd before the loader resolves them,
-    // so the loader reuses the imported factory instead of re-transpiling it.
-    // Each session still gets fresh Extension objects and its own runtime
-    // (initializeExtension runs per load). Fail-open and inert when the SDK
-    // patch is absent — the loader then does exactly what it did before.
-    await this.seedGlobalExtensionFactories(cwd, agentDir);
-    await loader.reload();
-    this.logExtensions(loader.getExtensions());
-    return loader;
+    // B1.2: seed the process-cached global extension factories into the SDK's
+    // own module cache for this session's real cwd, then resolve. Seed and
+    // resolve must be ONE critical section: the SDK's extension module cache is
+    // a single process-global cwd slot, so a concurrent session open in another
+    // cwd would change the slot mid-interval, clearing this session's seeded
+    // factories and forcing both sessions to re-import on the event loop.
+    // Fail-open and inert when the SDK patch is absent — the loader then does
+    // exactly what it did before. Inside the section, each session still gets
+    // fresh Extension objects and its own runtime (initializeExtension runs per
+    // load).
+    return runExtensionLoadCriticalSection(async () => {
+      const loader = new DefaultResourceLoader({ cwd, agentDir });
+      await this.seedGlobalExtensionFactories(cwd, agentDir);
+      await loader.reload();
+      this.logExtensions(loader.getExtensions());
+      return loader;
+    });
   }
 
   /**

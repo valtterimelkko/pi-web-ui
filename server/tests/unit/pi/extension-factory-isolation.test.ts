@@ -9,7 +9,7 @@ import {
   type ExtensionAPI,
   type ExtensionRuntime,
 } from '@earendil-works/pi-coding-agent';
-import { ExtensionFactoryCache } from '../../../src/pi/extension-factory-cache.js';
+import { ExtensionFactoryCache, runExtensionLoadCriticalSection } from '../../../src/pi/extension-factory-cache.js';
 
 /**
  * B1.2 requirement 1/2 live-mechanism proof.
@@ -25,6 +25,7 @@ import { ExtensionFactoryCache } from '../../../src/pi/extension-factory-cache.j
  */
 
 const instancesKey = '__b12IsolationInstances';
+const statefulKey = '__b12StatefulSets';
 type Captured = { api: ExtensionAPI; extension: Extension };
 
 function capture(): Captured[] {
@@ -81,14 +82,17 @@ beforeEach(async () => {
     importExtensionFactory?: (path: string) => Promise<unknown>;
     seedExtensionFactory?: (path: string, factory: unknown, cwd: string) => boolean;
   };
+  // The fixture extension stands in for an audited share-safe global extension.
   cache = new ExtensionFactoryCache({
     importFactory: sdk.importExtensionFactory,
     seedFactory: sdk.seedExtensionFactory,
+    allowlist: ['iso'],
   });
 });
 
 afterEach(() => {
   delete (globalThis as Record<string, unknown>)[instancesKey];
+  delete (globalThis as Record<string, unknown>)[statefulKey];
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -206,5 +210,132 @@ describe('B1.2 per-session extension runtime isolation (factory-cached load)', (
     expect(cache.stats.imports).toBe(2);
     expect(cache.stats.reimports).toBe(1);
     expect(capture()).toHaveLength(2);
+  });
+});
+
+/**
+ * Major 1 (independent review): caching an evaluated module also shares its
+ * MODULE-SCOPE state. This fixture has a module-level Set mutated on
+ * `session_start` — the shape the review found in the global `subagent`
+ * extension. It must be uncached (not on the allowlist), and the test proves
+ * both the safe outcome and the hazard when it IS cached.
+ */
+const STATEFUL_SOURCE = `
+const activeSessions = new Set();
+export default function (pi) {
+  pi.on('session_start', async (event) => { activeSessions.add(event.sessionId ?? 'unknown'); });
+  (globalThis.${statefulKey} ??= []).push(activeSessions);
+}
+`;
+
+function writeStatefulExtension(agentDir: string, name: string): void {
+  const dir = join(agentDir, 'extensions', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'index.ts'), STATEFUL_SOURCE);
+}
+
+function statefulSets(): Array<Set<string>> {
+  return ((globalThis as Record<string, unknown>)[statefulKey] ??= []) as Array<Set<string>>;
+}
+
+async function makeStatefulCache(allowlist: readonly string[]): Promise<ExtensionFactoryCache> {
+  const sdk = (await import('@earendil-works/pi-coding-agent')) as unknown as {
+    importExtensionFactory?: (path: string) => Promise<unknown>;
+    seedExtensionFactory?: (path: string, factory: unknown, cwd: string) => boolean;
+  };
+  return new ExtensionFactoryCache({
+    importFactory: sdk.importExtensionFactory,
+    seedFactory: sdk.seedExtensionFactory,
+    allowlist,
+  });
+}
+
+async function loadStateful(cache: ExtensionFactoryCache, cwd: string): Promise<Extension[]> {
+  await cache.seed(cwd, agentDir);
+  const loader = new DefaultResourceLoader({ cwd, agentDir });
+  await loader.reload();
+  return loader.getExtensions().extensions;
+}
+
+function fireSessionStart(extensions: Extension[], sessionId: string): void {
+  for (const extension of extensions) {
+    for (const handler of extension.handlers.get('session_start') ?? []) {
+      handler({ type: 'session_start', sessionId }, undefined);
+    }
+  }
+}
+
+describe('B1.2 module-state isolation for stateful extensions (review major 1)', () => {
+  it('keeps session A\'s module state untouched when session B starts (stateful extension uncached)', async () => {
+    writeStatefulExtension(agentDir, 'stateful');
+    const cache = await makeStatefulCache([]);
+    const extA = await loadStateful(cache, cwdA);
+    fireSessionStart(extA, 'A');
+    const extB = await loadStateful(cache, cwdB);
+    fireSessionStart(extB, 'B');
+
+    const sets = statefulSets();
+    expect(sets).toHaveLength(2);
+    expect([...sets[0]]).toEqual(['A']);
+    expect([...sets[1]]).toEqual(['B']);
+    expect(sets[0]).not.toBe(sets[1]);
+  });
+
+  it('demonstrates the hazard when the stateful extension IS cached', async () => {
+    writeStatefulExtension(agentDir, 'stateful');
+    const cache = await makeStatefulCache(['stateful']);
+    const extA = await loadStateful(cache, cwdA);
+    fireSessionStart(extA, 'A');
+    const extB = await loadStateful(cache, cwdB);
+    fireSessionStart(extB, 'B');
+
+    const sets = statefulSets();
+    // One shared module instance: B's start mutated A's set.
+    expect(sets[0]).toBe(sets[1]);
+    expect([...sets[0]]).toEqual(['A', 'B']);
+  });
+});
+
+/**
+ * Major 2 (independent review): the SDK's extension module cache is ONE
+ * process-global cwd slot, so seed → loader.reload() must be atomic. Without
+ * it, concurrent opens in different cwds interleave and clear each other.
+ */
+describe('B1.2 seed→reload critical section (review major 2)', () => {
+  async function loadTracked(cwd: string, events: string[], useSection: boolean): Promise<Extension[]> {
+    const body = async (): Promise<Extension[]> => {
+      events.push(`enter:${cwd}`);
+      await cache.seed(cwd, agentDir);
+      // Stand-in for the loader's own async resolution window, during which a
+      // competing seed would change the global slot.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const loader = new DefaultResourceLoader({ cwd, agentDir });
+      await loader.reload();
+      events.push(`exit:${cwd}`);
+      return loader.getExtensions().extensions;
+    };
+    return useSection ? runExtensionLoadCriticalSection(body) : body();
+  }
+
+  it('serialises concurrent different-cwd loads and keeps the cache effective', async () => {
+    const events: string[] = [];
+    const [a, b] = await Promise.all([
+      loadTracked(cwdA, events, true),
+      loadTracked(cwdB, events, true),
+    ]);
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    expect(events).toEqual([`enter:${cwdA}`, `exit:${cwdA}`, `enter:${cwdB}`, `exit:${cwdB}`]);
+    expect(cache.stats.imports).toBe(1);
+  });
+
+  it('interleaves without the critical section (the review hazard, as a control)', async () => {
+    const events: string[] = [];
+    await Promise.all([
+      loadTracked(cwdA, events, false),
+      loadTracked(cwdB, events, false),
+    ]);
+    // Both entered before either exited: the global slot changed mid-interval.
+    expect(events.slice(0, 2)).toEqual([`enter:${cwdA}`, `enter:${cwdB}`]);
   });
 });

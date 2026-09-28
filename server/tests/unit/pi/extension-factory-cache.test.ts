@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  DEFAULT_SHARE_SAFE_EXTENSIONS,
   ExtensionFactoryCache,
   discoverGlobalExtensionPaths,
+  runExtensionLoadCriticalSection,
   type ExtensionFactoryCacheDeps,
 } from '../../../src/pi/extension-factory-cache.js';
 
@@ -96,7 +98,7 @@ describe('ExtensionFactoryCache', () => {
     });
     const importFactory = vi.fn(async (path: string) => ({ kind: 'factory', path }));
     const seedFactory = vi.fn(() => true);
-    const cache = new ExtensionFactoryCache({ ...deps, importFactory, seedFactory, ...extra });
+    const cache = new ExtensionFactoryCache({ ...deps, importFactory, seedFactory, allowlist: ['alpha'], ...extra });
     return { cache, importFactory, seedFactory, dirs, files };
   }
 
@@ -175,5 +177,145 @@ describe('ExtensionFactoryCache', () => {
     await cache.load(AGENT);
     const seen = cache.lastScanEntryCount;
     expect(seen).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('ExtensionFactoryCache — share-safe allowlist (major 1)', () => {
+  it('imports and seeds only extensions on the allowlist', async () => {
+    const { deps } = fakeFs({
+      dirs: {
+        [`${AGENT}/extensions`]: ['safe-one', 'stateful-one'],
+        [`${AGENT}/extensions/safe-one`]: ['index.ts'],
+        [`${AGENT}/extensions/stateful-one`]: ['index.ts', 'state.ts'],
+      },
+      files: {
+        [`${AGENT}/extensions/safe-one/index.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/stateful-one/index.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/stateful-one/state.ts`]: { mtimeMs: 1 },
+      },
+    });
+    const importFactory = vi.fn(async (path: string) => ({ path }));
+    const seedFactory = vi.fn(() => true);
+    const cache = new ExtensionFactoryCache({ ...deps, importFactory, seedFactory, allowlist: ['safe-one'] });
+
+    const result = await cache.seed('/work/a', AGENT);
+    expect(result.seeded).toBe(1);
+    expect(importFactory).toHaveBeenCalledTimes(1);
+    expect(importFactory).toHaveBeenCalledWith(`${AGENT}/extensions/safe-one/index.ts`);
+    expect(seedFactory).toHaveBeenCalledTimes(1);
+    expect(cache.stats).toMatchObject({ discovered: 2, allowlisted: 1, skipped: 1, cached: 1 });
+  });
+
+  it('defaults to the audited share-safe allowlist', async () => {
+    expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toContain('auto-compact-75');
+    expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toContain('todo');
+    // Audited as carrying per-session module state — must stay uncached.
+    for (const denied of ['subagent', 'enhanced-plan-mode', 'goal-engine', 'memory', 'parallel-orchestrator', 'web-tools']) {
+      expect(DEFAULT_SHARE_SAFE_EXTENSIONS).not.toContain(denied);
+    }
+  });
+
+  it('does not cache an extension whose id is not allowlisted, even when discovered', async () => {
+    const { deps } = fakeFs({
+      dirs: { [`${AGENT}/extensions`]: ['stateful'], [`${AGENT}/extensions/stateful`]: ['index.ts'] },
+      files: { [`${AGENT}/extensions/stateful/index.ts`]: { mtimeMs: 1 } },
+    });
+    const importFactory = vi.fn(async () => ({}));
+    const cache = new ExtensionFactoryCache({ ...deps, importFactory, seedFactory: () => true, allowlist: [] });
+    const entries = await cache.load(AGENT);
+    expect(entries).toEqual([]);
+    expect(importFactory).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExtensionFactoryCache — whole-tree freshness and budget (minors 3 and 4)', () => {
+  it('re-imports a loose entry when a sibling outside its directory changes', async () => {
+    const { deps, files } = fakeFs({
+      dirs: { [`${AGENT}/extensions`]: ['loose.ts', 'helper'], [`${AGENT}/extensions/helper`]: ['util.ts'] },
+      files: {
+        [`${AGENT}/extensions/loose.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/helper/util.ts`]: { mtimeMs: 1 },
+      },
+    });
+    const importFactory = vi.fn(async (p: string) => ({ p }));
+    const cache = new ExtensionFactoryCache({ ...deps, importFactory, seedFactory: () => true, allowlist: ['loose', 'helper'] });
+    await cache.load(AGENT);
+    expect(importFactory).toHaveBeenCalledTimes(1);
+    files.get(`${AGENT}/extensions/helper/util.ts`)!.mtimeMs = 5000;
+    await cache.load(AGENT);
+    expect(importFactory).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-imports a manifest-declared entry when its helper changes', async () => {
+    const { deps, files } = fakeFs({
+      dirs: { [`${AGENT}/extensions`]: ['pkg'], [`${AGENT}/extensions/pkg`]: ['package.json', 'main.ts', 'helper.ts'] },
+      files: {
+        [`${AGENT}/extensions/pkg/package.json`]: { mtimeMs: 1, content: JSON.stringify({ pi: { extensions: ['main.ts'] } }) },
+        [`${AGENT}/extensions/pkg/main.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/pkg/helper.ts`]: { mtimeMs: 1 },
+      },
+    });
+    const importFactory = vi.fn(async (p: string) => ({ p }));
+    const cache = new ExtensionFactoryCache({ ...deps, importFactory, seedFactory: () => true, allowlist: ['pkg'] });
+    await cache.load(AGENT);
+    files.get(`${AGENT}/extensions/pkg/helper.ts`)!.mtimeMs = 9000;
+    await cache.load(AGENT);
+    expect(importFactory).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to no caching when the traversal budget is exceeded', async () => {
+    const many = Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`${AGENT}/extensions/big/f${i}.ts`, { mtimeMs: i }]));
+    const { deps } = fakeFs({
+      dirs: { [`${AGENT}/extensions`]: ['big'], [`${AGENT}/extensions/big`]: Object.keys(many).map((p) => p.split('/').pop()!) },
+      files: many,
+    });
+    const importFactory = vi.fn(async () => ({}));
+    const seedFactory = vi.fn(() => true);
+    const cache = new ExtensionFactoryCache({ ...deps, importFactory, seedFactory, allowlist: ['big'], maxScanEntries: 100 });
+    const seeded = await cache.seed('/work/a', AGENT);
+    expect(seeded).toEqual({ available: true, seeded: 0 });
+    expect(importFactory).not.toHaveBeenCalled();
+    expect(seedFactory).not.toHaveBeenCalled();
+    expect(cache.stats.overBudget).toBe(true);
+  });
+
+  it('bounds directories visited, not only files', async () => {
+    const dirs: Record<string, string[]> = { [`${AGENT}/extensions`]: [] };
+    for (let i = 0; i < 200; i += 1) {
+      dirs[`${AGENT}/extensions`].push(`d${i}`);
+      dirs[`${AGENT}/extensions/d${i}`] = [];
+    }
+    const { deps } = fakeFs({ dirs, files: {} });
+    const cache = new ExtensionFactoryCache({ ...deps, importFactory: async () => ({}), seedFactory: () => true, maxScanDirs: 20 });
+    const entries = await cache.load(AGENT);
+    expect(entries).toEqual([]);
+    expect(cache.stats.overBudget).toBe(true);
+  });
+});
+
+describe('runExtensionLoadCriticalSection (major 2)', () => {
+  it('runs tasks strictly one at a time in submission order', async () => {
+    const order: string[] = [];
+    const task = (name: string, delay: number) => async () => {
+      order.push(`start:${name}`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      order.push(`end:${name}`);
+      return name;
+    };
+    const [a, b] = await Promise.all([
+      runExtensionLoadCriticalSection(task('a', 30)),
+      runExtensionLoadCriticalSection(task('b', 5)),
+    ]);
+    expect(a).toBe('a');
+    expect(b).toBe('b');
+    expect(order).toEqual(['start:a', 'end:a', 'start:b', 'end:b']);
+  });
+
+  it('keeps the chain alive after a rejection', async () => {
+    const failing = runExtensionLoadCriticalSection(async () => {
+      throw new Error('boom');
+    });
+    await expect(failing).rejects.toThrow('boom');
+    await expect(runExtensionLoadCriticalSection(async () => 'ok')).resolves.toBe('ok');
   });
 });

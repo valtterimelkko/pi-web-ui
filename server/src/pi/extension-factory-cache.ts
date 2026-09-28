@@ -39,7 +39,69 @@ import { createLogger } from '../logging/logger.js';
  */
 
 const logger = createLogger('ExtensionFactoryCache');
-const DEFAULT_MAX_SCAN_ENTRIES = 512;
+const DEFAULT_MAX_SCAN_ENTRIES = 2048;
+const DEFAULT_MAX_SCAN_DIRS = 128;
+
+/**
+ * Extensions whose module may be cached and reused across sessions.
+ *
+ * Caching an evaluated module also shares its **module-scope** state across
+ * every session initialisation (fresh `Extension` objects and runtimes do not
+ * isolate module state). The independent review found this concretely in the
+ * global `subagent` extension (`backgroundManager`, `backgroundPiRef`,
+ * `backgroundSessionFile`, `backgroundStatusCtx`) and required an explicit,
+ * audited allowlist rather than caching everything.
+ *
+ * Audit rule: an extension is share-safe only if no module-scope mutable
+ * binding exists in any file it loads — no top-level `let`/`var`, no
+ * `const` bound to a `Map`/`Set`/`WeakMap`/array/object/class instance, no
+ * `process.on/once`, no module-level timer. Findings (file:line):
+ *
+ *   per-session / mutable module state (NOT cached):
+ *     enhanced-plan-mode    index.ts:81 module `state` object; index.ts:576 `let piRef`
+ *     goal-engine           auto-continue.ts:264/267/268 Maps; status-ui.ts:6 WeakMap
+ *     memory                index.ts:52 `let state`
+ *     parallel-orchestrator index.ts:49/50 Maps
+ *     subagent              index.ts:85/90/91/93 `let`s; index.ts:113 singleton
+ *                           BackgroundTaskManager; runtime.ts:142 mutationQueues Map
+ *     web-tools             index.ts:43 shared content cache Map (and a command
+ *                           that clears it globally)
+ *   share-safe (cached): everything else — agent-discovery, agent-os-inject,
+ *     auto-compact-75, background-shell, cli-anything, commandcode-provider,
+ *     compact-observability, subagent-evaluator, watch-wake, todo.
+ *
+ * The full audit table is in docs/plans/execution-reports/orchestration-scaling/B1.2.md.
+ * The pre-existing same-cwd sharing of these modules is a follow-up for the
+ * extension-store owner (pi-enhancement); this lane must not widen it.
+ */
+export const DEFAULT_SHARE_SAFE_EXTENSIONS: readonly string[] = [
+  'agent-discovery',
+  'agent-os-inject',
+  'auto-compact-75',
+  'background-shell',
+  'cli-anything',
+  'commandcode-provider',
+  'compact-observability',
+  'subagent-evaluator',
+  'watch-wake',
+  'todo',
+];
+
+/** Process-wide serialisation of seed → loader.reload() (review major 2). */
+let extensionLoadChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Run `fn` with exclusive access to the SDK's single process-global extension
+ * cwd slot. Seeding and the loader's `loadExtensionsCached()` must form one
+ * critical section: a concurrent open in another cwd would change the slot
+ * between the two, clearing the first session's seeded entries and forcing both
+ * to re-import on the event loop. A rejection never breaks the chain.
+ */
+export function runExtensionLoadCriticalSection<T>(fn: () => Promise<T>): Promise<T> {
+  const run = extensionLoadChain.then(fn, fn);
+  extensionLoadChain = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 export interface ExtensionDirEntry {
   name: string;
@@ -56,8 +118,15 @@ export interface ExtensionFactoryCacheDeps {
   readdir?: (dir: string) => Promise<ExtensionDirEntry[]>;
   stat?: (path: string) => Promise<{ mtimeMs: number; size: number } | undefined>;
   readFile?: (path: string) => Promise<string>;
-  /** Bound on how many files a single extension directory fingerprint reads. */
+  /** Bound on files visited by the shared freshness scan. */
   maxScanEntries?: number;
+  /** Bound on directories visited by the shared freshness scan. */
+  maxScanDirs?: number;
+  /**
+   * Extension ids whose modules may be cached. Defaults to the audited
+   * share-safe set; anything absent keeps the per-load import.
+   */
+  allowlist?: readonly string[];
 }
 
 export interface CachedExtensionFactory {
@@ -68,10 +137,13 @@ export interface CachedExtensionFactory {
 
 export interface ExtensionFactoryCacheStats {
   discovered: number;
+  allowlisted: number;
+  skipped: number;
   cached: number;
   imports: number;
   reimports: number;
   pruned: number;
+  overBudget: boolean;
 }
 
 interface CacheEntry {
@@ -161,64 +233,99 @@ export async function discoverGlobalExtensionPaths(agentDir: string, overrides: 
   return discovered;
 }
 
+/** Extension id: the top-level directory name (or loose file basename). */
+export function extensionId(entryPath: string, extensionsDir: string): string {
+  const relative = entryPath.startsWith(`${extensionsDir}/`)
+    ? entryPath.slice(extensionsDir.length + 1)
+    : entryPath;
+  const first = relative.split('/')[0];
+  return first.replace(/\.(ts|js)$/, '');
+}
+
+export interface ExtensionTreeScan {
+  /** Resolved entry paths the SDK's discovery would load. */
+  entryPaths: string[];
+  /** One fingerprint over every file in the tree (any change invalidates all). */
+  fingerprint: string;
+  overBudget: boolean;
+  dirsVisited: number;
+  entriesVisited: number;
+}
+
 /**
- * A change-detecting fingerprint for one extension. Directory-shaped extensions
- * fingerprint every file inside their directory (bounded); loos-file extensions
- * fingerprint the entry file only.
+ * Walk the whole global extensions tree once, producing (a) the entry paths the
+ * SDK would load and (b) a single freshness fingerprint over every file found.
+ * Deliberately fingerprints the WHOLE tree rather than each extension's
+ * directory: a loose-file entry or a `package.json`-declared entry that imports
+ * a sibling helper must be re-imported when that helper changes (review minor 3).
+ *
+ * Bounded on BOTH axes (review minor 4): directories visited and entries read.
+ * Over budget, the caller declines to cache at all rather than traversing an
+ * unbounded tree.
  */
-export async function extensionFingerprint(
-  extensionPath: string,
+export async function scanExtensionsTree(
+  agentDir: string,
   overrides: ExtensionFactoryCacheDeps = {},
-  maxScanEntries = DEFAULT_MAX_SCAN_ENTRIES,
-): Promise<string> {
+  budget: { maxDirs: number; maxEntries: number } = { maxDirs: DEFAULT_MAX_SCAN_DIRS, maxEntries: DEFAULT_MAX_SCAN_ENTRIES },
+): Promise<ExtensionTreeScan> {
   const statFn = overrides.stat ?? defaultStat;
   const readdirFn = overrides.readdir ?? defaultReaddir;
+  const extensionsDir = join(agentDir, 'extensions');
+  const entryPaths = await discoverGlobalExtensionPaths(agentDir, overrides);
   const parts: string[] = [];
-  const entryStat = await statFn(extensionPath);
-  parts.push(`entry:${entryStat?.mtimeMs ?? 'missing'}:${entryStat?.size ?? 0}`);
-  const isDirectoryShaped = /[/\\]index\.(ts|js)$/.test(extensionPath);
-  if (!isDirectoryShaped) return parts.join('|');
-
-  const dir = extensionPath.replace(/[/\\][^/\\]+$/, '');
-  const queue = [dir];
-  let scanned = 0;
-  while (queue.length > 0 && scanned < maxScanEntries) {
+  const queue = [extensionsDir];
+  let dirsVisited = 0;
+  let entriesVisited = 0;
+  let overBudget = false;
+  while (queue.length > 0) {
+    if (dirsVisited >= budget.maxDirs) {
+      overBudget = true;
+      break;
+    }
     const current = queue.shift();
     if (current === undefined) break;
+    dirsVisited += 1;
     let entries: ExtensionDirEntry[];
     try {
       entries = await readdirFn(current);
     } catch {
       continue;
     }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (entry.name === 'node_modules' || entry.name === '.git') continue;
-      const full = join(current, entry.name);
-      if (entry.isDirectory) {
-        queue.push(full);
-        continue;
+      if (entriesVisited >= budget.maxEntries) {
+        overBudget = true;
+        break;
       }
-      if (scanned >= maxScanEntries) break;
+      const full = join(current, entry.name);
       const info = await statFn(full);
       parts.push(`${full}:${info?.mtimeMs ?? 'missing'}:${info?.size ?? 0}`);
-      scanned += 1;
+      entriesVisited += 1;
+      if (entry.isDirectory) queue.push(full);
     }
+    if (overBudget) break;
   }
   parts.sort();
-  return parts.join('|');
+  return { entryPaths, fingerprint: parts.join('|'), overBudget, dirsVisited, entriesVisited };
 }
 
 export class ExtensionFactoryCache {
   private readonly deps: ExtensionFactoryCacheDeps;
   private readonly maxScanEntries: number;
+  private readonly maxScanDirs: number;
+  private readonly allowlist: ReadonlySet<string>;
   private readonly entries = new Map<string, CacheEntry>();
   private importFactory?: (extensionPath: string) => Promise<unknown | undefined>;
   private seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
-  private counters: ExtensionFactoryCacheStats = { discovered: 0, cached: 0, imports: 0, reimports: 0, pruned: 0 };
+  private counters: ExtensionFactoryCacheStats = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false };
   private scanEntryCount = 0;
+  private overBudgetWarned = false;
   constructor(deps: ExtensionFactoryCacheDeps = {}) {
     this.deps = deps;
     this.maxScanEntries = deps.maxScanEntries ?? DEFAULT_MAX_SCAN_ENTRIES;
+    this.maxScanDirs = deps.maxScanDirs ?? DEFAULT_MAX_SCAN_DIRS;
+    this.allowlist = new Set(deps.allowlist ?? DEFAULT_SHARE_SAFE_EXTENSIONS);
     this.importFactory = deps.importFactory;
     this.seedFactory = deps.seedFactory;
   }
@@ -247,29 +354,49 @@ export class ExtensionFactoryCache {
     return this.scanEntryCount;
   }
 
-  /** Discover global extensions and return their (possibly cached) factories. */
+  /** Discover global extensions and return the allowlisted, cached factories. */
   async load(agentDir: string): Promise<CachedExtensionFactory[]> {
-    const paths = await discoverGlobalExtensionPaths(agentDir, this.deps);
-    this.counters.discovered = paths.length;
+    const extensionsDir = join(agentDir, 'extensions');
+    const scan = await scanExtensionsTree(agentDir, this.deps, { maxDirs: this.maxScanDirs, maxEntries: this.maxScanEntries });
+    this.scanEntryCount = Math.min(scan.entriesVisited, this.maxScanEntries);
+    const allowed = scan.entryPaths.filter((path) => this.allowlist.has(extensionId(path, extensionsDir)));
+    this.counters.discovered = scan.entryPaths.length;
+    this.counters.allowlisted = allowed.length;
+    this.counters.skipped = scan.entryPaths.length - allowed.length;
+    if (scan.overBudget) {
+      // Decline to cache at all: an unbounded tree must not be traversed, and a
+      // partial fingerprint would silently freeze stale factories.
+      this.counters.overBudget = true;
+      this.counters.cached = 0;
+      this.entries.clear();
+      if (!this.overBudgetWarned) {
+        this.overBudgetWarned = true;
+        logger.warn(
+          `[ExtensionFactoryCache] extension tree exceeds the scan budget (dirs ${scan.dirsVisited}, entries ${scan.entriesVisited}); ` +
+          'falling back to the unpatched per-session import path for every extension (sessions are unaffected; opens stay slow).',
+        );
+      }
+      return [];
+    }
+    this.counters.overBudget = false;
+
     const result: CachedExtensionFactory[] = [];
-    const seen = new Set(paths);
-    for (const path of paths) {
-      const fingerprint = await extensionFingerprint(path, this.deps, this.maxScanEntries);
-      this.scanEntryCount = fingerprint.split('|').filter((part) => !part.startsWith('entry:')).length;
+    for (const path of allowed) {
       const cached = this.entries.get(path);
-      if (cached && cached.fingerprint === fingerprint) {
-        result.push({ path, factory: cached.factory, fingerprint });
+      if (cached && cached.fingerprint === scan.fingerprint) {
+        result.push({ path, factory: cached.factory, fingerprint: scan.fingerprint });
         continue;
       }
       const factory = await this.importFactoryFor(path);
       if (factory === undefined) continue;
       if (cached) this.counters.reimports += 1;
       this.counters.imports += 1;
-      this.entries.set(path, { factory, fingerprint });
-      result.push({ path, factory, fingerprint });
+      this.entries.set(path, { factory, fingerprint: scan.fingerprint });
+      result.push({ path, factory, fingerprint: scan.fingerprint });
     }
+    const keep = new Set(allowed);
     for (const path of [...this.entries.keys()]) {
-      if (seen.has(path)) continue;
+      if (keep.has(path)) continue;
       this.entries.delete(path);
       this.counters.pruned += 1;
     }
@@ -310,7 +437,8 @@ export class ExtensionFactoryCache {
 
   reset(): void {
     this.entries.clear();
-    this.counters = { discovered: 0, cached: 0, imports: 0, reimports: 0, pruned: 0 };
+    this.counters = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false };
+    this.overBudgetWarned = false;
     this.scanEntryCount = 0;
   }
 }
