@@ -42,9 +42,9 @@ describe('SessionWatcher read coalescing', () => {
     tempDir = undefined;
   });
 
-  it('coalesces ten notifications per controlled debounce burst and preserves complete metadata', async () => {
+  it('starts exactly one complete read for N appends inside one quiet window', async () => {
     vi.useFakeTimers();
-    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-coalesce-'));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-window-'));
     const filePath = path.join(tempDir, 'timestamp_session.jsonl');
     await writeFile(filePath, sessionContent('canonical-session', 'complete prompt'));
 
@@ -52,42 +52,33 @@ describe('SessionWatcher read coalescing', () => {
     const invoke = watcher as unknown as { handleChange(type: 'change', filePath: string): void };
     const originalRead = watcher.readSessionInfo.bind(watcher);
     const oracle = await originalRead(filePath);
-    const gates = Array.from({ length: 20 }, () => deferred<void>());
     let readCalls = 0;
-    watcher.readSessionInfo = async (file) => {
-      const gate = gates[readCalls];
+    watcher.readSessionInfo = async () => {
       readCalls += 1;
-      if (!gate) throw new Error(`unexpected read ${readCalls}`);
-      await gate.promise;
-      // The complete-file oracle is computed by the production parser above;
-      // the latch controls only when each coalesced read is allowed to finish.
       return oracle;
     };
 
     const events: SessionChangeEvent[] = [];
     watcher.on('session_update', (event: SessionChangeEvent) => events.push(event));
 
-    for (let burst = 0; burst < 10; burst += 1) {
-      for (let notification = 0; notification < 10; notification += 1) {
-        invoke.handleChange('change', filePath);
-      }
-      expect(readCalls).toBe(burst * 2 + 1);
-
-      gates[burst * 2].resolve();
-      await flushMicrotasks();
-      expect(readCalls).toBe(burst * 2 + 2);
-
-      gates[burst * 2 + 1].resolve();
-      await vi.advanceTimersByTimeAsync(500);
-      await flushMicrotasks();
+    for (let notification = 0; notification < 25; notification += 1) {
+      invoke.handleChange('change', filePath);
     }
+    // No complete-file read while the path is still changing.
+    expect(readCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(499); // window not yet closed
+    expect(readCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1); // quiet period reached
+    await flushMicrotasks();
+    expect(readCalls).toBe(1);
 
     const counters = watcher as unknown as DebugCounters;
-    expect(counters.debugFullReadCount).toBe(20);
-    expect(counters.debugBoundedHeaderReadCount).toBe(100);
-    expect(events).toHaveLength(10);
+    expect(counters.debugFullReadCount).toBe(1);
+    expect(counters.debugBoundedHeaderReadCount).toBe(25);
+    expect(events).toHaveLength(1);
     expect(events.at(-1)?.info).toEqual(oracle);
-    expect(readCalls).toBe(20);
 
     await watcher.stop();
   });
@@ -113,17 +104,18 @@ describe('SessionWatcher read coalescing', () => {
       invoke.handleChange('change', filePath);
       await flushMicrotasks();
     }
-    expect(readCalls).toBe(1);
+    // Reads are coalesced to the window: none starts while changes still arrive.
+    expect(readCalls).toBe(0);
 
     await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
-    expect(readCalls).toBe(2);
+    expect(readCalls).toBe(1);
     expect(events.at(-1)?.info).toEqual(oracle);
 
     await watcher.stop();
   });
 
-  it('uses one trailing read for a change during an in-flight read and does not resurrect state after stop', async () => {
+  it('a change during the window read is covered by the next window, and stop() leaves no state', async () => {
     vi.useFakeTimers();
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-inflight-'));
     const filePath = path.join(tempDir, 'replaceable_session.jsonl');
@@ -145,6 +137,13 @@ describe('SessionWatcher read coalescing', () => {
     watcher.on('session_update', (event: SessionChangeEvent) => events.push(event));
 
     invoke.handleChange('add', filePath);
+    // The read starts only when the window closes, not on the notification.
+    expect(calls).toBe(0);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toBe(1);
+
+    // A change during that read restarts the window; the next window performs
+    // the next single read (no trailing read chained from finishRead).
     await appendFile(filePath, JSON.stringify({
       type: 'message',
       id: 'message-2',
@@ -152,19 +151,18 @@ describe('SessionWatcher read coalescing', () => {
       message: { role: 'assistant', content: [{ type: 'text', text: 'after change' }] },
     }) + '\n');
     invoke.handleChange('change', filePath);
-    expect(calls).toBe(1);
-
     const changedOracle = await originalRead(filePath);
     firstRead.resolve(changedOracle);
     await flushMicrotasks();
+    expect(events).toHaveLength(1);
+    expect(events[0]?.info?.messageCount).toBe(changedOracle.messageCount);
+    expect(calls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(500);
     expect(calls).toBe(2);
     secondRead.resolve(changedOracle);
-    await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
-
-    expect(events).toHaveLength(1);
-    expect(events[0]?.info).toEqual(changedOracle);
-    expect(events[0]?.info?.messageCount).toBe(changedOracle.messageCount);
+    expect(events).toHaveLength(2);
 
     const beforeStopState = watcher as unknown as {
       sessionIdsByPath: Map<string, string>;
@@ -173,12 +171,14 @@ describe('SessionWatcher read coalescing', () => {
     };
     expect(beforeStopState.sessionIdsByPath.get(filePath)).toBe(changedOracle.id);
 
+    // stop() must not let a late read resurrect per-path state.
     const thirdRead = deferred<SessionInfo>();
     watcher.readSessionInfo = () => {
       calls += 1;
       return thirdRead.promise;
     };
     invoke.handleChange('change', filePath);
+    await vi.advanceTimersByTimeAsync(500);
     expect(calls).toBe(3);
     await watcher.stop();
     thirdRead.resolve(changedOracle);
@@ -189,7 +189,7 @@ describe('SessionWatcher read coalescing', () => {
     expect(beforeStopState.pendingInfoByPath.size).toBe(0);
   });
 
-  it('keeps the bounded header identity for an add-unlink race while the full read is pending', async () => {
+  it('keeps the bounded header identity for an add-unlink race without ever starting a full read', async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-unlink-'));
     const filePath = path.join(tempDir, 'filename-fallback.jsonl');
     await writeFile(filePath, sessionContent('unlink-canonical'));
@@ -198,27 +198,22 @@ describe('SessionWatcher read coalescing', () => {
     const invoke = watcher as unknown as {
       handleChange(type: 'add' | 'unlink', filePath: string): void;
     };
-    const pendingRead = deferred<SessionInfo>();
-    watcher.readSessionInfo = () => pendingRead.promise;
+    let readCalls = 0;
+    watcher.readSessionInfo = async () => {
+      readCalls += 1;
+      throw new Error('a full read must not start for an add-unlink inside the window');
+    };
     const events: SessionChangeEvent[] = [];
     watcher.on('session_update', (event: SessionChangeEvent) => events.push(event));
 
     invoke.handleChange('add', filePath);
     await rm(filePath);
     invoke.handleChange('unlink', filePath);
-    pendingRead.resolve({
-      id: 'unlink-canonical',
-      path: filePath,
-      cwd: '/tmp/session-workspace',
-      firstMessage: 'hello',
-      messageCount: 2,
-      createdAt: new Date(1),
-      lastActivity: new Date(2),
-    });
     await flushMicrotasks();
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'unlink', sessionId: 'unlink-canonical' });
+    expect(readCalls).toBe(0);
     const counters = watcher as unknown as DebugCounters;
     expect(counters.debugBoundedHeaderReadCount).toBe(1);
     await watcher.stop();

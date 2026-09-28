@@ -203,11 +203,13 @@ export class SessionWatcher extends EventEmitter {
       inFlight: null,
     };
     this.readStateByPath.set(filePath, state);
+    // Coalesce complete-file reads to the debounce window (B1.1 correction).
+    // Starting a read on a raw notification meant a continuously-appended
+    // large session kept the read chain alive for the whole turn — each read
+    // being fs.readFile of the whole file plus a synchronous JSON.parse of
+    // every line. The debounced emit below starts at most one read, once the
+    // path has gone quiet for the debounce delay.
     state.revalidateQueued = true;
-    // A completed read can cover all notifications in the current debounce
-    // window; defer that invalidation to the debounced emit. If a read is
-    // already active, ensureRead() simply returns the covering promise.
-    if (!hadDebounceTimer || state.inFlight) void this.ensureRead(filePath, state);
 
     // Debounce add/change events
     const timer = setTimeout(() => {
@@ -268,19 +270,15 @@ export class SessionWatcher extends EventEmitter {
 
     state.cached = info;
     if (info) this.sessionIdsByPath.set(filePath, info.id);
-    // A notification that arrived while this read was active invalidated the
-    // result. One boolean gives exactly one trailing read without a promise
-    // backlog; further changes can set it again while that read is active.
-    if (state.revalidateQueued) void this.ensureRead(filePath, state);
+    // No trailing read is chained here (B1.1 correction). A change that landed
+    // during this read reset the debounce window, and that window's emit will
+    // perform the next single read — so a continuously-appended file gets at
+    // most one read per quiet period instead of back-to-back full parses.
   }
 
-  /** Wait for the cached result after any one trailing invalidation read settles. */
-  private async waitForSettledRead(filePath: string, state: SessionReadState): Promise<SessionInfo | null> {
-    let info = await this.ensureRead(filePath, state);
-    while (!this.stopped && this.readStateByPath.get(filePath) === state && (state.inFlight || state.revalidateQueued)) {
-      info = await this.ensureRead(filePath, state);
-    }
-    return info;
+  /** One read for the window that just closed (see finishRead for the bound). */
+  private waitForSettledRead(filePath: string, state: SessionReadState): Promise<SessionInfo | null> {
+    return this.ensureRead(filePath, state);
   }
 
   /**
