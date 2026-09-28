@@ -26,10 +26,8 @@ import {
   type SnapshotGraph,
 } from '../../server/src/live-validation/heap-soak/snapshot-retainers.js';
 
-export const WATCHER_CHAIN_TOKENS = [
+export const SESSION_WATCHER_CHAIN_TOKENS = [
   'SessionWatcher',
-  'FSWatcher',
-  'FSEvent',
   'debounceTimers',
   'readStateByPath',
   'sessionIdsByPath',
@@ -41,13 +39,27 @@ export const WATCHER_CHAIN_TOKENS = [
   'chokidar',
 ] as const;
 
+/** Generic `fs.FSWatcher` handles (node internals); the Pi SDK creates these too. */
+export const FS_WATCHER_CHAIN_TOKENS = ['FSWatcher', 'FSEvent'] as const;
+
+export const WATCHER_CHAIN_TOKENS = [
+  ...SESSION_WATCHER_CHAIN_TOKENS,
+  ...FS_WATCHER_CHAIN_TOKENS,
+] as const;
+
 export interface ConstructorSummary {
   constructor: string;
   instances: number;
   reachableInstances: number;
   /** Reachable instances whose dominant retainer chain passes through watcher state. */
   watcherHeldInstances: number;
-  topChains: Array<{ chain: string; instances: number; watcherHeld: boolean }>;
+  /**
+   * Subset held specifically through `SessionWatcher`/chokidar session state
+   * (debounceTimers, readStateByPath, _pendingWrites, _watched, _closers …),
+   * as opposed to a generic `fs.FSWatcher` handle the Pi SDK can also create.
+   */
+  sessionWatcherHeldInstances: number;
+  topChains: Array<{ chain: string; instances: number; watcherHeld: boolean; sessionWatcherHeld: boolean }>;
 }
 
 export interface SnapshotSummary {
@@ -61,18 +73,25 @@ export function isWatcherChain(chain: string): boolean {
   return WATCHER_CHAIN_TOKENS.some((token) => chain.includes(token));
 }
 
+export function isSessionWatcherChain(chain: string): boolean {
+  return SESSION_WATCHER_CHAIN_TOKENS.some((token) => chain.includes(token));
+}
+
 function summarizeConstructor(graph: SnapshotGraph, analysis: ConstructorRetainerAnalysis): ConstructorSummary {
   const topChains = analysis.chains.map((group) => ({
     chain: group.chain,
     instances: group.instances,
     watcherHeld: isWatcherChain(group.chain),
+    sessionWatcherHeld: isSessionWatcherChain(group.chain),
   }));
   const watcherHeldInstances = topChains.reduce((sum, group) => sum + (group.watcherHeld ? group.instances : 0), 0);
+  const sessionWatcherHeldInstances = topChains.reduce((sum, group) => sum + (group.sessionWatcherHeld ? group.instances : 0), 0);
   return {
     constructor: analysis.constructor,
     instances: analysis.instances,
     reachableInstances: analysis.reachableInstances,
     watcherHeldInstances,
+    sessionWatcherHeldInstances,
     topChains,
   };
 }
@@ -110,15 +129,15 @@ export function renderSummaryMarkdown(
   lines.push(`- Files churned: ${cases.reduce((sum, c) => sum + c.files, 0)} across ${cases.length} cases (${cases.map((c) => `${c.case}=${c.files}`).join(', ')}).`);
   lines.push(`- Retained churn path strings: before ${before.retainedChurnPathStrings} → after ${after.retainedChurnPathStrings} (Δ ${after.retainedChurnPathStrings - before.retainedChurnPathStrings}).`);
   lines.push('');
-  lines.push('| constructor | instances before | instances after | Δ | watcher-held before | watcher-held after | watcher-held Δ |');
-  lines.push('|---|---:|---:|---:|---:|---:|---:|');
+  lines.push('| constructor | instances before | instances after | Δ | session-watcher-held Δ | any-watcher-held Δ |');
+  lines.push('|---|---:|---:|---:|---:|---:|');
   const byName = new Map(before.constructors.map((c) => [c.constructor, c]));
   for (const afterCtor of after.constructors) {
     const beforeCtor = byName.get(afterCtor.constructor);
     lines.push(
       `| ${afterCtor.constructor} | ${beforeCtor?.instances ?? 'n/a'} | ${afterCtor.instances} | ` +
       `${beforeCtor ? afterCtor.instances - beforeCtor.instances : 'n/a'} | ` +
-      `${beforeCtor?.watcherHeldInstances ?? 'n/a'} | ${afterCtor.watcherHeldInstances} | ` +
+      `${beforeCtor ? afterCtor.sessionWatcherHeldInstances - beforeCtor.sessionWatcherHeldInstances : 'n/a'} | ` +
       `${beforeCtor ? afterCtor.watcherHeldInstances - beforeCtor.watcherHeldInstances : 'n/a'} |`,
     );
   }
@@ -128,7 +147,7 @@ export function renderSummaryMarkdown(
     lines.push('');
     lines.push(`### ${ctor.constructor} — ${ctor.instances} instances (${ctor.reachableInstances} reachable)`);
     for (const chain of ctor.topChains) {
-      lines.push(`- ${chain.instances} instance(s)${chain.watcherHeld ? ' [watcher-held]' : ''} via:`);
+      lines.push(`- ${chain.instances} instance(s)${chain.sessionWatcherHeld ? ' [session-watcher-held]' : chain.watcherHeld ? ' [fs-watcher-held]' : ''} via:`);
       lines.push('  ```');
       for (const step of chain.chain.split('\n')) lines.push(`  ${step}`);
       lines.push('  ```');

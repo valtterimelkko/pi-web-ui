@@ -91,6 +91,9 @@ interface ConstructorDelta {
   instancesBefore: number;
   instancesAfter: number;
   instancesDelta: number;
+  sessionWatcherHeldBefore: number;
+  sessionWatcherHeldAfter: number;
+  sessionWatcherHeldDelta: number;
   watcherHeldBefore: number;
   watcherHeldAfter: number;
   watcherHeldDelta: number;
@@ -103,6 +106,7 @@ interface Verdict {
   retainedChurnPathStringsDelta: number;
   constructors: ConstructorDelta[];
   /** Growth that is attributable to watcher-held state only. */
+  sessionWatcherHeldGrowthTotal: number;
   watcherHeldGrowthTotal: number;
   churn: ChurnResult;
   memory: { before: NodeJS.MemoryUsage; after: NodeJS.MemoryUsage };
@@ -114,15 +118,16 @@ function renderVerdict(verdict: Verdict): string {
   lines.push(`files churned: ${verdict.totalFiles} (${verdict.filesPerCase}/case)`);
   lines.push(`retained churn path strings Δ: ${verdict.retainedChurnPathStringsDelta}`);
   lines.push('');
-  lines.push('constructor        before  after  delta   watcherHeldΔ');
+  lines.push('constructor        before  after  delta  sWatcherHeldΔ  anyWatcherHeldΔ');
   for (const ctor of verdict.constructors) {
     lines.push(
       `${ctor.constructor.padEnd(18)} ${String(ctor.instancesBefore).padStart(6)} ${String(ctor.instancesAfter).padStart(6)} ` +
-      `${String(ctor.instancesDelta).padStart(6)} ${String(ctor.watcherHeldDelta).padStart(13)}`,
+      `${String(ctor.instancesDelta).padStart(6)} ${String(ctor.sessionWatcherHeldDelta).padStart(15)} ${String(ctor.watcherHeldDelta).padStart(16)}`,
     );
   }
   lines.push('');
-  lines.push(`watcher-held growth total: ${verdict.watcherHeldGrowthTotal}`);
+  lines.push(`session-watcher-held growth total: ${verdict.sessionWatcherHeldGrowthTotal}`);
+  lines.push(`any-watcher-held growth total: ${verdict.watcherHeldGrowthTotal}`);
   return lines.join('\n');
 }
 
@@ -193,8 +198,8 @@ async function main(): Promise<void> {
   }
 
   const parsed = JSON.parse(readFileSync(summaryJsonPath, 'utf8')) as {
-    before: { retainedChurnPathStrings: number; constructors: Array<{ constructor: string; instances: number; watcherHeldInstances: number }> };
-    after: { retainedChurnPathStrings: number; constructors: Array<{ constructor: string; instances: number; watcherHeldInstances: number }> };
+    before: { retainedChurnPathStrings: number; constructors: Array<{ constructor: string; instances: number; sessionWatcherHeldInstances: number; watcherHeldInstances: number }> };
+    after: { retainedChurnPathStrings: number; constructors: Array<{ constructor: string; instances: number; sessionWatcherHeldInstances: number; watcherHeldInstances: number }> };
   };
   const beforeByName = new Map(parsed.before.constructors.map((c) => [c.constructor, c]));
   const constructors: ConstructorDelta[] = parsed.after.constructors.map((after) => {
@@ -204,6 +209,9 @@ async function main(): Promise<void> {
       instancesBefore: before?.instances ?? 0,
       instancesAfter: after.instances,
       instancesDelta: after.instances - (before?.instances ?? 0),
+      sessionWatcherHeldBefore: before?.sessionWatcherHeldInstances ?? 0,
+      sessionWatcherHeldAfter: after.sessionWatcherHeldInstances,
+      sessionWatcherHeldDelta: after.sessionWatcherHeldInstances - (before?.sessionWatcherHeldInstances ?? 0),
       watcherHeldBefore: before?.watcherHeldInstances ?? 0,
       watcherHeldAfter: after.watcherHeldInstances,
       watcherHeldDelta: after.watcherHeldInstances - (before?.watcherHeldInstances ?? 0),
@@ -216,6 +224,7 @@ async function main(): Promise<void> {
     totalFiles: churn.totalWritten,
     retainedChurnPathStringsDelta: parsed.after.retainedChurnPathStrings - parsed.before.retainedChurnPathStrings,
     constructors,
+    sessionWatcherHeldGrowthTotal: constructors.reduce((sum, c) => sum + Math.max(0, c.sessionWatcherHeldDelta), 0),
     watcherHeldGrowthTotal: constructors.reduce((sum, c) => sum + Math.max(0, c.watcherHeldDelta), 0),
     churn,
     memory: { before: memoryBefore, after: memoryAfter },

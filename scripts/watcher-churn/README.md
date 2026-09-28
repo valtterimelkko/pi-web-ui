@@ -19,8 +19,11 @@ forced-GC heap snapshots taken through the server's loopback inspector.
 4. Settles, forced-GC, heap snapshot **after**.
 5. `summarize.ts` (imports the heap-soak read-only retainer module owned by lane
    b0-1) reports `Timeout`/`Stats`/`Date`/`FSWatcher` instance counts, how many
-   are watcher-held, and the dominant shortest retainer chains — which are the
-   watcher map sizes (for example instances reached through
+   are held specifically through `SessionWatcher`/chokidar session state
+   (`debounceTimers`, `_pendingWrites`, `_watched`, `_closers`, `readStateByPath`)
+   as opposed to a generic `fs.FSWatcher` handle the Pi SDK also creates, and
+   the dominant shortest retainer chains — which are the watcher map sizes (for
+   example instances reached through
    `object:SessionWatcher --property:debounceTimers--> object:Map`).
 
 Outputs in `--out-dir`: `before.heapsnapshot`, `after.heapsnapshot`,
