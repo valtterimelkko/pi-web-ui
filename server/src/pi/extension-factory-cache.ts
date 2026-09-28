@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { opendir, readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createLogger } from '../logging/logger.js';
 
@@ -125,6 +125,8 @@ export interface ExtensionFactoryCacheDeps {
   /** Place an already-imported factory into the SDK module cache for `cwd`. */
   seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
   readdir?: (dir: string) => Promise<ExtensionDirEntry[]>;
+  /** Streaming enumeration seam (preferred): lets the scanner stop at the budget. */
+  opendir?: (dir: string) => Promise<AsyncIterable<ExtensionDirEntry>>;
   stat?: (path: string) => Promise<{ mtimeMs: number; size: number } | undefined>;
   readFile?: (path: string) => Promise<string>;
   /** Bound on files visited by the shared freshness scan. */
@@ -173,6 +175,38 @@ async function defaultReaddir(dir: string): Promise<ExtensionDirEntry[]> {
   }));
 }
 
+function toDirEntry(entry: { name: string; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): ExtensionDirEntry {
+  return {
+    name: entry.name,
+    isFile: entry.isFile(),
+    isDirectory: entry.isDirectory(),
+    isSymbolicLink: entry.isSymbolicLink(),
+  };
+}
+
+/** Stream a directory with fs.opendir, closing the handle even on early break. */
+async function defaultOpendir(dir: string): Promise<AsyncIterable<ExtensionDirEntry>> {
+  const handle = await opendir(dir);
+  return {
+    async *[Symbol.asyncIterator]() {
+      try {
+        for await (const entry of handle) yield toDirEntry(entry);
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    },
+  };
+}
+
+/** Wrap a materialised listing as an async iterable (test seam only). */
+function iterableFrom(entries: ExtensionDirEntry[]): AsyncIterable<ExtensionDirEntry> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const entry of entries) yield entry;
+    },
+  };
+}
+
 async function defaultStat(path: string): Promise<{ mtimeMs: number; size: number } | undefined> {
   try {
     const info = await stat(path);
@@ -190,7 +224,7 @@ async function defaultStat(path: string): Promise<{ mtimeMs: number; size: numbe
 async function resolveExtensionEntries(
   dir: string,
   deps: Required<Pick<ExtensionFactoryCacheDeps, 'stat' | 'readFile'>>,
-  opBudget?: () => boolean,
+  exhausted?: () => boolean,
 ): Promise<string[]> {
   const packageJsonPath = join(dir, 'package.json');
   if (await deps.stat(packageJsonPath)) {
@@ -200,7 +234,8 @@ async function resolveExtensionEntries(
       if (Array.isArray(declared) && declared.every((entry) => typeof entry === 'string') && declared.length > 0) {
         const entries: string[] = [];
         for (const relative of declared) {
-          if (opBudget && opBudget()) break;
+          // Every manifest candidate is debited against the SAME hard budget.
+          if (exhausted && exhausted()) break;
           const candidate = resolve(dir, relative);
           if (await deps.stat(candidate)) entries.push(candidate);
         }
@@ -211,7 +246,7 @@ async function resolveExtensionEntries(
     }
   }
   for (const name of ['index.ts', 'index.js']) {
-    if (opBudget && opBudget()) return [];
+    if (exhausted && exhausted()) return [];
     const candidate = join(dir, name);
     if (await deps.stat(candidate)) return [candidate];
   }
@@ -295,7 +330,6 @@ export async function scanExtensionsTree(
   budget: { maxDirs: number; maxEntries: number } = { maxDirs: DEFAULT_MAX_SCAN_DIRS, maxEntries: DEFAULT_MAX_SCAN_ENTRIES },
 ): Promise<ExtensionTreeScan> {
   const statFn = overrides.stat ?? defaultStat;
-  const readdirFn = overrides.readdir ?? defaultReaddir;
   const readFileFn = overrides.readFile ?? ((path: string) => readFile(path, 'utf-8'));
   const extensionsDir = join(agentDir, 'extensions');
   const parts: string[] = [];
@@ -307,27 +341,51 @@ export async function scanExtensionsTree(
   let overBudget = false;
 
   const statB = async (path: string) => { fsOps += 1; return statFn(path); };
-  const readdirB = async (dir: string) => { fsOps += 1; return readdirFn(dir); };
-  const empty: ExtensionTreeScan = { entryPaths: [], fingerprint: '', overBudget: false, dirsVisited: 0, entriesVisited: 0, fsOps: 1, unfingerprintable: [] };
 
-  let top: ExtensionDirEntry[];
-  try {
-    top = await readdirB(extensionsDir);
-  } catch {
-    return empty;
-  }
-  top.sort((a, b) => a.name.localeCompare(b.name));
+  /**
+   * ONE shared hard budget: every consumed directory entry and every manifest
+   * candidate debits it, and the scan stops the moment it is exhausted. Returns
+   * true when exhausted (the caller must stop).
+   */
+  const debitEntry = (): boolean => {
+    if (entriesVisited >= budget.maxEntries) {
+      overBudget = true;
+      return true;
+    }
+    entriesVisited += 1;
+    return false;
+  };
 
-  // queue entries carry their top-level extension id, so a symlink found deep in
-  // a subtree can exclude exactly that extension.
+  /**
+   * Streamed enumeration: prefer the streaming seam, then the materialised test
+   * seam, then real `fs.opendir`. Directory listings are never materialised in
+   * full on the production path (round-3 review).
+   */
+  const openStream = async (dir: string): Promise<AsyncIterable<ExtensionDirEntry> | undefined> => {
+    fsOps += 1;
+    try {
+      if (overrides.opendir) return await overrides.opendir(dir);
+      if (overrides.readdir) return iterableFrom(await overrides.readdir(dir));
+      return await defaultOpendir(dir);
+    } catch {
+      return undefined;
+    }
+  };
+
+  const empty: ExtensionTreeScan = {
+    entryPaths: [], fingerprint: '', overBudget: false, dirsVisited: 0, entriesVisited: 0, fsOps: 1, unfingerprintable: [],
+  };
+
+  const rootStream = await openStream(extensionsDir);
+  if (!rootStream) return empty;
+
   const queue: Array<{ dir: string; id: string }> = [];
-  for (const entry of top) {
+  for await (const entry of rootStream) {
     if (entry.name === 'node_modules' || entry.name === '.git') continue;
-    if (entriesVisited >= budget.maxEntries) { overBudget = true; break; }
+    if (debitEntry()) break;
     const full = join(extensionsDir, entry.name);
     const info = await statB(full);
     parts.push(fingerprintPart(full, info));
-    entriesVisited += 1;
     const id = entry.name.replace(/\.(ts|js)$/, '');
     if (entry.isSymbolicLink) {
       // Never follow a symlinked extension: its subtree cannot be fingerprinted.
@@ -339,9 +397,8 @@ export async function scanExtensionsTree(
       continue;
     }
     if (entry.isDirectory) {
-      const resolved = await resolveExtensionEntries(full, { stat: statB, readFile: readFileFn }, () => overBudget || entriesVisited >= budget.maxEntries);
+      const resolved = await resolveExtensionEntries(full, { stat: statB, readFile: readFileFn }, debitEntry);
       entryPaths.push(...resolved);
-      if (entriesVisited >= budget.maxEntries) overBudget = true;
       queue.push({ dir: full, id });
     }
   }
@@ -352,20 +409,14 @@ export async function scanExtensionsTree(
     const current = queue.shift();
     if (current === undefined) break;
     dirsVisited += 1;
-    let entries: ExtensionDirEntry[];
-    try {
-      entries = await readdirB(current.dir);
-    } catch {
-      continue;
-    }
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
+    const stream = await openStream(current.dir);
+    if (!stream) continue;
+    for await (const entry of stream) {
       if (entry.name === 'node_modules' || entry.name === '.git') continue;
-      if (entriesVisited >= budget.maxEntries) { overBudget = true; break; }
+      if (debitEntry()) break;
       const full = join(current.dir, entry.name);
       const info = await statB(full);
       parts.push(fingerprintPart(full, info));
-      entriesVisited += 1;
       if (entry.isSymbolicLink) {
         unfingerprintable.add(current.id);
         continue;

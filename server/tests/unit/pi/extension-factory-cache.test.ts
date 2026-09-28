@@ -392,5 +392,96 @@ describe('ExtensionFactoryCache — round-2 review guards', () => {
     expect(entries.map((entry) => entry.path)).toEqual([`${AGENT}/extensions/plain/index.ts`]);
     expect(importFactory).toHaveBeenCalledTimes(1);
     expect(cache.stats.unfingerprintable).toBe(1);
+
+    // Mutate the helper UNDER the symlink and load again: the symlinked
+    // extension must still never be imported (there is no fingerprint to go
+    // stale, because it is excluded rather than followed).
+    const baseStat = deps.stat;
+    const helper = `${AGENT}/extensions/linked/helper.ts`;
+    const bumped = new Map<string, { mtimeMs: number; size: number }>();
+    bumped.set(helper, { mtimeMs: 99_999, size: 10 });
+    const cacheAfter = new ExtensionFactoryCache({
+      readdir: linkedReaddir,
+      stat: async (path: string) => bumped.get(path) ?? baseStat?.(path),
+      readFile: deps.readFile,
+      importFactory,
+      seedFactory: () => true,
+      allowlist: ['linked', 'plain'],
+    });
+    const second = await cacheAfter.load(AGENT);
+    expect(second.map((entry) => entry.path)).toEqual([`${AGENT}/extensions/plain/index.ts`]);
+    // The linked extension is never imported, before or after the mutation.
+    expect(importFactory.mock.calls.map((call) => call[0])).toEqual([
+      `${AGENT}/extensions/plain/index.ts`,
+      `${AGENT}/extensions/plain/index.ts`,
+    ]);
+    expect(cacheAfter.stats.unfingerprintable).toBe(1);
+  });
+});
+
+describe('ExtensionFactoryCache — discovery is inside the shared hard budget (round-3 review)', () => {
+  it('stops a 500-entry pi.extensions manifest at the entry budget', async () => {
+    const declared = Array.from({ length: 500 }, (_, i) => `e${i}.ts`);
+    const files: Record<string, { mtimeMs: number; size?: number; content?: string }> = {
+      [`${AGENT}/extensions/pkg/package.json`]: { mtimeMs: 1, content: JSON.stringify({ pi: { extensions: declared } }) },
+    };
+    for (let i = 0; i < 500; i += 1) files[`${AGENT}/extensions/pkg/e${i}.ts`] = { mtimeMs: i };
+    const base = fakeFs({
+      dirs: { [`${AGENT}/extensions`]: ['pkg'], [`${AGENT}/extensions/pkg`]: ['package.json', ...declared] },
+      files,
+    });
+    let stats = 0;
+    const cache = new ExtensionFactoryCache({
+      readdir: base.deps.readdir,
+      stat: async (path: string) => { stats += 1; return base.deps.stat!(path); },
+      readFile: base.deps.readFile,
+      importFactory: async (p: string) => ({ p }),
+      seedFactory: () => true,
+      allowlist: ['pkg'],
+      maxScanEntries: 2,
+    });
+    const entries = await cache.load(AGENT);
+    expect(entries).toEqual([]);
+    expect(cache.stats.overBudget).toBe(true);
+    // Manifest candidates are debited against the same budget: the scan stops
+    // after the budget, not after stat'ing all 500 declared files.
+    expect(stats).toBeLessThanOrEqual(6);
+    expect(cache.lastScanEntryCount).toBeLessThanOrEqual(3);
+  });
+
+  it('does not fully list a 1,000-entry extensions root', async () => {
+    const base = fakeFs({
+      dirs: {
+        [`${AGENT}/extensions`]: Array.from({ length: 1000 }, (_, i) => `d${i}`),
+      },
+      files: {},
+    });
+    let yielded = 0;
+    let readdirCalls = 0;
+    const cache = new ExtensionFactoryCache({
+      // Streaming seam: the scanner must stop pulling once the budget is spent.
+      opendir: async (dir: string) => {
+        const list = await base.deps.readdir!(dir);
+        return (async function* () {
+          for (const entry of list) {
+            yielded += 1;
+            yield entry;
+          }
+        })();
+      },
+      readdir: async (dir: string) => { readdirCalls += 1; return base.deps.readdir!(dir); },
+      stat: base.deps.stat,
+      readFile: base.deps.readFile,
+      importFactory: async () => ({}),
+      seedFactory: () => true,
+      maxScanDirs: 1,
+      maxScanEntries: 2,
+    });
+    const entries = await cache.load(AGENT);
+    expect(entries).toEqual([]);
+    expect(cache.stats.overBudget).toBe(true);
+    // budget + 1: the entry that trips the limit is the only one past it.
+    expect(yielded).toBeLessThanOrEqual(3);
+    expect(readdirCalls).toBe(0);
   });
 });
