@@ -15,7 +15,7 @@ import path from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
 import { InspectorClient } from './inspector.js';
-import { getUnitStatus } from './systemd-units.js';
+import { getUnitStatus, stopUnit, waitForUnitGone } from './systemd-units.js';
 import { loadRunState, saveRunState } from './run-state-io.js';
 import { appendLaneEvent, readLaneEvents } from './events-log.js';
 import { appendSampleRow } from './csv-io.js';
@@ -31,7 +31,8 @@ import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } fr
 import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { leastSquaresSlope, type SlopePoint } from '../../server/src/live-validation/heap-soak/slope.js';
 import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, nextStateOnPollFailure, type QuotaState, type ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
-import { FULL_SCHEDULE, MICRO_SCHEDULE, checkpointOffsetsMs, isRunComplete, nextDueOffset, phaseAt, snapshotOffsetsMs, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
+import { DEFAULT_FULL_RUN_HOURS, MICRO_SCHEDULE, checkpointOffsetsMs, endSnapshotOffsetMs, fullScheduleForHours, interimSnapshotOffsetsMs, isRunComplete, nextDueOffset, phaseAt, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
+import { TEARDOWN_KEEP_SERVER_ENV_KEY, completionNoticeBody, decideRunTeardown, parseKeepServerFlag } from '../../server/src/live-validation/heap-soak/run-teardown.js';
 import { buildReport, parseSampleCsv, renderReportMarkdown, formatElapsedMs } from '../../server/src/live-validation/heap-soak/report.js';
 import { snapshotComparisonSection } from './snapshot-diff.js';
 import { nextHeapThresholdSnapshot } from '../../server/src/live-validation/heap-soak/heap-threshold-snapshots.js';
@@ -58,8 +59,11 @@ async function main(): Promise<void> {
   if (!runStatePath) throw new Error('supervisor requires --run-state <path>');
 
   const state = loadRunState(runStatePath);
-  const schedule: ScheduleConfig = state.mode === 'micro' ? MICRO_SCHEDULE : FULL_SCHEDULE;
+  // B0.1 defect 5: a `full` run's window is whatever run-state recorded (--hours), defaulting to 24 h; micro keeps its compressed schedule.
+  const schedule: ScheduleConfig = state.mode === 'micro' ? MICRO_SCHEDULE : fullScheduleForHours(state.windowHours ?? DEFAULT_FULL_RUN_HOURS);
   const runStartMs = new Date(state.startedAt).getTime();
+  // B0.1 defect 3: the server is stopped at completion unless an operator explicitly asked to keep it.
+  const keepServer = state.keepServer === true || parseKeepServerFlag(process.env[TEARDOWN_KEEP_SERVER_ENV_KEY]);
 
   // Reattach check — NEVER restart the server, only confirm it is still the
   // exact process this run-state was created for.
@@ -87,6 +91,8 @@ async function main(): Promise<void> {
         ? { terminalState: 'server_died' as const, serverDeath: state.serverDeath, coveredWindowMs: state.serverDeath.elapsedMs }
         : { terminalState: 'complete' as const }),
       ...(state.extensionsOverlays && state.extensionsOverlays.length > 0 ? { extensionsOverlays: state.extensionsOverlays } : {}),
+      ...(state.windowHours !== undefined ? { windowHours: state.windowHours } : {}),
+      ...(state.build ? { build: state.build } : {}),
     });
     const snapshotSection = await snapshotComparisonSection(state.runDir);
 
@@ -125,7 +131,13 @@ async function main(): Promise<void> {
         saveRunState(runStatePath, state);
       }
     } else if (shouldSendFinalNotice('completion', state)) {
-      await notify('done', `run ${state.runId} complete`, `verdict=${report.verdict} trailingSlope=${report.trailingSlope.slopeMBPerHour.toFixed(2)}MB/h peakHeap=${report.peakHeapMB.toFixed(0)}MB`);
+      await notify('done', `run ${state.runId} complete`, completionNoticeBody({
+        verdict: report.verdict,
+        trailingSlopeMBPerHour: report.trailingSlope.slopeMBPerHour,
+        peakHeapMB: report.peakHeapMB,
+        keepServer,
+        serverUnit: state.server.unitName,
+      }));
       state.completionNoticeSentAt = new Date().toISOString();
       saveRunState(runStatePath, state);
     }
@@ -183,10 +195,16 @@ async function main(): Promise<void> {
   mkdirSync(path.join(state.runDir, 'children'), { recursive: true });
 
   const lanes = applyForcedBadLanes(enabledLanes(LANE_DEFINITIONS));
-  const driverState: DriverState = { breakers: new Map(Object.entries(state.laneBreakers) as [import('../../server/src/live-validation/heap-soak/types.js').LaneName, import('../../server/src/live-validation/heap-soak/types.js').CircuitBreakerState][]) };
+  const driverState: DriverState = {
+    breakers: new Map(Object.entries(state.laneBreakers) as [import('../../server/src/live-validation/heap-soak/types.js').LaneName, import('../../server/src/live-validation/heap-soak/types.js').CircuitBreakerState][]),
+    // B0.1 defect 4: shared with the orphan sweep so it never deletes a child a wave's straggler still owns.
+    inFlight: new Set<string>(),
+    swept: new Set<string>(),
+  };
 
   const checkpointOffsets = checkpointOffsetsMs(schedule);
-  const snapshotOffsets = snapshotOffsetsMs(schedule);
+  // B0.1 defect 2: the sampler loop can only reach offsets strictly inside the window; the end offset is taken explicitly after it.
+  const snapshotOffsets = interimSnapshotOffsetsMs(schedule);
   const firedCheckpoints = new Set(state.firedCheckpointOffsetsMs ?? []);
   const firedSnapshots = new Set(state.firedSnapshotOffsetsMs ?? []);
   let anomalyHeapPinged = false;
@@ -272,6 +290,37 @@ async function main(): Promise<void> {
     state.lastSampleAt = new Date().toISOString();
     saveRunState(runStatePath, state);
   };
+
+  /**
+   * B0.1 defect 2: the declared end snapshot, taken after the window closes and
+   * before finalisation. Forced GC first (never a raw heapUsed), then the
+   * snapshot, so the report's start-vs-end comparison and retainer summary use
+   * a real end-of-run heap rather than the 12 h (or start) one.
+   */
+  async function takeEndSnapshot(): Promise<void> {
+    const offset = endSnapshotOffsetMs(schedule);
+    if (firedSnapshots.has(offset)) return;
+    try {
+      await inspector.collectGarbage();
+      mkdirSync(path.join(state.runDir, 'snapshots'), { recursive: true });
+      const snapshotPath = path.join(state.runDir, 'snapshots', `snapshot-${offset}ms.heapsnapshot`);
+      const result = await inspector.takeHeapSnapshot(snapshotPath);
+      firedSnapshots.add(offset);
+      state.endSnapshotMs = offset;
+      state.endSnapshotPath = snapshotPath;
+      delete state.endSnapshotError;
+      log({
+        ts: new Date().toISOString(),
+        elapsedMs: elapsedNow(),
+        lane: 'A',
+        kind: 'checkpoint',
+        detail: `end snapshot taken after the window: ${result.chunkCount} chunks, ${result.bytesWritten} bytes -> ${snapshotPath}`,
+      });
+    } catch (error) {
+      state.endSnapshotError = error instanceof Error ? error.message : String(error);
+      log({ ts: new Date().toISOString(), elapsedMs: elapsedNow(), lane: 'A', kind: 'anomaly', detail: `end snapshot failed: ${state.endSnapshotError}` });
+    }
+  }
 
   // Both loops (sampler timer + once-per-wave) call pollQuotaNow(); without
   // serialising them, two overlapping polls can each read the SAME `previous`
@@ -429,7 +478,10 @@ async function main(): Promise<void> {
         logEvent: log,
         runStartMs,
         backbonePaused: quotaState === 'paused',
-        isStopped: () => stopped,
+        // B0.1 defect 5: a bounded run's window must actually bound the load —
+        // the wave loop otherwise overruns it by up to one waveMs before the
+        // driver re-checks isRunComplete.
+        isStopped: () => stopped || isRunComplete(elapsedNow(), schedule),
       }, driverState, schedule.waveMs);
       state.cycleCount += 1;
       persist();
@@ -444,7 +496,7 @@ async function main(): Promise<void> {
 
       // Orphan sweep once per cycle — the harness must never become the leak.
       const events = readLaneEvents(state.eventsLogPath);
-      await sweepOrphans(client, events, log, elapsedNow);
+      await sweepOrphans(client, events, log, elapsedNow, { inFlight: driverState.inFlight, swept: driverState.swept });
 
       if (stopped || isRunComplete(elapsedNow(), schedule)) break;
       await interruptibleSleep(schedule.idleMs);
@@ -458,11 +510,36 @@ async function main(): Promise<void> {
   // mistake a finished run for an unrecovered death.
   if (state.terminalState !== 'server_died') state.terminalState = 'complete';
   persist();
+
+  // B0.1 defect 2: end snapshot after the window closes, before finalisation
+  // (so report.md's snapshot section compares start against end) and before
+  // teardown. Skipped only when the server died — there is then no live heap
+  // to snapshot.
+  if (state.terminalState === 'complete') {
+    await takeEndSnapshot();
+    persist();
+  }
+
   await finaliseRun();
 
   writeFileSync(path.join(state.runDir, 'ws-client-status.json'), JSON.stringify(wsClient.getStats(), null, 2));
   wsClient.close();
   inspector.close();
+
+  // B0.1 defect 3: stop the disposable server at completion (after the end
+  // snapshot) unless explicitly asked to keep it. A dead run has nothing to
+  // stop. `server_died` handling above is unchanged: the run still ends as
+  // server_died, with its death evidence, and is never reclassified.
+  const teardown = decideRunTeardown({ keepServer, terminalState: state.terminalState ?? 'complete' });
+  console.error(`[supervisor] teardown: ${teardown.reason}`);
+  if (teardown.stopServer) {
+    await stopUnit(state.server.unitName);
+    const gone = await waitForUnitGone(state.server.unitName, 15_000);
+    state.serverStoppedAt = new Date().toISOString();
+    state.serverStopVerifiedGone = gone;
+    saveRunState(runStatePath, state);
+    console.error(`[supervisor] server unit ${state.server.unitName} stopped (verified gone=${gone})`);
+  }
 }
 
 main().catch(async (error) => {

@@ -36,13 +36,13 @@ it?** heapUsed alone is not proof of a leak — it includes uncollected garbage
 
 | Piece | File | What it does |
 |---|---|---|
-| Launcher | `launcher.ts` | Builds the isolated agent dir, starts the server as a transient systemd unit with `--inspect=127.0.0.1:<port>` + the production heap cap, writes `run-state.json`. |
+| Launcher | `launcher.ts` | Builds the isolated agent dir, **refuses to start on a stale/unverifiable `dist`** (B0.1), starts the server as a transient systemd unit with `--inspect=127.0.0.1:<port>` + the production heap cap, writes `run-state.json` (checkout HEAD, build check, window hours). |
 | Inspector client | `inspector.ts` | CDP over the Node inspector: forced GC, `process.memoryUsage()`, heap snapshots, a round-trip-time lag proxy. |
 | Sampler | `sampler.ts` + `csv-io.ts` | One sample = forced GC → memory reading → lag proxy → capacity/health/session-count → disk check → CSV row + heartbeat file. |
 | Driver | `driver.ts` + `lanes.ts` + `wave-target.ts` | Time-boxed waves of tool-using Pi children across model lanes; see **Load model** below. |
 | Circuit breaker | `circuit-breaker.ts` | Per-lane consecutive-failure breaker with cooldown; pure state machine. |
-| Orphan sweep | `orphan-sweep.ts` + `orphans.ts` | Reconciles the events log's `child_created`/`child_deleted` pairs once per cycle; deletes anything still open. |
-| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. Checks server liveness (unit state + MainPID + socket) every cycle; on death it stops the load driver and ends the run as `server_died` with the death evidence. If it restarts into an already-dead server, startup recovery terminalises idempotently from saved state — but a run already recorded `complete` is never reclassified (correction 03). |
+| Orphan sweep | `orphan-sweep.ts` + `orphans.ts` | Reconciles the events log's `child_created`/`child_deleted` pairs once per cycle; deletes anything still open **that no in-flight driver cycle still tracks**, and accounts any swept-while-tracked session as `orphan_swept`, never `child_failed` (B0.1). |
+| Supervisor | `supervisor.ts` | Runs sampler + driver loops concurrently as the `pi-web-ui-soak-supervisor-<run-id>` unit (`Restart=on-failure`); on (re)start, reattaches to the recorded server PID — **never restarts the server**. Checks server liveness (unit state + MainPID + socket) every cycle; on death it stops the load driver and ends the run as `server_died` with the death evidence. If it restarts into an already-dead server, startup recovery terminalises idempotently from saved state — but a run already recorded `complete` is never reclassified (correction 03). **After the window it takes the end snapshot (forced GC first), finalises the report, then stops the disposable server** unless `--keep-server`/`HEAP_SOAK_KEEP_SERVER` asks otherwise (B0.1). |
 | Server liveness | `liveness-io.ts` + `server-death.ts` (pure) | Reads the unit's `ActiveState`/`Result`/`ExecMainStatus` and a bounded journal tail, tests socket reachability, and decides death from the recorded unit/PID identity (never from the sampler's own failures). A transient socket blip is tolerated for up to 3 consecutive observations. |
 | Report | `report.ts` (pure) + `analyze.ts` (CLI) | Least-squares post-GC slope (overall + trailing + per-phase + per-quota-state), idle-return-to-baseline, sample coverage, the verdict rule itself, lane stats, verdict; and a prominent `SERVER DIED` header when the run ended as `server_died`. |
 | Snapshot summary + diff | `snapshot-parse.ts` (pure) + `snapshot-retainers.ts` (pure) + `snapshot-selection.ts` (pure) + `snapshot-diff.ts` + `snapshot-diff-worker.ts` | `.heapsnapshot` structural parser plus retainer-path BFS and a cut test. Uses the latest **valid** (non-empty, parseable) snapshot — a 0-byte declared snapshot is skipped and named — and runs the parse+analysis in a separate `--max-old-space-size=12288` process. |
@@ -100,6 +100,55 @@ fixes them:
    extension dirs). Overlays are copied on top of the isolated agent dir's
    production extensions, recorded in `run-state.json`, and never touch
    `~/.pi/agent/extensions`.
+
+## B0.1 harness fixes (2026-09-28)
+
+The B1 confirmation soak exposed five harness defects that would have forced
+hand repairs before D1's bounded run and E2's final 24 h soak (see
+[`B1-confirmation-soak.md`](../../docs/plans/execution-reports/orchestration-scaling/B1-confirmation-soak.md)
+§5). B0.1 fixes them; every one is unit-tested on the pure logic and exercised
+by Gate 1.
+
+1. **Stale `dist` guard.** The launcher runs `server/dist` (`--compiled`) from
+   its own checkout, so a `dist` that predates a `server/src`/`shared/src`
+   commit silently measures the wrong code (wave 1 lost a soak this way).
+   `build-freshness.ts` (pure) + `build-freshness-io.ts` (git/stat I/O) now
+   **refuse to start** — never warn — when no compiled artefact exists, when
+   `server/src`/`shared/src` has uncommitted changes, when the newest commit
+   touching those trees is newer than the oldest compiled artefact mtime, or
+   when the git state cannot be read. The decision uses
+   `git log -1 --format=%ct -- server/src shared/src` (no build-script change).
+   The checkout HEAD and the check result are recorded in `run-state.json` and
+   at the top of `report.md`. Fix a refusal with `npm run build`.
+2. **End snapshot.** The declared end offset equalled `totalMs`, but the
+   sampler loop exits on `isRunComplete(elapsed >= totalMs)` first, so it never
+   fired (only 0 h and 12 h were ever captured). `snapshotOffsetsMs` is split
+   into in-window offsets (`interimSnapshotOffsetsMs`) and the end offset
+   (`endSnapshotOffsetMs`); the supervisor takes the end snapshot **after the
+   window closes and before finalisation**, with a forced GC first, and records
+   it in run-state. `report.md` therefore compares start against end (falling
+   back to the latest valid snapshot) and runs the retainer summary on the end
+   snapshot.
+3. **Teardown.** A completed run used to leave the server unit up until
+   `cli.ts stop` was run by hand. The supervisor now stops the disposable
+   server at completion, after the end snapshot. Keep it up only with
+   `--keep-server` (or `HEAP_SOAK_KEEP_SERVER=1`), and then the completion
+   Telegram message says `SERVER LEFT RUNNING`. `server_died` runs still end as
+   `server_died` and are never reclassified.
+4. **Orphan-sweep race.** All 167 lane-A `SESSION_NOT_FOUND` failures in the
+   confirmation soak followed `child_created` -> `child_tool_call_seen` ->
+   `orphan_swept` -> the driver's own follow-up failing: the sweep deleted
+   children a wave's stragglers still owned, and the harness counted its own
+   deletion as a child failure. The driver now tracks in-flight session ids
+   (`DriverState.inFlight`) and the sweep skips them (they delete themselves in
+   their own `finally`); if a swept session nevertheless fails later, it is
+   recorded as `orphan_swept`, not `child_failed`. `report.md` reports "swept
+   children mis-counted as child failures", which a correct run leaves at 0.
+5. **Bounded run length.** `start` accepts `--hours <n>` (whole number,
+   1–168; default 24). Checkpoints and snapshot offsets are fractions of
+   `totalMs`, so both scale; `report.md` and `run-state.json` record the
+   window. `cli.ts plan [--hours <n>]` is a dry run that prints the scaled
+   schedule without starting anything, and `status` prints it for a live run.
 
 ## Load model (owner amendment, 2026-09-26)
 
@@ -265,12 +314,17 @@ behaviour (any disabled lane is simply never a candidate) — see
 
 ```
 npx tsx scripts/heap-soak/cli.ts preflight                     # Gate 0
-npx tsx scripts/heap-soak/cli.ts micro [--extensions-overlay <dir>]   # Gate 1 (~20 min + teardown)
-npx tsx scripts/heap-soak/cli.ts start [--run-id <id>] [--extensions-overlay <dir>]  # the real 24h run
+npx tsx scripts/heap-soak/cli.ts micro [--keep-server] [--extensions-overlay <dir>]   # Gate 1 (~20 min + teardown)
+npx tsx scripts/heap-soak/cli.ts plan [--hours <n>]            # dry-run the scaled full schedule
+npx tsx scripts/heap-soak/cli.ts start [--run-id <id>] [--hours <n>] [--keep-server] [--extensions-overlay <dir>]  # the real run (default 24h)
 npx tsx scripts/heap-soak/cli.ts status --run-id <id>
 npx tsx scripts/heap-soak/cli.ts stop  --run-id <id>            # stop both units; run dir is kept
 npx tsx scripts/heap-soak/cli.ts report --run-id <id> [--mode micro|full]
 ```
+
+A run stops its own server unit at completion (`--keep-server` opts out); `stop`
+remains for a run that is still in flight or was kept up on purpose. `start`
+refuses to launch on a stale `dist` — run `npm run build` first.
 
 `--extensions-overlay` is repeatable: each value is either a single extension
 directory (containing `index.ts`/`index.js`/…) or a directory whose immediate
