@@ -42,6 +42,101 @@ export interface BrowserLoadResult {
   cyclesCompleted: number;
 }
 
+export interface ExtensionCommandResult {
+  command: string;
+  sessionPath: string;
+  ok: boolean;
+  /** The notification text the extension's ui.notify produced. */
+  notification?: string;
+  error?: string;
+}
+
+/**
+ * Live disposable check that a real session still executes an extension slash
+ * command (extension commands run without an LLM turn). Logs in, connects,
+ * sends `{type:'prompt', sessionId, message:'/<command>'}` — the same message a
+ * browser sends when a user types a slash command — and waits for the
+ * extension's `notification`.
+ */
+export async function runExtensionCommand(options: {
+  port: number;
+  sessionPath: string;
+  command: string;
+  expectContains?: string;
+  password?: string;
+  origin?: string;
+  timeoutMs?: number;
+}): Promise<ExtensionCommandResult> {
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  const password = options.password ?? 'dev-password';
+  const origin = options.origin ?? 'http://localhost:3000';
+  const token = await login(options.port, password);
+  const ws = new WebSocket(`ws://127.0.0.1:${options.port}/ws`, {
+    headers: { Origin: origin, Cookie: `accessToken=${token}` },
+  });
+
+  const result: ExtensionCommandResult = { command: options.command, sessionPath: options.sessionPath, ok: false };
+  return new Promise<ExtensionCommandResult>((resolve) => {
+    const timer = setTimeout(() => {
+      result.error = `no notification within ${timeoutMs} ms`;
+      try { ws.close(); } catch { /* best-effort */ }
+      resolve(result);
+    }, timeoutMs);
+    const finish = (): void => {
+      clearTimeout(timer);
+      try { ws.close(); } catch { /* best-effort */ }
+      resolve(result);
+    };
+    ws.on('error', (error) => {
+      result.error = error instanceof Error ? error.message : String(error);
+      finish();
+    });
+    ws.on('message', (data) => {
+      let message: Record<string, unknown>;
+      try {
+        message = JSON.parse(String(data)) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      if (message.type !== 'notification') {
+        // Some paths wrap the toast differently; accept any frame that carries
+        // the expected text so the check is about the extension running, not the
+        // envelope name.
+        if (options.expectContains && JSON.stringify(message).includes(options.expectContains)) {
+          result.ok = true;
+          result.notification = JSON.stringify(message).slice(0, 500);
+          finish();
+        }
+        return;
+      }
+      const notification = message.notification as { message?: unknown } | undefined;
+      const text = typeof notification?.message === 'string' ? notification.message : '';
+      if (options.expectContains && !text.includes(options.expectContains)) return;
+      result.ok = true;
+      result.notification = text;
+      finish();
+    });
+    ws.on('open', () => {
+      // Mirror the browser: switch to the session first (the server routes slash
+      // commands through the connection's current session), then send the
+      // command as a prompt.
+      let switched = false;
+      ws.on('message', (data) => {
+        if (switched) return;
+        try {
+          const message = JSON.parse(String(data)) as { type?: unknown };
+          if (message.type !== 'session_switched') return;
+        } catch {
+          return;
+        }
+        switched = true;
+        ws.send(JSON.stringify({ type: 'prompt', sessionId: options.sessionPath, message: options.command }));
+      });
+      ws.send(JSON.stringify({ type: 'switch_session', sessionPath: options.sessionPath }));
+    });
+  });
+}
+
 async function login(port: number, password: string): Promise<string> {
   const body = JSON.stringify({ password });
   return new Promise((resolve, reject) => {

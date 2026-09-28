@@ -29,7 +29,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { generateCorpus, writeCorpusIndex, type CorpusSummary } from './corpus.js';
-import { runBrowserLoad, type BrowserLoadResult } from './browser-client.js';
+import { runBrowserLoad, runExtensionCommand, type BrowserLoadResult, type ExtensionCommandResult } from './browser-client.js';
 
 const execFileAsync = promisify(execFile);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -43,6 +43,7 @@ interface Args {
   runDir?: string;
   port?: number;
   repeatPool: number;
+  extensionCommand: string;
   keep: boolean;
   generateOnly: boolean;
 }
@@ -63,6 +64,9 @@ function parseArgs(argv: string[]): Args {
     // only this many sessions per tab, so every open after the first revisits a
     // warm cwd (repeat-cwd distribution).
     repeatPool: Number(value('repeat-pool') ?? 0),
+    // Live disposable check: a real session executes this extension slash command
+    // (extension commands run without an LLM turn). Empty string skips it.
+    extensionCommand: value('extension-command') ?? '/webtools-clear-cache',
     keep: argv.includes('--keep'),
     generateOnly: argv.includes('--generate-only'),
   };
@@ -297,7 +301,17 @@ async function main(): Promise<void> {
 
     const attributionLines = await readAttributionLines(unitName);
     const metrics = summariseMetrics(join(runDir, 'metrics', 'health-metrics.jsonl'), loadStartedAtMs, attributionLines);
-    const report = { ...summary, tabs, repeatPool: args.repeatPool, drive, metrics, loadStartedAtMs };
+    let extensionCommand: ExtensionCommandResult | undefined;
+    if (args.extensionCommand) {
+      extensionCommand = await runExtensionCommand({
+        port,
+        sessionPath: corpus.sessions[0].path,
+        command: args.extensionCommand,
+        expectContains: 'cache cleared',
+      });
+      process.stderr.write(`[extension-command] ${JSON.stringify(extensionCommand)}\n`);
+    }
+    const report = { ...summary, tabs, repeatPool: args.repeatPool, drive, extensionCommand, metrics, loadStartedAtMs };
     writeFileSync(join(runDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
     console.log(JSON.stringify(report, null, 2));
   } finally {
