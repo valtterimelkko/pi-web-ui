@@ -57,6 +57,26 @@ Capability, identity, or property mismatch fails closed. There is no automatic h
 
 ## Ownership and lifecycle invariants
 
+### In-process Pi session teardown (B5, finding F1)
+
+Ordinary Pi sessions live and die inside the main server process (`MultiSessionManager` / Pi SDK `AgentSession`). Every dispose/unload path routes through one teardown funnel with a per-path in-flight dedupe (one teardown per session path, whoever races):
+
+- **Manager paths:** `disposeLoadedSession` (Internal API DELETE, aggressive memory-pressure cleanup, stale-stream reset), `unloadSession` (idle timeout, error cleanup, maxSessions eviction), `stopSession`, the failed-create cleanup, and `dispose()` (server shutdown; emissions run in parallel within one bound).
+- **PiService paths:** the `createSession` extension-bind-failure catch, `removeClient` (last owner), and `cleanup()`.
+- **SessionPool paths (correction 01):** extension-driven `createClientSession` replacement → `new` (the CLI `newSession` those calls imitate; the destination file is not known yet, so no `targetSessionFile`); `switchClientSession` replacement → `resume` + `targetSessionFile` (the switch destination); `removeClient`, `cleanupInactive` and the `cleanup()` pool drain → `quit`. The pool funnel dedupes per session id; `PiService.cleanup()` awaits the drain and the identity-safe release keeps drained sessions out of the remaining-sessions pass, so no session is ever emitted twice.
+
+Before the SDK object is disposed, the funnel emits one **bounded `session_shutdown` event** through the SDK's public `AgentSession.extensionRunner` (`hasHandlers('session_shutdown')` then `emit`), mirroring the SDK's own teardown order (`teardownCurrent`: emit → dispose). The emission is bounded by `sessionShutdownTimeoutMs` (default 5 s, background-shell's own teardown budget); handler errors are caught and logged and never block disposal; sessions without shutdown handlers skip the emission entirely.
+
+**Reason mapping:** every terminal path emits `quit` — this is the parent-adjudicated decision for idle unload too (correction 01): idle cleanup is the reaper for sessions nobody deleted (an orchestration child whose parent never sent DELETE), and a browser session with an open tab stays subscribed, so it is never idle-unloaded; the runtime is genuinely torn down either way and a rehydration is not guaranteed to ever happen, so keeping processes and timers alive on the off-chance would preserve the leak the event exists to close; persisted extension state reconciles truthfully on a later rehydration. The one exception is `recoverSession` (dispose→rehydrate of the same session file), which emits `resume` with `targetSessionFile`: the successor runtime adopts extension state exactly like a CLI session switch, so background-shell tasks stay alive for adoption and memory saves, while goal-engine/watch-wake timers and handles are relinquished by the outgoing runtime.
+
+**Closing fence (correction 01).** A session being torn down stays mapped with its old status while the emission runs, so the funnel marks it closing synchronously before the first await. A prompt or submission to a closing session is refused with the existing does-not-exist error (not a busy error: busy would advertise a retry that cannot succeed — the session is being removed). A browser subscribe arriving mid-teardown waits for the teardown and rehydrates fresh, so a reattaching tab gets its view back instead of an error. `performUnload` clears viewing/subscription references so none point at a removed session.
+
+The extra ≤ 5 s `DELETE` latency is accepted (parent decision, correction 01).
+
+`disposeLoadedSession` is awaited by every Internal API caller so the bounded emission and the session's final flush complete before the backing JSONL is unlinked.
+
+### Worker pilot invariants
+
 1. **One owner per session path.** A process-wide worker ownership registry prevents plain and contained pools from concurrently owning the same session path. A warm-worker lookup must retain the same session, execution-instance and profile identity with a monotonic turn epoch. Ownership is released only through the idempotent worker release path.
 2. **Single-flight creation.** Concurrent creation/rehydration requests for one path wait for the same spawn promise; none receives a not-yet-ready duplicate.
 3. **Immutable launch identity.** A contained generation is launched with `{sessionId, sessionPath, runId, executionInstanceId, attemptEpoch, profile:'heavy'}`. The launcher-observed unit/cgroup/PIDs are outputs, not request inputs.

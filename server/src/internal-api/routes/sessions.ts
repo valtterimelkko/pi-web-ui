@@ -1338,7 +1338,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'claude') claudeService.abort(sessionId);
     if (entry.sdkType === 'opencode') opencodeService.disposeSession(sessionId);
     if (entry.sdkType === 'antigravity') antigravityService.disposeSession(sessionId);
-    if (entry.sdkType === 'pi') multiSessionManager.disposeLoadedSession(entry.path);
+    if (entry.sdkType === 'pi') await multiSessionManager.disposeLoadedSession(entry.path);
     await deleteSessionFiles(entry);
     await sessionRegistry.delete(sessionId);
   }
@@ -1809,7 +1809,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             resolvedPiModel = effectiveModel ? `${effectiveModel.provider}/${effectiveModel.id}` : undefined;
           } catch (error) {
             if (error instanceof PiProviderNotAllowedError) {
-              multiSessionManager.disposeLoadedSession(status.sessionPath);
+              await multiSessionManager.disposeLoadedSession(status.sessionPath);
               await deleteSessionFiles({ sdkType: 'pi', path: status.sessionPath, id: status.sessionId });
               await sessionRegistry.delete(status.sessionId);
               sendExecutionPolicyError(res, error);
@@ -3024,7 +3024,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (entry.sdkType === 'pi') {
         // Dispose the live SDK object before unlinking its backing JSONL. This
         // also removes synthetic subscriber and event-handler references.
-        multiSessionManager.disposeLoadedSession(entry.path);
+        // B5: awaited so the bounded session_shutdown emission and the final
+        // flush complete before the backing file is unlinked.
+        await multiSessionManager.disposeLoadedSession(entry.path);
       }
 
       // Remove the runtime's persisted session files so the session does not
@@ -6871,7 +6873,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           );
         } catch (error) {
           multiSessionManager.unsubscribeClient(internalClientId, status.sessionPath);
-          multiSessionManager.disposeLoadedSession?.(status.sessionPath);
+          await multiSessionManager.disposeLoadedSession?.(status.sessionPath);
           await unlink(status.sessionPath).catch(() => undefined);
           await sessionRegistry.delete(status.sessionId);
           throw error;

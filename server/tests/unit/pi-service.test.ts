@@ -625,13 +625,13 @@ describe('PiService', () => {
       // Create a session first
       await service.createSession({ clientId: 'client-1' });
 
-      // Now remove it
-      service.removeClient('client-1');
+      // Now remove it (B5: awaited — the bounded shutdown emission runs first)
+      await service.removeClient('client-1');
       expect(service.getSessionByClientId('client-1')).toBeUndefined();
     });
 
-    it('should handle removing non-existent client', () => {
-      expect(() => service.removeClient('non-existent')).not.toThrow();
+    it('should handle removing non-existent client', async () => {
+      await expect(service.removeClient('non-existent')).resolves.toBeUndefined();
     });
   });
 

@@ -8,6 +8,7 @@ import { MemoryJournalPolicy, resolveMemoryJournalPolicyOptions } from '../obser
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { getHeapStatistics } from 'node:v8';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
+import { emitSessionShutdown, SESSION_SHUTDOWN_TIMEOUT_MS, type SessionShutdownInit } from './session-shutdown.js';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 const logger = createLogger('MultiSessionManager');
@@ -125,6 +126,8 @@ export interface MultiSessionManagerOptions {
   maxPinnedSessions?: number;
   /** How long before a streaming session with no events is considered stale (default: 900000ms = 15 minutes) */
   staleStreamingThresholdMs?: number;
+  /** Bound for one session_shutdown emission on dispose (B5; default 5000ms, background-shell's own teardown budget) */
+  sessionShutdownTimeoutMs?: number;
   /** Injectable memory stats seam (tests); defaults to process.memoryUsage + v8 heap limit. */
   memoryStats?: () => { heapUsedMb: number; heapLimitMb: number; rssMb: number; externalMb: number };
   /** Injectable shed monitor seam (tests); defaults to the process-wide monitor. */
@@ -217,6 +220,18 @@ export class MultiSessionManager {
   
   // Stale streaming detection threshold (default 15 minutes without events)
   private staleStreamingThresholdMs: number;
+  private sessionShutdownTimeoutMs: number;
+  /** B5: per-path in-flight teardowns, keyed by session path — one emission+dispose per session, never two. */
+  private teardownInFlight = new Map<string, Promise<void>>();
+  /** B5: re-entrancy guard for the timer-driven cleanup sweep while a sweep can now await emissions. */
+  private cleanupSweepInFlight = false;
+  /**
+   * B5 correction 01: sessions fenced as closing. Set synchronously in
+   * teardownOnce BEFORE the first await — the session stays mapped with its
+   * old status while handlers run, and this fence is what stops subscribes
+   * and prompts from attaching to a half-torn-down session.
+   */
+  private closingSessions = new Set<string>();
 
   // Grace period after API error before synthetic agent_end (default 60s)
   private readonly apiErrorGracePeriodMs = 60 * 1000;
@@ -253,6 +268,7 @@ export class MultiSessionManager {
     this.enableMemoryMonitoring = options.enableMemoryMonitoring ?? true;
     this.maxPinnedSessions = options.maxPinnedSessions ?? MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME;
     this.staleStreamingThresholdMs = options.staleStreamingThresholdMs ?? 15 * 60 * 1000;
+    this.sessionShutdownTimeoutMs = options.sessionShutdownTimeoutMs ?? SESSION_SHUTDOWN_TIMEOUT_MS;
     this.memoryStats = options.memoryStats ?? defaultMemoryStats;
     this.shedMonitor = options.shedMonitor ?? getEventLoopShedMonitor();
     this.memoryJournalPolicy = options.memoryJournalPolicy ?? new MemoryJournalPolicy(resolveMemoryJournalPolicyOptions());
@@ -361,7 +377,9 @@ export class MultiSessionManager {
     }
     
     this.cleanupTimer = setInterval(() => {
-      this.cleanupIdleSessions();
+      void this.cleanupIdleSessions().catch((error) => {
+        logger.error('[MultiSessionManager] Idle cleanup sweep failed:', error);
+      });
     }, this.cleanupIntervalMs);
     
     // Unref the timer so it doesn't keep the process alive
@@ -429,47 +447,63 @@ export class MultiSessionManager {
         `[MultiSessionManager] High memory usage detected (${heapUsedMB}MB of ${heapLimitMB} heap limit, ${(ratio * 100).toFixed(1)}%), triggering aggressive cleanup + shed mode`,
       );
       this.shedMonitor.observeMemoryPressure(true);
-      this.aggressiveCleanup();
+      void this.aggressiveCleanup().catch((error) => {
+        logger.error('[MultiSessionManager] Aggressive cleanup failed:', error);
+      });
     } else if (ratio <= MultiSessionManager.MEMORY_SHED_RECOVER_RATIO) {
       this.shedMonitor.observeMemoryPressure(false);
     }
   }
   
+  /** B5: re-entrancy guard — an in-flight aggressive cleanup awaits emissions. */
+  private aggressiveCleanupInFlight = false;
+
   /**
    * Aggressive cleanup when memory is high
    */
-  private aggressiveCleanup(): void {
-    let cleanedCount = 0;
-    
-    // Clean up all idle sessions regardless of timeout (but never pinned ones)
-    for (const [sessionPath, activeSession] of this.sessions.entries()) {
-      // Only clean up sessions that are not currently active and not pinned
-      if (activeSession.status === 'idle' && activeSession.subscribers.size === 0 && !activeSession.pinned) {
-        logger.info(`[MultiSessionManager] Aggressive cleanup: disposing session ${sessionPath}`);
-        this.disposeSession(sessionPath);
-        cleanedCount++;
+  private async aggressiveCleanup(): Promise<void> {
+    if (this.aggressiveCleanupInFlight) return;
+    this.aggressiveCleanupInFlight = true;
+    try {
+      let cleanedCount = 0;
+
+      // Clean up all idle sessions regardless of timeout (but never pinned ones).
+      // B5: disposals run in parallel and settle before the limit check below.
+      const disposals: Promise<void>[] = [];
+      for (const [sessionPath, activeSession] of this.sessions.entries()) {
+        // Only clean up sessions that are not currently active and not pinned
+        if (activeSession.status === 'idle' && activeSession.subscribers.size === 0 && !activeSession.pinned) {
+          logger.info(`[MultiSessionManager] Aggressive cleanup: disposing session ${sessionPath}`);
+          disposals.push(this.disposeSession(sessionPath));
+        }
       }
-    }
-    
-    // If still too many sessions, remove oldest idle ones
-    if (this.sessions.size > this.maxSessions) {
-      const sessionsToRemove = this.sessions.size - this.maxSessions;
-      const idleSessions = Array.from(this.sessions.entries())
-        .filter(([_, s]) => s.status === 'idle' && !s.pinned)
-        .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
-      
-      for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
-        const [sessionPath] = idleSessions[i];
-        logger.info(`[MultiSessionManager] Aggressive cleanup: disposing oldest session ${sessionPath}`);
-        this.disposeSession(sessionPath);
-        cleanedCount++;
+      if (disposals.length > 0) await Promise.all(disposals);
+      cleanedCount += disposals.length;
+
+      // If still too many sessions, remove oldest idle ones
+      if (this.sessions.size > this.maxSessions) {
+        const sessionsToRemove = this.sessions.size - this.maxSessions;
+        const idleSessions = Array.from(this.sessions.entries())
+          .filter(([_, s]) => s.status === 'idle' && !s.pinned)
+          .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
+
+        const oldest: Promise<void>[] = [];
+        for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
+          const [sessionPath] = idleSessions[i];
+          logger.info(`[MultiSessionManager] Aggressive cleanup: disposing oldest session ${sessionPath}`);
+          oldest.push(this.disposeSession(sessionPath));
+        }
+        if (oldest.length > 0) await Promise.all(oldest);
+        cleanedCount += oldest.length;
       }
-    }
-    
-    // Force garbage collection if available
-    if (global.gc) {
-      global.gc();
-      logger.info(`[MultiSessionManager] Triggered garbage collection after aggressive cleanup (${cleanedCount} sessions removed)`);
+
+      // Force garbage collection if available
+      if (global.gc) {
+        global.gc();
+        logger.info(`[MultiSessionManager] Triggered garbage collection after aggressive cleanup (${cleanedCount} sessions removed)`);
+      }
+    } finally {
+      this.aggressiveCleanupInFlight = false;
     }
   }
   
@@ -478,9 +512,22 @@ export class MultiSessionManager {
    * Sessions are unloaded from memory after idleTimeoutMs of inactivity.
    * Also enforces maxSessions limit by unloading oldest idle sessions.
    */
-  cleanupIdleSessions(): number {
+  cleanupIdleSessions(): Promise<number> {
+    // B5: a sweep now awaits bounded shutdown emissions, so overlapping timer
+    // ticks must not interleave two sweeps over the same sessions.
+    if (this.cleanupSweepInFlight) return Promise.resolve(0);
+    this.cleanupSweepInFlight = true;
+    return this.performCleanupSweep().finally(() => {
+      this.cleanupSweepInFlight = false;
+    });
+  }
+
+  private async performCleanupSweep(): Promise<number> {
     const now = Date.now();
     let cleanedCount = 0;
+    // B5: teardowns now await bounded shutdown emissions — collect each pass's
+    // teardowns and await them before the next pass's predicates are evaluated.
+    const staleDisposals: Promise<void>[] = [];
     
     // First pass: Detect and reset stale streaming sessions
     // If a session is marked as streaming but hasn't received events for a while,
@@ -518,14 +565,14 @@ export class MultiSessionManager {
                 message: `Session was streaming with no activity for ${Math.round(timeSinceLastEvent / 1000)}s. Disposed and will rehydrate fresh on next access.`,
               },
             });
-            this.disposeSession(sessionPath);
-            cleanedCount++;
+            staleDisposals.push(this.disposeSession(sessionPath));
           }
         }
       }
     }
     
     // Second pass: Clean up idle sessions that have exceeded timeout
+    const unloads: Promise<void>[] = [];
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
       // Pinned sessions are never cleaned up by idle timeout
       if (activeSession.pinned) continue;
@@ -543,8 +590,7 @@ export class MultiSessionManager {
       // Clean up errored sessions immediately
       if (activeSession.status === 'error') {
         logger.info(`[MultiSessionManager] Cleaning up errored session: ${sessionPath}`);
-        this.unloadSession(sessionPath);
-        cleanedCount++;
+        unloads.push(this.unloadSession(sessionPath));
         continue;
       }
       
@@ -552,13 +598,16 @@ export class MultiSessionManager {
       const idleTime = now - activeSession.lastActivity.getTime();
       if (idleTime > this.idleSessionTimeoutMs) {
         logger.info(`[MultiSessionManager] Unloading idle session after ${Math.round(idleTime / 60000)}min: ${sessionPath}`);
-        this.unloadSession(sessionPath);
-        cleanedCount++;
+        unloads.push(this.unloadSession(sessionPath));
       }
     }
+    if (staleDisposals.length > 0) await Promise.all(staleDisposals);
+    if (unloads.length > 0) await Promise.all(unloads);
+    cleanedCount += staleDisposals.length + unloads.length;
     
     // Third pass: Enforce maxSessions limit by unloading oldest idle sessions
-    // Pinned sessions are excluded from eviction
+    // Pinned sessions are excluded from eviction. Runs after the earlier passes'
+    // teardowns settled so the limit check sees the post-cleanup population.
     if (this.sessions.size > this.maxSessions) {
       const sessionsToRemove = this.sessions.size - this.maxSessions;
       
@@ -567,12 +616,14 @@ export class MultiSessionManager {
         .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0 && !s.pinned)
         .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
       
+      const evictions: Promise<void>[] = [];
       for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
         const [sessionPath] = idleSessions[i];
         logger.info(`[MultiSessionManager] Unloading oldest idle session to enforce limit: ${sessionPath}`);
-        this.unloadSession(sessionPath);
-        cleanedCount++;
+        evictions.push(this.unloadSession(sessionPath));
       }
+      if (evictions.length > 0) await Promise.all(evictions);
+      cleanedCount += evictions.length;
     }
     
     if (cleanedCount > 0) {
@@ -585,7 +636,7 @@ export class MultiSessionManager {
   /**
    * Alias for cleanupIdleSessions - for backward compatibility with tests
    */
-  cleanupInactiveSessions(): number {
+  async cleanupInactiveSessions(): Promise<number> {
     return this.cleanupIdleSessions();
   }
   
@@ -605,14 +656,38 @@ export class MultiSessionManager {
   }
 
   /**
-   * Dispose a single session
+   * Dispose a single session (B5 funnel entry).
+   *
+   * Every terminal dispose path (Internal API DELETE via `disposeLoadedSession`,
+   * aggressive memory-pressure cleanup, stale-stream reset) routes through here.
+   * B5 (finding F1): before the SDK object is disposed, the session's extensions
+   * get one bounded `session_shutdown` emission — the SDK's own teardown order
+   * (emit → dispose in `teardownCurrent`) — so background-shell processes are
+   * torn down, goal-engine/watch-wake timers cleared and memory state saved
+   * instead of leaking past the session.
+   *
+   * Concurrent teardowns of the same session share ONE in-flight run, so the
+   * event is emitted exactly once no matter how many paths race.
    */
-  private disposeSession(sessionPath: string): void {
+  private disposeSession(sessionPath: string, shutdown: SessionShutdownInit = { reason: 'quit' }): Promise<void> {
+    return this.teardownOnce(sessionPath, 'dispose', shutdown);
+  }
+
+  /**
+   * B5: one in-flight teardown per session path. A second caller (another
+   * dispose path racing the cleanup timer, or a double DELETE) awaits the same
+   * run instead of emitting a second `session_shutdown` or double-disposing.
+   */
+  private async performDispose(sessionPath: string, shutdown: SessionShutdownInit): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) return;
 
     this.cancelApiErrorGraceTimer(sessionPath);
-    
+
+    // B5 (finding F1): let extensions shut down while their ctx is still live.
+    // Bounded, error-caught, never throws (see session-shutdown.ts).
+    await emitSessionShutdown(activeSession.agentSession, shutdown, this.sessionShutdownTimeoutMs);
+
     // Dispose the agent session
     try {
       activeSession.agentSession.dispose();
@@ -646,10 +721,9 @@ export class MultiSessionManager {
   }
 
   /** Explicitly dispose a loaded session before its backing files are deleted. */
-  disposeLoadedSession(sessionPath: string): boolean {
-    if (!this.sessions.has(sessionPath)) return false;
-    this.disposeSession(sessionPath);
-    return true;
+  disposeLoadedSession(sessionPath: string, shutdown: SessionShutdownInit = { reason: 'quit' }): Promise<boolean> {
+    if (!this.sessions.has(sessionPath)) return Promise.resolve(false);
+    return this.disposeSession(sessionPath, shutdown).then(() => true);
   }
 
   /** Public read: client ids currently subscribed to a session. */
@@ -703,11 +777,19 @@ export class MultiSessionManager {
     const pinClaims = this.getPinClaims(sessionPath);
     const previousSessionId = this.sessions.get(sessionPath)?.sessionId;
 
-    this.disposeLoadedSession(sessionPath);
-
-    // Await full disposal: the in-memory session is gone AND the extension's
-    // async session_shutdown handlers have had a bounded chance to settle
-    // (5764604/46982c0).
+    // B5: dispose now emits `session_shutdown` (reason `resume`) and awaits it
+    // inside disposeLoadedSession — the rehydration successor runtime adopts
+    // extension state exactly like a CLI session switch: background tasks stay
+    // alive for adoption, memory saves, and the outgoing runtime relinquishes
+    // its timers/handles. (Before B5 this path never emitted the event and the
+    // settle comment below was drift — the wait was always trivially instant.)
+    await this.disposeLoadedSession(sessionPath, {
+      reason: 'resume',
+      targetSessionFile: sessionPath,
+    });
+    // Bounded belt-and-braces settle: disposal (emission + dispose) is awaited
+    // above, so this loop only guards residual async work between teardown and
+    // rehydration.
     const settleDeadline = Date.now() + 2_000;
     while (this.getAgentSession(sessionPath) && Date.now() < settleDeadline) {
       await delay(50);
@@ -760,45 +842,77 @@ export class MultiSessionManager {
   /**
    * Unload a session from memory without deleting the session file.
    * This is used for lazy session management - the session can be rehydrated later.
+   *
+   * B5: the unload also emits one bounded `session_shutdown` (reason `quit`):
+   * the extension runtime IS torn down here and there is no guaranteed successor
+   * runtime, so background processes, armed timers and unsaved state must not
+   * outlive the unload. A later rehydration starts fresh extensions; persisted
+   * extension state (e.g. background-shell's task ledger) reconciles truthfully
+   * against the torn-down world.
    */
-  private unloadSession(sessionPath: string): void {
+  private unloadSession(sessionPath: string): Promise<void> {
+    return this.teardownOnce(sessionPath, 'unload', { reason: 'quit' });
+  }
+
+  private async performUnload(sessionPath: string, shutdown: SessionShutdownInit): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) return;
 
     this.cancelApiErrorGraceTimer(sessionPath);
-    
+
+    // B5 (finding F1): bounded shutdown emission before the SDK object dies.
+    await emitSessionShutdown(activeSession.agentSession, shutdown, this.sessionShutdownTimeoutMs);
+
     // Dispose the agent session (this flushes to disk automatically)
     try {
       activeSession.agentSession.dispose();
     } catch (error) {
       logger.error(`[MultiSessionManager] Error unloading session ${sessionPath}:`, error);
     }
-    
+
     // Release the event handler and every other PiService-owned reference
     this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
 
     this.sessions.delete(sessionPath);
     this.extensionUiSnapshots.delete(sessionPath);
+
+    // B5 correction 01: an unload must not leave references pointing at a
+    // removed session — clear viewing references (and, defensively, any
+    // subscription that appeared while the emission ran; the closing fence
+    // prevents new ones, so this is belt-and-braces).
+    for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
+      if (viewingPath === sessionPath) {
+        this.clientViewingSession.delete(clientId);
+      }
+    }
+    for (const [clientId, subscriptions] of this.clientSubscriptions.entries()) {
+      if (subscriptions.has(sessionPath)) {
+        subscriptions.delete(sessionPath);
+        if (subscriptions.size === 0) {
+          this.clientSubscriptions.delete(clientId);
+        }
+      }
+    }
   }
 
   /**
    * Evict the oldest idle session to make room for a new one.
    * Returns true if a session was evicted, false if no idle sessions available.
    */
-  private evictOldestIdleSession(): boolean {
+  private async evictOldestIdleSession(): Promise<boolean> {
     // Get idle sessions sorted by last activity (oldest first), excluding pinned
     const idleSessions = Array.from(this.sessions.entries())
       .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0 && !s.pinned)
       .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
-    
+
     if (idleSessions.length === 0) {
       logger.warn(`[MultiSessionManager] Cannot evict: no idle sessions available (${this.sessions.size} loaded)`);
       return false;
     }
-    
+
     const [sessionPath] = idleSessions[0];
     logger.info(`[MultiSessionManager] Evicting oldest idle session: ${sessionPath}`);
-    this.unloadSession(sessionPath);
+    await this.unloadSession(sessionPath);
     return true;
   }
 
@@ -885,6 +999,9 @@ export class MultiSessionManager {
     const resolvedSessionPath = agentSession.sessionFile;
     if (!resolvedSessionPath) {
       this.releasePiServiceRefs(tempClientId, agentSession.sessionId);
+      // B5: even a failed create gets its bounded shutdown emission — extensions
+      // already ran session_start during createSession's bind.
+      await emitSessionShutdown(agentSession, { reason: 'quit' }, this.sessionShutdownTimeoutMs);
       agentSession.dispose();
       throw new Error('Failed to create session file');
     }
@@ -983,6 +1100,21 @@ export class MultiSessionManager {
 
     const wasAlreadyActive = activeSession !== undefined;
 
+    // B5 correction 01: a session fenced as closing stays mapped (old status)
+    // while its bounded shutdown emission runs. A subscribe arriving
+    // mid-teardown waits for the teardown and then falls through to the
+    // rehydration branch — a browser tab reattaches to a FRESH session
+    // instead of erroring into a half-torn-down object (same dispose→
+    // rehydrate design as recoverSession). Recorded: fresh rehydrate chosen
+    // over an error because the session file (unload) still exists and the
+    // manager already owns this transition.
+    if (activeSession && this.closingSessions.has(sessionPath)) {
+      const inFlightTeardown = this.teardownInFlight.get(sessionPath);
+      logger.info(`[MultiSessionManager] Subscribe ${clientId} arrived while ${sessionPath} is closing; waiting for teardown, then rehydrating fresh`);
+      if (inFlightTeardown) await inFlightTeardown.catch(() => undefined);
+      activeSession = this.sessions.get(sessionPath);
+    }
+
     if (!activeSession) {
       // Session not in memory - need to rehydrate from disk
       logger.info(`[MultiSessionManager] Rehydrating session from disk: ${sessionPath}`);
@@ -990,7 +1122,7 @@ export class MultiSessionManager {
       // Check if we're at capacity and need to make room
       if (this.sessions.size >= this.maxSessions) {
         logger.info(`[MultiSessionManager] At capacity (${this.sessions.size}/${this.maxSessions}), unloading oldest idle session`);
-        this.evictOldestIdleSession();
+        await this.evictOldestIdleSession();
       }
       
       // Create/recreate the session
@@ -1806,8 +1938,11 @@ export class MultiSessionManager {
    */
   async prompt(sessionPath: string, message: string): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
-    if (!activeSession) {
-      throw new Error(`Session ${sessionPath} does not exist`);
+    // B5 correction 01: a closing session is refused with the existing
+    // does-not-exist error — busy would advertise a retry that cannot
+    // succeed, because the session is being removed.
+    if (!activeSession || this.closingSessions.has(sessionPath)) {
+      throw new Error(`Session ${sessionPath} does not exist${this.closingSessions.has(sessionPath) ? ' (it is closing)' : ''}`);
     }
 
     if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
@@ -1855,8 +1990,9 @@ export class MultiSessionManager {
    */
   async submitPrompt(sessionPath: string, message: string): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
-    if (!activeSession) {
-      throw new Error(`Session ${sessionPath} does not exist`);
+    // B5 correction 01: refuse a closing session (see prompt()).
+    if (!activeSession || this.closingSessions.has(sessionPath)) {
+      throw new Error(`Session ${sessionPath} does not exist${this.closingSessions.has(sessionPath) ? ' (it is closing)' : ''}`);
     }
 
     if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
@@ -1977,8 +2113,12 @@ export class MultiSessionManager {
    */
   async submitSteer(sessionPath: string, message: string): Promise<{ joinedRunningTurn: boolean }> {
     const activeSession = this.sessions.get(sessionPath);
-    if (!activeSession) {
-      throw new Error(`Session ${sessionPath} does not exist`);
+    // B5 correction 02: same closing-session fence as prompt/submitPrompt — a
+    // Talker/Voice Mode steer racing session_shutdown must not submit work to
+    // a session being disposed. Same existing does-not-exist error, same
+    // rationale (busy would advertise a retry that cannot succeed).
+    if (!activeSession || this.closingSessions.has(sessionPath)) {
+      throw new Error(`Session ${sessionPath} does not exist${this.closingSessions.has(sessionPath) ? ' (it is closing)' : ''}`);
     }
 
     activeSession.lastActivity = new Date();
@@ -2050,16 +2190,28 @@ export class MultiSessionManager {
     };
   }
 
-  /**
-   * Explicitly stop and dispose a session.
-   * This is called when a user clicks the stop button.
-   * Returns true if the session was stopped, false if it didn't exist.
-   */
-  stopSession(sessionPath: string): boolean {
+  private teardownOnce(sessionPath: string, kind: 'dispose' | 'unload' | 'stop', shutdown: SessionShutdownInit): Promise<void> {
+    const inFlight = this.teardownInFlight.get(sessionPath);
+    if (inFlight) return inFlight;
+    // B5 correction 01: fence synchronously, before the first await.
+    this.closingSessions.add(sessionPath);
+    const run = (
+      kind === 'dispose'
+        ? this.performDispose(sessionPath, shutdown)
+        : kind === 'unload'
+          ? this.performUnload(sessionPath, shutdown)
+          : this.performStop(sessionPath, shutdown)
+    ).finally(() => {
+      this.teardownInFlight.delete(sessionPath);
+      this.closingSessions.delete(sessionPath);
+    });
+    this.teardownInFlight.set(sessionPath, run);
+    return run;
+  }
+
+  private async performStop(sessionPath: string, shutdown: SessionShutdownInit): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
-    if (!activeSession) {
-      return false;
-    }
+    if (!activeSession) return;
 
     logger.info(
       '[MultiSessionManager]',
@@ -2075,6 +2227,9 @@ export class MultiSessionManager {
         error
       );
     }
+
+    // B5: bounded shutdown emission while the extensions' ctx is still live.
+    await emitSessionShutdown(activeSession.agentSession, shutdown, this.sessionShutdownTimeoutMs);
 
     // Dispose the agent session
     try {
@@ -2111,30 +2266,43 @@ export class MultiSessionManager {
         }
       }
     }
+  }
 
-    return true;
+  /**
+   * Explicitly stop and dispose a session.
+   * This is called when a user clicks the stop button.
+   * Returns true if the session was stopped, false if it didn't exist.
+   * B5: the stop emits one bounded `session_shutdown` (reason quit) before the
+   * SDK object is disposed, and participates in the per-path teardown funnel —
+   * a stop racing a cleanup-sweep unload shares ONE emission, never two.
+   */
+  stopSession(sessionPath: string): Promise<boolean> {
+    if (!this.sessions.has(sessionPath)) {
+      return Promise.resolve(false);
+    }
+    return this.teardownOnce(sessionPath, 'stop', { reason: 'quit' }).then(() => true);
   }
 
   /**
    * Dispose all sessions and clear internal state.
    * Called when the server shuts down.
+   * B5: every session gets its bounded `session_shutdown` (reason quit) —
+   * emissions run in parallel so the whole shutdown stays within one bound.
    */
-  dispose(): void {
+  async dispose(): Promise<void> {
     // Stop cleanup timer
     this.stopCleanupTimer();
-    
-    // Dispose all sessions and release every PiService-owned reference
-    for (const [sessionPath, activeSession] of this.sessions.entries()) {
-      try {
-        activeSession.agentSession.dispose();
-      } catch (error) {
-        logger.error(
-          `[MultiSessionManager] Error disposing session ${sessionPath}:`,
-          error
-        );
-      }
-      this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
-    }
+
+    // Dispose all sessions and release every PiService-owned reference. The
+    // funnel dedupes racing teardowns; snapshot the paths first because the
+    // per-session disposal mutates the map as it completes.
+    await Promise.all(
+      [...this.sessions.keys()].map((sessionPath) =>
+        this.disposeSession(sessionPath).catch((error) => {
+          logger.error(`[MultiSessionManager] Error disposing session ${sessionPath}:`, error);
+        }),
+      ),
+    );
 
     // Clear all maps
     this.sessions.clear();

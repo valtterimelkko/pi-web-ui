@@ -112,7 +112,8 @@ describe('host-side exit-listener guard (B1 retainer 2)', () => {
 
     for (let i = 0; i < 5; i += 1) {
       const status = await manager.createAndSubscribe(`cycle-client-${i}`, '/work');
-      expect(manager.disposeLoadedSession(status.sessionPath)).toBe(true);
+      // B5: disposeLoadedSession is now awaited (bounded shutdown emission first).
+      await expect(manager.disposeLoadedSession(status.sessionPath)).resolves.toBe(true);
     }
 
     expect(internals(service).sessions.size).toBe(0);

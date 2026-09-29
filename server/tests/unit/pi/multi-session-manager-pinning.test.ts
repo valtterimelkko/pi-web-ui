@@ -282,7 +282,7 @@ describe('MultiSessionManager', () => {
       // Advance past timeout
       vi.advanceTimersByTime(60 * 60 * 1000); // 60 minutes
       
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions();
       expect(cleanedCount).toBe(0);
       expect(manager.hasSession('/path/to/pinned-idle.jsonl')).toBe(true);
       expect(mockSession.dispose).not.toHaveBeenCalled();
@@ -316,7 +316,7 @@ describe('MultiSessionManager', () => {
       vi.advanceTimersByTime(20 * 60 * 1000);
       
       mockBroadcast.mockClear();
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       // Should be reset to idle (dead worker detected) but NOT unloaded
       const status = manager.getSessionStatus('/path/to/pinned-streaming.jsonl');
@@ -351,7 +351,7 @@ describe('MultiSessionManager', () => {
       manager.pinSession('/path/1.jsonl');
       
       // Trigger cleanup that would evict idle sessions
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions();
       
       // Pinned session should not be evicted
       expect(cleanedCount).toBe(0);
@@ -368,7 +368,7 @@ describe('MultiSessionManager', () => {
       manager.pinSession('/path/to/session.jsonl');
       
       // Access private method via any for testing
-      (manager as any).aggressiveCleanup();
+      await (manager as any).aggressiveCleanup();
       
       expect(manager.hasSession('/path/to/session.jsonl')).toBe(true);
       expect(mockSession.dispose).not.toHaveBeenCalled();
@@ -383,7 +383,7 @@ describe('MultiSessionManager', () => {
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       manager.pinSession('/path/to/session.jsonl');
       
-      const result = manager.stopSession('/path/to/session.jsonl');
+      const result = await manager.stopSession('/path/to/session.jsonl');
       
       expect(result).toBe(true);
       expect(manager.hasSession('/path/to/session.jsonl')).toBe(false);
@@ -423,7 +423,7 @@ describe('MultiSessionManager', () => {
       
       // Advance 40 minutes while pinned (no cleanup)
       vi.advanceTimersByTime(40 * 60 * 1000);
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       expect(manager.hasSession('/path/to/session.jsonl')).toBe(true);
       
       // Unpin - should reset idle clock
@@ -431,12 +431,12 @@ describe('MultiSessionManager', () => {
       
       // Advance only 15 minutes (not enough to trigger 30 min timeout)
       vi.advanceTimersByTime(15 * 60 * 1000);
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       expect(manager.hasSession('/path/to/session.jsonl')).toBe(true);
       
       // Advance another 20 minutes (total 35 min since unpin, exceeds 30 min)
       vi.advanceTimersByTime(20 * 60 * 1000);
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       expect(manager.hasSession('/path/to/session.jsonl')).toBe(false);
       
       vi.useRealTimers();

@@ -27,6 +27,7 @@ import {
   type SnapshotDiff,
 } from './pi-openrouter-refresh.js';
 import { createLogger } from '../logging/logger.js';
+import { emitSessionShutdown, SESSION_SHUTDOWN_TIMEOUT_MS } from './session-shutdown.js';
 import { readSessionIdentity } from './session-cwd.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
 import { ToolArgsBudgetGuard } from './tool-args-budget.js';
@@ -568,6 +569,9 @@ export class PiService {
       // Correction 03 (minor): the failed session's factory snapshot must not
       // outlive its disposed session.
       this.sessionFactorySnapshots.delete(session.sessionId);
+      // B5 (finding F1): the extensions already ran session_start during bind —
+      // give them the bounded shutdown emission before the SDK object dies.
+      await emitSessionShutdown(session, { reason: 'quit' }, SESSION_SHUTDOWN_TIMEOUT_MS);
       session.dispose();
       throw error;
     }
@@ -927,7 +931,7 @@ export class PiService {
     });
   }
 
-  removeClient(clientId: string): void {
+  async removeClient(clientId: string): Promise<void> {
     const sessionId = this.clientSessionMap.get(clientId);
     const session = sessionId ? this.sessions.get(sessionId) : undefined;
     // Dispose only when this client was the last owner of the session id. A
@@ -944,6 +948,8 @@ export class PiService {
       }
     }
     if (session && !siblingStillOwns) {
+      // B5 (finding F1): bounded shutdown emission before the SDK object dies.
+      await emitSessionShutdown(session, { reason: 'quit' }, SESSION_SHUTDOWN_TIMEOUT_MS);
       session.dispose();
     }
     // Canonical release (B1 heap retainer 1): drops eventHandlers /
@@ -973,10 +979,23 @@ export class PiService {
     // clientSessions map after cleanup, strongly retaining disposed sessions.
     if (this.sessionPool) {
       for (const clientId of this.sessionPool.getActiveClients()) {
-        this.sessionPool.removeClient(clientId);
+        // B5 correction 01: awaited — the pool teardown emits the bounded
+        // session_shutdown before disposing, so it settles before the
+        // remaining-sessions pass below (identity-safe release keeps the
+        // drained sessions out of that pass: no double emission).
+        await this.sessionPool.removeClient(clientId);
       }
     }
-    for (const session of this.sessions.values()) {
+    // B5 (finding F1): the remaining (non-pool) sessions get their bounded
+    // shutdown emission before disposal — in parallel so the whole cleanup
+    // stays within one emission bound.
+    const remaining = [...this.sessions.values()];
+    await Promise.all(
+      remaining.map((session) =>
+        emitSessionShutdown(session, { reason: 'quit' }, SESSION_SHUTDOWN_TIMEOUT_MS).catch(() => undefined),
+      ),
+    );
+    for (const session of remaining) {
       session.dispose();
     }
     this.sessions.clear();

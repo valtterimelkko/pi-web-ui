@@ -184,7 +184,7 @@ export async function createOneSession(params: {
           await deps.piService.setModel(status.sessionId, entry.model);
         } catch (error) {
           deps.multiSessionManager.unsubscribeClient(deps.internalClientId, status.sessionPath);
-          deps.multiSessionManager.disposeLoadedSession(status.sessionPath);
+          await deps.multiSessionManager.disposeLoadedSession(status.sessionPath);
           await unlink(status.sessionPath).catch(() => undefined);
           await deps.sessionRegistry.delete(status.sessionId);
           throw new RuntimeOpError(
@@ -201,7 +201,7 @@ export async function createOneSession(params: {
         );
       } catch (error) {
         deps.multiSessionManager.unsubscribeClient(deps.internalClientId, status.sessionPath);
-        deps.multiSessionManager.disposeLoadedSession(status.sessionPath);
+        await deps.multiSessionManager.disposeLoadedSession(status.sessionPath);
         await unlink(status.sessionPath).catch(() => undefined);
         await deps.sessionRegistry.delete(status.sessionId);
         if (error instanceof PiProviderNotAllowedError) {

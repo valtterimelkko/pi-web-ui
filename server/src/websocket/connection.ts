@@ -4598,8 +4598,9 @@ export class WebSocketConnectionManager {
       this.handleDisconnect(clientId);
     }
 
-    // Dispose MultiSessionManager after clients have unsubscribed.
-    this.multiSessionManager.dispose();
+    // Dispose MultiSessionManager after clients have unsubscribed. B5: awaited
+    // so every session's bounded session_shutdown emission completes on shutdown.
+    await this.multiSessionManager.dispose();
 
     // Clear any armed AskUserQuestion disconnect grace timers so nothing dangles.
     for (const timer of this.askUserDisconnectGraceTimers.values()) {
