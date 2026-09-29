@@ -49,7 +49,7 @@ Honest note: the first GREEN run failed once — `pair resolution: invalid value
 c8838308 tests: --bytes-cap option on the B3b live-proof driver for byte-cap sizing runs (B3c, V2a's driver-cap-param.diff)
 c5fd99cf config: streamed-byte default re-sized 16 MiB -> 4 MiB from live measurement (B3c)
 dc9b1613 docs+contract 1.56.0: streamed-byte default re-size recorded (B3c)
-<evidence commit> docs: B3c evidence bundle (this file)
+557adc8d docs: B3c evidence bundle (this file; sha placed by the follow-up tidy commit)
 ```
 
 Diff vs base: `git diff --stat fadc6783..HEAD` → 11 files changed, 53 insertions(+), 24 deletions(-) (plus this evidence file's commit).
