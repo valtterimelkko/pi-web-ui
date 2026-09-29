@@ -138,10 +138,11 @@ function startFixture(port) {
 
     // Every later request (session B; the control's post-run turn): a paced
     // stream that runs for at least bMinStreamMs AND until session A's run
-    // has resolved (+500 ms grace) — so B's stream structurally spans A's
-    // entire runaway window. ~64 B every 33 ms ≈ 1.9 KB/s, inside the
-    // measured real per-run streaming range (p50 148, p99 1,014, max
-    // 6,583 B/s; measurement-v2.json).
+    // has resolved (+500 ms grace, capped at 100 s so a wedged A cannot
+    // deadlock B — A's own 120 s prompt timeout fires first). 64 B every
+    // 66 ms ≈ 970 B/s ≈ the measured p99 REAL per-run streaming rate
+    // (1,014 B/s; measurement-v2.json) — B streams at a realistic rate while
+    // spanning A's entire runaway window.
     record.kind = 'streaming-session';
     chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
     const bPayload = 'y'.repeat(64);
@@ -154,10 +155,9 @@ function startFixture(port) {
       bSent += 64;
       record.bytes = bSent;
       const elapsed = Date.now() - bStarted;
-      const holdCap = runawayPlan.bMinStreamMs + 30_000; // bounded hold: a wedged A must not deadlock B
-      if ((!fixtureState.aResolved || elapsed < runawayPlan.bMinStreamMs) && elapsed < holdCap) {
-        setTimeout(writeB, 33);
-      } else if (!graceScheduled && fixtureState.aResolved && elapsed < holdCap) {
+      if ((!fixtureState.aResolved || elapsed < runawayPlan.bMinStreamMs) && elapsed < 100_000) {
+        setTimeout(writeB, 66);
+      } else if (!graceScheduled && fixtureState.aResolved && elapsed < 100_000) {
         graceScheduled = true;
         setTimeout(writeB, 500); // keep streaming 500 ms past A's resolution, then finish
       } else {
@@ -429,6 +429,7 @@ async function main() {
       stressBytesPerSecond: Math.round(chunkBytes / (paceChunkMs / 1000)),
       realisticBytesPerSecond: 21000,
       realisticChunksPerSecond: 333,
+      sessionBBytesPerSecond: 970,
     },
   };
   const tokenPath = path.join(stateDir, 'internal-api-token');
