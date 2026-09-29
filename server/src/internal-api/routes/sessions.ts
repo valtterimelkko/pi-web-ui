@@ -99,7 +99,7 @@ import {
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
-import { formatPreflightProblem, preflightSpecSchema, runDispatchPreflight } from '../dispatch-preflight.js';
+import { formatPreflightProblem, preflightSpecSchema, resolveEffectiveCreateCwd, runDispatchPreflight, runtimeChildPathEnv } from '../dispatch-preflight.js';
 import { DEFAULT_DRAIN_RETRY_AFTER_SECONDS } from '../drain-controller.js';
 import { readBoundedJsonBody as readJsonBody, RequestBodyTooLargeError } from '../request-body.js';
 import {
@@ -1558,7 +1558,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const body: CreateSessionRequest = parsed.data as CreateSessionRequest;
 
     const runtime: SessionRuntime = parsed.data.runtime;
-    const cwd = parsed.data.cwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
+    const cwd = resolveEffectiveCreateCwd(parsed.data.cwd);
     if (runtime === 'pi') {
       try {
         assertPiModelAllowed(body.model, blockedPiProviders);
@@ -1583,11 +1583,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // effective cwd always (default-on: a missing/unwritable cwd already failed
     // the runtime spawn today, only later and less clearly), plus the caller's
     // declared referenced paths and tools when provided. No session is created
-    // and no model token is spent on refusal.
+    // and no model token is spent on refusal. Tools resolve on the PATH the
+    // target runtime's child will actually see (correction 01).
     const createPreflight = await runDispatchPreflight({
-      cwd,
+      cwd: resolveEffectiveCreateCwd(parsed.data.cwd),
       paths: body.preflight?.paths,
       tools: body.preflight?.tools,
+      pathEnv: runtimeChildPathEnv(runtime),
     });
     if (!createPreflight.ok) {
       sendJson(res, 400, {
@@ -3386,27 +3388,40 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    // C4 (contract 1.53.0): optional per-dispatch preflight. Refuses before any
-    // receipt, admission or runtime work. The session cwd is not re-checked
-    // here (it was validated at create); only this dispatch's declared items.
-    if (body.preflight !== undefined) {
-      const specParse = preflightSpecSchema.safeParse(body.preflight);
-      if (!specParse.success) {
-        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'preflight must be an object with optional `paths` (absolute) and `tools` (bare names) string arrays'));
-        return;
-      }
-      const promptPreflight = await runDispatchPreflight({ paths: specParse.data.paths, tools: specParse.data.tools });
-      if (!promptPreflight.ok) {
-        sendJson(res, 400, {
-          ...enrichedErrorBody(ErrorCode.PREFLIGHT_FAILED, formatPreflightProblem(promptPreflight)),
-          failures: promptPreflight.failures,
-        });
-        return;
-      }
-    }
+    // C4 (contract 1.53.0): optional per-dispatch preflight. Shape is refused
+    // before any lookup; the check itself runs once the target runtime is
+    // known (below) so tools resolve on that runtime's child PATH. The session
+    // cwd is not re-checked here (it was validated at create).
+    const pendingPreflightSpec = body.preflight !== undefined
+      ? (() => {
+          const specParse = preflightSpecSchema.safeParse(body.preflight);
+          if (!specParse.success) {
+            sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'preflight must be an object with optional `paths` (absolute) and `tools` (bare names) string arrays'));
+            return undefined;
+          }
+          return specParse.data;
+        })()
+      : undefined;
+    if (body.preflight !== undefined && pendingPreflightSpec === undefined) return;
 
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
+      // C4 (correction 01): runtime-aware preflight execution before the
+      // Command Code dispatch (still before any receipt/runtime work).
+      if (pendingPreflightSpec) {
+        const ccPreflight = await runDispatchPreflight({
+          paths: pendingPreflightSpec.paths,
+          tools: pendingPreflightSpec.tools,
+          pathEnv: runtimeChildPathEnv('commandcode'),
+        });
+        if (!ccPreflight.ok) {
+          sendJson(res, 400, {
+            ...enrichedErrorBody(ErrorCode.PREFLIGHT_FAILED, formatPreflightProblem(ccPreflight)),
+            failures: ccPreflight.failures,
+          });
+          return;
+        }
+      }
       const requestId = getCorrelationContext()?.requestId ?? newRequestId();
       await withCorrelation({ requestId, sessionId, runtime: 'commandcode' }, async () => {
         await handleCommandCodePrompt(req, res, commandCodeEntry, body);
@@ -3440,6 +3455,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
 
     const runtime = entry.sdkType;
+
+    // C4 (contract 1.53.0): runtime-aware preflight execution — before any
+    // receipt, admission decision or runtime call (correction 01: tools
+    // resolve on THIS runtime's child PATH).
+    if (pendingPreflightSpec) {
+      const promptPreflight = await runDispatchPreflight({
+        paths: pendingPreflightSpec.paths,
+        tools: pendingPreflightSpec.tools,
+        pathEnv: runtimeChildPathEnv(runtime),
+      });
+      if (!promptPreflight.ok) {
+        sendJson(res, 400, {
+          ...enrichedErrorBody(ErrorCode.PREFLIGHT_FAILED, formatPreflightProblem(promptPreflight)),
+          failures: promptPreflight.failures,
+        });
+        return;
+      }
+    }
 
     // Contract 1.45.0 Phase 4b: ownership gate BEFORE any receipt/admission/
     // runtime call — a live foreign owner refuses 409 with no run created; a
@@ -6993,11 +7026,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         };
       }
       // C4 (contract 1.53.0): per-entry dispatch preflight before any runtime
-      // work — effective cwd always, plus the entry's declared paths/tools.
+      // work — effective cwd always (same resolution as single create,
+      // correction 01), plus the entry's declared paths/tools on the entry
+      // runtime's child PATH.
       const entryPreflight = await runDispatchPreflight({
-        cwd: entry.cwd || config.validationDefaultCwd,
+        cwd: resolveEffectiveCreateCwd(entry.cwd),
         paths: entry.preflight?.paths,
         tools: entry.preflight?.tools,
+        pathEnv: runtimeChildPathEnv(entry.runtime),
       });
       if (!entryPreflight.ok) {
         return {

@@ -613,7 +613,7 @@ aggregated, deterministic report.
 | `paths` | when `preflight.paths` is sent | each absolute path **exists** (existence only — no content reads; dangling symlinks count as missing) |
 | `tools` | when `preflight.tools` is sent | each bare name resolves to an executable regular file on the server's `PATH` (the same environment the runtime child inherits) |
 
-**Refusal shape (400, all endpoints):**
+**Refusal shape (400 — single create and prompt dispatch only):**
 
 ```json
 {
@@ -631,6 +631,26 @@ brief in one round trip. `failures[].problem` values: `does not exist`,
 `not a directory`, `not writable by the server user`, `not accessible`,
 `not found on PATH`.
 
+**Batch envelope (POST /sessions/batch — never a top-level 400):** batch
+answers `200` with the usual `{created[], createdCount, failedCount}` body; a
+preflight failure is **nested per entry** —
+
+```json
+{
+  "created": [
+    { "index": 1, "success": false, "runtime": "pi",
+      "error": { "code": "PREFLIGHT_FAILED",
+                 "message": "Dispatch preflight failed: …",
+                 "failures": [ { "kind": "cwd", "item": "/missing", "problem": "does not exist" } ] } }
+  ],
+  "createdCount": 0,
+  "failedCount": 1
+}
+```
+
+Good entries in the same batch still create (partial-success semantics
+unchanged); `createdCount`/`failedCount` summarise the envelope.
+
 **Semantics and limits**
 
 - Ordering on creates: admission (`503`, server state, retryable) is evaluated
@@ -642,6 +662,10 @@ brief in one round trip. `failures[].problem` values: `does not exist`,
   re-checks only that dispatch's declared paths/tools — the session cwd is not
   re-checked (it was validated at create). The check runs before any receipt,
   admission decision or runtime call. Malformed shape → `400 INVALID_REQUEST`.
+- Tool lookups resolve on the **target runtime's child PATH** (correction 01):
+  Antigravity spawns `agy` with `/root/.local/bin` prepended, so its preflight
+  sees that prefix too; Pi (in-process), Claude (SDK spawn) and Command Code
+  (allowlisted env passthrough) children see the server `PATH` unchanged.
 - Bounds: ≤ 32 paths, ≤ 32 tools, paths ≤ 4096 chars; strict object — unknown
   keys are `400 INVALID_REQUEST`.
 - The check is point-in-time: state can change between the probe and the

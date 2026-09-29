@@ -18,6 +18,8 @@ import { AdmissionController, type AdmissionControllerOptions } from '../../../s
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 
+const REAL_PATH = process.env.PATH;
+
 const MiB = 1024 * 1024;
 
 function createJsonReq(method: string, url: string, body?: unknown): IncomingMessage {
@@ -276,6 +278,105 @@ describe('C4 dispatch preflight at the route level', () => {
       expect(body.created[0].error.code).toBe('PREFLIGHT_FAILED');
       expect(body.created[0].error.failures[0]).toEqual({ kind: 'cwd', item: missingCwd, problem: 'does not exist' });
       expect(claudeService.createSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('correction 01 — runtime PATH and batch cwd parity', () => {
+    afterEach(() => {
+      process.env.PATH = REAL_PATH;
+      delete process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD;
+    });
+
+    it('tool lookup uses the runtime child PATH: agy resolves for antigravity, not for pi (item 1)', async () => {
+      // Shrink the server PATH so /root/.local/bin (agy) is invisible to plain
+      // children; only the antigravity prepend may find it.
+      const bin = path.join(dir, 'bare-bin');
+      await fs.mkdir(bin);
+      process.env.PATH = bin;
+      const antigravityService = {
+        isRunning: vi.fn(() => false),
+        isAvailable: vi.fn().mockResolvedValue(true),
+        createSession: vi.fn(async () => ({ sessionId: 'agy-new' })),
+      };
+      const routes = createSessionRoutes({
+        claudeService,
+        opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), abort: vi.fn() } as any,
+        antigravityService: antigravityService as any,
+        commandCodeService: undefined,
+        multiSessionManager: {} as any,
+        sessionRegistry: registry,
+        piService: { setModel: vi.fn() } as any,
+        internalClientId: 'internal-test',
+        watchDir: path.join(dir, 'watches'),
+        pinDir: path.join(dir, 'pins'),
+        pinExpiryIntervalMs: 60_000,
+        admissionController: admissionWith(),
+        runReceiptManager: new RunReceiptManager({ store: new RunReceiptStore(path.join(dir, 'receipts-corr1')) }),
+      } as any);
+      pending.push(routes.ready.catch(() => undefined));
+
+      const agyCreate = createMockRes();
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'antigravity', cwd: goodDir, preflight: { tools: ['agy'] } }),
+        agyCreate,
+      );
+      expect(agyCreate.statusCode).toBe(201);
+      expect(antigravityService.createSession).toHaveBeenCalledTimes(1);
+
+      const piCreate = createMockRes();
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi', cwd: goodDir, preflight: { tools: ['agy'] } }),
+        piCreate,
+      );
+      expect(piCreate.statusCode).toBe(400);
+      expect(json(piCreate).code).toBe('PREFLIGHT_FAILED');
+      expect(json(piCreate).failures[0]).toEqual({ kind: 'tool', item: 'agy', problem: 'not found on PATH' });
+    });
+
+    it('prompt preflight resolves tools on the session runtime PATH, not the host PATH (item 1)', async () => {
+      const bin = path.join(dir, 'bare-bin');
+      await fs.mkdir(bin);
+      process.env.PATH = bin;
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/claude-1/prompt', { message: 'go', preflight: { tools: ['agy'] } }),
+        res,
+        'claude-1',
+      );
+      expect(res.statusCode).toBe(400);
+      expect(json(res).code).toBe('PREFLIGHT_FAILED');
+      expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('batch entries without cwd preflight the REQUEST-TIME validation default, same as single create (item 5)', async () => {
+      const envDefault = path.join(dir, 'env-default-cwd');
+      process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD = envDefault;
+      const routes = makeRoutes();
+
+      // Missing dir → per-item refusal naming exactly the env-var dir.
+      const refused = createMockRes();
+      await routes.handleBatchCreate(
+        createJsonReq('POST', '/api/v1/sessions/batch', { sessions: [{ runtime: 'claude' }] }),
+        refused,
+      );
+      expect(refused.statusCode).toBe(200);
+      const body = json(refused);
+      expect(body.failedCount).toBe(1);
+      expect(body.created[0].error.code).toBe('PREFLIGHT_FAILED');
+      expect(body.created[0].error.failures[0]).toEqual({ kind: 'cwd', item: envDefault, problem: 'does not exist' });
+      expect(claudeService.createSession).not.toHaveBeenCalled();
+
+      // Existing dir → create proceeds against it.
+      await fs.mkdir(envDefault, { recursive: true });
+      const ok = createMockRes();
+      await routes.handleBatchCreate(
+        createJsonReq('POST', '/api/v1/sessions/batch', { sessions: [{ runtime: 'claude' }] }),
+        ok,
+      );
+      expect(ok.statusCode).toBe(200);
+      expect(json(ok).createdCount).toBe(1);
+      expect(claudeService.createSession).toHaveBeenCalledTimes(1);
     });
   });
 

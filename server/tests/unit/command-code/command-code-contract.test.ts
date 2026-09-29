@@ -18,6 +18,6 @@ describe('Command Code Internal API boundary', () => {
     expect(capabilities.commandcode).toBeDefined();
     // The deliberate version pin. Bumping the contract must be an act someone
     // chooses, and this is where that choice is felt — hence exact, not a floor.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.53.0');
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.51.0'); // correction 01 item 6: shared pin left for the parent to reconcile at merge — expected local failure on this lane branch
   });
 });

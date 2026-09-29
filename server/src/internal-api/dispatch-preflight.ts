@@ -71,12 +71,12 @@ export interface PreflightReport {
 
 /** The subset of fs/promises the probes need; injectable for tests. */
 export interface PreflightFs {
-  stat(path: string): Promise<{ isDirectory(): boolean }>;
+  stat(path: string): Promise<{ isDirectory(): boolean; isFile(): boolean }>;
   access(path: string, mode: number): Promise<void>;
 }
 
 const defaultFs: PreflightFs = {
-  stat: (p) => fsp.stat(p) as Promise<{ isDirectory(): boolean }>,
+  stat: (p) => fsp.stat(p) as Promise<{ isDirectory(): boolean; isFile(): boolean }>,
   access: (p, mode) => fsp.access(p, mode),
 };
 
@@ -97,6 +97,32 @@ export interface RunDispatchPreflightOptions {
   fs?: PreflightFs;
 }
 
+/**
+ * The PATH the target runtime's child will actually see. Antigravity spawns
+ * `agy` with `/root/.local/bin` prepended (see the inline env builders in
+ * `antigravity-service.ts` `runAgy` and `agy-stream-process.ts` `start` — the
+ * expression here mirrors them exactly); Pi sessions run in-process and
+ * Claude/Command Code children inherit the server environment, so they see the
+ * server PATH unchanged. Correction 01 item 1: tool lookups must use THIS
+ * environment, not the bare server PATH.
+ */
+export function runtimeChildPathEnv(runtime: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode', serverPath?: string): string {
+  const base = serverPath ?? process.env.PATH ?? '';
+  return runtime === 'antigravity' ? `/root/.local/bin:${base}` : base;
+}
+
+/**
+ * Effective create cwd, shared by the single-create and batch-create preflight
+ * hooks so both resolve EXACTLY the same value (correction 01 item 5): explicit
+ * request cwd, else the validation default read at request time, else the
+ * server cwd. Config's load-time snapshot must not be used here — a caller
+ * that sets the env var after boot would otherwise see two different cwds on
+ * the two create paths.
+ */
+export function resolveEffectiveCreateCwd(explicitCwd?: string): string {
+  return explicitCwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
+}
+
 /** Resolve one bare tool name against a PATH string (first match wins). */
 async function toolOnPath(name: string, pathEnv: string, fs: PreflightFs): Promise<boolean> {
   for (const dir of pathEnv.split(':')) {
@@ -104,7 +130,9 @@ async function toolOnPath(name: string, pathEnv: string, fs: PreflightFs): Promi
     const candidate = nodePath.join(dir, name);
     try {
       const st = await fs.stat(candidate);
-      if (!st.isDirectory()) {
+      // Regular files only: a FIFO or socket with the exec bit set is not a
+      // usable tool (correction 01 item 2).
+      if (st.isFile()) {
         await fs.access(candidate, constants.X_OK);
         return true;
       }
@@ -122,45 +150,54 @@ async function toolOnPath(name: string, pathEnv: string, fs: PreflightFs): Promi
  */
 export async function runDispatchPreflight(options: RunDispatchPreflightOptions): Promise<PreflightReport> {
   const fs = options.fs ?? defaultFs;
-  const failures: PreflightFailure[] = [];
 
+  // Per-check-group indexed collection, flattened afterwards, so the report
+  // order is deterministic in input order no matter which probe resolves first
+  // (correction 01 item 3).
+  const cwdFailures: PreflightFailure[] = [];
   if (options.cwd !== undefined) {
     const cwd = options.cwd;
     try {
       const st = await fs.stat(cwd);
       if (!st.isDirectory()) {
-        failures.push({ kind: 'cwd', item: cwd, problem: 'not a directory' });
+        cwdFailures.push({ kind: 'cwd', item: cwd, problem: 'not a directory' });
       } else {
         try {
           await fs.access(cwd, constants.W_OK);
         } catch {
-          failures.push({ kind: 'cwd', item: cwd, problem: 'not writable by the server user' });
+          cwdFailures.push({ kind: 'cwd', item: cwd, problem: 'not writable by the server user' });
         }
       }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      failures.push({ kind: 'cwd', item: cwd, problem: code === 'ENOENT' ? 'does not exist' : 'not accessible' });
+      cwdFailures.push({ kind: 'cwd', item: cwd, problem: code === 'ENOENT' ? 'does not exist' : 'not accessible' });
     }
   }
 
-  await Promise.all(
-    (options.paths ?? []).map(async (p) => {
+  const pathChecks = await Promise.all(
+    (options.paths ?? []).map(async (p): Promise<PreflightFailure | null> => {
       try {
         await fs.access(p, constants.F_OK);
+        return null;
       } catch {
-        failures.push({ kind: 'path', item: p, problem: 'does not exist' });
+        return { kind: 'path', item: p, problem: 'does not exist' };
       }
     }),
   );
 
   const pathEnv = options.pathEnv ?? process.env.PATH ?? '';
-  await Promise.all(
-    (options.tools ?? []).map(async (tool) => {
-      if (!(await toolOnPath(tool, pathEnv, fs))) {
-        failures.push({ kind: 'tool', item: tool, problem: 'not found on PATH' });
-      }
+  const toolChecks = await Promise.all(
+    (options.tools ?? []).map(async (tool): Promise<PreflightFailure | null> => {
+      if (await toolOnPath(tool, pathEnv, fs)) return null;
+      return { kind: 'tool', item: tool, problem: 'not found on PATH' };
     }),
   );
+
+  const failures = [
+    ...cwdFailures,
+    ...pathChecks.filter((f): f is PreflightFailure => f !== null),
+    ...toolChecks.filter((f): f is PreflightFailure => f !== null),
+  ];
 
   return { ok: failures.length === 0, failures };
 }
