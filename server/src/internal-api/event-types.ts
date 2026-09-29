@@ -53,6 +53,7 @@ export const EVENT_TYPE_REGISTRY: readonly EventTypeInfo[] = [
   { type: SSE_EVENT_TYPES.CHILD_TURN_ENDED, description: 'A linked child session reached a terminal turn state (contract 1.34.0).', category: 'control', verbosity: BOTH },
   { type: SSE_EVENT_TYPES.WATCH_REGISTERED, description: 'A durable watch was registered linking this session to a watched target (contract 1.34.0).', category: 'control', verbosity: BOTH },
   { type: SSE_EVENT_TYPES.WATCH_FIRED, description: 'A durable watch registered from this session fired and its wake was dispatched (contract 1.34.0).', category: 'control', verbosity: BOTH },
+  { type: SSE_EVENT_TYPES.TOOL_ARGS_BUDGET_EXCEEDED, description: 'The streaming tool-argument budget aborted this run; the receipt carries RUN_BUDGET_EXCEEDED (contract 1.48.0).', category: 'control', verbosity: BOTH },
 ];
 
 /** All registered event type names (drift-guard set). */
