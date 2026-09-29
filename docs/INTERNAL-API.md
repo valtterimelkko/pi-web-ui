@@ -1343,8 +1343,10 @@ interactive Web UI work, separate control/execution capacity, measured
 cgroup-v2 memory usage (or process RSS/host RAM fallback), optional PID/task and
 host-pressure/event evidence, conservative-knob provenance, and
 `retryAfterSeconds`. Additive fields such as `classes`, `control`,
-`stalledRuns`, `quarantinedRuns`, `oldestActiveRunStartedAt`, and
-`disposalOwners` are process-local diagnostics.
+`stalledRuns`, `quarantinedRuns`, `oldestActiveRunStartedAt`, `disposalLane`
+and `disposalOwners` are process-local diagnostics. Contract `1.49.0` adds the
+V8 heap gate (`heap`), the sustained event-loop lag gate (`eventLoopLag`) and
+the drain state (`draining`).
 
 ```json
 {
@@ -1378,6 +1380,32 @@ host-pressure/event evidence, conservative-knob provenance, and
   "memoryEvents": { "oom": 0, "oomKill": 0, "high": 0, "source": "service" },
   "admissionConfig": { "explicitKnobs": ["maxActiveTurns"], "prodFallbackKnobs": [] },
   "control": { "inFlight": 0, "queued": 0 },
+  "disposalLane": { "inFlight": 0, "queued": 0 },
+  "heap": {
+    "usedBytes": 209715200,
+    "limitBytes": 4345298944,
+    "projectedBytes": 276824064,
+    "reservedBytesPerTurn": 67108864,
+    "pressureFraction": 0.75,
+    "recoveryFraction": 0.65,
+    "pressureBytes": 3258974208,
+    "recoveryBytes": 2824444313,
+    "pressure": false,
+    "source": "v8"
+  },
+  "eventLoopLag": {
+    "thresholdMs": 300,
+    "recoveryMs": 150,
+    "sustainedReadings": 2,
+    "consecutiveHighReadings": 0,
+    "pressure": false,
+    "telemetryAvailable": true,
+    "stale": false,
+    "lastP99Ms": 84,
+    "lastReadingAt": "2026-09-29T12:00:00.000Z",
+    "source": "a2"
+  },
+  "draining": null,
   "retryAfterSeconds": 2
 }
 ```
@@ -1390,9 +1418,50 @@ should preflight, but the prompt route remains the atomic authority because
 capacity can change between reads. A refusal is HTTP `429` (or `503` for
 resource-pressure reasons) with code `ADMISSION_CAPACITY_EXHAUSTED`, stable
 `reason` (`global_limit`, `runtime_limit`, `memory_pressure`, `pid_pressure`,
-or `host_memory_pressure`), body `retryAfterSeconds`, and a `Retry-After`
-header. Capacity limits active turns, not durable sessions or retention leases;
-no hidden queue is created.
+`host_memory_pressure`, `heap_pressure`, `event_loop_lag` or `draining`), body
+`retryAfterSeconds`, and a `Retry-After` header. Only `global_limit` and
+`runtime_limit` are `429`; every other reason is `503`. Capacity limits active
+turns, not durable sessions or retention leases; no hidden queue is created.
+
+**Heap and lag gates (contract 1.49.0, B2).** Both refuse P2/P3 only; P0/P1
+control is never refused by them.
+
+- `heap_pressure`: the projected V8 heap is `heap.usedBytes` (V8
+  `used_heap_size`) plus `heap.reservedBytesPerTurn` for each active P2/P3 turn
+  and one for the candidate. Refusal starts when the projection reaches
+  `heap.pressureBytes` (`pressureFraction` × `heap_size_limit`, default 0.75)
+  and holds until it falls strictly below `heap.recoveryBytes` (default 0.65).
+  With the 4 GiB production cap that is ≈3 GiB to trip and ≈2.6 GiB to recover,
+  an order of magnitude above the ≈200 MB post-GC floor measured in the B1
+  confirmation soak, so ordinary operation never trips it and ≈1 GiB stays
+  free for in-flight turns and a full collection before the OOM.
+- `event_loop_lag`: each A2 health reading (every 30 s, lag p99 over a 60 s
+  window) feeds admission. `sustainedReadings` (default 2) consecutive readings
+  with p99 ≥ `thresholdMs` (default 300 ms) latch the refusal; only a reading
+  with p99 strictly below `recoveryMs` (default half the trigger, 150 ms)
+  releases it. A reading with no samples is ignored; a latched state whose last
+  reading is older than 180 s fails open and reports `stale: true`.
+  `telemetryAvailable: false` means no reading has arrived yet (the gate is
+  inert, not green).
+- Refusals for both carry `Retry-After: 30` (one A2 interval; the state cannot
+  change sooner). `draining` uses the ordinary `retryAfterSeconds`.
+
+**Creates are admission-checked (1.49.0).** `POST /sessions`, each
+`POST /sessions/batch` entry and `POST /sessions/:id/transfer` with `createNew`
+are refused with the same `503` shape under any pressure reason or while
+draining, before any runtime work. Batch entries report
+`error: { code: "ADMISSION_CAPACITY_EXHAUSTED", reason, message, retryAfterSeconds }`.
+Turn-slot saturation never refuses a create: a create holds no turn, and the
+later prompt is what needs a slot.
+
+**Disposal is always available (1.49.0).** `DELETE /sessions/:id` is exempt
+from the critical memory floor (`controlAvailable: false`, where other control
+answers `503 CONTROL_CRITICAL`) and runs in its own bounded lane
+(`disposalLane`, 4 concurrent, 32 queued), so neither the floor nor a
+saturated control lane can refuse the operation that frees memory.
+`POST /sessions/:id/abort` is also exempt from the floor (it stays on the
+control lane). Heap pressure, lag and draining never refuse either. The
+Internal API has no batch-delete route; delete sessions one by one.
 
 A busy direct `steer` retains its own request receipt but joins the existing
 execution: it does not reserve another P2 turn. Delivery uses the bounded
@@ -2982,7 +3051,7 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 | `RETENTION_CLAIM_OWNER_MISMATCH` | 409 | Supplied cooperative owner does not match the lease |
 | `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required resident claim could not be acquired; create is rolled back |
 | `RETENTION_STORE_UNAVAILABLE` | 503 | Required lease persistence/renewal/release was not durable |
-| `ADMISSION_CAPACITY_EXHAUSTED` | 429 | Prompt-time global/runtime/memory admission refused; respect `Retry-After` |
+| `ADMISSION_CAPACITY_EXHAUSTED` | 429 / 503 | Prompt- or create-time admission refused: `429` for global/runtime turn budget, `503` for memory/PID/host/heap/event-loop-lag pressure or draining; respect `Retry-After` |
 | `PROVIDER_NOT_ALLOWED` | 403 | Pi provider is disabled for Internal API agent execution |
 | `MODEL_NOT_APPLIED` | 422 | Explicit Pi model selector was refused or not applied; the session was not created (1.21.0). Use the exact `provider/model` selector. |
 
@@ -3043,6 +3112,20 @@ INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN=512
 # When pids.current + (active+1)*this >= pids.max, execution is refused
 # (pid_pressure, 503). Empirical Pi turns measure 5-25 tasks.
 INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN=96
+
+# B2 V8 heap gate (contract 1.49.0): refuse P2/P3 and creates when projected
+# heap >= this fraction of heap_size_limit (default 0.75); recover below the
+# recovery fraction (default 0.65). Projection reserves this much per turn.
+INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION=0.75
+INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION=0.65
+INTERNAL_API_ADMISSION_HEAP_RESERVED_MB_PER_TURN=64
+
+# B2 sustained event-loop lag gate: N consecutive A2 readings with p99 at or
+# above the threshold refuse P2/P3 and creates; recovery below the recovery
+# mark (default half the threshold).
+INTERNAL_API_ADMISSION_LAG_P99_MS=300
+INTERNAL_API_ADMISSION_LAG_RECOVERY_MS=
+INTERNAL_API_ADMISSION_LAG_SUSTAINED_READINGS=2
 
 # Maximum Pi sessions kept resident in the MultiSessionManager (default 20)
 PI_MAX_SESSIONS=20

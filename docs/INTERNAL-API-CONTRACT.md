@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.48.0",
+  "contractVersion": "1.49.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,18 @@ Current contract:
 
 ### Changelog
 
+- **1.49.0** (minor — B2 heap- and lag-aware admission; disposal always available). Admission now acts on the two limits that actually bind the process, and session disposal can no longer be refused under pressure.
+  - **New refusal reasons** on `ADMISSION_CAPACITY_EXHAUSTED` (both `503`, with body `retryAfterSeconds` and a `Retry-After` header, default 30 s — one A2 reading interval):
+    - `heap_pressure` — projected V8 heap (`used_heap_size` + one reservation per active P2/P3 turn + one for the candidate, default 64 MiB each) at or above a fraction of `heap_size_limit` (default 0.75); refusal holds until the projection falls strictly below the recovery fraction (default 0.65).
+    - `event_loop_lag` — two consecutive A2 readings (30 s cadence, 60 s window) with lag p99 ≥ 300 ms latch the refusal; it releases only on a reading with p99 strictly below the recovery mark (default half the trigger, 150 ms). A latched state with no fresh reading for 180 s fails open (`eventLoopLag.stale: true`).
+    - `draining` (B4 seam) — the server is draining before a restart.
+  - **Creates are gated.** `POST /sessions`, each `POST /sessions/batch` entry and `POST /sessions/:id/transfer` with `createNew` are now refused under every pressure reason (`memory_pressure`, `host_memory_pressure`, `pid_pressure`, `heap_pressure`, `event_loop_lag`) and while `draining`, with the same `503` shape (batch entries carry `error: { code, reason, message, retryAfterSeconds }`). Turn-slot saturation (`global_limit`, `runtime_limit`) never refuses a create, because a create holds no turn. Before 1.49.0 creates were never admission-checked.
+  - **Status change for existing consumers:** every non-slot refusal is now `503`, including the Command Code prompt path (previously always `429`). `global_limit` and `runtime_limit` stay `429`.
+  - **Disposal is always available.** `DELETE /sessions/:id` no longer answers `503 CONTROL_CRITICAL` at the critical memory floor, and runs in its own bounded disposal lane (`/capacity` `disposalLane`), so neither the floor nor a saturated control lane can refuse it. `POST /sessions/:id/abort` is also exempt from the floor (it stays on the control lane). Other control operations keep the existing `CONTROL_CRITICAL` floor. Neither heap pressure, lag nor draining ever refuses P0/P1 control or disposal.
+  - **`GET /api/v1/capacity` additions:** `heap` (`usedBytes`, `limitBytes`, `projectedBytes`, `reservedBytesPerTurn`, `pressureFraction`, `recoveryFraction`, `pressureBytes`, `recoveryBytes`, `pressure`, `source`), `eventLoopLag` (`thresholdMs`, `recoveryMs`, `sustainedReadings`, `consecutiveHighReadings`, `pressure`, `telemetryAvailable`, `stale`, optional `lastP99Ms`, `lastReadingAt`, `source`), `draining` (`null` or `{ since, reason }`) and `disposalLane` (`{ inFlight, queued }`). Top-level `reason` now reports what the next P2 request would be refused with (same precedence as a prompt).
+  - **Configuration:** `INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION`, `INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION`, `INTERNAL_API_ADMISSION_HEAP_RESERVED_MB_PER_TURN`, `INTERNAL_API_ADMISSION_LAG_P99_MS` (the single lag knob), `INTERNAL_API_ADMISSION_LAG_RECOVERY_MS`, `INTERNAL_API_ADMISSION_LAG_SUSTAINED_READINGS`. Invalid values fail startup.
+  - Consumer adaptation: treat the three new reasons like `memory_pressure` (back off for `Retry-After`, do not retry immediately); handle `503` on create; read the new `/capacity` fields when preflighting. Clients switching on `429` alone for Command Code prompts must also accept `503`.
+  - Rollback: reverting the server removes the reasons, the create gate and the fields; DELETE returns to the control lane and its critical floor. No persisted state changes.
 - **1.48.0** (minor, additive — B3a per-run budgets on streamed tool-call arguments). No existing field or default changes; one new terminal receipt code and one new SSE event type.
   - **New terminal code `RUN_BUDGET_EXCEEDED`.** A Pi run whose streamed tool-call arguments exceed the configured budget (default 65,536 chars per tool call / 262,144 chars per run — re-decided by correction 02's PACED live measurements on pristine pi-ai: 64 KB passed the B2 lag gate at both the incident's ~90 deltas/s (p99 max 4 ms/185 samples) and ~300 deltas/s (p99 max 10 ms/52 samples), zero readings ≥300 ms; the unpaced lab worst case, preserved under correction 03, measured lag p99 max 10,615 ms over a 21.7 s pre-abort window (`measure/corr03-64k-unpaced.json`, two samples — a floor, bounded by the abort) and is documented as a residual risk with `PI_TOOL_ARGS_MAX_CALL_CHARS=16384` as the tighter-bound remedy; `0` disables) is aborted via the runtime's public abort and the receipt terminates `failed` with `errorCode: "RUN_BUDGET_EXCEEDED"`. Before 1.48.0 such a run ended with a plain `agent_end` (`stopReason: "aborted"`) and the receipt completed as `completed`, masking the breach. The synchronous prompt path answers `500` with `code: "RUN_BUDGET_EXCEEDED"` and the `runId`; detached runs surface it through the receipt and watches as usual. Parents should treat it like any terminal failure: resend smaller or raise the env caps.
   - **New SSE event `tool_args_budget_exceeded`** (event-types registry `control`, both verbosities): `{ type, timestamp, data: { scope: "call" | "turn", capChars, observedChars, contentIndex? } }`, emitted on the session's normal event stream just before the aborted turn ends.
@@ -398,7 +410,7 @@ For `/api/v1`, preserve these rules:
 7. **Local-only security boundary stays intact.** Keep Unix-socket + bearer-token assumptions unless a separate public API is intentionally designed.
 8. **Trusted multi-client, not multi-tenant.** Every process holding the shared token can inspect and control every API session. Concurrency safety does not provide tenant isolation or per-client authorization.
 9. **Retention ownership and execution capacity are separate.** Durable recovery claims do not imply residency, residency does not grant a turn permit, and only the owner-selected lease id may be renewed/released.
-10. **Pi Web UI is final admission authority.** External conductors may preflight `/capacity`, but prompt admission is rechecked atomically against process-local concurrency and measured memory headroom while preserving interactive reserve.
+10. **Pi Web UI is final admission authority.** External conductors may preflight `/capacity`, but prompt admission is rechecked atomically against process-local concurrency, measured memory headroom, projected V8 heap and sustained event-loop lag while preserving interactive reserve. Session disposal (DELETE) is never refused by admission or the critical memory floor (1.49.0).
 
 ## Error code catalog
 
@@ -438,7 +450,7 @@ re-introduced.
 | `RETENTION_CLAIM_OWNER_MISMATCH` | 409 | Conditional owner check failed | Caller supplied a different owner id |
 | `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required residency could not be applied | Runtime could not materialise/retain the new session |
 | `RETENTION_STORE_UNAVAILABLE` | 503 | Lease guarantee could not be persisted | Owner-only ledger unavailable/unwritable |
-| `ADMISSION_CAPACITY_EXHAUSTED` | 429 | Turn admission temporarily refused | Global/runtime budget or measured memory headroom |
+| `ADMISSION_CAPACITY_EXHAUSTED` | 429 / 503 | Turn or create admission temporarily refused | `429`: global/runtime turn budget. `503`: memory, PID, host, V8 heap (`heap_pressure`), sustained event-loop lag (`event_loop_lag`) or `draining` (1.49.0) |
 | `WATCH_NOT_FOUND` | 404 | No long-horizon watch for session | GET/DELETE `/watch` before POST, or post-restart |
 | `WATCH_GENERATION_MISMATCH` | 409 | Watch generation precondition does not match | Reconcile current generation and ownership before any intentional retry |
 | `TRANSFER_DISPATCH_FAILED` | 500 | Transfer could not be dispatched | Target creation / injection / IO failure |

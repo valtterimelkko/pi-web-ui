@@ -393,6 +393,18 @@ export function admissionStartupStatus(options: AdmissionControllerOptions & { i
 }
 
 /**
+ * B2: feed every A2 reading's lag p99 into admission's event_loop_lag gate.
+ * Structural so admission does not import the telemetry module; returns the
+ * unsubscribe function (call it on shutdown).
+ */
+export function connectAdmissionToLagReadings(
+  admission: Pick<AdmissionController, 'observeLagReading'>,
+  telemetry: { onReading(listener: (r: { lagP99Ms: number; lagSampleCount: number; atMs: number }) => void): () => void },
+): () => void {
+  return telemetry.onReading((r) => admission.observeLagReading({ p99Ms: r.lagP99Ms, atMs: r.atMs, sampleCount: r.lagSampleCount }));
+}
+
+/**
  * Resolves this process's actual memory capacity from its nested service cgroup
  * (preferred) rather than the cgroup-root/host aggregate. See `cgroup-capacity.ts`.
  */
