@@ -1099,7 +1099,8 @@ export interface RunReceipt {
   workState?: RunWorkState;
   /** Stable wire error code for failed or restart-interrupted runs. */
   errorCode?: string;
-  interruptionReason?: 'server_restart';
+  /** Why a restart interrupted the run: `drain_timeout` = a drain-then-restart announced the cut-off (B4, 1.51.0); `server_restart` = unplanned. */
+  interruptionReason?: 'server_restart' | 'drain_timeout';
   /** Durable, payload-free liveness and recovery evidence (contract >= 1.14.0). */
   liveness?: RunLivenessEvidence;
   /** Additive Phase 7 Pi-only shadow classification evidence. */

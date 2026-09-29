@@ -23,10 +23,28 @@ export interface PersistedRunReceipt extends RunReceipt {
   requestFingerprint?: string;
 }
 
+export type RestartInterruptionReason = 'server_restart' | 'drain_timeout';
+
+/** One run this boot recovered from a nonterminal state (B4, contract 1.51.0). */
+export interface RecoveredRun {
+  runId: string;
+  sessionId: string;
+  runtime: RunReceipt['runtime'];
+  terminalAt: string;
+  errorCode: 'SERVER_RESTART';
+  interruptionReason: RestartInterruptionReason;
+}
+
 export interface RunReceiptStoreOptions {
   now?: () => number;
   maxAgeMs?: number;
   maxCount?: number;
+  /**
+   * B4: classify a run recovered at boot. `drain_timeout` marks a run a
+   * drain-then-restart announced as cut off; anything else is an unplanned
+   * `server_restart`. Defaults to `server_restart`.
+   */
+  classifyRecovery?: (record: PersistedRunReceipt) => RestartInterruptionReason;
 }
 
 const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -75,6 +93,9 @@ export class RunReceiptStore {
   private readonly writeChains = new Map<string, Promise<void>>();
   /** Keep restart-recovered evidence visible through the initial prune pass. */
   private readonly recoveryProtected = new Set<string>();
+  private readonly classifyRecovery?: (record: PersistedRunReceipt) => RestartInterruptionReason;
+  /** Runs this process recovered at init (B4): the watch layer fires parents' watches for them. */
+  private recovered: RecoveredRun[] = [];
   private ready = false;
 
   /**
@@ -87,6 +108,7 @@ export class RunReceiptStore {
     this.now = options.now ?? Date.now;
     this.maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
     this.maxCount = options.maxCount ?? DEFAULT_MAX_COUNT;
+    this.classifyRecovery = options.classifyRecovery;
   }
 
   /** Load persisted receipts and recover work interrupted by a server restart. */
@@ -124,10 +146,22 @@ export class RunReceiptStore {
     const recoveryAt = new Date(this.now()).toISOString();
     for (const record of this.cache.values()) {
       if (record.status !== 'accepted' && record.status !== 'queued' && record.status !== 'started') continue;
+      let interruptionReason: RestartInterruptionReason = 'server_restart';
+      try {
+        if (this.classifyRecovery?.(record) === 'drain_timeout') interruptionReason = 'drain_timeout';
+      } catch { /* classification is advisory; default to an unplanned restart */ }
       record.status = 'interrupted';
       record.terminalAt = recoveryAt;
       record.errorCode = 'SERVER_RESTART';
-      record.interruptionReason = 'server_restart';
+      record.interruptionReason = interruptionReason;
+      this.recovered.push({
+        runId: record.runId,
+        sessionId: record.sessionId,
+        runtime: record.runtime,
+        terminalAt: recoveryAt,
+        errorCode: 'SERVER_RESTART',
+        interruptionReason,
+      });
       if (record.liveness) {
         record.liveness = {
           ...record.liveness,
@@ -143,6 +177,11 @@ export class RunReceiptStore {
     }
     await this.prune();
     this.recoveryProtected.clear();
+  }
+
+  /** Runs recovered from a nonterminal state by this process's init (B4). */
+  getRecoveredRuns(): RecoveredRun[] {
+    return this.recovered.map((run) => ({ ...run }));
   }
 
   get(runId: string): PersistedRunReceipt | undefined {
@@ -472,7 +511,7 @@ export class RunReceiptStore {
     if (record.errorCode !== undefined && !SAFE_ERROR_CODE.test(record.errorCode)) {
       throw new Error('Invalid receipt error code');
     }
-    if (record.interruptionReason !== undefined && record.interruptionReason !== 'server_restart') {
+    if (record.interruptionReason !== undefined && record.interruptionReason !== 'server_restart' && record.interruptionReason !== 'drain_timeout') {
       throw new Error('Invalid interruption reason');
     }
     if (record.liveness !== undefined) validateLiveness(record.liveness);
