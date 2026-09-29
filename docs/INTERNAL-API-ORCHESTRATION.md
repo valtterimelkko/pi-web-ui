@@ -38,6 +38,49 @@ When the task is validation rather than ordinary orchestration, never use the de
 
 Do not stop, restart, or redeploy `pi-web-ui.service` during validation unless the user explicitly asked you to control the production service. If the user genuinely wants production validation, say so in the report and use `--allow-production`.
 
+## The thin parent client (`pi-orch`)
+
+Parents do not need to hand-write curl against this API. The companion repo
+`/root/pi-orch` (local-only until the owner approves publishing; no runtime
+dependencies beyond Node's standard library) provides a thin client for exactly
+that: an importable module (`src/index.ts`) and a shell-friendly CLI
+(`bin/pi-orch`) with the verbs `spawn`, `prompt`, `wait`, `result`, `verify`,
+`cleanup` and `status`.
+
+- `spawn` wraps create with the route tuple (runtime, live `/models` selector,
+  thinking level, cwd), durable retention, an optional goal, and C4 preflight;
+  it always sends `X-Parent-Session` from `PI_WEB_UI_SESSION_ID` /
+  `PI_SESSION_ID` when present, so lineage is recorded without extra work.
+- `prompt` does detached dispatch with an idempotency key and records the runId.
+- `wait` never polls. It registers a watch on the child and blocks in the
+  server's long poll (`GET /watches/wait`), advancing the cursor, with a
+  deadline. It distinguishes `interruptedByRestart`, `NEVER_STARTED`,
+  `RUN_BUDGET_EXCEEDED` and `RUN_TRANSPORT_LOST`, and survives a server restart
+  by re-registering the watch (`fireIfSettled`).
+- `result` returns the receipt's `finalText` plus evidence pointers.
+- `cleanup` releases the owned retention lease, then deletes the session.
+- `status` lists children by parent (`?parent=`, contract 1.54.0) with busy
+  state, goal state and last receipt.
+
+It honours `Retry-After` on 429/503 with a bounded retry budget and uses a
+documented exit-code table (`/root/pi-orch/README.md`). Output is JSON with
+`--json`, human-readable otherwise.
+
+**Contract drift guard.** This repo generates a committed snapshot of the
+routes, request schemas, response types, error codes and contract version the
+client consumes:
+`docs/contract/internal-api-client-snapshot.json`, produced deterministically
+by `npx tsx scripts/generate-client-snapshot.ts` from the server's zod schemas
+(`session-validation.ts`, `dispatch-preflight.ts`) and internal-api types.
+`server/tests/unit/internal-api/client-snapshot-drift.test.ts` regenerates the
+snapshot and fails CI when a server schema or type changes without
+regenerating it. The client's own tests validate its builders and parsers
+against that snapshot (read from the main checkout by default, overridable via
+`PI_ORCH_SNAPSHOT_PATH`). The snapshot is not wire-visible, so it carries no
+contract bump by itself; the client learns of a newer server at runtime by
+comparing the snapshot's `contractVersion` with live `/capabilities` and flags
+a stale snapshot.
+
 ## What the Internal API can do today
 
 Across the five runtime paths — Pi, Claude, OpenCode, Antigravity, and Command Code (gated by `COMMAND_CODE_ENABLED`) — the current Internal API can now cover the
