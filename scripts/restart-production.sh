@@ -214,7 +214,26 @@ else
   # 2. Drain.
   body_file="$(mktemp)"
   trap 'rm -f "$body_file"' EXIT
-  payload="$(jq -cn --arg reason "${REASON:0:500}" --argjson t "$DRAIN_TIMEOUT" '{reason: $reason, timeoutSeconds: $t}')"
+  # Correction 01 (self-drain): a caller that runs the deploy from its own
+  # agent session (browser or managed Pi agent) is itself busy, so the drain
+  # would wait the full timeout for — then kill — the caller. Forward the
+  # caller's session id (PI_WEB_UI_SESSION_ID, else PI_SESSION_ID) as
+  # excludeSessionIds; the server lifts only the busy-session wait for it.
+  CALLER_SESSION_ID="${PI_WEB_UI_SESSION_ID:-${PI_SESSION_ID:-}}"
+  case "$CALLER_SESSION_ID" in
+    ''|*[!a-zA-Z0-9_-]*)
+      if [ -n "$CALLER_SESSION_ID" ]; then
+        echo "Self-drain guard: caller session id is empty or unsafe; not forwarding it." >&2
+      fi
+      CALLER_SESSION_ID="" ;;
+  esac
+  if [ -n "$CALLER_SESSION_ID" ]; then
+    payload="$(jq -cn --arg reason "${REASON:0:500}" --argjson t "$DRAIN_TIMEOUT" --arg sid "$CALLER_SESSION_ID" \
+      '{reason: $reason, timeoutSeconds: $t} + {excludeSessionIds: [$sid]}')"
+    echo "Self-drain guard: excluding the caller session ${CALLER_SESSION_ID} from the drain's busy-session wait." >&2
+  else
+    payload="$(jq -cn --arg reason "${REASON:0:500}" --argjson t "$DRAIN_TIMEOUT" '{reason: $reason, timeoutSeconds: $t}')"
+  fi
   echo "Draining ${UNIT} (timeout ${DRAIN_TIMEOUT}s): new sessions and prompts are refused while in-flight runs settle..." >&2
   set +e
   http_code="$(curl -sS --unix-socket "$SOCKET" \
@@ -236,7 +255,8 @@ else
         "initial_runs=\(.initial.nonterminalRuns // 0)",
         "initial_turns=\(.initial.activeTurns // 0)",
         "completed=\(.completedDuringDrain // 0)",
-        "cut_off=\((.cutOffRunIds // []) | length)"]
+        "cut_off=\((.cutOffRunIds // []) | length)",
+        "cut_off_sessions=\((.cutOffSessionIds // []) | length)"]
       + (if ((.cutOffRunIds // []) | length) > 0 then ["cut_off_runs=" + ((.cutOffRunIds // [])[:20] | join("+"))] else [] end)
       | join(",")' "$body_file" 2>/dev/null || true)"
     case "$state" in
