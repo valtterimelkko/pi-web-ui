@@ -122,6 +122,16 @@ current as the CLI advertises new models (typically weekly). One run:
    (startup discovery is when the new models go live in the browser selector
    and the Internal API), then posts a Telegram summary via `scripts/notify.sh`.
 
+   The restart call budgets the whole drain-then-restart cycle, not a flat
+   60 s: drain (20 s) + HTTP slack (10 s) + the unit's stop timeout (30 s,
+   `TimeoutStopSec` in `deploy/systemd/pi-web-ui.service`) + a 90 s readiness
+   margin = 150 s (`RESTART_JOB_BUDGET_MS` in
+   `scripts/command-code-weekly-refresh.ts`; the weekly-refresh tests pin
+   each part to its source file, so a change to the drain defaults or the
+   unit's stop timeout fails a test instead of outliving the job). A drain
+   that cannot settle in time is still refused by the wrapper itself and
+   read as a deferral, not a failure.
+
 Nothing here bumps the Internal API contract: catalogue growth is data, not an
 API change, and the runtime catalogue fails open, so even a skipped week only
 means a new model lacks its effort selector until the next run.

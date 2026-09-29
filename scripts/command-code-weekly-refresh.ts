@@ -63,6 +63,25 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 const RESTART_WAIT_WINDOW_MS = 30 * 60_000;
 const RESTART_POLL_MS = 30_000;
 const RESTART_REASON = 'weekly command-code catalogue refresh';
+
+// Restart job budget (plan §6 small item "weekly refresh restart budget", the
+// B4 residual). restart-pi-web-ui.sh spends up to RESTART_DRAIN_BUDGET_SECONDS
+// draining plus RESTART_DRAIN_HTTP_SLACK_SECONDS of HTTP slack before it
+// decides, and then `systemctl restart` blocks for the unit's stop
+// (TimeoutStopSec) and the start until the Type=notify service reports ready.
+// The old flat 60 s call timeout could fire inside that stop: the job then
+// failed after committing, with the restart state uncertain. The budget is the
+// sum of the named parts plus RESTART_START_MARGIN_SECONDS of start margin;
+// the weekly-refresh tests pin each part to its source file, so a change to
+// the drain defaults or the unit's stop timeout fails a test instead of
+// silently outliving the budget.
+export const RESTART_DRAIN_BUDGET_SECONDS = 20; // scripts/restart-pi-web-ui.sh: PI_WEB_UI_JOB_DRAIN_TIMEOUT_SECONDS default
+export const RESTART_DRAIN_HTTP_SLACK_SECONDS = 10; // scripts/restart-pi-web-ui.sh: PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS default
+export const UNIT_STOP_TIMEOUT_SECONDS = 30; // deploy/systemd/pi-web-ui.service: TimeoutStopSec
+export const RESTART_START_MARGIN_SECONDS = 90; // Type=notify readiness margin (systemd's default TimeoutStartSec)
+export const RESTART_JOB_BUDGET_SECONDS =
+  RESTART_DRAIN_BUDGET_SECONDS + RESTART_DRAIN_HTTP_SLACK_SECONDS + UNIT_STOP_TIMEOUT_SECONDS + RESTART_START_MARGIN_SECONDS;
+export const RESTART_JOB_BUDGET_MS = RESTART_JOB_BUDGET_SECONDS * 1000;
 const ELIGIBILITY_PROMPT = 'Reply with one word: ok';
 
 export interface ProcResult {
@@ -391,7 +410,10 @@ export async function runWeeklyRefresh(
       await sleep(RESTART_POLL_MS);
     }
     if (idle) {
-      const restart = await run(paths.restartScript, ['--reason', RESTART_REASON], { timeoutMs: 60_000, cwd: paths.repoRoot });
+      // RESTART_JOB_BUDGET_MS covers the whole drain-then-restart cycle (see
+      // the constants above): a restart that blocks for the unit's full stop
+      // timeout no longer outlives the call and fails a committed refresh.
+      const restart = await run(paths.restartScript, ['--reason', RESTART_REASON], { timeoutMs: RESTART_JOB_BUDGET_MS, cwd: paths.repoRoot });
       if (processSucceeded(restart)) {
         restarted = true;
       } else if (isRestartCapacityRefusal(restart)) {
