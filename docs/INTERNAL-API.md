@@ -980,6 +980,12 @@ You can also set verbosity via header: `X-Verbosity: tasks`.
 
 `requireActiveTurn: true` turns the `follow_up` idle-promotion into `409 SESSION_NOT_STREAMING` on every runtime. Capability-gate runtime differences with `followUpSemantics`, `supportsSteerWhileBusy`, `supportsInteractiveQuestions`, and `supportsStructuredQuestionResponse` from `/capabilities`.
 
+**Busy truth during Pi auto-compaction (contract 1.57.0).** While the SDK is auto-compacting (or branch-summarising), the session's manager status is already idle — agent_end settled it — but the runtime refuses every input. Compaction is therefore busy everywhere the Internal API derives busy truth: `GET /sessions/:id` reports `busy: true`, the sessions list and watch settlement agree, and every prompt mode (including steer and detached prompts) is refused before dispatch with `409 SESSION_BUSY`, a detail naming the compaction, and `Retry-After`. This closes the accepted-then-lost shape where a `202` was followed by a receipt failed `RUNTIME_ERROR` ("Cannot submit a prompt while compaction is in progress"). Retry after compaction completes; the session returns to ordinary idle/busy semantics.
+
+**One Pi liveness predicate (correction 01).** Every Pi busy decision uses one predicate: manager `busy`/`streaming` status, the SDK's public `isStreaming` truth, or compaction. Extension-driven and browser turns hold the SDK without the manager's status moving, so manager-idle + SDK-streaming sessions are busy truth: a plain prompt is refused `409 SESSION_BUSY` instead of being rejected by the SDK after acceptance, and a `follow_up` is queued behind the live turn instead of being idle-promoted into a doomed new turn.
+
+**`follow_up` requires a live turn on a busy Pi session (contract 1.57.0).** A follow_up is a queue acceptance whose queue drains only when the live turn ends. A busy state with no live runtime turn (the pre-start window before `agent_start`, or a stalled turn) would queue the message behind nothing. On a busy Pi session whose SDK does not report a live streaming turn, `follow_up` is refused with `409 SESSION_BUSY` (detail names the missing live turn; `Retry-After` set) instead of being accepted-then-stalled. Idle promotion and genuine behind-a-live-turn queueing are unchanged; the same refusal applies on the watch-wake dispatch path.
+
 ---
 
 #### Verbosity: `answers` (default)
@@ -1234,6 +1240,10 @@ Contract `1.14.0` records the `run-activity-v1` policy and timeouts on new recei
 For final-artifact certainty, read the matching receipt and then both transcript projections: `GET /sessions/:id/transcript?scope=visible_full` for the complete bounded runtime-agnostic output and `GET /sessions/:id/transcript?view=screen` for the UI-faithful projection. `scope=screen` is not a valid replacement for `view=screen`. Require terminal state, output evidence, and transcript/screen hashes or counts to remain unchanged across the caller's bounded quiescence readback window. `outputEvidence.disposition=text` only proves normalized assistant text was observed; `no-text` and `unknown` are non-conclusive and do not assess semantic answer quality. The default `session evidence.runChronology` carries only the compact disposition to stay within its response budget; use the full receipt or `expand=runs` for all output counts. Do not infer transport loss from an empty recent or screen projection without checking full transcript, history, diagnostics, and runtime-owned evidence.
 
 During the owner-approved Phase 7 shadow gate, Pi prompts submitted through the disposable `validationMode` Internal API server add an optional `phase7Shadow` projection. Normal development/production servers do not enable this observation. It is evidence only: `mode:"shadow"` never changes routing or ownership. The projection contains the server policy `phase7-pi-shadow/v1`, a bounded `standard`, `heavy`, or `long-horizon` profile, low-cardinality reason codes, session affinity, and the honest `shared-service`/`pi-control-process` resource identity (`sessionScoped:false`). Prompt text is never persisted. The frozen thresholds are 4,096 UTF-8 prompt bytes, 8 attributable `tool_execution_start` events, and 60 seconds for a separate long-horizon signal; duration is not treated as resource-pressure proof. The existing uncontained Pi path remains the only execution path, and the field is absent for other runtimes and non-validation servers.
+
+**Never-started runs (contract 1.57.0).** A dispatched run — receipt `started` — that never produced a single eligible activity event or any output evidence is terminalised by the start watchdog as `failed` with errorCode `NEVER_STARTED` once the start window elapses (`INTERNAL_API_RUN_START_WINDOW_MS`, default 120000 ms; `0` disables start detection and restores the legacy classification, where the same shape waited for the 15-minute idle window and was reported `TURN_STALLED`). The receipt records `liveness.watchdog.reason: "no_activity"` plus an additive `startWindowMs` naming the deciding window. The decision fires the operator notification ("Run never started" — no quarantine claim, nothing was in flight) and the run's watchers: completion-type watch conditions ingest a synthetic completion flagged `runNeverStarted: true` with `runId`, `acceptedAt`, `startWindowMs` and `errorCode` — the in-flight counterpart of `interruptedByRestart`, dataMatch-able the same way, so a parent's standing watch learns without polling. Queue-pending Pi follow_up receipts are exempt: queue-pending is legitimate, and the queue's delivery truth governs the receipt from markStarted onward.
+
+**Post-terminal response fence (contract 1.57.0).** If a run's receipt reaches a terminal state while its synchronous dispatch is still waiting — because an abort, delete, run-cancel or watchdog terminalised it externally and the runtime adapter never handed the dispatch chain back — the dispatch waits at most `INTERNAL_API_POST_TERMINAL_SETTLE_MS` (default 10000 ms) for the runtime, then fences the execution (observers detached) and writes the HTTP response from the receipt's outcome with errorCode `RUN_TRANSPORT_LOST` and the `runId`. A terminal receipt can no longer correspond to a silently hung request; the receipt remains the authoritative terminal outcome.
 
 Idempotency is scoped to `(sessionId, idempotencyKey)` and defaults to 24 hours
 from acceptance (`INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS`). A same-key retry with
@@ -3282,7 +3292,9 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 |---|---|---|
 | `UNAUTHORIZED` | 401 | Missing or invalid API key |
 | `SESSION_NOT_FOUND` | 404 | Session ID doesn't exist |
-| `SESSION_BUSY` | 409 | Session is currently streaming |
+| `SESSION_BUSY` | 409 | Session is currently streaming (or auto-compacting — contract 1.57.0) |
+| `NEVER_STARTED` | 500 | Dispatched run produced no runtime activity inside the start window (contract 1.57.0) |
+| `RUN_TRANSPORT_LOST` | 500 | Receipt terminal but the runtime never handed the dispatch chain back; response reflects the receipt (contract 1.57.0) |
 | `SESSION_CREATE_FAILED` | 500 | Could not create session |
 | `RUNTIME_UNAVAILABLE` | 503 | Requested runtime not installed |
 | `RUNTIME_ERROR` | 500 | Runtime failed during execution |
@@ -3325,6 +3337,14 @@ INTERNAL_API_RUN_RECEIPTS_DIR=
 
 # Session-scoped idempotency replay window (default 24h, milliseconds)
 INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS=86400000
+
+# Start window for the never-started run watchdog (default 120000 ms; 0 disables;
+# contract 1.57.0)
+INTERNAL_API_RUN_START_WINDOW_MS=120000
+
+# Post-terminal settle window bounding a synchronous dispatch's wait for its
+# runtime after the receipt is terminal (default 10000 ms; contract 1.57.0)
+INTERNAL_API_POST_TERMINAL_SETTLE_MS=10000
 
 # Directory for durable Internal API retention-lease ledger (default: ~/.pi-web-ui/pins)
 INTERNAL_API_PIN_DIR=

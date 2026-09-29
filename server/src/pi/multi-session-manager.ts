@@ -108,6 +108,20 @@ export interface SessionStatusInfo {
   currentStep: number;
   subscriberCount: number;
   pinned: boolean;
+  /**
+   * C2 (contract 1.57.0): the SDK's public `AgentSession.isCompacting` truth
+   * (auto-compaction or branch summarisation is running). During compaction
+   * the manager's own status is already idle (agent_end settled it), but the
+   * runtime accepts no input — the Internal API must see compaction as busy.
+   * Strictly read-only; a throwing getter is not compaction evidence.
+   */
+  compacting?: boolean;
+  /**
+   * C2 (contract 1.57.0): the SDK's public `AgentSession.isStreaming` truth.
+   * Distinguishes a LIVE runtime turn (safe to queue a follow_up behind) from
+   * the manager's pre-start `busy` limbo (a queue nothing may drain).
+   */
+  sdkStreaming?: boolean;
 }
 
 /**
@@ -197,6 +211,27 @@ function attachSessionIdToWebUiMessage(message: unknown, sessionId: string): unk
     ...payload,
     sessionId,
   };
+}
+
+/**
+ * C2 (contract 1.57.0): read the SDK's public per-session activity truth for
+ * the Internal API's busy semantics. Both getters are strictly read-only
+ * public `AgentSession` state (owner rule: no upstream changes); a throwing
+ * getter is simply absent from the result, never busy/compaction evidence.
+ */
+function readSdkActivityTruth(agentSession: AgentSession): { compacting?: boolean; sdkStreaming?: boolean } {
+  const truth: { compacting?: boolean; sdkStreaming?: boolean } = {};
+  try {
+    if (agentSession.isCompacting === true) truth.compacting = true;
+  } catch {
+    /* a throwing getter is not compaction evidence */
+  }
+  try {
+    if (agentSession.isStreaming === true) truth.sdkStreaming = true;
+  } catch {
+    /* a throwing getter is not streaming evidence */
+  }
+  return truth;
 }
 
 /**
@@ -1363,7 +1398,6 @@ export class MultiSessionManager {
     if (!activeSession) {
       return undefined;
     }
-
     return {
       sessionPath: activeSession.sessionPath,
       sessionId: activeSession.sessionId,
@@ -1373,6 +1407,7 @@ export class MultiSessionManager {
       currentStep: activeSession.currentStep,
       subscriberCount: activeSession.subscribers.size,
       pinned: activeSession.pinned,
+      ...readSdkActivityTruth(activeSession.agentSession),
     };
   }
 

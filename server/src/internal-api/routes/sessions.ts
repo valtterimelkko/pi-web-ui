@@ -176,6 +176,26 @@ class TurnStalledError extends Error {
 }
 
 /**
+ * C2 (contract 1.57.0): the run's receipt reached a terminal state but the
+ * runtime adapter never handed the synchronous dispatch chain back within the
+ * post-terminal settle window — the R2 input shape (a terminal receipt with
+ * no HTTP response). The response is written from the receipt's outcome
+ * instead of tracking a transport that would hang.
+ */
+class RunTransportLostError extends Error {
+  readonly receiptStatus: string;
+  readonly receiptErrorCode?: string;
+  constructor(receiptStatus: string, receiptErrorCode?: string) {
+    super(
+      `Run receipt terminalised (${receiptStatus}${receiptErrorCode ? ` ${receiptErrorCode}` : ''}) but the runtime never handed the dispatch chain back; responding from the receipt`,
+    );
+    this.name = 'RunTransportLostError';
+    this.receiptStatus = receiptStatus;
+    this.receiptErrorCode = receiptErrorCode;
+  }
+}
+
+/**
  * Contract 1.45.0 (silent no-op plan Phase 1): the runtime accepted the prompt
  * but no turn ever started — the classic extension input-hook swallow (the
  * 23 Sep incident: a fenced auto-compact-75 returned {action:'handled'} and
@@ -249,6 +269,10 @@ function isRuntimeAlreadyRunningError(error: Error): boolean {
 }
 
 function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
+  // C2 correction 01: the post-terminal response fence has the same meaning on
+  // every runtime — map it before the runtime-specific branches so the Command
+  // Code path reports the computed code instead of the hard-coded RUNTIME_ERROR.
+  if (error instanceof RunTransportLostError) return ErrorCode.RUN_TRANSPORT_LOST;
   if (runtime !== 'commandcode') {
     if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
     if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
@@ -420,6 +444,9 @@ export interface SessionRoutesDeps {
   internalClientId: string;
   /** Directory for durable watch ledgers (long-horizon validation). */
   watchDir: string;
+  /** C2 (contract 1.57.0): post-terminal settle window (ms) bounding a synchronous
+   *  dispatch's wait for its runtime after the receipt is terminal. Defaults to config. */
+  postTerminalSettleMs?: number;
   /** Optional durable run-receipt manager. Direct route tests use an in-memory fallback. */
   runReceiptManager?: RunReceiptManager;
   /** Directory for durable run receipts when no manager is injected. */
@@ -610,6 +637,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
+  // C2 (contract 1.57.0): post-terminal response fence window. A synchronous
+  // dispatch whose receipt is already terminal waits at most this long for its
+  // runtime to hand the dispatch chain back before responding from the receipt
+  // (RUN_TRANSPORT_LOST) — a terminal receipt can no longer mean a silent request.
+  const postTerminalSettleMs = deps.postTerminalSettleMs ?? config.internalApiPostTerminalSettleMs;
   // Priority model (server-derived; callers cannot self-declare a class):
   //   P0 — human/browser prompts: enter via WebSocket and are bounded per-session
   //        (one active turn per WS session) and by the runtime's maxSessions cap;
@@ -1050,6 +1082,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     logger.warn('[WatchManager] boot rehydration failed (will retry on next watch call):', error instanceof Error ? error.message : String(error));
   });
 
+  // C2 (contract 1.57.0): a run the start watchdog terminalises as
+  // NEVER_STARTED never emits a runtime agent_end — without this sink the
+  // parent's standing watch on that child would wait forever. The watchdog
+  // decision fires completion-type watch conditions through the ordinary
+  // event path, flagged runNeverStarted. The operator notification is wired
+  // separately at construction (server.ts).
+  runReceipts.addNeverStartedListener?.((receipt) => {
+    void watchManager.notifyRunNeverStarted({
+      sessionId: receipt.sessionId,
+      runId: receipt.runId,
+      runtime: receipt.runtime,
+      acceptedAt: receipt.acceptedAt,
+      startWindowMs: receipt.liveness?.watchdog?.startWindowMs ?? config.internalApiRunStartWindowMs,
+      errorCode: receipt.errorCode ?? 'NEVER_STARTED',
+    }).catch(() => { /* best-effort: the receipt is already terminal */ });
+  });
+
   /**
    * Execute one watch wake as a detached, receipted prompt on the target
    * session. Mirrors the dispatch decisions of POST /sessions/:id/prompt
@@ -1094,6 +1143,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return { status: 'failed', errorCode: providerPolicyError.code, detail: providerPolicyError.message };
     }
     const busy = isSessionBusy(entry);
+    // C2 (contract 1.57.0): the same explicit Pi busy refusals as the prompt
+    // path — a wake into a compacting session would fail at the runtime, and a
+    // follow_up wake behind no live turn would queue behind nothing.
+    const busyRefusal = piBusyRefusal(entry, mode);
+    if (busyRefusal) {
+      return { status: 'failed', errorCode: ErrorCode.SESSION_BUSY, detail: busyRefusal.detail };
+    }
     if (busy && mode === 'steer') {
       try {
         return await withControlLane(async () => {
@@ -1441,7 +1497,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   function evidenceStatus(entry: RegistryEntry): SessionInfo['status'] {
     try {
       const running = entry.sdkType === 'pi'
-        ? ['busy', 'streaming'].includes(multiSessionManager.getSessionStatus(entry.path)?.status ?? '')
+        // C2 correction 01: the one liveness predicate — busy/streaming status,
+        // SDK streaming truth (extension/browser turns), or compaction — as
+        // busy truth for polling parents (detail.busy, the sessions list, and
+        // watch settlement all derive from this).
+        ? piLiveness(entry).busy
         : entry.sdkType === 'claude'
           ? claudeService.isRunning(entry.id)
           : entry.sdkType === 'opencode'
@@ -3258,7 +3318,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         complete(new Error('Joined run observer was cancelled'));
         cancelExecution();
       }
-      await execution;
+      // C2 (contract 1.57.0): post-terminal response fence. The receipt can
+      // terminalise by an external decision (abort, delete, run cancel) or by
+      // the start watchdog while the runtime adapter never settles its promise
+      // — the R2 input shape: terminal receipt, no HTTP response. Bound the
+      // remaining wait; on expiry fence the execution (observers detached, Pi
+      // turn boundary resolved) and complete from the receipt's outcome.
+      if (winner.kind === 'terminal') {
+        const settled = await Promise.race([
+          execution.then(() => true as const),
+          delay(postTerminalSettleMs).then(() => false as const),
+        ]);
+        if (settled === false) {
+          logger.warn(
+            `Run ${runId}: receipt terminal (${winner.receipt.status}) but the runtime never handed the dispatch chain back within ${postTerminalSettleMs}ms; fencing execution and responding from the receipt`,
+          );
+          cancelExecution();
+          complete(new RunTransportLostError(winner.receipt.status, winner.receipt.errorCode));
+        }
+      } else {
+        await execution;
+      }
     }
 
     // Wait for agent_end evidence as well as the terminal transition. This
@@ -3286,13 +3366,68 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (executionError) throw executionError;
   }
 
+  /**
+   * C2 correction 01: the ONE Pi liveness predicate. Manager `busy`/`streaming`
+   * status, the SDK's public `isStreaming` truth (extension-driven and browser
+   * turns the manager never saw), or compaction. Every Pi busy decision
+   * derives from this single predicate: the pre-dispatch refusal check, the
+   * post-reservation re-check, the follow_up queue gate, `evidenceStatus`
+   * (GET /sessions/:id `busy`, the sessions list, watch settlement), and the
+   * watch-wake dispatch path (via isSessionBusy + piBusyRefusal).
+   */
+  function piLiveness(entry: RegistryEntry): { busy: boolean; liveTurn: boolean; compacting: boolean } {
+    const statusInfo = multiSessionManager.getSessionStatus?.(entry.path);
+    const managerBusy = statusInfo?.status === 'busy' || statusInfo?.status === 'streaming';
+    const sdkStreaming = statusInfo?.sdkStreaming === true;
+    const compacting = statusInfo?.compacting === true;
+    return {
+      busy: managerBusy || sdkStreaming || compacting,
+      // A LIVE runtime turn the queue can drain: a streaming status, or the
+      // SDK's own streaming truth. The manager's pre-start `busy` limbo and
+      // compaction are busy but NOT live turns (compaction is refused earlier).
+      liveTurn: statusInfo?.status === 'streaming' || sdkStreaming,
+      compacting,
+    };
+  }
+
   function isSessionBusy(entry: RegistryEntry): boolean {
     if (activeDirectDispatchTokens.has(entry.id)) return true;
     if (entry.sdkType === 'claude') return claudeService.isRunning(entry.id);
     if (entry.sdkType === 'opencode') return opencodeService.isRunning(entry.id);
     if (entry.sdkType === 'antigravity') return antigravityService.isRunning(entry.id);
-    const status = multiSessionManager.getSessionStatus?.(entry.path)?.status;
-    return status === 'busy' || status === 'streaming';
+    // C2 correction 01: the one liveness predicate — manager busy/streaming,
+    // SDK isStreaming truth (extension/browser turns), or compaction. During
+    // compaction the runtime refuses every input; during an SDK-streaming turn
+    // a plain prompt would be rejected by the SDK. Never accepted-then-lost.
+    return piLiveness(entry).busy;
+  }
+
+  /**
+   * C2 (contract 1.57.0): explicit Pi busy refusals shared by the prompt and
+   * watch-wake dispatch paths. Two shapes must never be accepted-then-lost:
+   *
+   *  - compaction: the runtime refuses every input while compacting, so all
+   *    modes are refused with a compaction hint (Retry-After is set by the
+   *    callers);
+   *  - follow_up without a live turn: a follow_up is a queue acceptance whose
+   *    queue drains only when the live turn ends. A busy state with no live
+   *    runtime turn (the pre-start limbo, or a stalled turn) would queue the
+   *    message behind nothing — refused instead.
+   */
+  function piBusyRefusal(entry: RegistryEntry, mode: PromptMode): { detail: string } | undefined {
+    if (entry.sdkType !== 'pi') return undefined;
+    const liveness = piLiveness(entry);
+    if (liveness.compacting) {
+      return { detail: 'Session is auto-compacting; prompts are refused until compaction completes' };
+    }
+    // Idle follow_up promotion (contract 1.37-era behaviour) is untouched: the
+    // live-turn requirement only constrains QUEUING into a busy session.
+    // Manager-idle + SDK-streaming (extension/browser turns) IS a live turn,
+    // so it queues (correction 01: the predicate sees it).
+    if (mode === 'follow_up' && liveness.busy && !liveness.liveTurn) {
+      return { detail: 'Session reports busy with no live runtime turn; follow_up refused because nothing would drain the queue' };
+    }
+    return undefined;
   }
 
   /**
@@ -3663,6 +3798,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
+      // C2 (contract 1.57.0): explicit Pi busy refusals before any mode
+      // resolution — compaction refuses every mode (the runtime accepts no
+      // input while compacting), and a follow_up without a live turn is
+      // refused instead of queued behind nothing. Never accepted-then-lost.
+      const busyRefusal = piBusyRefusal(entry, mode);
+      if (busyRefusal) {
+        res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+        sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, busyRefusal.detail));
+        return;
+      }
+
       // Contract 1.27.0 (goal function): Pi extension commands pass through on a
       // busy session — AgentSession.prompt() resolves commands before its
       // streaming guard, exactly like the browser WebSocket path. This is what
@@ -3794,8 +3940,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             : runtime === 'antigravity'
               ? antigravityService.isRunning(sessionId)
               : (() => {
-                  const status = multiSessionManager.getSessionStatus?.(entry.path)?.status;
-                  return status === 'busy' || status === 'streaming';
+                  // C2 correction 01: the one liveness predicate, so an
+                  // SDK-streaming extension/browser turn the manager never
+                  // saw also refuses a second plain prompt here.
+                  return piLiveness(entry).busy;
                 })();
       } catch (error) {
         directClaim?.release();

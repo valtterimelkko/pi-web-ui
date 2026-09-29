@@ -31,6 +31,8 @@ const logger = createLogger('RunReceiptManager');
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TURN_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_TURN_MAX_MS = 6 * 60 * 60 * 1000;
+/** C2 (contract 1.57.0): default start window for the never-started watchdog. */
+const DEFAULT_RUN_START_WINDOW_MS = 120 * 1000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 const DEFAULT_DRAIN_POLL_MS = 1_000;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
@@ -76,6 +78,24 @@ export interface RunReceiptManagerDeps {
   turnMaxMs?: number;
   /** Fired when the watchdog terminalises a run as TURN_STALLED (quarantine signal). */
   onStalled?: (receipt: RunReceipt) => void;
+  /**
+   * C2 (contract 1.57.0): fired when the start watchdog terminalises a run as
+   * NEVER_STARTED (no runtime activity inside the start window). Distinct from
+   * `onStalled`: nothing was ever in flight, so there is no quarantine claim
+   * to make — the operator is told the run never started and watchers are
+   * fired so parents learn without polling.
+   */
+  onRunNeverStarted?: (receipt: RunReceipt) => void;
+  /**
+   * C2 (contract 1.57.0): configurable start window for dispatched runs.
+   * A run whose receipt is `started` (dispatched to the runtime) with no
+   * eligible activity ever observed is terminalised NEVER_STARTED once this
+   * window elapses. `0` disables start detection (legacy behaviour: the idle
+   * watchdog is the only net). Default 120000. Queued receipts (Pi follow_up
+   * queue-pending) are exempt — queue-pending is legitimate, not a runtime
+   * that failed to start.
+   */
+  runStartWindowMs?: number;
   /** If set, cancel/stall defers admission release until this resolves true (runtime
    *  confirmed quiescent) or drainTimeoutMs elapses (quarantine). §11 fence. */
   isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
@@ -146,6 +166,9 @@ export class RunReceiptManager {
   private watchdogTimer?: NodeJS.Timeout;
   private stalledRunCount = 0;
   private readonly onStalled?: (receipt: RunReceipt) => void;
+  private readonly onRunNeverStarted?: (receipt: RunReceipt) => void;
+  private readonly runStartWindowMs: number;
+  private readonly neverStartedListeners: Array<(receipt: RunReceipt) => void> = [];
   private readonly isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
@@ -169,6 +192,10 @@ export class RunReceiptManager {
       DEFAULT_TURN_MAX_MS,
     );
     this.onStalled = deps.onStalled;
+    this.onRunNeverStarted = deps.onRunNeverStarted;
+    this.runStartWindowMs = deps.runStartWindowMs !== undefined && deps.runStartWindowMs >= 0
+      ? deps.runStartWindowMs
+      : DEFAULT_RUN_START_WINDOW_MS;
     this.isRuntimeQuiescent = deps.isRuntimeQuiescent;
     this.drainTimeoutMs = positiveTimeout(deps.drainTimeoutMs, undefined, DEFAULT_DRAIN_TIMEOUT_MS);
     this.drainPollMs = positiveTimeout(deps.drainPollMs, undefined, DEFAULT_DRAIN_POLL_MS);
@@ -188,6 +215,16 @@ export class RunReceiptManager {
   attachLease(runId: string, lease: { release: () => void }): void {
     const active = this.activeRuns.get(runId);
     if (active) active.lease = lease;
+  }
+
+  /**
+   * C2 (contract 1.57.0): register a listener fired when the start watchdog
+   * terminalises a run as NEVER_STARTED. The Internal API wiring adds two:
+   * the operator notification (server.ts) and the parent-watch firing sink
+   * (routes/sessions.ts, late-bound after the watch manager exists).
+   */
+  addNeverStartedListener(listener: (receipt: RunReceipt) => void): void {
+    this.neverStartedListeners.push(listener);
   }
 
   async findExistingRun(input: BeginRunInput): Promise<ExistingRunResult | undefined> {
@@ -435,6 +472,7 @@ export class RunReceiptManager {
                   decidedAt: terminalAt,
                   idleTimeoutMs: this.turnIdleTimeoutMs,
                   absoluteTimeoutMs: this.turnMaxMs,
+                  ...(outcome.errorCode === 'NEVER_STARTED' ? { startWindowMs: this.runStartWindowMs } : {}),
                 },
                 cessation: {
                   state: 'unknown' as const,
@@ -598,6 +636,41 @@ export class RunReceiptManager {
   private async reconcileStalledRuns(): Promise<void> {
     const now = this.now();
     for (const [runId, active] of Array.from(this.activeRuns)) {
+      // C2 (contract 1.57.0): start detection. A DISPATCHED run (receipt
+      // status 'started' — markQueued/markStarted distinguish queue-pending
+      // from runtime dispatch) with no eligible activity ever observed is
+      // known as NEVER_STARTED inside the start window, long before the idle
+      // watchdog would report a stalled TURN that never existed. Queue-pending
+      // receipts are exempt: waiting in the Pi follow-up queue is legitimate,
+      // not a runtime that failed to start.
+      const startWindowExceeded = this.runStartWindowMs > 0
+        && now - active.acceptedAtMs >= this.runStartWindowMs;
+      if (startWindowExceeded && neverProducedWork(active)) {
+        const before = this.store.get(runId);
+        if (!before || isTerminal(before.status) || before.status !== 'started') continue;
+        logger.warn(
+          `Run ${runId} never started: dispatched ${now - active.acceptedAtMs}ms ago with no run activity ever observed (start window ${this.runStartWindowMs}ms)`,
+        );
+        const terminal = await this.finish(runId, {
+          status: 'failed',
+          errorCode: 'NEVER_STARTED',
+          stallReason: 'no_activity',
+        }).catch((error) => {
+          logger.warn(`failed to terminalise never-started run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+          return undefined;
+        });
+        if (terminal?.errorCode === 'NEVER_STARTED') {
+          this.onRunNeverStarted?.(terminal);
+          for (const listener of this.neverStartedListeners) {
+            try {
+              listener(terminal);
+            } catch (error) {
+              logger.warn(`never-started listener failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+        continue;
+      }
       const idleExceeded = now - active.lastActivityAtMs >= this.turnIdleTimeoutMs;
       const maxExceeded = now - active.acceptedAtMs >= this.turnMaxMs;
       if (!idleExceeded && !maxExceeded) continue;

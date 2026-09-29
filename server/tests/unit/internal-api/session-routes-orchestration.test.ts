@@ -1100,7 +1100,9 @@ describe('createSessionRoutes orchestration endpoints', () => {
       registry.get.mockResolvedValue(piEntry('pi-race', 'openai-codex/gpt-5.5'));
       const agentSession = multiSessionManager.getAgentSession();
       agentSession.model = { provider: 'openai-codex', id: 'gpt-5.5' };
-      multiSessionManager.getSessionStatus = vi.fn(() => ({ status: 'busy' }));
+      // C2 (contract 1.57.0): queueing behind a busy session requires a live
+      // runtime turn — this scenario models the legitimate queue race.
+      multiSessionManager.getSessionStatus = vi.fn(() => ({ status: 'busy', sdkStreaming: true }));
       multiSessionManager.subscribeClient.mockImplementation(async () => {
         agentSession.model = { provider: 'openai', id: 'gpt-5.5' };
       });
@@ -1124,7 +1126,8 @@ describe('createSessionRoutes orchestration endpoints', () => {
       registry.get.mockResolvedValue(piEntry('pi-queued-lock', 'openai-codex/gpt-5.5'));
       const agentSession = multiSessionManager.getAgentSession();
       agentSession.model = { provider: 'openai-codex', id: 'gpt-5.5' };
-      multiSessionManager.getSessionStatus = vi.fn(() => ({ status: 'busy' }));
+      // C2 (contract 1.57.0): live turn behind the queue (legitimate queueing).
+      multiSessionManager.getSessionStatus = vi.fn(() => ({ status: 'busy', sdkStreaming: true }));
       const releaseModelLock = vi.fn();
       piService.acquireSessionModelLock.mockResolvedValue(releaseModelLock);
       const routes = makeRoutes();

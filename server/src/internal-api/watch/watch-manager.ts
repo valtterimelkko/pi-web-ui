@@ -563,6 +563,52 @@ export class WatchManager {
     }
   }
 
+  /**
+   * C2 (contract 1.57.0): in-flight counterpart of the restart reconciliation.
+   * A run the start watchdog terminalised as NEVER_STARTED never emits a
+   * runtime agent_end, so a parent's standing watch on that child would wait
+   * forever. The route layer feeds the watchdog decision here and completion-
+   * type conditions fire through the ordinary event path (once-semantics,
+   * wake dispatch, surfacing and ledger persistence), flagged
+   * `runNeverStarted` so parents can tell it from a real finish (and
+   * dataMatch it, exactly like `interruptedByRestart`).
+   */
+  async notifyRunNeverStarted(info: {
+    sessionId: string;
+    runId: string;
+    runtime?: SessionRuntime;
+    acceptedAt: string;
+    startWindowMs: number;
+    errorCode: string;
+  }): Promise<void> {
+    await this.init();
+    try {
+      const live = this.active.get(info.sessionId);
+      if (!live || live.record.status !== 'active') return;
+      const timestamp = Date.now();
+      const data: Record<string, unknown> = {
+        sessionId: info.sessionId,
+        runNeverStarted: true,
+        status: 'failed',
+        runId: info.runId,
+        errorCode: info.errorCode,
+        acceptedAt: info.acceptedAt,
+        startWindowMs: info.startWindowMs,
+      };
+      const waitsOnGoalEnd = live.record.conditions.some(
+        (c) => !c.fired && (c.spec as { eventType?: string }).eventType === 'goal_end',
+      );
+      const wakeBudget: WakeBudget = { remaining: 1 };
+      this.handleEvent(info.sessionId, { type: 'agent_end', timestamp, data }, wakeBudget);
+      if (waitsOnGoalEnd && this.active.get(info.sessionId) === live && live.record.status === 'active') {
+        this.handleEvent(info.sessionId, { type: 'goal_end', timestamp, data }, wakeBudget);
+      }
+      logger.info(`never-started reconciliation: fired watch ${live.record.watchId} for run ${info.runId} on ${info.sessionId} (NEVER_STARTED, start window ${info.startWindowMs}ms)`);
+    } catch {
+      /* watch reconciliation is best-effort; the receipt is already terminal */
+    }
+  }
+
   private withSessionMutation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.mutationChains.get(sessionId) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(operation);

@@ -193,6 +193,10 @@ export class ConditionEngine {
         if (data.interruptedByRestart === true) {
           return truncate(`event ${event.type} (interrupted by restart: run ${String(data.runId ?? 'unknown')}, ${String(data.interruptionReason ?? 'server_restart')})`);
         }
+        // C2 (contract 1.57.0): a never-started reconciliation says so too.
+        if (data.runNeverStarted === true) {
+          return truncate(`event ${event.type} (run never started: run ${String(data.runId ?? 'unknown')}, start window ${String(data.startWindowMs ?? 'unknown')}ms)`);
+        }
         return truncate(`event ${event.type}`);
       }
 

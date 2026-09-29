@@ -86,13 +86,32 @@ describe('RunReceiptManager — stall classification', () => {
 
     const receipt = m.get(run.receipt.runId)!;
     expect(receipt.status).toBe('failed');
-    // The error code stays TURN_STALLED (public contract), but the reason must
-    // not claim a turn was running.
-    expect(receipt.errorCode).toBe('TURN_STALLED');
+    // C2 (contract 1.57.0): with start detection on (the default), the run is
+    // known as NEVER_STARTED at the start window, long before 15 minutes. The
+    // reason still refuses to claim a turn was running.
+    expect(receipt.errorCode).toBe('NEVER_STARTED');
     expect(receipt.liveness?.watchdog?.reason).toBe('no_activity');
+    expect(receipt.liveness?.watchdog?.startWindowMs).toBe(120_000);
     // Delivery failure is not work failure: nothing was ever observed.
     expect(receipt.outputEvidence).toMatchObject({ assistantMessages: 0, toolCalls: 0, disposition: 'unknown' });
     expect(receipt.liveness?.lastEligibleActivity).toBeUndefined();
+  });
+
+  it('still reports TURN_STALLED no_activity at the idle window when start detection is disabled', async () => {
+    const m = makeManager({ runStartWindowMs: 0 });
+    await m.init();
+    const run = await m.beginRun(baseInput);
+    await m.markStarted(run.receipt.runId);
+
+    now += 900_000;
+    await reconcile(m);
+
+    const receipt = m.get(run.receipt.runId)!;
+    expect(receipt.status).toBe('failed');
+    expect(receipt.errorCode).toBe('TURN_STALLED');
+    expect(receipt.liveness?.watchdog?.reason).toBe('no_activity');
+    expect(receipt.liveness?.watchdog?.startWindowMs).toBeUndefined();
+    expect(receipt.outputEvidence).toMatchObject({ assistantMessages: 0, toolCalls: 0, disposition: 'unknown' });
   });
 
   it('still reports idle when a turn really was producing activity and then went quiet', async () => {
@@ -130,9 +149,14 @@ describe('RunReceiptManager — stall classification', () => {
     expect(m.get(run.receipt.runId)?.liveness?.watchdog?.reason).toBe('absolute');
   });
 
-  it('classifies an accepted-but-never-started run the same way', async () => {
+  it('leaves a queue-pending follow_up alone at the idle window (C2: queue-pending is not a stalled runtime)', async () => {
     // The queue_while_busy shape: a pi follow_up accepted onto a busy session is
     // parked until the session drains it, so it can produce no activity at all.
+    // Before C2 the idle watchdog terminalised it TURN_STALLED at 15 minutes —
+    // the receipt lied while the queue was still legitimate. The 2026-09-15
+    // lost-wake shape (busy state with no live turn) is now refused at accept
+    // (C2 follow_up live-turn requirement), so a queue that stays pending is
+    // honestly pending, and delivery truth governs the receipt from there.
     const m = makeManager();
     await m.init();
     const run = await m.beginRun({ ...baseInput, mode: 'follow_up', dispatchMode: 'follow_up' });
@@ -142,13 +166,14 @@ describe('RunReceiptManager — stall classification', () => {
     await reconcile(m);
 
     const receipt = m.get(run.receipt.runId)!;
-    expect(receipt.status).toBe('failed');
-    expect(receipt.liveness?.watchdog?.reason).toBe('no_activity');
+    expect(receipt.status).toBe('queued');
+    expect(receipt.errorCode).toBeUndefined();
   });
 
-  it('passes the honest reason to the stalled-run callback so the operator can be told the truth', async () => {
+  it('passes the honest reason to the never-started callback so the operator can be told the truth', async () => {
     const onStalled = vi.fn();
-    const m = makeManager({ onStalled });
+    const onRunNeverStarted = vi.fn();
+    const m = makeManager({ onStalled, onRunNeverStarted });
     await m.init();
     const run = await m.beginRun(baseInput);
     await m.markStarted(run.receipt.runId);
@@ -156,9 +181,14 @@ describe('RunReceiptManager — stall classification', () => {
     now += 900_000;
     await reconcile(m);
 
-    expect(onStalled).toHaveBeenCalledTimes(1);
-    const receipt = onStalled.mock.calls[0][0];
+    // C2 (contract 1.57.0): a run that never produced work is a NEVER_STARTED,
+    // not a stalled turn — the quarantine-flavoured onStalled hook must NOT
+    // fire for it (nothing was in flight).
+    expect(onRunNeverStarted).toHaveBeenCalledTimes(1);
+    expect(onStalled).not.toHaveBeenCalled();
+    const receipt = onRunNeverStarted.mock.calls[0][0];
     expect(receipt.liveness?.watchdog?.reason).toBe('no_activity');
+    expect(receipt.errorCode).toBe('NEVER_STARTED');
     expect(receipt.runId).toBe(run.receipt.runId);
   });
 
