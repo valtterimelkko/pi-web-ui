@@ -80,7 +80,7 @@ import { AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGo
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
-import { WatchGenerationMismatchError, WatchManager, WatchValidationError, type RestartInterruptedRun, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
+import { WatchGenerationMismatchError, WatchManager, WatchValidationError, type RestartInterruptedBusySession, type RestartInterruptedRun, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
 import {
   IdempotencyKeyValidationError,
@@ -485,6 +485,8 @@ export interface SessionRoutesDeps {
   drainRetryAfterSeconds?: number;
   /** B4: runs this boot recovered as restart-interrupted; their parents' watches fire at boot. */
   getRestartInterruptedRuns?: () => RestartInterruptedRun[] | Promise<RestartInterruptedRun[]>;
+  /** B4.1: receipt-less busy sessions the drain announced as cut off; same boot firing. */
+  getRestartInterruptedBusySessions?: () => RestartInterruptedBusySession[] | Promise<RestartInterruptedBusySession[]>;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -984,6 +986,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // (all runtimes indexed), file mtime fallback for on-disk JSONL sessions.
     // B4: runs this boot recovered as restart-interrupted fire their watches.
     getRestartInterruptedRuns: deps.getRestartInterruptedRuns,
+    // B4.1: receipt-less busy sessions the drain cut off fire the same watches.
+    getRestartInterruptedBusySessions: deps.getRestartInterruptedBusySessions,
     getSessionLastActivity: async (sessionPath) => {
       try {
         const entry = await sessionRegistry.get(sessionPath)

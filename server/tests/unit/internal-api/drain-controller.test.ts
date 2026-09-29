@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   DrainController,
+  composeInterruptedBusySessions,
   consumeDrainRecord,
   readDrainRecord,
+  type DrainBusySession,
   type DrainRunRef,
 } from '../../../src/internal-api/drain-controller.js';
 
@@ -47,12 +49,14 @@ describe('DrainController', () => {
   let admission: FakeAdmission;
   let runs: DrainRunRef[];
   let quarantined: number;
+  let busy: DrainBusySession[];
   let controller: DrainController | undefined;
 
   const make = (overrides: Partial<ConstructorParameters<typeof DrainController>[0]> = {}): DrainController => {
     controller = new DrainController({
       admission,
       listNonterminalRuns: () => runs.map((r) => ({ ...r })),
+      listBusySessions: () => busy.map((b) => ({ ...b })),
       quarantinedTurns: () => quarantined,
       recordPath,
       pollIntervalMs: 5,
@@ -67,6 +71,85 @@ describe('DrainController', () => {
     admission = fakeAdmission();
     runs = [];
     quarantined = 0;
+    busy = [];
+  });
+
+  describe('correction 01 — self-drain exclusion', () => {
+    it('an excluded caller session does not block the settle wait and is never cut off', async () => {
+      busy = [
+        { sessionId: 'self-1', runtime: 'pi', busyReason: 'status+sdk_streaming' },
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' },
+      ];
+      const drain = make();
+      const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000, excludeSessionIds: ['self-1'] });
+      // The caller's own busy state must not hold the drain hostage...
+      expect(status.state).toBe('draining');
+      expect(status.remaining.busySessions).toBe(1);
+      expect(status.remaining.sessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming', runIds: [] }]);
+      expect(status.excludedSessionIds).toEqual(['self-1']);
+      // ...and when the OTHER work clears, the drain settles.
+      busy = [];
+      const outcome = await drain.waitForOutcome();
+      expect(outcome.state).toBe('settled');
+      expect(outcome.cutOffSessionIds).toEqual([]);
+    });
+
+    it('an excluded session is not listed as cut off at a timeout and stays in the status', async () => {
+      busy = [
+        { sessionId: 'self-1', runtime: 'pi', busyReason: 'status' },
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' },
+      ];
+      const drain = make({ holdMs: 5_000 });
+      drain.start({ reason: 'deploy', timeoutMs: 20, excludeSessionIds: ['self-1'] });
+      const outcome = await drain.waitForOutcome();
+      expect(outcome.state).toBe('timed_out');
+      expect(outcome.cutOffSessionIds).toEqual(['goal-1']);
+      expect(outcome.excludedSessionIds).toEqual(['self-1']);
+      const record = readDrainRecord(recordPath);
+      expect((record?.cutOffSessions ?? []).map((s) => s.sessionId)).toEqual(['goal-1']);
+    });
+
+    it('exclusion covers only the busy-session wait: the excluded session run receipts still count', () => {
+      runs = [run('self-run')];
+      runs[0].sessionId = 'self-1';
+      busy = [{ sessionId: 'self-1', runtime: 'pi', busyReason: 'status' }];
+      const drain = make();
+      const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000, excludeSessionIds: ['self-1'] });
+      expect(status.state).toBe('draining');
+      expect(status.remaining.nonterminalRuns).toBe(1);
+      expect(status.remaining.busySessions).toBe(0);
+    });
+
+    it('reports no exclusions when none were requested and none when idle', () => {
+      const drain = make();
+      drain.start({ reason: 'deploy', timeoutMs: 1_000 });
+      expect(drain.status().excludedSessionIds).toEqual([]);
+    });
+  });
+
+  describe('correction 01 — cut-off session↔run association', () => {
+    it('cut-off session entries carry that session\'s nonterminal receipt ids in the status and the record', async () => {
+      runs = [run('goal-run-1'), run('goal-run-2', 'queued'), run('other-run')];
+      runs[0].sessionId = 'goal-1';
+      runs[1].sessionId = 'goal-1';
+      runs[2].sessionId = 'someone-else';
+      busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+      const drain = make();
+      drain.start({ reason: 'deploy', timeoutMs: 20 });
+      const outcome = await drain.waitForOutcome();
+      expect(outcome.state).toBe('timed_out');
+      expect(outcome.remaining.sessions[0]).toMatchObject({ sessionId: 'goal-1', runIds: ['goal-run-1', 'goal-run-2'] });
+      const record = readDrainRecord(recordPath);
+      expect(record?.cutOffSessions[0]).toMatchObject({ sessionId: 'goal-1', runIds: ['goal-run-1', 'goal-run-2'] });
+    });
+
+    it('a busy session with no receipt carries an empty association', async () => {
+      busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+      const drain = make();
+      drain.start({ reason: 'deploy', timeoutMs: 20 });
+      await drain.waitForOutcome();
+      expect(readDrainRecord(recordPath)?.cutOffSessions[0]?.runIds).toEqual([]);
+    });
   });
 
   afterEach(() => {
@@ -81,12 +164,14 @@ describe('DrainController', () => {
     expect(admission.state).toBeNull();
   });
 
-  it('closes admission on start and settles at once when nothing is in flight', async () => {
+  it('closes admission on start and settles on the first (refresh-awaited) evaluation', async () => {
     const drain = make();
     const { status, joined } = drain.start({ reason: 'deploy 1.51.0', timeoutMs: 1_000 });
     expect(joined).toBe(false);
-    // Nothing in flight: the verdict is reached synchronously inside start().
-    expect(status.state).toBe('settled');
+    // Correction 02: the verdict is never taken on the provisional synchronous
+    // measure — start() reports 'draining' and evaluate() decides after the
+    // bounded busy refresh. Nothing in flight settles on that first evaluation.
+    expect(status.state).toBe('draining');
     expect(admission.state).toMatchObject({ reason: 'deploy 1.51.0' });
     const outcome = await drain.waitForOutcome();
     expect(outcome).toMatchObject({
@@ -144,9 +229,11 @@ describe('DrainController', () => {
     expect(outcome.state).toBe('timed_out');
     expect(outcome.cutOffRunIds.sort()).toEqual(['b', 'c']);
     expect(outcome.completedDuringDrain).toBe(1);
-    expect(outcome.initial).toEqual({ activeTurns: 3, nonterminalRuns: 3 });
+    // B4.1: the initial measurement also counts resident busy sessions (none here).
+    expect(outcome.initial).toEqual({ activeTurns: 3, nonterminalRuns: 3, busySessions: 0 });
     const record = readDrainRecord(recordPath);
-    expect(record).toMatchObject({ version: 1, state: 'timed_out', reason: 'deploy' });
+    // B4.1: record version 2 (cutOffSessions added); readers still accept v1.
+    expect(record).toMatchObject({ version: 2, state: 'timed_out', reason: 'deploy' });
     expect(record?.cutOffRunIds.sort()).toEqual(['b', 'c']);
     expect(statSync(recordPath).mode & 0o777).toBe(0o600);
   });
@@ -213,6 +300,100 @@ describe('DrainController', () => {
   it('exposes a positive retry-after for refused callers', () => {
     expect(make({ retryAfterSeconds: 45 }).retryAfterSeconds).toBe(45);
   });
+
+  // ── B4.1 (contract 1.52.0): the drain also sees resident busy sessions ──
+
+  it('a busy resident session keeps the drain open until it settles (B4.1)', async () => {
+    busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy 1.52.0', timeoutMs: 5_000 });
+    // A goal-engine continuation holds no admission turn and no receipt: the
+    // pre-B4.1 drain settled here. It must keep waiting instead.
+    expect(status.state).toBe('draining');
+    expect(status.remaining).toMatchObject({ activeTurns: 0, nonterminalRuns: 0, busySessions: 1, sessions: [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }] });
+    busy = [];
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('settled');
+    expect(outcome.remaining).toMatchObject({ busySessions: 0, sessions: [] });
+  });
+
+  it('a session idle at the drain is not counted (B4.1)', async () => {
+    const drain = make();
+    drain.start({ reason: 'deploy', timeoutMs: 1_000 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('settled');
+    // `initial` comes from the provisional start measure (same values here).
+    expect(drain.status().state).toBe('settled');
+    expect(outcome.initial).toEqual({ activeTurns: 0, nonterminalRuns: 0, busySessions: 0 });
+    expect(outcome.remaining.busySessions).toBe(0);
+    expect(outcome.remaining.sessions).toEqual([]);
+    expect(outcome.cutOffSessionIds).toEqual([]);
+  });
+
+  it('a timed-out drain lists the still-busy sessions in the verdict and the durable record (B4.1)', async () => {
+    busy = [
+      { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status+sdk_streaming' },
+      { sessionId: 'browser-2', runtime: 'pi', busyReason: 'status' },
+    ];
+    const drain = make();
+    drain.start({ reason: 'deploy', timeoutMs: 40 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('timed_out');
+    expect(outcome.cutOffSessionIds.sort()).toEqual(['browser-2', 'goal-1']);
+    const record = readDrainRecord(recordPath);
+    expect(record?.version).toBe(2);
+    expect(record?.cutOffSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
+      { sessionId: 'browser-2', runtime: 'pi', busyReason: 'status', runIds: [] },
+      { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status+sdk_streaming', runIds: [] },
+    ]);
+  });
+
+  it('reports busy sessions in the initial measurement (B4.1)', () => {
+    runs = [run('r1')];
+    busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000 });
+    expect(status.initial).toEqual({ activeTurns: 0, nonterminalRuns: 1, busySessions: 1 });
+  });
+
+  it('keeps cut-off sessions in lastOutcome after the hold expires (B4.1)', async () => {
+    busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+    const drain = make({ holdMs: 30 });
+    drain.start({ reason: 'deploy', timeoutMs: 20 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('timed_out');
+    await new Promise((r) => setTimeout(r, 80));
+    expect(drain.status()).toMatchObject({ state: 'idle', lastOutcome: { state: 'timed_out', endedBy: 'hold_expired', cutOffSessionIds: ['goal-1'] } });
+  });
+
+  it('a browser-started turn (P0, status-busy, no receipt) also keeps the drain open (B4.1)', async () => {
+    // The browser path holds the manager status flag but no SDK stream yet and
+    // no admission slot: pre-B4.1 this drain settled and the restart killed
+    // the turn. Busy is busy — the drain cannot and must not special-case it.
+    busy = [{ sessionId: 'browser-1', runtime: 'pi', busyReason: 'status' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000 });
+    expect(status.state).toBe('draining');
+    expect(status.remaining.sessions).toEqual([{ sessionId: 'browser-1', runtime: 'pi', busyReason: 'status', runIds: [] }]);
+    busy = [];
+    expect((await drain.waitForOutcome()).state).toBe('settled');
+  });
+
+  it('another runtime running turn (existing busy flag) keeps the drain open (B4.1)', async () => {
+    busy = [{ sessionId: 'claude-1', runtime: 'claude', busyReason: 'runtime-running' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000 });
+    expect(status.state).toBe('draining');
+    busy = [];
+    expect((await drain.waitForOutcome()).state).toBe('settled');
+  });
+
+  it('a failing busy accessor degrades to not-busy with a warning, like the receipt source (B4.1)', async () => {
+    const drain = make({ listBusySessions: () => { throw new Error('accessor down'); } });
+    drain.start({ reason: 'deploy', timeoutMs: 1_000 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('settled');
+  });
 });
 
 describe('drain record helpers', () => {
@@ -239,5 +420,196 @@ describe('drain record helpers', () => {
     expect(existsSync(p)).toBe(false);
     expect(JSON.parse(readFileSync(`${p}.consumed`, 'utf8')).cutOffRunIds).toEqual(['run-1']);
     expect(consumeDrainRecord(p)).toBeUndefined();
+  });
+
+  it('reads a v1 record (pre-1.52.0) with no cut-off sessions as an empty list (B4.1)', () => {
+    const p = path.join(dir, 'internal-api-drain.json');
+    writeFileSync(p, JSON.stringify({ version: 1, state: 'timed_out', reason: 'r', startedAt: 'a', finishedAt: 'b', cutOffRunIds: ['run-1'] }));
+    expect(readDrainRecord(p)?.cutOffSessions).toEqual([]);
+  });
+
+  it('reads a v2 record and drops malformed cut-off session entries (B4.1)', () => {
+    const p = path.join(dir, 'internal-api-drain.json');
+    writeFileSync(p, JSON.stringify({
+      version: 2, state: 'timed_out', reason: 'r', startedAt: 'a', finishedAt: 'b', cutOffRunIds: ['run-1'],
+      cutOffSessions: [
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' },
+        { sessionId: 42 },
+        'garbage',
+      ],
+    }));
+    expect(readDrainRecord(p)?.cutOffSessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming', runIds: [] }]);
+  });
+
+  it('keeps safe runIds on cut-off session entries and drops unsafe ones (correction 01)', () => {
+    const p = path.join(dir, 'internal-api-drain.json');
+    writeFileSync(p, JSON.stringify({
+      version: 2, state: 'timed_out', reason: 'r', startedAt: 'a', finishedAt: 'b', cutOffRunIds: [],
+      cutOffSessions: [
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status', runIds: ['run-1', '../evil', 42] },
+      ],
+    }));
+    expect(readDrainRecord(p)?.cutOffSessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'status', runIds: ['run-1'] }]);
+  });
+});
+
+describe('composeInterruptedBusySessions (correction 01 — boot composition)', () => {
+  const record = (cutOffSessions: Array<{ sessionId: string; runtime: string; busyReason: string; runIds?: string[] }>, state: 'timed_out' | 'settled' = 'timed_out') => ({
+    version: 2 as const, state, reason: 'deploy', startedAt: 'a', finishedAt: 'b', cutOffRunIds: [] as string[], cutOffSessions,
+  });
+
+  it('returns nothing without a timed-out record', () => {
+    expect(composeInterruptedBusySessions(undefined, new Set())).toEqual([]);
+    expect(composeInterruptedBusySessions(record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status' }], 'settled'), new Set())).toEqual([]);
+  });
+
+  it('skips sessions whose runs were receipt-backed and interrupted (the receipt path fires)', () => {
+    expect(composeInterruptedBusySessions(
+      record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status', runIds: ['r1'] }]),
+      new Set(['g']),
+    )).toEqual([]);
+  });
+
+  it('skips sessions whose matching receipts all finished (any terminal state) before the kill', () => {
+    const status = (runId: string) => (runId === 'r1' ? 'completed' : runId === 'r2' ? 'failed' : undefined);
+    expect(composeInterruptedBusySessions(
+      record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status', runIds: ['r1', 'r2'] }]),
+      new Set<string>(),
+      status,
+    )).toEqual([]);
+  });
+
+  it('synthesises for sessions with no receipt or an unknown outcome', () => {
+    expect(composeInterruptedBusySessions(
+      record([
+        { sessionId: 'g1', runtime: 'pi', busyReason: 'sdk_streaming' },
+        { sessionId: 'g2', runtime: 'pi', busyReason: 'status', runIds: ['ghost'] },
+      ]),
+      new Set<string>(),
+      () => undefined,
+    )).toEqual([
+      { sessionId: 'g1', runtime: 'pi', runId: 'busy-g1', errorCode: 'SERVER_RESTART', interruptionReason: 'drain_timeout' },
+      { sessionId: 'g2', runtime: 'pi', runId: 'busy-g2', errorCode: 'SERVER_RESTART', interruptionReason: 'drain_timeout' },
+    ]);
+  });
+
+  it('synthesises when only SOME matching receipts finished (another turn may still have been cut off)', () => {
+    const status = (runId: string) => (runId === 'r1' ? 'completed' : undefined);
+    const out = composeInterruptedBusySessions(
+      record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status', runIds: ['r1', 'r2'] }]),
+      new Set<string>(),
+      status,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].sessionId).toBe('g');
+  });
+});
+
+describe('DrainController correction 02 — decisions await the busy refresh', () => {
+  let dir: string;
+  let recordPath: string;
+  let admission: FakeAdmission;
+  let controller: DrainController | undefined;
+
+  const makeCorr2 = (overrides: {
+    listBusySessions: () => DrainBusySession[];
+    refreshBusySessions?: () => Promise<void>;
+    busyRefreshTimeoutMs?: number;
+    timeoutMs?: number;
+  }): DrainController => {
+    controller = new DrainController({
+      admission,
+      listNonterminalRuns: () => [],
+      listBusySessions: overrides.listBusySessions,
+      refreshBusySessions: overrides.refreshBusySessions,
+      busyRefreshTimeoutMs: overrides.busyRefreshTimeoutMs,
+      recordPath,
+      pollIntervalMs: 5,
+    });
+    return controller;
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'pi-drain-corr2-'));
+    recordPath = path.join(dir, 'internal-api-drain.json');
+    admission = fakeAdmission();
+  });
+
+  afterEach(() => {
+    controller?.shutdown();
+    controller = undefined;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a non-Pi session that turns busy during the pending refresh is NOT omitted from the verdict or the cut-off record', async () => {
+    // The sync accessor still reports the OLD (empty) snapshot; the awaited
+    // refresh is what discovers the busy session — the decision must wait for it.
+    let visible: DrainBusySession[] = [];
+    let refreshes = 0;
+    const drain = makeCorr2({
+      listBusySessions: () => visible.map((b) => ({ ...b })),
+      refreshBusySessions: () => new Promise<void>((resolve) => {
+        setTimeout(() => { visible = [{ sessionId: 'late-claude', runtime: 'claude', busyReason: 'runtime-running' }]; refreshes += 1; resolve(); }, 25);
+      }),
+    });
+    drain.start({ reason: 'deploy', timeoutMs: 120 });
+    const outcome = await drain.waitForOutcome();
+    expect(refreshes).toBeGreaterThanOrEqual(1);
+    expect(outcome.state).toBe('timed_out');
+    expect(outcome.cutOffSessionIds).toEqual(['late-claude']);
+    const record = readDrainRecord(recordPath);
+    expect((record?.cutOffSessions ?? []).map((s) => s.sessionId)).toEqual(['late-claude']);
+    expect(record?.busyRefresh).toBe('fresh');
+  });
+
+  it('an unavailable busy refresh never settles on unknown: the drain runs to its timeout and the record says so', async () => {
+    const drain = makeCorr2({
+      listBusySessions: () => [],
+      refreshBusySessions: async () => { throw new Error('registry down'); },
+    });
+    drain.start({ reason: 'deploy', timeoutMs: 60 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('timed_out');
+    expect(outcome.cutOffSessionIds).toEqual([]);
+    expect(readDrainRecord(recordPath)?.busyRefresh).toBe('unavailable');
+  });
+
+  it('a refresh exceeding the bound is treated as unknown, not as a fresh empty snapshot', async () => {
+    const drain = makeCorr2({
+      listBusySessions: () => [],
+      refreshBusySessions: () => new Promise<void>(() => { /* never settles */ }),
+      busyRefreshTimeoutMs: 20,
+    });
+    drain.start({ reason: 'deploy', timeoutMs: 80 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('timed_out');
+    expect(readDrainRecord(recordPath)?.busyRefresh).toBe('unavailable');
+  });
+
+  it('a fresh empty refresh settles as before and records fresh (control)', async () => {
+    const drain = makeCorr2({
+      listBusySessions: () => [],
+      refreshBusySessions: async () => undefined,
+    });
+    drain.start({ reason: 'deploy', timeoutMs: 5_000 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('settled');
+    expect(readDrainRecord(recordPath)?.busyRefresh).toBe('fresh');
+  });
+
+  it('a cancel while a refresh is in flight resolves idle and never settles late', async () => {
+    let releaseRefresh: (() => void) | undefined;
+    const drain = makeCorr2({
+      listBusySessions: () => [],
+      refreshBusySessions: () => new Promise<void>((resolve) => { releaseRefresh = resolve; }),
+    });
+    drain.start({ reason: 'deploy', timeoutMs: 60_000 });
+    const pending = drain.waitForOutcome();
+    await drain.cancel('operator');
+    releaseRefresh?.();
+    expect((await pending).state).toBe('idle');
+    await new Promise((r) => setTimeout(r, 40));
+    expect(drain.status().state).toBe('idle');
+    expect(admission.state).toBeNull();
   });
 });

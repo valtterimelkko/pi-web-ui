@@ -55,6 +55,26 @@ export interface DrainRunRef {
   status: string;
 }
 
+/**
+ * B4.1 (contract 1.52.0): payload-free reference to one RESIDENT BUSY session
+ * whose in-flight turn holds no admission slot and no run receipt — a Pi
+ * goal-engine continuation, another extension-driven turn (watch-wake,
+ * subagent) or a browser (P0) turn. A restart would kill it silently.
+ *
+ * Correction 01: `runIds` carries the session's NONTERMINAL receipt ids at the
+ * measurement (usually empty — these turns are receipt-less), so the boot
+ * composition can tell a genuinely cut-off extension turn from one whose
+ * receipt-backed run finished normally inside the window.
+ */
+export interface DrainBusySession {
+  sessionId: string;
+  runtime: string;
+  /** Payload-free reason the runtime reports the session busy (e.g. `sdk_streaming`). */
+  busyReason: string;
+  /** Nonterminal receipt ids of this session at the measurement (usually []). */
+  runIds?: string[];
+}
+
 export interface DrainStatus {
   state: DrainState;
   /** Whether admission is currently refusing new P2/P3 execution for the drain. */
@@ -66,15 +86,19 @@ export interface DrainStatus {
   /** When a settled/timed-out drain reopens admission if no restart follows. */
   holdUntil?: string;
   waitedMs?: number;
-  initial?: { activeTurns: number; nonterminalRuns: number };
-  remaining: { activeTurns: number; quarantinedTurns: number; nonterminalRuns: number; runs: DrainRunRef[] };
+  initial?: { activeTurns: number; nonterminalRuns: number; busySessions: number };
+  remaining: { activeTurns: number; quarantinedTurns: number; nonterminalRuns: number; runs: DrainRunRef[]; busySessions: number; sessions: DrainBusySession[] };
   /** Runs nonterminal at drain start that reached a terminal state during the drain. */
   completedDuringDrain: number;
   /** Runs still in flight when the drain timed out: the restart will cut these off. */
   cutOffRunIds: string[];
+  /** B4.1: busy sessions still in flight when the drain timed out (no receipt exists for them). */
+  cutOffSessionIds: string[];
+  /** Correction 01: caller sessions excluded from the busy-session wait (self-drain). */
+  excludedSessionIds: string[];
   retryAfterSeconds: number;
   /** The most recent drain verdict after it ended (hold expiry or cancel). */
-  lastOutcome?: { state: 'settled' | 'timed_out' | 'draining'; endedBy: string; endedAt: string; cutOffRunIds: string[] };
+  lastOutcome?: { state: 'settled' | 'timed_out' | 'draining'; endedBy: string; endedAt: string; cutOffRunIds: string[]; cutOffSessionIds: string[] };
 }
 
 export interface DrainAdmission {
@@ -87,6 +111,23 @@ export interface DrainControllerDeps {
   admission: DrainAdmission;
   /** Current nonterminal run receipts (accepted/queued/started). */
   listNonterminalRuns: () => DrainRunRef[];
+  /**
+   * B4.1: resident busy sessions with no admission turn and no receipt
+   * (extension-driven Pi turns, browser turns; other runtimes' busy flags).
+   * Must be payload-free and read-only. Absent = none reported.
+   */
+  listBusySessions?: () => DrainBusySession[];
+  /**
+   * Correction 02: awaited (bounded) before every OUTCOME decision — the
+   * sync `listBusySessions` may lag the cross-runtime snapshot, so a decision
+   * taken on it alone could miss a busy session that turned busy during the
+   * pending refresh. When the refresh cannot complete inside the bound, the
+   * snapshot is UNKNOWN: the drain does not settle, and a timeout record says
+   * `busyRefresh: "unavailable"`.
+   */
+  refreshBusySessions?: () => Promise<void>;
+  /** Bounded wait for one busy refresh before a decision (default 2000 ms). */
+  busyRefreshTimeoutMs?: number;
   /** Admission slots held by quarantined terminal runs (capacity debt). */
   quarantinedTurns?: () => number;
   /** Durable verdict record read by the next process at boot. Omit for memory-only. */
@@ -103,6 +144,15 @@ export interface DrainStartInput {
   reason: string;
   timeoutMs?: number;
   holdMs?: number;
+  /**
+   * Correction 01 (self-drain): sessions to EXCLUDE from the busy-session
+   * settle wait — a caller that runs the deploy from its own agent session is
+   * itself busy and would otherwise wait the full timeout for itself and then
+   * be killed anyway. Validated and bounded by the route (safe ids, max 8);
+   * the controller clamps defensively. Receipts and admission turns are NOT
+   * excluded: the exclusion only lifts the busy-session wait.
+   */
+  excludeSessionIds?: string[];
 }
 
 export const DEFAULT_DRAIN_TIMEOUT_MS = 600_000;
@@ -113,12 +163,17 @@ const DEFAULT_POLL_INTERVAL_MS = 500;
 
 /** Durable drain verdict, read once by the next process at boot. */
 export interface DrainRecord {
-  version: 1;
+  /** 2 since B4.1 (contract 1.52.0): `cutOffSessions` added. Readers accept 1 and 2. */
+  version: 2;
   state: 'settled' | 'timed_out';
   reason: string;
   startedAt: string;
   finishedAt: string;
   cutOffRunIds: string[];
+  /** B4.1: busy sessions still in flight at the timeout (payload-free). Correction 01: `runIds` associates the session with its nonterminal receipts. */
+  cutOffSessions: Array<DrainBusySession & { runIds: string[] }>;
+  /** Correction 02: whether the final decision's busy snapshot was fresh or the refresh was unavailable (absent on pre-correction records). */
+  busyRefresh: 'fresh' | 'unavailable';
 }
 
 const SAFE_RUN_ID = /^[a-zA-Z0-9_-]{1,128}$/;
@@ -131,6 +186,9 @@ function clampInt(value: number | undefined, fallback: number, min: number, max:
 export class DrainController {
   private readonly admission: DrainAdmission;
   private readonly listNonterminalRuns: () => DrainRunRef[];
+  private readonly listBusySessions: () => DrainBusySession[];
+  private readonly refreshBusySessions?: () => Promise<void>;
+  private readonly busyRefreshTimeoutMs: number;
   private readonly quarantinedTurns: () => number;
   private readonly recordPath?: string;
   private readonly now: () => number;
@@ -147,10 +205,14 @@ export class DrainController {
   private timeoutMs?: number;
   private holdMs?: number;
   private holdUntilMs?: number;
-  private initial?: { activeTurns: number; nonterminalRuns: number };
+  private initial?: { activeTurns: number; nonterminalRuns: number; busySessions: number };
   private initialRunIds = new Set<string>();
-  private remaining: DrainStatus['remaining'] = { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [] };
+  private remaining: DrainStatus['remaining'] = { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [], busySessions: 0, sessions: [] };
   private cutOffRunIds: string[] = [];
+  private cutOffSessionIds: string[] = [];
+  private excludedSessionIds: ReadonlySet<string> = new Set();
+  private lastBusyRefreshFresh = true;
+  private evaluating = false;
   private lastOutcome?: DrainStatus['lastOutcome'];
   private pollTimer?: NodeJS.Timeout;
   private holdTimer?: NodeJS.Timeout;
@@ -159,6 +221,9 @@ export class DrainController {
   constructor(deps: DrainControllerDeps) {
     this.admission = deps.admission;
     this.listNonterminalRuns = deps.listNonterminalRuns;
+    this.listBusySessions = deps.listBusySessions ?? (() => []);
+    this.refreshBusySessions = deps.refreshBusySessions;
+    this.busyRefreshTimeoutMs = clampInt(deps.busyRefreshTimeoutMs, 2_000, 1, 60_000);
     this.quarantinedTurns = deps.quarantinedTurns ?? (() => 0);
     this.recordPath = deps.recordPath;
     this.now = deps.now ?? Date.now;
@@ -181,16 +246,21 @@ export class DrainController {
     this.timeoutMs = clampInt(input.timeoutMs, this.defaultTimeoutMs, 0, this.maxTimeoutMs);
     this.holdMs = clampInt(input.holdMs, this.defaultHoldMs, 1, MAX_DRAIN_TIMEOUT_MS);
     this.cutOffRunIds = [];
+    this.cutOffSessionIds = [];
+    this.excludedSessionIds = new Set((input.excludeSessionIds ?? []).slice(0, 8));
+    this.lastBusyRefreshFresh = true;
     this.admission.setDraining({ since: this.startedAtMs, reason: input.reason });
+    // Provisional synchronous measurement: it fills `initial` and the visible
+    // `remaining` immediately (the drain route has usually just awaited a
+    // refresh via its pre-start hook). The OUTCOME DECISION is never taken on
+    // it — evaluate() awaits the busy refresh first (correction 02).
     this.measure();
-    this.initial = { activeTurns: this.remaining.activeTurns, nonterminalRuns: this.remaining.nonterminalRuns };
+    this.initial = { activeTurns: this.remaining.activeTurns, nonterminalRuns: this.remaining.nonterminalRuns, busySessions: this.remaining.busySessions };
     this.initialRunIds = new Set(this.remaining.runs.map((r) => r.runId));
-    logger.info(`[InternalAPI] drain started: reason=${JSON.stringify(input.reason)} timeoutMs=${this.timeoutMs} activeTurns=${this.initial.activeTurns} nonterminalRuns=${this.initial.nonterminalRuns}`);
-    this.evaluate();
-    if (this.state === 'draining') {
-      this.pollTimer = setInterval(() => this.evaluate(), this.pollIntervalMs);
-      this.pollTimer.unref?.();
-    }
+    logger.info(`[InternalAPI] drain started: reason=${JSON.stringify(input.reason)} timeoutMs=${this.timeoutMs} activeTurns=${this.initial.activeTurns} nonterminalRuns=${this.initial.nonterminalRuns} busySessions=${this.initial.busySessions}`);
+    this.pollTimer = setInterval(() => { void this.evaluate(); }, this.pollIntervalMs);
+    this.pollTimer.unref?.();
+    void this.evaluate();
     return { status: this.status(), joined: false };
   }
 
@@ -209,6 +279,7 @@ export class DrainController {
       endedBy,
       endedAt: new Date(this.now()).toISOString(),
       cutOffRunIds: [...this.cutOffRunIds],
+      cutOffSessionIds: [...this.cutOffSessionIds],
     };
     this.clearTimers();
     this.state = 'idle';
@@ -234,12 +305,14 @@ export class DrainController {
       waitedMs: this.state === 'idle' || this.startedAtMs === undefined || endMs === undefined ? undefined : endMs - this.startedAtMs,
       initial: this.state === 'idle' ? undefined : this.initial,
       remaining: this.state === 'idle'
-        ? { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [] }
-        : { ...this.remaining, runs: this.remaining.runs.map((r) => ({ ...r })) },
+        ? { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [], busySessions: 0, sessions: [] }
+        : { ...this.remaining, runs: this.remaining.runs.map((r) => ({ ...r })), sessions: this.remaining.sessions.map((s) => ({ ...s, runIds: [...(s.runIds ?? [])] })) },
       completedDuringDrain: this.state === 'idle' ? 0 : this.completedCount(),
       cutOffRunIds: this.state === 'idle' ? [] : [...this.cutOffRunIds],
+      cutOffSessionIds: this.state === 'idle' ? [] : [...this.cutOffSessionIds],
+      excludedSessionIds: this.state === 'idle' ? [] : [...this.excludedSessionIds],
       retryAfterSeconds: this.retryAfterSeconds,
-      ...(this.lastOutcome ? { lastOutcome: { ...this.lastOutcome, cutOffRunIds: [...this.lastOutcome.cutOffRunIds] } } : {}),
+      ...(this.lastOutcome ? { lastOutcome: { ...this.lastOutcome, cutOffRunIds: [...this.lastOutcome.cutOffRunIds], cutOffSessionIds: [...this.lastOutcome.cutOffSessionIds] } } : {}),
     };
   }
 
@@ -271,24 +344,84 @@ export class DrainController {
     } catch (error) {
       logger.warn(`[InternalAPI] drain could not read admission: ${error instanceof Error ? error.message : String(error)}`);
     }
+    let busy: DrainBusySession[] = [];
+    try {
+      busy = this.listBusySessions();
+    } catch (error) {
+      // Fail open like the receipt source: a broken accessor must not stall
+      // deploys forever. The warning keeps the blind spot visible.
+      logger.warn(`[InternalAPI] drain could not list busy sessions: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // Self-drain exclusion (correction 01) lifts only the busy-session wait.
+    busy = busy.filter((s) => !this.excludedSessionIds.has(s.sessionId));
+    // Correction 01: associate each busy session with its nonterminal receipts
+    // so the record can tell a cut-off turn from one that finished in-window.
+    const runIdsBySession = new Map<string, string[]>();
+    for (const r of runs) {
+      const list = runIdsBySession.get(r.sessionId) ?? [];
+      list.push(r.runId);
+      runIdsBySession.set(r.sessionId, list);
+    }
     this.remaining = {
       activeTurns: Math.max(0, active - quarantined),
       quarantinedTurns: quarantined,
       nonterminalRuns: runs.length,
       runs: runs.map((r) => ({ runId: r.runId, sessionId: r.sessionId, runtime: r.runtime, status: r.status })),
+      busySessions: busy.length,
+      sessions: busy.map((s) => ({ sessionId: s.sessionId, runtime: s.runtime, busyReason: s.busyReason, runIds: runIdsBySession.get(s.sessionId) ?? [] })),
     };
   }
 
-  private evaluate(): void {
-    if (this.state !== 'draining' || this.startedAtMs === undefined) return;
-    this.measure();
-    if (this.remaining.activeTurns === 0 && this.remaining.nonterminalRuns === 0) {
-      this.finish('settled');
+  /**
+   * Correction 02: the outcome decision ALWAYS awaits the busy refresh first
+   * (bounded): a decision on a snapshot that lags a pending refresh could
+   * settle (or cut off) without a busy session that is only discoverable
+   * after the refresh. Re-entrancy is guarded; state is re-checked after the
+   * await so a cancel during a slow refresh cannot settle late.
+   */
+  private async evaluate(): Promise<void> {
+    if (this.state !== 'draining' || this.startedAtMs === undefined || this.evaluating) return;
+    this.evaluating = true;
+    try {
+      await this.refreshBusyBeforeDecision();
+      if (this.state !== 'draining' || this.startedAtMs === undefined) return;
+      this.measure();
+      if (this.remaining.activeTurns === 0 && this.remaining.nonterminalRuns === 0 && this.remaining.busySessions === 0 && this.lastBusyRefreshFresh) {
+        this.finish('settled');
+        return;
+      }
+      if (this.now() - this.startedAtMs >= (this.timeoutMs ?? 0)) {
+        this.cutOffRunIds = this.remaining.runs.map((r) => r.runId);
+        this.cutOffSessionIds = this.remaining.sessions.map((s) => s.sessionId);
+        this.finish('timed_out');
+      }
+    } finally {
+      this.evaluating = false;
+    }
+  }
+
+  /** Await the busy refresh, bounded; an unavailable refresh marks the snapshot unknown. */
+  private async refreshBusyBeforeDecision(): Promise<void> {
+    const refresh = this.refreshBusySessions;
+    if (!refresh) {
+      this.lastBusyRefreshFresh = true;
       return;
     }
-    if (this.now() - this.startedAtMs >= (this.timeoutMs ?? 0)) {
-      this.cutOffRunIds = this.remaining.runs.map((r) => r.runId);
-      this.finish('timed_out');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`busy refresh exceeded ${this.busyRefreshTimeoutMs}ms`)), this.busyRefreshTimeoutMs);
+        timer.unref?.();
+        refresh().then(
+          () => { clearTimeout(timer); resolve(); },
+          (error: unknown) => { clearTimeout(timer); reject(error); },
+        );
+      });
+      this.lastBusyRefreshFresh = true;
+    } catch (error) {
+      // UNKNOWN ≠ empty: never settle on an unavailable snapshot; a timeout
+      // still finishes (bounded) and the record says the snapshot was not fresh.
+      this.lastBusyRefreshFresh = false;
+      logger.warn(`[InternalAPI] drain busy refresh unavailable before decision: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -298,7 +431,7 @@ export class DrainController {
     this.finishedAtMs = this.now();
     this.holdUntilMs = this.finishedAtMs + (this.holdMs ?? this.defaultHoldMs);
     this.writeRecord(state);
-    logger.info(`[InternalAPI] drain ${state}: waitedMs=${this.finishedAtMs - (this.startedAtMs ?? this.finishedAtMs)} completedDuringDrain=${this.completedCount()} cutOff=${this.cutOffRunIds.length} activeTurns=${this.remaining.activeTurns} nonterminalRuns=${this.remaining.nonterminalRuns}`);
+    logger.info(`[InternalAPI] drain ${state}: waitedMs=${this.finishedAtMs - (this.startedAtMs ?? this.finishedAtMs)} completedDuringDrain=${this.completedCount()} cutOff=${this.cutOffRunIds.length} cutOffSessions=${this.cutOffSessionIds.length} activeTurns=${this.remaining.activeTurns} nonterminalRuns=${this.remaining.nonterminalRuns} busySessions=${this.remaining.busySessions} busyRefresh=${state === 'settled' ? 'fresh' : (this.lastBusyRefreshFresh ? 'fresh' : 'unavailable')}`);
     this.holdTimer = setTimeout(() => { void this.cancel('hold_expired'); }, this.holdUntilMs - this.finishedAtMs);
     this.holdTimer.unref?.();
     this.flushWaiters(this.status());
@@ -318,12 +451,14 @@ export class DrainController {
   private writeRecord(state: 'settled' | 'timed_out'): void {
     if (!this.recordPath) return;
     const record: DrainRecord = {
-      version: 1,
+      version: 2,
       state,
       reason: this.reason ?? '',
       startedAt: new Date(this.startedAtMs ?? this.now()).toISOString(),
       finishedAt: new Date(this.finishedAtMs ?? this.now()).toISOString(),
       cutOffRunIds: [...this.cutOffRunIds],
+      cutOffSessions: this.remaining.sessions.map((s) => ({ sessionId: s.sessionId, runtime: s.runtime, busyReason: s.busyReason, runIds: [...(s.runIds ?? [])] })),
+      busyRefresh: state === 'settled' ? 'fresh' : (this.lastBusyRefreshFresh ? 'fresh' : 'unavailable'),
     };
     try {
       mkdirSync(path.dirname(this.recordPath), { recursive: true, mode: 0o700 });
@@ -343,21 +478,41 @@ export class DrainController {
   }
 }
 
-/** Read a drain record; undefined when absent or malformed. Unsafe run ids are dropped. */
+/** Read a drain record; undefined when absent or malformed. Unsafe run ids are dropped. Accepts v1 (pre-1.52.0) and v2. */
 export function readDrainRecord(recordPath: string): DrainRecord | undefined {
   try {
     if (!existsSync(recordPath)) return undefined;
-    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as Partial<DrainRecord>;
-    if (!raw || raw.version !== 1 || (raw.state !== 'settled' && raw.state !== 'timed_out')) return undefined;
+    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as { version?: number; state?: unknown; reason?: unknown; startedAt?: unknown; finishedAt?: unknown; cutOffRunIds?: unknown; cutOffSessions?: unknown; busyRefresh?: unknown };
+    if (!raw || (raw.version !== 1 && raw.version !== 2) || (raw.state !== 'settled' && raw.state !== 'timed_out')) return undefined;
+    const state = raw.state as 'settled' | 'timed_out';
     return {
-      version: 1,
-      state: raw.state,
+      version: 2,
+      state,
       reason: typeof raw.reason === 'string' ? raw.reason.slice(0, 500) : '',
       startedAt: typeof raw.startedAt === 'string' ? raw.startedAt : '',
       finishedAt: typeof raw.finishedAt === 'string' ? raw.finishedAt : '',
       cutOffRunIds: Array.isArray(raw.cutOffRunIds)
         ? raw.cutOffRunIds.filter((id): id is string => typeof id === 'string' && SAFE_RUN_ID.test(id))
         : [],
+      cutOffSessions: Array.isArray(raw.cutOffSessions)
+        ? raw.cutOffSessions
+          .filter((s): s is DrainBusySession => Boolean(s) && typeof s === 'object' && !Array.isArray(s)
+            && typeof (s as DrainBusySession).sessionId === 'string' && SAFE_RUN_ID.test((s as DrainBusySession).sessionId)
+            && typeof (s as DrainBusySession).runtime === 'string'
+            && typeof (s as DrainBusySession).busyReason === 'string')
+          .map((s) => ({
+            sessionId: s.sessionId,
+            runtime: s.runtime.slice(0, 32),
+            busyReason: s.busyReason.slice(0, 64),
+            // Correction 01: the session↔run association survives the record
+            // (safe ids only) so boot can suppress false interruptions.
+            runIds: Array.isArray((s as { runIds?: unknown }).runIds)
+              ? ((s as { runIds: unknown[] }).runIds.filter((id): id is string => typeof id === 'string' && SAFE_RUN_ID.test(id)))
+              : [],
+          }))
+        : [],
+      // Correction 02: absent on pre-correction v2 records — informational only.
+      busyRefresh: raw.busyRefresh === 'unavailable' ? 'unavailable' : 'fresh',
     };
   } catch {
     return undefined;
@@ -377,4 +532,129 @@ export function consumeDrainRecord(recordPath: string): DrainRecord | undefined 
     try { unlinkSync(recordPath); } catch { /* best effort */ }
   }
   return record;
+}
+
+/** What boot hands the WatchManager for one receipt-less cut-off busy session. */
+export interface InterruptedBusySessionRef {
+  sessionId: string;
+  runtime: string;
+  /** Synthetic interruption reference (`busy-<sessionId>`); no receipt exists. */
+  runId: string;
+  errorCode: string;
+  interruptionReason: string;
+}
+
+const NONTERMINAL_RECEIPT_STATUSES = new Set(['accepted', 'queued', 'started']);
+
+/**
+ * Correction 01 (finding 3): compose the boot busy-session reconciliation list
+ * from the previous process's drain record, WITHOUT false interruptions for
+ * work that finished normally inside the hold window.
+ *
+ * A cut-off session is skipped when
+ *  - its runs were receipt-backed and recovered as interrupted (the receipt
+ *    path fires — never double-fire), or
+ *  - EVERY receipt associated with it at the timeout reached a terminal state
+ *    (completed/failed/cancelled): the work finished before the kill, and its
+ *    real completion already fired watches. Only when some associated run has
+ *    no known terminal outcome (typically a receipt-less extension turn) does
+ *    the synthetic `busy-<sessionId>` reference fire.
+ */
+export function composeInterruptedBusySessions(
+  record: DrainRecord | undefined,
+  recoveredRunSessionIds: ReadonlySet<string>,
+  receiptStatus?: (runId: string) => string | undefined,
+): InterruptedBusySessionRef[] {
+  if (!record || record.state !== 'timed_out') return [];
+  const out: InterruptedBusySessionRef[] = [];
+  for (const session of record.cutOffSessions) {
+    if (recoveredRunSessionIds.has(session.sessionId)) continue;
+    // An UNKNOWN receipt outcome (recorded runId, status unreadable) is not
+    // finished work: the conservative reading is that it was cut off.
+    const allFinished = (session.runIds ?? []).length > 0
+      && (session.runIds ?? []).every((runId) => {
+        const status = receiptStatus?.(runId);
+        return typeof status === 'string' && !NONTERMINAL_RECEIPT_STATUSES.has(status);
+      });
+    if (allFinished) continue;
+    out.push({
+      sessionId: session.sessionId,
+      runtime: session.runtime,
+      runId: `busy-${session.sessionId}`,
+      errorCode: 'SERVER_RESTART',
+      interruptionReason: 'drain_timeout',
+    });
+  }
+  return out;
+}
+
+/** Sources the shared busy-session snapshot reads from (see `createBusySessionSource`). */
+export interface BusySessionSources {
+  /** The cross-runtime registry's full entry list (async source of truth for non-Pi runtimes). */
+  listRegistryEntries: () => Promise<Array<{ id: string; sdkType: string }>>;
+  /** A runtime's EXISTING busy flag, read-only. A throw is not busy evidence. */
+  isRuntimeRunning: (sdkType: string, sessionId: string) => boolean;
+  /** Pi resident busy accessor (sync, always live — never snapshotted). */
+  listPiBusySessions: () => DrainBusySession[];
+  /** Warning sink; defaults to the Internal API drain logger. */
+  onWarn?: (message: string) => void;
+}
+
+export interface BusySessionSource {
+  /** Sync, payload-free busy list: Pi live + non-Pi from the last snapshot. */
+  listBusySessions: () => DrainBusySession[];
+  /**
+   * Shared in-flight registry refresh. Concurrent callers await ONE promise
+   * (no early return against a stale snapshot); a caller after it settled
+   * starts a fresh fetch. A failed refresh keeps the previous snapshot.
+   */
+  refresh: () => Promise<void>;
+}
+
+/**
+ * Correction 01 (finding 2): the non-Pi busy list must stay current. The
+ * pre-correction wiring snapshotted the registry at boot and before a drain
+ * start and returned early while a refresh was in flight, so a concurrent
+ * caller could measure against a stale or empty snapshot. This source makes
+ * `refresh()` share one in-flight promise; callers kick it on every drain
+ * measurement and await it before a drain starts.
+ */
+export function createBusySessionSource(sources: BusySessionSources): BusySessionSource {
+  let snapshot: Array<{ id: string; sdkType: string }> = [];
+  let inFlight: Promise<void> | undefined;
+  const warn = sources.onWarn ?? ((message: string) => logger.warn(`[InternalAPI] ${message}`));
+  const refresh = (): Promise<void> => {
+    if (!inFlight) {
+      inFlight = sources.listRegistryEntries()
+        .then((entries) => { snapshot = entries; })
+        .catch((error) => {
+          warn(`drain busy-session registry refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => { inFlight = undefined; });
+    }
+    return inFlight;
+  };
+  return {
+    refresh,
+    listBusySessions: () => {
+      const busy: DrainBusySession[] = [];
+      try {
+        for (const session of sources.listPiBusySessions()) {
+          busy.push({ sessionId: session.sessionId, runtime: session.runtime, busyReason: session.busyReason });
+        }
+      } catch (error) {
+        warn(`drain Pi busy accessor failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      for (const entry of snapshot) {
+        try {
+          if (sources.isRuntimeRunning(entry.sdkType, entry.id)) {
+            busy.push({ sessionId: entry.id, runtime: entry.sdkType, busyReason: 'runtime-running' });
+          }
+        } catch {
+          /* a lookup failure is not busy evidence */
+        }
+      }
+      return busy;
+    },
+  };
 }

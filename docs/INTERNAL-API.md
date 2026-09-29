@@ -1591,11 +1591,12 @@ proof that every tool descendant has stopped.
 
 ### Drain-then-restart
 
-Contract `1.51.0` (B4). A restart of `pi-web-ui.service` kills every in-process
-child (KillMode=control-group). A drain lets in-flight work finish first, keeps
-new work out, and makes sure parents learn about anything the restart still
-cuts off. Operators do not call this by hand: `npm run production:drain-restart`
-(see [`DEPLOYMENT.md`](../DEPLOYMENT.md#deploy--redeploy-flow)) drives it.
+Contract `1.52.0` (B4, extended by B4.1). A restart of `pi-web-ui.service` kills
+every in-process child (KillMode=control-group). A drain lets in-flight work
+finish first, keeps new work out, and makes sure parents learn about anything
+the restart still cuts off. Operators do not call this by hand:
+`npm run production:drain-restart` (see
+[`DEPLOYMENT.md`](../DEPLOYMENT.md#deploy--redeploy-flow)) drives it.
 
 ```
 POST   /api/v1/drain   {"reason": "deploy 1.51.0", "timeoutSeconds": 600, "holdSeconds": 300}
@@ -1604,13 +1605,53 @@ DELETE /api/v1/drain
 ```
 
 - `POST` closes admission for new P2/P3 execution and **blocks** until a verdict:
-  `settled` (no active execution turns — quarantined capacity debt excluded —
-  **and** no nonterminal run receipts: `accepted`, `queued` or `started`) or
-  `timed_out` (the `timeoutSeconds` bound, `0..3600`, default `600`, elapsed).
-  `cutOffRunIds` lists the runs still in flight at a timeout: the restart will
-  cut those off. A `POST` while a drain runs joins it (`joined: true`) and its
-  own parameters are ignored. The body is validated strictly (`reason` 1–500
-  characters, integer seconds, no unknown fields).
+  `settled` (no active execution turns — quarantined capacity debt excluded —,
+  **no** nonterminal run receipts: `accepted`/`queued`/`started`, **and no**
+  resident busy sessions) or `timed_out` (the `timeoutSeconds` bound, `0..3600`,
+  default `600`, elapsed).
+  `cutOffRunIds` lists the runs still in flight at a timeout and
+  `cutOffSessionIds` the resident busy sessions: the restart will cut those
+  off. `remaining.sessions[]` entries carry `runIds[]` — the session's
+  nonterminal receipts at the measurement — so boot can tell a genuinely
+  cut-off extension turn from one whose receipt-backed run finished inside the
+  hold window (a session whose recorded receipts ALL terminalised before the
+  kill is NOT announced as interrupted at boot). A second `POST` while a drain
+  runs joins it (`joined: true`) and its own parameters are ignored. The body
+  is validated strictly (`reason` 1–500 characters, integer seconds, no
+  unknown fields).
+- **Self-drain guard (correction 01).** `POST` accepts an optional
+  `excludeSessionIds` (safe `[a-zA-Z0-9_-]` ids, at most 8): sessions excluded
+  from the BUSY-SESSION wait only — their receipts and admission turns still
+  count and reconcile normally — and listed in `excludedSessionIds`. A session
+  that runs the deploy from its own turn would otherwise wait the full timeout
+  for, then be killed with, the caller. `scripts/restart-production.sh`
+  forwards `PI_WEB_UI_SESSION_ID` (else `PI_SESSION_ID`) automatically when
+  set, logs that it did, and never forwards an unsafe value; a joining `POST`
+  ignores the joiner's exclusions.
+- **B4.1 — the drain sees every busy session.** Before 1.52.0 the settle wait
+  counted only what the Internal API meters, so a Pi turn started by the goal
+  engine, another extension (watch-wake deadline, subagent) or the browser
+  (P0) held nothing the drain could see and a deploy could kill it silently.
+  The wait now also counts every resident busy session: Pi sessions via the
+  manager's status flag and the SDK's public `AgentSession.isStreaming` state,
+  other runtimes via their existing busy flags over a cross-runtime snapshot
+  refreshed on EVERY drain measurement (shared in-flight refresh: overlapping
+  callers await one refresh; Pi is always read live). Busy sessions block the
+  drain exactly like runs (a browser turn is the same class of in-flight work
+  as an orchestration child; killing it silently is the harm this lane exists
+  to close) and the configured timeout bounds the wait either way, so a
+  chatty interactive turn cannot stall a deploy indefinitely.
+  `remaining.sessions` lists them payload-free (`sessionId`, `runtime`,
+  `busyReason` — e.g. `sdk_streaming`, `status`, `status+sdk_streaming`,
+  `runtime-running` — plus `runIds`) so an operator can see WHY a drain is
+  still waiting; a session idle at the drain is never counted.
+- **Browser prompt fence (correction 01).** While a drain is active OR held
+  (admission stays closed after the verdict until the restart or hold expiry),
+  a WebSocket `prompt` — including slash commands, which also start turns — is
+  refused with a user-visible `error` (`code: "SERVER_DRAINING"`,
+  `retryAfterSeconds`, message names the restart) instead of starting a turn
+  the restart would kill silently. Steer and follow_up keep their existing
+  behaviour. With the Internal API disabled nothing is fenced.
 - After the verdict admission **stays closed** until the process restarts. If
   no restart follows within `holdSeconds` (default `300`), the drain ends by
   itself, admission reopens, and `GET` reports `lastOutcome.endedBy:
@@ -1626,8 +1667,9 @@ DELETE /api/v1/drain
   ledger. Reads, control, abort, watches, approvals, adoption and `DELETE`
   keep working.
 - The verdict is written to `internal-api-drain.json` beside the run-receipt
-  directory. The next process reads it once at boot (then renames it
-  `internal-api-drain.json.consumed`).
+  directory (version `2`, with `cutOffSessions` beside `cutOffRunIds`; the
+  reader still accepts a v1 record). The next process reads it once at boot
+  (then renames it `internal-api-drain.json.consumed`).
 
 **After the restart.** Every run the restart cut off ends `interrupted` with
 `errorCode: "SERVER_RESTART"` (as before 1.51.0) and `interruptionReason:
@@ -1647,6 +1689,23 @@ recorded `suppressed`, reason `coalesced_restart_reconciliation`). Register
 to watch for interruptions only. A child session whose watch was not active at
 the restart gets no firing; its receipt (`GET /api/v1/runs/:runId`) still shows
 the interruption.
+
+**Receipt-less busy sessions (B4.1).** An extension-driven or browser turn has
+no run receipt, so boot reconciliation works from the drain record's
+`cutOffSessions` instead: every watched child listed there that has no
+recovered receipt gets the same synthetic `agent_end` (plus `goal_end` when
+pending), with `data.runId: "busy-<sessionId>"` — a SYNTHETIC interruption
+reference, not a receipt id — and `data.busySession: true` beside the usual
+`interruptedByRestart`, `status: "interrupted"`, `errorCode` and
+`interruptionReason` (`runIds` is absent). The wake suffix keeps the B4 form:
+`(interrupted by restart: run busy-<sessionId>, drain_timeout)`. A child that
+also has receipt-backed interrupted runs is reconciled from those receipts
+only — one firing per session. A session whose recorded `runIds` ALL reached a
+terminal state before the kill (the receipt-backed run finished inside the
+hold window) is NOT announced as interrupted; an unknown outcome still
+synthesises. A session cut off by an UNPLANNED restart (no
+drain ran, so no record exists) still cannot be announced at boot; that blind
+spot predates B4 and is unchanged.
 
 ---
 
