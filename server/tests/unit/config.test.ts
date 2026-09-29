@@ -11,6 +11,14 @@ import {
   resolveToolArgsCaps,
   PI_TOOL_ARGS_MAX_CHARS_BOUND,
   PI_TOOL_ARGS_MIN_CHARS_BOUND,
+  parseRunBudgetCap,
+  resolveRunBudgetCaps,
+  PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS,
+  PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES,
+  PI_RUN_BUDGET_MIN_OUTPUT_TOKENS,
+  PI_RUN_BUDGET_MAX_OUTPUT_TOKENS_BOUND,
+  PI_RUN_BUDGET_MIN_STREAMED_BYTES,
+  PI_RUN_BUDGET_MAX_STREAMED_BYTES_BOUND,
   LOG_FORMATS,
   type LogLevel,
   type LogFormat,
@@ -217,5 +225,94 @@ describe('pi streaming tool-argument caps (B3a)', () => {
   it('config singleton exposes validated caps', () => {
     expect(config.piToolArgsMaxCallChars).toBeGreaterThanOrEqual(0);
     expect(config.piToolArgsMaxTurnChars).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
+  const TOK_MIN = PI_RUN_BUDGET_MIN_OUTPUT_TOKENS;
+  const TOK_MAX = PI_RUN_BUDGET_MAX_OUTPUT_TOKENS_BOUND;
+  const BYTE_MIN = PI_RUN_BUDGET_MIN_STREAMED_BYTES;
+  const BYTE_MAX = PI_RUN_BUDGET_MAX_STREAMED_BYTES_BOUND;
+
+  it('defaults come from the measured rule and are exported', () => {
+    // Correction 01 (measured on the guard's real boundary): 735 files /
+    // 3,353 segments merged at a <2s follow-up gap → 3,273 runs; worst case
+    // at a 30s merge max 270,689 output tokens per run. Rule: margin over
+    // the merged max, NEVER BELOW 2× → 1,000,000 (3.7× the merged max) so a
+    // legitimate long agentic loop cannot trip the message-end token cap;
+    // the live byte bound is the primary volume control. Streamed bytes:
+    // merged max 999,449 (30s: 1,050,331); 16 MiB stays (15.3× ≥ 2× rule),
+    // 0/3,280 merged runs breach it.
+    expect(PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS).toBe(1_000_000);
+    expect(PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES).toBe(16 * 1024 * 1024);
+  });
+
+  it('bounds are sane and wide enough for measured real runs', () => {
+    expect(TOK_MIN).toBeLessThanOrEqual(267_569);
+    expect(TOK_MAX).toBeGreaterThanOrEqual(500_000);
+    expect(BYTE_MIN).toBeLessThanOrEqual(999_449);
+    expect(BYTE_MAX).toBeGreaterThanOrEqual(16 * 1024 * 1024);
+  });
+
+  it('single-cap parsing: unset/blank falls back, 0 disables, in-bounds values pass (both dimensions)', () => {
+    expect(parseRunBudgetCap(undefined, 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).value).toBe(500_000);
+    expect(parseRunBudgetCap('', 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).value).toBe(500_000);
+    expect(parseRunBudgetCap('   ', 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).value).toBe(500_000);
+    expect(parseRunBudgetCap('0', 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).value).toBe(0);
+    expect(parseRunBudgetCap(String(TOK_MIN), 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).value).toBe(TOK_MIN);
+    expect(parseRunBudgetCap(String(TOK_MAX), 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).value).toBe(TOK_MAX);
+    expect(parseRunBudgetCap('123456', 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).value).toBe(123_456);
+
+    expect(parseRunBudgetCap(undefined, 16 * 1024 * 1024, 'PI_RUN_BUDGET_MAX_STREAMED_BYTES', BYTE_MIN, BYTE_MAX).value).toBe(16 * 1024 * 1024);
+    expect(parseRunBudgetCap('0', 16 * 1024 * 1024, 'PI_RUN_BUDGET_MAX_STREAMED_BYTES', BYTE_MIN, BYTE_MAX).value).toBe(0);
+    expect(parseRunBudgetCap(String(BYTE_MIN), 16 * 1024 * 1024, 'PI_RUN_BUDGET_MAX_STREAMED_BYTES', BYTE_MIN, BYTE_MAX).value).toBe(BYTE_MIN);
+    expect(parseRunBudgetCap(String(BYTE_MAX), 16 * 1024 * 1024, 'PI_RUN_BUDGET_MAX_STREAMED_BYTES', BYTE_MIN, BYTE_MAX).value).toBe(BYTE_MAX);
+  });
+
+  it('single-cap parsing: out-of-bounds or junk values report a warning and fall back — never throw', () => {
+    for (const invalid of ['1', String(TOK_MIN - 1), String(TOK_MAX + 1), '-5', '1.5', 'NaN', 'abc']) {
+      const resolved = parseRunBudgetCap(invalid, 1_000_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX);
+      expect(resolved.value).toBe(1_000_000);
+      expect(resolved.warning).toMatch(/PI_RUN_BUDGET_MAX_OUTPUT_TOKENS/);
+    }
+    for (const invalid of [String(BYTE_MIN - 1), String(BYTE_MAX + 1), 'potato']) {
+      const resolved = parseRunBudgetCap(invalid, 16 * 1024 * 1024, 'PI_RUN_BUDGET_MAX_STREAMED_BYTES', BYTE_MIN, BYTE_MAX);
+      expect(resolved.value).toBe(16 * 1024 * 1024);
+      expect(resolved.warning).toMatch(/PI_RUN_BUDGET_MAX_STREAMED_BYTES/);
+    }
+    expect(parseRunBudgetCap('0', 1_000_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).warning).toBeUndefined();
+  });
+
+  it('pair resolution: defaults when both unset; both values honoured in bounds', () => {
+    expect(resolveRunBudgetCaps(undefined, undefined)).toEqual({
+      outputTokens: 1_000_000,
+      streamedBytes: 16 * 1024 * 1024,
+      warnings: [],
+    });
+    expect(resolveRunBudgetCaps('100000', String(4 * 1024 * 1024))).toMatchObject({
+      outputTokens: 100_000,
+      streamedBytes: 4 * 1024 * 1024,
+    });
+    expect(resolveRunBudgetCaps('100000', String(4 * 1024 * 1024)).warnings).toEqual([]);
+  });
+
+  it('pair resolution: invalid values warn and fall back to defaults — startup never fails', () => {
+    const broken = resolveRunBudgetCaps('potato', String(BYTE_MAX + 1));
+    expect(broken).toMatchObject({ outputTokens: 1_000_000, streamedBytes: 16 * 1024 * 1024 });
+    expect(broken.warnings).toHaveLength(2);
+    expect(broken.warnings[0]).toMatch(/PI_RUN_BUDGET_MAX_OUTPUT_TOKENS/);
+    expect(broken.warnings[1]).toMatch(/PI_RUN_BUDGET_MAX_STREAMED_BYTES/);
+  });
+
+  it('pair resolution: an explicit 0 disables that dimension without warning, independently', () => {
+    expect(resolveRunBudgetCaps('0', '0')).toMatchObject({ outputTokens: 0, streamedBytes: 0 });
+    expect(resolveRunBudgetCaps('0', String(8 * 1024 * 1024))).toMatchObject({ outputTokens: 0, streamedBytes: 8 * 1024 * 1024 });
+    expect(resolveRunBudgetCaps('250000', '0')).toMatchObject({ outputTokens: 250_000, streamedBytes: 0 });
+    expect(resolveRunBudgetCaps('0', '0').warnings).toEqual([]);
+  });
+
+  it('config singleton exposes validated run-budget caps', () => {
+    expect(config.piRunBudgetMaxOutputTokens).toBeGreaterThanOrEqual(0);
+    expect(config.piRunBudgetMaxStreamedBytes).toBeGreaterThanOrEqual(0);
   });
 });

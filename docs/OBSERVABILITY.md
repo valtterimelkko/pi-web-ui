@@ -843,7 +843,7 @@ transcript bodies, no cookies, no auth data. The route's schema is strict: an
 unknown field is rejected rather than stored, so transcript content cannot be
 smuggled in beside a health record.
 
-## Run budgets (B3a)
+## Run budgets (B3a + B3b)
 
 Every in-process Pi session enforces a per-run budget on streamed tool-call
 argument characters. The 2026-09-12 production stall (a runaway generation whose
@@ -899,6 +899,68 @@ patch; that patch is removed and the bound now lives in pi-web-ui, leaving
   p99 ~9.8 KB, max 36.9 KB — the 64 KB default keeps patch parity and has
   zero observed false positives (the 16 KB alternative would have failed
   ~0.16% of calls, including large legit `write`s).
+
+### Per-run output-token and streamed-byte budgets (B3b, contract 1.50.0)
+
+Beside the tool-argument guard, every in-process Pi session enforces two more
+per-run budgets against runaway generation (endless prose, thinking or tool
+calls — the same 2026-09-12 class beyond its quadratic parse arm):
+
+- **Where:** `server/src/pi/run-budget.ts`, one guard per session at the same
+  single `PiService.createSession` subscribe funnel.
+- **Caps:** `PI_RUN_BUDGET_MAX_OUTPUT_TOKENS` (default `1000000` per run) and
+  `PI_RUN_BUDGET_MAX_STREAMED_BYTES` (default `16777216` = 16 MiB per run,
+  UTF-8 bytes over text + thinking + tool-call deltas). `0` disables a
+  dimension; an invalid value logs one warning and falls back — configuration
+  never stops startup.
+- **What counts:** output tokens are summed from the public `usage.output`
+  each assistant message reports at `message_end` (the runtime reports usage
+  only in the final streaming chunk — the token cap therefore trips at
+  message boundaries); streamed bytes count every `text_delta`,
+  `thinking_delta` and `toolcall_delta` as they stream, which is the LIVE
+  mid-stream bound within a message. Providers without usage reporting (37 of
+  73,843 measured assistant messages) never trip the token cap; the byte cap
+  still bounds them.
+- **On breach:** one `run_budget_exceeded` event on the session's normal
+  stream (`data: { budget: "output_tokens" | "streamed_bytes", cap, observed }`),
+  then the public `AgentSession.abort()` with the same bounded retry pattern
+  as B3a. Internal API receipts terminate `failed` with the SAME
+  `RUN_BUDGET_EXCEEDED` code (which budget tripped lives on the event — the
+  receipt persists only the code). B3a's `tool_args_budget_exceeded` event
+  now also carries `data.budget: "tool_args"` (additive) so all three budgets
+  share one discriminator.
+- **What to look for:** the `run_budget_exceeded`
+  event on the session event stream and the error-code catalog hint. (Log
+  lines from component `RunBudget` appear only when abort retries fail — a
+  clean breach is observable on the event stream and the receipt, not the
+  log.)
+- **Calibration (correction 02 — measured on the guard's real run boundary
+  with the CORRECTED merge key; pi-agent-core's loop consumes queued
+  follow-ups INSIDE one run, so persisted user-message segments are merged
+  into one run when the segment's USER timestamp is within 2 s of the
+  previous assistant end — v2 wrongly merged on the first assistant
+  timestamp):** 735 files / 3,356 segments; the gap distribution is bimodal
+  (921 gaps <2s vs 1,226 ≥30s). Merged at <2s: **918 joins → 2,382 runs** —
+  output tokens per merged run p50 9,403, p99 148,540, p99.9 257,194, max
+  **270,689**; streamed bytes p50 33,018, p99 537,833, p99.9 896,543, max
+  **1,050,331**. Worst case at a 30s merge: 1,900 runs, same maxima.
+  - output tokens: **0/2,376 merged runs breach 1,000,000** (3.7× the merged
+    max; the 2× rule vs the worst case requires ≥541,378). Deliberately
+    loose: the token cap fires only at message end, so it must not abort a
+    legitimate long agentic loop — the byte cap is the live bound.
+  - streamed bytes: **0/2,382 merged runs breach 16 MiB** (~16× the merged
+    max, ≥2× rule).
+  - real streaming rate (merged-run bytes/wall, includes tool time): p50
+    143 B/s, p99 1,088 B/s, p99.9 2,710 B/s, max 6,583 B/s — the live-proof
+    pacing is justified against these figures.
+  History: the first-round segment view and the correction-01 v2 figures
+  (wrong merge key: 3,273 runs at 2s) are preserved in the lane measure dir
+  (`measurement.json`, `measurement-v2.json`); corrected figures are
+  `measurement-v3.json`. Independent reviewer aggregation (918 joins; 2,375
+  token runs / max 270,689; 2,381 byte runs / max 1,050,331) matches v3
+  exactly on joins and maxima; v3's run counts are +1 (2,376/2,382) because
+  the live corpus gained a segment between the reviewer's scan and the v3
+  scan.
 
 ## Error codes & enrichment
 

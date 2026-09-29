@@ -183,6 +183,10 @@ export class ToolArgsBudgetGuard {
           type: TOOL_ARGS_BUDGET_EXCEEDED_EVENT,
           timestamp: Date.now(),
           data: {
+            // Contract 1.50.0 (B3b) added `budget` as an additive uniform
+            // discriminator across all three per-run budgets; the 1.48.0
+            // fields below are unchanged.
+            budget: 'tool_args' as const,
             scope,
             capChars,
             observedChars,

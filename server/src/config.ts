@@ -43,20 +43,7 @@ export interface ParsedToolArgsCap {
  * valid, warning-free.
  */
 export function parseToolArgsCap(raw: string | undefined, fallback: number, name: string): ParsedToolArgsCap {
-  if (raw === undefined || raw.trim() === '') return { value: fallback };
-  const trimmed = raw.trim();
-  if (trimmed === '0') return { value: 0 };
-  if (!/^[1-9]\d*$/.test(trimmed)) {
-    return { value: fallback, warning: `${name}='${raw}' is not a valid cap; using ${fallback}.` };
-  }
-  const value = Number(trimmed);
-  if (value < PI_TOOL_ARGS_MIN_CHARS_BOUND || value > PI_TOOL_ARGS_MAX_CHARS_BOUND) {
-    return {
-      value: fallback,
-      warning: `${name}=${value} is outside the supported range [${PI_TOOL_ARGS_MIN_CHARS_BOUND}, ${PI_TOOL_ARGS_MAX_CHARS_BOUND}]; using ${fallback}.`,
-    };
-  }
-  return { value };
+  return parseRunBudgetCap(raw, fallback, name, PI_TOOL_ARGS_MIN_CHARS_BOUND, PI_TOOL_ARGS_MAX_CHARS_BOUND);
 }
 
 export interface ResolvedToolArgsCaps {
@@ -90,6 +77,97 @@ export function resolveToolArgsCaps(
     };
   }
   return { callChars: call.value, turnChars: turn.value, warnings };
+}
+
+// ─── Pi per-run output-token and streamed-byte budgets (B3b) ─────────────
+
+/** Lower bound (tokens) for a configured per-run output-token cap. */
+export const PI_RUN_BUDGET_MIN_OUTPUT_TOKENS = 1_000;
+/** Upper bound (tokens) for a configured per-run output-token cap. */
+export const PI_RUN_BUDGET_MAX_OUTPUT_TOKENS_BOUND = 10_000_000;
+/** Lower bound (bytes) for a configured per-run streamed-byte cap. 64 KiB
+ *  keeps the configured range wide enough to cover the measured realistic
+ *  maximum (999,449) and tighter operator-chosen experiments. */
+export const PI_RUN_BUDGET_MIN_STREAMED_BYTES = 64 * 1024;
+/** Upper bound (bytes) for a configured per-run streamed-byte cap. */
+export const PI_RUN_BUDGET_MAX_STREAMED_BYTES_BOUND = 1024 * 1024 * 1024;
+/** Default per-run output-token cap (B3b, correction 01 re-derived on the
+ *  guard's real run boundary): pi-agent-core's loop consumes queued
+ *  follow-ups INSIDE one run, so persisted user-message segments were merged
+ *  at a <2s follow-up gap (gap distribution is bimodal: 921 gaps <2s vs 1,223
+ *  ≥30s in 735 files / 3,353 segments → 3,273 merged runs). Merged max
+ *  267,569 tokens; worst case at a 30s merge 270,689. Rule: margin over the
+ *  merged max, NEVER BELOW 2× → 1,000,000 (3.7×) — deliberately loose so a
+ *  legitimate long agentic loop cannot trip this message-end cap; the
+ *  streamed-byte cap is the live volume bound. */
+export const PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS = 1_000_000;
+/** Default per-run streamed-byte cap over all streamed assistant output
+ *  (text + thinking + tool-call arguments; UTF-8 bytes; B3b correction 01:
+ *  merged-run max 999,449, worst case at a 30s merge 1,050,331; 0/3,280
+ *  merged runs exceed 16 MiB = 15.3× the merged max, ≥2× rule). This is the
+ *  LIVE mid-stream bound: usage tokens are only reported at message end,
+ *  bytes stream per delta. */
+export const PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Parse one per-run budget cap env value (B3b). Same contract as B3a's
+ * `parseToolArgsCap`: unset/blank falls back, an explicit `0` disables,
+ * anything invalid or out of `[min, max]` reports a warning and falls back —
+ * configuration never stops startup. Bounds are per-dimension (tokens vs
+ * bytes), so they are parameters here; `parseToolArgsCap` delegates to this
+ * with the tool-argument bounds.
+ */
+export function parseRunBudgetCap(
+  raw: string | undefined,
+  fallback: number,
+  name: string,
+  min: number,
+  max: number,
+): ParsedToolArgsCap {
+  if (raw === undefined || raw.trim() === '') return { value: fallback };
+  const trimmed = raw.trim();
+  if (trimmed === '0') return { value: 0 };
+  if (!/^[1-9]\d*$/.test(trimmed)) {
+    return { value: fallback, warning: `${name}='${raw}' is not a valid cap; using ${fallback}.` };
+  }
+  const value = Number(trimmed);
+  if (value < min || value > max) {
+    return {
+      value: fallback,
+      warning: `${name}=${value} is outside the supported range [${min}, ${max}]; using ${fallback}.`,
+    };
+  }
+  return { value };
+}
+
+export interface ResolvedRunBudgetCaps {
+  outputTokens: number;
+  streamedBytes: number;
+  warnings: string[];
+}
+
+/**
+ * Resolve the per-run output-token and streamed-byte caps together (B3b).
+ * The two dimensions are independent (no ordering rule): each invalid value
+ * falls back individually with one warning. Never throws.
+ */
+export function resolveRunBudgetCaps(
+  outputRaw: string | undefined,
+  streamedRaw: string | undefined,
+): ResolvedRunBudgetCaps {
+  const output = parseRunBudgetCap(
+    outputRaw, PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS',
+    PI_RUN_BUDGET_MIN_OUTPUT_TOKENS, PI_RUN_BUDGET_MAX_OUTPUT_TOKENS_BOUND,
+  );
+  const streamed = parseRunBudgetCap(
+    streamedRaw, PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES, 'PI_RUN_BUDGET_MAX_STREAMED_BYTES',
+    PI_RUN_BUDGET_MIN_STREAMED_BYTES, PI_RUN_BUDGET_MAX_STREAMED_BYTES_BOUND,
+  );
+  return {
+    outputTokens: output.value,
+    streamedBytes: streamed.value,
+    warnings: [output.warning, streamed.warning].filter((w): w is string => w !== undefined),
+  };
 }
 
 // ─── Logging configuration (observability) ──────────────────────────────────
@@ -363,6 +441,10 @@ export interface ServerConfig {
   piToolArgsMaxCallChars: number;
   /** B3a: per-run aggregate cap on streamed tool-argument chars; 0 disables. */
   piToolArgsMaxTurnChars: number;
+  /** B3b: per-run cap on summed assistant output tokens; 0 disables. */
+  piRunBudgetMaxOutputTokens: number;
+  /** B3b: per-run cap on streamed assistant bytes (text + thinking + tool args); 0 disables. */
+  piRunBudgetMaxStreamedBytes: number;
   maxClaudeProcesses: number;
   opencodeServerPort: number;
   opencodeServerHost: string;
@@ -584,6 +666,13 @@ export const config: ServerConfig = {
     const caps = resolveToolArgsCaps(process.env.PI_TOOL_ARGS_MAX_CALL_CHARS, process.env.PI_TOOL_ARGS_MAX_TURN_CHARS);
     for (const warning of caps.warnings) console.warn(`[config] ${warning}`);
     return { piToolArgsMaxCallChars: caps.callChars, piToolArgsMaxTurnChars: caps.turnChars };
+  })(),
+  // B3b: per-run output-token and streamed-byte budgets. Same never-stop-
+  // startup contract as B3a: invalid values warn and fall back at load time.
+  ...((): { piRunBudgetMaxOutputTokens: number; piRunBudgetMaxStreamedBytes: number } => {
+    const caps = resolveRunBudgetCaps(process.env.PI_RUN_BUDGET_MAX_OUTPUT_TOKENS, process.env.PI_RUN_BUDGET_MAX_STREAMED_BYTES);
+    for (const warning of caps.warnings) console.warn(`[config] ${warning}`);
+    return { piRunBudgetMaxOutputTokens: caps.outputTokens, piRunBudgetMaxStreamedBytes: caps.streamedBytes };
   })(),
   maxClaudeProcesses: parseInt(process.env.MAX_CLAUDE_PROCESSES || '10', 10),
   opencodeServerPort: parseInt(process.env.OPENCODE_SERVER_PORT || '4096', 10),
