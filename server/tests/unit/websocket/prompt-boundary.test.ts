@@ -223,3 +223,81 @@ describe('correction 01: the browser prompt fence while a drain is active or hel
     expect(sent.find((s) => s.message.code === 'SERVER_DRAINING')).toBeUndefined();
   });
 });
+
+describe('correction 02: Command Code steer / follow_up can start NEW turns — fence them', () => {
+  let mgr: WebSocketConnectionManager;
+  let sent: Array<{ clientId: string; message: { type: string; code?: string; message?: string } }>;
+  let ccPrompt: ReturnType<typeof vi.fn>;
+  let ccAbort: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mgr = new WebSocketConnectionManager();
+    sent = [];
+    (mgr as any).sendMessage = (clientId: string, message: unknown) => {
+      sent.push({ clientId, message: message as { type: string; code?: string; message?: string } });
+    };
+    ccPrompt = vi.fn(async () => undefined);
+    ccAbort = vi.fn(async () => undefined);
+    (mgr as any).multiSessionManager = {
+      getClientSessionPath: () => 'cc-1',
+      getAgentSession: () => undefined,
+      getSessionStatus: () => ({ status: 'idle' }),
+      dispose: () => {},
+    };
+    (mgr as any).commandCodeSessionIds = new Set(['cc-1']);
+    (mgr as any).commandCodeService = {
+      isRunning: vi.fn(() => false),
+      abort: ccAbort,
+      waitForTurnEnd: vi.fn(async () => undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    (mgr as any).handleCommandCodePrompt = ccPrompt;
+    (mgr as any).drainCommandCodeFollowUps = vi.fn(async () => undefined);
+  });
+
+  afterEach(async () => {
+    if (mgr) await (mgr as any).close?.();
+  });
+
+  const fencedError = () => sent.find((s) => s.message.code === 'SERVER_DRAINING');
+
+  it('refuses an IDLE Command Code steer (it would start a new turn as a prompt)', async () => {
+    mgr.drainFence = () => ({ active: true, retryAfterSeconds: 30 });
+    await (mgr as any).handleSteer('c1', { type: 'steer', message: BENIGN });
+    expect(fencedError()).toBeDefined();
+    expect(ccPrompt).not.toHaveBeenCalled();
+  });
+
+  it('refuses a RUNNING Command Code steer (abort + immediate next prompt also starts a turn)', async () => {
+    (mgr as any).commandCodeService.isRunning = vi.fn(() => true);
+    mgr.drainFence = () => ({ active: true, retryAfterSeconds: 30 });
+    await (mgr as any).handleSteer('c1', { type: 'steer', message: BENIGN });
+    expect(fencedError()).toBeDefined();
+    expect(ccAbort).not.toHaveBeenCalled();
+    expect(ccPrompt).not.toHaveBeenCalled();
+  });
+
+  it('refuses an IDLE Command Code follow_up (it would start a new turn as a prompt)', async () => {
+    mgr.drainFence = () => ({ active: true, retryAfterSeconds: 30 });
+    await (mgr as any).handleFollowUp('c1', { type: 'follow_up', message: BENIGN });
+    expect(fencedError()).toBeDefined();
+    expect(ccPrompt).not.toHaveBeenCalled();
+  });
+
+  it('allows a RUNNING Command Code follow_up (a true queue; joining stays allowed)', async () => {
+    (mgr as any).commandCodeService.isRunning = vi.fn(() => true);
+    mgr.drainFence = () => ({ active: true, retryAfterSeconds: 30 });
+    await (mgr as any).handleFollowUp('c1', { type: 'follow_up', message: BENIGN });
+    expect(fencedError()).toBeUndefined();
+    expect(ccPrompt).not.toHaveBeenCalled();
+    const queue = (mgr as any).commandCodeFollowUps.get('cc-1');
+    expect(queue).toEqual([BENIGN]);
+  });
+
+  it('without a fence the Command Code steer behaves exactly as before (control)', async () => {
+    await (mgr as any).handleSteer('c1', { type: 'steer', message: BENIGN });
+    expect(fencedError()).toBeUndefined();
+    expect(ccPrompt).toHaveBeenCalledTimes(1);
+  });
+});

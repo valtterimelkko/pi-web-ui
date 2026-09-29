@@ -9,7 +9,7 @@ import { createServer } from 'http';
 import path from 'path';
 import { createApp } from './app.js';
 import { config } from './config.js';
-import { WebSocketConnectionManager } from './websocket/index.js';
+import { WebSocketConnectionManager, wireWebSocketDrainFence } from './websocket/index.js';
 import { handleWebSocketUpgrade } from './websocket/upgrade-handler.js';
 import { initializePiService, startSessionWatcher, getPiService, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
 import { publishSessionUpdateToBroker } from './session-broker-bridge.js';
@@ -171,14 +171,16 @@ async function initialize(): Promise<void> {
           if (wsManager && handler) {
             wsManager.goalControlApi = (sessionId, body) => handler(sessionId, body);
           }
-          // B4.1 correction 01: the browser prompt fence rides the Internal
-          // API drain the same way — prompts are refused while a drain is
-          // active or held, so a deploy cannot kill a just-started turn.
-          const fence = internalApiServer?.getDrainFence() ?? null;
-          if (wsManager && fence) {
-            wsManager.drainFence = fence;
-          }
         });
+        // B4.1 correction 02 (finding 1): the browser drain fence is installed
+        // as a LATE-BOUND accessor that resolves the live Internal API server
+        // on every prompt. The pre-correction microtask read getDrainFence()
+        // before start() built the controller — it returned null and the
+        // fence was never installed. Startup order and a future Internal API
+        // restart cannot leave a stale or missing fence.
+        if (wsManager) {
+          wireWebSocketDrainFence(wsManager, () => internalApiServer);
+        }
         notificationsRegistry = sharedRegistry;
         internalApiServer = new InternalApiServer({
           config: {

@@ -412,6 +412,9 @@ export class InternalApiServer {
       admission: admissionController,
       listNonterminalRuns: () => runReceiptManager.listNonterminal(),
       listBusySessions,
+      // Correction 02: every outcome decision awaits this (bounded) before it
+      // measures — a decision on a lagging snapshot could miss a busy session.
+      refreshBusySessions: () => busySource.refresh(),
       quarantinedTurns: () => runReceiptManager.getQuarantinedCount(),
       recordPath: drainRecordPath,
     });

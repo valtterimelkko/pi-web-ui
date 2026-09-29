@@ -374,6 +374,31 @@ export async function sendRuntimeAvailabilityStatus(
   ]);
 }
 
+  /**
+ * B4.1 correction 02 (finding 1): install the browser drain fence as a
+ * STABLE LATE-BOUND accessor. The pre-correction wiring read
+ * `internalApiServer?.getDrainFence()` inside a `queueMicrotask` that ran
+ * before the server's drain controller existed — it returned null and the
+ * fence was never installed. The installed accessor resolves the LIVE
+ * server on every prompt: startup order and an Internal API restart cannot
+ * leave a stale or missing fence. When no server/controller exists the
+ * fence is inactive (Internal API disabled = never fenced).
+ */
+export function wireWebSocketDrainFence(
+  target: { drainFence?: () => { active: boolean; retryAfterSeconds: number } },
+  resolveServer: () => { getDrainFence?: () => (() => { active: boolean; retryAfterSeconds: number }) | null } | null | undefined,
+): void {
+  target.drainFence = () => {
+    try {
+      // getDrainFence() hands back the per-call fence accessor (null until the
+      // controller exists); invoke it — never install a stale function.
+      return resolveServer()?.getDrainFence?.()?.() ?? { active: false, retryAfterSeconds: 30 };
+    } catch {
+      return { active: false, retryAfterSeconds: 30 };
+    }
+  };
+}
+
 export class WebSocketConnectionManager {
   /**
    * Contract 1.27.0 goal function: browser goal control for runtimes without a
@@ -1329,6 +1354,25 @@ export class WebSocketConnectionManager {
    * applied uniformly upstream in `handleMessage`/`routeMessage` before this
    * runs, so the same protection sequence covers prompt, steer, and follow_up.
    */
+  /**
+   * B4.1 (corrections 01+02): the drain fence for every browser path that can
+   * START a new turn. Sends the user-visible refusal and returns true when a
+   * drain is active or held. Joining an already-running turn (a true steer or
+   * queued follow-up) must NOT call this — that stays allowed.
+   */
+  private fencedNewTurn(clientId: string): boolean {
+    const fence = this.drainFence?.();
+    if (!fence?.active) {
+      return false;
+    }
+    this.sendMessage(clientId, {
+      type: 'error',
+      message: `Server is restarting shortly: a deploy drain is active and new turns are refused. Retry in ~${fence.retryAfterSeconds}s; this message was not started.`,
+      code: 'SERVER_DRAINING',
+    });
+    return true;
+  }
+
   private blockIfPromptInjection(clientId: string, text: string): boolean {
     const injectionCheck = detectPromptInjection(text);
     if (injectionCheck.recommendation === 'block') {
@@ -1351,13 +1395,7 @@ export class WebSocketConnectionManager {
     // the restart kills silently (the gap the drain exists to close). Refuse
     // with a clear, user-visible error instead — including slash commands,
     // which also start turns. Steer/follow_up keep their existing behaviour.
-    const fence = this.drainFence?.();
-    if (fence?.active) {
-      this.sendMessage(clientId, {
-        type: 'error',
-        message: `Server is restarting shortly: a deploy drain is active and new prompts are refused. Retry in ~${fence.retryAfterSeconds}s; this prompt was not started.`,
-        code: 'SERVER_DRAINING',
-      });
+    if (this.fencedNewTurn(clientId)) {
       return;
     }
 
@@ -2011,6 +2049,12 @@ export class WebSocketConnectionManager {
    * steer hand-off is already in flight are queued as follow-ups (FIFO).
    */
   private async handleCommandCodeSteer(clientId: string, sessionId: string, text: string): Promise<void> {
+    // Correction 02 (finding 3): BOTH Command Code steer paths start a turn —
+    // idle steer is an ordinary prompt, running steer aborts and immediately
+    // re-prompts. Neither joins; both are fenced while a drain is held.
+    if (this.fencedNewTurn(clientId)) {
+      return;
+    }
     if (!this.commandCodeService.isRunning(sessionId)) {
       await this.handleCommandCodePrompt(clientId, sessionId, text);
       await this.drainCommandCodeFollowUps(clientId, sessionId);
@@ -2027,6 +2071,12 @@ export class WebSocketConnectionManager {
   /** Command Code follow-up: queue while a run is live, send immediately otherwise. */
   private async handleCommandCodeFollowUp(clientId: string, sessionId: string, text: string): Promise<void> {
     if (!this.commandCodeService.isRunning(sessionId)) {
+      // Correction 02 (finding 3): an idle Command Code follow-up is an
+      // ordinary prompt — a NEW turn — so the drain fence applies. A running
+      // session's follow-up is a true queue (joining) and stays allowed.
+      if (this.fencedNewTurn(clientId)) {
+        return;
+      }
       await this.handleCommandCodePrompt(clientId, sessionId, text);
       await this.drainCommandCodeFollowUps(clientId, sessionId);
       return;

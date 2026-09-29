@@ -2,7 +2,7 @@
 // Handles real-time communication between client and server
 
 export * from './protocol.js';
-export { WebSocketConnectionManager, type WebSocketClient } from './connection.js';
+export { WebSocketConnectionManager, wireWebSocketDrainFence, type WebSocketClient } from './connection.js';
 export {
   handleSessionWebSocket,
   replayHistory,
