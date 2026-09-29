@@ -282,6 +282,9 @@ export interface BatchCreateEntry {
   agentOsCapture?: 'enabled' | 'disabled';
   /** Contract 1.53.0 (C4): dispatch preflight spec (referenced paths + tools); effective cwd always preflighted too. */
   preflight?: PreflightSpec;
+  /** Contract 1.54.0 (C5, correction 01): per-entry parent linkage, same semantics
+   *  as the single-create body field (header wins). */
+  parentSessionId?: string;
 }
 
 export interface BatchCreateRequest {
