@@ -207,7 +207,9 @@ describe('watch wake — full chain: firing → wake dispatch → run receipt (i
 
   it('records a busy Pi follow-up honestly as deferred delivery', async () => {
     const followUp = vi.fn(async () => undefined);
-    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'busy' });
+    // C2 (contract 1.57.0): deferred delivery queues behind a LIVE runtime
+    // turn; a busy state with no live turn is refused before dispatch.
+    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'busy', sdkStreaming: true });
     multiSessionManager.getAgentSession.mockReturnValue({
       followUp,
       getFollowUpMessages: vi.fn(() => ['child done']),
