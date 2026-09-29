@@ -2787,6 +2787,15 @@ DELETE /api/v1/sessions/:sessionId
 Removes the session from the registry. If the session is running, it will
 be aborted first.
 
+For Pi sessions the delete disposes the runtime through the manager's
+tear-down funnel, which first emits one **bounded `session_shutdown`
+event** (reason `quit`, 5 s bound) to the session's extensions —
+background-shell processes are killed, goal-engine/watch-wake timers are
+cleared and memory state is saved before the SDK object is released and
+the backing session file is unlinked (B5, finding F1). The response
+shape and statuses are unchanged; DELETE latency can include up to the
+emission bound when extensions have shutdown handlers.
+
 **Response (200):**
 ```json
 { "success": true }
