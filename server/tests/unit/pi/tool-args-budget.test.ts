@@ -311,6 +311,89 @@ describe('ToolArgsBudgetGuard', () => {
     expect(abortCalls).toBe(3);
     expect(emitted).toHaveLength(1);
   });
+
+  it('an abort RESOLVING after the run boundary must not latch the NEW run (correction 04)', async () => {
+    const guard = new ToolArgsBudgetGuard({ callChars: 64, turnChars: 8192 });
+    const emitted: Record<string, unknown>[] = [];
+    let abortCalls = 0;
+    let releaseRun1Abort: (() => void) | undefined;
+    const session = {
+      get aborted() {
+        return abortCalls;
+      },
+      abort: () => {
+        abortCalls += 1;
+        if (abortCalls === 1) {
+          // Run 1's abort stays pending until the test releases it — after
+          // run 2 has already started (abort() resolves on the idle
+          // transition, and a queued follow-up can start the next run then).
+          return new Promise<void>((resolve) => {
+            releaseRun1Abort = resolve;
+          });
+        }
+        return Promise.resolve();
+      },
+      emitted,
+      emit: (event: Record<string, unknown>) => {
+        emitted.push(event);
+      },
+    };
+    guard.observe(session, agentStart(), session.emit);
+    feedDeltas(guard, session, 0, 128); // run 1 breaches; attempt 1 pending
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(1);
+
+    // Run 1 ends and run 2 starts while run 1's abort is still in flight.
+    guard.observe(session, agentStart(), session.emit);
+
+    releaseRun1Abort!(); // run 1's abort resolves AFTER the boundary
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Run 2 must be fully guarded: its own breach fires and aborts on its own.
+    feedDeltas(guard, session, 0, 128);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(2);
+    const synthetic = emitted.filter((event) => event.type === TOOL_ARGS_BUDGET_EXCEEDED_EVENT);
+    expect(synthetic).toHaveLength(2); // one reason event per run
+  });
+
+  it('an abort REJECTING after the run boundary must not touch the NEW run (correction 04)', async () => {
+    const guard = new ToolArgsBudgetGuard({ callChars: 64, turnChars: 8192 });
+    const emitted: Record<string, unknown>[] = [];
+    let abortCalls = 0;
+    let rejectRun1Abort: ((error: Error) => void) | undefined;
+    const session = {
+      get aborted() {
+        return abortCalls;
+      },
+      abort: () => {
+        abortCalls += 1;
+        if (abortCalls === 1) {
+          return new Promise<void>((_resolve, reject) => {
+            rejectRun1Abort = reject;
+          });
+        }
+        return Promise.resolve();
+      },
+      emitted,
+      emit: (event: Record<string, unknown>) => {
+        emitted.push(event);
+      },
+    };
+    guard.observe(session, agentStart(), session.emit);
+    feedDeltas(guard, session, 0, 128);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    guard.observe(session, agentStart(), session.emit); // run 2 starts
+    rejectRun1Abort!(new Error('late failure')); // run 1's abort rejects AFTER the boundary
+    await new Promise((resolve) => setImmediate(resolve));
+
+    feedDeltas(guard, session, 0, 128); // run 2 crosses the cap
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(2);
+    const synthetic = emitted.filter((event) => event.type === TOOL_ARGS_BUDGET_EXCEEDED_EVENT);
+    expect(synthetic).toHaveLength(2);
+  });
 });
 
 describe('PiToolArgsBudgetExceededError', () => {

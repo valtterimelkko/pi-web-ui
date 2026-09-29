@@ -167,10 +167,15 @@ export class ToolArgsBudgetGuard {
     observedChars: number,
     contentIndex: number | undefined,
   ): void {
+    // Capture THIS run: agent_start replaces this.run, and abort() settles on
+    // the idle transition — a queued follow-up can start the next run before
+    // the promise resolves, so the callbacks below must mutate only the run
+    // they belonged to, never the new one (correction 04).
+    const run = this.run;
     // Emit the reason BEFORE aborting so every observer sees it before the
     // aborted turn's terminal events — exactly once per run.
-    if (!this.run.syntheticEmitted) {
-      this.run.syntheticEmitted = true;
+    if (!run.syntheticEmitted) {
+      run.syntheticEmitted = true;
       try {
         emit({
           type: TOOL_ARGS_BUDGET_EXCEEDED_EVENT,
@@ -192,19 +197,19 @@ export class ToolArgsBudgetGuard {
     // the NEXT delta retries (bounded) — a browser session has no receipt
     // watchdog to retry for us (correction 03) — while a merely SLOW abort
     // never spawns duplicate attempts.
-    if (!this.run.abortInFlight) {
-      const attempt = this.run.abortAttempts + 1;
-      this.run.abortAttempts = attempt;
-      this.run.abortInFlight = true;
+    if (!run.abortInFlight) {
+      const attempt = run.abortAttempts + 1;
+      run.abortAttempts = attempt;
+      run.abortInFlight = true;
       void session.abort().then(
         () => {
-          this.run.abortInFlight = false;
-          this.run.breached = true;
+          run.abortInFlight = false;
+          run.breached = true;
         },
         (abortError: unknown) => {
-          this.run.abortInFlight = false;
+          run.abortInFlight = false;
           if (attempt >= MAX_ABORT_ATTEMPTS) {
-            this.run.breached = true;
+            run.breached = true;
             logger.error(
               `session.abort() failed ${attempt} times after the tool-argument budget breach ` +
                 `(${abortError instanceof Error ? abortError.message : String(abortError)}); ` +
