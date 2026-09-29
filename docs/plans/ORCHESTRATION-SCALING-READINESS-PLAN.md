@@ -1,6 +1,6 @@
 # Orchestration Scaling Readiness Plan
 
-> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **Open before wave 2:** the B1.2 production telemetry comparison, and the owner's `subagent` decision (B1.3). **Next: wave 2 (B2–B4), then R2.** Server-side fixes reach production only at an owner-approved restart.
+> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **2026-09-29 follow-up (owner rule: no local patches to upstream packages):** both local patches are removed. B1.2b replaces the pi-core extension-factory patch with the public SDK API; B3a (the tool-argument part of B3) replaces the pi-ai toolstream patch with a pi-web-ui-side budget; `subagent` shipped with owner option B (B1.3). All were deployed at the 2026-09-29 10:10 UTC restart. **Open before wave 2:** the B1.2 production telemetry comparison. **Next: wave 2 (B2, the rest of B3, B4), then R2.** Server-side fixes reach production only at an owner-approved restart.
 > **Created:** 2026-09-26 from the Pi Web UI / Internal API deep review (owner-requested).
 > **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). **Review moments** are held with the owner, in that session or, if its context is exhausted, by a fresh Opus agent that first follows §7 (handoff).
 > **Evidence:** [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md).
@@ -100,6 +100,11 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
   - B1.1: the residual file-watcher growth, proven with synthetic churn.
   - B1.2: attribute and remove production event-loop lag spikes. This comes first because B2's lag gate would otherwise refuse API work because of browser activity.
 - **Long soaks are expensive; keep them to a minimum.** E2's final soak is the only 24 h soak left in the plan. D1's contained-build check uses a bounded run. Other validation uses synthetic, fast checks wherever they can decide the question.
+
+**Owner decisions recorded 2026-09-29 (during the interim wave):**
+- **No local changes to upstream packages** (`@earendil-works/*`): no patches, no `dist` edits, no `postinstall` patching, no deep imports of private files. Upstream updates must not be able to break our processes. Where a patch served a real purpose, replace it robustly from our side: degrade gracefully at runtime (fallback plus a warning), and alarm loudly in CI (version pins). Both existing patches were removed (B1.2b, B3a).
+- **`subagent`: option B.** One process-wide background registry keyed by session, with delivery routed to the owning session (B1.3).
+- Production restarts are authorised for these fixes, still with activeTurns 0, a board check and `production:lock`.
 
 ## 4. Execution contract (applies to every step)
 
@@ -362,18 +367,30 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
 - **Open:** the production spike-minute comparison over an observation window against the 17-in-22-h baseline.
 - Evidence: [`B1.2.md`](./execution-reports/orchestration-scaling/B1.2.md); reviews `…/reviews/b1-2-luna-review*.md` (REJECT ×3, all findings closed; the final correction was verified by the parent).
 
+**B1.2b — the SDK patch replaced by the public API (2026-09-29, owner rule; merged `683ffa56`, in production since the 10:10 UTC restart).**
+- **How factories are delivered now.** Cached factories reach each session's `DefaultResourceLoader` through its public options: `extensionFactories` + `noExtensions` + `additionalExtensionPaths` + `extensionsOverride`, which restores real paths, order and errors. Factories are imported with `jiti` 2.7.0, using an alias map that replicates the SDK's aliasing through public resolution only (`server/src/pi/sdk-extension-importer.ts`).
+- **Per-loader snapshots.** Each loader holds its own factory snapshot, owned for as long as the session is. `/reload` updates only that session's snapshot and only with successful imports. A failed re-import surfaces as the SDK's own load error.
+- **Degradation.** An exact SDK version guard (`0.87.1`) and any failure in the pipeline degrade that session to the plain uncached loader, with a rate-limited warning and `getExtensionLoaderTelemetry()`. A CI test pins the SDK version.
+- **Cost.** One extra settings reload and package resolve per open. Reproduction steady-state p99 is 117–192 ms, about 20% above the patch build, with one non-sustained warm-up reading per run.
+- **Production smoke after the restart.** 16/16 extensions load at their real paths, with 0 fallback warnings and 0 `<inline:` labels. The cold first open stalled 730 ms (the one-off import). New-cwd opens took 496–558 ms in the loader, with 359–395 ms stalls on 3 of 5; the others were under the 50 ms log. The 12:07 UTC telemetry comparison quantifies the effect.
+- Evidence: [`B1.2b.md`](./execution-reports/orchestration-scaling/B1.2b.md); reviews `…/reviews/b1-2b-luna-review*.md` (REJECT ×2, all closed; correction 03 verified by the parent).
+
 #### B1.3 — Extension module state safe to share (added 2026-09-28 during B1.2)
 
 **Intent.** Caching extension modules is only safe when their module-scope state is safe to share between sessions. The SDK **already** shares an evaluated module between sessions in the **same cwd** in production today, so per-session module state is a latent correctness bug regardless of caching.
 **Done** (`pi-enhancement` `8a4b768`, `9ad45d2`, `7c11e1d`; deployed to `~/.pi/agent/extensions` 2026-09-29 00:04 UTC, backup in `/root/orch-ops/orchestration-scaling/deploy-backup-b13-20260929T000419/`):
 - `memory`, `goal-engine` (auto-continue maps) and `enhanced-plan-mode` moved to per-session scope, each with a two-session isolation test (including a goal-engine shutdown-isolation regression).
 - `web-tools` (request-keyed cache) and `parallel-orchestrator` (globally keyed registries) audited as process-wide safe.
-**Open — owner decision:** `subagent`'s background-task registry is module-level. Among same-cwd sessions today, `reconcile()` drops other sessions' tracked tasks, and completion notices go to the most recently started session, not the owner.
-- **A: per-session manager.** A task belongs to the session that started it.
-- **B: process-wide registry keyed by session.** Tasks survive session switches and are routed to their owner.
-- **C: leave it** (current).
+**`subagent` — owner chose option B (2026-09-29); shipped (`pi-enhancement` `b046a8a`, deployed 2026-09-29 10:09 UTC; cached from pi-web-ui `6442ce23`, 16/16).**
+- There is one process-wide background registry keyed by session.
+  - Delivery goes to the owning session while it is live.
+  - It is handed over only on an explicit session switch; a vanished owner stays authoritative.
+  - Owners that have ended are held in a bounded set (64), and running children are aborted on eviction.
+  - Pending notifications per owner are bounded by count and bytes; dead `WeakRef` slots are swept.
+  - The exit hook is re-registered on every launch. The persisted `background-tasks` shape is unchanged.
+- Luna rejected round 1 (5 majors) and accepted round 2. **Residual:** no live background-task check was run after the final correction (unit and runtime tests plus Luna probes only).
 
-A or B also makes the last extension cacheable, which removes the residual new-cwd stall seen in production.
+**Finding F1 (for R2).** Pi Web UI never emits `session_shutdown` when it disposes a Pi session; only CLI new/resume/fork/quit/reload do. Extensions' shutdown cleanup therefore never runs in Web UI sessions. B1.3s works around this with `WeakRef` sweeps. A dispose-time `session_shutdown` (or equivalent) is a lifecycle fix to decide at R2.
 **Known gap for the store owner:** `pi-enhancement` has no working typecheck (`memory/tsconfig.json` `ignoreDeprecations` rejected; no root script).
 
 #### B2 — Heap- and lag-aware admission, heap cap aligned
@@ -403,6 +420,19 @@ A or B also makes the last extension cacheable, which removes the residual new-c
 - [ ] Disposable live proof with a fixture that reproduces the 2026-09-12 pattern (very long generation with streamed tool arguments): the turn is aborted at the cap; during the run, a second session keeps streaming and measured event-loop lag stays under the B2 threshold.
 - [ ] The parent sees the terminal state through its watch or receipt without polling.
 **Not victory if:** the cap exists but the 12 Sep-style fixture still pushes lag over threshold.
+**B3a outcome — the streamed tool-argument cap (2026-09-29; merged `3da55e78`, contract 1.48.0, in production since the 10:10 UTC restart).** This replaces the removed pi-ai toolstream patch (owner rule).
+- **Guard.** `ToolArgsBudgetGuard` sits at the single `PiService` subscribe funnel. It counts public `toolcall_delta` characters per call and per run.
+- **On breach:** it emits `tool_args_budget_exceeded`, then calls the public `session.abort()`, with bounded retries per run. The receipt terminates `RUN_BUDGET_EXCEEDED` and stores only the code.
+- **Defaults: 65,536 per call and 262,144 per run** (env `PI_TOOL_ARGS_MAX_CALL_CHARS` / `PI_TOOL_ARGS_MAX_TURN_CHARS`; invalid values warn and fall back; `0` disables). They were chosen by **paced** live measurement on pristine pi-ai:
+  - about 90 deltas/s: p99 max 4 ms;
+  - about 300 deltas/s: p99 max 10 ms;
+  - no reading ≥300 ms in either run.
+- **Residuals.**
+  - **Unpaced worst case:** the 64 KB unpaced run reached a p99 of 10.6 s from two starved samples, bounded by the abort. The cap-off positive control reached a p99 of 23.6 s and never aborted.
+  - **16 KB alternative:** a 16 KB cap passes even unpaced, but would fail about 1 in 600 real tool calls (large writes).
+  - **Parsing:** it stays quadratic upstream; the cap bounds the quadratic parse rather than making it linear.
+- **Still open in B3:** the output-token and streamed-byte caps.
+- Evidence: [`B3a.md`](./execution-reports/orchestration-scaling/B3a.md); raw runs in `/root/orch-ops/orchestration-scaling/b3a/measure/`; reviews `…/reviews/b3a-luna-review*.md` (REJECT, then ACCEPT-WITH-MINORS; corrections 04–05 verified by the parent).
 
 #### B4 — Drain-then-restart deploys
 
@@ -421,6 +451,7 @@ Decide:
 - go/no-go for Stage C;
 - B2's heap and lag thresholds, checked against production telemetry;
 - whether production lag and watcher growth are closed or need another round.
+- the Pi dispose lifecycle (finding F1 in B1.3: no `session_shutdown` on Web UI dispose).
 (The heap-cap choice and the third-retainer question were settled at the 2026-09-28 interim review.)
 
 ### Stage C — Parent ergonomics and child quality
@@ -600,6 +631,7 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | Wave 1 execution | 2026-09-27 | `38c5e91e-…` (orchestrating) | Children on `clinepass/cline-pass/deepseek-v4.1-flash` (owner-authorised to use the remaining Cline Pass quota). An independent reviewer, GPT-6 Luna via `openai-codex` (owner-authorised), ran per lane, and the parent verified every lane. B0, B1 and A2 are merged; the extension fix is deployed. Owner instructions: no production restart until the owner picks a moment (another agent uses the Internal API); review stop after the 24 h confirmation soak. Plan change: B0.1 (stale-`dist` guard) added as an open follow-up. |
 | Interim review (after the confirmation soak) | 2026-09-28 | `d5db9012-5cb3-44af-99b9-06a3f8dd43ca` (Opus; "Int API Program 2", continuing `38c5e91e` after it crashed) | **Inputs checked:** the confirmation soak's `report.md`, `run-state.json`, `events.jsonl` and unit journal (one start, no OOM); start, 12 h and a manually taken end snapshot (constructor counts, `AgentSession` retainer, watcher retainer paths); `session-watcher.ts`; production `server/dist` build time against the restart (B1 present in production); A2 production telemetry (journal `Memory:` lines 120/h → 1/h; lag spike minutes). **Decisions (owner):** B1 shipped; heap cap unchanged; an interim wave before wave 2; long soaks kept to a minimum. **Plan changes:** status line; §2 rows for the confirmation soak and production telemetry; §3 decisions; §5 sequence and dependencies; new B0.1 (widened), B1.1 and B1.2; B1 outcome; B2 cap and lag-threshold source; R2 inputs and decisions; D1 bounded soak; E2 as the only remaining 24 h soak, with a browser-like load and a telemetry comparison; E1 second instance; §7 read-order, locations and rules. Evidence: [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md). |
 | Interim wave execution | 2026-09-28/29 | `d5db9012-…` (orchestrating) | **Routing:** children on `clinepass/cline-pass/deepseek-v4.1-flash` (owner-authorised), independent reviewer GPT-6 Luna via `openai-codex` (owner-authorised). **Quality loop:** the parent verified every hand-back (diffs, own re-runs, own probes) before Luna. Parent corrections caught: a pre-drain end snapshot; the `awaitWriteFinish` live-session regression (measured 114 reads vs 1); an id-less unlink breaking removal; the untracked-orphan misread as retention. Luna rejected each lane at least twice; every finding was closed, and the final rounds were verified by the parent. **Scope changes (parent, within the owner's autonomy grant):** B1.2's per-cwd loader cache was rejected (shared runtime); a guarded additive SDK patch was approved; **new step B1.3**; `subagent` left uncached, with the A/B decision put to the owner. **Production:** extensions deployed with a backup, then a restart at 00:05 UTC under `production:lock` (activeTurns 0). **Gates on master `ddccf8bf`:** lint, typecheck, build, docs 0; full `npm test` 6,428 passed, with 1 load-sensitive Claude SDK test failing in the full run and passing alone (untouched by this wave). **Plan changes:** status line; B0.1/B1.1/B1.2 outcomes; new B1.3; C2 input; §9 rows. |
+| Patch removal and `subagent` B (owner follow-up) | 2026-09-29 | `d5db9012-…` (orchestrating) | **Owner rules:** no local changes to upstream packages, with robust replacements; `subagent` option B; restarts authorised. **Lanes:** b1-2b and b1-3s on Claude Opus (SDK), b3a on the Pi runtime; reviewer Luna. **Parent catches:** the 16 KB cap default would fail about 1 in 600 real writes, so it was re-decided with paced measurements; b3a's evidence was overwritten (Luna) and re-run and preserved; an abort-callback race on the run boundary; b3a's deploy restore procedure would have deleted pi-ai's nested `node_modules`, so only the single patched file was restored; b1-2b's snapshot ownership (a sibling client). **Production:** 2026-09-29 10:10 UTC restart under `production:lock` (activeTurns 0). pi-coding-agent and both pi-ai copies are verified identical to npm 0.87.1, and the root `postinstall` is gone. **Gates on master `3da55e78`:** lint, typecheck, build and docs 0; server suite 6,487 passed, with 2 failures in the known load-sensitive `claude-process-pool-resilience` test (passes alone, untouched). **Agent OS** contract mirror 1.48.0 (`2636f48`). **Plan changes:** status line; §3 decisions for 2026-09-29; B1.2b; B1.3 `subagent` outcome and finding F1; B3a outcome; R2 input; §9 rows. |
 
 ## 9. Status ledger
 
@@ -612,10 +644,11 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | B0.1 | **shipped** (`ddccf8bf`) | [`B0.1.md`](./execution-reports/orchestration-scaling/B0.1.md); reviews `…/reviews/b0-1-luna-review*.md` | Harness ready for D1 (bounded `--hours`) and E2 (24 h); final micro 29/29, retained deleted children 0 |
 | B1 | **shipped** (`5bbc95a6`; `pi-enhancement` `97a7106`, deployed to `~/.pi/agent/extensions` 2026-09-27 16:21 UTC; in production since the 2026-09-27 17:39 UTC restart) | [`B1.md`](./execution-reports/orchestration-scaling/B1.md); [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md); reviews `…/reviews/b1-luna-review.md` | Confirmation soak `full-1790523945117-ea387201` passed: 24 h alive, post-GC ~200 MB flat, 8,092 children, trailing slope 0.31 MB/h. Accepted residuals: `SessionPool` shutdown cleanup (at review); one bounded extension slot. Third small retainer → B1.1 |
 | B1.1 | **shipped** (`a48ad8f1`; in production 2026-09-29 00:05 UTC) | [`B1.1.md`](./execution-reports/orchestration-scaling/B1.1.md); reviews `…/reviews/b1-1-luna-review*.md` | Watcher retention 0 at 3,000 files; live-session reads coalesced (1 read vs 114) |
-| B1.2 | **merged, in production** (`b55ca2e8`; restart 2026-09-29 00:05 UTC); **production telemetry comparison open** | [`B1.2.md`](./execution-reports/orchestration-scaling/B1.2.md); reviews `…/reviews/b1-2-luna-review*.md` | Reproduction p99 388–533 → 98–201 ms, spike minutes 6 → 0; proposed B2 gate 300 ms sustained / 150 ms recovery |
-| B1.3 | **shipped for 5/6** (`pi-enhancement` `7c11e1d`, deployed 2026-09-29 00:04 UTC); **`subagent` awaits owner decision A/B/C** | B1.2.md (B1.3 sections) | Fixes a latent same-cwd sharing bug in production; `subagent` misroutes notifications among same-cwd sessions today |
+| B1.2 | **merged, in production** (`b55ca2e8`; restart 2026-09-29 00:05 UTC); **patch replaced by the public API in B1.2b** (`683ffa56`, restart 2026-09-29 10:10 UTC); **production telemetry comparison open** | [`B1.2.md`](./execution-reports/orchestration-scaling/B1.2.md); reviews `…/reviews/b1-2-luna-review*.md` | Reproduction p99 388–533 → 98–201 ms, spike minutes 6 → 0; proposed B2 gate 300 ms sustained / 150 ms recovery |
+| B1.3 | **shipped 6/6** (`pi-enhancement` `7c11e1d`, deployed 2026-09-29 00:04 UTC; `subagent` option B `b046a8a`, deployed 2026-09-29 10:09 UTC; cached 16/16) | B1.2.md (B1.3 sections); `/root/orch-ops/orchestration-scaling/b1-3s/B1.3s.md` | Finding F1 (no `session_shutdown` on Web UI dispose) goes to R2 |
 | B2 | not started, **cleared** | — | Heap cap settled (unchanged). `heap_pressure` can be built now; `event_loop_lag` threshold after B1.2 |
-| B3–B4 | not started, **cleared** | — | Independent of B0–B2; may run alongside the interim wave |
+| B3 | **tool-argument cap shipped as B3a** (`3da55e78`, contract 1.48.0, in production 2026-09-29 10:10 UTC); output-token and streamed-byte caps not started | [`B3a.md`](./execution-reports/orchestration-scaling/B3a.md) | Replaces the removed pi-ai patch; defaults 64 KiB/256 KiB by paced measurement; unpaced residual documented |
+| B4 | not started, **cleared** | — | |
 | C1–C6 | not started | — | |
 | D1–D2 | not started | — | Needs R3 authorisation |
 | E1–E2 | not started | — | |
