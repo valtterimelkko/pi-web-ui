@@ -284,6 +284,23 @@ describe('B5 correction 01 — closing-session fence (manager)', () => {
     await teardown;
   });
 
+  it('a steer arriving during a deferred teardown is refused with the same does-not-exist error (correction 02)', async () => {
+    const service = newService();
+    const created = installFakeCreateSession(service);
+    const manager = newManager(service, { sessionShutdownTimeoutMs: 150 });
+    const status = await manager.createAndSubscribe('client-1', '/work');
+    const session = created[0];
+    session.prompt = vi.fn(async () => undefined);
+    session.extensionRunner = fakeRunner(vi.fn(() => new Promise<void>(() => {})));
+
+    const teardown = manager.disposeLoadedSession(status.sessionPath);
+    await expect(manager.submitSteer(status.sessionPath, 'steer?')).rejects.toThrow(/does not exist/);
+    await expect(manager.steer(status.sessionPath, 'steer?')).rejects.toThrow(/does not exist/);
+    await teardown;
+    // The closing session never received the steer.
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
   it('performUnload clears stale viewing references so none point at a removed session', async () => {
     const service = newService();
     const created = installFakeCreateSession(service);

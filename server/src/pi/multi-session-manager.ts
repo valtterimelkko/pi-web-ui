@@ -2113,8 +2113,12 @@ export class MultiSessionManager {
    */
   async submitSteer(sessionPath: string, message: string): Promise<{ joinedRunningTurn: boolean }> {
     const activeSession = this.sessions.get(sessionPath);
-    if (!activeSession) {
-      throw new Error(`Session ${sessionPath} does not exist`);
+    // B5 correction 02: same closing-session fence as prompt/submitPrompt — a
+    // Talker/Voice Mode steer racing session_shutdown must not submit work to
+    // a session being disposed. Same existing does-not-exist error, same
+    // rationale (busy would advertise a retry that cannot succeed).
+    if (!activeSession || this.closingSessions.has(sessionPath)) {
+      throw new Error(`Session ${sessionPath} does not exist${this.closingSessions.has(sessionPath) ? ' (it is closing)' : ''}`);
     }
 
     activeSession.lastActivity = new Date();
