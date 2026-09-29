@@ -6,6 +6,7 @@ import {
   DrainController,
   consumeDrainRecord,
   readDrainRecord,
+  type DrainBusySession,
   type DrainRunRef,
 } from '../../../src/internal-api/drain-controller.js';
 
@@ -47,12 +48,14 @@ describe('DrainController', () => {
   let admission: FakeAdmission;
   let runs: DrainRunRef[];
   let quarantined: number;
+  let busy: DrainBusySession[];
   let controller: DrainController | undefined;
 
   const make = (overrides: Partial<ConstructorParameters<typeof DrainController>[0]> = {}): DrainController => {
     controller = new DrainController({
       admission,
       listNonterminalRuns: () => runs.map((r) => ({ ...r })),
+      listBusySessions: () => busy.map((b) => ({ ...b })),
       quarantinedTurns: () => quarantined,
       recordPath,
       pollIntervalMs: 5,
@@ -67,6 +70,7 @@ describe('DrainController', () => {
     admission = fakeAdmission();
     runs = [];
     quarantined = 0;
+    busy = [];
   });
 
   afterEach(() => {
@@ -144,9 +148,11 @@ describe('DrainController', () => {
     expect(outcome.state).toBe('timed_out');
     expect(outcome.cutOffRunIds.sort()).toEqual(['b', 'c']);
     expect(outcome.completedDuringDrain).toBe(1);
-    expect(outcome.initial).toEqual({ activeTurns: 3, nonterminalRuns: 3 });
+    // B4.1: the initial measurement also counts resident busy sessions (none here).
+    expect(outcome.initial).toEqual({ activeTurns: 3, nonterminalRuns: 3, busySessions: 0 });
     const record = readDrainRecord(recordPath);
-    expect(record).toMatchObject({ version: 1, state: 'timed_out', reason: 'deploy' });
+    // B4.1: record version 2 (cutOffSessions added); readers still accept v1.
+    expect(record).toMatchObject({ version: 2, state: 'timed_out', reason: 'deploy' });
     expect(record?.cutOffRunIds.sort()).toEqual(['b', 'c']);
     expect(statSync(recordPath).mode & 0o777).toBe(0o600);
   });
@@ -213,6 +219,74 @@ describe('DrainController', () => {
   it('exposes a positive retry-after for refused callers', () => {
     expect(make({ retryAfterSeconds: 45 }).retryAfterSeconds).toBe(45);
   });
+
+  // ── B4.1 (contract 1.52.0): the drain also sees resident busy sessions ──
+
+  it('a busy resident session keeps the drain open until it settles (B4.1)', async () => {
+    busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy 1.52.0', timeoutMs: 5_000 });
+    // A goal-engine continuation holds no admission turn and no receipt: the
+    // pre-B4.1 drain settled here. It must keep waiting instead.
+    expect(status.state).toBe('draining');
+    expect(status.remaining).toMatchObject({ activeTurns: 0, nonterminalRuns: 0, busySessions: 1, sessions: [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }] });
+    busy = [];
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('settled');
+    expect(outcome.remaining).toMatchObject({ busySessions: 0, sessions: [] });
+  });
+
+  it('a session idle at the drain is not counted (B4.1)', () => {
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 1_000 });
+    expect(status.state).toBe('settled');
+    expect(status.initial).toEqual({ activeTurns: 0, nonterminalRuns: 0, busySessions: 0 });
+    expect(status.remaining.busySessions).toBe(0);
+    expect(status.remaining.sessions).toEqual([]);
+    expect(status.cutOffSessionIds).toEqual([]);
+  });
+
+  it('a timed-out drain lists the still-busy sessions in the verdict and the durable record (B4.1)', async () => {
+    busy = [
+      { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status+sdk_streaming' },
+      { sessionId: 'browser-2', runtime: 'pi', busyReason: 'status' },
+    ];
+    const drain = make();
+    drain.start({ reason: 'deploy', timeoutMs: 40 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('timed_out');
+    expect(outcome.cutOffSessionIds.sort()).toEqual(['browser-2', 'goal-1']);
+    const record = readDrainRecord(recordPath);
+    expect(record?.version).toBe(2);
+    expect(record?.cutOffSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
+      { sessionId: 'browser-2', runtime: 'pi', busyReason: 'status' },
+      { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status+sdk_streaming' },
+    ]);
+  });
+
+  it('reports busy sessions in the initial measurement (B4.1)', () => {
+    runs = [run('r1')];
+    busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000 });
+    expect(status.initial).toEqual({ activeTurns: 0, nonterminalRuns: 1, busySessions: 1 });
+  });
+
+  it('keeps cut-off sessions in lastOutcome after the hold expires (B4.1)', async () => {
+    busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+    const drain = make({ holdMs: 30 });
+    drain.start({ reason: 'deploy', timeoutMs: 20 });
+    const outcome = await drain.waitForOutcome();
+    expect(outcome.state).toBe('timed_out');
+    await new Promise((r) => setTimeout(r, 80));
+    expect(drain.status()).toMatchObject({ state: 'idle', lastOutcome: { state: 'timed_out', endedBy: 'hold_expired', cutOffSessionIds: ['goal-1'] } });
+  });
+
+  it('a failing busy accessor degrades to not-busy with a warning, like the receipt source (B4.1)', () => {
+    const drain = make({ listBusySessions: () => { throw new Error('accessor down'); } });
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 1_000 });
+    expect(status.state).toBe('settled');
+  });
 });
 
 describe('drain record helpers', () => {
@@ -239,5 +313,24 @@ describe('drain record helpers', () => {
     expect(existsSync(p)).toBe(false);
     expect(JSON.parse(readFileSync(`${p}.consumed`, 'utf8')).cutOffRunIds).toEqual(['run-1']);
     expect(consumeDrainRecord(p)).toBeUndefined();
+  });
+
+  it('reads a v1 record (pre-1.52.0) with no cut-off sessions as an empty list (B4.1)', () => {
+    const p = path.join(dir, 'internal-api-drain.json');
+    writeFileSync(p, JSON.stringify({ version: 1, state: 'timed_out', reason: 'r', startedAt: 'a', finishedAt: 'b', cutOffRunIds: ['run-1'] }));
+    expect(readDrainRecord(p)?.cutOffSessions).toEqual([]);
+  });
+
+  it('reads a v2 record and drops malformed cut-off session entries (B4.1)', () => {
+    const p = path.join(dir, 'internal-api-drain.json');
+    writeFileSync(p, JSON.stringify({
+      version: 2, state: 'timed_out', reason: 'r', startedAt: 'a', finishedAt: 'b', cutOffRunIds: ['run-1'],
+      cutOffSessions: [
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' },
+        { sessionId: 42 },
+        'garbage',
+      ],
+    }));
+    expect(readDrainRecord(p)?.cutOffSessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }]);
   });
 });

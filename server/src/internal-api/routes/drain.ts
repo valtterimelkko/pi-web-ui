@@ -58,9 +58,15 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
 
 export interface DrainRoutesDeps {
   drain: DrainController;
+  /**
+   * B4.1: awaited once before a drain starts, so the busy-session source reads
+   * a fresh snapshot (the cross-runtime registry is async; the drain's own
+   * accessors are sync). A rejection must not block the drain.
+   */
+  onBeforeStart?: () => Promise<void>;
 }
 
-export function createDrainRoutes({ drain }: DrainRoutesDeps) {
+export function createDrainRoutes({ drain, onBeforeStart }: DrainRoutesDeps) {
   async function handleStartDrain(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const raw = await readBoundedJsonBody<unknown>(req, { maxBytes: 16 * 1024 });
     const parsed = startDrainSchema.safeParse(raw ?? undefined);
@@ -70,6 +76,13 @@ export function createDrainRoutes({ drain }: DrainRoutesDeps) {
         details: parsed.error.issues,
       });
       return;
+    }
+    if (onBeforeStart) {
+      try {
+        await onBeforeStart();
+      } catch {
+        /* a stale busy snapshot must never block the drain */
+      }
     }
     const { reason, timeoutSeconds, holdSeconds } = parsed.data;
     const { joined } = drain.start({

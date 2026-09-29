@@ -6,7 +6,7 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { RunReceiptStore, type PersistedRunReceipt } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { InternalApiEventBroker } from '../../../src/internal-api/event-broker.js';
-import { WatchManager, type RestartInterruptedRun } from '../../../src/internal-api/watch/watch-manager.js';
+import { WatchManager, type RestartInterruptedBusySession, type RestartInterruptedRun } from '../../../src/internal-api/watch/watch-manager.js';
 
 /**
  * B4 post-boot reconciliation.
@@ -285,5 +285,129 @@ describe('WatchManager fires parents\' watches for restart-interrupted runs (B4)
     await expect(manager.init()).resolves.toBeUndefined();
     await flush();
     expect(manager.get('child-8')?.status).toBe('active');
+  });
+});
+
+describe('WatchManager fires parents\' watches for receipt-less busy sessions cut off by a restart (B4.1)', () => {
+  let dir: string;
+  let manager: WatchManager | undefined;
+  const pin = vi.fn(() => true);
+
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-b41-watch-')); });
+  afterEach(async () => {
+    manager?.close();
+    manager = undefined;
+    await flush();
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  async function arm(sessionId: string, request: Parameters<WatchManager['register']>[0]['request'], extra: Partial<ConstructorParameters<typeof WatchManager>[0]> = {}): Promise<void> {
+    const before = new WatchManager({ broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin, ...extra });
+    await before.register({ sessionId, sessionPath: `/sessions/${sessionId}.jsonl`, runtime: 'pi', request });
+    await flush();
+    before.close();
+    await flush();
+  }
+
+  // What the server composes at boot from the drain record's cut-off sessions
+  // that have no recovered run receipt.
+  const busy = (sessionId: string, runId = `busy-${sessionId}`, interruptionReason = 'drain_timeout'): RestartInterruptedBusySession => ({
+    sessionId, runtime: 'pi', runId, errorCode: 'SERVER_RESTART', interruptionReason,
+  });
+
+  const receiptRun = (sessionId: string, runId: string, interruptionReason = 'drain_timeout'): RestartInterruptedRun => ({
+    runId, sessionId, runtime: 'pi', terminalAt: new Date(Date.now() + 5_000).toISOString(), errorCode: 'SERVER_RESTART', interruptionReason,
+  });
+
+  it('fires an agent_end watch for a receipt-less busy session with the synthetic interruption reference', async () => {
+    await arm('goal-1', { conditions: [{ type: 'event_type', eventType: 'agent_end', dataMatch: { interruptedByRestart: true } }] });
+    const broker = new InternalApiEventBroker();
+    manager = new WatchManager({
+      broker, storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [],
+      getRestartInterruptedBusySessions: () => [busy('goal-1')],
+    });
+    await manager.init();
+    await flush();
+    const w = manager.get('goal-1');
+    expect(w?.firingCount).toBe(1);
+    expect(w?.firings[0].eventType).toBe('agent_end');
+    expect(w?.firings[0].evidence).toContain('interrupted by restart');
+    expect(w?.firings[0].evidence).toContain('busy-goal-1');
+    expect(w?.firings[0].evidence).toContain('drain_timeout');
+  });
+
+  it('names the synthetic reference in the wake text so the parent never mistakes it for a normal finish', async () => {
+    const dispatchWake = vi.fn(async (_input: { message: string }) => ({ status: 'dispatched' as const, deliveryKind: 'prompt' as const }));
+    await arm('goal-2', {
+      conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+      onFire: { type: 'prompt', targetSessionId: 'parent-2', message: 'child {{sessionId}} finished: {{evidence}}', cooldownSeconds: 0 },
+    }, { dispatchWake });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin, dispatchWake,
+      getRestartInterruptedRuns: () => [],
+      getRestartInterruptedBusySessions: () => [busy('goal-2')],
+    });
+    await manager.init();
+    await flush();
+    expect(dispatchWake).toHaveBeenCalledTimes(1);
+    expect(dispatchWake.mock.calls[0][0].message).toContain('(interrupted by restart: run busy-goal-2, drain_timeout)');
+  });
+
+  it('also fires a pending goal_end, coalesced into one wake (B4.1)', async () => {
+    const dispatchWake = vi.fn(async (_input: { message: string }) => ({ status: 'dispatched' as const, deliveryKind: 'prompt' as const }));
+    await arm('goal-3', {
+      conditions: [{ type: 'event_type', eventType: 'agent_end' }, { type: 'event_type', eventType: 'goal_end' }],
+      onFire: { type: 'prompt', targetSessionId: 'parent-3', message: 'wake', maxWakeups: 3, cooldownSeconds: 0 },
+    }, { dispatchWake });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin, dispatchWake,
+      getRestartInterruptedRuns: () => [],
+      getRestartInterruptedBusySessions: () => [busy('goal-3')],
+    });
+    await manager.init();
+    await flush();
+    const w = manager.get('goal-3');
+    expect(w?.firingCount).toBe(2);
+    expect(dispatchWake).toHaveBeenCalledTimes(1);
+    expect(w?.wakeAttempts.map((a) => [a.status, a.reason])).toEqual([['dispatched', undefined], ['suppressed', 'coalesced_restart_reconciliation']]);
+  });
+
+  it('a session with recovered receipts wins over its busy entry: one firing, receipt data, no busy flag', async () => {
+    await arm('child-both', { conditions: [{ type: 'event_type', eventType: 'agent_end' }] });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [receiptRun('child-both', 'run-both')],
+      getRestartInterruptedBusySessions: () => [busy('child-both')],
+    });
+    await manager.init();
+    await flush();
+    const w = manager.get('child-both');
+    expect(w?.firingCount).toBe(1);
+    expect(w?.firings[0].evidence).toContain('run-both');
+    expect(w?.firings[0].evidence).not.toContain('busy-');
+  });
+
+  it('ignores busy sessions with no watch (control)', async () => {
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [],
+      getRestartInterruptedBusySessions: () => [busy('no-watch')],
+    });
+    await expect(manager.init()).resolves.toBeUndefined();
+    await flush();
+    expect(manager.get('no-watch')).toBeUndefined();
+  });
+
+  it('survives a failing busy-session source without blocking the receipt reconciliation', async () => {
+    await arm('child-r', { conditions: [{ type: 'event_type', eventType: 'agent_end' }] });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [receiptRun('child-r', 'run-r')],
+      getRestartInterruptedBusySessions: () => { throw new Error('busy source down'); },
+    });
+    await expect(manager.init()).resolves.toBeUndefined();
+    await flush();
+    expect(manager.get('child-r')?.firingCount).toBe(1);
   });
 });

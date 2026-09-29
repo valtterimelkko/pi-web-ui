@@ -61,7 +61,7 @@ import {
 } from './admission-controller.js';
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
-import { DrainController, consumeDrainRecord } from './drain-controller.js';
+import { DrainController, consumeDrainRecord, type DrainBusySession } from './drain-controller.js';
 import { createDrainRoutes, isExecutionEntryRequest } from './routes/drain.js';
 
 const logger = createLogger('InternalAPI');
@@ -312,14 +312,32 @@ export class InternalApiServer {
     });
     await runReceiptManager.init();
     this.runReceiptManager = runReceiptManager;
+    // B4.1: receipt-less busy sessions the previous process's drain announced
+    // as cut off. Sessions whose runs WERE receipt-backed are reconciled from
+    // those receipts; only the rest need the synthetic reference.
+    const recoveredReceiptSessionIds = new Set(runReceiptManager.getRestartRecoveredRuns().map((run) => run.sessionId));
+    const interruptedBusySessions = priorDrain?.state === 'timed_out'
+      ? priorDrain.cutOffSessions
+        .filter((session) => !recoveredReceiptSessionIds.has(session.sessionId))
+        .map((session) => ({
+          sessionId: session.sessionId,
+          runtime: session.runtime,
+          runId: `busy-${session.sessionId}`,
+          errorCode: 'SERVER_RESTART',
+          interruptionReason: 'drain_timeout',
+        }))
+      : [];
     {
       const recovered = runReceiptManager.getRestartRecoveredRuns();
       const byDrain = recovered.filter((run) => run.interruptionReason === 'drain_timeout').length;
-      if (priorDrain || recovered.length > 0) {
+      const busyNote = interruptedBusySessions.length > 0
+        ? `; ${interruptedBusySessions.length} receipt-less busy session(s) reconciled from the drain record`
+        : '';
+      if (priorDrain || recovered.length > 0 || interruptedBusySessions.length > 0) {
         logger.info(
           `[InternalAPI] restart reconciliation: ${recovered.length} run(s) interrupted by restart ` +
-          `(${byDrain} announced by drain, ${recovered.length - byDrain} unplanned); ` +
-          `previous drain: ${priorDrain ? `${priorDrain.state} reason=${JSON.stringify(priorDrain.reason)} cutOff=${priorDrain.cutOffRunIds.length}` : 'none'}`,
+          `(${byDrain} announced by drain, ${recovered.length - byDrain} unplanned)${busyNote}; ` +
+          `previous drain: ${priorDrain ? `${priorDrain.state} reason=${JSON.stringify(priorDrain.reason)} cutOff=${priorDrain.cutOffRunIds.length} cutOffSessions=${priorDrain.cutOffSessions.length}` : 'none'}`,
         );
       }
     }
@@ -368,14 +386,61 @@ export class InternalApiServer {
 
     // B4 drain-then-restart: closes admission through the shared seam and
     // waits for active turns AND nonterminal receipts before a restart.
+    // B4.1: the settle wait ALSO counts resident busy sessions that hold no
+    // admission slot and no receipt — Pi extension-driven turns (goal-engine
+    // continuations, watch-wake deadlines, subagent) and browser (P0) turns
+    // via the SDK's public streaming state, and other runtimes via their
+    // existing busy flags. The registry snapshot is refreshed at boot, before
+    // every drain start, and on every measure (the accessors are sync).
+    let registrySnapshot: Array<{ id: string; sdkType: string }> = [];
+    let refreshingRegistry = false;
+    const refreshRegistrySnapshot = async (): Promise<void> => {
+      if (refreshingRegistry) return;
+      refreshingRegistry = true;
+      try {
+        const entries = await this.sessionRegistry.listAll();
+        registrySnapshot = entries.map((entry) => ({ id: entry.id, sdkType: entry.sdkType }));
+      } catch (error) {
+        logger.warn(`[InternalAPI] drain busy-session registry refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        refreshingRegistry = false;
+      }
+    };
+    void refreshRegistrySnapshot();
+    const listBusySessions = (): DrainBusySession[] => {
+      const busy: DrainBusySession[] = [];
+      try {
+        for (const session of this.multiSessionManager.listBusySessions()) {
+          busy.push({ sessionId: session.sessionId, runtime: 'pi', busyReason: session.busyBecause.join('+') });
+        }
+      } catch (error) {
+        logger.warn(`[InternalAPI] drain Pi busy accessor failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      for (const entry of registrySnapshot) {
+        // Pi is covered by the resident accessor above; the other runtimes
+        // expose their existing busy flags only (read-only).
+        let running = false;
+        try {
+          if (entry.sdkType === 'claude') running = this.claudeService.isRunning(entry.id);
+          else if (entry.sdkType === 'opencode') running = this.opencodeService.isRunning(entry.id);
+          else if (entry.sdkType === 'antigravity') running = this.antigravityService.isRunning(entry.id);
+          else if (entry.sdkType === 'commandcode') running = this.commandCodeService.isRunning(entry.id);
+        } catch {
+          running = false; // a lookup failure is not busy evidence
+        }
+        if (running) busy.push({ sessionId: entry.id, runtime: entry.sdkType, busyReason: 'runtime-running' });
+      }
+      return busy;
+    };
     const drainController = new DrainController({
       admission: admissionController,
       listNonterminalRuns: () => runReceiptManager.listNonterminal(),
+      listBusySessions,
       quarantinedTurns: () => runReceiptManager.getQuarantinedCount(),
       recordPath: drainRecordPath,
     });
     this.drainController = drainController;
-    const drainRoutes = createDrainRoutes({ drain: drainController });
+    const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: refreshRegistrySnapshot });
 
     // Create routes
     const sessionRoutes = createSessionRoutes({
@@ -402,6 +467,7 @@ export class InternalApiServer {
       onBrowserMessage: this.onBrowserMessage,
       drainRetryAfterSeconds: drainController.retryAfterSeconds,
       getRestartInterruptedRuns: () => runReceiptManager.getRestartRecoveredRuns(),
+      getRestartInterruptedBusySessions: () => interruptedBusySessions,
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
     this.eventBroker = sessionRoutes.broker;

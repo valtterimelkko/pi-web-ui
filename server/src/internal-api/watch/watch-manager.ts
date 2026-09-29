@@ -74,6 +74,23 @@ export interface RestartInterruptedRun {
   interruptionReason: string;
 }
 
+/**
+ * B4.1 (contract 1.52.0): a resident busy session the previous process's drain
+ * listed as cut off, which has NO recovered run receipt (extension-driven or
+ * browser turn). The watch layer fires the child's completion-type watch for it
+ * exactly as for receipt-backed runs; `runId` carries the SYNTHETIC
+ * interruption reference (`busy-<sessionId>`), and the event data is flagged
+ * `busySession: true` so parents can tell it from a receipt-backed run.
+ */
+export interface RestartInterruptedBusySession {
+  sessionId: string;
+  runtime: string;
+  /** Synthetic interruption reference identifying the cut-off turn. */
+  runId: string;
+  errorCode: string;
+  interruptionReason: string;
+}
+
 /** Completion-type event conditions eligible for `fireIfSettled`. */
 const SETTLED_COMPLETION_EVENT_TYPES = new Set(['agent_end', 'goal_end']);
 
@@ -119,6 +136,13 @@ export interface WatchManagerDeps {
    * when a goal_end condition is pending) flagged `interruptedByRestart`.
    */
   getRestartInterruptedRuns?: () => RestartInterruptedRun[] | Promise<RestartInterruptedRun[]>;
+  /**
+   * B4.1: receipt-less busy sessions the previous process's drain announced as
+   * cut off (extension-driven or browser turns). Same synthetic completion as
+   * receipt-backed runs; sessions that ALSO have recovered receipts are
+   * ignored here so a session never fires twice.
+   */
+  getRestartInterruptedBusySessions?: () => RestartInterruptedBusySession[] | Promise<RestartInterruptedBusySession[]>;
   /** Contract 1.34.0 surfacing: called on watch_registered / watch_fired when the watch has parent linkage. */
   surface?: (record: PersistedWatch, event: { type: 'watch_registered' | 'watch_fired'; timestamp: number; data: Record<string, unknown> }) => void;
 }
@@ -285,6 +309,7 @@ export class WatchManager {
   private readonly surface?: WatchManagerDeps['surface'];
   private readonly getSubjectSettlement?: WatchManagerDeps['getSubjectSettlement'];
   private readonly getRestartInterruptedRuns?: WatchManagerDeps['getRestartInterruptedRuns'];
+  private readonly getRestartInterruptedBusySessions?: WatchManagerDeps['getRestartInterruptedBusySessions'];
   /** Live watches keyed by sessionId. */
   private readonly active = new Map<string, ActiveWatch>();
   /** Minimal cross-watch backpressure: one in-flight steer dispatch per target. */
@@ -309,6 +334,7 @@ export class WatchManager {
     this.surface = deps.surface;
     this.getSubjectSettlement = deps.getSubjectSettlement;
     this.getRestartInterruptedRuns = deps.getRestartInterruptedRuns;
+    this.getRestartInterruptedBusySessions = deps.getRestartInterruptedBusySessions;
   }
 
   /**
@@ -458,6 +484,12 @@ export class WatchManager {
    * one synthetic completion through the ordinary event path (once-semantics,
    * dataMatch, wake dispatch, surfacing and ledger persistence all apply),
    * flagged `interruptedByRestart` so parents can tell it from a real finish.
+   *
+   * B4.1: receipt-less busy sessions the drain announced as cut off (PI
+   * extension-driven turns, browser turns) get the same synthetic completion,
+   * with the synthetic `busy-<sessionId>` reference in `data.runId` and
+   * `data.busySession: true`. A session that also has recovered receipts is
+   * reconciled from its receipts only — one firing per session.
    */
   private async reconcileRestartInterruptions(): Promise<void> {
     if (!this.getRestartInterruptedRuns) return;
@@ -468,22 +500,54 @@ export class WatchManager {
       list.push(run);
       bySession.set(run.sessionId, list);
     }
+    let busySessions: RestartInterruptedBusySession[] = [];
+    if (this.getRestartInterruptedBusySessions) {
+      try {
+        busySessions = await this.getRestartInterruptedBusySessions();
+      } catch {
+        busySessions = []; // the receipt-backed reconciliation must still run
+      }
+    }
+    for (const busySession of busySessions) {
+      if (!bySession.has(busySession.sessionId)) bySession.set(busySession.sessionId, []);
+    }
     for (const [sessionId, sessionRuns] of bySession) {
       try {
         const live = this.active.get(sessionId);
         if (!live || live.record.status !== 'active') continue;
-        const latest = sessionRuns.reduce((a, b) => (Date.parse(b.terminalAt) > Date.parse(a.terminalAt) ? b : a));
-        const parsed = Date.parse(latest.terminalAt);
-        const timestamp = Number.isFinite(parsed) ? parsed : Date.now();
-        const data = {
-          sessionId,
-          interruptedByRestart: true,
-          status: 'interrupted',
-          runId: latest.runId,
-          runIds: sessionRuns.map((run) => run.runId),
-          errorCode: latest.errorCode,
-          interruptionReason: latest.interruptionReason,
-        };
+        const busyOnly = sessionRuns.length === 0;
+        let timestamp: number;
+        let data: Record<string, unknown>;
+        let firedLine: string;
+        if (busyOnly) {
+          const ref = busySessions.find((s) => s.sessionId === sessionId);
+          if (!ref) continue;
+          timestamp = Date.now();
+          data = {
+            sessionId,
+            interruptedByRestart: true,
+            status: 'interrupted',
+            runId: ref.runId,
+            busySession: true,
+            errorCode: ref.errorCode,
+            interruptionReason: ref.interruptionReason,
+          };
+          firedLine = `restart reconciliation: fired watch ${live.record.watchId} for receipt-less busy session ${sessionId} (${ref.interruptionReason}, ref ${ref.runId})`;
+        } else {
+          const latest = sessionRuns.reduce((a, b) => (Date.parse(b.terminalAt) > Date.parse(a.terminalAt) ? b : a));
+          const parsed = Date.parse(latest.terminalAt);
+          timestamp = Number.isFinite(parsed) ? parsed : Date.now();
+          data = {
+            sessionId,
+            interruptedByRestart: true,
+            status: 'interrupted',
+            runId: latest.runId,
+            runIds: sessionRuns.map((run) => run.runId),
+            errorCode: latest.errorCode,
+            interruptionReason: latest.interruptionReason,
+          };
+          firedLine = `restart reconciliation: fired watch ${live.record.watchId} for ${sessionRuns.length} interrupted run(s) on ${sessionId} (${latest.interruptionReason})`;
+        }
         const waitsOnGoalEnd = live.record.conditions.some(
           (c) => !c.fired && (c.spec as { eventType?: string }).eventType === 'goal_end',
         );
@@ -492,7 +556,7 @@ export class WatchManager {
         if (waitsOnGoalEnd && this.active.get(sessionId) === live && live.record.status === 'active') {
           this.handleEvent(sessionId, { type: 'goal_end', timestamp, data }, wakeBudget);
         }
-        logger.info(`restart reconciliation: fired watch ${live.record.watchId} for ${sessionRuns.length} interrupted run(s) on ${sessionId} (${latest.interruptionReason})`);
+        logger.info(firedLine);
       } catch {
         /* reconciliation is best-effort per session */
       }

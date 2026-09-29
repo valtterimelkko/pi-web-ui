@@ -110,6 +110,18 @@ export interface SessionStatusInfo {
 }
 
 /**
+ * B4.1 (contract 1.52.0): payload-free busy marker for the drain's settle
+ * wait. `busyBecause` says which signals saw the busy state: the manager's own
+ * status flag (`status`) and/or the SDK's public streaming state
+ * (`sdk_streaming`).
+ */
+export interface PiBusySession {
+  sessionId: string;
+  sessionPath: string;
+  busyBecause: Array<'status' | 'sdk_streaming'>;
+}
+
+/**
  * Options for MultiSessionManager
  */
 export interface MultiSessionManagerOptions {
@@ -1244,6 +1256,43 @@ export class MultiSessionManager {
       }
     }
     return statuses;
+  }
+
+  /**
+   * B4.1 (contract 1.52.0): payload-free busy markers for the pre-restart
+   * drain's settle wait.
+   *
+   * A session is busy when the manager's own status flag (`busy` = turn
+   * accepted but the model has not started streaming yet; `streaming` = a turn
+   * is running) OR the SDK's public `AgentSession.isStreaming` state says so.
+   * The SDK state also covers extension-driven turns — goal-engine
+   * continuations, watch-wake deadlines, subagent — and browser (P0) turns,
+   * which hold no Internal API receipt and no admission slot: before B4.1 the
+   * drain could not see them and a deploy could kill them silently.
+   *
+   * STRICTLY READ-ONLY: no status mutation, no activity update, no disposal
+   * (the dispose/unload paths belong to lane B5). A throwing `isStreaming`
+   * getter is not busy evidence and is swallowed.
+   */
+  listBusySessions(): PiBusySession[] {
+    const busy: PiBusySession[] = [];
+    for (const activeSession of this.sessions.values()) {
+      const busyBecause: PiBusySession['busyBecause'] = [];
+      if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
+        busyBecause.push('status');
+      }
+      try {
+        if (activeSession.agentSession.isStreaming === true) {
+          busyBecause.push('sdk_streaming');
+        }
+      } catch {
+        /* a throwing getter is not busy evidence */
+      }
+      if (busyBecause.length > 0) {
+        busy.push({ sessionId: activeSession.sessionId, sessionPath: activeSession.sessionPath, busyBecause });
+      }
+    }
+    return busy;
   }
 
   /**

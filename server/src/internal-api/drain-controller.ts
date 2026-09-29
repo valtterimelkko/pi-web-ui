@@ -55,6 +55,19 @@ export interface DrainRunRef {
   status: string;
 }
 
+/**
+ * B4.1 (contract 1.52.0): payload-free reference to one RESIDENT BUSY session
+ * whose in-flight turn holds no admission slot and no run receipt — a Pi
+ * goal-engine continuation, another extension-driven turn (watch-wake,
+ * subagent) or a browser (P0) turn. A restart would kill it silently.
+ */
+export interface DrainBusySession {
+  sessionId: string;
+  runtime: string;
+  /** Payload-free reason the runtime reports the session busy (e.g. `sdk_streaming`). */
+  busyReason: string;
+}
+
 export interface DrainStatus {
   state: DrainState;
   /** Whether admission is currently refusing new P2/P3 execution for the drain. */
@@ -66,15 +79,17 @@ export interface DrainStatus {
   /** When a settled/timed-out drain reopens admission if no restart follows. */
   holdUntil?: string;
   waitedMs?: number;
-  initial?: { activeTurns: number; nonterminalRuns: number };
-  remaining: { activeTurns: number; quarantinedTurns: number; nonterminalRuns: number; runs: DrainRunRef[] };
+  initial?: { activeTurns: number; nonterminalRuns: number; busySessions: number };
+  remaining: { activeTurns: number; quarantinedTurns: number; nonterminalRuns: number; runs: DrainRunRef[]; busySessions: number; sessions: DrainBusySession[] };
   /** Runs nonterminal at drain start that reached a terminal state during the drain. */
   completedDuringDrain: number;
   /** Runs still in flight when the drain timed out: the restart will cut these off. */
   cutOffRunIds: string[];
+  /** B4.1: busy sessions still in flight when the drain timed out (no receipt exists for them). */
+  cutOffSessionIds: string[];
   retryAfterSeconds: number;
   /** The most recent drain verdict after it ended (hold expiry or cancel). */
-  lastOutcome?: { state: 'settled' | 'timed_out' | 'draining'; endedBy: string; endedAt: string; cutOffRunIds: string[] };
+  lastOutcome?: { state: 'settled' | 'timed_out' | 'draining'; endedBy: string; endedAt: string; cutOffRunIds: string[]; cutOffSessionIds: string[] };
 }
 
 export interface DrainAdmission {
@@ -87,6 +102,12 @@ export interface DrainControllerDeps {
   admission: DrainAdmission;
   /** Current nonterminal run receipts (accepted/queued/started). */
   listNonterminalRuns: () => DrainRunRef[];
+  /**
+   * B4.1: resident busy sessions with no admission turn and no receipt
+   * (extension-driven Pi turns, browser turns; other runtimes' busy flags).
+   * Must be payload-free and read-only. Absent = none reported.
+   */
+  listBusySessions?: () => DrainBusySession[];
   /** Admission slots held by quarantined terminal runs (capacity debt). */
   quarantinedTurns?: () => number;
   /** Durable verdict record read by the next process at boot. Omit for memory-only. */
@@ -113,12 +134,15 @@ const DEFAULT_POLL_INTERVAL_MS = 500;
 
 /** Durable drain verdict, read once by the next process at boot. */
 export interface DrainRecord {
-  version: 1;
+  /** 2 since B4.1 (contract 1.52.0): `cutOffSessions` added. Readers accept 1 and 2. */
+  version: 2;
   state: 'settled' | 'timed_out';
   reason: string;
   startedAt: string;
   finishedAt: string;
   cutOffRunIds: string[];
+  /** B4.1: busy sessions still in flight at the timeout (payload-free). */
+  cutOffSessions: DrainBusySession[];
 }
 
 const SAFE_RUN_ID = /^[a-zA-Z0-9_-]{1,128}$/;
@@ -131,6 +155,7 @@ function clampInt(value: number | undefined, fallback: number, min: number, max:
 export class DrainController {
   private readonly admission: DrainAdmission;
   private readonly listNonterminalRuns: () => DrainRunRef[];
+  private readonly listBusySessions: () => DrainBusySession[];
   private readonly quarantinedTurns: () => number;
   private readonly recordPath?: string;
   private readonly now: () => number;
@@ -147,10 +172,11 @@ export class DrainController {
   private timeoutMs?: number;
   private holdMs?: number;
   private holdUntilMs?: number;
-  private initial?: { activeTurns: number; nonterminalRuns: number };
+  private initial?: { activeTurns: number; nonterminalRuns: number; busySessions: number };
   private initialRunIds = new Set<string>();
-  private remaining: DrainStatus['remaining'] = { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [] };
+  private remaining: DrainStatus['remaining'] = { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [], busySessions: 0, sessions: [] };
   private cutOffRunIds: string[] = [];
+  private cutOffSessionIds: string[] = [];
   private lastOutcome?: DrainStatus['lastOutcome'];
   private pollTimer?: NodeJS.Timeout;
   private holdTimer?: NodeJS.Timeout;
@@ -159,6 +185,7 @@ export class DrainController {
   constructor(deps: DrainControllerDeps) {
     this.admission = deps.admission;
     this.listNonterminalRuns = deps.listNonterminalRuns;
+    this.listBusySessions = deps.listBusySessions ?? (() => []);
     this.quarantinedTurns = deps.quarantinedTurns ?? (() => 0);
     this.recordPath = deps.recordPath;
     this.now = deps.now ?? Date.now;
@@ -181,11 +208,12 @@ export class DrainController {
     this.timeoutMs = clampInt(input.timeoutMs, this.defaultTimeoutMs, 0, this.maxTimeoutMs);
     this.holdMs = clampInt(input.holdMs, this.defaultHoldMs, 1, MAX_DRAIN_TIMEOUT_MS);
     this.cutOffRunIds = [];
+    this.cutOffSessionIds = [];
     this.admission.setDraining({ since: this.startedAtMs, reason: input.reason });
     this.measure();
-    this.initial = { activeTurns: this.remaining.activeTurns, nonterminalRuns: this.remaining.nonterminalRuns };
+    this.initial = { activeTurns: this.remaining.activeTurns, nonterminalRuns: this.remaining.nonterminalRuns, busySessions: this.remaining.busySessions };
     this.initialRunIds = new Set(this.remaining.runs.map((r) => r.runId));
-    logger.info(`[InternalAPI] drain started: reason=${JSON.stringify(input.reason)} timeoutMs=${this.timeoutMs} activeTurns=${this.initial.activeTurns} nonterminalRuns=${this.initial.nonterminalRuns}`);
+    logger.info(`[InternalAPI] drain started: reason=${JSON.stringify(input.reason)} timeoutMs=${this.timeoutMs} activeTurns=${this.initial.activeTurns} nonterminalRuns=${this.initial.nonterminalRuns} busySessions=${this.initial.busySessions}`);
     this.evaluate();
     if (this.state === 'draining') {
       this.pollTimer = setInterval(() => this.evaluate(), this.pollIntervalMs);
@@ -209,6 +237,7 @@ export class DrainController {
       endedBy,
       endedAt: new Date(this.now()).toISOString(),
       cutOffRunIds: [...this.cutOffRunIds],
+      cutOffSessionIds: [...this.cutOffSessionIds],
     };
     this.clearTimers();
     this.state = 'idle';
@@ -234,12 +263,13 @@ export class DrainController {
       waitedMs: this.state === 'idle' || this.startedAtMs === undefined || endMs === undefined ? undefined : endMs - this.startedAtMs,
       initial: this.state === 'idle' ? undefined : this.initial,
       remaining: this.state === 'idle'
-        ? { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [] }
-        : { ...this.remaining, runs: this.remaining.runs.map((r) => ({ ...r })) },
+        ? { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 0, runs: [], busySessions: 0, sessions: [] }
+        : { ...this.remaining, runs: this.remaining.runs.map((r) => ({ ...r })), sessions: this.remaining.sessions.map((s) => ({ ...s })) },
       completedDuringDrain: this.state === 'idle' ? 0 : this.completedCount(),
       cutOffRunIds: this.state === 'idle' ? [] : [...this.cutOffRunIds],
+      cutOffSessionIds: this.state === 'idle' ? [] : [...this.cutOffSessionIds],
       retryAfterSeconds: this.retryAfterSeconds,
-      ...(this.lastOutcome ? { lastOutcome: { ...this.lastOutcome, cutOffRunIds: [...this.lastOutcome.cutOffRunIds] } } : {}),
+      ...(this.lastOutcome ? { lastOutcome: { ...this.lastOutcome, cutOffRunIds: [...this.lastOutcome.cutOffRunIds], cutOffSessionIds: [...this.lastOutcome.cutOffSessionIds] } } : {}),
     };
   }
 
@@ -271,23 +301,34 @@ export class DrainController {
     } catch (error) {
       logger.warn(`[InternalAPI] drain could not read admission: ${error instanceof Error ? error.message : String(error)}`);
     }
+    let busy: DrainBusySession[] = [];
+    try {
+      busy = this.listBusySessions();
+    } catch (error) {
+      // Fail open like the receipt source: a broken accessor must not stall
+      // deploys forever. The warning keeps the blind spot visible.
+      logger.warn(`[InternalAPI] drain could not list busy sessions: ${error instanceof Error ? error.message : String(error)}`);
+    }
     this.remaining = {
       activeTurns: Math.max(0, active - quarantined),
       quarantinedTurns: quarantined,
       nonterminalRuns: runs.length,
       runs: runs.map((r) => ({ runId: r.runId, sessionId: r.sessionId, runtime: r.runtime, status: r.status })),
+      busySessions: busy.length,
+      sessions: busy.map((s) => ({ sessionId: s.sessionId, runtime: s.runtime, busyReason: s.busyReason })),
     };
   }
 
   private evaluate(): void {
     if (this.state !== 'draining' || this.startedAtMs === undefined) return;
     this.measure();
-    if (this.remaining.activeTurns === 0 && this.remaining.nonterminalRuns === 0) {
+    if (this.remaining.activeTurns === 0 && this.remaining.nonterminalRuns === 0 && this.remaining.busySessions === 0) {
       this.finish('settled');
       return;
     }
     if (this.now() - this.startedAtMs >= (this.timeoutMs ?? 0)) {
       this.cutOffRunIds = this.remaining.runs.map((r) => r.runId);
+      this.cutOffSessionIds = this.remaining.sessions.map((s) => s.sessionId);
       this.finish('timed_out');
     }
   }
@@ -298,7 +339,7 @@ export class DrainController {
     this.finishedAtMs = this.now();
     this.holdUntilMs = this.finishedAtMs + (this.holdMs ?? this.defaultHoldMs);
     this.writeRecord(state);
-    logger.info(`[InternalAPI] drain ${state}: waitedMs=${this.finishedAtMs - (this.startedAtMs ?? this.finishedAtMs)} completedDuringDrain=${this.completedCount()} cutOff=${this.cutOffRunIds.length} activeTurns=${this.remaining.activeTurns} nonterminalRuns=${this.remaining.nonterminalRuns}`);
+    logger.info(`[InternalAPI] drain ${state}: waitedMs=${this.finishedAtMs - (this.startedAtMs ?? this.finishedAtMs)} completedDuringDrain=${this.completedCount()} cutOff=${this.cutOffRunIds.length} cutOffSessions=${this.cutOffSessionIds.length} activeTurns=${this.remaining.activeTurns} nonterminalRuns=${this.remaining.nonterminalRuns} busySessions=${this.remaining.busySessions}`);
     this.holdTimer = setTimeout(() => { void this.cancel('hold_expired'); }, this.holdUntilMs - this.finishedAtMs);
     this.holdTimer.unref?.();
     this.flushWaiters(this.status());
@@ -318,12 +359,13 @@ export class DrainController {
   private writeRecord(state: 'settled' | 'timed_out'): void {
     if (!this.recordPath) return;
     const record: DrainRecord = {
-      version: 1,
+      version: 2,
       state,
       reason: this.reason ?? '',
       startedAt: new Date(this.startedAtMs ?? this.now()).toISOString(),
       finishedAt: new Date(this.finishedAtMs ?? this.now()).toISOString(),
       cutOffRunIds: [...this.cutOffRunIds],
+      cutOffSessions: this.remaining.sessions.map((s) => ({ sessionId: s.sessionId, runtime: s.runtime, busyReason: s.busyReason })),
     };
     try {
       mkdirSync(path.dirname(this.recordPath), { recursive: true, mode: 0o700 });
@@ -343,20 +385,29 @@ export class DrainController {
   }
 }
 
-/** Read a drain record; undefined when absent or malformed. Unsafe run ids are dropped. */
+/** Read a drain record; undefined when absent or malformed. Unsafe run ids are dropped. Accepts v1 (pre-1.52.0) and v2. */
 export function readDrainRecord(recordPath: string): DrainRecord | undefined {
   try {
     if (!existsSync(recordPath)) return undefined;
-    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as Partial<DrainRecord>;
-    if (!raw || raw.version !== 1 || (raw.state !== 'settled' && raw.state !== 'timed_out')) return undefined;
+    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as { version?: number; state?: unknown; reason?: unknown; startedAt?: unknown; finishedAt?: unknown; cutOffRunIds?: unknown; cutOffSessions?: unknown };
+    if (!raw || (raw.version !== 1 && raw.version !== 2) || (raw.state !== 'settled' && raw.state !== 'timed_out')) return undefined;
+    const state = raw.state as 'settled' | 'timed_out';
     return {
-      version: 1,
-      state: raw.state,
+      version: 2,
+      state,
       reason: typeof raw.reason === 'string' ? raw.reason.slice(0, 500) : '',
       startedAt: typeof raw.startedAt === 'string' ? raw.startedAt : '',
       finishedAt: typeof raw.finishedAt === 'string' ? raw.finishedAt : '',
       cutOffRunIds: Array.isArray(raw.cutOffRunIds)
         ? raw.cutOffRunIds.filter((id): id is string => typeof id === 'string' && SAFE_RUN_ID.test(id))
+        : [],
+      cutOffSessions: Array.isArray(raw.cutOffSessions)
+        ? raw.cutOffSessions
+          .filter((s): s is DrainBusySession => Boolean(s) && typeof s === 'object' && !Array.isArray(s)
+            && typeof (s as DrainBusySession).sessionId === 'string' && SAFE_RUN_ID.test((s as DrainBusySession).sessionId)
+            && typeof (s as DrainBusySession).runtime === 'string'
+            && typeof (s as DrainBusySession).busyReason === 'string')
+          .map((s) => ({ sessionId: s.sessionId, runtime: s.runtime.slice(0, 32), busyReason: s.busyReason.slice(0, 64) }))
         : [],
     };
   } catch {

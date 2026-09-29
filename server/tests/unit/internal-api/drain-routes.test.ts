@@ -116,10 +116,10 @@ describe('drain control routes', () => {
   let drain: DrainController | undefined;
   afterEach(() => { drain?.shutdown(); drain = undefined; });
 
-  function setup(runs: Array<{ runId: string; sessionId: string; runtime: string; status: string }> = []) {
+  function setup(runs: Array<{ runId: string; sessionId: string; runtime: string; status: string }> = [], onBeforeStart?: () => Promise<void>) {
     const admission = roomyAdmission();
     drain = new DrainController({ admission, listNonterminalRuns: () => runs, pollIntervalMs: 5 });
-    return { admission, routes: createDrainRoutes({ drain }) };
+    return { admission, routes: createDrainRoutes({ drain, onBeforeStart }) };
   }
 
   it('POST /drain closes admission, waits for the verdict and returns it', async () => {
@@ -130,6 +130,31 @@ describe('drain control routes', () => {
     const body = JSON.parse(res.body);
     expect(body).toMatchObject({ state: 'settled', draining: true, reason: 'deploy 1.51.0', joined: false, cutOffRunIds: [] });
     expect(admission.getDraining()).toMatchObject({ reason: 'deploy 1.51.0' });
+  });
+
+  // B4.1: the busy-session source reads a refreshed snapshot BEFORE the first
+  // measure — a busy session present only after the refresh must be counted.
+  it('POST /drain awaits onBeforeStart before the first measurement (B4.1)', async () => {
+    const busy: Array<{ sessionId: string; runtime: string; busyReason: string }> = [];
+    const admission = roomyAdmission();
+    drain = new DrainController({ admission, listNonterminalRuns: () => [], listBusySessions: () => busy, pollIntervalMs: 5 });
+    const routes = createDrainRoutes({
+      drain,
+      onBeforeStart: async () => {
+        busy.push({ sessionId: 'late-goal', runtime: 'pi', busyReason: 'sdk_streaming' });
+      },
+    });
+    const res = mockRes();
+    await routes.handleStartDrain(jsonReq('POST', '/api/v1/drain', { reason: 'deploy 1.52.0', timeoutSeconds: 0 }), res);
+    expect(JSON.parse(res.body)).toMatchObject({ state: 'timed_out', cutOffSessionIds: ['late-goal'] });
+  });
+
+  it('a rejecting onBeforeStart never blocks the drain (B4.1)', async () => {
+    const { routes } = setup([], async () => { throw new Error('snapshot down'); });
+    const res = mockRes();
+    await routes.handleStartDrain(jsonReq('POST', '/api/v1/drain', { reason: 'deploy', timeoutSeconds: 5 }), res);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ state: 'settled' });
   });
 
   it('POST /drain reports the cut-off runs when the timeout elapses', async () => {
