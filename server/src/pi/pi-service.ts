@@ -508,7 +508,9 @@ export class PiService {
       if (handler) {
         handler(event);
       }
-      toolArgsBudget.observe(session, event, (synthetic) => handler?.(synthetic));
+      // The synthetic breach event intentionally rides the same funnel as raw
+      // session events (both downstream consumers dispatch structurally).
+      toolArgsBudget.observe(session, event, (synthetic) => handler?.(synthetic as AgentSessionEvent));
     });
 
     // Always bind extensions before exposing the session. bindExtensions()

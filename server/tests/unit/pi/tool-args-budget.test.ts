@@ -15,7 +15,7 @@
  * and the PiService wiring (every session event passes through the guard;
  * synthetic events dispatch through the registered handler).
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   PiToolArgsBudgetExceededError,

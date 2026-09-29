@@ -132,14 +132,15 @@ export class ToolArgsBudgetGuard {
 
     const delta = (assistantEvent as { delta?: unknown }).delta;
     if (typeof delta !== 'string' || delta.length === 0) return;
-    const contentIndex = (assistantEvent as { contentIndex?: unknown }).contentIndex;
+    const rawIndex = (assistantEvent as { contentIndex?: unknown }).contentIndex;
+    const contentIndex = typeof rawIndex === 'number' ? rawIndex : undefined;
 
     this.run.turnTotal += delta.length;
     if (typeof contentIndex === 'number') {
       this.run.perCall.set(contentIndex, (this.run.perCall.get(contentIndex) ?? 0) + delta.length);
     }
 
-    const callObserved = typeof contentIndex === 'number' ? this.run.perCall.get(contentIndex) ?? 0 : 0;
+    const callObserved = contentIndex !== undefined ? this.run.perCall.get(contentIndex) ?? 0 : 0;
     if (this.caps.callChars > 0 && callObserved > this.caps.callChars) {
       this.breach(session, emit, 'call', this.caps.callChars, callObserved, contentIndex);
       return;
@@ -160,8 +161,7 @@ export class ToolArgsBudgetGuard {
     this.run.breached = true;
     const error = new PiToolArgsBudgetExceededError(scope, capChars, observedChars);
     logger.warn(
-      `tool-argument budget exceeded (scope=${scope}, cap=${capChars}, observed=${observedChars}` +
-        `${contentIndex !== undefined ? `, contentIndex=${contentIndex}` : ''}); aborting the turn`,
+      `${error.message}${contentIndex !== undefined ? ` (contentIndex=${contentIndex})` : ''} — aborting the turn`,
     );
     // Emit the reason BEFORE aborting so every observer sees it before the
     // aborted turn's terminal events.

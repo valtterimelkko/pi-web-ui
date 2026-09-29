@@ -129,7 +129,7 @@ cwd, as do skills, prompt templates, themes and project context.
 
 Seeding uses an additive accessor exported by
 `scripts/patch-pi-coding-agent-extension-factory.mjs` (a guarded postinstall
-patch in the same style as `scripts/patch-pi-ai-toolstream.mjs`). When the patch
+patch). When the patch
 is absent the cache is inert: the server logs one warning and uses the
 unpatched per-session path, so a missing patch degrades to today's behaviour
 rather than breaking sessions.

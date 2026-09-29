@@ -815,6 +815,40 @@ transcript bodies, no cookies, no auth data. The route's schema is strict: an
 unknown field is rejected rather than stored, so transcript content cannot be
 smuggled in beside a health record.
 
+## Run budgets (B3a)
+
+Every in-process Pi session enforces a per-run budget on streamed tool-call
+argument characters. The 2026-09-12 production stall (a runaway generation whose
+tool-call arguments were re-parsed per streamed delta — quadratic, synchronous,
+~11 minutes of unresponsive server) used to be bounded by a local `node_modules`
+patch; that patch is removed and the bound now lives in pi-web-ui, leaving
+`@earendil-works/pi-ai` pristine.
+
+- **Where:** `server/src/pi/tool-args-budget.ts`, installed at the single
+  `PiService.createSession` subscribe funnel — one guard per session, covering
+  Internal API dispatches, browser sessions and hosted sessions alike.
+- **Caps:** `PI_TOOL_ARGS_MAX_CALL_CHARS` (default `65536` per tool call) and
+  `PI_TOOL_ARGS_MAX_TURN_CHARS` (default `262144` per run). `0` disables a cap;
+  an invalid value, or a turn cap below the call cap, logs one warning and falls
+  back to the defaults — configuration never stops startup.
+- **On breach:** the guard emits one `tool_args_budget_exceeded` event on the
+  session's normal stream (`data: { scope, capChars, observedChars,
+  contentIndex? }`) and aborts the turn via the public `AgentSession.abort()`.
+  Internal API receipts terminate `failed` with `RUN_BUDGET_EXCEEDED`; the
+  synchronous dispatch answers `500` with that code and the `runId`.
+- **What to look for:** log component `ToolArgsBudget` (one warn line per
+  breach with scope/cap/observed), the `tool_args_budget_exceeded` event in the
+  session stream/receipt event record, and `RUN_BUDGET_EXCEEDED` in the
+  error-code catalog.
+- **Calibration:** measured on pristine pi-ai 0.87.1, per-delta parse cost grows
+  from ~0.37 ms at 4 KB accumulated to ~12.8 ms at 460 KB (linear per call,
+  quadratic over a stream); one 460 KB fine-delta generation integrates to
+  ~141 s of main-thread CPU. The caps abort long before the dangerous zone:
+  worst case at the default cap is ~18 s in ≤2.25 ms slices, and the unbounded
+  accumulation mechanism itself is deleted. Real tool arguments measured over
+  5,633 recent calls: p50 233 B, p90 ~2 KB, p99 ~9.8 KB, max 36.9 KB — the
+  64 KB cap has zero observed false positives.
+
 ## Error codes & enrichment
 
 Every Internal API error response has the stable shape `{ error, code }`. Codes
