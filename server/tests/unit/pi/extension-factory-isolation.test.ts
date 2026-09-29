@@ -3,13 +3,17 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  DefaultResourceLoader,
   ExtensionRunner,
   type Extension,
   type ExtensionAPI,
   type ExtensionRuntime,
 } from '@earendil-works/pi-coding-agent';
-import { ExtensionFactoryCache, runExtensionLoadCriticalSection } from '../../../src/pi/extension-factory-cache.js';
+import {
+  ExtensionFactoryCache,
+  createExtensionFactoryResourceLoader,
+  refreshExtensionFactories,
+  runExtensionLoadCriticalSection,
+} from '../../../src/pi/extension-factory-cache.js';
 
 /**
  * B1.2 requirement 1/2 live-mechanism proof.
@@ -78,16 +82,9 @@ beforeEach(async () => {
   mkdirSync(cwdB, { recursive: true });
   writeExtension(agentDir, 'iso');
   (globalThis as Record<string, unknown>)[instancesKey] = [];
-  const sdk = (await import('@earendil-works/pi-coding-agent')) as unknown as {
-    importExtensionFactory?: (path: string) => Promise<unknown>;
-    seedExtensionFactory?: (path: string, factory: unknown, cwd: string) => boolean;
-  };
   // The fixture extension stands in for an audited share-safe global extension.
-  cache = new ExtensionFactoryCache({
-    importFactory: sdk.importExtensionFactory,
-    seedFactory: sdk.seedExtensionFactory,
-    allowlist: ['iso'],
-  });
+  // Factories are imported with the real public jiti importer (default).
+  cache = new ExtensionFactoryCache({ allowlist: ['iso'] });
 });
 
 afterEach(() => {
@@ -97,9 +94,7 @@ afterEach(() => {
 });
 
 async function loadWithCache(cwd: string): Promise<{ extensions: Extension[]; runtime: ExtensionRuntime }> {
-  await cache.seed(cwd, agentDir);
-  const loader = new DefaultResourceLoader({ cwd, agentDir });
-  await loader.reload();
+  const { loader } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
   const result = loader.getExtensions();
   return { extensions: result.extensions, runtime: result.runtime };
 }
@@ -238,22 +233,12 @@ function statefulSets(): Array<Set<string>> {
   return ((globalThis as Record<string, unknown>)[statefulKey] ??= []) as Array<Set<string>>;
 }
 
-async function makeStatefulCache(allowlist: readonly string[]): Promise<ExtensionFactoryCache> {
-  const sdk = (await import('@earendil-works/pi-coding-agent')) as unknown as {
-    importExtensionFactory?: (path: string) => Promise<unknown>;
-    seedExtensionFactory?: (path: string, factory: unknown, cwd: string) => boolean;
-  };
-  return new ExtensionFactoryCache({
-    importFactory: sdk.importExtensionFactory,
-    seedFactory: sdk.seedExtensionFactory,
-    allowlist,
-  });
+function makeStatefulCache(allowlist: readonly string[]): ExtensionFactoryCache {
+  return new ExtensionFactoryCache({ allowlist });
 }
 
 async function loadStateful(cache: ExtensionFactoryCache, cwd: string): Promise<Extension[]> {
-  await cache.seed(cwd, agentDir);
-  const loader = new DefaultResourceLoader({ cwd, agentDir });
-  await loader.reload();
+  const { loader } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
   return loader.getExtensions().extensions;
 }
 
@@ -298,19 +283,19 @@ describe('B1.2 module-state isolation for stateful extensions (review major 1)',
 
 /**
  * Major 2 (independent review): the SDK's extension module cache is ONE
- * process-global cwd slot, so seed → loader.reload() must be atomic. Without
- * it, concurrent opens in different cwds interleave and clear each other.
+ * process-global cwd slot, so the uncached extensions' cached-import window
+ * and the loader reload must be atomic. Without the section, concurrent opens
+ * in different cwds interleave and clear each other.
  */
 describe('B1.2 seed→reload critical section (review major 2)', () => {
   async function loadTracked(cwd: string, events: string[], useSection: boolean): Promise<Extension[]> {
     const body = async (): Promise<Extension[]> => {
       events.push(`enter:${cwd}`);
-      await cache.seed(cwd, agentDir);
+      await refreshExtensionFactories(agentDir, { cache });
       // Stand-in for the loader's own async resolution window, during which a
-      // competing seed would change the global slot.
+      // competing open would change the global slot for uncached extensions.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      const loader = new DefaultResourceLoader({ cwd, agentDir });
-      await loader.reload();
+      const { loader } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
       events.push(`exit:${cwd}`);
       return loader.getExtensions().extensions;
     };
@@ -373,10 +358,9 @@ describe('B1.2 reload paths share the seed→load critical section', () => {
     const events: string[] = [];
     const open = runExtensionLoadCriticalSection(async () => {
       events.push('open:enter');
-      await cache.seed(cwdB, agentDir);
+      await refreshExtensionFactories(agentDir, { cache });
       await new Promise((resolve) => setTimeout(resolve, 20));
-      const loader = new DefaultResourceLoader({ cwd: cwdB, agentDir });
-      await loader.reload();
+      const { loader } = await createExtensionFactoryResourceLoader(cwdB, agentDir, { cache });
       events.push('open:exit');
       return loader.getExtensions().extensions;
     });
@@ -384,8 +368,7 @@ describe('B1.2 reload paths share the seed→load critical section', () => {
     // clearExtensionCache() internally, so it must not interleave with the open.
     const reload = runExtensionLoadCriticalSection(async () => {
       events.push('reload:enter');
-      const loader = new DefaultResourceLoader({ cwd: cwdA, agentDir });
-      await loader.reload();
+      const { loader } = await createExtensionFactoryResourceLoader(cwdA, agentDir, { cache });
       await loader.reload();
       events.push('reload:exit');
       return loader.getExtensions().extensions;

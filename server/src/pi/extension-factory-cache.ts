@@ -1,6 +1,15 @@
 import { opendir, readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import {
+  DefaultPackageManager,
+  DefaultResourceLoader,
+  SettingsManager,
+  type ExtensionAPI,
+  type LoadExtensionsResult,
+  type Extension as SdkExtension,
+} from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
+import { ExtensionImporterError, importFactoryViaJiti } from './sdk-extension-importer.js';
 
 /**
  * B1.2 — process-level extension **factory** cache.
@@ -13,13 +22,22 @@ import { createLogger } from '../logging/logger.js';
  * measured 0.3–1.7 s synchronous block on the event loop.
  *
  * What this does: import each **global** extension's default-export factory once
- * per process, watch it for changes, and hand the factory back to the SDK's own
- * module cache for the session's real cwd (via the additive
- * `seedExtensionFactory` accessor from
- * `scripts/patch-pi-coding-agent-extension-factory.mjs`). `loadExtensionsCached`
- * then reuses the factory while still calling `initializeExtension` per load, so
- * every session keeps its **own** Extension objects and its own runtime — the
- * isolation property the rejected per-cwd-loader cache broke.
+ * per process with jiti and the SDK's own module aliasing (see
+ * `sdk-extension-importer.ts`), and hand the factories to each session's
+ * `DefaultResourceLoader` through the **public** `extensionFactories` option —
+ * together with `noExtensions` + `additionalExtensionPaths` so every non-cached
+ * extension (subagent, symlinked, over-budget, project-local, configured,
+ * packages) still loads through the SDK's own discovery at the real cwd. The
+ * loader initialises each factory per session (fresh Extension objects and
+ * runtime) and `extensionsOverride` restores the exact paths, order and error
+ * labels the discovered path would have produced.
+ *
+ * Failure contract (parent 01-answer.md item 2 — degrade at runtime, alarm in
+ * CI): any failure in the factory pipeline (SDK version outside the validated
+ * range, unresolvable alias target, jiti import failure, override hitting
+ * frozen/changed result objects, parity self-check mismatch) degrades THAT
+ * session to the plain uncached SDK loader with a rate-limited warning and a
+ * diagnostics counter. The loud signal lives in the tests.
  *
  * Deliberately NOT cached: project-local extensions (`<cwd>/.pi/extensions`),
  * configured extensions and packages. Those are cwd-dependent and are still
@@ -41,6 +59,7 @@ import { createLogger } from '../logging/logger.js';
 const logger = createLogger('ExtensionFactoryCache');
 const DEFAULT_MAX_SCAN_ENTRIES = 2048;
 const DEFAULT_MAX_SCAN_DIRS = 128;
+const IMPORT_WARN_INTERVAL_MS = 5_000;
 
 /**
  * Extensions whose module may be cached and reused across sessions.
@@ -120,10 +139,8 @@ export interface ExtensionDirEntry {
 }
 
 export interface ExtensionFactoryCacheDeps {
-  /** Import an extension module and return its default-export factory. */
+  /** Import an extension module and return its default-export factory. Defaults to the public jiti importer. */
   importFactory?: (extensionPath: string) => Promise<unknown | undefined>;
-  /** Place an already-imported factory into the SDK module cache for `cwd`. */
-  seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
   readdir?: (dir: string) => Promise<ExtensionDirEntry[]>;
   /** Streaming enumeration seam (preferred): lets the scanner stop at the budget. */
   opendir?: (dir: string) => Promise<AsyncIterable<ExtensionDirEntry>>;
@@ -145,6 +162,31 @@ export interface CachedExtensionFactory {
   factory: unknown;
   fingerprint: string;
 }
+
+/** What a scan produced, beyond the plain factory list (correction 02). */
+export interface ExtensionFactoryLoadOutcome {
+  factories: CachedExtensionFactory[];
+  /** Resolved paths whose (re-)import failed on THIS scan; stale entries dropped. */
+  failedPaths: string[];
+  /** failure message per failed resolved path. */
+  failureMessages: Map<string, string>;
+  overBudget: boolean;
+}
+
+/**
+ * One open loader's own `path → factory` snapshot (correction 02 major). The
+ * loader's wrappers read ONLY this map — never the process cache — so cache
+ * pruning or clearing cannot break an open session. `failed` entries make a
+ * subsequent initialisation surface the import failure exactly like the
+ * uncached path would (error entry, real path).
+ */
+export interface LoaderFactorySnapshot {
+  readonly entries: Map<string, LoaderFactoryEntry>;
+}
+
+export type LoaderFactoryEntry =
+  | { kind: 'factory'; factory: unknown }
+  | { kind: 'failed'; message: string };
 
 export interface ExtensionFactoryCacheStats {
   discovered: number;
@@ -444,28 +486,17 @@ export class ExtensionFactoryCache {
   private readonly maxScanDirs: number;
   private readonly allowlist: ReadonlySet<string>;
   private readonly entries = new Map<string, CacheEntry>();
-  private importFactory?: (extensionPath: string) => Promise<unknown | undefined>;
-  private seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
+  private readonly importFactory: (extensionPath: string) => Promise<unknown | undefined>;
   private counters: ExtensionFactoryCacheStats = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false, unfingerprintable: 0 };
   private scanEntryCount = 0;
   private overBudgetWarned = false;
+  private lastImportWarnAt = 0;
   constructor(deps: ExtensionFactoryCacheDeps = {}) {
     this.deps = deps;
     this.maxScanEntries = deps.maxScanEntries ?? DEFAULT_MAX_SCAN_ENTRIES;
     this.maxScanDirs = deps.maxScanDirs ?? DEFAULT_MAX_SCAN_DIRS;
     this.allowlist = new Set(deps.allowlist ?? DEFAULT_SHARE_SAFE_EXTENSIONS);
-    this.importFactory = deps.importFactory;
-    this.seedFactory = deps.seedFactory;
-  }
-
-  /**
-   * Test seam and runtime fallback: when the SDK accessors are absent the cache
-   * stays inert (it will never import or seed), and the caller keeps today's
-   * per-session loader path.
-   */
-  setAccessors(accessors: { importFactory?: (extensionPath: string) => Promise<unknown | undefined>; seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean } | undefined): void {
-    this.importFactory = accessors?.importFactory;
-    this.seedFactory = accessors?.seedFactory;
+    this.importFactory = deps.importFactory ?? importFactoryViaJiti;
   }
 
   get statsSnapshot(): ExtensionFactoryCacheStats {
@@ -484,6 +515,21 @@ export class ExtensionFactoryCache {
 
   /** Discover global extensions and return the allowlisted, cached factories. */
   async load(agentDir: string): Promise<CachedExtensionFactory[]> {
+    return (await this.loadWithOutcome(agentDir)).factories;
+  }
+
+  /**
+   * `load()` plus the outcome a loader refresh needs: which allowlisted paths
+   * FAILED to import on this scan (their stale entries are dropped — an open
+   * session's snapshot decides what to do), and whether the scan was
+   * over budget. Import failures are aggregated into ONE rate-limited warning
+   * per scan (correction 02 minor: no per-extension warning flood).
+   */
+  async loadWithOutcome(agentDir: string): Promise<ExtensionFactoryLoadOutcome> {
+    return this.loadOutcome(agentDir);
+  }
+
+  private async loadOutcome(agentDir: string): Promise<ExtensionFactoryLoadOutcome> {
     const extensionsDir = join(agentDir, 'extensions');
     const scan = await scanExtensionsTree(agentDir, this.deps, { maxDirs: this.maxScanDirs, maxEntries: this.maxScanEntries });
     this.scanEntryCount = Math.min(scan.entriesVisited, this.maxScanEntries);
@@ -505,24 +551,33 @@ export class ExtensionFactoryCache {
           'falling back to the unpatched per-session import path for every extension (sessions are unaffected; opens stay slow).',
         );
       }
-      return [];
+      return { factories: [], failedPaths: [], failureMessages: new Map(), overBudget: true };
     }
     this.counters.overBudget = false;
 
     const result: CachedExtensionFactory[] = [];
+    const failedPaths = new Map<string, string>();
     for (const path of allowed) {
       const cached = this.entries.get(path);
       if (cached && cached.fingerprint === scan.fingerprint) {
         result.push({ path, factory: cached.factory, fingerprint: scan.fingerprint });
         continue;
       }
-      const factory = await this.importFactoryFor(path);
-      if (factory === undefined) continue;
+      const attempted = await this.importFactoryFor(path);
+      if (attempted === undefined) {
+        // Correction 02: a failed (re-)import drops any stale entry — the
+        // module is NOT kept serving as if fresh. Open sessions keep their own
+        // per-loader snapshot until their refresh marks the path failed.
+        this.entries.delete(path);
+        failedPaths.set(resolve(path), this.lastImportError ?? 'import failed');
+        continue;
+      }
       if (cached) this.counters.reimports += 1;
       this.counters.imports += 1;
-      this.entries.set(path, { factory, fingerprint: scan.fingerprint });
-      result.push({ path, factory, fingerprint: scan.fingerprint });
+      this.entries.set(path, { factory: attempted, fingerprint: scan.fingerprint });
+      result.push({ path, factory: attempted, fingerprint: scan.fingerprint });
     }
+    if (failedPaths.size > 0) this.warnImportFailures(failedPaths);
     const keep = new Set(allowed);
     for (const path of [...this.entries.keys()]) {
       if (keep.has(path)) continue;
@@ -530,38 +585,45 @@ export class ExtensionFactoryCache {
       this.counters.pruned += 1;
     }
     this.counters.cached = this.entries.size;
-    return result;
+    return {
+      factories: result,
+      failedPaths: [...failedPaths.keys()],
+      failureMessages: failedPaths,
+      overBudget: false,
+    };
   }
 
+  private lastImportError: string | undefined;
+
   private async importFactoryFor(path: string): Promise<unknown | undefined> {
-    if (!this.importFactory) return undefined;
     try {
-      return await this.importFactory(path);
+      const factory = await this.importFactory(path);
+      this.lastImportError = undefined;
+      return factory;
     } catch (error) {
-      // A broken extension must not fail session creation; the loader will
-      // report the same failure itself if the path is requested.
-      logger.warn(`[ExtensionFactoryCache] import failed for ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      // A broken extension must not fail session creation; the loader reports
+      // the failure per session, exactly like the uncached path. The per-scan
+      // aggregate warning lives in warnImportFailures (rate-limited).
+      this.lastImportError = error instanceof Error ? error.message : String(error);
       return undefined;
     }
   }
 
   /**
-   * Place every cached global factory into the SDK module cache for `cwd`, so
-   * the next `DefaultResourceLoader.reload()` reuses it instead of re-importing.
+   * ONE aggregated, rate-limited warning per scan for importer failures
+   * (correction 02 minor: repeated opens must not flood the log).
    */
-  async seed(cwd: string, agentDir: string): Promise<{ available: boolean; seeded: number }> {
-    if (!this.importFactory || !this.seedFactory) return { available: false, seeded: 0 };
-    const factories = await this.load(agentDir);
-    const resolvedCwd = resolve(cwd);
-    let seeded = 0;
-    for (const entry of factories) {
-      try {
-        if (this.seedFactory(entry.path, entry.factory, resolvedCwd)) seeded += 1;
-      } catch (error) {
-        logger.warn(`[ExtensionFactoryCache] seed failed for ${entry.path}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    return { available: true, seeded };
+  private warnImportFailures(failedPaths: Map<string, string>): void {
+    const now = Date.now();
+    if (now - this.lastImportWarnAt < IMPORT_WARN_INTERVAL_MS) return;
+    this.lastImportWarnAt = now;
+    const paths = [...failedPaths.keys()];
+    const shown = paths.slice(0, 10);
+    logger.warn(
+      `[ExtensionFactoryCache] ${paths.length} extension import(s) failed this scan: ${shown.join(', ')}` +
+      `${paths.length > shown.length ? ` (+${paths.length - shown.length} more)` : ''}; ` +
+      'affected extensions stay uncached (per-session loads report the error).',
+    );
   }
 
   reset(): void {
@@ -572,48 +634,302 @@ export class ExtensionFactoryCache {
   }
 }
 
-// ── SDK accessors (patch-present detection) ─────────────────────────────────
+// ── Factory delivery through the public SDK API (B1.2b) ─────────────────────
 
-interface ExtensionFactorySdk {
-  importExtensionFactory?: (extensionPath: string) => Promise<unknown | undefined>;
-  seedExtensionFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
+export interface ExtensionLoaderTelemetry {
+  fallbacks: number;
+  lastFallbackReason?: string;
+  lastFallbackAt?: string;
 }
 
-let sdkModulePromise: Promise<ExtensionFactorySdk> | undefined;
+const FALLBACK_WARN_INTERVAL_MS = 5_000;
+const fallbackTelemetry: Required<Pick<ExtensionLoaderTelemetry, 'fallbacks'>> & {
+  lastFallbackReason?: string;
+  lastFallbackAt?: string;
+  lastWarningAt: number;
+} = { fallbacks: 0, lastWarningAt: 0 };
 
-async function loadSdkModule(): Promise<ExtensionFactorySdk> {
-  sdkModulePromise ??= import('@earendil-works/pi-coding-agent') as unknown as Promise<ExtensionFactorySdk>;
-  return sdkModulePromise;
+/** Bounded copy of the degradation counter (a fallback never blocks a session). */
+export function getExtensionLoaderTelemetry(): ExtensionLoaderTelemetry {
+  return {
+    fallbacks: fallbackTelemetry.fallbacks,
+    lastFallbackReason: fallbackTelemetry.lastFallbackReason,
+    lastFallbackAt: fallbackTelemetry.lastFallbackAt,
+  };
 }
 
-/** True when the additive patch is applied and both accessors are callable. */
-export async function isExtensionFactorySeedingAvailable(): Promise<boolean> {
-  const sdk = await loadSdkModule();
-  return typeof sdk.importExtensionFactory === 'function' && typeof sdk.seedExtensionFactory === 'function';
+/** Test seam. */
+export function resetExtensionLoaderTelemetry(): void {
+  fallbackTelemetry.fallbacks = 0;
+  fallbackTelemetry.lastFallbackReason = undefined;
+  fallbackTelemetry.lastFallbackAt = undefined;
+  fallbackTelemetry.lastWarningAt = 0;
 }
 
-let warningLogged = false;
-let globalCache: ExtensionFactoryCache | undefined;
+function noteFallback(reason: string): void {
+  fallbackTelemetry.fallbacks += 1;
+  fallbackTelemetry.lastFallbackReason = reason;
+  fallbackTelemetry.lastFallbackAt = new Date().toISOString();
+  const now = Date.now();
+  if (now - fallbackTelemetry.lastWarningAt >= FALLBACK_WARN_INTERVAL_MS) {
+    fallbackTelemetry.lastWarningAt = now;
+    logger.warn(
+      `[ExtensionFactoryCache] extension factory loading degraded to the plain uncached SDK path (reason: ${reason}); ` +
+      'sessions are unaffected — session opens stay slow until the cause is fixed.',
+    );
+  }
+}
 
-/** The process-wide cache, wired to the SDK accessors when the patch is present. */
-export async function getExtensionFactoryCache(): Promise<ExtensionFactoryCache> {
-  if (!globalCache) {
-    const sdk = await loadSdkModule();
-    const importFactory = sdk.importExtensionFactory;
-    const seedFactory = sdk.seedExtensionFactory;
-    const patched = typeof importFactory === 'function' && typeof seedFactory === 'function';
-    globalCache = new ExtensionFactoryCache({
-      importFactory: patched ? importFactory.bind(sdk) : undefined,
-      seedFactory: patched ? seedFactory.bind(sdk) : undefined,
+/** Strip the loader's single `<inline:name>` wrapper (name = the real path). */
+const stripInlineLabel = (label: string): string | undefined =>
+  label.startsWith('<inline:') && label.endsWith('>') ? label.slice('<inline:'.length, -1) : undefined;
+
+export interface ExtensionLoaderDeps {
+  /** The process cache (default: the singleton). */
+  cache?: ExtensionFactoryCache;
+  /** Test seam: force the extensionsOverride to throw (frozen/changed result objects). */
+  forceOverrideFailure?: boolean;
+  /** Test seam: tamper with the parity self-check so it reports a mismatch. */
+  tamperParityCheck?: boolean;
+  /** Test seam: replace the plain fallback loader construction. */
+  createPlainLoader?: (cwd: string, agentDir: string) => DefaultResourceLoader;
+}
+
+/**
+ * Restore full parity on the loader's extension result: real paths, real order,
+ * rewritten error labels. Runs BEFORE the loader recomputes every sourceInfo
+ * from `metadataByPath`, so sourceInfo comes out identical to the discovered
+ * path. Throws on any structural surprise (frozen objects, missing entries) —
+ * the caller degrades that session to the plain loader.
+ */
+export function applyExtensionFactoryParity(
+  result: LoadExtensionsResult,
+  enabledOrder: readonly string[],
+  options: { tamperParityCheck?: boolean; generatedLabels?: readonly string[] } = {},
+): LoadExtensionsResult {
+  // Correction 02 (minor) + correction 03 (minor): normalise `<inline:…>`
+  // labels in error paths AND in embedded message text (conflict diagnostics
+  // name the conflicting owner path in the message) — but ONLY the exact
+  // labels this loader generated (`<inline:${factory.path}>` for its known
+  // factory paths). Extension-authored diagnostic text containing arbitrary
+  // `<inline:…>` substrings must stay verbatim.
+  const generatedLabels = options.generatedLabels ?? [];
+  const labelRewrites = generatedLabels.map((path) => ({ label: `<inline:${path}>`, path }));
+  const rewriteGeneratedLabels = (text: string): string => {
+    let rewritten = text;
+    for (const { label, path } of labelRewrites) {
+      rewritten = rewritten.split(label).join(path);
+    }
+    return rewritten;
+  };
+  const isGeneratedLabel = (candidate: string | undefined): string | undefined => {
+    if (candidate === undefined) return undefined;
+    const inner = stripInlineLabel(candidate);
+    return inner !== undefined && generatedLabels.includes(inner) ? inner : undefined;
+  };
+  const erroredRealPaths = new Set<string>();
+  for (const error of result.errors) {
+    const realPath = isGeneratedLabel(error.path);
+    if (realPath !== undefined) error.path = realPath;
+    if (typeof error.error === 'string' && labelRewrites.some(({ label }) => error.error.includes(label))) {
+      error.error = rewriteGeneratedLabels(error.error);
+    }
+    if (typeof error.path === 'string') erroredRealPaths.add(resolve(error.path));
+  }
+
+  const loaded = [...result.extensions];
+  const used = new Set<SdkExtension>();
+  const ordered: SdkExtension[] = [];
+  let erroredExpected = 0;
+  for (const enabledPath of enabledOrder) {
+    const resolvedPath = resolve(enabledPath);
+    const match = loaded.find((extension) => {
+      if (used.has(extension)) return false;
+      const candidate = extension.path.startsWith('<inline:') ? stripInlineLabel(extension.path) : extension.path;
+      return candidate !== undefined && resolve(candidate) === resolvedPath;
     });
-    if (!patched && !warningLogged) {
-      warningLogged = true;
-      logger.warn(
-        '[ExtensionFactoryCache] extension-factory accessors are absent (scripts/patch-pi-coding-agent-extension-factory.mjs not applied); ' +
-        'falling back to the unpatched per-session extension import path. Sessions are unaffected; session opens remain slow.',
-      );
+    if (match !== undefined) {
+      used.add(match);
+      if (match.path.startsWith('<inline:')) {
+        // Mutating public result fields; a future SDK that freezes these fails
+        // loudly here and the session degrades to the plain loader.
+        match.path = resolvedPath;
+        match.resolvedPath = resolvedPath;
+      }
+      ordered.push(match);
+      continue;
+    }
+    // Correction 02 (major): an extension whose re-import failed is absent from
+    // `extensions` and present in `errors` with its real path — exactly what
+    // the uncached path produces. Parity counts it as accounted for.
+    if (erroredRealPaths.has(resolvedPath)) {
+      erroredExpected += 1;
+      continue;
     }
   }
+  if (options.tamperParityCheck) ordered.splice(0, 1);
+  if (ordered.length + erroredExpected !== enabledOrder.length || used.size !== loaded.length) {
+    const missing = enabledOrder.length - ordered.length - erroredExpected;
+    throw new ExtensionImporterError(
+      `extension parity self-check failed: ${missing} expected extension(s) missing, ${loaded.length - used.size} unexpected loaded extension(s)`,
+    );
+  }
+  result.extensions = ordered;
+  return result;
+}
+
+/**
+ * Build the session's resource loader with cached factories delivered through
+ * the public API. Any failure inside the factory pipeline degrades to the
+ * plain uncached SDK loader (normal discovery, no factories) — never throws
+ * into session creation.
+ */
+export interface ExtensionFactoryLoaderResult {
+  loader: DefaultResourceLoader;
+  /** The loader's own factory snapshot; `undefined` for the plain fallback loader. */
+  snapshot?: LoaderFactorySnapshot;
+}
+
+export async function createExtensionFactoryResourceLoader(
+  cwd: string,
+  agentDir: string,
+  deps: ExtensionLoaderDeps = {},
+  onLoaded?: (loader: DefaultResourceLoader) => void,
+): Promise<ExtensionFactoryLoaderResult> {
+  try {
+    return await buildFactoryBackedLoader(cwd, agentDir, deps, onLoaded);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    noteFallback(reason);
+    const loader = deps.createPlainLoader?.(cwd, agentDir) ?? new DefaultResourceLoader({ cwd, agentDir });
+    await loader.reload();
+    onLoaded?.(loader);
+    return { loader, snapshot: undefined };
+  }
+}
+
+async function buildFactoryBackedLoader(
+  cwd: string,
+  agentDir: string,
+  deps: ExtensionLoaderDeps,
+  onLoaded?: (loader: DefaultResourceLoader) => void,
+): Promise<ExtensionFactoryLoaderResult> {
+  // Per-loader SettingsManager: the loader mutates project-trust state on it,
+  // so it must never be shared across sessions. The pre-pass reload mirrors the
+  // loader's own internal sequence (reload settings → resolve).
+  const settingsManager = SettingsManager.create(cwd, agentDir);
+  await settingsManager.reload();
+  const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+  const resolvedPaths = await packageManager.resolve();
+  const enabledOrder = resolvedPaths.extensions.filter((resource) => resource.enabled).map((resource) => resource.path);
+
+  const cache = deps.cache ?? (await getExtensionFactoryCache());
+  const { factories } = await cache.loadWithOutcome(agentDir);
+  const stats = cache.stats;
+  // Systemic importer failure (SDK version out of range, alias map broken, jiti
+  // unavailable): every allowlisted extension failed to import — degrade the
+  // whole session to the plain uncached path. A single broken extension is NOT
+  // systemic: it stays uncached and the loader reports it per session, exactly
+  // like today's uncached path.
+  if (!stats.overBudget && stats.allowlisted > 0 && factories.length === 0) {
+    throw new ExtensionImporterError(
+      `all ${stats.allowlisted} allowlisted extension factories failed to import (systemic importer failure)`,
+    );
+  }
+  const factoryPaths = new Set(factories.map((factory) => resolve(factory.path)));
+  const additionalPaths = enabledOrder.filter((path) => !factoryPaths.has(resolve(path)));
+
+  // Correction 02 (major): the loader reads ONLY its own snapshot — never the
+  // process cache — so cache pruning/clearing cannot break an open session.
+  // refreshExtensionFactories swaps entries on this map atomically, only with
+  // successful imports; a failed re-import marks the entry `failed`, which the
+  // wrapper surfaces as the uncached path's load error.
+  const snapshot: LoaderFactorySnapshot = {
+    entries: new Map(factories.map((factory) => [resolve(factory.path), { kind: 'factory' as const, factory: factory.factory }])),
+  };
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    noExtensions: true,
+    additionalExtensionPaths: additionalPaths,
+    extensionFactories: factories.map((factory) => ({
+      // name = the real path: the loader labels the entry `<inline:${name}>`,
+      // and applyExtensionFactoryParity strips exactly that one wrapper.
+      name: factory.path,
+      factory: (api: ExtensionAPI): void | Promise<void> => {
+        const entry = snapshot.entries.get(resolve(factory.path));
+        if (!entry || entry.kind !== 'factory' || typeof entry.factory !== 'function') {
+          throw new Error(
+            `Failed to load extension: ${entry && entry.kind === 'failed' ? entry.message : `cached factory unavailable for ${factory.path}`}`,
+          );
+        }
+        return (entry.factory as (api: ExtensionAPI) => void | Promise<void>)(api);
+      },
+    })),
+    extensionsOverride: (result: LoadExtensionsResult) => {
+      if (deps.forceOverrideFailure) {
+        throw new ExtensionImporterError('extensionsOverride hit frozen or changed result objects (simulated)');
+      }
+      return applyExtensionFactoryParity(result, enabledOrder, {
+        tamperParityCheck: deps.tamperParityCheck,
+        generatedLabels: factories.map((factory) => factory.path),
+      });
+    },
+  });
+  await loader.reload();
+  onLoaded?.(loader);
+  return { loader, snapshot };
+}
+
+/**
+ * Refresh ONE loader's factory snapshot for its /reload (pi-service,
+ * inside the extension-load critical section). Atomic and
+ * successful-imports-only:
+ *  - a changed extension whose re-import succeeds swaps the snapshot entry for
+ *    the new factory (the next `.reload()` initialises the new code);
+ *  - a failed re-import marks the entry `failed` — the next `.reload()`
+ *    surfaces the import error exactly like the uncached path (no stale code);
+ *  - a removed extension leaves the entry untouched — the open session keeps
+ *    its snapshot (file-set changes take effect at the next open);
+ *  - an over-budget scan leaves the whole snapshot untouched.
+ * Without a snapshot (plain fallback loader) this is a no-op.
+ */
+export async function refreshExtensionFactories(
+  agentDir: string,
+  deps: { cache?: ExtensionFactoryCache; snapshot?: LoaderFactorySnapshot } = {},
+): Promise<void> {
+  const snapshot = deps.snapshot;
+  if (!snapshot) return;
+  const cache = deps.cache ?? (await getExtensionFactoryCache());
+  const outcome = await cache.loadWithOutcome(agentDir);
+  if (outcome.overBudget) return;
+  const freshByPath = new Map(outcome.factories.map((factory) => [resolve(factory.path), factory]));
+  const failedSet = new Set(outcome.failedPaths);
+  // Atomic per-path swap on the snapshot: entries are only ever replaced or
+  // newly set, never deleted — an open loader cannot lose a factory here.
+  for (const [path, existing] of snapshot.entries) {
+    if (failedSet.has(path)) {
+      snapshot.entries.set(path, { kind: 'failed', message: outcome.failureMessages.get(path) ?? 'import failed' });
+      continue;
+    }
+    const fresh = freshByPath.get(path);
+    if (fresh) snapshot.entries.set(path, { kind: 'factory', factory: fresh.factory });
+    if (!fresh && existing.kind === 'failed') {
+      // The path is gone from discovery: the failure marker no longer applies
+      // (a next open would simply not include the extension); leave the last
+      // state — the loader keeps its snapshot either way.
+    }
+  }
+}
+
+// ── Process-wide cache ───────────────────────────────────────────────────────
+
+let globalCache: ExtensionFactoryCache | undefined;
+
+/** The process-wide cache (jiti importer by default — no patch, no accessors). */
+export async function getExtensionFactoryCache(deps?: ExtensionFactoryCacheDeps): Promise<ExtensionFactoryCache> {
+  globalCache ??= new ExtensionFactoryCache(deps);
   return globalCache;
 }
 
@@ -621,6 +937,4 @@ export async function getExtensionFactoryCache(): Promise<ExtensionFactoryCache>
 export function resetExtensionFactoryCache(): void {
   globalCache?.reset();
   globalCache = undefined;
-  warningLogged = false;
-  sdkModulePromise = undefined;
 }
