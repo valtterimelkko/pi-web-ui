@@ -17,7 +17,7 @@ export type ValidationCapabilities = CapabilitiesResponse;
 export type ValidationRuntime = keyof ValidationCapabilities['runtimes'];
 
 export interface InternalApiClientLike {
-  createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse>;
+  createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; source?: string; scenarioId?: string; ephemeral?: boolean; parentSessionId?: string; headers?: Record<string, string> }): Promise<CreateSessionResponse>;
   promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]>;
   promptWithIdempotency(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse>;
   promptDetached?(sessionId: string, message: string): Promise<{ sessionId: string; runId: string; detached: boolean; status: string }>;
@@ -43,6 +43,10 @@ export interface InternalApiClientLike {
   optInNotifications(sessionId: string, label?: string): Promise<unknown>;
   getNotificationState(sessionId: string): Promise<{ optIn: unknown; deliveries: unknown[] }>;
   getLastPromptEvidence?(sessionId: string): { runId?: string; eventCounts: Record<string, number>; dispatchMode?: string } | undefined;
+  /** C5 (1.54.0): list sessions, optionally filtered by parent lineage. */
+  listSessions?(parent?: string): Promise<import('../internal-api/types.js').ListSessionsResponse>;
+  /** C5 (1.54.0): unix socket path, for scenarios exercising the peer-credential path. */
+  getSocketPath?(): string;
 }
 
 export interface ValidationAssertion {
@@ -87,6 +91,8 @@ export interface ValidationContext {
   timeoutMs?: number;
   /** Optional explicit model id (e.g. `kilo/...`, `opencode/...-free`). */
   model?: string;
+  /** C5 (1.54.0): the validation server's unix socket path, when available. */
+  socketPath?: string;
 }
 
 export interface ValidationScenario {

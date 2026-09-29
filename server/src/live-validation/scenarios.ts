@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type {
@@ -633,6 +634,176 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           assertions,
         };
       });
+    },
+  },
+  'parent-lineage': {
+    id: 'parent-lineage',
+    description:
+      'C5 (contract 1.54.0) lineage always recorded: body/header linkage, peer-credential fallback for a managed caller without the header, fail-safe for a bogus identity, header precedence, and the ?parent= list filter. Deterministic — no model turns.',
+    async run(context) {
+      const assertions: ValidationAssertion[] = [];
+      const createdSessions: string[] = [];
+      const cleanupWarnings: string[] = [];
+      const client = context.client;
+      const socketPath = context.socketPath
+        ?? (typeof client.getSocketPath === 'function' ? client.getSocketPath() : undefined);
+      if (!socketPath || typeof client.listSessions !== 'function') {
+        return {
+          scenarioId: 'parent-lineage',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'parent-lineage requires a socket path and a listSessions-capable client',
+          assertions: [],
+        };
+      }
+
+      const createBody = JSON.stringify({ runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage' });
+
+      /** Spawn a node one-liner that POSTs to /api/v1/sessions over the unix
+       *  socket with a controlled environment — the same shape as a managed
+       *  runtime subprocess creating a child (contract 1.47.0). */
+      const spawnCreate = (env: { PI_WEB_UI_SESSION_ID?: string }, headerParent?: string) => new Promise<Record<string, unknown>>((resolve, reject) => {
+        const script =
+          "const http=require('node:http');"
+          + "const req=http.request({socketPath:process.env.C5_SOCK,path:'/api/v1/sessions',method:'POST',headers:{'Content-Type':'application/json',...(process.env.C5_HEADER?{'X-Parent-Session':process.env.C5_HEADER}:{})}},(res)=>{let raw='';res.on('data',c=>raw+=c);res.on('end',()=>process.stdout.write(raw));});"
+          + "req.on('error',(e)=>{process.stdout.write(JSON.stringify({c5error:String(e)}));process.exit(0);});"
+          + 'req.end(process.env.C5_BODY);';
+        const childEnv: Record<string, string | undefined> = { ...process.env };
+        delete childEnv.PI_WEB_UI_SESSION_ID;
+        delete childEnv.PI_SESSION_ID;
+        delete childEnv.PI_WEB_UI_PARENT_SESSION_ID;
+        if (env.PI_WEB_UI_SESSION_ID) childEnv.PI_WEB_UI_SESSION_ID = env.PI_WEB_UI_SESSION_ID;
+        childEnv.C5_SOCK = socketPath;
+        childEnv.C5_BODY = createBody;
+        if (headerParent) childEnv.C5_HEADER = headerParent; else delete childEnv.C5_HEADER;
+        const child = spawn(process.execPath, ['-e', script], { env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
+        let out = '';
+        child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+        const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+        child.on('close', () => {
+          clearTimeout(timer);
+          try { resolve(JSON.parse(out) as Record<string, unknown>); } catch (e) { reject(new Error(`unparseable create response: ${out.slice(0, 200)} (${String(e)})`)); }
+        });
+        child.on('error', (e) => { clearTimeout(timer); reject(e); });
+      });
+
+      const trackCleanup = async (sessionId: string): Promise<void> => {
+        try { await client.deleteSession(sessionId); } catch (e) { cleanupWarnings.push(`cleanup ${sessionId}: ${e instanceof Error ? e.message : String(e)}`); }
+      };
+
+      try {
+        const parent = await client.createSession({
+          runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage',
+        });
+        createdSessions.push(parent.sessionId);
+        const parent2 = await client.createSession({
+          runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage',
+        });
+        createdSessions.push(parent2.sessionId);
+
+        // 1. Explicit body linkage (source 'body').
+        const viaBody = await client.createSession({
+          runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage',
+          parentSessionId: parent.sessionId,
+        });
+        createdSessions.push(viaBody.sessionId);
+        assertions.push({
+          name: 'body_linkage',
+          passed: viaBody.parentSessionId === parent.sessionId && viaBody.parentSource === 'body',
+          details: `parentSessionId=${viaBody.parentSessionId} parentSource=${viaBody.parentSource}`,
+        });
+
+        // 2. Header path unchanged (source 'header').
+        const viaHeader = await client.createSession({
+          runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage',
+          headers: { 'X-Parent-Session': parent.sessionId },
+        });
+        createdSessions.push(viaHeader.sessionId);
+        assertions.push({
+          name: 'header_linkage_unchanged',
+          passed: viaHeader.parentSessionId === parent.sessionId && viaHeader.parentSource === 'header',
+          details: `parentSessionId=${viaHeader.parentSessionId} parentSource=${viaHeader.parentSource}`,
+        });
+
+        // 3. Managed caller without the header: peer-credential ancestry resolution.
+        const peerChild = await spawnCreate({ PI_WEB_UI_SESSION_ID: parent.sessionId });
+        const peerChildId = typeof peerChild.sessionId === 'string' ? peerChild.sessionId : undefined;
+        if (peerChildId) createdSessions.push(peerChildId);
+        assertions.push({
+          name: 'peer_linkage_managed_caller',
+          passed: peerChild.parentSessionId === parent.sessionId && peerChild.parentSource === 'peer',
+          details: `sessionId=${peerChildId ?? '?'} parentSessionId=${String(peerChild.parentSessionId)} parentSource=${String(peerChild.parentSource)}`,
+        });
+
+        // 4. Fail-safe: a managed-looking identity that names no registry session → unlinked, never wrongly linked.
+        const bogusChild = await spawnCreate({ PI_WEB_UI_SESSION_ID: 'c5-bogus-nonexistent-parent' });
+        const bogusChildId = typeof bogusChild.sessionId === 'string' ? bogusChild.sessionId : undefined;
+        if (bogusChildId) createdSessions.push(bogusChildId);
+        assertions.push({
+          name: 'bogus_identity_fail_safe',
+          passed: bogusChild.parentSessionId === undefined && bogusChild.parentSource === undefined,
+          details: `sessionId=${bogusChildId ?? '?'} parentSessionId=${String(bogusChild.parentSessionId)} parentSource=${String(bogusChild.parentSource)}`,
+        });
+
+        // 5. Explicit header beats the caller's own managed identity.
+        const precedenceChild = await spawnCreate({ PI_WEB_UI_SESSION_ID: parent.sessionId }, parent2.sessionId);
+        const precedenceChildId = typeof precedenceChild.sessionId === 'string' ? precedenceChild.sessionId : undefined;
+        if (precedenceChildId) createdSessions.push(precedenceChildId);
+        assertions.push({
+          name: 'header_beats_peer_identity',
+          passed: precedenceChild.parentSessionId === parent2.sessionId && precedenceChild.parentSource === 'header',
+          details: `sessionId=${precedenceChildId ?? '?'} parentSessionId=${String(precedenceChild.parentSessionId)} parentSource=${String(precedenceChild.parentSource)}`,
+        });
+
+        // 6. List lineage surfacing + the ?parent= filter.
+        const list = await client.listSessions();
+        const byId = new Map(list.sessions.map((s) => [s.sessionId, s]));
+        const linkedIds = [viaBody.sessionId, viaHeader.sessionId, peerChildId, precedenceChildId]
+          .filter((id): id is string => typeof id === 'string');
+        const allLinkedHaveLineage = linkedIds.every((id) => byId.get(id)?.parentSessionId !== undefined);
+        const bogusStaysUnlinked = bogusChildId === undefined || byId.get(bogusChildId)?.parentSessionId === undefined;
+        assertions.push({
+          name: 'list_items_carry_lineage',
+          passed: allLinkedHaveLineage && bogusStaysUnlinked,
+          details: `linked children expose parentSessionId on GET /sessions (${linkedIds.length} checked); the bogus child stays unlinked`,
+        });
+
+        const filtered = await client.listSessions(parent.sessionId);
+        const expectedChildren = [viaBody.sessionId, viaHeader.sessionId, peerChildId].sort();
+        const actualChildren = filtered.sessions.map((s) => s.sessionId).sort();
+        assertions.push({
+          name: 'parent_filter_exact',
+          passed: JSON.stringify(actualChildren) === JSON.stringify(expectedChildren),
+          details: `?parent=${parent.sessionId} → [${actualChildren.join(', ')}]`,
+        });
+
+        const filtered2 = await client.listSessions(parent2.sessionId);
+        assertions.push({
+          name: 'parent_filter_second_parent',
+          passed: filtered2.sessions.length === 1 && filtered2.sessions[0].sessionId === precedenceChildId,
+          details: `?parent=${parent2.sessionId} → [${filtered2.sessions.map((s) => s.sessionId).join(', ')}]`,
+        });
+
+        // 7. Unresolvable parent value is a 404, not a silently empty list.
+        let notFound = false;
+        try {
+          await client.listSessions('c5-no-such-parent-session');
+        } catch (error) {
+          notFound = error instanceof Error && 'statusCode' in error && (error as { statusCode?: number }).statusCode === 404;
+        }
+        assertions.push({ name: 'parent_filter_unresolvable_is_404', passed: notFound, details: 'GET /sessions?parent=<unresolvable>' });
+
+        return {
+          scenarioId: 'parent-lineage',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
+          assertions,
+          cleanupWarnings,
+        };
+      } finally {
+        for (const sessionId of createdSessions) await trackCleanup(sessionId);
+      }
     },
   },
   'claude-ask-user-question': {
