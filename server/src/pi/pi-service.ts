@@ -150,7 +150,7 @@ export interface SessionRefMaps {
  * handler/session identity. A different owner still mapping the same session
  * id keeps the sessions entry alive (identity-safe, sibling-preserving).
  */
-export function releaseSessionRefsFrom(maps: SessionRefMaps, handlerKey: string, sessionId: string): void {
+export function releaseSessionRefsFrom(maps: SessionRefMaps, handlerKey: string, sessionId: string): boolean {
   maps.eventHandlers.delete(handlerKey);
   maps.clientWebUIContexts.delete(handlerKey);
   if (maps.clientSessionMap.get(handlerKey) === sessionId) {
@@ -160,7 +160,11 @@ export function releaseSessionRefsFrom(maps: SessionRefMaps, handlerKey: string,
   for (const owner of maps.clientSessionMap.values()) {
     if (owner === sessionId) { stillOwned = true; break; }
   }
-  if (!stillOwned) maps.sessions.delete(sessionId);
+  if (!stillOwned) {
+    maps.sessions.delete(sessionId);
+    return true;
+  }
+  return false;
 }
 
 export class PiService {
@@ -540,6 +544,9 @@ export class PiService {
         this.clientWebUIContexts.delete(options.clientId);
         this.removeEventHandler(options.clientId);
       }
+      // Correction 03 (minor): the failed session's factory snapshot must not
+      // outlive its disposed session.
+      this.sessionFactorySnapshots.delete(session.sessionId);
       session.dispose();
       throw error;
     }
@@ -618,8 +625,10 @@ export class PiService {
    * never touches a sibling session or an unrelated owner of the same id.
    */
   releaseSessionRefs(handlerKey: string, sessionId: string): void {
-    if (sessionId) this.sessionFactorySnapshots.delete(sessionId);
-    releaseSessionRefsFrom(
+    // Correction 03 (major): the snapshot lives exactly as long as the session
+    // entry — a sibling owner still mapping the session keeps it, so the
+    // sibling's /reload keeps refreshing factories.
+    const sessionEntryReleased = releaseSessionRefsFrom(
       {
         sessions: this.sessions,
         clientSessionMap: this.clientSessionMap,
@@ -629,6 +638,7 @@ export class PiService {
       handlerKey,
       sessionId,
     );
+    if (sessionEntryReleased && sessionId) this.sessionFactorySnapshots.delete(sessionId);
   }
 
   async listSessions(cwd?: string): Promise<SessionInfo[]> {
@@ -952,6 +962,9 @@ export class PiService {
     this.clientSessionMap.clear();
     this.eventHandlers.clear();
     this.clientWebUIContexts.clear();
+    // Correction 03 (minor): direct/non-pool sessions' factory snapshots die
+    // with cleanup too — nothing may retain per-loader factory closures.
+    this.sessionFactorySnapshots.clear();
   }
 }
 

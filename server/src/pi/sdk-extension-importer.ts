@@ -381,8 +381,10 @@ export async function importFactoryViaJiti(extensionPath: string, deps: JitiImpo
     return typeof mod === 'function' ? mod : undefined;
   } catch (error) {
     const cause = toError(error);
-    // Include the underlying message so per-session load errors carry the same
-    // diagnostic text the uncached path produces.
-    throw new ExtensionImporterError(`Failed to import extension module ${extensionPath}: ${cause.message}`, { cause });
+    // Correction 03 (minor): the MESSAGE is the underlying cause message so a
+    // failed re-import surfaces exactly like the uncached path
+    // (`Failed to load extension: <cause>`); the module context stays on the
+    // `cause` chain.
+    throw new ExtensionImporterError(cause.message, { cause });
   }
 }

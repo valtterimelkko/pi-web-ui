@@ -12,7 +12,7 @@ vi.mock('../../../src/logging/logger.js', () => ({
 }));
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import type { Extension } from '@earendil-works/pi-coding-agent';
 import {
   DEFAULT_SHARE_SAFE_EXTENSIONS,
@@ -651,7 +651,7 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
   const failureClasses: Array<[string, (harness: LoaderHarness) => Parameters<typeof createExtensionFactoryResourceLoader>[2]]> = [
     [
       'SDK version outside the validated range (real importer chain)',
-      (harness) => ({
+      () => ({
         cache: new ExtensionFactoryCache({
           allowlist: ['iso'],
           importFactory: (path) =>
@@ -665,7 +665,7 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
     ],
     [
       'jiti import fails (crash on import)',
-      (harness) => ({
+      () => ({
         cache: new ExtensionFactoryCache({
           allowlist: ['iso'],
           importFactory: async () => {
@@ -755,8 +755,13 @@ describe('B1.2b correction 02 — per-loader factory snapshots', () => {
       expect(isoLoaded).toBeUndefined();
       const isoError = result.errors.find((error) => error.path.includes('/iso/'));
       expect(isoError).toBeDefined();
-      expect(isoError!.error).toContain('Failed to load extension');
-      expect(isoError!.error).toContain('b12b-reimport-failure');
+      // Correction 03 (minor): EXACT plain-loader parity — the surfaced text is
+      // `Failed to load extension: <cause>`, with no importer wrapping text.
+      expect(isoError!.error).toBe('Failed to load extension: b12b-reimport-failure');
+      const plain = await loadPlain(harness.cwdA, harness.agentDir);
+      const plainError = plain.errors.find((error) => error.path.includes('/iso/'));
+      expect(plainError).toBeDefined();
+      expect(plainError!.error).toBe(isoError!.error);
       // The uncached sibling is untouched.
       expect(result.extensions.some((extension) => extension.path.includes('/uncached/'))).toBe(true);
     } finally {
@@ -826,6 +831,25 @@ describe('B1.2b correction 02 — per-loader factory snapshots', () => {
     }
   });
 
+  it('rewrites ONLY loader-generated <inline:> labels in messages; extension-authored text stays verbatim (correction 03)', async () => {
+    const harness = await loaderHarness();
+    try {
+      // The cached extension's factory throws with an authored <inline:…>
+      // literal that is NOT one of this loader's generated labels.
+      writeFileSync(
+        join(harness.agentDir, 'extensions', 'iso', 'index.ts'),
+        `export default function () { throw new Error('user diagnostic literal <inline:not-an-extension-label> should stay verbatim'); }`,
+      );
+      const { loader } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
+      const result = loader.getExtensions();
+      const authored = result.errors.find((error) => error.error.includes('<inline:not-an-extension-label>'));
+      expect(authored).toBeDefined();
+      expect(authored!.error).toBe('user diagnostic literal <inline:not-an-extension-label> should stay verbatim');
+    } finally {
+      loaderHarnessTeardown(harness);
+    }
+  });
+
   it('rewrites <inline:> labels in error paths AND messages, with conflict diagnostics included in the parity projection', async () => {
     const root = mkdtempSync(join(tmpdir(), 'b12b-conflict-'));
     try {
@@ -855,6 +879,12 @@ export default function (pi) {
       expect(project(viaFactory)).toEqual(project(plain));
       // No <inline: label anywhere in the delivered result.
       expect(JSON.stringify({ extensions: viaFactory.extensions.map((e) => ({ p: e.path, rp: e.resolvedPath })), errors: viaFactory.errors })).not.toContain('<inline:');
+      // The GENERATED owner label in the conflict message was rewritten to the
+      // real path (correction 03: generated labels only, but still rewritten).
+      const conflict = viaFactory.errors.find((error) => error.error.includes('conflicts with'));
+      expect(conflict).toBeDefined();
+      // The embedded owner path is the real file, not a generated label.
+      expect(conflict!.error).toMatch(/conflicts with \//);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

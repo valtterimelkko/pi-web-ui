@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { pathToFileURL, fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import {
   VALIDATED_SDK_VERSION,
   ExtensionImporterError,
@@ -83,7 +83,6 @@ describe('B1.2b SDK alias map', () => {
     // Independent anchor: the resolved entry really belongs to the SDK package.
     const pkg = JSON.parse(readFileSync(join(sdkRoot, 'package.json'), 'utf-8')) as { name: string };
     expect(pkg.name).toBe('@earendil-works/pi-coding-agent');
-    void pathToFileURL;
   });
 
   it('prefers the SDK-nested companion copies (the ones import.meta.resolve from the SDK finds)', () => {

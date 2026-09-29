@@ -705,18 +705,34 @@ export interface ExtensionLoaderDeps {
 export function applyExtensionFactoryParity(
   result: LoadExtensionsResult,
   enabledOrder: readonly string[],
-  options: { tamperParityCheck?: boolean } = {},
+  options: { tamperParityCheck?: boolean; generatedLabels?: readonly string[] } = {},
 ): LoadExtensionsResult {
-  // Correction 02 (minor): normalise `<inline:…>` labels in error paths AND in
-  // embedded message text (conflict diagnostics name the conflicting owner
-  // path in the message), so no factory label leaks into logs or the UI.
-  const rewriteInlineLabels = (text: string): string => text.replace(/<inline:([^>\n]*)>/g, (_match, inner: string) => inner);
+  // Correction 02 (minor) + correction 03 (minor): normalise `<inline:…>`
+  // labels in error paths AND in embedded message text (conflict diagnostics
+  // name the conflicting owner path in the message) — but ONLY the exact
+  // labels this loader generated (`<inline:${factory.path}>` for its known
+  // factory paths). Extension-authored diagnostic text containing arbitrary
+  // `<inline:…>` substrings must stay verbatim.
+  const generatedLabels = options.generatedLabels ?? [];
+  const labelRewrites = generatedLabels.map((path) => ({ label: `<inline:${path}>`, path }));
+  const rewriteGeneratedLabels = (text: string): string => {
+    let rewritten = text;
+    for (const { label, path } of labelRewrites) {
+      rewritten = rewritten.split(label).join(path);
+    }
+    return rewritten;
+  };
+  const isGeneratedLabel = (candidate: string | undefined): string | undefined => {
+    if (candidate === undefined) return undefined;
+    const inner = stripInlineLabel(candidate);
+    return inner !== undefined && generatedLabels.includes(inner) ? inner : undefined;
+  };
   const erroredRealPaths = new Set<string>();
   for (const error of result.errors) {
-    const realPath = error.path === undefined ? undefined : stripInlineLabel(error.path);
+    const realPath = isGeneratedLabel(error.path);
     if (realPath !== undefined) error.path = realPath;
-    if (typeof error.error === 'string' && error.error.includes('<inline:')) {
-      error.error = rewriteInlineLabels(error.error);
+    if (typeof error.error === 'string' && labelRewrites.some(({ label }) => error.error.includes(label))) {
+      error.error = rewriteGeneratedLabels(error.error);
     }
     if (typeof error.path === 'string') erroredRealPaths.add(resolve(error.path));
   }
@@ -855,7 +871,10 @@ async function buildFactoryBackedLoader(
       if (deps.forceOverrideFailure) {
         throw new ExtensionImporterError('extensionsOverride hit frozen or changed result objects (simulated)');
       }
-      return applyExtensionFactoryParity(result, enabledOrder, { tamperParityCheck: deps.tamperParityCheck });
+      return applyExtensionFactoryParity(result, enabledOrder, {
+        tamperParityCheck: deps.tamperParityCheck,
+        generatedLabels: factories.map((factory) => factory.path),
+      });
     },
   });
   await loader.reload();
@@ -909,8 +928,8 @@ export async function refreshExtensionFactories(
 let globalCache: ExtensionFactoryCache | undefined;
 
 /** The process-wide cache (jiti importer by default — no patch, no accessors). */
-export async function getExtensionFactoryCache(): Promise<ExtensionFactoryCache> {
-  globalCache ??= new ExtensionFactoryCache();
+export async function getExtensionFactoryCache(deps?: ExtensionFactoryCacheDeps): Promise<ExtensionFactoryCache> {
+  globalCache ??= new ExtensionFactoryCache(deps);
   return globalCache;
 }
 
