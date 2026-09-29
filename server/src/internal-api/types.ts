@@ -1575,7 +1575,7 @@ export interface WatchWakeAttempt {
   deliveryKind?: WatchWakeDeliveryKind;
   /** Error code when `failed` (e.g. `SESSION_BUSY`, `WAKE_DISPATCH_UNAVAILABLE`). */
   errorCode?: string;
-  /** Suppression reason: `max_wakeups_reached`, `cooldown`, or `steer_pending`. */
+  /** Suppression reason: `max_wakeups_reached`, `cooldown`, `steer_pending`, or (1.51.0) `coalesced_restart_reconciliation`. */
   reason?: string;
 }
 

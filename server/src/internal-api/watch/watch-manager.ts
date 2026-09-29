@@ -226,15 +226,48 @@ export function validateOnFireAction(sessionId: string, raw: unknown): WatchOnFi
 /** Interpolate the bounded placeholder set for a wake message. */
 function composeWakeMessage(
   action: WatchOnFireAction,
-  context: { conditionId: string; eventType: string; evidence: string; sessionId: string; firedAt: number },
+  context: WakeContext & { sessionId: string },
 ): string {
   const evidence = action.includeEvidence ? context.evidence : '[evidence excluded]';
-  return action.message
+  const composed = action.message
     .replaceAll('{{conditionId}}', context.conditionId)
     .replaceAll('{{eventType}}', context.eventType)
     .replaceAll('{{sessionId}}', context.sessionId)
     .replaceAll('{{firedAt}}', new Date(context.firedAt).toISOString())
     .replaceAll('{{evidence}}', evidence);
+  // B4 correction 01 (finding 4): a restart-reconciled firing always says so in
+  // the wake text itself — whatever the template and includeEvidence — so a
+  // parent can never mistake an interrupted child for a normal completion.
+  if (!context.interruption) return composed;
+  return `${composed}\n(interrupted by restart: run ${context.interruption.runId}, ${context.interruption.reason})`;
+}
+
+/** What a firing hands to wake dispatch (and to its bounded retry). */
+interface WakeContext {
+  conditionId: string;
+  eventType: string;
+  evidence: string;
+  firedAt: number;
+  /** Set only for restart-reconciliation firings (B4). */
+  interruption?: { runId: string; reason: string };
+}
+
+/**
+ * B4 correction 01 (finding 5): restart reconciliation may ingest agent_end AND
+ * goal_end for one session; together they may dispatch at most one wake.
+ */
+interface WakeBudget {
+  remaining: number;
+}
+
+/** The restart-interruption marker a reconciliation event carries (B4). */
+function interruptionOf(event: NormalizedEvent): WakeContext['interruption'] {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  if (data.interruptedByRestart !== true) return undefined;
+  return {
+    runId: typeof data.runId === 'string' ? data.runId : 'unknown',
+    reason: typeof data.interruptionReason === 'string' ? data.interruptionReason : 'server_restart',
+  };
 }
 
 export class WatchManager {
@@ -454,9 +487,10 @@ export class WatchManager {
         const waitsOnGoalEnd = live.record.conditions.some(
           (c) => !c.fired && (c.spec as { eventType?: string }).eventType === 'goal_end',
         );
-        this.handleEvent(sessionId, { type: 'agent_end', timestamp, data });
+        const wakeBudget: WakeBudget = { remaining: 1 };
+        this.handleEvent(sessionId, { type: 'agent_end', timestamp, data }, wakeBudget);
         if (waitsOnGoalEnd && this.active.get(sessionId) === live && live.record.status === 'active') {
-          this.handleEvent(sessionId, { type: 'goal_end', timestamp, data });
+          this.handleEvent(sessionId, { type: 'goal_end', timestamp, data }, wakeBudget);
         }
         logger.info(`restart reconciliation: fired watch ${live.record.watchId} for ${sessionRuns.length} interrupted run(s) on ${sessionId} (${latest.interruptionReason})`);
       } catch {
@@ -889,7 +923,7 @@ export class WatchManager {
     this.active.delete(sessionId);
   }
 
-  private handleEvent(sessionId: string, event: NormalizedEvent): void {
+  private handleEvent(sessionId: string, event: NormalizedEvent, wakeBudget?: WakeBudget): void {
     const live = this.active.get(sessionId);
     if (!live) return;
     const { record, engine } = live;
@@ -916,7 +950,8 @@ export class WatchManager {
           eventType: match.eventType,
           evidence: match.evidence,
           firedAt: match.eventType === event.type ? (event.timestamp ?? Date.now()) : Date.now(),
-        });
+          interruption: interruptionOf(event),
+        }, wakeBudget);
         if (recorded) firedSomething = true;
       }
     }
@@ -951,7 +986,8 @@ export class WatchManager {
     sessionId: string,
     live: ActiveWatch,
     cond: WatchConditionState,
-    input: { eventType: string; evidence: string; firedAt: number; reconciled?: boolean },
+    input: { eventType: string; evidence: string; firedAt: number; reconciled?: boolean; interruption?: WakeContext['interruption'] },
+    wakeBudget?: WakeBudget,
   ): boolean {
     const { record } = live;
     const isOnce = cond.spec.once !== false;
@@ -996,12 +1032,24 @@ export class WatchManager {
 
     // ── Opt-in wake dispatch (watch the child, wake the parent) ──
     if (record.onFire) {
-      this.dispatchWakeForFiring(sessionId, live, {
-        conditionId: cond.id,
-        eventType: firing.eventType,
-        evidence: firing.evidence,
-        firedAt: firing.firedAt,
-      });
+      if (wakeBudget && wakeBudget.remaining <= 0) {
+        this.appendWakeAttempt(record, {
+          attemptedAt: Date.now(),
+          targetSessionId: record.onFire.targetSessionId,
+          status: 'suppressed',
+          conditionId: cond.id,
+          reason: 'coalesced_restart_reconciliation',
+        });
+      } else {
+        if (wakeBudget) wakeBudget.remaining -= 1;
+        this.dispatchWakeForFiring(sessionId, live, {
+          conditionId: cond.id,
+          eventType: firing.eventType,
+          evidence: firing.evidence,
+          firedAt: firing.firedAt,
+          ...(input.interruption ? { interruption: input.interruption } : {}),
+        });
+      }
     }
     return true;
   }
@@ -1014,7 +1062,7 @@ export class WatchManager {
   private dispatchWakeForFiring(
     sessionId: string,
     live: ActiveWatch,
-    context: { conditionId: string; eventType: string; evidence: string; firedAt: number },
+    context: WakeContext,
     isRetry = false,
   ): void {
     const record = live.record;

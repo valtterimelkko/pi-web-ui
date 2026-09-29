@@ -156,6 +156,62 @@ describe('WatchManager fires parents\' watches for restart-interrupted runs (B4)
     expect(call[0].message).toContain('interrupted by restart');
   });
 
+  // Correction 01, finding 4: the wake text itself must say "interrupted",
+  // whatever the parent's message template and includeEvidence (default false).
+  it.each([
+    ['a generic message', 'your child is done'],
+    ['an {{eventType}} template', 'child {{sessionId}} finished ({{eventType}}): {{evidence}}'],
+  ])('states the interruption in the wake text for %s with includeEvidence off', async (_label, message) => {
+    const dispatchWake = vi.fn(async (_input: { message: string }) => ({ status: 'dispatched' as const, deliveryKind: 'prompt' as const }));
+    await arm('child-w', {
+      conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+      onFire: { type: 'prompt', targetSessionId: 'parent-w', message, cooldownSeconds: 0 },
+    }, { dispatchWake });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin, dispatchWake,
+      getRestartInterruptedRuns: () => [interrupted('child-w', 'run-w', 'drain_timeout')],
+    });
+    await manager.init();
+    await flush();
+    expect(dispatchWake).toHaveBeenCalledTimes(1);
+    const text = dispatchWake.mock.calls[0][0].message;
+    expect(text).toContain('(interrupted by restart: run run-w, drain_timeout)');
+    expect(text).not.toContain('[evidence excluded] (interrupted');
+  });
+
+  it('does not add the interruption suffix to an ordinary completion wake (control)', async () => {
+    const dispatchWake = vi.fn(async (_input: { message: string }) => ({ status: 'dispatched' as const, deliveryKind: 'prompt' as const }));
+    const broker = new InternalApiEventBroker();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, dispatchWake });
+    await manager.register({
+      sessionId: 'child-n', sessionPath: '/sessions/child-n.jsonl', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }], onFire: { type: 'prompt', targetSessionId: 'parent-n', message: 'your child is done', cooldownSeconds: 0 } },
+    });
+    broker.publish('child-n', ev('agent_end'));
+    await flush();
+    expect(dispatchWake).toHaveBeenCalledTimes(1);
+    expect(dispatchWake.mock.calls[0][0].message).toBe('your child is done');
+  });
+
+  // Correction 01, finding 5: one interruption wakes a parent once.
+  it('coalesces the agent_end and goal_end reconciliation firings into a single wake', async () => {
+    const dispatchWake = vi.fn(async (_input: { message: string }) => ({ status: 'dispatched' as const, deliveryKind: 'prompt' as const }));
+    await arm('child-g', {
+      conditions: [{ type: 'event_type', eventType: 'agent_end' }, { type: 'event_type', eventType: 'goal_end' }],
+      onFire: { type: 'prompt', targetSessionId: 'parent-g', message: 'wake', maxWakeups: 3, cooldownSeconds: 0 },
+    }, { dispatchWake });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin, dispatchWake,
+      getRestartInterruptedRuns: () => [interrupted('child-g', 'run-g')],
+    });
+    await manager.init();
+    await flush();
+    const w = manager.get('child-g');
+    expect(w?.firingCount).toBe(2);
+    expect(dispatchWake).toHaveBeenCalledTimes(1);
+    expect(w?.wakeAttempts.map((a) => [a.status, a.reason])).toEqual([['dispatched', undefined], ['suppressed', 'coalesced_restart_reconciliation']]);
+  });
+
   it('lets a parent watch only interruptions via dataMatch, and ordinary agent_end does not match it', async () => {
     await arm('child-3', { conditions: [{ type: 'event_type', eventType: 'agent_end', dataMatch: { interruptedByRestart: true } }] });
     const broker = new InternalApiEventBroker();
