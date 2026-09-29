@@ -101,6 +101,9 @@ describe('ToolArgsBudgetGuard', () => {
     expect((event.data as Record<string, unknown>).scope).toBe('call');
     expect((event.data as Record<string, unknown>).capChars).toBe(1024);
     expect((event.data as Record<string, unknown>).observedChars).toBeGreaterThan(1024);
+    // Contract 1.50.0 (B3b): additive uniform budget discriminator across all
+    // three per-run budgets (the 1.48.0 fields above are unchanged).
+    expect((event.data as Record<string, unknown>).budget).toBe('tool_args');
     expect(typeof event.timestamp).toBe('number');
   });
 

@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.48.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.50.0' as const;
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -1391,6 +1391,8 @@ export const SSE_EVENT_TYPES = {
   WATCH_FIRED: 'watch_fired',
   /** Contract 1.48.0 (B3a): the streaming tool-argument budget aborted the run. */
   TOOL_ARGS_BUDGET_EXCEEDED: 'tool_args_budget_exceeded',
+  /** Contract 1.50.0 (B3b): a per-run output-token or streamed-byte budget aborted the run. */
+  RUN_BUDGET_EXCEEDED: 'run_budget_exceeded',
 } as const;
 
 export interface SSETaskStatusEvent {

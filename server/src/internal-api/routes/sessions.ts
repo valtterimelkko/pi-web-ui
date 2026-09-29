@@ -90,6 +90,7 @@ import { resolveExecutionInstanceId } from '../execution-instance.js';
 import { classifyPhase7PiShadow } from '../phase7-pi-shadow.js';
 // Contract 1.48.0 (B3a): the Pi runtime's streaming tool-argument budget.
 import { PiToolArgsBudgetExceededError, TOOL_ARGS_BUDGET_EXCEEDED_EVENT } from '../../pi/tool-args-budget.js';
+import { PiRunBudgetExceededError, RUN_BUDGET_EXCEEDED_EVENT } from '../../pi/run-budget.js';
 import {
   createEventCollector,
   collectAnswerEvent,
@@ -248,8 +249,11 @@ function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
   if (runtime !== 'commandcode') {
     if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
     if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
-    // Contract 1.48.0 (B3a): the streaming tool-argument budget aborted the turn.
-    if (error instanceof PiToolArgsBudgetExceededError) return ErrorCode.RUN_BUDGET_EXCEEDED;
+    // Contract 1.48.0 (B3a) + 1.50.0 (B3b): the streaming tool-argument and
+    // per-run output-token/streamed-byte budgets abort the turn.
+    if (error instanceof PiToolArgsBudgetExceededError || error instanceof PiRunBudgetExceededError) {
+      return ErrorCode.RUN_BUDGET_EXCEEDED;
+    }
     return error instanceof TurnStalledError ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR;
   }
   if (error instanceof CommandCodeRuntimeError) {
@@ -5995,7 +5999,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // turn-window facts the PROMPT_NOT_EXECUTED fail-fast reads.
         let sawAgentStart = false;
         let sawCompaction = false;
-        let budgetBreach: PiToolArgsBudgetExceededError | undefined;
+        let budgetBreach: PiToolArgsBudgetExceededError | PiRunBudgetExceededError | undefined;
         const eventObserver = (event: unknown) => {
           const normalized = event as NormalizedEvent;
           if (normalized?.type === 'agent_start') sawAgentStart = true;
@@ -6012,6 +6016,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               data.scope ?? 'turn',
               data.capChars ?? 0,
               data.observedChars ?? 0,
+            );
+          }
+          // Contract 1.50.0 (B3b): a per-run output-token or streamed-byte
+          // budget breach turns the completion into the same loud
+          // RUN_BUDGET_EXCEEDED failure; data.budget names which tripped.
+          if (normalized?.type === RUN_BUDGET_EXCEEDED_EVENT && !budgetBreach) {
+            const data = (normalized.data ?? {}) as { budget?: 'output_tokens' | 'streamed_bytes'; cap?: number; observed?: number };
+            budgetBreach = new PiRunBudgetExceededError(
+              data.budget ?? 'streamed_bytes',
+              data.cap ?? 0,
+              data.observed ?? 0,
             );
           }
           try { onEvent(normalized); } catch { /* non-fatal */ }

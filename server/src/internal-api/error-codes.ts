@@ -482,9 +482,9 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
   },
   [ErrorCode.RUN_BUDGET_EXCEEDED]: {
     httpStatus: 500,
-    description: 'The run was aborted because streamed tool-call arguments exceeded the configured per-call or per-run budget.',
-    cause: 'A runaway generation kept streaming tool-call argument deltas past the budget (the 2026-09-12 stall class); pi-web-ui aborted the turn via the runtime’s public abort to bound synchronous per-delta parsing.',
-    hint: 'The receipt persists only this code. Which cap tripped (scope), the cap and the observed size are on the session event stream: the `tool_args_budget_exceeded` event carries `data.scope`, `data.capChars` and `data.observedChars`, and the server log carries a human-readable `ToolArgsBudget` warning. Real tool arguments are normally a few KB; resending as-is will breach again — reduce the requested payload or raise PI_TOOL_ARGS_MAX_CALL_CHARS / PI_TOOL_ARGS_MAX_TURN_CHARS.',
+    description: 'The run was aborted because a per-run budget was exceeded: streamed tool-call arguments, output tokens, or streamed assistant bytes.',
+    cause: 'A runaway generation kept streaming past a configured budget (the 2026-09-12 stall class and unbounded-generation volumes); pi-web-ui aborted the turn via the runtime’s public abort to bound event-loop work and heap growth.',
+    hint: 'The receipt persists only this code. Which budget tripped is on the session event stream: the `tool_args_budget_exceeded` event (contract 1.48.0) carries `data.scope`, `data.capChars` and `data.observedChars` (plus `data.budget: "tool_args"` since 1.50.0), and the `run_budget_exceeded` event (1.50.0) carries `data.budget: "output_tokens" | "streamed_bytes"`, `data.cap` and `data.observed`; the server log carries a human-readable `ToolArgsBudget`/`RunBudget` warning. Output tokens are reported by the runtime only at message end, so streamed bytes are the live mid-stream bound. Resending as-is will breach again — reduce the requested payload or raise PI_TOOL_ARGS_MAX_CALL_CHARS / PI_TOOL_ARGS_MAX_TURN_CHARS / PI_RUN_BUDGET_MAX_OUTPUT_TOKENS / PI_RUN_BUDGET_MAX_STREAMED_BYTES.',
     docs: 'docs/OBSERVABILITY.md#run-budgets',
   },
 };
