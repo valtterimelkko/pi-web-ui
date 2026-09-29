@@ -647,13 +647,14 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
       const client = context.client;
       const socketPath = context.socketPath
         ?? (typeof client.getSocketPath === 'function' ? client.getSocketPath() : undefined);
-      if (!socketPath || typeof client.listSessions !== 'function') {
+      const token = typeof client.getToken === 'function' ? client.getToken() : undefined;
+      if (!socketPath || !token || typeof client.listSessions !== 'function') {
         return {
           scenarioId: 'parent-lineage',
           runtime: context.runtime,
           passed: true,
           skipped: true,
-          reason: 'parent-lineage requires a socket path and a listSessions-capable client',
+          reason: 'parent-lineage requires a socket path, a bearer token and a listSessions-capable client',
           assertions: [],
         };
       }
@@ -666,7 +667,7 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
       const spawnCreate = (env: { PI_WEB_UI_SESSION_ID?: string }, headerParent?: string) => new Promise<Record<string, unknown>>((resolve, reject) => {
         const script =
           "const http=require('node:http');"
-          + "const req=http.request({socketPath:process.env.C5_SOCK,path:'/api/v1/sessions',method:'POST',headers:{'Content-Type':'application/json',...(process.env.C5_HEADER?{'X-Parent-Session':process.env.C5_HEADER}:{})}},(res)=>{let raw='';res.on('data',c=>raw+=c);res.on('end',()=>process.stdout.write(raw));});"
+          + "const req=http.request({socketPath:process.env.C5_SOCK,path:'/api/v1/sessions',method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.C5_TOKEN,...(process.env.C5_HEADER?{'X-Parent-Session':process.env.C5_HEADER}:{})}},(res)=>{let raw='';res.on('data',c=>raw+=c);res.on('end',()=>process.stdout.write(raw));});"
           + "req.on('error',(e)=>{process.stdout.write(JSON.stringify({c5error:String(e)}));process.exit(0);});"
           + 'req.end(process.env.C5_BODY);';
         const childEnv: Record<string, string | undefined> = { ...process.env };
@@ -675,6 +676,7 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         delete childEnv.PI_WEB_UI_PARENT_SESSION_ID;
         if (env.PI_WEB_UI_SESSION_ID) childEnv.PI_WEB_UI_SESSION_ID = env.PI_WEB_UI_SESSION_ID;
         childEnv.C5_SOCK = socketPath;
+        childEnv.C5_TOKEN = token;
         childEnv.C5_BODY = createBody;
         if (headerParent) childEnv.C5_HEADER = headerParent; else delete childEnv.C5_HEADER;
         const child = spawn(process.execPath, ['-e', script], { env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });

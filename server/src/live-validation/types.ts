@@ -47,6 +47,8 @@ export interface InternalApiClientLike {
   listSessions?(parent?: string): Promise<import('../internal-api/types.js').ListSessionsResponse>;
   /** C5 (1.54.0): unix socket path, for scenarios exercising the peer-credential path. */
   getSocketPath?(): string;
+  /** C5 (1.54.0): bearer token, for scenarios that authenticate their own subprocesses. */
+  getToken?(): string;
 }
 
 export interface ValidationAssertion {

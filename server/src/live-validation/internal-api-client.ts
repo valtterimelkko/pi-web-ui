@@ -197,13 +197,14 @@ export class InternalApiClient implements InternalApiClientLike {
   }
 
   async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number; parentSessionId?: string; headers?: Record<string, string> }): Promise<CreateSessionResponse> {
-    const request = { ...input } as typeof input & { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' };
+    const { headers, ...bodyInput } = input;
+    const request = { ...bodyInput } as typeof bodyInput & { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' };
     if (input.runtime === 'commandcode' && input.source === 'live-validation-commandcode-fixture') {
       const model = input.model ?? 'qwen/qwen3.8-max';
       request.model = model;
       if (model === 'qwen/qwen3.8-max') request.effort = 'medium';
     }
-    return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', request, this.requestTimeoutMs, input.headers);
+    return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', request, this.requestTimeoutMs, headers);
   }
 
   /** Detached (fire-and-forget) prompt dispatch: returns 202 immediately; the
@@ -427,6 +428,11 @@ export class InternalApiClient implements InternalApiClientLike {
    *  peer-credential path with their own subprocesses). */
   getSocketPath(): string {
     return this.socketPath;
+  }
+
+  /** Bearer token for scenarios that must authenticate their own subprocesses. */
+  getToken(): string {
+    return this.token;
   }
 
   /** Answers-mode prompt (non-streaming), including idempotent replay responses. */
