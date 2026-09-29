@@ -76,10 +76,12 @@ const IMPORT_WARN_INTERVAL_MS = 5_000;
  * `const` bound to a `Map`/`Set`/`WeakMap`/array/object/class instance, no
  * `process.on/once`, no module-level timer. Findings (file:line):
  *
- *   per-session state still NOT cached (B1.3 remaining):
- *     subagent              index.ts:85/90/91/93 `let`s; index.ts:113 singleton
- *                           BackgroundTaskManager — see the B1.3 question: making it
- *                           share-safe changes user-visible background-task scope
+ *   made share-safe by B1.3s (pi-enhancement b046a8a, owner option B):
+ *     subagent              the per-session `let`s are gone; index.ts:169
+ *                           BackgroundTaskManager is ONE deliberately process-wide
+ *                           registry keyed by session (delivery routed to the owning
+ *                           session); runtime.ts:142 mutationQueues is keyed by run
+ *                           record path (process-safe)
  *   refactored to per-session scope and now cached (B1.3, pi-enhancement 8a4b768 / 9ad45d2):
  *     enhanced-plan-mode    `state` + `piRef` moved into the factory closure
  *     memory                `let state` moved into the factory closure
@@ -109,6 +111,7 @@ export const DEFAULT_SHARE_SAFE_EXTENSIONS: readonly string[] = [
   'goal-engine',
   'memory',
   'parallel-orchestrator',
+  'subagent',
   'subagent-evaluator',
   'watch-wake',
   'todo',

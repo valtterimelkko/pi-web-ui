@@ -238,10 +238,11 @@ describe('ExtensionFactoryCache — share-safe allowlist (major 1)', () => {
     for (const added of ['memory', 'goal-engine', 'parallel-orchestrator', 'web-tools', 'enhanced-plan-mode']) {
       expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toContain(added);
     }
-    // Still carry per-session module state — must stay uncached until B1.3 finishes them.
-    for (const denied of ['subagent']) {
-      expect(DEFAULT_SHARE_SAFE_EXTENSIONS).not.toContain(denied);
-    }
+    // B1.3s (pi-enhancement b046a8a): subagent's module state is now one
+    // deliberately process-wide registry keyed by session — cached.
+    expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toContain('subagent');
+    // Every audited global extension is now share-safe (16/16).
+    expect(DEFAULT_SHARE_SAFE_EXTENSIONS).toHaveLength(16);
   });
 
   it('does not cache an extension whose id is not allowlisted, even when discovered', async () => {
