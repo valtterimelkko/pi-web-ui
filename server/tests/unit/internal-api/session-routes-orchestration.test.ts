@@ -823,10 +823,10 @@ describe('createSessionRoutes orchestration endpoints', () => {
       registry.get.mockResolvedValue(claudeEntry('new-claude'));
       const res = createMockRes();
       await makeRoutes().handleCreateSession(
-        createJsonReq('POST', '/api/v1/sessions', { runtime: 'claude', model: 'sonnet', cwd: '/tmp/c' }), res, 'internal-test');
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'claude', model: 'sonnet', cwd: os.tmpdir() }), res, 'internal-test');
       expect(res.statusCode).toBe(201);
       expect(JSON.parse(res.body)).toMatchObject({ runtime: 'claude', model: 'sonnet' });
-      expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/c', 'sonnet', undefined, undefined, REQUIRE_SDK);
+      expect(claudeService.createSession).toHaveBeenCalledWith(os.tmpdir(), 'sonnet', undefined, undefined, REQUIRE_SDK);
     });
 
     it('refuses creation with 403 CLAUDE_BACKEND_NOT_ALLOWED when the selection is not SDK-backed', async () => {
@@ -1363,7 +1363,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         runtime: 'claude',
         model: 'profile:owner-sonnet',
         thinkingLevel: 'high',
-        cwd: '/tmp/claude-profile',
+        cwd: os.tmpdir(),
       });
       const res = createMockRes();
 
@@ -1376,7 +1376,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         modelSelector: 'profile:owner-sonnet',
         executionInstanceId: 'owner-sonnet',
       });
-      expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/claude-profile', 'sonnet', 'high', 'owner-sonnet', { requireBackend: 'sdk-subscription' });
+      expect(claudeService.createSession).toHaveBeenCalledWith(os.tmpdir(), 'sonnet', 'high', 'owner-sonnet', { requireBackend: 'sdk-subscription' });
 
       const info = createMockRes();
       await routes.handleGetSessionInfo(createJsonReq('GET', '/api/v1/sessions/new-claude/info'), info, 'new-claude');
@@ -1396,7 +1396,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       const req = createJsonReq('POST', '/api/v1/sessions', {
         runtime: 'claude',
         model: 'profile:',
-        cwd: '/tmp/claude-profile',
+        cwd: os.tmpdir(),
       });
       const res = createMockRes();
 
@@ -1413,7 +1413,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         runtime: 'claude',
         model: 'profile:owner-sonnet',
         profileId: 'other-profile',
-        cwd: '/tmp/claude-profile',
+        cwd: os.tmpdir(),
       });
       const res = createMockRes();
 
@@ -1431,14 +1431,14 @@ describe('createSessionRoutes orchestration endpoints', () => {
         runtime: 'claude',
         model: 'sonnet',
         thinkingLevel: 'max',
-        cwd: '/tmp/claude-max',
+        cwd: os.tmpdir(),
       });
       const res = createMockRes();
 
       await routes.handleCreateSession(req, res, 'internal-test');
 
       expect(res.statusCode).toBe(201);
-      expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/claude-max', 'sonnet', 'max', undefined, { requireBackend: 'sdk-subscription' });
+      expect(claudeService.createSession).toHaveBeenCalledWith(os.tmpdir(), 'sonnet', 'max', undefined, { requireBackend: 'sdk-subscription' });
     });
 
     it('returns the effective Pi thinking level rather than the requested level', async () => {
@@ -1546,14 +1546,14 @@ describe('createSessionRoutes orchestration endpoints', () => {
       });
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch', {
-        sessions: [{ runtime: 'claude', model: 'profile:owner-sonnet', thinkingLevel: 'high', cwd: '/tmp/batch-profile' }],
+        sessions: [{ runtime: 'claude', model: 'profile:owner-sonnet', thinkingLevel: 'high', cwd: os.tmpdir() }],
       });
       const res = createMockRes();
 
       await routes.handleBatchCreate(req, res);
 
       expect(res.statusCode).toBe(200);
-      expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/batch-profile', 'sonnet', 'high', 'owner-sonnet', { requireBackend: 'sdk-subscription' });
+      expect(claudeService.createSession).toHaveBeenCalledWith(os.tmpdir(), 'sonnet', 'high', 'owner-sonnet', { requireBackend: 'sdk-subscription' });
       expect(JSON.parse(res.body).created[0]).toMatchObject({
         success: true,
         model: 'profile:owner-sonnet',
@@ -1572,7 +1572,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       });
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch', {
-        sessions: [{ runtime: 'claude', model: 'profile:owner-sonnet', cwd: '/tmp/batch-profile' }],
+        sessions: [{ runtime: 'claude', model: 'profile:owner-sonnet', cwd: os.tmpdir() }],
       });
       const res = createMockRes();
 
@@ -1649,8 +1649,8 @@ describe('createSessionRoutes orchestration endpoints', () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch', {
         sessions: [
-          { runtime: 'claude', cwd: '/root/a' },
-          { runtime: 'opencode', cwd: '/root/b' },
+          { runtime: 'claude', cwd: os.tmpdir() },
+          { runtime: 'opencode', cwd: os.tmpdir() },
         ],
       });
       const res = createMockRes();

@@ -98,6 +98,9 @@ export const ErrorCode = {
   // Contract 1.51.0 (B4): the server is draining before a planned restart; new
   // P2/P3 creates and prompts are refused, control and DELETE keep working.
   SERVER_DRAINING: 'SERVER_DRAINING',
+  // Contract 1.53.0 (C4): dispatch preflight refused the request before any
+  // runtime work — no session created, no model token spent.
+  PREFLIGHT_FAILED: 'PREFLIGHT_FAILED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -496,6 +499,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'An operator started drain-then-restart (POST /api/v1/drain): admission refuses new P2/P3 execution while in-flight runs settle, until the restart or until the drain is cancelled or its hold window lapses.',
     hint: 'Respect Retry-After and retry after the restart; GET /api/v1/drain shows the drain state. Control, abort, watches and DELETE keep working. Runs the restart cuts off end `interrupted` (SERVER_RESTART, interruptionReason drain_timeout) and their watches fire at boot.',
     docs: 'docs/INTERNAL-API.md#drain-then-restart',
+  },
+  [ErrorCode.PREFLIGHT_FAILED]: {
+    httpStatus: 400,
+    description: 'Dispatch preflight refused the request before any runtime work: a working-directory, referenced-path or declared-tool check failed.',
+    cause: 'The effective cwd does not exist, is not a directory or is not writable by the server user; a caller-declared referenced path does not exist; or a caller-declared tool name is not an executable file on the server PATH. The response body lists every failure in `failures[]` ({kind, item, problem}).',
+    hint: 'Fix the listed items and resend. Nothing was created and no model token was spent; a 400 here is a caller error, not retryable without a change.',
+    docs: 'docs/INTERNAL-API.md#dispatch-preflight-contract-1530',
   },
 };
 

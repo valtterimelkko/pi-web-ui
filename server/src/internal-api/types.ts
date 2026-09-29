@@ -8,6 +8,7 @@
 
 import type { NormalizedEvent, ScreenView } from '@pi-web-ui/shared';
 import type { CommandCodeEffort as NativeCommandCodeEffort } from '../command-code/command-code-model-catalog.js';
+import type { PreflightFailure, PreflightSpec } from './dispatch-preflight.js';
 
 export type CommandCodeEffort = NativeCommandCodeEffort;
 export type CommandCodeModelStatus = 'runnable' | 'evidence-only' | 'unavailable';
@@ -72,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.51.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.53.0' as const;
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -189,6 +190,9 @@ export interface CreateSessionRequest {
   parentSessionId?: string;
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
+  /** Contract 1.53.0 (C4): dispatch preflight spec (referenced paths + tools). The
+   *  effective cwd is always preflighted on create regardless of this field. */
+  preflight?: PreflightSpec;
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy role field.
   invocationRole?: 'conductor-root' | 'implementation-child';
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy attestation field.
@@ -209,6 +213,13 @@ export interface SendPromptRequest {
    * 409 SESSION_NOT_STREAMING instead of being promoted to a new turn.
    */
   requireActiveTurn?: boolean;
+  /**
+   * Contract 1.53.0 (C4): optional dispatch preflight for THIS prompt. Declared
+   * referenced paths must exist and declared bare tool names must be executable
+   * on the server PATH before the dispatch proceeds; otherwise 400
+   * PREFLIGHT_FAILED and no turn starts. The session cwd is not re-checked here.
+   */
+  preflight?: PreflightSpec;
   /**
    * Fire-and-forget dispatch: run the pre-flight checks, kick off the turn, and
    * return `202 Accepted` immediately without waiting for it to complete. The
@@ -269,6 +280,8 @@ export interface BatchCreateEntry {
   commandCodeAttestation?: CommandCodeRoleAttestationRequest;
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
+  /** Contract 1.53.0 (C4): dispatch preflight spec (referenced paths + tools); effective cwd always preflighted too. */
+  preflight?: PreflightSpec;
 }
 
 export interface BatchCreateRequest {
@@ -293,7 +306,8 @@ export interface BatchCreateResultItem {
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** Contract 1.49.0: admission refusals (ADMISSION_CAPACITY_EXHAUSTED) carry reason + retryAfterSeconds. */
-  error?: { code: string; message: string; reason?: string; retryAfterSeconds?: number };
+  /** Contract 1.53.0 (C4): preflight refusals (PREFLIGHT_FAILED) additionally carry failures[] ({kind,item,problem}). */
+  error?: { code: string; message: string; reason?: string; retryAfterSeconds?: number; failures?: PreflightFailure[] };
 }
 
 export interface BatchCreateResponse {

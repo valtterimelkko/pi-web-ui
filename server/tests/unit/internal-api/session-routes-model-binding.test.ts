@@ -245,7 +245,7 @@ describe('Pi model binding durability across rehydration (contract 1.33.0)', () 
     makeRoutes();
     const res = mockRes();
     await routes.handleCreateSession(jsonReq('POST', '/api/v1/sessions', {
-      runtime: 'pi', cwd: '/root/proj', model: INTENDED, thinkingLevel: 'xhigh',
+      runtime: 'pi', cwd: os.tmpdir(), model: INTENDED, thinkingLevel: 'xhigh',
     }), res, 'create-1');
 
     expect(res.statusCode).toBe(201);
@@ -259,7 +259,7 @@ describe('Pi model binding durability across rehydration (contract 1.33.0)', () 
     makeRoutes();
     const res = mockRes();
     await routes.handleCreateSession(jsonReq('POST', '/api/v1/sessions', {
-      runtime: 'pi', cwd: '/root/proj', model: INTENDED,
+      runtime: 'pi', cwd: os.tmpdir(), model: INTENDED,
     }), res, 'create-2');
 
     expect(res.statusCode).toBe(201);

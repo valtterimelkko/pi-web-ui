@@ -255,7 +255,7 @@ describe('Internal API session list filters and fields (contract 1.30.0)', () =>
 
       const res = mockRes();
       await routes.handleCreateSession(
-        jsonReq('POST', '/api/v1/sessions', { runtime: 'antigravity', cwd: '/root/proj' }),
+        jsonReq('POST', '/api/v1/sessions', { runtime: 'antigravity', cwd: os.tmpdir() }),
         res,
       );
       expect(res.statusCode).toBe(201);

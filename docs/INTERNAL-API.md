@@ -558,6 +558,7 @@ POST /api/v1/sessions
 | `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
 | `agentOsCapture` | `"enabled"` \| `"disabled"` | No | unspecified | Contract 1.47.0: per-session Agent OS capture opt-in. Stored on the registry entry, echoed in the create response (and in batch-create result items) and on `GET /sessions/:id`, and exported to per-session runtime subprocesses as `PI_WEB_UI_AGENT_OS_CAPTURE` — each only when set. Any other value is `400`. Omitted = unspecified: Agent OS then decides by origin (it skips capture for unspecified `internal-api` sessions unless its host-wide `AGENT_OS_CAPTURE_API_SESSIONS=1` is set). Pi Web UI only records and exports it; it never acts on it. Also accepted per entry by `POST /sessions/batch`. |
+| `preflight` | object | No | — | Contract 1.53.0: dispatch preflight spec, `{paths?: string[], tools?: string[]}` (≤ 32 each). `paths` are absolute paths that must **exist**; `tools` are bare executable names that must be on the server `PATH`. On any failure the create is refused `400 PREFLIGHT_FAILED` with `failures[]` before a session exists or a model token is spent. The effective `cwd` is always preflighted (exists + directory + server-user writable) whether or not this field is sent. See [Dispatch preflight](#dispatch-preflight-contract-1530). |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. Only SDK-backed profiles are accepted (contract 1.46.0). |
 | `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role machinery. Raw flags, environment, executable paths, and native ids are never accepted. |
 | `commandCodeAttestation` | object | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role-attestation machinery; no longer required or verified. |
@@ -591,7 +592,85 @@ not return a half-created unretained success.
 
 **Errors:**
 - `400` — Missing `runtime` field
+- `400` — `PREFLIGHT_FAILED`: the dispatch preflight refused the create (cwd/paths/tools); nothing was created (contract 1.53.0)
 - `503` — Requested runtime not available
+
+---
+
+### Dispatch preflight (contract 1.53.0)
+
+Children dispatched by orchestration parents kept failing on workspace problems
+(missing working directories, referenced paths that were never created, tools
+that are not installed). The preflight answers those questions **before any
+runtime session exists and before any model token is spent**, with one
+aggregated, deterministic report.
+
+**What is checked**
+
+| Check | When | Rule |
+|---|---|---|
+| `cwd` | always on `POST /sessions` and each batch entry | effective cwd (explicit `cwd` → validation default → server cwd) exists, is a directory, and is writable by the server user |
+| `paths` | when `preflight.paths` is sent | each absolute path **exists** (existence only — no content reads; dangling symlinks count as missing) |
+| `tools` | when `preflight.tools` is sent | each bare name resolves to an executable regular file on the server's `PATH` (the same environment the runtime child inherits) |
+
+**Refusal shape (400 — single create and prompt dispatch only):**
+
+```json
+{
+  "error": "Dispatch preflight failed: path '/root/missing' does not exist; tool 'rg' not found on PATH",
+  "code": "PREFLIGHT_FAILED",
+  "failures": [
+    { "kind": "path", "item": "/root/missing", "problem": "does not exist" },
+    { "kind": "tool", "item": "rg", "problem": "not found on PATH" }
+  ]
+}
+```
+
+Every failing item is listed (no short-circuit), so a parent fixes its whole
+brief in one round trip. `failures[].problem` values: `does not exist`,
+`not a directory`, `not writable by the server user`, `not accessible`,
+`not found on PATH`.
+
+**Batch envelope (POST /sessions/batch — never a top-level 400):** batch
+answers `200` with the usual `{created[], createdCount, failedCount}` body; a
+preflight failure is **nested per entry** —
+
+```json
+{
+  "created": [
+    { "index": 1, "success": false, "runtime": "pi",
+      "error": { "code": "PREFLIGHT_FAILED",
+                 "message": "Dispatch preflight failed: …",
+                 "failures": [ { "kind": "cwd", "item": "/missing", "problem": "does not exist" } ] } }
+  ],
+  "createdCount": 0,
+  "failedCount": 1
+}
+```
+
+Good entries in the same batch still create (partial-success semantics
+unchanged); `createdCount`/`failedCount` summarise the envelope.
+
+**Semantics and limits**
+
+- Ordering on creates: admission (`503`, server state, retryable) is evaluated
+  first; preflight (`400`, caller error) after it, before any runtime call.
+- Batch: preflight runs per entry after that entry's admission check; only the
+  failing entry fails (partial-success semantics unchanged). Its result item's
+  `error` carries `failures[]` alongside `code: "PREFLIGHT_FAILED"`.
+- Prompt dispatch (`POST /sessions/:id/prompt`): the optional `preflight` field
+  re-checks only that dispatch's declared paths/tools — the session cwd is not
+  re-checked (it was validated at create). The check runs before any receipt,
+  admission decision or runtime call. Malformed shape → `400 INVALID_REQUEST`.
+- Tool lookups resolve on the **target runtime's child PATH** (correction 01):
+  Antigravity spawns `agy` with `/root/.local/bin` prepended, so its preflight
+  sees that prefix too; Pi (in-process), Claude (SDK spawn) and Command Code
+  (allowlisted env passthrough) children see the server `PATH` unchanged.
+- Bounds: ≤ 32 paths, ≤ 32 tools, paths ≤ 4096 chars; strict object — unknown
+  keys are `400 INVALID_REQUEST`.
+- The check is point-in-time: state can change between the probe and the
+  runtime spawn (TOCTOU). It proves the workspace was valid at dispatch, not
+  that it stays valid.
 
 ---
 
@@ -885,6 +964,7 @@ how much detail you receive.
 | `detach` | boolean | No | `false` | Fire-and-forget: run the pre-flight checks, start the turn, and return `202 Accepted` immediately without waiting. The turn keeps running server-side; read results later via `/info` + `/transcript`. Only valid with `verbosity=answers`. See [Detached dispatch](#detached-fire-and-forget-dispatch). |
 | `idempotencyKey` | string | No | — | Session-scoped key, 1–128 characters. A matching request reuses the existing run within the default 24-hour TTL; a different request with the same live key returns `IDEMPOTENCY_KEY_CONFLICT`. The raw key is never persisted. |
 | `requireActiveTurn` | boolean | No | `false` | For `follow_up`, require a currently active turn instead of permitting idle promotion. Idle returns `409 SESSION_NOT_STREAMING`. |
+| `preflight` | object | No | — | Contract 1.53.0: per-dispatch preflight, `{paths?: string[], tools?: string[]}` — declared paths must exist and declared bare tool names must be executable on the server `PATH` before the dispatch proceeds; otherwise `400 PREFLIGHT_FAILED` (with `failures[]`) and no turn starts. The session cwd is not re-checked. See [Dispatch preflight](#dispatch-preflight-contract-1530). |
 
 You can also set verbosity via header: `X-Verbosity: tasks`.
 

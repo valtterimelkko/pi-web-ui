@@ -114,7 +114,7 @@ describe('agentOsCapture — create, batch create and GET session', () => {
       createSession: vi.fn(async () => {
         n += 1;
         const id = `agy-${n}`;
-        entries.set(id, { id, path: id, sdkType: 'antigravity', cwd: '/root/proj', firstMessage: '', messageCount: 0, status: 'idle', createdAt: '', lastActivity: '' });
+        entries.set(id, { id, path: id, sdkType: 'antigravity', cwd: os.tmpdir(), firstMessage: '', messageCount: 0, status: 'idle', createdAt: '', lastActivity: '' });
         return { sessionId: id };
       }),
     };
@@ -148,7 +148,7 @@ describe('agentOsCapture — create, batch create and GET session', () => {
   }
 
   it('stores and echoes agentOsCapture on create', async () => {
-    const out = await create({ runtime: 'antigravity', cwd: '/root/proj', agentOsCapture: 'disabled' });
+    const out = await create({ runtime: 'antigravity', cwd: os.tmpdir(), agentOsCapture: 'disabled' });
     expect(out.status).toBe(201);
     expect(out.body.agentOsCapture).toBe('disabled');
     expect(entries.get(out.body.sessionId).agentOsCapture).toBe('disabled');
@@ -156,14 +156,14 @@ describe('agentOsCapture — create, batch create and GET session', () => {
   });
 
   it('leaves the create response and registry untouched when omitted', async () => {
-    const out = await create({ runtime: 'antigravity', cwd: '/root/proj' });
+    const out = await create({ runtime: 'antigravity', cwd: os.tmpdir() });
     expect(out.status).toBe(201);
     expect('agentOsCapture' in out.body).toBe(false);
     expect('agentOsCapture' in entries.get(out.body.sessionId)).toBe(false);
   });
 
   it('400s an invalid value before creating anything', async () => {
-    const out = await create({ runtime: 'antigravity', cwd: '/root/proj', agentOsCapture: 'maybe' });
+    const out = await create({ runtime: 'antigravity', cwd: os.tmpdir(), agentOsCapture: 'maybe' });
     expect(out.status).toBe(400);
     expect(antigravityService.createSession).not.toHaveBeenCalled();
   });
@@ -172,8 +172,8 @@ describe('agentOsCapture — create, batch create and GET session', () => {
     const res = mockRes();
     await routes.handleBatchCreate(jsonReq('POST', '/api/v1/sessions/batch', {
       sessions: [
-        { runtime: 'antigravity', cwd: '/root/proj', agentOsCapture: 'enabled' },
-        { runtime: 'antigravity', cwd: '/root/proj' },
+        { runtime: 'antigravity', cwd: os.tmpdir(), agentOsCapture: 'enabled' },
+        { runtime: 'antigravity', cwd: os.tmpdir() },
       ],
     }), res);
     const body = JSON.parse(res.body);
@@ -187,11 +187,11 @@ describe('agentOsCapture — create, batch create and GET session', () => {
 
   it('GET /sessions/:id reports the stored value', async () => {
     entries.set('claude-1', {
-      id: 'claude-1', path: 'claude-1', sdkType: 'claude', cwd: '/root/proj', firstMessage: '', messageCount: 0,
+      id: 'claude-1', path: 'claude-1', sdkType: 'claude', cwd: os.tmpdir(), firstMessage: '', messageCount: 0,
       status: 'idle', createdAt: '', lastActivity: '', origin: 'internal-api', agentOsCapture: 'enabled',
     });
     entries.set('claude-2', {
-      id: 'claude-2', path: 'claude-2', sdkType: 'claude', cwd: '/root/proj', firstMessage: '', messageCount: 0,
+      id: 'claude-2', path: 'claude-2', sdkType: 'claude', cwd: os.tmpdir(), firstMessage: '', messageCount: 0,
       status: 'idle', createdAt: '', lastActivity: '',
     });
     const r1 = mockRes();
