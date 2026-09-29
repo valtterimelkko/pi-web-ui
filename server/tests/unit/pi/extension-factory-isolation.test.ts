@@ -94,7 +94,7 @@ afterEach(() => {
 });
 
 async function loadWithCache(cwd: string): Promise<{ extensions: Extension[]; runtime: ExtensionRuntime }> {
-  const loader = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
+  const { loader } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
   const result = loader.getExtensions();
   return { extensions: result.extensions, runtime: result.runtime };
 }
@@ -238,7 +238,7 @@ function makeStatefulCache(allowlist: readonly string[]): ExtensionFactoryCache 
 }
 
 async function loadStateful(cache: ExtensionFactoryCache, cwd: string): Promise<Extension[]> {
-  const loader = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
+  const { loader } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
   return loader.getExtensions().extensions;
 }
 
@@ -295,7 +295,7 @@ describe('B1.2 seed→reload critical section (review major 2)', () => {
       // Stand-in for the loader's own async resolution window, during which a
       // competing open would change the global slot for uncached extensions.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      const loader = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
+      const { loader } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
       events.push(`exit:${cwd}`);
       return loader.getExtensions().extensions;
     };
@@ -360,7 +360,7 @@ describe('B1.2 reload paths share the seed→load critical section', () => {
       events.push('open:enter');
       await refreshExtensionFactories(agentDir, { cache });
       await new Promise((resolve) => setTimeout(resolve, 20));
-      const loader = await createExtensionFactoryResourceLoader(cwdB, agentDir, { cache });
+      const { loader } = await createExtensionFactoryResourceLoader(cwdB, agentDir, { cache });
       events.push('open:exit');
       return loader.getExtensions().extensions;
     });
@@ -368,7 +368,7 @@ describe('B1.2 reload paths share the seed→load critical section', () => {
     // clearExtensionCache() internally, so it must not interleave with the open.
     const reload = runExtensionLoadCriticalSection(async () => {
       events.push('reload:enter');
-      const loader = await createExtensionFactoryResourceLoader(cwdA, agentDir, { cache });
+      const { loader } = await createExtensionFactoryResourceLoader(cwdA, agentDir, { cache });
       await loader.reload();
       events.push('reload:exit');
       return loader.getExtensions().extensions;

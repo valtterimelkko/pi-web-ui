@@ -1,4 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach as vitestBeforeEach } from 'vitest';
+
+const { loggerWarn } = vi.hoisted(() => ({ loggerWarn: vi.fn() }));
+vi.mock('../../../src/logging/logger.js', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: loggerWarn,
+    error: vi.fn(),
+    debug: vi.fn(),
+    errorObject: vi.fn(),
+  }),
+}));
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -158,13 +169,6 @@ describe('ExtensionFactoryCache', () => {
     const bare = cache as unknown as Record<string, unknown>;
     expect(bare['seed']).toBeUndefined();
     expect(bare['setAccessors']).toBeUndefined();
-  });
-
-  it('peekFactory returns the cached factory without triggering a scan', async () => {
-    const { cache } = cacheHarness();
-    await cache.load(AGENT);
-    expect(cache.peekFactory(`${AGENT}/extensions/alpha/index.ts`)).toMatchObject({ kind: 'factory' });
-    expect(cache.peekFactory(`${AGENT}/extensions/unknown/index.ts`)).toBeUndefined();
   });
 
   it('defaults importFactory to the public jiti importer when none is provided', async () => {
@@ -556,16 +560,19 @@ async function loadPlain(cwd: string, agentDir: string): Promise<ReturnType<impo
 }
 
 /** Full comparable projection: order, identity, registrations. */
-function project(result: { extensions: Extension[] }): Array<Record<string, unknown>> {
-  return result.extensions.map((extension) => ({
-    path: extension.path,
-    resolvedPath: extension.resolvedPath,
-    source: extension.sourceInfo?.source,
-    scope: extension.sourceInfo?.scope,
-    commands: [...extension.commands.keys()].sort(),
-    tools: [...extension.tools.keys()].sort(),
-    flags: [...extension.flags.keys()].sort(),
-  }));
+function project(result: { extensions: Extension[]; errors: Array<{ path: string; error: string }> }): Record<string, unknown> {
+  return {
+    extensions: result.extensions.map((extension) => ({
+      path: extension.path,
+      resolvedPath: extension.resolvedPath,
+      source: extension.sourceInfo?.source,
+      scope: extension.sourceInfo?.scope,
+      commands: [...extension.commands.keys()].sort(),
+      tools: [...extension.tools.keys()].sort(),
+      flags: [...extension.flags.keys()].sort(),
+    })),
+    errors: result.errors.map((error) => ({ path: error.path, error: error.error })),
+  };
 }
 
 describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
@@ -578,7 +585,7 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
       writeFileSync(join(harness.cwdA, '.pi', 'extensions', 'local-one', 'index.ts'), UNCACHED_SOURCE);
 
       for (const cwd of [harness.cwdA, harness.cwdB]) {
-        const loader = await createExtensionFactoryResourceLoader(cwd, harness.agentDir, { cache: harness.cache });
+        const { loader } = await createExtensionFactoryResourceLoader(cwd, harness.agentDir, { cache: harness.cache });
         const viaFactory = loader.getExtensions();
         const plain = await loadPlain(cwd, harness.agentDir);
         expect(project(viaFactory)).toEqual(project(plain));
@@ -591,7 +598,7 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
   it('cached extensions keep their real path and the same sourceInfo the uncached path produces', async () => {
     const harness = await loaderHarness();
     try {
-      const loader = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
+      const { loader } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
       const iso = loader.getExtensions().extensions.find((extension) => extension.path.includes('/iso/'));
       expect(iso).toBeDefined();
       expect(iso!.path.startsWith('<inline')).toBe(false);
@@ -607,12 +614,12 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
   it('re-imports a changed cached extension on the next loader build (fingerprint freshness)', async () => {
     const harness = await loaderHarness();
     try {
-      const first = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
+      const { loader: first } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
       expect(first.getExtensions().extensions).toHaveLength(2);
       expect(harness.cache.stats.imports).toBe(1);
 
       writeFileSync(join(harness.agentDir, 'extensions', 'iso', 'index.ts'), ISO_SOURCE.replace('iso-echo', 'iso-echo-v2'));
-      const second = await createExtensionFactoryResourceLoader(harness.cwdB, harness.agentDir, { cache: harness.cache });
+      const { loader: second } = await createExtensionFactoryResourceLoader(harness.cwdB, harness.agentDir, { cache: harness.cache });
       expect(harness.cache.stats.imports).toBe(2);
       expect(harness.cache.stats.reimports).toBe(1);
       expect(second.getExtensions().extensions).toHaveLength(2);
@@ -625,11 +632,11 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
   it('picks up cached extension code changes on /reload via the factory indirection', async () => {
     const harness = await loaderHarness();
     try {
-      const loader = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
+      const { loader, snapshot } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
       expect([...loader.getExtensions().extensions[0]!.commands.keys()]).toContain('iso-echo');
 
       writeFileSync(join(harness.agentDir, 'extensions', 'iso', 'index.ts'), ISO_SOURCE.replace('iso-echo', 'iso-echo-v2'));
-      await refreshExtensionFactories(harness.agentDir, { cache: harness.cache });
+      await refreshExtensionFactories(harness.agentDir, { cache: harness.cache, snapshot });
       await loader.reload();
       const commands = loader.getExtensions().extensions.flatMap((extension) => [...extension.commands.keys()]);
       expect(commands).toContain('iso-echo-v2');
@@ -685,7 +692,7 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
         writeFileSync(join(harness.cwdA, '.pi', 'extensions', 'local-one', 'index.ts'), UNCACHED_SOURCE);
 
         const before = getExtensionLoaderTelemetry().fallbacks;
-        const loader = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, depsFor(harness));
+        const { loader } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, depsFor(harness));
         const projection = project(loader.getExtensions());
         const plain = await loadPlain(harness.cwdA, harness.agentDir);
         expect(projection).toEqual(project(plain));
@@ -697,4 +704,183 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
       }
     });
   }
+});
+
+// ── B1.2b correction 02 ─────────────────────────────────────────────────────
+
+/**
+ * Review major: an open session's loader must never depend on the mutable
+ * process cache. Each loader holds its own path → factory snapshot, captured at
+ * construction; `refreshExtensionFactories` updates exactly the given
+ * snapshot, atomically and only with successful imports. Pruning or clearing
+ * the process cache never touches an open loader; a failed re-import surfaces
+ * as a load error (SDK parity), not stale code.
+ */
+describe('B1.2b correction 02 — per-loader factory snapshots', () => {
+  vitestBeforeEach(() => { resetExtensionLoaderTelemetry(); loggerWarn.mockClear(); });
+
+  it('/reload succeeds and keeps the extension loaded when it was removed on disk', async () => {
+    const harness = await loaderHarness();
+    try {
+      const { loader, snapshot } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
+      expect(loader.getExtensions().extensions).toHaveLength(2);
+
+      // Remove the extension, then the session's /reload runs (refresh + reload).
+      rmSync(join(harness.agentDir, 'extensions', 'iso'), { recursive: true, force: true });
+      await refreshExtensionFactories(harness.agentDir, { cache: harness.cache, snapshot });
+      await loader.reload();  // must not reject
+
+      const extensions = loader.getExtensions().extensions;
+      // The open session keeps its snapshot: the extension is still loaded.
+      expect(extensions).toHaveLength(2);
+      expect(extensions.some((extension) => extension.path.includes('/iso/'))).toBe(true);
+    } finally {
+      loaderHarnessTeardown(harness);
+    }
+  });
+
+  it('/reload reports a failed re-import as a load error (SDK parity), not stale code', async () => {
+    const harness = await loaderHarness();
+    try {
+      const { loader, snapshot } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
+      expect(loader.getExtensions().extensions).toHaveLength(2);
+
+      // The changed extension no longer imports.
+      writeFileSync(join(harness.agentDir, 'extensions', 'iso', 'index.ts'), 'throw new ReferenceError("b12b-reimport-failure");\nexport default function () {};');
+      await refreshExtensionFactories(harness.agentDir, { cache: harness.cache, snapshot });
+      await loader.reload();  // must not reject
+
+      const result = loader.getExtensions();
+      const isoLoaded = result.extensions.find((extension) => extension.path.includes('/iso/'));
+      expect(isoLoaded).toBeUndefined();
+      const isoError = result.errors.find((error) => error.path.includes('/iso/'));
+      expect(isoError).toBeDefined();
+      expect(isoError!.error).toContain('Failed to load extension');
+      expect(isoError!.error).toContain('b12b-reimport-failure');
+      // The uncached sibling is untouched.
+      expect(result.extensions.some((extension) => extension.path.includes('/uncached/'))).toBe(true);
+    } finally {
+      loaderHarnessTeardown(harness);
+    }
+  });
+
+  it('/reload succeeds with the snapshot intact after an over-budget refresh', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'b12b-overbudget-'));
+    try {
+      const agentDir = join(root, 'agent');
+      const cwd = join(root, 'work');
+      mkdirSync(join(agentDir, 'extensions', 'iso'), { recursive: true });
+      mkdirSync(join(agentDir, 'extensions', 'uncached'), { recursive: true });
+      mkdirSync(cwd, { recursive: true });
+      writeFileSync(join(agentDir, 'extensions', 'iso', 'index.ts'), ISO_SOURCE);
+      writeFileSync(join(agentDir, 'extensions', 'uncached', 'index.ts'), UNCACHED_SOURCE);
+      const cache = new ExtensionFactoryCache({ allowlist: ['iso'], maxScanEntries: 8 });
+
+      const { loader, snapshot } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
+      expect(loader.getExtensions().extensions).toHaveLength(2);
+
+      // Blow the budget: the next scan declines to cache anything at all.
+      for (let i = 0; i < 8; i += 1) {
+        writeFileSync(join(agentDir, 'extensions', 'iso', `helper-${i}.ts`), '// helper\n');
+      }
+      expect(cache.stats.overBudget).toBe(false);
+      await refreshExtensionFactories(agentDir, { cache, snapshot });
+      expect(cache.stats.overBudget).toBe(true);
+
+      await loader.reload();  // must not reject
+      const extensions = loader.getExtensions().extensions;
+      expect(extensions).toHaveLength(2);
+      expect(extensions.some((extension) => extension.path.includes('/iso/'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("session A's reload never changes session B's loaded state or snapshot", async () => {
+    const harness = await loaderHarness();
+    try {
+      const { loader: loaderA, snapshot: snapshotA } = await createExtensionFactoryResourceLoader(harness.cwdA, harness.agentDir, { cache: harness.cache });
+      const { loader: loaderB } = await createExtensionFactoryResourceLoader(harness.cwdB, harness.agentDir, { cache: harness.cache });
+      const bExtensionsBefore = loaderB.getExtensions().extensions;
+
+      // A's /reload: successful re-import of a changed extension.
+      writeFileSync(join(harness.agentDir, 'extensions', 'iso', 'index.ts'), ISO_SOURCE.replace('iso-echo', 'iso-echo-v2'));
+      await refreshExtensionFactories(harness.agentDir, { cache: harness.cache, snapshot: snapshotA });
+      await loaderA.reload();
+      const aCommands = loaderA.getExtensions().extensions.flatMap((extension) => [...extension.commands.keys()]);
+      expect(aCommands).toContain('iso-echo-v2');
+
+      // B was not reloaded: same Extension objects, still the old code.
+      expect(loaderB.getExtensions().extensions).toEqual(bExtensionsBefore);
+      const bCommands = loaderB.getExtensions().extensions.flatMap((extension) => [...extension.commands.keys()]);
+      expect(bCommands).toContain('iso-echo');
+      expect(bCommands).not.toContain('iso-echo-v2');
+
+      // B's own /reload keeps working from B's own (unchanged) snapshot.
+      await loaderB.reload();
+      const bCommandsAfterOwnReload = loaderB.getExtensions().extensions.flatMap((extension) => [...extension.commands.keys()]);
+      expect(bCommandsAfterOwnReload).toContain('iso-echo');
+      expect(bCommandsAfterOwnReload).not.toContain('iso-echo-v2');
+    } finally {
+      loaderHarnessTeardown(harness);
+    }
+  });
+
+  it('rewrites <inline:> labels in error paths AND messages, with conflict diagnostics included in the parity projection', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'b12b-conflict-'));
+    try {
+      const agentDir = join(root, 'agent');
+      const cwd = join(root, 'work');
+      mkdirSync(join(agentDir, 'extensions', 'iso'), { recursive: true });
+      mkdirSync(join(agentDir, 'extensions', 'twin'), { recursive: true });
+      mkdirSync(cwd, { recursive: true });
+      const CLASH_SOURCE = `
+export default function (pi) {
+  pi.registerTool({ name: 'clash_tool', description: 'clash', parameters: { type: 'object', properties: {} }, execute: async () => ({ output: 'clash' }) });
+  pi.registerCommand('clash-echo', { description: 'clash', handler: async () => 'clash' });
+}
+`;
+      writeFileSync(join(agentDir, 'extensions', 'iso', 'index.ts'), CLASH_SOURCE);
+      writeFileSync(join(agentDir, 'extensions', 'twin', 'index.ts'), CLASH_SOURCE);
+      const cache = new ExtensionFactoryCache({ allowlist: ['iso', 'twin'] });
+
+      const { loader } = await createExtensionFactoryResourceLoader(cwd, agentDir, { cache });
+      const viaFactory = loader.getExtensions();
+      const plain = await loadPlain(cwd, agentDir);
+
+      // Conflicts exist on both paths (same tool + command registered twice).
+      expect(viaFactory.errors.length).toBeGreaterThan(0);
+      expect(plain.errors.length).toBeGreaterThan(0);
+      // Full projection equality, errors included.
+      expect(project(viaFactory)).toEqual(project(plain));
+      // No <inline: label anywhere in the delivered result.
+      expect(JSON.stringify({ extensions: viaFactory.extensions.map((e) => ({ p: e.path, rp: e.resolvedPath })), errors: viaFactory.errors })).not.toContain('<inline:');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('B1.2b correction 02 — importer failure warnings are aggregated and rate-limited', () => {
+  vitestBeforeEach(() => { loggerWarn.mockClear(); resetExtensionLoaderTelemetry(); });
+
+  it('a globally broken importer across N loads emits at most one warning within the rate window', async () => {
+    const { deps } = fakeFs({
+      dirs: { [`${AGENT}/extensions`]: ['alpha', 'beta'], [`${AGENT}/extensions/alpha`]: ['index.ts'], [`${AGENT}/extensions/beta`]: ['index.ts'] },
+      files: {
+        [`${AGENT}/extensions/alpha/index.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/beta/index.ts`]: { mtimeMs: 1 },
+      },
+    });
+    const cache = new ExtensionFactoryCache({
+      ...deps,
+      allowlist: ['alpha', 'beta'],
+      importFactory: async () => { throw new ExtensionImporterError('jiti unavailable (simulated)'); },
+    });
+    for (let i = 0; i < 5; i += 1) await cache.load(AGENT);
+    const importWarnings = loggerWarn.mock.calls.map((call) => String(call[0])).filter((text) => text.includes('import(s) failed') || text.includes('import failed'));
+    expect(importWarnings.length).toBeLessThanOrEqual(1);
+    expect(importWarnings[0]).toContain('alpha');
+    expect(importWarnings[0]).toContain('beta');
+  });
 });

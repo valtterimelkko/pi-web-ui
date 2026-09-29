@@ -222,12 +222,14 @@ export function resolveSdkAliasMap(deps: SdkResolutionDeps = {}): Record<string,
     requireFrom: deps.requireFrom ?? ((fromPath) => createRequire(fromPath)),
   };
 
-  // Version guard — runtime degrades via the typed error; CI fails loudly in
-  // the test suite (the pin test) so a maintainer re-validates on SDK bumps.
+  // Version guard — correction 02 (minor): EXACT match against the validated
+  // version. A same-minor bump (0.87.2) can change the alias surface, so any
+  // other version degrades to the plain uncached path at runtime; the CI pin
+  // test tells the maintainer to re-validate.
   const version = full.sdkVersion();
-  if (!version.startsWith('0.87.')) {
+  if (version !== VALIDATED_SDK_VERSION) {
     throw new ExtensionImporterError(
-      `@earendil-works/pi-coding-agent ${version} is outside the validated range (${VALIDATED_SDK_VERSION} minor line); ` +
+      `@earendil-works/pi-coding-agent ${version} is not the validated version (${VALIDATED_SDK_VERSION}); ` +
       'the extension factory alias map and override must be re-validated for this SDK version. ' +
       'Falling back to the plain uncached SDK path.',
     );
@@ -378,8 +380,9 @@ export async function importFactoryViaJiti(extensionPath: string, deps: JitiImpo
     const mod = await jitiInstance.import(extensionPath, { default: true });
     return typeof mod === 'function' ? mod : undefined;
   } catch (error) {
-    throw new ExtensionImporterError(`Failed to import extension module ${extensionPath}`, { cause: toError(error) });
+    const cause = toError(error);
+    // Include the underlying message so per-session load errors carry the same
+    // diagnostic text the uncached path produces.
+    throw new ExtensionImporterError(`Failed to import extension module ${extensionPath}: ${cause.message}`, { cause });
   }
 }
-
-

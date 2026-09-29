@@ -132,19 +132,28 @@ patch, no files inside `node_modules` are ever modified, and the package
 `exports` map is the only boundary used.
 
 **Graceful degradation.** Any failure in the factory pipeline (SDK version
-outside the validated `0.87.x` range, an unresolvable alias target, a jiti
+not exactly the validated `0.87.1`, an unresolvable alias target, a jiti
 import failure, the override hitting frozen or changed result objects, a parity
 self-check mismatch) degrades that session to the plain uncached SDK loader —
 sessions keep working, they just open slowly. Each degradation is counted in
-`getExtensionLoaderTelemetry()` and logged as a rate-limited warning; the tests
+`getExtensionLoaderTelemetry()` and logged as a rate-limited warning; importer
+failures are additionally aggregated per scan into one rate-limited warning
+listing the failed paths. The tests
 pin the validated SDK version loudly (they fail on an SDK bump until the alias
 map and override are re-validated).
 
-**Reload behaviour.** Code changes to cached extensions are picked up by
-`/reload` (the loader dereferences the cache's current factory). Newly added or
-removed extension **files** reach an already-open session only at its next
-open, because the loader's `additionalExtensionPaths` are fixed at construction
-by the public API; a fresh enumeration happens on every session open.
+**Reload behaviour (correction 02).** Each open session's loader holds its own
+`path → factory` snapshot; the session's `/reload` refreshes exactly that
+snapshot — atomically, only with successful imports — and never another
+session's. Code changes to cached extensions are therefore picked up by the
+reloading session's `/reload`; a failed re-import surfaces as that extension's
+load error with its real path (matching the uncached path) instead of silently
+running stale code; a removed extension or an over-budget scan leaves the open
+session's snapshot intact (the session keeps working with what it loaded).
+Newly added or removed extension **files** reach an already-open session only
+at its next open, because the loader's `additionalExtensionPaths` are fixed at
+construction by the public API; a fresh enumeration happens on every session
+open.
 
 Project-local (`<cwd>/.pi/extensions`), configured and package extensions are
 **not** cached: they keep loading per real cwd, as do skills, prompt templates,

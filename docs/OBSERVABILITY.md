@@ -468,7 +468,7 @@ reproduction harness is `scripts/lag-repro/run.ts` (see
 
 The extension factory cache (see `docs/ARCHITECTURE.md`, "Global extension
 loading") degrades **per session** to the plain uncached SDK loader when its
-pipeline fails — SDK version outside the validated `0.87.x` range, an
+pipeline fails — an SDK version other than the validated `0.87.1`, an
 unresolvable alias target, a jiti import failure, the override hitting frozen
 or changed result objects, or a parity self-check mismatch. Sessions keep
 working; session opens stay slow. Each degradation is observable two ways:
@@ -481,10 +481,16 @@ working; session opens stay slow. Each degradation is observable two ways:
   lastFallbackAt }`. It is a module accessor, not a REST route; wire it into a
   diagnostics component or capacity read-out before alerting on it.
 
+Per-scan importer failures (a broken extension, or a globally broken importer)
+are aggregated into their own rate-limited warning listing the failed paths
+(`… N extension import(s) failed this scan: …`) — at most one per 5 s, so
+repeated opens cannot flood the log (correction 02).
+
 Absence of both signals means every session opened through the factory path.
 The loud counterpart lives in the tests:
 `sdk-extension-importer.test.ts` pins the installed SDK version to the validated
-one and fails on an SDK bump until the alias map and override are re-validated.
+one EXACTLY and fails on any SDK bump until the alias map and override are
+re-validated.
 
 ### Re-running the A2 live proof
 
