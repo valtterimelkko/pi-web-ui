@@ -7,8 +7,9 @@
  * fixture that reproduces the 2026-09-12 pattern's generation arm: one very
  * long assistant generation streaming content chunks. Scenarios:
  *
- *   bytes   — default budgets (1,000,000 output tokens / 16 MiB streamed
- *             bytes), stress-paced 4 KiB / 3 ms ≈ 1.37 MB/s (~500× the p99.9
+ *   bytes   — default budgets (1,000,000 output tokens / the configured
+ *             streamed-byte default — 4 MiB since B3c; overridable per run
+ *             with --bytes-cap), stress-paced 4 KiB / 3 ms ≈ 1.37 MB/s (~500× the p99.9
  *             real streaming rate of 2,710 B/s): the streamed-byte cap must
  *             abort the turn at the cap, the receipt must carry
  *             RUN_BUDGET_EXCEEDED, and a second session must stream
@@ -443,7 +444,7 @@ async function main() {
   try {
     if (wantBytes) {
       log('── scenario bytes (default budgets, stress-paced ~1.37 MB/s ≈ 300× p99.9 real rate) ──');
-      runawayPlan.bytes = 32 * 1024 * 1024; // never reached: the 16 MiB cap aborts mid-stream
+      runawayPlan.bytes = 32 * 1024 * 1024; // never reached: the byte cap aborts mid-stream
       runawayPlan.completionTokens = controlOutputTokens;
       runawayPlan.chunkBytes = 4096;
       runawayPlan.bMinStreamMs = 16_000; // A aborts at ~14 s; B must stream past it

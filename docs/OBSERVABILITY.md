@@ -909,8 +909,9 @@ calls — the same 2026-09-12 class beyond its quadratic parse arm):
 - **Where:** `server/src/pi/run-budget.ts`, one guard per session at the same
   single `PiService.createSession` subscribe funnel.
 - **Caps:** `PI_RUN_BUDGET_MAX_OUTPUT_TOKENS` (default `1000000` per run) and
-  `PI_RUN_BUDGET_MAX_STREAMED_BYTES` (default `16777216` = 16 MiB per run,
-  UTF-8 bytes over text + thinking + tool-call deltas). `0` disables a
+  `PI_RUN_BUDGET_MAX_STREAMED_BYTES` (default `4194304` = 4 MiB per run,
+  UTF-8 bytes over text + thinking + tool-call deltas; re-sized from 16 MiB
+  by B3c, see Calibration below). `0` disables a
   dimension; an invalid value logs one warning and falls back — configuration
   never stops startup.
 - **What counts:** output tokens are summed from the public `usage.output`
@@ -948,8 +949,17 @@ calls — the same 2026-09-12 class beyond its quadratic parse arm):
     max; the 2× rule vs the worst case requires ≥541,378). Deliberately
     loose: the token cap fires only at message end, so it must not abort a
     legitimate long agentic loop — the byte cap is the live bound.
-  - streamed bytes: **0/2,382 merged runs breach 16 MiB** (~16× the merged
-    max, ≥2× rule).
+  - streamed bytes (B3c re-sizing, 2026-09-29): **0/2,382 merged runs breach
+    the new 4 MiB default** (~4× the merged max, ≥2× rule). The default was
+    re-sized from 16 MiB by live measurement: 12 pristine-harness
+    `bytes`-scenario runs at the 1 s A2 cadence (5× 8 MiB, 5× 4 MiB, 2×
+    16 MiB positive control; every per-run verdict and A2 sample kept with
+    the B3c evidence) — worst single-sample end-of-run stall 209 ms at 8 MiB
+    (over the frozen <200 ms sizing rule), 132 ms at 4 MiB (under), 180/187
+    ms at the 16 MiB controls. The upstream finalisation stall scales with
+    the finalised message size, so the smaller default bounds it well under
+    the B2 lag threshold. (The original 16 MiB choice was ~16× the merged
+    max with 0/2,382 breaches.)
   - real streaming rate (merged-run bytes/wall, includes tool time): p50
     143 B/s, p99 1,088 B/s, p99.9 2,710 B/s, max 6,583 B/s — the live-proof
     pacing is justified against these figures.
