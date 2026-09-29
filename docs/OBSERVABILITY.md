@@ -464,6 +464,28 @@ anything. Unit coverage and the measured bounds are in
 reproduction harness is `scripts/lag-repro/run.ts` (see
 [`plans/execution-reports/orchestration-scaling/B1.2.md`](./plans/execution-reports/orchestration-scaling/B1.2.md)).
 
+### Extension-factory degradation (B1.2b)
+
+The extension factory cache (see `docs/ARCHITECTURE.md`, "Global extension
+loading") degrades **per session** to the plain uncached SDK loader when its
+pipeline fails — SDK version outside the validated `0.87.x` range, an
+unresolvable alias target, a jiti import failure, the override hitting frozen
+or changed result objects, or a parity self-check mismatch. Sessions keep
+working; session opens stay slow. Each degradation is observable two ways:
+
+- a rate-limited warning (at most one per 5 s) through the central logger,
+  hence in the diagnostics ring buffer:
+  `[ExtensionFactoryCache] extension factory loading degraded to the plain uncached SDK path (reason: …)`;
+- the bounded counter `getExtensionLoaderTelemetry()` from
+  `server/src/pi/extension-factory-cache.ts` — `{ fallbacks, lastFallbackReason,
+  lastFallbackAt }`. It is a module accessor, not a REST route; wire it into a
+  diagnostics component or capacity read-out before alerting on it.
+
+Absence of both signals means every session opened through the factory path.
+The loud counterpart lives in the tests:
+`sdk-extension-importer.test.ts` pins the installed SDK version to the validated
+one and fails on an SDK bump until the alias map and override are re-validated.
+
 ### Re-running the A2 live proof
 
 `server/tests/integration/health-telemetry-live-proof.mjs` (a manual
