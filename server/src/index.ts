@@ -171,6 +171,13 @@ async function initialize(): Promise<void> {
           if (wsManager && handler) {
             wsManager.goalControlApi = (sessionId, body) => handler(sessionId, body);
           }
+          // B4.1 correction 01: the browser prompt fence rides the Internal
+          // API drain the same way — prompts are refused while a drain is
+          // active or held, so a deploy cannot kill a just-started turn.
+          const fence = internalApiServer?.getDrainFence() ?? null;
+          if (wsManager && fence) {
+            wsManager.drainFence = fence;
+          }
         });
         notificationsRegistry = sharedRegistry;
         internalApiServer = new InternalApiServer({

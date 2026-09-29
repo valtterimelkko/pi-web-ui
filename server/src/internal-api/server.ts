@@ -61,7 +61,7 @@ import {
 } from './admission-controller.js';
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
-import { DrainController, consumeDrainRecord, type DrainBusySession } from './drain-controller.js';
+import { DrainController, composeInterruptedBusySessions, consumeDrainRecord, createBusySessionSource, type DrainBusySession } from './drain-controller.js';
 import { createDrainRoutes, isExecutionEntryRequest } from './routes/drain.js';
 
 const logger = createLogger('InternalAPI');
@@ -312,21 +312,17 @@ export class InternalApiServer {
     });
     await runReceiptManager.init();
     this.runReceiptManager = runReceiptManager;
-    // B4.1: receipt-less busy sessions the previous process's drain announced
-    // as cut off. Sessions whose runs WERE receipt-backed are reconciled from
-    // those receipts; only the rest need the synthetic reference.
+    // B4.1 + correction 01: receipt-less busy sessions the previous process's
+    // drain announced as cut off, composed through the shared helper so work
+    // that finished normally inside the hold window is NOT announced as an
+    // interruption (its receipts are terminal at boot), and sessions whose
+    // runs were receipt-backed are left to the receipt path.
     const recoveredReceiptSessionIds = new Set(runReceiptManager.getRestartRecoveredRuns().map((run) => run.sessionId));
-    const interruptedBusySessions = priorDrain?.state === 'timed_out'
-      ? priorDrain.cutOffSessions
-        .filter((session) => !recoveredReceiptSessionIds.has(session.sessionId))
-        .map((session) => ({
-          sessionId: session.sessionId,
-          runtime: session.runtime,
-          runId: `busy-${session.sessionId}`,
-          errorCode: 'SERVER_RESTART',
-          interruptionReason: 'drain_timeout',
-        }))
-      : [];
+    const interruptedBusySessions = composeInterruptedBusySessions(
+      priorDrain,
+      recoveredReceiptSessionIds,
+      (runId) => runReceiptManager.get(runId)?.status,
+    );
     {
       const recovered = runReceiptManager.getRestartRecoveredRuns();
       const byDrain = recovered.filter((run) => run.interruptionReason === 'drain_timeout').length;
@@ -386,51 +382,31 @@ export class InternalApiServer {
 
     // B4 drain-then-restart: closes admission through the shared seam and
     // waits for active turns AND nonterminal receipts before a restart.
-    // B4.1: the settle wait ALSO counts resident busy sessions that hold no
-    // admission slot and no receipt — Pi extension-driven turns (goal-engine
-    // continuations, watch-wake deadlines, subagent) and browser (P0) turns
-    // via the SDK's public streaming state, and other runtimes via their
-    // existing busy flags. The registry snapshot is refreshed at boot, before
-    // every drain start, and on every measure (the accessors are sync).
-    let registrySnapshot: Array<{ id: string; sdkType: string }> = [];
-    let refreshingRegistry = false;
-    const refreshRegistrySnapshot = async (): Promise<void> => {
-      if (refreshingRegistry) return;
-      refreshingRegistry = true;
-      try {
-        const entries = await this.sessionRegistry.listAll();
-        registrySnapshot = entries.map((entry) => ({ id: entry.id, sdkType: entry.sdkType }));
-      } catch (error) {
-        logger.warn(`[InternalAPI] drain busy-session registry refresh failed: ${error instanceof Error ? error.message : String(error)}`);
-      } finally {
-        refreshingRegistry = false;
-      }
-    };
-    void refreshRegistrySnapshot();
+    // B4.1 + correction 01: the settle wait ALSO counts resident busy sessions
+    // that hold no admission slot and no receipt — Pi extension-driven turns
+    // (goal-engine continuations, watch-wake deadlines, subagent) and browser
+    // (P0) turns via the SDK's public streaming state, and other runtimes via
+    // their existing busy flags. The shared source refreshes the cross-runtime
+    // snapshot on EVERY measurement (shared in-flight promise — overlapping
+    // callers await one refresh) and the drain route awaits it before a start,
+    // so a busy non-Pi session can never be measured against a stale or empty
+    // snapshot. Pi is always read live, never from the snapshot.
+    const busySource = createBusySessionSource({
+      listRegistryEntries: () => this.sessionRegistry.listAll().then((all) => all.map((entry) => ({ id: entry.id, sdkType: entry.sdkType }))),
+      isRuntimeRunning: (sdkType, sessionId) => {
+        if (sdkType === 'claude') return this.claudeService.isRunning(sessionId);
+        if (sdkType === 'opencode') return this.opencodeService.isRunning(sessionId);
+        if (sdkType === 'antigravity') return this.antigravityService.isRunning(sessionId);
+        if (sdkType === 'commandcode') return this.commandCodeService.isRunning(sessionId);
+        return false; // 'pi' is covered by the live resident accessor
+      },
+      listPiBusySessions: () => this.multiSessionManager.listBusySessions().map((s) => ({ sessionId: s.sessionId, runtime: 'pi', busyReason: s.busyBecause.join('+') })),
+    });
     const listBusySessions = (): DrainBusySession[] => {
-      const busy: DrainBusySession[] = [];
-      try {
-        for (const session of this.multiSessionManager.listBusySessions()) {
-          busy.push({ sessionId: session.sessionId, runtime: 'pi', busyReason: session.busyBecause.join('+') });
-        }
-      } catch (error) {
-        logger.warn(`[InternalAPI] drain Pi busy accessor failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      for (const entry of registrySnapshot) {
-        // Pi is covered by the resident accessor above; the other runtimes
-        // expose their existing busy flags only (read-only).
-        let running = false;
-        try {
-          if (entry.sdkType === 'claude') running = this.claudeService.isRunning(entry.id);
-          else if (entry.sdkType === 'opencode') running = this.opencodeService.isRunning(entry.id);
-          else if (entry.sdkType === 'antigravity') running = this.antigravityService.isRunning(entry.id);
-          else if (entry.sdkType === 'commandcode') running = this.commandCodeService.isRunning(entry.id);
-        } catch {
-          running = false; // a lookup failure is not busy evidence
-        }
-        if (running) busy.push({ sessionId: entry.id, runtime: entry.sdkType, busyReason: 'runtime-running' });
-      }
-      return busy;
+      // Correction 01: every measurement kicks the shared refresh; the NEXT
+      // poll reads it. The pre-start hook awaits it (bounded staleness mid-drain).
+      void busySource.refresh();
+      return busySource.listBusySessions();
     };
     const drainController = new DrainController({
       admission: admissionController,
@@ -440,7 +416,7 @@ export class InternalApiServer {
       recordPath: drainRecordPath,
     });
     this.drainController = drainController;
-    const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: refreshRegistrySnapshot });
+    const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: () => busySource.refresh() });
 
     // Create routes
     const sessionRoutes = createSessionRoutes({
@@ -732,6 +708,22 @@ export class InternalApiServer {
    */
   getGoalControlHandler(): ((sessionId: string, body: Record<string, unknown>) => Promise<{ statusCode: number; body: Record<string, unknown> }>) | null {
     return this.goalControlHandler;
+  }
+
+  /**
+   * B4.1 correction 01: the browser prompt fence. True while a drain is
+   * active OR held (admission stays closed after the verdict until a restart
+   * or hold expiry), so a browser prompt arriving after `settled` cannot start
+   * a turn the restart then kills silently. Null until the server has started
+   * (Internal API disabled = never fenced).
+   */
+  getDrainFence(): (() => { active: boolean; retryAfterSeconds: number }) | null {
+    if (!this.drainController) return null;
+    const drain = this.drainController;
+    return () => {
+      const status = drain.status();
+      return { active: status.state !== 'idle', retryAfterSeconds: drain.retryAfterSeconds };
+    };
   }
 
   /**

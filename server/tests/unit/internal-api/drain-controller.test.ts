@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   DrainController,
+  composeInterruptedBusySessions,
   consumeDrainRecord,
   readDrainRecord,
   type DrainBusySession,
@@ -71,6 +72,84 @@ describe('DrainController', () => {
     runs = [];
     quarantined = 0;
     busy = [];
+  });
+
+  describe('correction 01 — self-drain exclusion', () => {
+    it('an excluded caller session does not block the settle wait and is never cut off', async () => {
+      busy = [
+        { sessionId: 'self-1', runtime: 'pi', busyReason: 'status+sdk_streaming' },
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' },
+      ];
+      const drain = make();
+      const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000, excludeSessionIds: ['self-1'] });
+      // The caller's own busy state must not hold the drain hostage...
+      expect(status.state).toBe('draining');
+      expect(status.remaining.busySessions).toBe(1);
+      expect(status.remaining.sessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming', runIds: [] }]);
+      expect(status.excludedSessionIds).toEqual(['self-1']);
+      // ...and when the OTHER work clears, the drain settles.
+      busy = [];
+      const outcome = await drain.waitForOutcome();
+      expect(outcome.state).toBe('settled');
+      expect(outcome.cutOffSessionIds).toEqual([]);
+    });
+
+    it('an excluded session is not listed as cut off at a timeout and stays in the status', async () => {
+      busy = [
+        { sessionId: 'self-1', runtime: 'pi', busyReason: 'status' },
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' },
+      ];
+      const drain = make({ holdMs: 5_000 });
+      drain.start({ reason: 'deploy', timeoutMs: 20, excludeSessionIds: ['self-1'] });
+      const outcome = await drain.waitForOutcome();
+      expect(outcome.state).toBe('timed_out');
+      expect(outcome.cutOffSessionIds).toEqual(['goal-1']);
+      expect(outcome.excludedSessionIds).toEqual(['self-1']);
+      const record = readDrainRecord(recordPath);
+      expect((record?.cutOffSessions ?? []).map((s) => s.sessionId)).toEqual(['goal-1']);
+    });
+
+    it('exclusion covers only the busy-session wait: the excluded session run receipts still count', () => {
+      runs = [run('self-run')];
+      runs[0].sessionId = 'self-1';
+      busy = [{ sessionId: 'self-1', runtime: 'pi', busyReason: 'status' }];
+      const drain = make();
+      const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000, excludeSessionIds: ['self-1'] });
+      expect(status.state).toBe('draining');
+      expect(status.remaining.nonterminalRuns).toBe(1);
+      expect(status.remaining.busySessions).toBe(0);
+    });
+
+    it('reports no exclusions when none were requested and none when idle', () => {
+      const drain = make();
+      drain.start({ reason: 'deploy', timeoutMs: 1_000 });
+      expect(drain.status().excludedSessionIds).toEqual([]);
+    });
+  });
+
+  describe('correction 01 — cut-off session↔run association', () => {
+    it('cut-off session entries carry that session\'s nonterminal receipt ids in the status and the record', async () => {
+      runs = [run('goal-run-1'), run('goal-run-2', 'queued'), run('other-run')];
+      runs[0].sessionId = 'goal-1';
+      runs[1].sessionId = 'goal-1';
+      runs[2].sessionId = 'someone-else';
+      busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+      const drain = make();
+      drain.start({ reason: 'deploy', timeoutMs: 20 });
+      const outcome = await drain.waitForOutcome();
+      expect(outcome.state).toBe('timed_out');
+      expect(outcome.remaining.sessions[0]).toMatchObject({ sessionId: 'goal-1', runIds: ['goal-run-1', 'goal-run-2'] });
+      const record = readDrainRecord(recordPath);
+      expect(record?.cutOffSessions[0]).toMatchObject({ sessionId: 'goal-1', runIds: ['goal-run-1', 'goal-run-2'] });
+    });
+
+    it('a busy session with no receipt carries an empty association', async () => {
+      busy = [{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }];
+      const drain = make();
+      drain.start({ reason: 'deploy', timeoutMs: 20 });
+      await drain.waitForOutcome();
+      expect(readDrainRecord(recordPath)?.cutOffSessions[0]?.runIds).toEqual([]);
+    });
   });
 
   afterEach(() => {
@@ -259,8 +338,8 @@ describe('DrainController', () => {
     const record = readDrainRecord(recordPath);
     expect(record?.version).toBe(2);
     expect(record?.cutOffSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
-      { sessionId: 'browser-2', runtime: 'pi', busyReason: 'status' },
-      { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status+sdk_streaming' },
+      { sessionId: 'browser-2', runtime: 'pi', busyReason: 'status', runIds: [] },
+      { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status+sdk_streaming', runIds: [] },
     ]);
   });
 
@@ -290,7 +369,7 @@ describe('DrainController', () => {
     const drain = make();
     const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000 });
     expect(status.state).toBe('draining');
-    expect(status.remaining.sessions).toEqual([{ sessionId: 'browser-1', runtime: 'pi', busyReason: 'status' }]);
+    expect(status.remaining.sessions).toEqual([{ sessionId: 'browser-1', runtime: 'pi', busyReason: 'status', runIds: [] }]);
     busy = [];
     expect((await drain.waitForOutcome()).state).toBe('settled');
   });
@@ -353,6 +432,69 @@ describe('drain record helpers', () => {
         'garbage',
       ],
     }));
-    expect(readDrainRecord(p)?.cutOffSessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming' }]);
+    expect(readDrainRecord(p)?.cutOffSessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'sdk_streaming', runIds: [] }]);
+  });
+
+  it('keeps safe runIds on cut-off session entries and drops unsafe ones (correction 01)', () => {
+    const p = path.join(dir, 'internal-api-drain.json');
+    writeFileSync(p, JSON.stringify({
+      version: 2, state: 'timed_out', reason: 'r', startedAt: 'a', finishedAt: 'b', cutOffRunIds: [],
+      cutOffSessions: [
+        { sessionId: 'goal-1', runtime: 'pi', busyReason: 'status', runIds: ['run-1', '../evil', 42] },
+      ],
+    }));
+    expect(readDrainRecord(p)?.cutOffSessions).toEqual([{ sessionId: 'goal-1', runtime: 'pi', busyReason: 'status', runIds: ['run-1'] }]);
+  });
+});
+
+describe('composeInterruptedBusySessions (correction 01 — boot composition)', () => {
+  const record = (cutOffSessions: Array<{ sessionId: string; runtime: string; busyReason: string; runIds?: string[] }>, state: 'timed_out' | 'settled' = 'timed_out') => ({
+    version: 2 as const, state, reason: 'deploy', startedAt: 'a', finishedAt: 'b', cutOffRunIds: [] as string[], cutOffSessions,
+  });
+
+  it('returns nothing without a timed-out record', () => {
+    expect(composeInterruptedBusySessions(undefined, new Set())).toEqual([]);
+    expect(composeInterruptedBusySessions(record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status' }], 'settled'), new Set())).toEqual([]);
+  });
+
+  it('skips sessions whose runs were receipt-backed and interrupted (the receipt path fires)', () => {
+    expect(composeInterruptedBusySessions(
+      record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status', runIds: ['r1'] }]),
+      new Set(['g']),
+    )).toEqual([]);
+  });
+
+  it('skips sessions whose matching receipts all finished (any terminal state) before the kill', () => {
+    const status = (runId: string) => (runId === 'r1' ? 'completed' : runId === 'r2' ? 'failed' : undefined);
+    expect(composeInterruptedBusySessions(
+      record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status', runIds: ['r1', 'r2'] }]),
+      new Set<string>(),
+      status,
+    )).toEqual([]);
+  });
+
+  it('synthesises for sessions with no receipt or an unknown outcome', () => {
+    expect(composeInterruptedBusySessions(
+      record([
+        { sessionId: 'g1', runtime: 'pi', busyReason: 'sdk_streaming' },
+        { sessionId: 'g2', runtime: 'pi', busyReason: 'status', runIds: ['ghost'] },
+      ]),
+      new Set<string>(),
+      () => undefined,
+    )).toEqual([
+      { sessionId: 'g1', runtime: 'pi', runId: 'busy-g1', errorCode: 'SERVER_RESTART', interruptionReason: 'drain_timeout' },
+      { sessionId: 'g2', runtime: 'pi', runId: 'busy-g2', errorCode: 'SERVER_RESTART', interruptionReason: 'drain_timeout' },
+    ]);
+  });
+
+  it('synthesises when only SOME matching receipts finished (another turn may still have been cut off)', () => {
+    const status = (runId: string) => (runId === 'r1' ? 'completed' : undefined);
+    const out = composeInterruptedBusySessions(
+      record([{ sessionId: 'g', runtime: 'pi', busyReason: 'status', runIds: ['r1', 'r2'] }]),
+      new Set<string>(),
+      status,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].sessionId).toBe('g');
   });
 });

@@ -21,11 +21,17 @@ import { readBoundedJsonBody } from '../request-body.js';
 
 const MAX_REASON_CHARS = 500;
 const MAX_SECONDS = 3600;
+/** Correction 01 (self-drain): bounded, safe session ids for the busy-wait exclusion. */
+const MAX_EXCLUDE_SESSIONS = 8;
+const SAFE_SESSION_ID = /^[a-zA-Z0-9_-]{1,128}$/;
 
 const startDrainSchema = z.object({
   reason: z.string().trim().min(1, 'reason is required').max(MAX_REASON_CHARS, `reason must be at most ${MAX_REASON_CHARS} characters`),
   timeoutSeconds: z.number().int().min(0).max(MAX_SECONDS).optional(),
   holdSeconds: z.number().int().min(1).max(MAX_SECONDS).optional(),
+  excludeSessionIds: z.array(
+    z.string().regex(SAFE_SESSION_ID, 'excludeSessionIds entries must be 1-128 characters of [a-zA-Z0-9_-]'),
+  ).max(MAX_EXCLUDE_SESSIONS, `excludeSessionIds must hold at most ${MAX_EXCLUDE_SESSIONS} ids`).optional(),
 }).strict();
 
 /** Strip control characters so a reason cannot forge log or audit lines. */
@@ -84,11 +90,12 @@ export function createDrainRoutes({ drain, onBeforeStart }: DrainRoutesDeps) {
         /* a stale busy snapshot must never block the drain */
       }
     }
-    const { reason, timeoutSeconds, holdSeconds } = parsed.data;
+    const { reason, timeoutSeconds, holdSeconds, excludeSessionIds } = parsed.data;
     const { joined } = drain.start({
       reason: sanitizeReason(reason),
       timeoutMs: timeoutSeconds === undefined ? undefined : timeoutSeconds * 1000,
       holdMs: holdSeconds === undefined ? undefined : holdSeconds * 1000,
+      excludeSessionIds,
     });
     const outcome = await drain.waitForOutcome();
     sendJson(res, 200, { ...outcome, joined });

@@ -175,3 +175,51 @@ describe('S4: unified prompt-boundary on prompt / steer / follow_up', () => {
     expect(followUpSpy).toHaveBeenCalledWith(BENIGN);
   });
 });
+
+describe('correction 01: the browser prompt fence while a drain is active or held', () => {
+  let mgr: WebSocketConnectionManager;
+  let sent: Array<{ clientId: string; message: { type: string; code?: string; message?: string; retryAfterSeconds?: number } }>;
+  let promptSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mgr = new WebSocketConnectionManager();
+    sent = [];
+    (mgr as any).sendMessage = (clientId: string, message: unknown) => {
+      sent.push({ clientId, message: message as { type: string; code?: string; message?: string; retryAfterSeconds?: number } });
+    };
+    promptSpy = vi.fn();
+    (mgr as any).multiSessionManager = {
+      getClientSessionPath: () => '/pi/session.jsonl',
+      getAgentSession: () => ({ prompt: promptSpy }),
+      getSessionStatus: () => ({ status: 'idle' }),
+      dispose: () => {},
+    };
+  });
+
+  afterEach(async () => {
+    if (mgr) await (mgr as any).close?.();
+  });
+
+  it('refuses a browser prompt with a user-visible SERVER_DRAINING error while a drain is held (even after the verdict)', async () => {
+    mgr.drainFence = () => ({ active: true, retryAfterSeconds: 30 });
+    await (mgr as any).handlePrompt('c1', { type: 'prompt', sessionId: 's', message: BENIGN });
+    const err = sent.find((s) => s.message.code === 'SERVER_DRAINING');
+    expect(err).toBeDefined();
+    expect(err?.message.message).toMatch(/restarting shortly/i);
+    expect(err?.message.message).toMatch(/retry in ~30s/i);
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses slash commands too: a fence exists to stop TURNS from starting, whatever the payload', async () => {
+    mgr.drainFence = () => ({ active: true, retryAfterSeconds: 30 });
+    await (mgr as any).handlePrompt('c1', { type: 'prompt', sessionId: 's', message: '/goal pause' });
+    expect(sent.find((s) => s.message.code === 'SERVER_DRAINING')).toBeDefined();
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not fence when no drain ran (control)', async () => {
+    await (mgr as any).handlePrompt('c1', { type: 'prompt', sessionId: 's', message: BENIGN });
+    expect(sent.find((s) => s.message.code === 'SERVER_DRAINING')).toBeUndefined();
+  });
+});

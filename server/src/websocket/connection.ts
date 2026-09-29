@@ -381,6 +381,15 @@ export class WebSocketConnectionManager {
    * Internal API goal-control handler; null = those controls answer honestly.
    */
   goalControlApi?: (sessionId: string, body: { action: string; objective?: string; verifyCommand?: string }) => Promise<{ statusCode: number; body: Record<string, unknown> }>;
+  /**
+   * B4.1 correction 01: the browser prompt fence, wired from index.ts to the
+   * Internal API drain. True while a drain is active or held (admission closed
+   * until the restart or hold expiry) — a prompt arriving then would start a
+   * turn the restart kills silently. Null (Internal API disabled) = never
+   * fenced. PROMPT DISPATCH ONLY: steer/follow_up deliberately keep their
+   * existing behaviour (they join turns that already exist).
+   */
+  drainFence?: () => { active: boolean; retryAfterSeconds: number };
   private wss: WebSocketServer;
   private clients: Map<string, WebSocketClient> = new Map();
   private piService: PiService;
@@ -1337,6 +1346,21 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[]; agent?: string }
   ): Promise<void> {
+    // B4.1 correction 01: the drain fence. While a drain is active or held the
+    // server is about to restart; a prompt dispatched now would start a turn
+    // the restart kills silently (the gap the drain exists to close). Refuse
+    // with a clear, user-visible error instead — including slash commands,
+    // which also start turns. Steer/follow_up keep their existing behaviour.
+    const fence = this.drainFence?.();
+    if (fence?.active) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: `Server is restarting shortly: a deploy drain is active and new prompts are refused. Retry in ~${fence.retryAfterSeconds}s; this prompt was not started.`,
+        code: 'SERVER_DRAINING',
+      });
+      return;
+    }
+
     // Unified prompt-boundary check (prompt / steer / follow_up all route
     // user-controlled text through this before any runtime is called).
     if (this.blockIfPromptInjection(clientId, message.message)) {

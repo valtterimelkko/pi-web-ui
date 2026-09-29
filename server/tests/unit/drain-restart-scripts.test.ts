@@ -74,6 +74,8 @@ const timedOut = {
   ...settled, state: 'timed_out', waitedMs: 600000, completedDuringDrain: 1,
   remaining: { activeTurns: 2, quarantinedTurns: 0, nonterminalRuns: 2, runs: [] },
   cutOffRunIds: ['run-b', 'run-c'],
+  // Correction 01: cut-off sessions (B4.1 busy sessions) are recorded too.
+  cutOffSessionIds: ['sess-b'],
 };
 
 describe('drain-then-restart deploy scripts (B4)', () => {
@@ -118,20 +120,28 @@ describe('drain-then-restart deploy scripts (B4)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-    ...process.env,
-    ...curl.env,
-    PATH: `${curl.binDir}:${process.env.PATH}`,
-    PI_WEB_UI_SERVICE_UNIT: UNIT,
-    PI_WEB_UI_INTERNAL_API_SOCKET: socketPath,
-    PI_WEB_UI_INTERNAL_API_TOKEN_FILE: tokenPath,
-    PI_WEB_UI_RESTART_SYSTEMCTL: systemctlStub,
-    PI_WEB_UI_NOTIFY_SCRIPT: notifyStub,
-    PI_WEB_UI_STOP_AUDIT_FILE: auditFile,
-    PI_WEB_UI_SYSTEMD_CAT: path.join(dir, 'no-such-systemd-cat'),
-    PI_WEB_UI_PRODUCTION_LOCK: lockPath,
-    ...extra,
-  });
+  const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
+    // Correction 01: the host shell may carry the SESSION'S OWN id (this test
+    // process runs under a managed agent). The caller-session forwarding must
+    // only ever come from the explicit `extra` overrides below, never leak in.
+    const inherited = { ...process.env };
+    delete inherited.PI_WEB_UI_SESSION_ID;
+    delete inherited.PI_SESSION_ID;
+    return {
+      ...inherited,
+      ...curl.env,
+      PATH: `${curl.binDir}:${process.env.PATH}`,
+      PI_WEB_UI_SERVICE_UNIT: UNIT,
+      PI_WEB_UI_INTERNAL_API_SOCKET: socketPath,
+      PI_WEB_UI_INTERNAL_API_TOKEN_FILE: tokenPath,
+      PI_WEB_UI_RESTART_SYSTEMCTL: systemctlStub,
+      PI_WEB_UI_NOTIFY_SCRIPT: notifyStub,
+      PI_WEB_UI_STOP_AUDIT_FILE: auditFile,
+      PI_WEB_UI_SYSTEMD_CAT: path.join(dir, 'no-such-systemd-cat'),
+      PI_WEB_UI_PRODUCTION_LOCK: lockPath,
+      ...extra,
+    };
+  };
   const run = (script: string, args: string[], extra: Record<string, string> = {}) =>
     spawnSync('bash', [script, ...args], { encoding: 'utf8', timeout: 30_000, env: env(extra) });
 
@@ -159,8 +169,41 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       const result = run(RESTART, ['--reason', 'deploy b4']);
       expect(result.status, result.stderr).toBe(0);
       expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
-      expect(readFileSync(auditFile, 'utf8')).toMatch(/drain=timed_out,waited_ms=600000,initial_runs=3,initial_turns=3,completed=1,cut_off=2,cut_off_runs=run-b\+run-c/);
+      expect(readFileSync(auditFile, 'utf8')).toMatch(/drain=timed_out,waited_ms=600000,initial_runs=3,initial_turns=3,completed=1,cut_off=2,cut_off_sessions=1,cut_off_runs=run-b\+run-c/);
       expect(result.stderr).toMatch(/cut off 2 run/);
+    });
+
+    // Correction 01 (self-drain): a caller that runs the deploy from its own
+    // agent session forwards that session id so the drain does not wait for
+    // — then kill — the caller itself.
+    it('forwards PI_WEB_UI_SESSION_ID as excludeSessionIds and says so', () => {
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const result = run(RESTART, ['--reason', 'self deploy'], { PI_WEB_UI_SESSION_ID: 'caller-session-1' });
+      expect(result.status, result.stderr).toBe(0);
+      const [drain] = curl.requests();
+      expect(JSON.parse(drain.body ?? '{}')).toMatchObject({ reason: 'self deploy', timeoutSeconds: 600, excludeSessionIds: ['caller-session-1'] });
+      expect(result.stderr).toContain('caller-session-1');
+    });
+
+    it('falls back to PI_SESSION_ID and prefers PI_WEB_UI_SESSION_ID when both are set', () => {
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const viaPi = run(RESTART, ['--reason', 'r'], { PI_SESSION_ID: 'pi-caller' });
+      expect(viaPi.status).toBe(0);
+      expect(JSON.parse(curl.requests().at(-1)?.body ?? '{}').excludeSessionIds).toEqual(['pi-caller']);
+      const viaBoth = run(RESTART, ['--reason', 'r'], { PI_SESSION_ID: 'pi-caller', PI_WEB_UI_SESSION_ID: 'web-caller' });
+      expect(viaBoth.status).toBe(0);
+      expect(JSON.parse(curl.requests().at(-1)?.body ?? '{}').excludeSessionIds).toEqual(['web-caller']);
+    });
+
+    it('does not forward an unsafe or empty session id, and sends no field without one', () => {
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const none = run(RESTART, ['--reason', 'r']);
+      expect(none.status).toBe(0);
+      expect(JSON.parse(curl.requests().at(-1)?.body ?? '{}')).toEqual({ reason: 'r', timeoutSeconds: 600 });
+      const unsafe = run(RESTART, ['--reason', 'r'], { PI_WEB_UI_SESSION_ID: '../evil; rm -rf' });
+      expect(unsafe.status).toBe(0);
+      expect(JSON.parse(curl.requests().at(-1)?.body ?? '{}').excludeSessionIds).toBeUndefined();
+      expect(unsafe.stderr).not.toContain('../evil');
     });
 
     it('--on-timeout abort cancels the drain and restarts nothing', () => {

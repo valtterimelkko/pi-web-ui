@@ -157,6 +157,34 @@ describe('drain control routes', () => {
     expect(JSON.parse(res.body)).toMatchObject({ state: 'settled' });
   });
 
+  // Correction 01 (self-drain): the caller may exclude its own session from
+  // the busy-session settle wait, bounded and validated.
+  it('POST /drain accepts bounded excludeSessionIds and reports them (correction 01)', async () => {
+    const admission = roomyAdmission();
+    const busy = [{ sessionId: 'self-1', runtime: 'pi', busyReason: 'status' }];
+    drain = new DrainController({ admission, listNonterminalRuns: () => [], listBusySessions: () => busy, pollIntervalMs: 5 });
+    const routes = createDrainRoutes({ drain });
+    const res = mockRes();
+    await routes.handleStartDrain(jsonReq('POST', '/api/v1/drain', { reason: 'deploy', timeoutSeconds: 5, excludeSessionIds: ['self-1'] }), res);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ state: 'settled', excludedSessionIds: ['self-1'] });
+  });
+
+  it.each([
+    ['more than 8 ids', { reason: 'deploy', excludeSessionIds: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'] }],
+    ['an unsafe id', { reason: 'deploy', excludeSessionIds: ['../etc/passwd'] }],
+    ['a non-string id', { reason: 'deploy', excludeSessionIds: [42] }],
+    ['a non-array value', { reason: 'deploy', excludeSessionIds: 'self-1' }],
+    ['an empty id', { reason: 'deploy', excludeSessionIds: [''] }],
+  ])('POST /drain rejects %s with 400 and admission untouched', async (_label, body) => {
+    const { admission, routes } = setup();
+    const res = mockRes();
+    await routes.handleStartDrain(jsonReq('POST', '/api/v1/drain', body), res);
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).code).toBe('INVALID_REQUEST');
+    expect(admission.getDraining()).toBeNull();
+  });
+
   it('POST /drain reports the cut-off runs when the timeout elapses', async () => {
     const { routes } = setup([{ runId: 'run-a', sessionId: 'child-a', runtime: 'pi', status: 'started' }]);
     const res = mockRes();
