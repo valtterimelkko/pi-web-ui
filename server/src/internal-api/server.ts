@@ -319,9 +319,13 @@ export class InternalApiServer {
       (admissionStatus.usingDefaults ? ' [CPU-defaults]' : ''),
     );
     if (admissionStatus.warning) logger.warn(`[InternalAPI] ${admissionStatus.warning}`);
+    for (const warning of r.warnings) logger.warn(`[InternalAPI] ${warning}`);
     // B2: validation-only pressure injection (inert unless PI_WEB_UI_VALIDATION_MODE=true).
-    const pressureOverride = createValidationPressureOverride(process.env);
-    if (pressureOverride) logger.warn('[InternalAPI] admission: validation pressure override file active (INTERNAL_API_ADMISSION_TEST_PRESSURE_FILE)');
+    // Correction 01: guarded by the validation child's identity record, not NODE_ENV.
+    const pressureOverride = createValidationPressureOverride(process.env, {
+      onRefused: (reason) => logger.warn(`[InternalAPI] admission: ${reason}`),
+    });
+    if (pressureOverride) logger.warn('[InternalAPI] admission: VALIDATION pressure override file active (INTERNAL_API_ADMISSION_TEST_PRESSURE_FILE) — disposable validation server only');
     const admissionController = new AdmissionController({
       ...admissionStatus.options,
       pressureOverride,

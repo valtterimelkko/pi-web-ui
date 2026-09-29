@@ -290,10 +290,10 @@ describe('B2 configuration', () => {
     expect(resolveAdmissionConfig({ lagThresholdMs: 500, lagRecoveryMs: 200 }).lagRecoveryMs).toBe(200);
   });
 
-  it('clamps an inverted band so recovery never sits above the trigger', () => {
+  it('clamps an inverted heap band; an inverted lag band falls back to the derived recovery (correction 01)', () => {
     const c = resolveAdmissionConfig({ heapPressureFraction: 0.5, heapRecoveryFraction: 0.9, lagThresholdMs: 200, lagRecoveryMs: 400 });
     expect(c.heapRecoveryFraction).toBe(0.5);
-    expect(c.lagRecoveryMs).toBe(200);
+    expect(c.lagRecoveryMs).toBe(100);
     // Out-of-range fractions fall back to the defaults.
     expect(resolveAdmissionConfig({ heapPressureFraction: 1.5 }).heapPressureFraction).toBe(0.75);
     expect(resolveAdmissionConfig({ heapPressureFraction: 0 }).heapPressureFraction).toBe(0.75);
@@ -323,10 +323,10 @@ describe('B2 configuration', () => {
       internalApiAdmissionLagRecoveryMs: 200,
       internalApiAdmissionLagSustainedReadings: 3,
     });
-    // Invalid values fail loudly at startup, like the existing admission knobs.
+    // Invalid heap values fail loudly at startup, like the existing admission knobs.
+    // (Lag knobs warn and fall back instead — correction 01, admission-correction-01.test.ts.)
     expect(() => resolveAdmissionHeapLagEnv({ INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION: '1.7' })).toThrow(/INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION/);
     expect(() => resolveAdmissionHeapLagEnv({ INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION: 'abc' })).toThrow(/INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION/);
-    expect(() => resolveAdmissionHeapLagEnv({ INTERNAL_API_ADMISSION_LAG_P99_MS: '0' })).toThrow(/INTERNAL_API_ADMISSION_LAG_P99_MS/);
   });
 
   it('passes the B2 knobs through the server admission wiring', () => {
@@ -350,25 +350,11 @@ describe('B2 validation-only pressure override', () => {
     expect(createValidationPressureOverride({ INTERNAL_API_ADMISSION_TEST_PRESSURE_FILE: '/tmp/x.json' })).toBeUndefined();
   });
 
-  it('reads heap and lag overrides from the file each time, falling back to real values when absent', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'b2-override-'));
-    const file = path.join(dir, 'pressure.json');
-    try {
-      const override = createValidationPressureOverride({
-        PI_WEB_UI_VALIDATION_MODE: 'true',
-        INTERNAL_API_ADMISSION_TEST_PRESSURE_FILE: file,
-      });
-      expect(override).toBeDefined();
-      expect(override!.heapUsedBytes()).toBeUndefined();
-      expect(override!.lagP99Ms()).toBeUndefined();
-      fs.writeFileSync(file, JSON.stringify({ heapUsedBytes: 123, lagP99Ms: 456 }));
-      expect(override!.heapUsedBytes()).toBe(123);
-      expect(override!.lagP99Ms()).toBe(456);
-      fs.writeFileSync(file, '{not json');
-      expect(override!.heapUsedBytes()).toBeUndefined();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+  it('the validation flag alone is not enough (correction 01: see admission-correction-01.test.ts)', () => {
+    expect(createValidationPressureOverride({
+      PI_WEB_UI_VALIDATION_MODE: 'true',
+      INTERNAL_API_ADMISSION_TEST_PRESSURE_FILE: path.join(os.tmpdir(), 'pressure.json'),
+    })).toBeUndefined();
   });
 
   it('drives the controller: heap override replaces used bytes, lag override replaces observed p99', async () => {
