@@ -96,6 +96,13 @@ export interface InternalApiConfig {
   admissionHostMinimumHeadroomBytes?: number;
   admissionReservedBytesPerTurn?: number;
   admissionReservedPidsPerTurn?: number;
+  /** B2 heap/lag admission knobs (see AdmissionControllerOptions). */
+  admissionHeapPressureFraction?: number;
+  admissionHeapRecoveryFraction?: number;
+  admissionReservedHeapBytesPerTurn?: number;
+  admissionLagThresholdMs?: number;
+  admissionLagRecoveryMs?: number;
+  admissionLagSustainedReadings?: number;
   /** Command Code turn concurrency; mirrored as the commandcode admission limit. */
   commandCodeConcurrency?: number;
 }
@@ -119,6 +126,12 @@ export function resolveInternalApiAdmissionOptions(input: Pick<InternalApiConfig
   | 'admissionHostMinimumHeadroomBytes'
   | 'admissionReservedBytesPerTurn'
   | 'admissionReservedPidsPerTurn'
+  | 'admissionHeapPressureFraction'
+  | 'admissionHeapRecoveryFraction'
+  | 'admissionReservedHeapBytesPerTurn'
+  | 'admissionLagThresholdMs'
+  | 'admissionLagRecoveryMs'
+  | 'admissionLagSustainedReadings'
   | 'commandCodeConcurrency'
 >): AdmissionControllerOptions {
   return {
@@ -128,6 +141,12 @@ export function resolveInternalApiAdmissionOptions(input: Pick<InternalApiConfig
     hostMinimumHeadroomBytes: input.admissionHostMinimumHeadroomBytes,
     reservedBytesPerTurn: input.admissionReservedBytesPerTurn,
     reservedPidsPerTurn: input.admissionReservedPidsPerTurn,
+    heapPressureFraction: input.admissionHeapPressureFraction,
+    heapRecoveryFraction: input.admissionHeapRecoveryFraction,
+    reservedHeapBytesPerTurn: input.admissionReservedHeapBytesPerTurn,
+    lagThresholdMs: input.admissionLagThresholdMs,
+    lagRecoveryMs: input.admissionLagRecoveryMs,
+    lagSustainedReadings: input.admissionLagSustainedReadings,
     runtimeMaxActiveTurns: input.commandCodeConcurrency === undefined
       ? undefined
       : { commandcode: input.commandCodeConcurrency },

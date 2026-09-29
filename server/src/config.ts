@@ -130,6 +130,44 @@ export function parseNonnegativeInteger(raw: string | undefined, fallback: numbe
   return Number(raw);
 }
 
+/** A fraction in (0, 1]; throws on anything else (fail loudly at startup). */
+export function parseFraction(raw: string | undefined, name: string): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = Number(raw.trim());
+  if (!Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`${name} must be a number in (0, 1].`);
+  }
+  return value;
+}
+
+/**
+ * B2 heap- and lag-aware admission knobs. Unset → undefined, so the
+ * controller's evidence-based defaults apply (heap 0.75/0.65 of
+ * heap_size_limit, 64 MiB per turn; lag 300 ms sustained over 2 A2 readings,
+ * recovery at half the threshold unless set).
+ */
+export function resolveAdmissionHeapLagEnv(env: NodeJS.ProcessEnv = process.env): {
+  internalApiAdmissionHeapPressureFraction?: number;
+  internalApiAdmissionHeapRecoveryFraction?: number;
+  internalApiAdmissionReservedHeapBytesPerTurn?: number;
+  internalApiAdmissionLagThresholdMs?: number;
+  internalApiAdmissionLagRecoveryMs?: number;
+  internalApiAdmissionLagSustainedReadings?: number;
+} {
+  const int = (name: string): number | undefined => (env[name] === undefined || env[name]!.trim() === ''
+    ? undefined
+    : parsePositiveInteger(env[name], 1, name));
+  const heapMb = int('INTERNAL_API_ADMISSION_HEAP_RESERVED_MB_PER_TURN');
+  return {
+    internalApiAdmissionHeapPressureFraction: parseFraction(env.INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION, 'INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION'),
+    internalApiAdmissionHeapRecoveryFraction: parseFraction(env.INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION, 'INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION'),
+    internalApiAdmissionReservedHeapBytesPerTurn: heapMb === undefined ? undefined : heapMb * 1024 * 1024,
+    internalApiAdmissionLagThresholdMs: int('INTERNAL_API_ADMISSION_LAG_P99_MS'),
+    internalApiAdmissionLagRecoveryMs: int('INTERNAL_API_ADMISSION_LAG_RECOVERY_MS'),
+    internalApiAdmissionLagSustainedReadings: int('INTERNAL_API_ADMISSION_LAG_SUSTAINED_READINGS'),
+  };
+}
+
 /**
  * Rate-limit cap. Accepts both documented names: RATE_LIMIT_MAX (legacy,
  * undocumented in env files) and RATE_LIMIT_MAX_REQUESTS (what every env file
@@ -367,6 +405,13 @@ export interface ServerConfig {
   /** Conservative projected PID/task reservation per admitted turn. When
    * `pids.current + this > pids.max`, execution is refused with `pid_pressure`. */
   internalApiAdmissionReservedPidsPerTurn?: number;
+  /** B2 heap/lag admission knobs (see resolveAdmissionHeapLagEnv). */
+  internalApiAdmissionHeapPressureFraction?: number;
+  internalApiAdmissionHeapRecoveryFraction?: number;
+  internalApiAdmissionReservedHeapBytesPerTurn?: number;
+  internalApiAdmissionLagThresholdMs?: number;
+  internalApiAdmissionLagRecoveryMs?: number;
+  internalApiAdmissionLagSustainedReadings?: number;
   /** Pi providers hidden and denied for agent execution on the Internal API only. */
   internalApiBlockedPiProviders: string[];
   /** Feature-gated, server-local Command Code adapter. */
@@ -589,6 +634,7 @@ export const config: ServerConfig = {
   internalApiAdmissionReservedPidsPerTurn: process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN
     ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN')
     : undefined,
+  ...resolveAdmissionHeapLagEnv(process.env),
   internalApiBlockedPiProviders: parseBlockedPiProviders(process.env.INTERNAL_API_BLOCKED_PI_PROVIDERS),
   commandCodeEnabled: process.env.COMMAND_CODE_ENABLED === 'true',
   commandCodeExecutablePath: parseAbsolutePath(process.env.COMMAND_CODE_EXECUTABLE_PATH, '/root/.npm-global/bin/cmd', 'COMMAND_CODE_EXECUTABLE_PATH'),
