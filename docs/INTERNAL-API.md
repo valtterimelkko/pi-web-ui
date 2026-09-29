@@ -1475,7 +1475,11 @@ child with such runs, the server ingests one synthetic `agent_end` (plus
 with `data.interruptedByRestart: true`, `runId`, `runIds`, `errorCode` and
 `interruptionReason`. Once-semantics, `dataMatch`, `onFire` wakes and ledger
 persistence all apply; the firing evidence reads `event agent_end (interrupted
-by restart: run <id>, drain_timeout)`. Register
+by restart: run <id>, drain_timeout)`. An `onFire` wake for it always ends
+with the line `(interrupted by restart: run <id>, <reason>)` — independent of
+the message template and of `includeEvidence` — and one interruption wakes a
+parent at most once per watched session (a second, coalesced attempt is
+recorded `suppressed`, reason `coalesced_restart_reconciliation`). Register
 `{"type": "event_type", "eventType": "agent_end", "dataMatch": {"interruptedByRestart": true}}`
 to watch for interruptions only. A child session whose watch was not active at
 the restart gets no firing; its receipt (`GET /api/v1/runs/:runId`) still shows
