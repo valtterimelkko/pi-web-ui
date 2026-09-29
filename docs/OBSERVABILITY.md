@@ -836,10 +836,11 @@ patch; that patch is removed and the bound now lives in pi-web-ui, leaving
   contentIndex? }`) and aborts the turn via the public `AgentSession.abort()`.
   Internal API receipts terminate `failed` with `RUN_BUDGET_EXCEEDED`; the
   synchronous dispatch answers `500` with that code and the `runId`.
-- **What to look for:** log component `ToolArgsBudget` (one warn line per
-  breach with scope/cap/observed), the `tool_args_budget_exceeded` event in the
-  session stream/receipt event record, and `RUN_BUDGET_EXCEEDED` in the
-  error-code catalog.
+- **What to look for:** log component `ToolArgsBudget` (a human-readable warn
+  line per breach), the `tool_args_budget_exceeded` event on the session event
+  stream (its `data` carries scope/cap/observed — the run receipt itself
+  stores only the `RUN_BUDGET_EXCEEDED` code), and the code in the error-code
+  catalog.
 - **Calibration (B3a correction 02, 2026-09-29 — PACED measurements decide):**
   measured on pristine pi-ai 0.87.1, per-delta parse cost grows from ~0.37 ms
   at 4 KB accumulated to ~12.8 ms at 460 KB (linear per call, quadratic over a
@@ -853,11 +854,19 @@ patch; that patch is removed and the bound now lives in pi-web-ui, leaving
   - 64 KB at ~300 deltas/s: abort 52.0 s, lag p99 max **10 ms** over 52
     samples, zero ≥300 ms;
   - 32 KB unpaced (for the record): abort 6.6 s, single lag sample 6,268 ms —
-    the unpaced lab worst case pins the loop for its whole pre-abort window
-    (64 KB unpaced measured p99 8.3 s, bounded by the abort). This worst case
-    is a residual risk of the 64 KB default; an operator who prefers the
-    tighter bound sets `PI_TOOL_ARGS_MAX_CALL_CHARS=16384`.
-  The cap-off positive control (unpaced) showed the stall class (p99 7.4 s).
+    the unpaced lab worst case pins the loop for its whole pre-abort window.
+    Preserved correction-03 runs quantify that worst case at the default caps:
+    64 KB unpaced aborts at the cap after 21.7 s with lag p99 max **10,615 ms**
+    (`measure/corr03-64k-unpaced.json`), and the cap-off control — which never
+    aborts — shows **p99 max 23,643 ms** (`measure/corr03-capoff.json`). Each
+    reading comes from only two A2 samples (the sampler itself starves while
+    the loop is pinned), so treat them as a floor; they are bounded by the
+    abort in the cap-on case. This worst case is a residual risk of the 64 KB
+    default; an operator who prefers the tighter bound sets
+    `PI_TOOL_ARGS_MAX_CALL_CHARS=16384`.
+  The cap-off positive control (unpaced) reproduces the stall class from the
+  preserved correction-03 evidence (p99 max 23,643 ms, no abort;
+  `measure/corr03-capoff.json`).
   Real tool arguments measured over 5,633 recent calls: p50 233 B, p90 ~2 KB,
   p99 ~9.8 KB, max 36.9 KB — the 64 KB default keeps patch parity and has
   zero observed false positives (the 16 KB alternative would have failed

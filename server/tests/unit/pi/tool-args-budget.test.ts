@@ -357,20 +357,22 @@ describe('ToolArgsBudgetGuard', () => {
     expect(synthetic).toHaveLength(2); // one reason event per run
   });
 
-  it('an abort REJECTING after the run boundary must not touch the NEW run (correction 04)', async () => {
+  it('an abort REJECTING after the run boundary must not touch the NEW run (correction 04/05)', async () => {
     const guard = new ToolArgsBudgetGuard({ callChars: 64, turnChars: 8192 });
     const emitted: Record<string, unknown>[] = [];
     let abortCalls = 0;
-    let rejectRun1Abort: ((error: Error) => void) | undefined;
+    const pendingAborts: Array<(error: Error) => void> = [];
     const session = {
       get aborted() {
         return abortCalls;
       },
       abort: () => {
         abortCalls += 1;
-        if (abortCalls === 1) {
+        if (abortCalls <= 2) {
+          // Attempts 1 (run 1) and 2 (run 2) stay pending until released —
+          // run 2's abort is IN FLIGHT when run 1's rejection settles.
           return new Promise<void>((_resolve, reject) => {
-            rejectRun1Abort = reject;
+            pendingAborts.push(reject);
           });
         }
         return Promise.resolve();
@@ -381,18 +383,40 @@ describe('ToolArgsBudgetGuard', () => {
       },
     };
     guard.observe(session, agentStart(), session.emit);
-    feedDeltas(guard, session, 0, 128);
+    feedDeltas(guard, session, 0, 128); // run 1 breaches; attempt 1 pending
     await new Promise((resolve) => setImmediate(resolve));
 
     guard.observe(session, agentStart(), session.emit); // run 2 starts
-    rejectRun1Abort!(new Error('late failure')); // run 1's abort rejects AFTER the boundary
-    await new Promise((resolve) => setImmediate(resolve));
-
-    feedDeltas(guard, session, 0, 128); // run 2 crosses the cap
+    feedDeltas(guard, session, 0, 128); // run 2 breaches; attempt 2 pending, in flight
     await new Promise((resolve) => setImmediate(resolve));
     expect(abortCalls).toBe(2);
+
+    // Run 1's abort rejects AFTER run 2's attempt is already in flight.
+    pendingAborts[0](new Error('late failure'));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Run 2 keeps streaming past the cap while its own abort is pending.
+    // Pre-correction-04 code cleared the NEW run's abortInFlight here, so
+    // these deltas spawned a duplicate attempt (abortCalls 3). Post-fix, the
+    // rejection touches only run 1's captured state and run 2 stays fenced.
+    feedDeltas(guard, session, 0, 256);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(2);
+
+    // Run 2's own abort then rejects (attempt 2 < 3): run 2 re-arms, and the
+    // next delta retries as attempt 3, which resolves and latches.
+    pendingAborts[1](new Error('settles as rejection'));
+    await new Promise((resolve) => setImmediate(resolve));
+    // Attempt 2 of run 2 is its final attempt? No: attempt 2 < 3, so run 2
+    // re-arms and the next delta retries (attempt 3, which resolves).
+    feedDeltas(guard, session, 0, 64);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(3);
+    feedDeltas(guard, session, 0, 64);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(3); // latched by the successful third attempt
     const synthetic = emitted.filter((event) => event.type === TOOL_ARGS_BUDGET_EXCEEDED_EVENT);
-    expect(synthetic).toHaveLength(2);
+    expect(synthetic).toHaveLength(2); // one reason event per run
   });
 });
 

@@ -26,7 +26,7 @@ ff7e3924 b3a gate: default caps 16,384/65,536 — live proof on pristine pi-ai d
 c1bba3cb tests: pin contract-version expectations to 1.48.0 (B3a bump)
 ```
 
-Diff vs base: `git diff --stat 12d01198..HEAD` → 26 files changed, 1,986 insertions(+), 366 deletions(-).
+Diff vs base: `git diff --stat 12d01198..HEAD` → 26 files changed, 2,244 insertions(+), 366 deletions(-).
 
 ## Cap defaults — correction 02 re-decides with PACED measurements
 
@@ -67,9 +67,17 @@ All four findings accepted and fixed; commits this correction: see `complete.md`
    These are the figures cited in this bundle (superseding the overwritten first-round readings of 7,378/8,305 ms, which remain quoted as history in the correction-02 section only).
 2. **[minor] Abort-failure recovery** — the guard no longer latches before abort succeeds: exactly one abort attempt is in flight at a time; a settled rejection leaves the run un-latched so the next delta retries (bounded at 3 attempts, then one error-level log and a terminal latch for the run). RED: 2 retry tests failed against the old latch; GREEN 18/18 guard+wiring. A merely slow abort never spawns duplicate attempts (exposed by the wiring tests' synchronous burst).
 3. **[minor] Receipt hint accuracy** — the `RUN_BUDGET_EXCEEDED` hint now states the receipt persists only the code and directs parents to the session event stream (`tool_args_budget_exceeded` carries `data.scope`/`capChars`/`observedChars`, also in session diagnostics). No receipt fields added. Contract text checked: it makes no receipt-detail claim (no change needed).
-4. **[minor] Evidence accuracy** — diff stat refreshed (26 files, 1,986 insertions); the correction-02 RED receipt added to the TDD table above.
+4. **[minor] Evidence accuracy** — diff stat refreshed (see the line above; correction-05 final: 26 files, 2,244 insertions); the correction-02 RED receipt added to the TDD table above.
 
-Also (review "also"): the **detached** boundary is now pinned by a route test — a `202 {detached:true, runId}` dispatch whose run breaches ends in a receipt `failed` with `RUN_BUDGET_EXCEEDED` through the shared `executePromptWithReceipt` path (`session-routes-tool-args-budget.test.ts`, 12/12).
+Also (review "also"): the **detached** boundary is now pinned by a route test — a `202 {detached:true, runId}` dispatch whose run breaches ends in a receipt `failed` with `RUN_BUDGET_EXCEEDED` through the shared `executePromptWithReceipt` path (`session-routes-tool-args-budget.test.ts`, 5 tests, all passing).
+
+## Correction 05 (final round, review r2 ACCEPT-WITH-MINORS + parent, 2026-09-29)
+
+1. **Evidence accuracy** — diff stat refreshed to the final-commit value (line above); the detached-test count corrected (the route file has 5 tests; the earlier “12/12” was a multi-file count stated wrongly).
+2. **Stale figures** — OBSERVABILITY.md and the contract entry now cite the preserved correction-03 readings: cap-off p99 max **23,643 ms** (`measure/corr03-capoff.json`), 64 KB unpaced **10,615 ms** over a 21.7 s pre-abort window (`measure/corr03-64k-unpaced.json`), each from two A2 samples with one ≥300 ms (sampler-starvation caveat stated; readings are a floor).
+3. **Receipt/diagnostics claims** — the guard's module docstring, the error-class docstring, OBSERVABILITY.md and the hint now say the receipt persists only the code; structured details are on the session event stream and the human-readable warning is in the log (`ToolArgsBudget` component). The “also in the session diagnostics” parenthetical is gone.
+4. **Rejecting-race test strength** — the test now holds run 2's abort in flight when run 1's rejection settles, then feeds more deltas: pre-correction-04 code cleared run 2's in-flight flag and spawned a duplicate attempt (RED: `expected 3 to be 2`, shown by temporarily reverting the run capture; the resolving variant failed too, `expected 1 to be 2`); post-fix GREEN 16/16 guard file.
+5. **Restore procedure made safe (parent finding)** — the old `rm -rf` + `cp -a` of the tarball's `package/` would have deleted both installed copies' nested `node_modules/` (their dependencies). Verified on this host: the only differing repo file vs the pristine extract is `dist/api/openai-completions.js`. The procedure above now backs up and replaces exactly that file in both copies, with marker-count, file-hash and `diff -rq` (apart from `node_modules`) verification and an explicit rollback.
 
 ## Gates (exact commands and exit codes)
 
@@ -95,9 +103,50 @@ Run from the worktree root unless noted. Full suites were run with a cleaned env
 - 64 KB/262 KB unpaced residual (preserved under correction 03): abort at cap 21.7 s, receipt `failed`/`RUN_BUDGET_EXCEEDED`, lag p99 max **10,615 ms** (bounded by the abort). Raw evidence: `measure/corr03-64k-unpaced.json` + `corr03-64k-unpaced.log`.
 - Raw verdict + run log: `/root/orch-ops/orchestration-scaling/b3a/measure/live-verdict.json`, `live-proof-run.log`. Run dir `/tmp/b3a-live` (disposable; scratch only).
 
-## Restore procedure (parent, at deploy)
+## Restore procedure (parent, at deploy) — SAFE form (parent finding, correction 05)
 
-Accepted as written in `01-design.md` §4: `npm pack @earendil-works/pi-ai@0.87.1` (tarball sha256 `35b4432f27cc2665f86beebb9af6a39b1251970883c3044bd8be4f4e8c731ca0`), verify marker absent + file hashes, replace BOTH physical copies in the main checkout, post-checks. Note for the deploy window: the shared tree currently still carries the patch AND is missing the b1-2b factory patch (parallel-lane rehearsal state); the parent reconciles both lanes' restores together.
+The original `01-design.md` §4 procedure (`rm -rf` each copy + `cp -a` the tarball's `package/`) is **unsafe and must not be used**: both installed pi-ai copies contain a nested `node_modules/` (their dependencies), which that procedure would delete. Verified on this host: `diff -rq` of the pristine 0.87.1 extract against an installed copy shows the ONLY differing repo file is `dist/api/openai-completions.js` — so the restore replaces exactly that one file, in BOTH physical copies, after a backup:
+
+```bash
+cd /tmp && rm -rf b3a-restore && mkdir b3a-restore && cd b3a-restore
+
+# 1) Fetch pristine and pin it
+npm pack @earendil-works/pi-ai@0.87.1
+# → earendil-works-pi-ai-0.87.1.tgz ; sha256 must be:
+#   35b4432f27cc2665f86beebb9af6a39b1251970883c3044bd8be4f4e8c731ca0
+tar xzf earendil-works-pi-ai-0.87.1.tgz                     # → package/
+grep -c PARTIAL_ARGS_PARSE_INTERVAL_MS package/dist/api/openai-completions.js   # expect 0
+sha256sum package/dist/api/openai-completions.js
+#   expect a2397cb3114a3d1a05993f6f19671ecbcc85540d8f8c59a233808c717df2682c
+
+# 2) BACKUP the two current files OUTSIDE the repo (an install wipes node_modules;
+#    never park backups inside the checkout)
+BK=/var/tmp/pi-ai-restore-$(date +%Y%m%dT%H%M%S); mkdir -p "$BK"
+cd /root/pi-web-ui
+cp -a node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js "$BK/root-copy.js"
+cp -a node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js "$BK/nested-copy.js"
+
+# 3) Replace ONLY the adapter file, in both physical copies
+cp /tmp/b3a-restore/package/dist/api/openai-completions.js \
+   node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js
+cp /tmp/b3a-restore/package/dist/api/openai-completions.js \
+   node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js
+
+# 4) Verify: marker gone, hash pristine, and the tree matches the extract apart
+#    from the nested dependencies (any other line means ABORT and restore the backups)
+grep -c PARTIAL_ARGS_PARSE_INTERVAL_MS \
+  node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js \
+  node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js
+#   expect 0 and 0
+sha256sum node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js \
+          node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js
+#   both must be a2397cb3114a3d1a05993f6f19671ecbcc85540d8f8c59a233808c717df2682c
+diff -rq /tmp/b3a-restore/package node_modules/@earendil-works/pi-ai | grep -v 'Only in.*node_modules'
+diff -rq /tmp/b3a-restore/package node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai | grep -v 'Only in.*node_modules'
+#   expect NO output from either (only 'Only in …: node_modules' lines filtered)
+```
+
+Rollback if verification fails: copy `$BK/root-copy.js` / `$BK/nested-copy.js` back over the two files. The tarball hash is the primary pin; if the registry ever serves a re-packed tarball for the same version (hash mismatch), fall back to the extracted-file hash + marker absence in step 1 and say so in the deploy record. The b1-2b factory restore is a separate procedure (their lane); the shared tree currently still carries the pi-ai patch AND is missing the factory patch — the parent reconciles both restores together at deploy.
 
 ## Definition of victory (frozen) — item by item
 

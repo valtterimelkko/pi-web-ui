@@ -18,8 +18,9 @@
  * `session.subscribe` closure), it counts the public `toolcall_delta` strings
  * per tool call and per run (agent_start → agent_end). When a cap trips it:
  *   1. emits one synthetic `tool_args_budget_exceeded` event through the same
- *      handler (so browser subscribers, Internal API observers, the broker and
- *      the receipt event record all see the reason), then
+ *      handler (so browser subscribers, Internal API observers and the broker
+ *      all see the reason; the receipt itself persists only the terminal
+ *      code), then
  *   2. aborts the turn via the PUBLIC `AgentSession.abort()` — the loop then
  *      ends the run normally with `stopReason: "aborted"`.
  * The Internal API's Pi dispatch path turns the synthetic event into a
@@ -57,8 +58,9 @@ type SyntheticEmitter = (event: Record<string, unknown>) => void;
 
 /**
  * The error the Internal API maps to the RUN_BUDGET_EXCEEDED receipt code.
- * Carries the cap, the observed size and which cap tripped, so the receipt
- * message is actionable without re-deriving anything.
+ * Carries the cap, the observed size and which cap tripped for the dispatch
+ * error message; the persisted receipt holds only the code — the structured
+ * details travel on the session event stream.
  */
 export class PiToolArgsBudgetExceededError extends Error {
   readonly scope: 'call' | 'turn';
