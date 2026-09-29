@@ -309,4 +309,43 @@ describe('C2 — compaction exposed as busy, follow_up requires a live turn', ()
     expect(res.statusCode).toBe(200);
     expect(agentSession.prompt).toHaveBeenCalledWith('hello');
   });
+
+  it('9. correction 01: follow_up with manager-idle but SDK-streaming truth queues behind the live turn (was: idle-promoted, SDK-rejected, cancelled)', async () => {
+    await makeRoutes();
+    // The extension-driven / browser turn shape: the manager's status is idle
+    // (it never saw the turn) but the SDK is streaming. One liveness predicate
+    // must see it, so the follow_up is QUEUED, not promoted to a plain prompt.
+    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle', compacting: false, sdkStreaming: true });
+    const agentSession = createAgentSessionMock();
+    multiSessionManager.getAgentSession.mockReturnValue(agentSession);
+
+    const req = jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'after the live turn', mode: 'follow_up', detach: true });
+    const res = mockRes();
+    await routes.handleSendPrompt(req, res, 'session-1');
+
+    expect(res.statusCode).toBe(202);
+    const body = JSON.parse(res.body);
+    expect(body.dispatchMode).toBe('follow_up');
+    expect(agentSession.followUp).toHaveBeenCalledWith('after the live turn');
+    expect(agentSession.prompt).not.toHaveBeenCalled();
+    expect(manager.get('run-1')?.dispatchMode).toBe('follow_up');
+  });
+
+  it('10. correction 01: plain prompt with manager-idle but SDK-streaming truth is refused 409 SESSION_BUSY', async () => {
+    await makeRoutes();
+    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle', compacting: false, sdkStreaming: true });
+    const agentSession = createAgentSessionMock();
+    multiSessionManager.getAgentSession.mockReturnValue(agentSession);
+
+    const req = jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'hello', detach: true });
+    const res = mockRes();
+    await routes.handleSendPrompt(req, res, 'session-1');
+
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.code).toBe('SESSION_BUSY');
+    expect(res.headers['retry-after']).toBeDefined();
+    expect(agentSession.prompt).not.toHaveBeenCalled();
+    expect(manager.get('run-1')).toBeUndefined();
+  });
 });

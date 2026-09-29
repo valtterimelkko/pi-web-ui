@@ -195,6 +195,70 @@ describe('C2 — post-terminal response fence', () => {
     expect(manager.get('run-1')?.status).toBe('cancelled');
   }, 10_000);
 
+  it('a Command Code synchronous dispatch whose receipt is terminalised externally still gets its HTTP response (correction 01)', async () => {
+    await makeRoutes();
+    const commandCodeRecord = {
+      schemaVersion: 1,
+      sessionId: 'cc-hang',
+      runtime: 'commandcode' as const,
+      cwd: '/tmp',
+      modelSelector: 'meta/muse-spark-1.2-contributor',
+      executionInstanceId: 'commandcode-default' as const,
+      createdAt: '2026-07-15T12:00:00.000Z',
+      updatedAt: '2026-07-15T12:00:00.000Z',
+      eventJournalRef: 'events/cc-hang.jsonl',
+      state: 'idle' as const,
+      messageCount: 0,
+      firstMessage: '',
+    };
+    const commandCodeService = {
+      findSession: vi.fn().mockResolvedValue(commandCodeRecord),
+      getSession: vi.fn().mockResolvedValue(commandCodeRecord),
+      isRunning: vi.fn(() => false),
+      // The turn never completes and never emits: the dispatch chain never
+      // hands back (the R2 shape on the Command Code runtime).
+      sendPrompt: vi.fn(() => new Promise<void>(() => {})),
+      abort: vi.fn().mockResolvedValue(undefined),
+    };
+    // Rebuild routes with the Command Code service wired.
+    await routes?.shutdown();
+    routes = createSessionRoutes({
+      claudeService,
+      opencodeService,
+      antigravityService,
+      multiSessionManager,
+      sessionRegistry: registry,
+      piService,
+      internalClientId: 'test-client',
+      watchDir: path.join(dir, 'watches'),
+      pinDir: path.join(dir, 'pins'),
+      pinExpiryIntervalMs: 60_000,
+      runReceiptManager: manager,
+      postTerminalSettleMs: 150,
+      commandCodeService,
+    } as any);
+
+    const req = jsonReq('POST', '/api/v1/sessions/cc-hang/prompt', { message: 'hello' });
+    const res = mockRes();
+    const dispatch = routes.handleSendPrompt(req, res, 'cc-hang');
+
+    await new Promise((r) => setTimeout(r, 40));
+    expect(manager.get('run-1')?.status).toBe('started');
+    await manager.cancelSession('cc-hang');
+    expect(manager.get('run-1')?.status).toBe('cancelled');
+
+    const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 2_000));
+    const outcome = await Promise.race([dispatch.then(() => 'responded'), timeout]);
+    expect(outcome).toBe('responded');
+    expect(res.ended).toBe(true);
+    expect(res.statusCode).toBe(500);
+    const body = JSON.parse(res.body);
+    // Correction 01: the computed code, not the hard-coded RUNTIME_ERROR.
+    expect(body.code).toBe('RUN_TRANSPORT_LOST');
+    expect(body.runId).toBe('run-1');
+    expect(manager.get('run-1')?.status).toBe('cancelled');
+  }, 10_000);
+
   it('a synchronous dispatch that settles normally is unaffected (control)', async () => {
     await makeRoutes();
     const agentSession = {

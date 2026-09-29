@@ -269,12 +269,13 @@ function isRuntimeAlreadyRunningError(error: Error): boolean {
 }
 
 function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
+  // C2 correction 01: the post-terminal response fence has the same meaning on
+  // every runtime — map it before the runtime-specific branches so the Command
+  // Code path reports the computed code instead of the hard-coded RUNTIME_ERROR.
+  if (error instanceof RunTransportLostError) return ErrorCode.RUN_TRANSPORT_LOST;
   if (runtime !== 'commandcode') {
     if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
     if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
-    // C2 (contract 1.57.0): the post-terminal response fence reports the
-    // receipt's outcome with its own code so the class is diagnosable.
-    if (error instanceof RunTransportLostError) return ErrorCode.RUN_TRANSPORT_LOST;
     // Contract 1.48.0 (B3a) + 1.50.0 (B3b): the streaming tool-argument and
     // per-run output-token/streamed-byte budgets abort the turn.
     if (error instanceof PiToolArgsBudgetExceededError || error instanceof PiRunBudgetExceededError) {
@@ -1496,11 +1497,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   function evidenceStatus(entry: RegistryEntry): SessionInfo['status'] {
     try {
       const running = entry.sdkType === 'pi'
-        // C2 (contract 1.57.0): compaction is running (busy truth for polling
-        // parents — detail.busy, the sessions list, and watch settlement all
-        // derive from this), exactly like the busy/streaming statuses.
-        ? ['busy', 'streaming'].includes(multiSessionManager.getSessionStatus(entry.path)?.status ?? '')
-          || multiSessionManager.getSessionStatus(entry.path)?.compacting === true
+        // C2 correction 01: the one liveness predicate — busy/streaming status,
+        // SDK streaming truth (extension/browser turns), or compaction — as
+        // busy truth for polling parents (detail.busy, the sessions list, and
+        // watch settlement all derive from this).
+        ? piLiveness(entry).busy
         : entry.sdkType === 'claude'
           ? claudeService.isRunning(entry.id)
           : entry.sdkType === 'opencode'
@@ -3365,19 +3366,40 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (executionError) throw executionError;
   }
 
+  /**
+   * C2 correction 01: the ONE Pi liveness predicate. Manager `busy`/`streaming`
+   * status, the SDK's public `isStreaming` truth (extension-driven and browser
+   * turns the manager never saw), or compaction. Every Pi busy decision
+   * derives from this single predicate: the pre-dispatch refusal check, the
+   * post-reservation re-check, the follow_up queue gate, `evidenceStatus`
+   * (GET /sessions/:id `busy`, the sessions list, watch settlement), and the
+   * watch-wake dispatch path (via isSessionBusy + piBusyRefusal).
+   */
+  function piLiveness(entry: RegistryEntry): { busy: boolean; liveTurn: boolean; compacting: boolean } {
+    const statusInfo = multiSessionManager.getSessionStatus?.(entry.path);
+    const managerBusy = statusInfo?.status === 'busy' || statusInfo?.status === 'streaming';
+    const sdkStreaming = statusInfo?.sdkStreaming === true;
+    const compacting = statusInfo?.compacting === true;
+    return {
+      busy: managerBusy || sdkStreaming || compacting,
+      // A LIVE runtime turn the queue can drain: a streaming status, or the
+      // SDK's own streaming truth. The manager's pre-start `busy` limbo and
+      // compaction are busy but NOT live turns (compaction is refused earlier).
+      liveTurn: statusInfo?.status === 'streaming' || sdkStreaming,
+      compacting,
+    };
+  }
+
   function isSessionBusy(entry: RegistryEntry): boolean {
     if (activeDirectDispatchTokens.has(entry.id)) return true;
     if (entry.sdkType === 'claude') return claudeService.isRunning(entry.id);
     if (entry.sdkType === 'opencode') return opencodeService.isRunning(entry.id);
     if (entry.sdkType === 'antigravity') return antigravityService.isRunning(entry.id);
-    // C2 (contract 1.57.0): Pi auto-compaction is busy. The manager's status
-    // is already idle at agent_end while the SDK is still compacting, and the
-    // runtime refuses every input until compaction completes — accepting a
-    // prompt here produced 202-then-failed-RUNTIME_ERROR dispatches.
-    const statusInfo = multiSessionManager.getSessionStatus?.(entry.path);
-    if (statusInfo?.compacting === true) return true;
-    const status = statusInfo?.status;
-    return status === 'busy' || status === 'streaming';
+    // C2 correction 01: the one liveness predicate — manager busy/streaming,
+    // SDK isStreaming truth (extension/browser turns), or compaction. During
+    // compaction the runtime refuses every input; during an SDK-streaming turn
+    // a plain prompt would be rejected by the SDK. Never accepted-then-lost.
+    return piLiveness(entry).busy;
   }
 
   /**
@@ -3394,17 +3416,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    */
   function piBusyRefusal(entry: RegistryEntry, mode: PromptMode): { detail: string } | undefined {
     if (entry.sdkType !== 'pi') return undefined;
-    const statusInfo = multiSessionManager.getSessionStatus?.(entry.path);
-    if (statusInfo?.compacting === true) {
+    const liveness = piLiveness(entry);
+    if (liveness.compacting) {
       return { detail: 'Session is auto-compacting; prompts are refused until compaction completes' };
     }
     // Idle follow_up promotion (contract 1.37-era behaviour) is untouched: the
     // live-turn requirement only constrains QUEUING into a busy session.
-    if (mode === 'follow_up' && isSessionBusy(entry)) {
-      const liveTurn = statusInfo?.status === 'streaming' || statusInfo?.sdkStreaming === true;
-      if (!liveTurn) {
-        return { detail: 'Session reports busy with no live runtime turn; follow_up refused because nothing would drain the queue' };
-      }
+    // Manager-idle + SDK-streaming (extension/browser turns) IS a live turn,
+    // so it queues (correction 01: the predicate sees it).
+    if (mode === 'follow_up' && liveness.busy && !liveness.liveTurn) {
+      return { detail: 'Session reports busy with no live runtime turn; follow_up refused because nothing would drain the queue' };
     }
     return undefined;
   }
@@ -3919,8 +3940,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             : runtime === 'antigravity'
               ? antigravityService.isRunning(sessionId)
               : (() => {
-                  const status = multiSessionManager.getSessionStatus?.(entry.path)?.status;
-                  return status === 'busy' || status === 'streaming';
+                  // C2 correction 01: the one liveness predicate, so an
+                  // SDK-streaming extension/browser turn the manager never
+                  // saw also refuses a second plain prompt here.
+                  return piLiveness(entry).busy;
                 })();
       } catch (error) {
         directClaim?.release();

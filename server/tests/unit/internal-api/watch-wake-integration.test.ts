@@ -232,6 +232,41 @@ describe('watch wake — full chain: firing → wake dispatch → run receipt (i
     expect(watch.wakeAttempts).toMatchObject([{ status: 'dispatched', deliveryKind: 'deferred-follow-up' }]);
   });
 
+  it('correction 01: queues a wake follow-up behind an SDK-streaming target whose manager status is idle', async () => {
+    // The C2 correction 01 shape: an extension-driven / browser turn holds the
+    // SDK but the manager status is idle. The one liveness predicate must see
+    // it, so the wake follow-up is QUEUED (deferred-follow-up), not idle-promoted.
+    const followUp = vi.fn(async () => undefined);
+    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle', sdkStreaming: true, compacting: false });
+    registry.get = vi.fn(async (id: string) => (id === 'child-1'
+      ? childEntry
+      : id === 'parent-1'
+        ? { ...parentEntry, model: 'zai/glm-5.3-flash' }
+        : undefined));
+    multiSessionManager.getAgentSession.mockReturnValue({
+      followUp,
+      getFollowUpMessages: vi.fn(() => ['child done']),
+      model: { provider: 'zai', id: 'glm-5.3-flash' },
+    });
+
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/child-1/watch', {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent-1', message: 'child done', mode: 'follow_up' },
+      }),
+      createMockRes(), 'child-1',
+    );
+    for (const o of observers) o(ev('agent_end'));
+    await flush();
+
+    await flush(400); // the wake dispatch is fire-and-forget; the queued followUp lands asynchronously
+    expect(followUp).toHaveBeenCalledWith('child done');
+    const get = createMockRes();
+    await routes.handleGetWatch(createJsonReq('GET', '/api/v1/sessions/child-1/watch'), get, 'child-1', new URLSearchParams());
+    const watch = JSON.parse(get.body);
+    expect(watch.wakeAttempts).toMatchObject([{ status: 'dispatched', deliveryKind: 'deferred-follow-up' }]);
+  });
+
   it('promotes idle steer to a receipted prompt turn', async () => {
     await routes.handleRegisterWatch(
       createJsonReq('POST', '/api/v1/sessions/child-1/watch', {
