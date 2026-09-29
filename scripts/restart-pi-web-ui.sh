@@ -5,8 +5,11 @@
 # WHY
 #
 # This is the restart entry point of scripts/command-code-weekly-refresh.ts,
-# which runs it with a 60-second budget and reads exit 1 + "refusing restart"
-# on stderr as "restart deferred" (not a failure). Until B4 correction 01 it had
+# which runs it with a budget that covers the whole cycle — drain (20 s) +
+# HTTP slack (10 s) + the unit's stop timeout (30 s) + a 90 s start margin,
+# see RESTART_JOB_BUDGET_* in that script — and reads exit 1 + "refusing
+# restart" on stderr as "restart deferred" (not a failure). Until B4
+# correction 01 it had
 # its own pre-flight that looked only at `activeTurns`: a follow-up accepted but
 # not yet turning (zero active turns) was cut off silently, `--force` needed no
 # reason, and the unit was hard-coded.
@@ -58,7 +61,7 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --drain-timeout) DRAIN_TIMEOUT="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
     *)
       printf 'restart-pi-web-ui: unknown argument: %s\n' "$1" >&2
       exit 64

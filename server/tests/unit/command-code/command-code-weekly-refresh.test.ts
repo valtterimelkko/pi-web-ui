@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -12,7 +13,20 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, spawn: spawnMock };
 });
 
-import { runWeeklyRefresh, type WeeklyRefreshPaths } from '../../../../scripts/command-code-weekly-refresh.js';
+import {
+  runWeeklyRefresh,
+  runProcess,
+  RESTART_DRAIN_BUDGET_SECONDS,
+  RESTART_DRAIN_HTTP_SLACK_SECONDS,
+  RESTART_JOB_BUDGET_MS,
+  RESTART_JOB_BUDGET_SECONDS,
+  RESTART_START_MARGIN_SECONDS,
+  UNIT_STOP_TIMEOUT_SECONDS,
+  type ProcessRunner,
+  type WeeklyRefreshPaths,
+} from '../../../../scripts/command-code-weekly-refresh.js';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 interface ProcessResult {
   stdout?: string;
@@ -334,6 +348,66 @@ describe('runWeeklyRefresh', () => {
       };
 
       await expect(runWeeklyRefresh([], options(client))).rejects.toThrow(/restart failed/);
+    });
+  });
+
+  // The weekly refresh restart budget (plan §6 small item, the B4 residual):
+  // restart-pi-web-ui.sh can spend drain + HTTP slack deciding, and then
+  // `systemctl restart` blocks for the unit's stop and the start. The flat
+  // 60 s call timeout could fire inside the stop and fail an otherwise
+  // committed refresh with an uncertain restart state. These tests pin the
+  // budget arithmetic AND each of its parts to the file they come from, so
+  // drift in any of them fails here instead of silently outliving the job.
+  describe('restart job budget', () => {
+    function readRepoFile(relativePath: string): Promise<string> {
+      return readFile(path.join(REPO_ROOT, relativePath), 'utf8');
+    }
+
+    it('derives the budget from drain + slack + unit stop, plus a start margin, and is strictly above the pre-restart decision time', () => {
+      expect(RESTART_JOB_BUDGET_SECONDS).toBe(
+        RESTART_DRAIN_BUDGET_SECONDS + RESTART_DRAIN_HTTP_SLACK_SECONDS + UNIT_STOP_TIMEOUT_SECONDS + RESTART_START_MARGIN_SECONDS,
+      );
+      // Strictly above: the call also has to cover the restart itself (the
+      // unit's stop and start), which is exactly what the old flat 60 s —
+      // equal to drain + slack + stop — could not.
+      expect(RESTART_JOB_BUDGET_SECONDS).toBeGreaterThan(
+        RESTART_DRAIN_BUDGET_SECONDS + RESTART_DRAIN_HTTP_SLACK_SECONDS + UNIT_STOP_TIMEOUT_SECONDS,
+      );
+      expect(RESTART_JOB_BUDGET_MS).toBe(RESTART_JOB_BUDGET_SECONDS * 1000);
+    });
+
+    it("pins the drain and slack parts to the wrapper's job defaults", async () => {
+      const script = await readRepoFile('scripts/restart-pi-web-ui.sh');
+      const drain = script.match(/PI_WEB_UI_JOB_DRAIN_TIMEOUT_SECONDS:-([0-9]+)/);
+      const slack = script.match(/PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS:-([0-9]+)/);
+      expect(drain).not.toBeNull();
+      expect(slack).not.toBeNull();
+      expect(RESTART_DRAIN_BUDGET_SECONDS).toBe(Number(drain?.[1]));
+      expect(RESTART_DRAIN_HTTP_SLACK_SECONDS).toBe(Number(slack?.[1]));
+    });
+
+    it("pins the stop part to the unit's configured TimeoutStopSec", async () => {
+      const unit = await readRepoFile('deploy/systemd/pi-web-ui.service');
+      const stop = unit.match(/^TimeoutStopSec=([0-9]+)$/m);
+      expect(stop).not.toBeNull();
+      expect(UNIT_STOP_TIMEOUT_SECONDS).toBe(Number(stop?.[1]));
+    });
+
+    it('runs the restart script within the derived budget, not the old flat 60 s', async () => {
+      const restartCalls: Array<{ command: string; timeoutMs: number }> = [];
+      const recordingRunner: ProcessRunner = async (command, args, runOptions) => {
+        if (command === RESTART_SCRIPT) restartCalls.push({ command, timeoutMs: runOptions.timeoutMs });
+        return runProcess(command, args, runOptions);
+      };
+
+      const result = await runWeeklyRefresh([], options({ processRunner: recordingRunner }));
+
+      expect(result.restarted).toBe(true);
+      expect(restartCalls).toHaveLength(1);
+      expect(restartCalls[0]?.timeoutMs).toBe(RESTART_JOB_BUDGET_MS);
+      expect(restartCalls[0]?.timeoutMs).toBeGreaterThan(
+        (RESTART_DRAIN_BUDGET_SECONDS + RESTART_DRAIN_HTTP_SLACK_SECONDS + UNIT_STOP_TIMEOUT_SECONDS) * 1000,
+      );
     });
   });
 });
