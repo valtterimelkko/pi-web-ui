@@ -1,0 +1,384 @@
+/**
+ * B3b live proof — pristine pi-ai, disposable server, runaway-generation
+ * fixture.
+ *
+ * Drives the compiled server built by pristine-harness.mts (pristine
+ * @earendil-works/pi-ai in BOTH resolution copies) against a local SSE
+ * fixture that reproduces the 2026-09-12 pattern's generation arm: one very
+ * long assistant generation streaming content chunks. Scenarios:
+ *
+ *   bytes   — default budgets (500,000 output tokens / 16 MiB streamed
+ *             bytes): the fixture streams paced 4 KiB content chunks; the
+ *             streamed-byte cap must abort the turn at the cap, the receipt
+ *             must carry RUN_BUDGET_EXCEEDED, and a second session must keep
+ *             streaming throughout with A2 event-loop lag under 300 ms.
+ *   tokens  — PI_RUN_BUDGET_MAX_OUTPUT_TOKENS=2000: the fixture streams a
+ *             small message that ends with usage completion_tokens=50000;
+ *             the output-token cap must abort at message_end (the runtime
+ *             reports usage only in the final chunk) with the same receipt.
+ *   cap-off — positive control (both PI_RUN_BUDGET_* knobs = 0): the same
+ *             volumes that abort cap-on (17 MiB streamed, 600,000 reported
+ *             output tokens) complete normally — receipt `completed`, no
+ *             abort — demonstrating the budgets are what stops the run.
+ *
+ * Event-loop lag is read from the server's A2 metrics file (the same
+ * instrument as production) for each scenario window, framed against B2's
+ * proposed threshold (300 ms; failure needs two consecutive readings ≥300 ms).
+ *
+ * Run under `systemd-run --scope --collect` so nothing shares the production
+ * cgroup:
+ *   systemd-run --scope --collect npx tsx \
+ *     server/tests/unit/pi-ai/run-budget-live-proof.mts --scratch /tmp/b3b-live \
+ *     --scenario all [--pace-chunk-ms 3] [--chunk-bytes 4096]
+ * Prints a JSON verdict and writes <scratch>/verdict-b3b.json.
+ */
+import http from 'node:http';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+
+const here = path.dirname(new URL(import.meta.url).pathname);
+const harness = path.join(here, 'pristine-harness.mts');
+
+function arg(name, fallback) {
+  const index = process.argv.indexOf(`--${name}`);
+  return index >= 0 ? process.argv[index + 1] : fallback;
+}
+
+function log(message) {
+  process.stderr.write(`[run-budget-live-proof] ${message}\n`);
+}
+
+function fail(message) {
+  process.stderr.write(`[run-budget-live-proof] FATAL: ${message}\n`);
+  process.exit(1);
+}
+
+const scratch = arg('scratch');
+const scenario = arg('scenario', 'all');
+const chunkBytes = Number(arg('chunk-bytes', '4096'));
+const paceChunkMs = Number(arg('pace-chunk-ms', '3'));
+const runawayBytes = Number(arg('runaway-bytes', String(17 * 1024 * 1024))); // past the 16 MiB default
+const controlOutputTokens = Number(arg('control-output-tokens', '600000')); // past the 500,000 default
+if (!scratch) fail('--scratch <root> is required');
+if (!existsSync(path.join(scratch, 'state'))) fail(`scratch not built: ${scratch}`);
+
+const stateDir = path.join(scratch, 'state');
+const workspace = path.join(stateDir, 'workspace');
+mkdirSync(path.join(stateDir, 'logs'), { recursive: true });
+
+// ─── fixture provider (local SSE; runs in THIS process, never the server's) ──
+
+const fixtureState = { requests: 0, log: [] };
+
+// Per-scenario runaway plan, set by the orchestrator before each scenario:
+// how many bytes request 1 streams before finishing, and what output-token
+// count its final usage chunk reports.
+const runawayPlan = { bytes: 17 * 1024 * 1024, completionTokens: 600_000 };
+
+function startFixture(port) {
+  const server = http.createServer((req, res) => {
+    res.on('error', () => { /* client aborted (the cap) — stop writing */ });
+    req.on('error', () => { /* same */ });
+    fixtureState.requests += 1;
+    const started = Date.now();
+    const record = { request: fixtureState.requests, started, bytes: 0, kind: 'unknown' };
+    fixtureState.log.push(record);
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const chunk = (obj) => {
+      if (!res.destroyed) res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    };
+    const chunkBody = { id: 'chatcmpl-b3b', object: 'chat.completion.chunk', created: 1_700_000_000, model: 'b3a-runaway' };
+    const finishClean = (completionTokens) => {
+      chunk({ ...chunkBody, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+      chunk({ ...chunkBody, choices: [], usage: { prompt_tokens: 128, completion_tokens: completionTokens, total_tokens: 128 + completionTokens } });
+      res.write('data: [DONE]\n\n');
+      record.finished = Date.now();
+      res.end();
+    };
+
+    if (fixtureState.requests === 1) {
+      // The runaway: one very long assistant generation in content chunks.
+      record.kind = 'runaway';
+      chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
+      const payload = 'x'.repeat(chunkBytes);
+      const targetBytes = runawayPlan.bytes;
+      let sent = 0;
+      const writeOne = () => {
+        if (res.destroyed) return; // the budget aborted the request — stop feeding
+        chunk({ ...chunkBody, choices: [{ index: 0, delta: { content: payload }, finish_reason: null }] });
+        sent += chunkBytes;
+        if (sent < targetBytes) {
+          if (paceChunkMs > 0) setTimeout(writeOne, paceChunkMs);
+          else if (res.writableNeedDrain) setImmediate(writeOne);
+          else writeOne();
+        } else {
+          record.bytes = sent;
+          finishClean(runawayPlan.completionTokens);
+        }
+      };
+      writeOne();
+      return;
+    }
+
+    // Every later request: instant, clean stop (session B; the control's post-run turn).
+    record.kind = 'instant-stop';
+    chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: null }] });
+    finishClean(4);
+    record.bytes = 4;
+  });
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
+}
+
+// ─── Internal API client over the unix socket ────────────────────────────────
+
+function apiRequest(socketPath, token, method, apiPath, body) {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(socketPath);
+    const chunks = [];
+    socket.setTimeout(300_000);
+    socket.on('connect', () => {
+      const headers = [
+        `${method} ${apiPath} HTTP/1.1`,
+        'Host: localhost',
+        `Authorization: Bearer ${token}`,
+        'Connection: close',
+      ];
+      if (payload !== undefined) {
+        headers.push('content-type: application/json', `content-length: ${Buffer.byteLength(payload)}`);
+      }
+      socket.write(`${headers.join('\r\n')}\r\n\r\n${payload ?? ''}`);
+    });
+    socket.on('data', (chunk) => chunks.push(chunk));
+    socket.on('timeout', () => { socket.destroy(); reject(new Error(`timeout on ${method} ${apiPath}`)); });
+    socket.on('error', reject);
+    socket.on('close', () => {
+      const raw = Buffer.concat(chunks).toString();
+      const split = raw.indexOf('\r\n\r\n');
+      const head = raw.slice(0, split);
+      let bodyText = raw.slice(split + 4);
+      if (/transfer-encoding:\s*chunked/i.test(head)) {
+        const parts = [];
+        let cursor = 0;
+        for (;;) {
+          const lineEnd = bodyText.indexOf('\r\n', cursor);
+          if (lineEnd === -1) break;
+          const size = parseInt(bodyText.slice(cursor, lineEnd), 16);
+          if (!Number.isFinite(size) || size === 0) break;
+          parts.push(bodyText.slice(lineEnd + 2, lineEnd + 2 + size));
+          cursor = lineEnd + 2 + size + 2;
+        }
+        bodyText = parts.join('');
+      }
+      const status = Number(head.split(' ')[1]);
+      let json;
+      try { json = JSON.parse(bodyText); } catch { json = undefined; }
+      resolve({ status, head, text: bodyText, json });
+    });
+  });
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function createSession(socketPath, token, label) {
+  const created = await apiRequest(socketPath, token, 'POST', '/api/v1/sessions', {
+    runtime: 'pi',
+    cwd: workspace,
+    model: 'b3a-fixture/b3a-runaway',
+  });
+  if (created.status !== 200 && created.status !== 201) {
+    fail(`session ${label} create failed: ${created.status} ${created.text.slice(0, 300)}`);
+  }
+  const sessionId = created.json?.session?.id ?? created.json?.id ?? created.json?.sessionId;
+  if (!sessionId) fail(`session ${label} create returned no id: ${created.text.slice(0, 300)}`);
+  return sessionId;
+}
+
+async function promptAndWait(socketPath, token, sessionId, message) {
+  const started = Date.now();
+  const response = await apiRequest(socketPath, token, 'POST', `/api/v1/sessions/${sessionId}/prompt`, { message });
+  return { response, wallMs: Date.now() - started };
+}
+
+async function getReceipt(socketPath, token, runId) {
+  const response = await apiRequest(socketPath, token, 'GET', `/api/v1/runs/${runId}`);
+  return response.json;
+}
+
+// ─── metrics window (B2 gate framing) ────────────────────────────────────────
+
+function analyseMetrics(metricsDir, windowStart, windowEnd) {
+  const file = path.join(metricsDir, 'health-metrics.jsonl');
+  if (!existsSync(file)) return { available: false, reason: 'metrics file missing' };
+  const lines = readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
+  const samples = [];
+  for (const line of lines) {
+    let record;
+    try { record = JSON.parse(line); } catch { continue; }
+    const ts = record.atMs ?? record.at ?? record.timestamp;
+    const time = typeof ts === 'number' ? ts : Date.parse(ts ?? '');
+    if (!Number.isFinite(time)) continue;
+    if (time < windowStart || time > windowEnd) continue;
+    samples.push(record);
+  }
+  const lagValues = samples.map((record) => record.lagP99Ms).filter((value) => typeof value === 'number');
+  if (samples.length === 0) return { available: false, reason: 'no samples in window', totalLines: lines.length };
+  let over300 = 0;
+  let twoConsecutiveOver300 = false;
+  let consecutiveRun = 0;
+  for (const value of lagValues) {
+    if (value >= 300) {
+      over300 += 1;
+      consecutiveRun += 1;
+      if (consecutiveRun >= 2) twoConsecutiveOver300 = true;
+    } else {
+      consecutiveRun = 0;
+    }
+  }
+  return {
+    available: true,
+    samples: samples.length,
+    lagP99Max: lagValues.length ? Math.max(...lagValues) : null,
+    p99Over300: over300,
+    twoConsecutiveOver300,
+  };
+}
+
+// ─── scenarios ───────────────────────────────────────────────────────────────
+
+async function runScenario(socketPath, token) {
+  fixtureState.requests = 0; // each scenario's first provider request is its runaway
+  const sessionA = await createSession(socketPath, token, 'A');
+  const windowStart = Date.now();
+
+  const aPromise = promptAndWait(socketPath, token, sessionA, 'stream the runaway fixture');
+
+  await sleep(2_000); // let A get mid-stream
+  const sessionB = await createSession(socketPath, token, 'B');
+  const b = await promptAndWait(socketPath, token, sessionB, 'answer briefly');
+  const bReceiptRunId = b.response.json?.runId;
+  const bReceipt = bReceiptRunId ? await getReceipt(socketPath, token, bReceiptRunId) : undefined;
+
+  const a = await aPromise;
+  const windowEnd = Date.now();
+  const aRunId = a.response.json?.runId;
+  const aReceipt = aRunId ? await getReceipt(socketPath, token, aRunId) : undefined;
+
+  const aErrorCode = a.response.json?.code ?? aReceipt?.errorCode;
+  return {
+    a: {
+      httpStatus: a.response.status,
+      errorCode: aErrorCode,
+      wallMs: a.wallMs,
+      receiptStatus: aReceipt?.status,
+      receiptErrorCode: aReceipt?.errorCode,
+      runId: aRunId,
+      servedModel: aReceipt?.servedModel ?? aReceipt?.model,
+    },
+    b: {
+      httpStatus: b.response.status,
+      wallMs: b.wallMs,
+      receiptStatus: bReceipt?.status,
+      servedModel: bReceipt?.servedModel ?? bReceipt?.model,
+    },
+    fixture: { requests: fixtureState.requests, log: fixtureState.log.slice() },
+    metrics: analyseMetrics(path.join(stateDir, 'metrics'), windowStart, windowEnd),
+  };
+}
+
+// ─── orchestration ───────────────────────────────────────────────────────────
+
+async function tsx(args) {
+  const { spawnSync } = await import('node:child_process');
+  const run = spawnSync('npx', ['tsx', harness, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  return { status: run.status, stdout: run.stdout ?? '' };
+}
+
+async function main() {
+  const port = await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const chosen = typeof address === 'object' && address ? address.port : 0;
+      server.close(() => (chosen ? resolve(chosen) : reject(new Error('no port'))));
+    });
+    server.on('error', reject);
+  });
+  log(`fixture provider on 127.0.0.1:${port}`);
+  await startFixture(port);
+
+  log('building scratch resolution root (idempotent) …');
+  const build = await tsx(['build', scratch, '--fixture-port', String(port)]);
+  if (build.status !== 0) fail(`harness build failed (exit ${build.status})`);
+
+  const serveOnce = async (envOverrides) => {
+    const args = ['serve', scratch, '--fixture-port', String(port)];
+    for (const [key, value] of Object.entries(envOverrides)) args.push('--env', `${key}=${value}`);
+    const { spawnSync } = await import('node:child_process');
+    const run = spawnSync('npx', ['tsx', harness, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 180_000 });
+    if (run.status !== 0) fail(`harness serve failed (exit ${run.status})`);
+    const line = (run.stdout ?? '').trim().split('\n').filter(Boolean).pop();
+    return JSON.parse(line);
+  };
+
+  const stopServer = async () => {
+    const { spawnSync } = await import('node:child_process');
+    spawnSync('npx', ['tsx', harness, 'stop', scratch], { encoding: 'utf8', stdio: 'inherit' });
+  };
+
+  const wantBytes = scenario === 'all' || scenario === 'bytes';
+  const wantTokens = scenario === 'all' || scenario === 'tokens';
+  const wantCapOff = scenario === 'all' || scenario === 'cap-off';
+
+  const verdict = { scenarios: {}, fixturePort: port, scratch, chunkBytes, paceChunkMs, runawayBytes, controlOutputTokens };
+  const tokenPath = path.join(stateDir, 'internal-api-token');
+
+  try {
+    if (wantBytes) {
+      log('── scenario bytes (default budgets, paced) ──');
+      runawayPlan.bytes = 32 * 1024 * 1024; // never reached: the 16 MiB cap aborts mid-stream
+      runawayPlan.completionTokens = controlOutputTokens;
+      const server = await serveOnce({});
+      const token = readFileSync(tokenPath, 'utf8').trim();
+      verdict.scenarios.bytes = await runScenario(server.socketPath, token);
+      await stopServer();
+    }
+    if (wantTokens) {
+      log('── scenario tokens (PI_RUN_BUDGET_MAX_OUTPUT_TOKENS=2000) ──');
+      // Small generation (far under the byte default) whose final usage chunk
+      // reports far more output tokens than the lowered cap: proves the
+      // message_end token path without the byte cap firing first.
+      runawayPlan.bytes = 64 * 1024;
+      runawayPlan.completionTokens = 50_000;
+      const server = await serveOnce({ PI_RUN_BUDGET_MAX_OUTPUT_TOKENS: '2000' });
+      const token = readFileSync(tokenPath, 'utf8').trim();
+      verdict.scenarios.tokens = await runScenario(server.socketPath, token);
+      await stopServer();
+    }
+    if (wantCapOff) {
+      log('── scenario cap-off (positive control, both knobs 0) ──');
+      // The same volumes that abort cap-on: 17 MiB streamed (past the 16 MiB
+      // byte default) and 600,000 reported output tokens (past the 500,000
+      // token default) — with the knobs at 0 neither trips.
+      runawayPlan.bytes = runawayBytes;
+      runawayPlan.completionTokens = controlOutputTokens;
+      const server = await serveOnce({ PI_RUN_BUDGET_MAX_OUTPUT_TOKENS: '0', PI_RUN_BUDGET_MAX_STREAMED_BYTES: '0' });
+      const token = readFileSync(tokenPath, 'utf8').trim();
+      verdict.scenarios['cap-off'] = await runScenario(server.socketPath, token);
+      await stopServer();
+    }
+  } finally {
+    await stopServer(); // idempotent; no orphan may survive a FATAL
+  }
+
+  writeFileSync(path.join(scratch, 'verdict-b3b.json'), `${JSON.stringify(verdict, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  process.exit(0);
+}
+
+main().catch((error) => fail(error instanceof Error ? error.stack ?? error.message : String(error)));
