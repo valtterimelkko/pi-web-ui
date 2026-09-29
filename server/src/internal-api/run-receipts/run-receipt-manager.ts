@@ -22,7 +22,7 @@ import {
   observePhase7PiShadowEvent,
   type Phase7PiShadowState,
 } from '../phase7-pi-shadow.js';
-import { RunReceiptStore, type PersistedRunReceipt } from './run-receipt-store.js';
+import { RunReceiptStore, type PersistedRunReceipt, type RecoveredRun } from './run-receipt-store.js';
 import { FinalTextTracker } from './final-text.js';
 import { createLogger } from '../../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
@@ -541,6 +541,18 @@ export class RunReceiptManager {
 
   hasActiveRun(sessionId: string): boolean {
     return (this.activeBySession.get(sessionId)?.size ?? 0) > 0;
+  }
+
+  /** B4 drain: payload-free references to every nonterminal run (accepted/queued/started). */
+  listNonterminal(): Array<{ runId: string; sessionId: string; runtime: string; status: RunReceiptStatus }> {
+    return this.store.list()
+      .filter((record) => !isTerminal(record.status))
+      .map((record) => ({ runId: record.runId, sessionId: record.sessionId, runtime: record.runtime, status: record.status }));
+  }
+
+  /** B4: runs this process recovered as restart-interrupted at boot. */
+  getRestartRecoveredRuns(): RecoveredRun[] {
+    return this.store.getRecoveredRuns();
   }
 
   getStalledRunCount(): number {

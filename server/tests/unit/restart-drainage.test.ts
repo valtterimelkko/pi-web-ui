@@ -3,7 +3,6 @@ import net from 'node:net';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
@@ -42,9 +41,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
  * log, so no test can restart anything real.
  */
 
-const SCRIPTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts');
-const restartProductionScript = path.join(SCRIPTS_DIR, 'restart-production.sh');
-const restartScript = path.join(SCRIPTS_DIR, 'restart-pi-web-ui.sh');
 
 const TOKEN = 'drainage-test-bearer-token';
 
@@ -173,16 +169,6 @@ function writeSystemctlPathStub(dir: string, logPath: string): string {
   return stubPath;
 }
 
-/**
- * A bound on each script run so a pathological hang fails the test instead of
- * wedging the whole suite. Healthy runs finish in well under a second.
- */
-const RUN_TIMEOUT_MS = 30_000;
-
-function runScript(script: string, args: string[], env: NodeJS.ProcessEnv) {
-  return spawnSync('bash', [script, ...args], { encoding: 'utf8', timeout: RUN_TIMEOUT_MS, env });
-}
-
 describe('restart drainage — capacity pre-flight before production restarts', () => {
   let dir: string;
   let api: CapacityApi;
@@ -206,74 +192,17 @@ describe('restart drainage — capacity pre-flight before production restarts', 
     rmSync(dir, { recursive: true, force: true });
   });
 
-  describe('restart-production.sh', () => {
-    const productionEnv = (): NodeJS.ProcessEnv => ({
-      PI_WEB_UI_INTERNAL_API_SOCKET: api.socketPath,
-      PI_WEB_UI_INTERNAL_API_TOKEN_FILE: api.tokenPath,
-      PI_WEB_UI_RESTART_SYSTEMCTL: systemctl.stubPath,
-      PI_WEB_UI_NOTIFY_SCRIPT: notify.stubPath,
-      PI_WEB_UI_CURL_SHIM_LOG: path.join(dir, 'curl-shim.args.log'),
-      PI_WEB_UI_FAKE_CAPACITY_SOCKET: api.socketPath,
-      PI_WEB_UI_FAKE_CAPACITY_TOKEN: TOKEN,
-      PI_WEB_UI_FAKE_CAPACITY_RESPONSE: path.join(dir, 'capacity-response.json'),
-      PATH: `${dir}:${process.env.PATH}`,
-    });
-
-    it('queries capacity and refuses with exit code 1 while active turns are in progress', () => {
-      api.setActiveTurns(3);
-
-      const result = runScript(restartProductionScript, [], {
-        ...process.env,
-        ...productionEnv(),
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain('3');
-      expect(result.stderr).toContain('active');
-      // The refusal must name its own escape hatch.
-      expect(result.stderr).toContain('--force');
-      // Nothing was restarted and nothing was announced as restarting.
-      expect(readLog(systemctl.logPath)).toEqual([]);
-      expect(readLog(notify.logPath)).toEqual([]);
-    });
-
-    it('queries the authenticated capacity endpoint over the unix socket', () => {
-      api.setActiveTurns(0);
-
-      runScript(restartProductionScript, [], { ...process.env, ...productionEnv() });
-
-      expect(api.requests).toHaveLength(1);
-      expect(api.requests[0]).toContain('--unix-socket');
-      expect(api.requests[0]).toContain(api.socketPath);
-      expect(api.requests[0]).toContain('-H');
-      expect(api.requests[0]).toContain('Authorization: Bearer drainage-test-bearer-token');
-      expect(api.requests[0]).toContain('http://localhost/api/v1/capacity');
-    });
-
-    it('proceeds to restart when active turns are zero', () => {
-      api.setActiveTurns(0);
-
-      const result = runScript(restartProductionScript, [], {
-        ...process.env,
-        ...productionEnv(),
-      });
-
-      expect(result.status).toBe(0);
-      expect(readLog(systemctl.logPath)).toEqual(['restart pi-web-ui.service']);
-    });
-
-    it('treats --force as the explicit override and restarts despite active turns', () => {
-      api.setActiveTurns(2);
-
-      const result = runScript(restartProductionScript, ['--force'], {
-        ...process.env,
-        ...productionEnv(),
-      });
-
-      expect(result.status).toBe(0);
-      expect(readLog(systemctl.logPath)).toEqual(['restart pi-web-ui.service']);
-    });
-  });
+  // B4 (2026-09-29): scripts/restart-production.sh no longer uses this
+  // capacity-only pre-flight. It drains first (POST /api/v1/drain), keeps this
+  // pre-flight only as the fallback for a server without the drain endpoint,
+  // and requires --reason with --force. Its cases — including the authenticated
+  // capacity query over the socket and the refusal while turns are active —
+  // are in tests/unit/drain-restart-scripts.test.ts.
+  //
+  // B4 correction 01: restart-pi-web-ui.sh no longer has its own capacity-only
+  // pre-flight either; it delegates to the same drain path within its job
+  // budget. Its refusal, restart and --force (now reason-required) cases moved
+  // to tests/unit/drain-restart-scripts.test.ts. The PATH guard below stays.
 
   describe('restart-pi-web-ui.sh', () => {
     const scriptEnv = (): NodeJS.ProcessEnv => ({
@@ -290,53 +219,6 @@ describe('restart drainage — capacity pre-flight before production restarts', 
       PI_WEB_UI_FAKE_CAPACITY_TOKEN: TOKEN,
       PI_WEB_UI_FAKE_CAPACITY_RESPONSE: path.join(dir, 'capacity-response.json'),
       PATH: `${dir}:${process.env.PATH}`,
-    });
-
-    it('queries capacity and refuses with exit code 1 while active turns are in progress', () => {
-      api.setActiveTurns(4);
-
-      const result = runScript(restartScript, ['--reason', 'drainage test', '--no-lock'], {
-        ...process.env,
-        ...scriptEnv(),
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain('4');
-      expect(result.stderr).toContain('active');
-      expect(result.stderr).toContain('--force');
-      // A refused restart never stops the service, so it must not write the
-      // RESTART-REQUESTED record that stop-audit forensics reads.
-      expect(existsSync(auditFile)).toBe(false);
-      expect(readLog(systemctl.logPath)).toEqual([]);
-    });
-
-    it('proceeds to restart when active turns are zero', () => {
-      api.setActiveTurns(0);
-
-      const result = runScript(restartScript, ['--reason', 'drainage test', '--no-lock'], {
-        ...process.env,
-        ...scriptEnv(),
-      });
-
-      expect(result.status).toBe(0);
-      expect(api.requests).toHaveLength(1);
-      expect(readLog(systemctl.logPath)).toEqual(['restart pi-web-ui']);
-    });
-
-    it('treats --force as the explicit override and restarts despite active turns', () => {
-      api.setActiveTurns(5);
-
-      const result = runScript(restartScript, ['--reason', 'drainage test', '--force', '--no-lock'], {
-        ...process.env,
-        ...scriptEnv(),
-      });
-
-      expect(result.status).toBe(0);
-      expect(readLog(systemctl.logPath)).toEqual(['restart pi-web-ui']);
-      // The forced restart is still a restart: the requester record is written.
-      expect(readFileSync(auditFile, 'utf8')).toContain('RESTART-REQUESTED');
-      // The reason is recorded %q-quoted, so assert the stem, not the phrase.
-      expect(readFileSync(auditFile, 'utf8')).toContain('reason=drainage');
     });
 
     it('intercepts a bare `systemctl` call through PATH, not only the env-var seam', () => {

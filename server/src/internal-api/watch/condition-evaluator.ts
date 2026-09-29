@@ -189,6 +189,10 @@ export class ConditionEngine {
       case 'event_type': {
         if (event.type !== cond.spec.eventType) return null;
         if (cond.spec.dataMatch && !shallowDataMatch(event, cond.spec.dataMatch)) return null;
+        // B4: a restart-reconciled completion says so in its evidence.
+        if (data.interruptedByRestart === true) {
+          return truncate(`event ${event.type} (interrupted by restart: run ${String(data.runId ?? 'unknown')}, ${String(data.interruptionReason ?? 'server_restart')})`);
+        }
         return truncate(`event ${event.type}`);
       }
 

@@ -571,11 +571,65 @@ npm run production:lock -- bash -lc '
   npm run typecheck &&
   npm test &&
   npm run build &&
-  sudo systemctl restart pi-web-ui &&
+  npm run production:drain-restart -- --reason "deploy <what>" &&
   sudo systemctl status pi-web-ui --no-pager &&
   npm run internal-api:wait
 '
 ```
+
+**Restarts drain by default (B4, contract 1.51.0).** A restart kills every
+in-process orchestration child (`KillMode=control-group`), so the canonical
+restart is `npm run production:drain-restart -- --reason "why"`
+(`scripts/restart-production.sh`; it takes the production lock itself,
+re-entrantly, so it also works inside the locked block above, and a direct call
+refuses with exit 75 while another deploy holds the lock):
+
+0. `systemctl is-active` decides whether there is anything to drain. A unit that
+   is confirmed `inactive` or `failed` has no children: it is not drained
+   (`drain=skipped_unit_inactive`); `--verb try-restart` on it is a no-op
+   (nothing is started; recorded as `RESTART-NOOP`), while `restart` and
+   `reload-or-restart` start it as those verbs mean. Any other state counts as
+   running.
+1. `POST /api/v1/drain` on the Internal API socket: new sessions and prompts are
+   refused with `503 SERVER_DRAINING` + `Retry-After`; control and `DELETE`
+   keep working; the call returns once active turns **and** nonterminal run
+   receipts have settled, or after the drain timeout (default 600 s,
+   `--drain-timeout N` for `0..3600`).
+2. `settled` → restart. `timed_out` → restart, cutting off the listed runs:
+   they end `interrupted` (`SERVER_RESTART`, `interruptionReason:
+   drain_timeout`) and their parents' watches fire at boot. Pass
+   `--on-timeout abort` to cancel the drain and restart nothing instead.
+3. The stop audit (`~/.pi-web-ui/stop-audit.log`) records the requester and the
+   verdict in one line, e.g. `RESTART-REQUESTED … reason=deploy… drain=settled,
+   waited_ms=4210,initial_runs=3,initial_turns=3,completed=3,cut_off=0 …`.
+
+**It fails closed.** On a running unit, anything the script cannot confirm is a
+refusal (exit 1): no socket or token, a socket that refuses connections, a
+drain request that times out or answers anything but `200` with a known state.
+A server that predates the drain endpoint (the deploy that ships B4) answers
+`404`; the script then uses the old active-turn pre-flight and proceeds only on
+an HTTP `200` with a numeric `activeTurns` of `0`.
+
+`npm run production:lock -- sudo systemctl restart pi-web-ui.service` (also
+`try-restart` and `reload-or-restart`) is routed through the same drain path
+automatically, keeping the verb. Restarting **without** a drain needs
+`npm run production:drain-restart -- --force --reason "why"`; the audit
+records `drain=forced` and the reason, and a forced restart refuses if neither
+the audit file nor the journal accepted that record.
+
+`scripts/restart-pi-web-ui.sh` (the Command Code weekly refresh's restart,
+60 s budget) goes through the same path with a 20 s drain, 10 s HTTP slack and
+`--on-timeout abort`: if the drain cannot settle in time, or the API state is
+unknown, it cancels the drain, restarts nothing and exits 1 with
+`restart-pi-web-ui: refusing restart …`, which the weekly job treats as
+"restart deferred". Its `--force` also needs a non-empty `--reason`.
+`npm run production:drain-restart -- --show-targets` prints the unit, socket,
+token file, audit file and drain defaults without touching anything. For
+disposable proofs every target is injectable (`PI_WEB_UI_SERVICE_UNIT`,
+`PI_WEB_UI_INTERNAL_API_SOCKET`, `PI_WEB_UI_INTERNAL_API_TOKEN_FILE`,
+`PI_WEB_UI_RESTART_SYSTEMCTL`, `PI_WEB_UI_NOTIFY_SCRIPT`,
+`PI_WEB_UI_STOP_AUDIT_FILE`, `PI_WEB_UI_PRODUCTION_LOCK`). The drain API itself
+is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md#drain-then-restart).
 
 `internal-api:wait` verifies the expected `pi-web-ui-internal-api` identity on
 the Unix socket, not merely the public HTTP listener. Its default deadline is

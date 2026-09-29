@@ -61,6 +61,8 @@ import {
 } from './admission-controller.js';
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
+import { DrainController, consumeDrainRecord } from './drain-controller.js';
+import { createDrainRoutes, isExecutionEntryRequest } from './routes/drain.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -82,6 +84,12 @@ export interface InternalApiConfig {
   pinDir?: string;
   /** Directory for persisted Internal-API run receipts. */
   runReceiptDir?: string;
+  /**
+   * B4: durable drain-verdict record read once at boot. Defaults to
+   * `internal-api-drain.json` beside the run-receipt directory, so a disposable
+   * server with its own receipt dir never reads production's record.
+   */
+  drainRecordPath?: string;
   /** Idempotency replay window for accepted runs. */
   runReceiptIdempotencyTtlMs?: number;
   /** Default API-pin lifetime (ms) */
@@ -177,6 +185,7 @@ export class InternalApiServer {
   private piService: PiService;
   private commandCodeService: CommandCodeService;
   private runReceiptManager: RunReceiptManager | null = null;
+  private drainController: DrainController | null = null;
   private notificationManager: NotificationManager | null = null;
   private socketOwner: UnixSocketOwner | null = null;
   private sessionRoutesShutdown: (() => Promise<void>) | null = null;
@@ -250,8 +259,16 @@ export class InternalApiServer {
 
     // Load durable run receipts before binding the socket. A restart must
     // recover in-flight records before a caller can retry an idempotent key.
+    const runReceiptDir = this.config.runReceiptDir || DEFAULT_RUN_RECEIPT_DIR;
+    // B4: the previous process's drain verdict (if any) tells boot recovery
+    // which interrupted runs a drain-then-restart announced as cut off.
+    const drainRecordPath = this.config.drainRecordPath || path.join(path.dirname(runReceiptDir), 'internal-api-drain.json');
+    const priorDrain = consumeDrainRecord(drainRecordPath);
+    const drainCutOff = new Set(priorDrain?.state === 'timed_out' ? priorDrain.cutOffRunIds : []);
     const runReceiptManager = new RunReceiptManager({
-      store: new RunReceiptStore(this.config.runReceiptDir || DEFAULT_RUN_RECEIPT_DIR),
+      store: new RunReceiptStore(runReceiptDir, {
+        classifyRecovery: (record) => (drainCutOff.has(record.runId) ? 'drain_timeout' : 'server_restart'),
+      }),
       idempotencyTtlMs: this.config.runReceiptIdempotencyTtlMs ?? config.internalApiRunIdempotencyTtlMs,
       onStalled: (receipt) => {
         // Two genuinely different events share this hook (2026-09-15):
@@ -295,6 +312,17 @@ export class InternalApiServer {
     });
     await runReceiptManager.init();
     this.runReceiptManager = runReceiptManager;
+    {
+      const recovered = runReceiptManager.getRestartRecoveredRuns();
+      const byDrain = recovered.filter((run) => run.interruptionReason === 'drain_timeout').length;
+      if (priorDrain || recovered.length > 0) {
+        logger.info(
+          `[InternalAPI] restart reconciliation: ${recovered.length} run(s) interrupted by restart ` +
+          `(${byDrain} announced by drain, ${recovered.length - byDrain} unplanned); ` +
+          `previous drain: ${priorDrain ? `${priorDrain.state} reason=${JSON.stringify(priorDrain.reason)} cutOff=${priorDrain.cutOffRunIds.length}` : 'none'}`,
+        );
+      }
+    }
 
     // One process-local admission authority sees all Internal API conductors.
     // It preserves explicit headroom for interactive Web UI turns.
@@ -338,6 +366,17 @@ export class InternalApiServer {
     this.admissionLagUnsubscribe?.();
     this.admissionLagUnsubscribe = connectAdmissionToLagReadings(admissionController, getHealthTelemetry());
 
+    // B4 drain-then-restart: closes admission through the shared seam and
+    // waits for active turns AND nonterminal receipts before a restart.
+    const drainController = new DrainController({
+      admission: admissionController,
+      listNonterminalRuns: () => runReceiptManager.listNonterminal(),
+      quarantinedTurns: () => runReceiptManager.getQuarantinedCount(),
+      recordPath: drainRecordPath,
+    });
+    this.drainController = drainController;
+    const drainRoutes = createDrainRoutes({ drain: drainController });
+
     // Create routes
     const sessionRoutes = createSessionRoutes({
       claudeService: this.claudeService,
@@ -361,6 +400,8 @@ export class InternalApiServer {
       blockedPiProviders: config.internalApiBlockedPiProviders,
       commandCodeService: this.commandCodeService,
       onBrowserMessage: this.onBrowserMessage,
+      drainRetryAfterSeconds: drainController.retryAfterSeconds,
+      getRestartInterruptedRuns: () => runReceiptManager.getRestartRecoveredRuns(),
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
     this.eventBroker = sessionRoutes.broker;
@@ -549,6 +590,7 @@ export class InternalApiServer {
             diagnosticsRoutes,
             eventTypesRoutes,
             notificationRoutes,
+            drainRoutes,
           }).catch((error) => {
             const tooLarge = error instanceof RequestBodyTooLargeError;
             const malformedPath = error instanceof URIError;
@@ -586,6 +628,8 @@ export class InternalApiServer {
     logger.info(`[InternalAPI] Listening on Unix socket: ${socketPath}`);
     logger.info(`[InternalAPI] API token ready at: ${tokenPath}`);
     } catch (error) {
+      this.drainController?.shutdown();
+      this.drainController = null;
       const notificationManager = this.notificationManager;
       notificationManager?.shutdown();
       await notificationManager?.waitForIdle();
@@ -643,6 +687,8 @@ export class InternalApiServer {
   private async stopInternal(): Promise<void> {
     const failures: unknown[] = [];
     try {
+      this.drainController?.shutdown();
+      this.drainController = null;
       const notificationManager = this.notificationManager;
       notificationManager?.shutdown();
       await notificationManager?.waitForIdle().catch((error) => failures.push(error));
@@ -689,6 +735,7 @@ export class InternalApiServer {
       diagnosticsRoutes: ReturnType<typeof createDiagnosticsRoutes>;
       eventTypesRoutes: ReturnType<typeof createEventTypesRoutes>;
       notificationRoutes: ReturnType<typeof createNotificationsRoutes>;
+      drainRoutes: ReturnType<typeof createDrainRoutes>;
     },
   ): Promise<void> {
     // Skip 'api' prefix if present: /api/v1/health → ['api', 'v1', 'health']
@@ -700,7 +747,30 @@ export class InternalApiServer {
       return;
     }
 
+    // B4: while draining, new P2/P3 creates and prompts are refused here with
+    // SERVER_DRAINING + Retry-After, before any receipt or runtime work.
+    if (isExecutionEntryRequest(req.method, [resource, id, action].filter((s): s is string => s !== undefined))
+      && deps.drainRoutes.refusesExecution()) {
+      deps.drainRoutes.sendDrainingRefusal(res);
+      return;
+    }
+
     switch (resource) {
+      case 'drain': {
+        // B4 drain-then-restart control (contract 1.51.0).
+        if (id) {
+          sendJson(res, 404, { error: 'Unknown drain endpoint', code: ErrorCode.NOT_FOUND });
+        } else if (req.method === 'POST') {
+          await deps.drainRoutes.handleStartDrain(req, res);
+        } else if (req.method === 'GET') {
+          await deps.drainRoutes.handleGetDrain(req, res);
+        } else if (req.method === 'DELETE') {
+          await deps.drainRoutes.handleCancelDrain(req, res);
+        } else {
+          sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+        }
+        return;
+      }
       case 'capacity': {
         if (req.method === 'GET' && !id) {
           deps.sessionRoutes.handleCapacity(req, res);

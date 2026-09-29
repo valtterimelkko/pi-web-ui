@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.49.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.51.0' as const;
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -292,8 +292,7 @@ export interface BatchCreateResultItem {
   pinnedUntil?: string;
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
-  /** Contract 1.49.0: admission refusals (ADMISSION_CAPACITY_EXHAUSTED) carry reason + retryAfterSeconds. */
-  error?: { code: string; message: string; reason?: string; retryAfterSeconds?: number };
+  error?: { code: string; message: string };
 }
 
 export interface BatchCreateResponse {
@@ -831,7 +830,7 @@ export interface CapacityPressureAverage {
  * distinguish execution admission from control, PID, host, and cgroup truth. */
 export interface CapacityResponse {
   available: boolean;
-  reason?: 'global_limit' | 'runtime_limit' | 'memory_pressure' | 'pid_pressure' | 'host_memory_pressure' | 'heap_pressure' | 'event_loop_lag' | 'draining';
+  reason?: 'global_limit' | 'runtime_limit' | 'memory_pressure' | 'pid_pressure' | 'host_memory_pressure';
   activeTurns: number;
   maxActiveTurns: number;
   interactiveReserve: number;
@@ -869,37 +868,7 @@ export interface CapacityResponse {
   quarantinedRuns?: number;
   oldestActiveRunStartedAt?: string;
   control?: { inFlight: number; queued: number };
-  /** Contract 1.49.0 (B2): session disposal (DELETE, abort) has its own lane, exempt from the critical floor. */
-  disposalLane?: { inFlight: number; queued: number };
   disposalOwners?: Record<string, number>;
-  /** Contract 1.49.0 (B2): projected V8 heap against heap_size_limit (hysteresis band). */
-  heap: {
-    usedBytes: number;
-    limitBytes: number;
-    projectedBytes: number;
-    reservedBytesPerTurn: number;
-    pressureFraction: number;
-    recoveryFraction: number;
-    pressureBytes: number;
-    recoveryBytes: number;
-    pressure: boolean;
-    source: 'v8' | 'validation-override';
-  };
-  /** Contract 1.49.0 (B2): sustained event-loop lag from A2 readings (hysteresis band). */
-  eventLoopLag: {
-    thresholdMs: number;
-    recoveryMs: number;
-    sustainedReadings: number;
-    consecutiveHighReadings: number;
-    pressure: boolean;
-    telemetryAvailable: boolean;
-    stale: boolean;
-    lastP99Ms?: number;
-    lastReadingAt?: string;
-    source?: 'a2' | 'validation-override';
-  };
-  /** Contract 1.49.0 (B4 seam): non-null while the server drains before a restart. */
-  draining: { since: string; reason: string } | null;
 }
 
 export interface PromptResponse {
@@ -1130,7 +1099,8 @@ export interface RunReceipt {
   workState?: RunWorkState;
   /** Stable wire error code for failed or restart-interrupted runs. */
   errorCode?: string;
-  interruptionReason?: 'server_restart';
+  /** Why a restart interrupted the run: `drain_timeout` = a drain-then-restart announced the cut-off (B4, 1.51.0); `server_restart` = unplanned. */
+  interruptionReason?: 'server_restart' | 'drain_timeout';
   /** Durable, payload-free liveness and recovery evidence (contract >= 1.14.0). */
   liveness?: RunLivenessEvidence;
   /** Additive Phase 7 Pi-only shadow classification evidence. */
@@ -1605,7 +1575,7 @@ export interface WatchWakeAttempt {
   deliveryKind?: WatchWakeDeliveryKind;
   /** Error code when `failed` (e.g. `SESSION_BUSY`, `WAKE_DISPATCH_UNAVAILABLE`). */
   errorCode?: string;
-  /** Suppression reason: `max_wakeups_reached`, `cooldown`, or `steer_pending`. */
+  /** Suppression reason: `max_wakeups_reached`, `cooldown`, `steer_pending`, or (1.51.0) `coalesced_restart_reconciliation`. */
   reason?: string;
 }
 

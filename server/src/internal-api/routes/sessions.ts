@@ -79,7 +79,7 @@ import { AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGo
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
-import { WatchGenerationMismatchError, WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
+import { WatchGenerationMismatchError, WatchManager, WatchValidationError, type RestartInterruptedRun, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
 import {
   IdempotencyKeyValidationError,
@@ -98,6 +98,7 @@ import {
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { DEFAULT_DRAIN_RETRY_AFTER_SECONDS } from '../drain-controller.js';
 import { readBoundedJsonBody as readJsonBody, RequestBodyTooLargeError } from '../request-body.js';
 import {
   createSessionBodySchema,
@@ -470,6 +471,10 @@ export interface SessionRoutesDeps {
    * the runtime-neutral goal surface renders for every runtime.
    */
   onBrowserMessage?: (message: Record<string, unknown>) => void;
+  /** B4 (contract 1.51.0): Retry-After for a `draining` admission refusal. Defaults to 30 s. */
+  drainRetryAfterSeconds?: number;
+  /** B4: runs this boot recovered as restart-interrupted; their parents' watches fire at boot. */
+  getRestartInterruptedRuns?: () => RestartInterruptedRun[] | Promise<RestartInterruptedRun[]>;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -528,6 +533,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // loop, memory, sockets) caused by in-flight P2 turns — that requires process
   // isolation (Phase 6 per-session cgroups).
   const admission = deps.admissionController ?? new AdmissionController();
+  // B4 (contract 1.51.0): a `draining` admission refusal is not capacity
+  // throttling. It gets its own code and a Retry-After sized to a restart, so
+  // callers (and goal control / wakes, which reuse this pipeline) can tell
+  // "retry after the deploy" from "the server is busy".
+  const drainRetryAfterSeconds = Number.isInteger(deps.drainRetryAfterSeconds) && (deps.drainRetryAfterSeconds as number) > 0
+    ? deps.drainRetryAfterSeconds as number
+    : DEFAULT_DRAIN_RETRY_AFTER_SECONDS;
+  const refusalCode = (error: AdmissionCapacityError): ErrorCode => (
+    error.reason === 'draining' ? ErrorCode.SERVER_DRAINING : ErrorCode.ADMISSION_CAPACITY_EXHAUSTED
+  );
+  const refusalRetryAfter = (error: AdmissionCapacityError): number => (
+    error.reason === 'draining' ? drainRetryAfterSeconds : error.retryAfterSeconds
+  );
   // Bounded control lane (P0/P1 guardrail): control operations bypass execution
   // admission but are NOT unbounded — this caps concurrent control-handler
   // executions and queues excess (up to a timeout), so a control flood cannot
@@ -547,14 +565,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** B2: one response shape for every admission refusal: 503 for pressure
    * (memory, PID, host, heap, event-loop lag, draining), 429 for turn-slot
-   * saturation; ADMISSION_CAPACITY_EXHAUSTED + reason + Retry-After. */
+   * saturation; ADMISSION_CAPACITY_EXHAUSTED (B4: SERVER_DRAINING when
+   * draining) + reason + Retry-After. */
   function sendAdmissionRefusal(res: ServerResponse, error: unknown, extra: Record<string, unknown> = {}): void {
     const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
-    res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
+    const retryAfterSeconds = refusalRetryAfter(capacityError);
+    res.setHeader('Retry-After', String(retryAfterSeconds));
     sendJson(res, admissionRefusalHttpStatus(capacityError.reason), {
-      ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message),
+      ...enrichedErrorBody(refusalCode(capacityError), capacityError.message),
       reason: capacityError.reason,
-      retryAfterSeconds: capacityError.retryAfterSeconds,
+      retryAfterSeconds,
       ...extra,
     });
   }
@@ -866,6 +886,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     ensureObserver: attachPiObserverIfNeeded,
     // Restart downtime reconciliation source: registry last-activity first
     // (all runtimes indexed), file mtime fallback for on-disk JSONL sessions.
+    // B4: runs this boot recovered as restart-interrupted fire their watches.
+    getRestartInterruptedRuns: deps.getRestartInterruptedRuns,
     getSessionLastActivity: async (sessionPath) => {
       try {
         const entry = await sessionRegistry.get(sessionPath)
@@ -3270,8 +3292,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       rawLease = await admission.acquire('commandcode', 'P2');
     } catch (error) {
-      await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
-      sendAdmissionRefusal(res, error, { runId });
+      const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
+      await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: refusalCode(capacityError) });
+      sendAdmissionRefusal(res, capacityError, { runId });
       return;
     }
     let released = false;
@@ -3619,12 +3642,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           rawAdmissionLease = await admission.acquire(runtime, 'P2');
         } catch (error) {
           directClaim?.release();
-          await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
+          const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: refusalCode(capacityError) });
           // Pressure refusals (memory/pid/host/heap/lag) and draining are 503
           // service-unavailable — the server cannot safely service the turn.
           // Capacity refusals (global/runtime limit) are 429 — retryable
           // admission throttling. Both carry ADMISSION_CAPACITY_EXHAUSTED + reason.
-          sendAdmissionRefusal(res, error, { runId });
+          sendAdmissionRefusal(res, capacityError, { runId });
           return;
         }
       }
@@ -7241,17 +7265,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           batchAdmissionLease = await admission.acquire(reg.sdkType as SessionRuntime, 'P2');
         } catch (error) {
           const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
-          await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED }).catch(() => undefined);
+          const code = refusalCode(capacityError);
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: code }).catch(() => undefined);
           return {
             index,
             sessionId: entry.sessionId,
             success: false,
             runId,
             error: {
-              code: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED,
+              code,
               reason: capacityError.reason,
               message: capacityError.message,
-              retryAfterSeconds: capacityError.retryAfterSeconds,
+              retryAfterSeconds: refusalRetryAfter(capacityError),
             },
           };
         }
