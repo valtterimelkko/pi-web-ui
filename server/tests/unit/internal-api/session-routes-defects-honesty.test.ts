@@ -66,7 +66,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
         id: sessionId,
         path: sessionId,
         sdkType: 'pi',
-        cwd: '/root/proj',
+        cwd: os.tmpdir(),
         model: 'zai/glm-5.3',
         firstMessage: '',
         messageCount: 0,
@@ -167,7 +167,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
     const routes = makeRoutes();
     const res = createMockRes();
     await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
-      runtime: 'pi', cwd: '/root/proj', model: 'gpt-5.6-sol',
+      runtime: 'pi', cwd: os.tmpdir(), model: 'gpt-5.6-sol',
     }), res, 'run-1');
 
     expect(res.statusCode).toBe(422);
@@ -181,7 +181,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
     const routes = makeRoutes();
     const res = createMockRes();
     await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
-      runtime: 'pi', cwd: '/root/proj', model: 'zai/glm-5.3',
+      runtime: 'pi', cwd: os.tmpdir(), model: 'zai/glm-5.3',
     }), res, 'run-2');
 
     expect(res.statusCode).toBe(201);
@@ -194,7 +194,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
     const routes = makeRoutes();
     const res = createMockRes();
     await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
-      runtime: 'pi', cwd: '/root/proj',
+      runtime: 'pi', cwd: os.tmpdir(),
     }), res, 'run-3');
 
     expect(res.statusCode).toBe(201);
@@ -208,14 +208,14 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
     opencodeService.setModel.mockRejectedValue(new Error('model not found'));
     // The created session resolves through the registry as an OpenCode session.
     registry.get = vi.fn(async (id: string) => ({
-      id, path: id, sdkType: 'opencode', cwd: '/root/proj', model: 'nope/missing',
+      id, path: id, sdkType: 'opencode', cwd: os.tmpdir(), model: 'nope/missing',
       firstMessage: '', messageCount: 0, status: 'idle',
       createdAt: '2026-08-25T00:00:00.000Z', lastActivity: '2026-08-25T00:00:00.000Z',
     }));
     const routes = makeRoutes();
     const res = createMockRes();
     await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
-      runtime: 'opencode', cwd: '/root/proj', model: 'nope/missing',
+      runtime: 'opencode', cwd: os.tmpdir(), model: 'nope/missing',
     }), res, 'run-4');
 
     expect(res.statusCode).toBe(422);
@@ -230,7 +230,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
     // Create with required durable retention (same flow the consumer used).
     const createRes = createMockRes();
     await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
-      runtime: 'claude', cwd: '/root/proj', retention: { mode: 'durable', ttlSeconds: 28_800, ownerId: 'orchestrator' },
+      runtime: 'claude', cwd: os.tmpdir(), retention: { mode: 'durable', ttlSeconds: 28_800, ownerId: 'orchestrator' },
     }), createRes, 'run-5');
     expect(createRes.statusCode).toBe(201);
     const leaseId = json(createRes).retention.leaseId;
@@ -293,7 +293,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
 
     const routes = makeRoutes();
     registry.get = vi.fn(async (id: string) => ({
-      id, path: id, sdkType: 'antigravity', cwd: '/root/proj', firstMessage: '',
+      id, path: id, sdkType: 'antigravity', cwd: os.tmpdir(), firstMessage: '',
       messageCount: 0, status: 'idle',
       createdAt: '2026-08-25T00:00:00.000Z', lastActivity: '2026-08-25T00:00:00.000Z',
     }));

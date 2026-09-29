@@ -202,7 +202,7 @@ describe('createSessionRoutes live-validation extensions', () => {
 
     const req = createJsonReq('POST', '/api/v1/sessions', {
       runtime: 'opencode',
-      cwd: '/tmp/oc-disabled-test',
+      cwd: process.cwd(),
     });
     const res = createMockRes();
 
