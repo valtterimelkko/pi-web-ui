@@ -71,6 +71,7 @@ Capped at ~10 items; older entries drop off (the rolling prose delta lives in [`
 ## 6. Internal API and orchestration
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes (including run receipts)
+- [`RECURRING-DEFECT-LEDGER.md`](./RECURRING-DEFECT-LEDGER.md) — Stage E1 of the orchestration-scaling plan: recurring defect classes from the 2026-09-26 operator-reports run plus the plan's mechanism classes, each with instances and its failing-then-passing regression tests (or `open`)
 - [`ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md`](./ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md) — shipped `1.14.0` liveness/recovery contract, remaining intent, provenance, and responsibility boundaries
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the three live-validation options (Internal API, Playwright E2E, browser-WebSocket path) with full runbooks; includes `scripts/ws-validate.mjs`
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watch ledgers + headless `validate:long-horizon` runner for long-running validation; recorded firings survive restart and reloaded `active` watches are rehydrated to keep observing (only unresolvable conditions demote to `detached`)
