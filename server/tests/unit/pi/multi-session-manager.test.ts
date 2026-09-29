@@ -602,7 +602,7 @@ describe('MultiSessionManager', () => {
 
       mockPiService.removeEventHandler.mockClear();
 
-      const stopped = manager.stopSession('/path/to/cleanup.jsonl');
+      const stopped = await manager.stopSession('/path/to/cleanup.jsonl');
       expect(stopped).toBe(true);
       expect(mockPiService.removeEventHandler).toHaveBeenCalledWith(handlerKey);
     });
@@ -1157,7 +1157,7 @@ describe('MultiSessionManager', () => {
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
       // Run cleanup - should NOT remove idle sessions
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
@@ -1171,7 +1171,7 @@ describe('MultiSessionManager', () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
@@ -1187,7 +1187,7 @@ describe('MultiSessionManager', () => {
       manager.updateSessionStatus('/path/to/session.jsonl', 'busy');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
@@ -1203,7 +1203,7 @@ describe('MultiSessionManager', () => {
       manager.updateSessionStatus('/path/to/session.jsonl', 'streaming');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
@@ -1230,7 +1230,7 @@ describe('MultiSessionManager', () => {
       
       // Run cleanup - should detect stale streaming and dispose the session
       const log = captureLogRecords();
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
 
       // Session should have been disposed (removed from map entirely)
       status = manager.getSessionStatus('/path/to/session.jsonl');
@@ -1265,7 +1265,7 @@ describe('MultiSessionManager', () => {
       vi.spyOn(Date, 'now').mockReturnValue(twoMinutesLater);
       
       // Run cleanup
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       // Status should still be streaming (not stale yet)
       const status = manager.getSessionStatus('/path/to/session.jsonl');
@@ -1288,7 +1288,7 @@ describe('MultiSessionManager', () => {
       const sixteenMinutesLater = Date.now() + 16 * 60 * 1000;
       vi.spyOn(Date, 'now').mockReturnValue(sixteenMinutesLater);
       
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
 
       const staleResetCalls = mockBroadcast.mock.calls.filter(
         (call: any[]) => call[1]?.event?.type === 'stale_stream_reset'
@@ -1318,13 +1318,13 @@ describe('MultiSessionManager', () => {
       // 4 minutes — should NOT be stale yet (under 5 min threshold)
       const fourMinutesLater = Date.now() + 4 * 60 * 1000;
       vi.spyOn(Date, 'now').mockReturnValue(fourMinutesLater);
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       expect(manager.getSessionStatus('/path/to/session.jsonl')).toBeDefined();
       
       // 6 minutes — should be stale (over 5 min threshold)
       const sixMinutesLater = Date.now() + 6 * 60 * 1000;
       (Date.now as any).mockReturnValue(sixMinutesLater);
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       expect(manager.getSessionStatus('/path/to/session.jsonl')).toBeUndefined();
       expect(mockSession.dispose).toHaveBeenCalled();
       if (typeof (Date.now as any).mockRestore === 'function') {
@@ -1343,7 +1343,7 @@ describe('MultiSessionManager', () => {
       manager.updateSessionStatus('/path/to/session.jsonl', 'error');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeUndefined();
@@ -1358,7 +1358,7 @@ describe('MultiSessionManager', () => {
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       manager.updateSessionStatus('/path/to/session.jsonl', 'error');
       
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
@@ -1376,7 +1376,7 @@ describe('MultiSessionManager', () => {
       manager.updateSessionStatus('/path/to/session.jsonl', 'error');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
 
-      manager.cleanupInactiveSessions();
+      await manager.cleanupInactiveSessions();
 
       expect(log.records.some((r) => r.msg.includes('Cleaning up errored session:'))).toBe(true);
 
@@ -1405,7 +1405,7 @@ describe('MultiSessionManager', () => {
       manager.unsubscribeClient('client-2', '/path/2.jsonl');
       manager.unsubscribeClient('client-3', '/path/3.jsonl');
       
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions();
       
       // Only the 2 errored sessions should be cleaned up
       expect(cleanedCount).toBe(2);
@@ -1424,7 +1424,7 @@ describe('MultiSessionManager', () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       
-      const result = manager.stopSession('/path/to/session.jsonl');
+      const result = await manager.stopSession('/path/to/session.jsonl');
       
       expect(result).toBe(true);
       expect(mockSession.abort).toHaveBeenCalled();
@@ -1432,10 +1432,10 @@ describe('MultiSessionManager', () => {
       expect(manager.getSessionStatus('/path/to/session.jsonl')).toBeUndefined();
     });
 
-    it('should return false for non-existent session', () => {
+    it('should return false for non-existent session', async () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       
-      const result = manager.stopSession('/non/existent.jsonl');
+      const result = await manager.stopSession('/non/existent.jsonl');
       
       expect(result).toBe(false);
     });
@@ -1449,7 +1449,7 @@ describe('MultiSessionManager', () => {
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       manager.setClientViewingSession('client-1', '/path/to/session.jsonl');
       
-      manager.stopSession('/path/to/session.jsonl');
+      await manager.stopSession('/path/to/session.jsonl');
       
       expect(manager.getClientSessionPath('client-1')).toBeUndefined();
     });
@@ -1462,7 +1462,7 @@ describe('MultiSessionManager', () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.stopSession('/path/to/session.jsonl');
+      await manager.stopSession('/path/to/session.jsonl');
       
       expect(manager.getClientSubscriptions('client-1')).toEqual([]);
     });
@@ -1476,7 +1476,7 @@ describe('MultiSessionManager', () => {
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       manager.updateSessionStatus('/path/to/session.jsonl', 'streaming');
       
-      manager.stopSession('/path/to/session.jsonl');
+      await manager.stopSession('/path/to/session.jsonl');
       
       // Should have called abort before dispose
       expect(mockSession.abort).toHaveBeenCalled();
@@ -1997,7 +1997,7 @@ describe('MultiSessionManager', () => {
       await manager.subscribeClient('client-1', '/path/1.jsonl');
       await manager.subscribeClient('client-2', '/path/2.jsonl');
       
-      manager.dispose();
+      await manager.dispose();
       
       expect(mockSession1.dispose).toHaveBeenCalled();
       expect(mockSession2.dispose).toHaveBeenCalled();
@@ -2010,7 +2010,7 @@ describe('MultiSessionManager', () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.dispose();
+      await manager.dispose();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeUndefined();
@@ -2267,7 +2267,9 @@ describe('MultiSessionManager', () => {
       manager.checkMemoryPressure();
 
       expect(shedMonitor.observeMemoryPressure).toHaveBeenCalledWith(true);
-      expect(manager.hasSession('/path/to/session-valve.jsonl')).toBe(false); // aggressive cleanup disposed it
+      // B5: aggressive cleanup now runs its shutdown emissions async (fire-and-
+      // forget from the memory monitor) — wait for the disposal to land.
+      await vi.waitFor(() => expect(manager.hasSession('/path/to/session-valve.jsonl')).toBe(false)); // aggressive cleanup disposed it
     });
 
     it('disarms once heap usage falls back below the recovery threshold', async () => {
@@ -2363,7 +2365,7 @@ describe('MultiSessionManager', () => {
       await manager.createAndSubscribe('client-1', '/work');
 
       const handlerKey = mockPiService.setEventHandler.mock.calls[0][0] as string;
-      const stopped = manager.stopSession('/path/to/session-release.jsonl');
+      const stopped = await manager.stopSession('/path/to/session-release.jsonl');
 
       expect(stopped).toBe(true);
       expect(releaseSessionRefs).toHaveBeenCalledWith(handlerKey, 'session-release');

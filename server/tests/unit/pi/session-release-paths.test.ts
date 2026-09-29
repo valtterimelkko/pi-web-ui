@@ -131,12 +131,12 @@ function newManager(service: PiService, options: Record<string, unknown> = {}): 
   return manager;
 }
 
-afterEach(() => {
-  for (const manager of managers.splice(0)) manager.dispose();
+afterEach(async () => {
+  for (const manager of managers.splice(0)) await manager.dispose();
   for (const pool of pools.splice(0)) {
-    for (const clientId of pool.getActiveClients()) pool.removeClient(clientId);
+    for (const clientId of pool.getActiveClients()) await pool.removeClient(clientId);
   }
-  for (const service of services.splice(0)) service.cleanup();
+  for (const service of services.splice(0)) await service.cleanup();
   vi.restoreAllMocks();
 });
 
@@ -149,7 +149,7 @@ describe('PiService session release — every dispose/unload path', () => {
     const session = created[0];
     const handlerKey = soleHandlerKey(service);
 
-    expect(manager.disposeLoadedSession(status.sessionPath)).toBe(true);
+    await expect(manager.disposeLoadedSession(status.sessionPath)).resolves.toBe(true);
 
     expect(session.dispose).toHaveBeenCalledTimes(1);
     expect(manager.hasSession(status.sessionPath)).toBe(false);
@@ -171,7 +171,7 @@ describe('PiService session release — every dispose/unload path', () => {
     active.lastActivity = new Date(Date.now() - 60_000);
     manager.unsubscribeClient('client-1', status.sessionPath);
 
-    expect(manager.cleanupIdleSessions()).toBeGreaterThanOrEqual(1);
+    await expect(manager.cleanupIdleSessions()).resolves.toBeGreaterThanOrEqual(1);
 
     expect(session.dispose).toHaveBeenCalledTimes(1);
     expect(manager.hasSession(status.sessionPath)).toBe(false);
@@ -203,7 +203,7 @@ describe('PiService session release — every dispose/unload path', () => {
     const session = created[0];
     const handlerKey = soleHandlerKey(service);
 
-    expect(manager.stopSession(status.sessionPath)).toBe(true);
+    await expect(manager.stopSession(status.sessionPath)).resolves.toBe(true);
 
     expect(session.dispose).toHaveBeenCalledTimes(1);
     expectFullyReleased(service, session.sessionId, handlerKey);
@@ -238,7 +238,7 @@ describe('PiService session release — every dispose/unload path', () => {
     const handlerKeys = [...internals(service).clientSessionMap.keys()];
     expect(handlerKeys).toHaveLength(2);
 
-    manager.dispose();
+    await manager.dispose();
 
     expect(created[0].dispose).toHaveBeenCalledTimes(1);
     expect(created[1].dispose).toHaveBeenCalledTimes(1);
@@ -258,7 +258,7 @@ describe('PiService session release — every dispose/unload path', () => {
     await service.createSession({ clientId: 'client-1' } as never);
     const session = created[0];
 
-    service.removeClient('client-1');
+    await service.removeClient('client-1');
 
     expect(session.dispose).toHaveBeenCalledTimes(1);
     expectFullyReleased(service, session.sessionId, 'client-1');
@@ -363,7 +363,7 @@ describe('PiService session release — every dispose/unload path', () => {
   // Correction round (reviewer findings 1-4)
   // ---------------------------------------------------------------------------
 
-  it('findings 1: PiService.removeClient disposes a shared session only when the last owner leaves', () => {
+  it('findings 1: PiService.removeClient disposes a shared session only when the last owner leaves', async () => {
     const service = newService();
     const session = fakeAgentSession('sid-shared', '/tmp/pi-sessions/sid-shared.jsonl');
     internals(service).sessions.set('sid-shared', session);
@@ -372,7 +372,7 @@ describe('PiService session release — every dispose/unload path', () => {
     internals(service).eventHandlers.set('client-a', () => {});
     internals(service).eventHandlers.set('client-b', () => {});
 
-    service.removeClient('client-a');
+    await service.removeClient('client-a');
 
     // client-b still maps the session: it must not have been disposed or dropped.
     expect(session.dispose).not.toHaveBeenCalled();
@@ -381,7 +381,7 @@ describe('PiService session release — every dispose/unload path', () => {
     expect(internals(service).eventHandlers.has('client-a')).toBe(false);
     expect(internals(service).eventHandlers.has('client-b')).toBe(true);
 
-    service.removeClient('client-b');
+    await service.removeClient('client-b');
 
     expect(session.dispose).toHaveBeenCalledTimes(1);
     expect(service.getSession('sid-shared')).toBeUndefined();
