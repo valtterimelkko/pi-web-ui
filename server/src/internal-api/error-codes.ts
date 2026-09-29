@@ -91,6 +91,10 @@ export const ErrorCode = {
   COMMANDCODE_PROVIDER_FAILURE: 'COMMANDCODE_PROVIDER_FAILURE',
   COMMANDCODE_RESUME_IDENTITY_DRIFT: 'COMMANDCODE_RESUME_IDENTITY_DRIFT',
   COMMANDCODE_PLAN_INELIGIBLE: 'COMMANDCODE_PLAN_INELIGIBLE',
+  // Contract 1.48.0 (B3a): the streaming tool-argument budget aborted the turn
+  // (2026-09-12 stall class, bounded from pi-web-ui's side; upstream packages
+  // stay pristine). Terminal on the run receipt.
+  RUN_BUDGET_EXCEEDED: 'RUN_BUDGET_EXCEEDED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -475,6 +479,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'The same key remains reserved within the endpoint-specific scope and retention window.',
     hint: 'Retry the original request with the same payload, or choose a new key for new work.',
     docs: 'docs/INTERNAL-API-CONTRACT.md#error-code-catalog',
+  },
+  [ErrorCode.RUN_BUDGET_EXCEEDED]: {
+    httpStatus: 500,
+    description: 'The run was aborted because streamed tool-call arguments exceeded the configured per-call or per-run budget.',
+    cause: 'A runaway generation kept streaming tool-call argument deltas past the budget (the 2026-09-12 stall class); pi-web-ui aborted the turn via the runtime’s public abort to bound synchronous per-delta parsing.',
+    hint: 'The receipt persists only this code. Which cap tripped (scope), the cap and the observed size are on the session event stream: the `tool_args_budget_exceeded` event carries `data.scope`, `data.capChars` and `data.observedChars`, and the server log carries a human-readable `ToolArgsBudget` warning. Real tool arguments are normally a few KB; resending as-is will breach again — reduce the requested payload or raise PI_TOOL_ARGS_MAX_CALL_CHARS / PI_TOOL_ARGS_MAX_TURN_CHARS.',
+    docs: 'docs/OBSERVABILITY.md#run-budgets',
   },
 };
 

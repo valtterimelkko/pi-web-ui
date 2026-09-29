@@ -36,6 +36,7 @@ describe('Internal API error-code catalog (Task 9)', () => {
       'TRANSFER_DISPATCH_FAILED',
       'EMPTY_TRANSCRIPT',
       'PROVIDER_NOT_ALLOWED',
+      'RUN_BUDGET_EXCEEDED',
     ]) {
       expect(codes.has(expected as never)).toBe(true);
     }

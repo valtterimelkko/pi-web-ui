@@ -88,6 +88,8 @@ import {
 import { RunReceiptStore } from '../run-receipts/run-receipt-store.js';
 import { resolveExecutionInstanceId } from '../execution-instance.js';
 import { classifyPhase7PiShadow } from '../phase7-pi-shadow.js';
+// Contract 1.48.0 (B3a): the Pi runtime's streaming tool-argument budget.
+import { PiToolArgsBudgetExceededError, TOOL_ARGS_BUDGET_EXCEEDED_EVENT } from '../../pi/tool-args-budget.js';
 import {
   createEventCollector,
   collectAnswerEvent,
@@ -246,6 +248,8 @@ function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
   if (runtime !== 'commandcode') {
     if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
     if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
+    // Contract 1.48.0 (B3a): the streaming tool-argument budget aborted the turn.
+    if (error instanceof PiToolArgsBudgetExceededError) return ErrorCode.RUN_BUDGET_EXCEEDED;
     return error instanceof TurnStalledError ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR;
   }
   if (error instanceof CommandCodeRuntimeError) {
@@ -5991,10 +5995,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // turn-window facts the PROMPT_NOT_EXECUTED fail-fast reads.
         let sawAgentStart = false;
         let sawCompaction = false;
+        let budgetBreach: PiToolArgsBudgetExceededError | undefined;
         const eventObserver = (event: unknown) => {
           const normalized = event as NormalizedEvent;
           if (normalized?.type === 'agent_start') sawAgentStart = true;
           if (normalized?.type === 'session_compaction') sawCompaction = true;
+          // Contract 1.48.0 (B3a): the streaming tool-argument budget aborts
+          // the turn upstream via the public API. The run still ends with a
+          // REAL agent_end (stopReason "aborted"), which would otherwise
+          // complete this receipt as `completed` and mask the breach — the
+          // synthetic budget event turns the completion into a loud
+          // RUN_BUDGET_EXCEEDED failure.
+          if (normalized?.type === TOOL_ARGS_BUDGET_EXCEEDED_EVENT && !budgetBreach) {
+            const data = (normalized.data ?? {}) as { scope?: 'call' | 'turn'; capChars?: number; observedChars?: number };
+            budgetBreach = new PiToolArgsBudgetExceededError(
+              data.scope ?? 'turn',
+              data.capChars ?? 0,
+              data.observedChars ?? 0,
+            );
+          }
           try { onEvent(normalized); } catch { /* non-fatal */ }
         };
         multiSessionManager.addApiObserver(sessionPath, eventObserver);
@@ -6008,7 +6027,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           if (normalized.type === 'agent_end' && !isSyntheticTerminalEvent(normalized) && ownsTurn && !ended) {
             ended = true;
             detachTurnObservers();
-            onComplete();
+            onComplete(budgetBreach);
             resolveTurnBoundary();
           }
         };

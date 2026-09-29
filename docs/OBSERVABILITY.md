@@ -843,6 +843,63 @@ transcript bodies, no cookies, no auth data. The route's schema is strict: an
 unknown field is rejected rather than stored, so transcript content cannot be
 smuggled in beside a health record.
 
+## Run budgets (B3a)
+
+Every in-process Pi session enforces a per-run budget on streamed tool-call
+argument characters. The 2026-09-12 production stall (a runaway generation whose
+tool-call arguments were re-parsed per streamed delta — quadratic, synchronous,
+~11 minutes of unresponsive server) used to be bounded by a local `node_modules`
+patch; that patch is removed and the bound now lives in pi-web-ui, leaving
+`@earendil-works/pi-ai` pristine.
+
+- **Where:** `server/src/pi/tool-args-budget.ts`, installed at the single
+  `PiService.createSession` subscribe funnel — one guard per session, covering
+  Internal API dispatches, browser sessions and hosted sessions alike.
+- **Caps:** `PI_TOOL_ARGS_MAX_CALL_CHARS` (default `65536` per tool call) and
+  `PI_TOOL_ARGS_MAX_TURN_CHARS` (default `262144` per run). `0` disables a cap;
+  an invalid value, or a turn cap below the call cap, logs one warning and falls
+  back to the defaults — configuration never stops startup.
+- **On breach:** the guard emits one `tool_args_budget_exceeded` event on the
+  session's normal stream (`data: { scope, capChars, observedChars,
+  contentIndex? }`) and aborts the turn via the public `AgentSession.abort()`.
+  Internal API receipts terminate `failed` with `RUN_BUDGET_EXCEEDED`; the
+  synchronous dispatch answers `500` with that code and the `runId`.
+- **What to look for:** log component `ToolArgsBudget` (a human-readable warn
+  line per breach), the `tool_args_budget_exceeded` event on the session event
+  stream (its `data` carries scope/cap/observed — the run receipt itself
+  stores only the `RUN_BUDGET_EXCEEDED` code), and the code in the error-code
+  catalog.
+- **Calibration (B3a correction 02, 2026-09-29 — PACED measurements decide):**
+  measured on pristine pi-ai 0.87.1, per-delta parse cost grows from ~0.37 ms
+  at 4 KB accumulated to ~12.8 ms at 460 KB (linear per call, quadratic over a
+  stream); one 460 KB fine-delta generation integrates to ~141 s of
+  main-thread CPU. Pacing is what real generation does — the collapse needs
+  parse-time × delta-rate ≥ 1 — so the default was re-decided with paced runs
+  of the fine-delta fixture through a disposable pristine server, all aborting
+  at the cap with `RUN_BUDGET_EXCEEDED`:
+  - 64 KB at the incident's ~90 deltas/s: abort 184.6 s, lag p99 max **4 ms**
+    over 185 samples, zero ≥300 ms;
+  - 64 KB at ~300 deltas/s: abort 52.0 s, lag p99 max **10 ms** over 52
+    samples, zero ≥300 ms;
+  - 32 KB unpaced (for the record): abort 6.6 s, single lag sample 6,268 ms —
+    the unpaced lab worst case pins the loop for its whole pre-abort window.
+    Preserved correction-03 runs quantify that worst case at the default caps:
+    64 KB unpaced aborts at the cap after 21.7 s with lag p99 max **10,615 ms**
+    (`measure/corr03-64k-unpaced.json`), and the cap-off control — which never
+    aborts — shows **p99 max 23,643 ms** (`measure/corr03-capoff.json`). Each
+    reading comes from only two A2 samples (the sampler itself starves while
+    the loop is pinned), so treat them as a floor; they are bounded by the
+    abort in the cap-on case. This worst case is a residual risk of the 64 KB
+    default; an operator who prefers the tighter bound sets
+    `PI_TOOL_ARGS_MAX_CALL_CHARS=16384`.
+  The cap-off positive control (unpaced) reproduces the stall class from the
+  preserved correction-03 evidence (p99 max 23,643 ms, no abort;
+  `measure/corr03-capoff.json`).
+  Real tool arguments measured over 5,633 recent calls: p50 233 B, p90 ~2 KB,
+  p99 ~9.8 KB, max 36.9 KB — the 64 KB default keeps patch parity and has
+  zero observed false positives (the 16 KB alternative would have failed
+  ~0.16% of calls, including large legit `write`s).
+
 ## Error codes & enrichment
 
 Every Internal API error response has the stable shape `{ error, code }`. Codes

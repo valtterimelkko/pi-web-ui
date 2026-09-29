@@ -29,6 +29,7 @@ import {
 import { createLogger } from '../logging/logger.js';
 import { readSessionIdentity } from './session-cwd.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
+import { ToolArgsBudgetGuard } from './tool-args-budget.js';
 import { createExtensionFactoryResourceLoader, refreshExtensionFactories, runExtensionLoadCriticalSection, type LoaderFactorySnapshot } from './extension-factory-cache.js';
 
 const logger = createLogger('PiService');
@@ -485,12 +486,25 @@ export class PiService {
     // Store client-to-session mapping
     this.clientSessionMap.set(options.clientId, session.sessionId);
 
-    // Subscribe to events and forward to handler
+    // Subscribe to events and forward to handler. Every event ALSO passes
+    // through the B3a streaming tool-argument budget guard (this closure is
+    // the single funnel for every in-process Pi session: browser, Internal
+    // API, hosted and extension-pool paths). On a cap breach the guard emits
+    // one synthetic `tool_args_budget_exceeded` event through the same handler
+    // and aborts the turn via the public session.abort(). With both caps
+    // disabled the guard costs one property read per event.
+    const toolArgsBudget = new ToolArgsBudgetGuard({
+      callChars: config.piToolArgsMaxCallChars,
+      turnChars: config.piToolArgsMaxTurnChars,
+    });
     session.subscribe((event) => {
       const handler = this.eventHandlers.get(options.clientId);
       if (handler) {
         handler(event);
       }
+      // The synthetic breach event intentionally rides the same funnel as raw
+      // session events (both downstream consumers dispatch structurally).
+      toolArgsBudget.observe(session, event, (synthetic) => handler?.(synthetic as AgentSessionEvent));
     });
 
     // Always bind extensions before exposing the session. bindExtensions()
