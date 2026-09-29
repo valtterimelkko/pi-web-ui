@@ -156,9 +156,11 @@ WebSocket-only surface.
   the same host, `GET /sessions/:id/events` can be less reliable than it is
   for Pi, OpenCode, and Antigravity. For Claude fan-out workflows, prefer
   `/wait` + `/transcript` as the safe fallback.
-- **No parent/child metadata model yet:** the API does not yet expose
-  `parentSessionId`, `orchestrationId`, or `GET /sessions?parent=...`.
-  Orchestrators must track their own child-session relationships.
+- **Lineage gaps for unmanaged callers:** `parentSessionId` linkage exists
+  (contract 1.34.0, extended by 1.54.0) and every managed caller is attributed —
+  but a caller with no header, no correlatable bash call, and no session
+  identity in its process ancestry (e.g. an external cron script) stays
+  unlinked by design: linkage fails safe rather than guessing.
 - **Run receipts are dispatch-scoped, not a queue:** every accepted Internal-API
   prompt has a durable `runId` and receipt, but Pi Web UI still does not expose
   a general-purpose job queue or scheduler. Use `GET /runs/:runId` for a
@@ -3003,6 +3005,25 @@ correlating the newest in-flight bash tool command that references the
 Internal API socket. Linked children persist `parentSessionId` in the
 registry; `GET /sessions/:id` and `/info` gain additive `parentSessionId` and
 `children` arrays.
+
+Contract 1.54.0 (C5) closes the remaining silent gap: when none of the above
+can attribute the caller, the server resolves it from the unix-socket
+connection itself — accepted-socket inode → peer socket inode (`ss -xp`
+narrowed to the Internal API socket path, full-table fallback with an explicit
+maxBuffer; overflow → no linkage + a rate-limited warning) → peer-end owners
+via a bounded `/proc` fd scan → bounded ancestry walk reading the session
+identity the server itself sets on managed runtime subprocesses
+(`PI_WEB_UI_SESSION_ID`, contract 1.47.0; `PI_SESSION_ID` for pi tool
+subprocesses). Ambiguity is fail-closed: every owner must resolve, and
+unanimity is required — a truncated owner set, an identity-less owner, or
+divergent owners link nothing. `POST /sessions/batch` links every child the
+same way (per-entry `parentSessionId`, shared header, peer fallback),
+Command Code records carry their registry lineage on `GET /sessions` and in
+`?parent=`, and linked children report `parentSource: "header" | "body" |
+"bash" | "peer"` (create and adopt-native responses, `GET /sessions` items,
+and the session detail endpoints). `GET /sessions?parent=<id-or-path>` returns
+exactly that parent's children (`404 SESSION_NOT_FOUND` for an unresolvable
+parent value, so a typo never masquerades as an empty list).
 
 **Events** (all on `/events`, watchable, and bridged to the browser):
 

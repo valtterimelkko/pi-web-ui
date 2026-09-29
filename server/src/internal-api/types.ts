@@ -303,6 +303,10 @@ export interface BatchCreateResultItem {
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
   pinnedUntil?: string;
+  /** Contract 1.54.0 (C5, correction 01): lineage when the caller (or the entry)
+   *  named a parent. Absent when unlinked. */
+  parentSessionId?: string;
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** Contract 1.49.0: admission refusals (ADMISSION_CAPACITY_EXHAUSTED) carry reason + retryAfterSeconds. */
@@ -647,6 +651,8 @@ export interface CreateSessionResponse {
   createdAt: string;
   /** Parent session linkage when the caller identified itself (contract 1.34.0). */
   parentSessionId?: string;
+  /** Contract 1.54.0 (C5): which source produced the linkage. Absent when unlinked. */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** True when the session was pinned at creation (pin:true requested). */
@@ -694,6 +700,10 @@ export interface SessionInfo {
    *  SessionWatcher), or 'unknown' for entries created before origin
    *  tracking. Additive since 1.30.0. */
   source?: 'browser' | 'internal-api' | 'native-discovered' | 'unknown';
+  /** Parent session linkage when known (display-only). Additive since 1.54.0 (C5). */
+  parentSessionId?: string;
+  /** Which source produced the linkage. Additive since 1.54.0 (C5). */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
 }
 
 /** One natively-discovered (direct-CLI) session returned by the bounded
@@ -784,6 +794,8 @@ export interface AdoptNativeSessionResponse {
   sessionId: string;
   runtime: string;
   parentSessionId?: string;
+  /** Contract 1.54.0 (C5): which source produced the linkage. Absent when unlinked. */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
   /** Whether the registry entry was created fresh or an existing entry was adopted. */
   adopted: 'created' | 'existing';
   nativePath?: string;

@@ -150,7 +150,7 @@ export class InternalApiClient implements InternalApiClientLike {
     this.promptTimeoutMs = positiveTimeout(options?.promptTimeoutMs, 5 * 60_000);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = this.requestTimeoutMs): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = this.requestTimeoutMs, extraHeaders?: Record<string, string>): Promise<T> {
     return new Promise((resolve, reject) => {
       let clearDeadline = () => {};
       const req = httpRequest({
@@ -160,6 +160,7 @@ export class InternalApiClient implements InternalApiClientLike {
         headers: {
           Authorization: `Bearer ${this.token}`,
           'Content-Type': 'application/json',
+          ...extraHeaders,
         },
       }, (res) => {
         let raw = '';
@@ -195,14 +196,15 @@ export class InternalApiClient implements InternalApiClientLike {
     });
   }
 
-  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number }): Promise<CreateSessionResponse> {
-    const request = { ...input } as typeof input & { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' };
+  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number; parentSessionId?: string; headers?: Record<string, string> }): Promise<CreateSessionResponse> {
+    const { headers, ...bodyInput } = input;
+    const request = { ...bodyInput } as typeof bodyInput & { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' };
     if (input.runtime === 'commandcode' && input.source === 'live-validation-commandcode-fixture') {
       const model = input.model ?? 'qwen/qwen3.8-max';
       request.model = model;
       if (model === 'qwen/qwen3.8-max') request.effort = 'medium';
     }
-    return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', request);
+    return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', request, this.requestTimeoutMs, headers);
   }
 
   /** Detached (fire-and-forget) prompt dispatch: returns 202 immediately; the
@@ -418,8 +420,24 @@ export class InternalApiClient implements InternalApiClientLike {
 
   // ─── Long-horizon validation surface ──────────────────────────────────────
 
-  async listSessions(): Promise<ListSessionsResponse> {
-    return this.request<ListSessionsResponse>('GET', '/api/v1/sessions');
+  async listSessions(parent?: string): Promise<ListSessionsResponse> {
+    return this.request<ListSessionsResponse>('GET', parent ? `/api/v1/sessions?parent=${encodeURIComponent(parent)}` : '/api/v1/sessions');
+  }
+
+  /** Unix socket path the client talks to (for scenarios that exercise the
+   *  peer-credential path with their own subprocesses). */
+  getSocketPath(): string {
+    return this.socketPath;
+  }
+
+  /** Bearer token for scenarios that must authenticate their own subprocesses. */
+  getToken(): string {
+    return this.token;
+  }
+
+  /** C5 (1.54.0): batch create (correction 01 exercises per-entry linkage). */
+  async batchCreate(entries: Array<Record<string, unknown>>): Promise<import('../internal-api/types.js').BatchCreateResponse> {
+    return this.request('POST', '/api/v1/sessions/batch', { sessions: entries });
   }
 
   /** Answers-mode prompt (non-streaming), including idempotent replay responses. */

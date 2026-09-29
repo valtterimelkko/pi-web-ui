@@ -122,6 +122,7 @@ async function main() {
         capabilities,
         cwd,
         model: args.model,
+        socketPath: target.socketPath,
       });
       results.push(result);
       if (!args.json) {
