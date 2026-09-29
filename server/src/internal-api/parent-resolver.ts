@@ -158,18 +158,37 @@ export function runSs(command: string, args: string[], maxBuffer: number): Promi
 
 /**
  * Default owners lookup: a bounded /proc/<pid>/fd scan for processes holding
- * `socket:[peerInode]`. Returns null when the scan is truncated (more owners
- * than the safe bound, or more /proc directories than the scan cap) — the
- * caller must give no linkage. An empty array means the peer end holds no
- * readable owner (e.g. it already exited): also no linkage, but a distinct
- * case for tests.
+ * `socket:[peerInode]`. Correction 02: only a CONFIRMED vanish may be skipped —
+ * ENOENT/ESRCH on a directory or fd readlink means the process or fd is gone.
+ * Any other read failure (EACCES, EPERM, …) makes the owner set INCOMPLETE and
+ * yields null: an inaccessible live owner must never be silently dropped, so a
+ * visible owner can never win "unanimity" against an unreadable one. Returns
+ * null when the scan is truncated (more owners than the safe bound, or more
+ * /proc directories than the scan cap). An empty array means the peer end holds
+ * no readable owner any more: also no linkage, but a distinct case for tests.
  */
-export async function defaultPeerOwners(peerInode: number): Promise<number[] | null> {
+export interface PeerOwnerScanIo {
+  readdir(path: string): Promise<string[]>;
+  readlink(path: string): Promise<string>;
+}
+
+function isVanish(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ESRCH';
+}
+
+export async function scanPeerOwners(
+  peerInode: number,
+  io: PeerOwnerScanIo,
+  bounds: { maxOwners?: number; maxDirs?: number } = {},
+): Promise<number[] | null> {
+  const maxOwners = bounds.maxOwners ?? MAX_PEER_OWNERS;
+  const maxDirs = bounds.maxDirs ?? MAX_PROC_DIRS;
   let dirents: string[];
   try {
-    dirents = await readdir('/proc');
+    dirents = await io.readdir('/proc');
   } catch {
-    return null;
+    return null; // the scan itself is unavailable → incomplete, fail closed
   }
   const want = `socket:[${String(peerInode)}]`;
   const owners: number[] = [];
@@ -177,28 +196,35 @@ export async function defaultPeerOwners(peerInode: number): Promise<number[] | n
   for (const name of dirents) {
     const pid = Number(name);
     if (!Number.isInteger(pid) || pid <= 0) continue;
-    if (scanned >= MAX_PROC_DIRS) return null; // truncated scan → fail closed
+    if (scanned >= maxDirs) return null; // truncated scan → fail closed
     scanned += 1;
     let fds: string[];
     try {
-      fds = await readdir(`/proc/${name}/fd`);
-    } catch {
-      continue; // vanished or not ours to read; not an owner we can see
+      fds = await io.readdir(`/proc/${name}/fd`);
+    } catch (err) {
+      if (isVanish(err)) continue; // confirmed vanish: the process is gone
+      return null; // EACCES/EPERM/other: an owner we cannot inspect → incomplete
     }
     for (const fd of fds) {
+      let link: string;
       try {
-        const link = await readlink(`/proc/${name}/fd/${fd}`);
-        if (link === want) {
-          if (!owners.includes(pid)) owners.push(pid);
-          break;
-        }
-      } catch {
-        continue; // fd vanished mid-scan
+        link = await io.readlink(`/proc/${name}/fd/${fd}`);
+      } catch (err) {
+        if (isVanish(err)) continue; // confirmed vanish: the fd (or process) is gone
+        return null; // EACCES/EPERM/other: incomplete
+      }
+      if (link === want) {
+        if (!owners.includes(pid)) owners.push(pid);
+        break;
       }
     }
   }
-  if (owners.length > MAX_PEER_OWNERS) return null; // truncated owner set → no linkage
+  if (owners.length > maxOwners) return null; // truncated owner set → no linkage
   return owners;
+}
+
+async function defaultPeerOwners(peerInode: number): Promise<number[] | null> {
+  return scanPeerOwners(peerInode, { readdir, readlink });
 }
 
 /** Injectable IO for deterministic tests. */

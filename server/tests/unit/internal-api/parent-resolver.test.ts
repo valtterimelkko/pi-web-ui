@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { execFile } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
-import { readlink } from 'node:fs/promises';
+import { readdir as fsReaddir, readlink as fsReadlink } from 'node:fs/promises';
 import {
   parseSsEstablishedLines,
   peerInodeOf,
@@ -23,6 +23,7 @@ import {
   firstIdentityValue,
   createPeerParentResolver,
   runSs,
+  scanPeerOwners,
   type SocketPeerEntry,
   type ParentResolverIo,
 } from '../../../src/internal-api/parent-resolver.js';
@@ -111,10 +112,9 @@ describe('default peerOwners (bounded /proc fd scan)', () => {
     const address = server.address();
     const client = net.connect(typeof address === 'object' && address ? address.port : 0, '127.0.0.1');
     await new Promise<void>((resolve) => client.on('connect', resolve));
-    const link = await readlink(`/proc/self/fd/${(client as unknown as { _handle: { fd: number } })._handle.fd}`);
+    const link = await fsReadlink(`/proc/self/fd/${(client as unknown as { _handle: { fd: number } })._handle.fd}`);
     const inode = Number(link!.match(/socket:\[(\d+)\]/)![1]);
-    const { defaultPeerOwners } = await import('../../../src/internal-api/parent-resolver.js');
-    const owners = await defaultPeerOwners(inode);
+    const owners = await scanPeerOwners(inode, { readdir: fsReaddir, readlink: fsReadlink });
     client.destroy();
     server.close();
     expect(owners).toContain(process.pid);
@@ -181,6 +181,167 @@ describe('walkAncestryForSession (injected /proc)', () => {
   it('is bounded: a pid cycle cannot loop forever', async () => {
     const value = await walkAncestryForSession(100, procIo({ ppid: { 100: 100 }, environ: {} }));
     expect(value).toBeUndefined();
+  });
+});
+
+describe('scanPeerOwners (correction 02: vanish vs incomplete)', () => {
+  const INODE = 4242;
+  const WANT = `socket:[${INODE}]`;
+
+  function scanIo(overrides: {
+    /** pid -> readdir result for /proc/<pid>/fd */
+    fds?: Record<number, string[]>;
+    /** pid -> error thrown by the /proc/<pid>/fd readdir */
+    fdsError?: Record<number, NodeJS.ErrnoException>;
+    /** "<pid>/<fd>" -> readlink result */
+    links?: Record<string, string>;
+    /** "<pid>/<fd>" -> error thrown by the fd readlink */
+    linkError?: Record<string, NodeJS.ErrnoException>;
+  }) {
+    return {
+      readdir: async (p: string) => {
+        if (p === '/proc') {
+          const pids = [...new Set([...Object.keys(overrides.fds ?? {}), ...Object.keys(overrides.fdsError ?? {})])];
+          return ['1', 'non-numeric', ...pids];
+        }
+        const pid = Number(p.split('/')[2]);
+        if (overrides.fdsError?.[pid]) throw overrides.fdsError[pid];
+        return overrides.fds?.[pid] ?? [];
+      },
+      readlink: async (p: string) => {
+        const parts = p.split('/');
+        const key = `${parts[2]}/${parts[4]}`; // '<pid>/<fd>'
+        if (overrides.linkError?.[key]) throw overrides.linkError[key];
+        return overrides.links?.[key] ?? 'socket:[1]';
+      },
+    };
+  }
+
+  it('returns the owners whose fds hold the peer inode', async () => {
+    const owners = await scanPeerOwners(INODE, scanIo({
+      fds: { 100: ['3'], 200: ['9'] },
+      links: { '100/3': WANT, '200/9': 'socket:[777]' },
+    }));
+    expect(owners).toEqual([100]);
+  });
+
+  it('skips a vanished process (ENOENT on the fd directory) and still returns the visible owner', async () => {
+    const owners = await scanPeerOwners(INODE, scanIo({
+      fds: { 100: ['3'] },
+      fdsError: { 200: Object.assign(new Error('gone'), { code: 'ENOENT' }) },
+      links: { '100/3': WANT },
+    }));
+    expect(owners).toEqual([100]);
+  });
+
+  it('skips a vanished fd (ENOENT on the fd readlink) and still returns the visible owner', async () => {
+    const owners = await scanPeerOwners(INODE, scanIo({
+      fds: { 100: ['3', '4'], 200: ['9'] },
+      linkError: { '100/4': Object.assign(new Error('gone'), { code: 'ENOENT' }) },
+      links: { '100/3': WANT },
+    }));
+    expect(owners).toEqual([100]);
+  });
+
+  it('treats EACCES on a process fd directory as an incomplete set (null), never a partial answer', async () => {
+    const owners = await scanPeerOwners(INODE, scanIo({
+      fds: { 100: ['3'] },
+      fdsError: { 200: Object.assign(new Error('denied'), { code: 'EACCES' }) },
+      links: { '100/3': WANT },
+    }));
+    expect(owners).toBeNull();
+  });
+
+  it('treats EPERM on a process fd directory as incomplete', async () => {
+    const owners = await scanPeerOwners(INODE, scanIo({
+      fds: { 100: ['3'] },
+      fdsError: { 200: Object.assign(new Error('denied'), { code: 'EPERM' }) },
+      links: { '100/3': WANT },
+    }));
+    expect(owners).toBeNull();
+  });
+
+  it('treats EACCES on an fd readlink as incomplete', async () => {
+    const owners = await scanPeerOwners(INODE, scanIo({
+      fds: { 100: ['3'], 200: ['9'] },
+      linkError: { '200/9': Object.assign(new Error('denied'), { code: 'EACCES' }) },
+      links: { '100/3': WANT },
+    }));
+    expect(owners).toBeNull();
+  });
+
+  it('treats an unreadable /proc root as incomplete', async () => {
+    const owners = await scanPeerOwners(INODE, {
+      readdir: async (p: string) => {
+        if (p === '/proc') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return [];
+      },
+      readlink: async () => 'socket:[1]',
+    });
+    expect(owners).toBeNull();
+  });
+
+  it('gives null when the owners exceed the safe bound (truncation is incomplete)', async () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ fds: { [i + 10]: ['3'] }, links: { [`${i + 10}/3`]: WANT } }));
+    const merged = many.reduce((acc, m) => ({ fds: { ...acc.fds, ...m.fds }, links: { ...acc.links, ...m.links } }), { fds: {} as Record<number, string[]>, links: {} as Record<string, string> });
+    const owners = await scanPeerOwners(INODE, scanIo(merged));
+    expect(owners).toBeNull();
+  });
+});
+
+describe('createPeerParentResolver (correction 02: an inaccessible owner gives no linkage, end to end)', () => {
+  type ResolveReq = Parameters<ReturnType<typeof createPeerParentResolver>['resolve']>[0];
+  const fakeReq = { socket: { _handle: { fd: 23 } } } as unknown as ResolveReq;
+  const SS_OUT = 'u_str ESTAB 0 0 /run/api/internal-api.sock 10 * 20';
+  const PEER_INODE = 20;
+
+  /** Resolver whose owners scan is the REAL scanPeerOwners over injected fs IO;
+   *  both owners walk to the same identity (sess-a), so only scan failures can
+   *  change the outcome. */
+  function resolverWithScan(failures: { fdsError?: Record<number, NodeJS.ErrnoException>; linkError?: Record<string, NodeJS.ErrnoException> }) {
+    return createPeerParentResolver({
+      readlinkFd: async () => 'socket:[10]',
+      ssEstablished: async () => ({ kind: 'ok', output: SS_OUT }),
+      peerOwners: (inode) => scanPeerOwners(inode, {
+        readdir: async (p: string) => {
+          if (p === '/proc') return ['100', '200'];
+          const pid = Number(p.split('/')[2]);
+          if (failures.fdsError?.[pid]) throw failures.fdsError[pid];
+          return ['3'];
+        },
+        readlink: async (p: string) => {
+          const parts = p.split('/');
+          const pid = parts[2];
+          if (failures.linkError?.[`${pid}/${parts[4]}`]) throw failures.linkError[`${pid}/${parts[4]}`];
+          return pid === '100' || pid === '200' ? `socket:[${PEER_INODE}]` : 'socket:[1]';
+        },
+      }),
+      environ: async () => ['PI_WEB_UI_SESSION_ID=sess-a'],
+      ppid: async () => null,
+      selfPid: () => 1,
+      warn: () => {},
+      now: () => 1_000_000,
+      registry: {
+        get: async (id: string) => ({ id, sdkType: 'claude', path: 'x' }),
+        getByPath: async () => undefined,
+      },
+    });
+  }
+
+  it('baseline: two readable owners agreeing on A still links', async () => {
+    expect(await resolverWithScan({}).resolve(fakeReq)).toEqual({ sessionId: 'sess-a', source: 'peer' });
+  });
+
+  it("one owner resolving to A plus one owner whose fd read fails EACCES → no link (Luna's case)", async () => {
+    expect(await resolverWithScan({ fdsError: { 200: Object.assign(new Error('denied'), { code: 'EACCES' }) } }).resolve(fakeReq)).toBeNull();
+  });
+
+  it('the same with ENOENT → the vanished owner is skipped and A is linked', async () => {
+    expect(await resolverWithScan({ fdsError: { 200: Object.assign(new Error('gone'), { code: 'ENOENT' }) } }).resolve(fakeReq)).toEqual({ sessionId: 'sess-a', source: 'peer' });
+  });
+
+  it('an fd-level readlink EACCES → no link', async () => {
+    expect(await resolverWithScan({ linkError: { '200/3': Object.assign(new Error('denied'), { code: 'EACCES' }) } }).resolve(fakeReq)).toBeNull();
   });
 });
 
