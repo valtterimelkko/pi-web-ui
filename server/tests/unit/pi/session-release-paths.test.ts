@@ -273,7 +273,8 @@ describe('PiService session release — every dispose/unload path', () => {
 
     const client = await pool.createClientSession('client-1', { cwd: '/work' });
 
-    pool.removeClient('client-1');
+    // B5 correction 01: removeClient is awaited (bounded session_shutdown first).
+    await pool.removeClient('client-1');
 
     expect(created[0].dispose).toHaveBeenCalledTimes(1);
     expect(pool.getClientSession('client-1')).toBeUndefined();

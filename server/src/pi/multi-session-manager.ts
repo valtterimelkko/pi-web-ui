@@ -225,6 +225,13 @@ export class MultiSessionManager {
   private teardownInFlight = new Map<string, Promise<void>>();
   /** B5: re-entrancy guard for the timer-driven cleanup sweep while a sweep can now await emissions. */
   private cleanupSweepInFlight = false;
+  /**
+   * B5 correction 01: sessions fenced as closing. Set synchronously in
+   * teardownOnce BEFORE the first await — the session stays mapped with its
+   * old status while handlers run, and this fence is what stops subscribes
+   * and prompts from attaching to a half-torn-down session.
+   */
+  private closingSessions = new Set<string>();
 
   // Grace period after API error before synthetic agent_end (default 60s)
   private readonly apiErrorGracePeriodMs = 60 * 1000;
@@ -862,12 +869,30 @@ export class MultiSessionManager {
     } catch (error) {
       logger.error(`[MultiSessionManager] Error unloading session ${sessionPath}:`, error);
     }
-    
+
     // Release the event handler and every other PiService-owned reference
     this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
 
     this.sessions.delete(sessionPath);
     this.extensionUiSnapshots.delete(sessionPath);
+
+    // B5 correction 01: an unload must not leave references pointing at a
+    // removed session — clear viewing references (and, defensively, any
+    // subscription that appeared while the emission ran; the closing fence
+    // prevents new ones, so this is belt-and-braces).
+    for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
+      if (viewingPath === sessionPath) {
+        this.clientViewingSession.delete(clientId);
+      }
+    }
+    for (const [clientId, subscriptions] of this.clientSubscriptions.entries()) {
+      if (subscriptions.has(sessionPath)) {
+        subscriptions.delete(sessionPath);
+        if (subscriptions.size === 0) {
+          this.clientSubscriptions.delete(clientId);
+        }
+      }
+    }
   }
 
   /**
@@ -1074,6 +1099,21 @@ export class MultiSessionManager {
     }
 
     const wasAlreadyActive = activeSession !== undefined;
+
+    // B5 correction 01: a session fenced as closing stays mapped (old status)
+    // while its bounded shutdown emission runs. A subscribe arriving
+    // mid-teardown waits for the teardown and then falls through to the
+    // rehydration branch — a browser tab reattaches to a FRESH session
+    // instead of erroring into a half-torn-down object (same dispose→
+    // rehydrate design as recoverSession). Recorded: fresh rehydrate chosen
+    // over an error because the session file (unload) still exists and the
+    // manager already owns this transition.
+    if (activeSession && this.closingSessions.has(sessionPath)) {
+      const inFlightTeardown = this.teardownInFlight.get(sessionPath);
+      logger.info(`[MultiSessionManager] Subscribe ${clientId} arrived while ${sessionPath} is closing; waiting for teardown, then rehydrating fresh`);
+      if (inFlightTeardown) await inFlightTeardown.catch(() => undefined);
+      activeSession = this.sessions.get(sessionPath);
+    }
 
     if (!activeSession) {
       // Session not in memory - need to rehydrate from disk
@@ -1898,8 +1938,11 @@ export class MultiSessionManager {
    */
   async prompt(sessionPath: string, message: string): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
-    if (!activeSession) {
-      throw new Error(`Session ${sessionPath} does not exist`);
+    // B5 correction 01: a closing session is refused with the existing
+    // does-not-exist error — busy would advertise a retry that cannot
+    // succeed, because the session is being removed.
+    if (!activeSession || this.closingSessions.has(sessionPath)) {
+      throw new Error(`Session ${sessionPath} does not exist${this.closingSessions.has(sessionPath) ? ' (it is closing)' : ''}`);
     }
 
     if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
@@ -1947,8 +1990,9 @@ export class MultiSessionManager {
    */
   async submitPrompt(sessionPath: string, message: string): Promise<void> {
     const activeSession = this.sessions.get(sessionPath);
-    if (!activeSession) {
-      throw new Error(`Session ${sessionPath} does not exist`);
+    // B5 correction 01: refuse a closing session (see prompt()).
+    if (!activeSession || this.closingSessions.has(sessionPath)) {
+      throw new Error(`Session ${sessionPath} does not exist${this.closingSessions.has(sessionPath) ? ' (it is closing)' : ''}`);
     }
 
     if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
@@ -2145,6 +2189,8 @@ export class MultiSessionManager {
   private teardownOnce(sessionPath: string, kind: 'dispose' | 'unload' | 'stop', shutdown: SessionShutdownInit): Promise<void> {
     const inFlight = this.teardownInFlight.get(sessionPath);
     if (inFlight) return inFlight;
+    // B5 correction 01: fence synchronously, before the first await.
+    this.closingSessions.add(sessionPath);
     const run = (
       kind === 'dispose'
         ? this.performDispose(sessionPath, shutdown)
@@ -2153,6 +2199,7 @@ export class MultiSessionManager {
           : this.performStop(sessionPath, shutdown)
     ).finally(() => {
       this.teardownInFlight.delete(sessionPath);
+      this.closingSessions.delete(sessionPath);
     });
     this.teardownInFlight.set(sessionPath, run);
     return run;

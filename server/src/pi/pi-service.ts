@@ -979,7 +979,11 @@ export class PiService {
     // clientSessions map after cleanup, strongly retaining disposed sessions.
     if (this.sessionPool) {
       for (const clientId of this.sessionPool.getActiveClients()) {
-        this.sessionPool.removeClient(clientId);
+        // B5 correction 01: awaited — the pool teardown emits the bounded
+        // session_shutdown before disposing, so it settles before the
+        // remaining-sessions pass below (identity-safe release keeps the
+        // drained sessions out of that pass: no double emission).
+        await this.sessionPool.removeClient(clientId);
       }
     }
     // B5 (finding F1): the remaining (non-pool) sessions get their bounded
