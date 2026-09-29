@@ -1043,8 +1043,8 @@ header without changing the SSE event envelope.
 
 Pi runs additionally carry the streaming tool-argument budget (contract
 `1.48.0`): when the run's streamed tool-call arguments exceed
-`PI_TOOL_ARGS_MAX_CALL_CHARS` (per tool call, default 65,536) or
-`PI_TOOL_ARGS_MAX_TURN_CHARS` (per run, default 262,144), the turn is aborted
+`PI_TOOL_ARGS_MAX_CALL_CHARS` (per tool call, default 16,384) or
+`PI_TOOL_ARGS_MAX_TURN_CHARS` (per run, default 65,536), the turn is aborted
 and the receipt terminates `failed` with `errorCode: "RUN_BUDGET_EXCEEDED"`.
 The session stream carries a `tool_args_budget_exceeded` event with
 `data.scope` (`"call" | "turn"`), `capChars` and `observedChars` just before the

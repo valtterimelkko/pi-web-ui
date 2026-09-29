@@ -827,8 +827,8 @@ patch; that patch is removed and the bound now lives in pi-web-ui, leaving
 - **Where:** `server/src/pi/tool-args-budget.ts`, installed at the single
   `PiService.createSession` subscribe funnel — one guard per session, covering
   Internal API dispatches, browser sessions and hosted sessions alike.
-- **Caps:** `PI_TOOL_ARGS_MAX_CALL_CHARS` (default `65536` per tool call) and
-  `PI_TOOL_ARGS_MAX_TURN_CHARS` (default `262144` per run). `0` disables a cap;
+- **Caps:** `PI_TOOL_ARGS_MAX_CALL_CHARS` (default `16384` per tool call) and
+  `PI_TOOL_ARGS_MAX_TURN_CHARS` (default `65536` per run). `0` disables a cap;
   an invalid value, or a turn cap below the call cap, logs one warning and falls
   back to the defaults — configuration never stops startup.
 - **On breach:** the guard emits one `tool_args_budget_exceeded` event on the
@@ -840,14 +840,20 @@ patch; that patch is removed and the bound now lives in pi-web-ui, leaving
   breach with scope/cap/observed), the `tool_args_budget_exceeded` event in the
   session stream/receipt event record, and `RUN_BUDGET_EXCEEDED` in the
   error-code catalog.
-- **Calibration:** measured on pristine pi-ai 0.87.1, per-delta parse cost grows
-  from ~0.37 ms at 4 KB accumulated to ~12.8 ms at 460 KB (linear per call,
-  quadratic over a stream); one 460 KB fine-delta generation integrates to
-  ~141 s of main-thread CPU. The caps abort long before the dangerous zone:
-  worst case at the default cap is ~18 s in ≤2.25 ms slices, and the unbounded
-  accumulation mechanism itself is deleted. Real tool arguments measured over
-  5,633 recent calls: p50 233 B, p90 ~2 KB, p99 ~9.8 KB, max 36.9 KB — the
-  64 KB cap has zero observed false positives.
+- **Calibration (B3a gate, 2026-09-29):** measured on pristine pi-ai 0.87.1,
+  per-delta parse cost grows from ~0.37 ms at 4 KB accumulated to ~12.8 ms at
+  460 KB (linear per call, quadratic over a stream); one 460 KB fine-delta
+  generation integrates to ~141 s of main-thread CPU. The live proof drove the
+  incident pattern through a disposable pristine server: with the fine-delta
+  fixture, the 64 KB parity cap BREACHED the B2 lag gate (p99 8.3 s — an
+  unpaced stream pins the loop for its whole ~18–22 s pre-abort window), while
+  the 16 KB default PASSED (unpaced: p99 93 ms, abort ~2.3 s; paced at the
+  incident's ~90 events/s: lag p99 max 3 ms across 47 samples, zero over
+  300 ms). The cap-off positive control showed the stall class (lag p99
+  7.4 s while streaming past the cap bound). Accepted trade-off: ~0.16% of
+  measured real tool calls (9/5,633; largest observed argument 36.9 KB) would
+  breach the 16 KB default — raise `PI_TOOL_ARGS_MAX_CALL_CHARS` for
+  workloads that legitimately write big files.
 
 ## Error codes & enrichment
 

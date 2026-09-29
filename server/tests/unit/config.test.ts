@@ -184,8 +184,8 @@ describe('pi streaming tool-argument caps (B3a)', () => {
 
   it('pair resolution: defaults when both unset; both values honoured in bounds', () => {
     expect(resolveToolArgsCaps(undefined, undefined)).toEqual({
-      callChars: 65536,
-      turnChars: 262144,
+      callChars: 16384,
+      turnChars: 65536,
       warnings: [],
     });
     expect(resolveToolArgsCaps('32768', '131072').warnings).toEqual([]);
@@ -194,7 +194,7 @@ describe('pi streaming tool-argument caps (B3a)', () => {
 
   it('pair resolution: invalid values warn and fall back to defaults — startup never fails', () => {
     const broken = resolveToolArgsCaps('potato', String(MAX + 1));
-    expect(broken).toMatchObject({ callChars: 65536, turnChars: 262144 });
+    expect(broken).toMatchObject({ callChars: 16384, turnChars: 65536 });
     expect(broken.warnings).toHaveLength(2);
     expect(broken.warnings[0]).toMatch(/PI_TOOL_ARGS_MAX_CALL_CHARS/);
     expect(broken.warnings[1]).toMatch(/PI_TOOL_ARGS_MAX_TURN_CHARS/);
@@ -202,7 +202,7 @@ describe('pi streaming tool-argument caps (B3a)', () => {
 
   it('pair resolution: turn cap below call cap warns once and resets BOTH to defaults', () => {
     const inverted = resolveToolArgsCaps('65536', '16384');
-    expect(inverted).toMatchObject({ callChars: 65536, turnChars: 262144 });
+    expect(inverted).toMatchObject({ callChars: 16384, turnChars: 65536 });
     expect(inverted.warnings).toHaveLength(1);
     expect(inverted.warnings[0]).toMatch(/PI_TOOL_ARGS_MAX_TURN_CHARS.*PI_TOOL_ARGS_MAX_CALL_CHARS|call cap/s);
   });

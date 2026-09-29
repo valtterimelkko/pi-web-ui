@@ -14,10 +14,17 @@ dotenv.config();
 export const PI_TOOL_ARGS_MIN_CHARS_BOUND = 1024;
 /** Upper bound (chars) for a configured streaming tool-argument cap. */
 export const PI_TOOL_ARGS_MAX_CHARS_BOUND = 1024 * 1024;
-/** Default per-tool-call cap: parity with the removed pi-ai patch's 64 KB abort. */
-export const PI_TOOL_ARGS_DEFAULT_CALL_CHARS = 64 * 1024;
+/** Default per-tool-call cap (B3a gate decision 2026-09-29): the live proof on
+ *  pristine pi-ai with the fine-delta fixture measured the B2 lag gate (300 ms
+ *  sustained) BREACHED at the 64 KB parity cap (p99 8.3 s — the unpaced stream
+ *  pins the loop for the whole ~18 s pre-abort window) and PASSING at 16 KB
+ *  (p99 93 ms, abort ~2.3 s). Accepted trade-off (parent rule): ~0.16% of
+ *  measured real tool calls (9/5,633; the largest observed argument was
+ *  36.9 KB) would now breach — operators of workloads that legitimately write
+ *  big files raise PI_TOOL_ARGS_MAX_CALL_CHARS rather than code changing. */
+export const PI_TOOL_ARGS_DEFAULT_CALL_CHARS = 16 * 1024;
 /** Default per-run (agent_start→agent_end) aggregate cap across tool calls. */
-export const PI_TOOL_ARGS_DEFAULT_TURN_CHARS = 256 * 1024;
+export const PI_TOOL_ARGS_DEFAULT_TURN_CHARS = 64 * 1024;
 
 export interface ParsedToolArgsCap {
   value: number;
