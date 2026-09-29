@@ -929,8 +929,11 @@ calls — the same 2026-09-12 class beyond its quadratic parse arm):
   receipt persists only the code). B3a's `tool_args_budget_exceeded` event
   now also carries `data.budget: "tool_args"` (additive) so all three budgets
   share one discriminator.
-- **What to look for:** log component `RunBudget`, the `run_budget_exceeded`
-  event on the session event stream, and the error-code catalog hint.
+- **What to look for:** the `run_budget_exceeded`
+  event on the session event stream and the error-code catalog hint. (Log
+  lines from component `RunBudget` appear only when abort retries fail — a
+  clean breach is observable on the event stream and the receipt, not the
+  log.)
 - **Calibration (measured real sessions, read-only scan of 732 files):**
   3,352 runs — output tokens per run p50 5,981, p90 45,953, p99 130,100,
   p99.9 204,869, max 267,569 (0/3,279 runs breach 500,000, ~1.9× the observed
