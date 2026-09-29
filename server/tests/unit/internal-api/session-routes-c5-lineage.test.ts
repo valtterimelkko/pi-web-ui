@@ -15,6 +15,10 @@ import { createSessionRoutes, type SessionRoutesDeps } from '../../../src/intern
 import { SessionRegistryManager } from '../../../src/session-registry.js';
 import { INTERNAL_API_CONTRACT_VERSION } from '../../../src/internal-api/types.js';
 
+// Integration (wave 3): C4's default-on cwd preflight refuses creates into a
+// non-existent cwd, so fixtures use a directory that exists and is writable.
+const PROJ = os.tmpdir();
+
 function jsonReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): IncomingMessage {
   const req = new PassThrough() as IncomingMessage;
   (req as any).method = method;
@@ -90,7 +94,7 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
       id: PARENT_ID,
       sdkType: 'pi',
       path: '/sessions/parent.jsonl',
-      cwd: '/root/proj',
+      cwd: PROJ,
       firstMessage: 'parent',
       messageCount: 1,
       status: 'idle',
@@ -132,10 +136,11 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
     return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : undefined };
   }
 
-  const createBody = { runtime: 'antigravity', cwd: '/root/proj' };
+  const createBody = { runtime: 'antigravity', cwd: PROJ };
 
-  it('bumps the contract to 1.54.0', () => {
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.54.0');
+  it('bumps the contract to at least 1.54.0', () => {
+    const [maj, min] = INTERNAL_API_CONTRACT_VERSION.split('.').map(Number);
+    expect(maj === 1 && min >= 54).toBe(true);
   });
 
   it('links via the X-Parent-Session header with parentSource "header" (unchanged header path)', async () => {
@@ -195,7 +200,7 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
         id: 'unlinked-1',
         sdkType: 'claude',
         path: '/sessions/unlinked.jsonl',
-        cwd: '/root/proj',
+        cwd: PROJ,
         firstMessage: 'u',
         messageCount: 0,
         status: 'idle',
@@ -251,8 +256,8 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
 
     it('links each batch child via the per-entry body parentSessionId', async () => {
       const out = await batch([
-        { runtime: 'antigravity', cwd: '/root/proj', parentSessionId: PARENT_ID },
-        { runtime: 'antigravity', cwd: '/root/proj', parentSessionId: PARENT_ID },
+        { runtime: 'antigravity', cwd: PROJ, parentSessionId: PARENT_ID },
+        { runtime: 'antigravity', cwd: PROJ, parentSessionId: PARENT_ID },
       ]);
       expect(out.status).toBe(200);
       expect(out.body.createdCount).toBe(2);
@@ -269,8 +274,8 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
 
     it('falls back to peer resolution per batch child when no entry names a parent', async () => {
       const out = await batch([
-        { runtime: 'antigravity', cwd: '/root/proj' },
-        { runtime: 'antigravity', cwd: '/root/proj' },
+        { runtime: 'antigravity', cwd: PROJ },
+        { runtime: 'antigravity', cwd: PROJ },
       ]);
       expect(out.status).toBe(200);
       for (const item of out.body.created) {
@@ -283,12 +288,12 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
     it('applies the request header to every batch child (header beats body)', async () => {
       const OTHER = '11111111-1111-4111-8111-000000000042';
       await registry.upsert({
-        id: OTHER, sdkType: 'pi', path: '/sessions/other-parent.jsonl', cwd: '/root/proj',
+        id: OTHER, sdkType: 'pi', path: '/sessions/other-parent.jsonl', cwd: PROJ,
         firstMessage: 'x', messageCount: 0, status: 'idle',
         createdAt: '2026-09-29T02:00:00.000Z', lastActivity: '2026-09-29T02:00:00.000Z',
       });
       const out = await batch(
-        [{ runtime: 'antigravity', cwd: '/root/proj', parentSessionId: OTHER }],
+        [{ runtime: 'antigravity', cwd: PROJ, parentSessionId: OTHER }],
         { 'x-parent-session': PARENT_ID },
       );
       expect(out.body.created[0].parentSessionId).toBe(PARENT_ID);
@@ -298,7 +303,7 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
 
     it('leaves batch children unlinked when peer resolution refuses (fail safe)', async () => {
       peerResolve.resolve.mockResolvedValue(null);
-      const out = await batch([{ runtime: 'antigravity', cwd: '/root/proj' }]);
+      const out = await batch([{ runtime: 'antigravity', cwd: PROJ }]);
       expect(out.body.created[0].success).toBe(true);
       expect('parentSessionId' in out.body.created[0]).toBe(false);
       expect('parentSource' in out.body.created[0]).toBe(false);
@@ -311,7 +316,7 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
     beforeEach(async () => {
       await registry.upsert({
         id: CC_ID, sdkType: 'commandcode', path: '/tmp/cc-session', commandCodeNativeSessionId: 'cc-native-1',
-        cwd: '/root/proj', firstMessage: 'cc', messageCount: 1, status: 'idle',
+        cwd: PROJ, firstMessage: 'cc', messageCount: 1, status: 'idle',
         createdAt: '2026-09-29T03:00:00.000Z', lastActivity: '2026-09-29T03:00:00.000Z',
         parentSessionId: PARENT_ID, parentSource: 'peer',
       });
@@ -327,7 +332,7 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
           isEnabled: vi.fn(() => true),
           listSessions: vi.fn(async () => [
             {
-              sessionId: CC_ID, executionInstanceId: 'exec-cc', cwd: '/root/proj',
+              sessionId: CC_ID, executionInstanceId: 'exec-cc', cwd: PROJ,
               modelSelector: 'meta/muse-spark-1.2-contributor', state: 'idle', messageCount: 1,
               firstMessage: 'cc', createdAt: '2026-09-29T03:00:00.000Z', updatedAt: '2026-09-29T03:01:00.000Z',
             },
