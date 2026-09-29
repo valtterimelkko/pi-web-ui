@@ -7,11 +7,18 @@
  * fixture that reproduces the 2026-09-12 pattern's generation arm: one very
  * long assistant generation streaming content chunks. Scenarios:
  *
- *   bytes   — default budgets (500,000 output tokens / 16 MiB streamed
- *             bytes): the fixture streams paced 4 KiB content chunks; the
- *             streamed-byte cap must abort the turn at the cap, the receipt
- *             must carry RUN_BUDGET_EXCEEDED, and a second session must keep
- *             streaming throughout with A2 event-loop lag under 300 ms.
+ *   bytes   — default budgets (1,000,000 output tokens / 16 MiB streamed
+ *             bytes), stress-paced 4 KiB / 3 ms ≈ 1.37 MB/s (~300× the p99.9
+ *             real streaming rate of 4,551 B/s): the streamed-byte cap must
+ *             abort the turn at the cap, the receipt must carry
+ *             RUN_BUDGET_EXCEEDED, and a second session must stream
+ *             THROUGHOUT A's runaway window (its own paced stream outlasts
+ *             A's abort) and complete normally, with A2 event-loop lag under
+ *             300 ms throughout.
+ *   bytes-realistic — PI_RUN_BUDGET_MAX_STREAMED_BYTES=131072 at ~333
+ *             chunks/s of 64 B (~21 KB/s; B3a measured ~300 deltas/s provider
+ *             pace, ~3× the most intense real run at 6.6 KB/s): aborts at the
+ *             cap at REALISTIC pacing; B streams throughout; lag < 300 ms.
  *   tokens  — PI_RUN_BUDGET_MAX_OUTPUT_TOKENS=2000: the fixture streams a
  *             small message that ends with usage completion_tokens=50000;
  *             the output-token cap must abort at message_end (the runtime
@@ -72,9 +79,12 @@ mkdirSync(path.join(stateDir, 'logs'), { recursive: true });
 const fixtureState = { requests: 0, log: [] };
 
 // Per-scenario runaway plan, set by the orchestrator before each scenario:
-// how many bytes request 1 streams before finishing, and what output-token
-// count its final usage chunk reports.
-const runawayPlan = { bytes: 17 * 1024 * 1024, completionTokens: 600_000 };
+// how many bytes request 1 streams before finishing, at what chunk size, and
+// what output-token count its final usage chunk reports. Session B (every
+// request after the first) streams 64 B every 33 ms (~1.9 KB/s — inside the
+// measured real per-run streaming range of 148–6,583 B/s) for at least
+// `bMinStreamMs`, so B's stream spans A's entire runaway window.
+const runawayPlan = { bytes: 17 * 1024 * 1024, completionTokens: 600_000, chunkBytes: 4096, bMinStreamMs: 16_000 };
 
 function startFixture(port) {
   const server = http.createServer((req, res) => {
@@ -105,13 +115,13 @@ function startFixture(port) {
       // The runaway: one very long assistant generation in content chunks.
       record.kind = 'runaway';
       chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
-      const payload = 'x'.repeat(chunkBytes);
+      const payload = 'x'.repeat(runawayPlan.chunkBytes);
       const targetBytes = runawayPlan.bytes;
       let sent = 0;
       const writeOne = () => {
         if (res.destroyed) return; // the budget aborted the request — stop feeding
         chunk({ ...chunkBody, choices: [{ index: 0, delta: { content: payload }, finish_reason: null }] });
-        sent += chunkBytes;
+        sent += runawayPlan.chunkBytes;
         record.bytes = sent; // track continuously so an aborted run still shows how much streamed
         if (sent < targetBytes) {
           if (paceChunkMs > 0) setTimeout(writeOne, paceChunkMs);
@@ -126,11 +136,30 @@ function startFixture(port) {
       return;
     }
 
-    // Every later request: instant, clean stop (session B; the control's post-run turn).
-    record.kind = 'instant-stop';
-    chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: null }] });
-    finishClean(4);
-    record.bytes = 4;
+    // Every later request (session B; the control's post-run turn): a paced
+    // stream that runs for at least bMinStreamMs — THROUGHOUT A's runaway
+    // window — then finishes cleanly. ~64 B every 33 ms ≈ 1.9 KB/s, inside
+    // the measured real per-run streaming range (p50 148, p99 1,014, max
+    // 6,583 B/s; measurement-v2.json).
+    record.kind = 'streaming-session';
+    chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
+    const bPayload = 'y'.repeat(64);
+    let bSent = 0;
+    const bStarted = Date.now();
+    const writeB = () => {
+      if (res.destroyed) return;
+      chunk({ ...chunkBody, choices: [{ index: 0, delta: { content: bPayload }, finish_reason: null }] });
+      bSent += 64;
+      record.bytes = bSent;
+      if (Date.now() - bStarted < runawayPlan.bMinStreamMs) {
+        setTimeout(writeB, 33);
+      } else {
+        record.streamMs = Date.now() - bStarted;
+        record.finished = Date.now();
+        finishClean(200);
+      }
+    };
+    writeB();
   });
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
 }
@@ -257,20 +286,25 @@ async function runScenario(socketPath, token) {
   const sessionA = await createSession(socketPath, token, 'A');
   const windowStart = Date.now();
 
+  const aFiredAt = Date.now();
   const aPromise = promptAndWait(socketPath, token, sessionA, 'stream the runaway fixture');
 
   await sleep(2_000); // let A get mid-stream
   const sessionB = await createSession(socketPath, token, 'B');
+  const bFiredAt = Date.now();
   const b = await promptAndWait(socketPath, token, sessionB, 'answer briefly');
+  const bResolvedAt = Date.now();
   const bReceiptRunId = b.response.json?.runId;
   const bReceipt = bReceiptRunId ? await getReceipt(socketPath, token, bReceiptRunId) : undefined;
 
   const a = await aPromise;
+  const aResolvedAt = Date.now();
   const windowEnd = Date.now();
   const aRunId = a.response.json?.runId;
   const aReceipt = aRunId ? await getReceipt(socketPath, token, aRunId) : undefined;
 
   const aErrorCode = a.response.json?.code ?? aReceipt?.errorCode;
+  const bStreamRecord = fixtureState.log.find((r) => r.kind === 'streaming-session');
   return {
     a: {
       httpStatus: a.response.status,
@@ -286,6 +320,17 @@ async function runScenario(socketPath, token) {
       wallMs: b.wallMs,
       receiptStatus: bReceipt?.status,
       servedModel: bReceipt?.servedModel ?? bReceipt?.model,
+    },
+    timeline: {
+      aFiredAt,
+      bFiredAt,
+      aResolvedAt,
+      bResolvedAt,
+      // The correction's requirement: B streamed THROUGHOUT A's runaway
+      // window — B's own run must still be in flight when A's abort lands.
+      bSpannedARun: bResolvedAt >= aResolvedAt,
+      bStreamMs: bStreamRecord?.streamMs ?? null,
+      bStreamedBytes: bStreamRecord?.bytes ?? null,
     },
     fixture: { requests: fixtureState.requests, log: fixtureState.log.slice() },
     metrics: analyseMetrics(path.join(stateDir, 'metrics'), windowStart, windowEnd),
@@ -333,20 +378,60 @@ async function main() {
   };
 
   const wantBytes = scenario === 'all' || scenario === 'bytes';
+  const wantRealistic = scenario === 'all' || scenario === 'bytes-realistic';
   const wantTokens = scenario === 'all' || scenario === 'tokens';
   const wantCapOff = scenario === 'all' || scenario === 'cap-off';
 
-  const verdict = { scenarios: {}, fixturePort: port, scratch, chunkBytes, paceChunkMs, runawayBytes, controlOutputTokens };
+  const verdict = {
+    scenarios: {},
+    fixturePort: port,
+    scratch,
+    chunkBytes,
+    paceChunkMs,
+    runawayBytes,
+    controlOutputTokens,
+    // Pacing justification (correction 01): real per-run streaming rates from
+    // the measured corpus (/root/orch-ops/orchestration-scaling/b3b/measure/
+    // measurement-v2.json, merged at the <2s follow-up gap, includes tool
+    // time): p50 148 B/s, p90 446 B/s, p99 1,014 B/s, p99.9 4,551 B/s, max
+    // 6,583 B/s. The stress run (4096 B / 3 ms ≈ 1,367,000 B/s) is ~300× the
+    // p99.9 real rate — a deliberate stress bound. The bytes-realistic run
+    // streams 64 B / 3 ms ≈ 333 chunks/s ≈ 21,000 B/s at B3a's measured
+    // ~300 deltas/s provider pace, ~3× the most intense real run — and still
+    // aborts at its (lowered) cap, at realistic pacing.
+    pacing: {
+      measuredRealBytesPerSecond: { p50: 148, p90: 446, p99: 1014, p999: 4551, max: 6583 },
+      stressBytesPerSecond: Math.round(chunkBytes / (paceChunkMs / 1000)),
+      realisticBytesPerSecond: 21000,
+      realisticChunksPerSecond: 333,
+    },
+  };
   const tokenPath = path.join(stateDir, 'internal-api-token');
 
   try {
     if (wantBytes) {
-      log('── scenario bytes (default budgets, paced) ──');
+      log('── scenario bytes (default budgets, stress-paced ~1.37 MB/s ≈ 300× p99.9 real rate) ──');
       runawayPlan.bytes = 32 * 1024 * 1024; // never reached: the 16 MiB cap aborts mid-stream
       runawayPlan.completionTokens = controlOutputTokens;
+      runawayPlan.chunkBytes = 4096;
+      runawayPlan.bMinStreamMs = 16_000; // A aborts at ~14 s; B must stream past it
       const server = await serveOnce({});
       const token = readFileSync(tokenPath, 'utf8').trim();
       verdict.scenarios.bytes = await runScenario(server.socketPath, token);
+      await stopServer();
+    }
+    if (wantRealistic) {
+      log('── scenario bytes-realistic (lowered byte cap, ~333 chunks/s ≈ B3a measured provider pace) ──');
+      // Realistic pacing AND an abort: 128 KiB cap at ~21 KB/s aborts in ~7 s
+      // (fastest observed real RUN streamed 6.6 KB/s; B3a measured ~300
+      // deltas/s provider pacing) — the paced lag gate at real-world rates.
+      runawayPlan.bytes = 1024 * 1024; // never reached: the 128 KiB cap aborts first
+      runawayPlan.completionTokens = controlOutputTokens;
+      runawayPlan.chunkBytes = 64;
+      runawayPlan.bMinStreamMs = 10_000;
+      const server = await serveOnce({ PI_RUN_BUDGET_MAX_STREAMED_BYTES: '131072' });
+      const token = readFileSync(tokenPath, 'utf8').trim();
+      verdict.scenarios['bytes-realistic'] = await runScenario(server.socketPath, token);
       await stopServer();
     }
     if (wantTokens) {
@@ -356,6 +441,8 @@ async function main() {
       // message_end token path without the byte cap firing first.
       runawayPlan.bytes = 64 * 1024;
       runawayPlan.completionTokens = 50_000;
+      runawayPlan.chunkBytes = 4096;
+      runawayPlan.bMinStreamMs = 3_000;
       const server = await serveOnce({ PI_RUN_BUDGET_MAX_OUTPUT_TOKENS: '2000' });
       const token = readFileSync(tokenPath, 'utf8').trim();
       verdict.scenarios.tokens = await runScenario(server.socketPath, token);
@@ -363,11 +450,13 @@ async function main() {
     }
     if (wantCapOff) {
       log('── scenario cap-off (positive control, both knobs 0) ──');
-      // The same volumes that abort cap-on: 17 MiB streamed (past the 16 MiB
-      // byte default) and 600,000 reported output tokens (past the 500,000
-      // token default) — with the knobs at 0 neither trips.
+      // The same volumes that abort cap-on — 17 MiB streamed (past the 16 MiB
+      // byte default) and a large reported output-token total — with the
+      // knobs at 0 neither trips: the run completes normally.
       runawayPlan.bytes = runawayBytes;
       runawayPlan.completionTokens = controlOutputTokens;
+      runawayPlan.chunkBytes = 4096;
+      runawayPlan.bMinStreamMs = 16_000;
       const server = await serveOnce({ PI_RUN_BUDGET_MAX_OUTPUT_TOKENS: '0', PI_RUN_BUDGET_MAX_STREAMED_BYTES: '0' });
       const token = readFileSync(tokenPath, 'utf8').trim();
       verdict.scenarios['cap-off'] = await runScenario(server.socketPath, token);
