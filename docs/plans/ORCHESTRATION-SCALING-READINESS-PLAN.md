@@ -1,6 +1,6 @@
 # Orchestration Scaling Readiness Plan
 
-> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) is shipped and in production since the owner-approved restart on 2026-09-27 17:39 UTC. The B1 24 h confirmation soak passed (heap flat at ~200 MB post-GC over 8,092 children). **Next: the interim wave (B0.1, B1.1, B1.2), then wave 2 (B2–B4), then R2.** Server-side fixes reach production only at an owner-approved restart.
+> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **Open before wave 2:** the B1.2 production telemetry comparison, and the owner's `subagent` decision (B1.3). **Next: wave 2 (B2–B4), then R2.** Server-side fixes reach production only at an owner-approved restart.
 > **Created:** 2026-09-26 from the Pi Web UI / Internal API deep review (owner-requested).
 > **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). **Review moments** are held with the owner, in that session or, if its context is exhausted, by a fresh Opus agent that first follows §7 (handoff).
 > **Evidence:** [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md).
@@ -240,6 +240,20 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
 - [ ] A failing test first for each defect.
 - [ ] A disposable `micro` run shows: the build commit recorded; an end snapshot taken and compared; the server unit gone after completion; zero `SESSION_NOT_FOUND` failures caused by the sweep; a planted stale `dist` refused.
 **Not victory if:** the end snapshot is still a manual step, or the stale-build check only warns.
+**Outcome (2026-09-29): shipped** (merged `ddccf8bf`; harness-only, no production code).
+- All five defects were fixed.
+- Independent review added more, all fixed with failing-test-first proofs:
+  - end-snapshot drain and pending-create tracking;
+  - DELETE only terminalised on confirmed not-found;
+  - the known slot subtracted only when the snapshot proves it;
+  - the verdict only on the true end snapshot;
+  - unknown git state refuses; missing artefacts refuse;
+  - teardown retries and anomaly reporting;
+  - server-side untracked-orphan reconciliation (a Gate 1 supervisor kill had left an orphan that read as a "retained child");
+  - fail-closed list failures and unknown session ages.
+- Report figures: live on the server, verified known slot, retained deleted.
+- Final micro `micro-1790637070894-92ed5848`: 29/29 steps, `Retained deleted children: 0`.
+- Evidence: [`B0.1.md`](./execution-reports/orchestration-scaling/B0.1.md); reviews `…/reviews/b0-1-luna-review*.md`.
 
 #### B1 — Fix what retains memory (retainers named at R1)
 
@@ -291,6 +305,20 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
 - [ ] A harness `micro` run with real Pi children on the new build shows the same counts flat between its start and end snapshots.
 - [ ] Watcher behaviour unchanged: add, change and unlink events still reach the registry (existing watcher tests pass, plus one live add/unlink check).
 **Not victory if:** only the debounce map is fixed while chokidar state still grows, or the proof needs a 24 h soak.
+**Outcome (2026-09-29): shipped** (merged `a48ad8f1`; in production since the 2026-09-29 00:05 UTC restart).
+- **Retention:** two retention paths fixed: the unlink branch now deletes its debounce entry, and chokidar `awaitWriteFinish` was removed (its `_remove()` early return leaked per-file watchers).
+  - Old build: 3,000 synthetic files left `Timeout` +756 and `FSWatcher` +507.
+  - New build: 0 by direct map cardinality.
+- **Read coalescing** replaces `awaitWriteFinish` for live sessions. For an 80 MB file appended every 50 ms:
+  - pre-coalescing: 114 complete reads, p99 226 ms;
+  - fixed: 1 read, p99 about 21 ms, which matches the old build.
+- **Also fixed:**
+  - stale metadata after a long in-flight read;
+  - unlink identity: the strict Pi filename parser, with `pi-service` keeping its lenient check;
+  - client removal and broker publication by path for unlinks without an id;
+  - symlink-safe churn guard.
+- **Follow-up:** the SDK's own per-session `fs.watch` handles grew slightly in a micro run (outside this step).
+- Evidence: [`B1.1.md`](./execution-reports/orchestration-scaling/B1.1.md); reviews `…/reviews/b1-1-luna-review*.md`.
 
 #### B1.2 — Attribute and remove production event-loop lag spikes (added at the 2026-09-28 interim review)
 
@@ -315,6 +343,38 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
 - [ ] Instrumentation is bounded, tested, and documented in `docs/OBSERVABILITY.md`.
 - [ ] After an owner-approved restart, production telemetry over a stated observation window shows fewer spike minutes than the 2026-09-27/28 baseline (17 in 22 h), with the comparison written into the evidence bundle.
 **Not victory if:** the threshold is raised instead of the stall removed; the fix is shown only with mocks; the attribution rests on timing overlap.
+**Outcome (2026-09-29): merged and in production; the production telemetry item is open.**
+- **Attribution:** every Pi session open re-imported all 16 global extensions, because the SDK clears its single-slot extension module cache whenever the cwd changes, blocking the loop for about 0.3–1.6 s. Proven with span containment (`pi.session.resource_loader`).
+- **Fix:** a process-level extension-factory cache.
+  - An additive guarded SDK patch (`scripts/patch-pi-coding-agent-extension-factory.mjs`, in `postinstall`) exposes the factory import and seed.
+  - Seed-to-load and every reload run in one process-wide critical section.
+  - Only audited share-safe extensions are cached (15/16; `subagent` excluded, see B1.3).
+- **Reproduction** (same synthetic corpus and client), A2 p99 under load:
+
+  | Build | A2 p99 | Spike minutes |
+  |---|---|---|
+  | Pre-fix | 388–533 ms | 6 |
+  | Final (`fe925403`) | 98–201 ms | 0 |
+
+  The fixture has `activeTurns=0`.
+- **Proposed B2 lag gate:** 300 ms sustained (two readings), recovering at 150 ms. B2 must validate it under active API load.
+- **Production smoke after the restart:** the cold first open stalled 718 ms (one-off import). The first new-cwd open stalled 413 ms (the uncached `subagent`). Later opens stayed under the 100 ms stall log.
+- **Open:** the production spike-minute comparison over an observation window against the 17-in-22-h baseline.
+- Evidence: [`B1.2.md`](./execution-reports/orchestration-scaling/B1.2.md); reviews `…/reviews/b1-2-luna-review*.md` (REJECT ×3, all findings closed; the final correction was verified by the parent).
+
+#### B1.3 — Extension module state safe to share (added 2026-09-28 during B1.2)
+
+**Intent.** Caching extension modules is only safe when their module-scope state is safe to share between sessions. The SDK **already** shares an evaluated module between sessions in the **same cwd** in production today, so per-session module state is a latent correctness bug regardless of caching.
+**Done** (`pi-enhancement` `8a4b768`, `9ad45d2`, `7c11e1d`; deployed to `~/.pi/agent/extensions` 2026-09-29 00:04 UTC, backup in `/root/orch-ops/orchestration-scaling/deploy-backup-b13-20260929T000419/`):
+- `memory`, `goal-engine` (auto-continue maps) and `enhanced-plan-mode` moved to per-session scope, each with a two-session isolation test (including a goal-engine shutdown-isolation regression).
+- `web-tools` (request-keyed cache) and `parallel-orchestrator` (globally keyed registries) audited as process-wide safe.
+**Open — owner decision:** `subagent`'s background-task registry is module-level. Among same-cwd sessions today, `reconcile()` drops other sessions' tracked tasks, and completion notices go to the most recently started session, not the owner.
+- **A: per-session manager.** A task belongs to the session that started it.
+- **B: process-wide registry keyed by session.** Tasks survive session switches and are routed to their owner.
+- **C: leave it** (current).
+
+A or B also makes the last extension cacheable, which removes the residual new-cwd stall seen in production.
+**Known gap for the store owner:** `pi-enhancement` has no working typecheck (`memory/tsconfig.json` `ignoreDeprecations` rejected; no root script).
 
 #### B2 — Heap- and lag-aware admission, heap cap aligned
 
@@ -379,6 +439,7 @@ C1–C5 should ship in one contract bump where practical, so that C6's stability
 **Not victory if:** the client wraps curl in a shell script with the same failure modes, or `wait` polls.
 
 #### C2 — Busy follow-ups and never-started runs
+**Input added 2026-09-29 (interim wave).** A Pi session reports `busy:false` during an auto-compaction. The Internal API then accepts a prompt with `202`, and the detached run fails with "Cannot submit a prompt while compaction is in progress" (receipt `failed RUNTIME_ERROR`). The parent sees an accepted dispatch that never runs. It was observed while supervising reviewer sessions. Separately, `auto-compact-75` aborts an in-flight turn when it compacts mid-run (the turn ends with no text) and resumes by itself. Parents must not re-prompt into that window. C2 should expose compaction as busy, or queue.
 
 **Intent.** No prompt is ever silently lost, and a run that never starts is known quickly.
 **Approach.** Reproduce first: a follow-up to a Pi session that stays busy beyond the inactivity window becomes `TURN_STALLED` and never reaches the session. Then fix it so the follow-up is either delivered after the running turn ends or refused explicitly (`409 SESSION_BUSY` with a hint), never accepted-then-dropped. Add start detection: an accepted run with no runtime activity within a configurable start window is marked with a distinct terminal state and the parent is notified.
@@ -538,6 +599,7 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | R1 | 2026-09-27 | `38c5e91e-6849-4f04-8b6b-301eb79468ab` (fresh Opus; "Int api program") | **Inputs checked:** `report.md`, `run-state.json`, `events.jsonl`, the soak unit's journal (V8 OOM at 13:34:40 UTC), the start and 1 GiB/2 GiB threshold snapshots (constructor diff, retainer paths, cut test), the code of the dispose paths, and commit `91effe69`. Not checked: A2 (not started) and production checksums. **Decisions (owner accepted the recommendations):** (a) leak proven, two retainers, B1 fixes both; (b) heap cap unchanged, decided at R2 from the confirmation soak; (c) Stage B proceeds. A1 is accepted as complete with deviations and is not repeated; the B1 confirmation soak (24 h) is its rerun. **Plan changes:** §1 item 2 and §2 updated with the soak result; §3 records the R1 decisions; new B0 (harness fixes); B1 rewritten around the named retainers, a cross-repo fix in `pi-enhancement`, and a host-side listener-count test; B2 amended (disposal available at critical memory, creates gated by heap, cap from R2); R2 inputs and decisions updated; E1 seeded with the "claims every path, wires one" class; §7 read-order and rules updated. Evidence: [`A1-soak.md`](./execution-reports/orchestration-scaling/A1-soak.md). |
 | Wave 1 execution | 2026-09-27 | `38c5e91e-…` (orchestrating) | Children on `clinepass/cline-pass/deepseek-v4.1-flash` (owner-authorised to use the remaining Cline Pass quota). An independent reviewer, GPT-6 Luna via `openai-codex` (owner-authorised), ran per lane, and the parent verified every lane. B0, B1 and A2 are merged; the extension fix is deployed. Owner instructions: no production restart until the owner picks a moment (another agent uses the Internal API); review stop after the 24 h confirmation soak. Plan change: B0.1 (stale-`dist` guard) added as an open follow-up. |
 | Interim review (after the confirmation soak) | 2026-09-28 | `d5db9012-5cb3-44af-99b9-06a3f8dd43ca` (Opus; "Int API Program 2", continuing `38c5e91e` after it crashed) | **Inputs checked:** the confirmation soak's `report.md`, `run-state.json`, `events.jsonl` and unit journal (one start, no OOM); start, 12 h and a manually taken end snapshot (constructor counts, `AgentSession` retainer, watcher retainer paths); `session-watcher.ts`; production `server/dist` build time against the restart (B1 present in production); A2 production telemetry (journal `Memory:` lines 120/h → 1/h; lag spike minutes). **Decisions (owner):** B1 shipped; heap cap unchanged; an interim wave before wave 2; long soaks kept to a minimum. **Plan changes:** status line; §2 rows for the confirmation soak and production telemetry; §3 decisions; §5 sequence and dependencies; new B0.1 (widened), B1.1 and B1.2; B1 outcome; B2 cap and lag-threshold source; R2 inputs and decisions; D1 bounded soak; E2 as the only remaining 24 h soak, with a browser-like load and a telemetry comparison; E1 second instance; §7 read-order, locations and rules. Evidence: [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md). |
+| Interim wave execution | 2026-09-28/29 | `d5db9012-…` (orchestrating) | **Routing:** children on `clinepass/cline-pass/deepseek-v4.1-flash` (owner-authorised), independent reviewer GPT-6 Luna via `openai-codex` (owner-authorised). **Quality loop:** the parent verified every hand-back (diffs, own re-runs, own probes) before Luna. Parent corrections caught: a pre-drain end snapshot; the `awaitWriteFinish` live-session regression (measured 114 reads vs 1); an id-less unlink breaking removal; the untracked-orphan misread as retention. Luna rejected each lane at least twice; every finding was closed, and the final rounds were verified by the parent. **Scope changes (parent, within the owner's autonomy grant):** B1.2's per-cwd loader cache was rejected (shared runtime); a guarded additive SDK patch was approved; **new step B1.3**; `subagent` left uncached, with the A/B decision put to the owner. **Production:** extensions deployed with a backup, then a restart at 00:05 UTC under `production:lock` (activeTurns 0). **Gates on master `ddccf8bf`:** lint, typecheck, build, docs 0; full `npm test` 6,428 passed, with 1 load-sensitive Claude SDK test failing in the full run and passing alone (untouched by this wave). **Plan changes:** status line; B0.1/B1.1/B1.2 outcomes; new B1.3; C2 input; §9 rows. |
 
 ## 9. Status ledger
 
@@ -547,10 +609,11 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | A2 | **shipped** (`2471b964`; in production since the 2026-09-27 17:39 UTC restart; production gate checked 2026-09-28: metrics file present and growing, journal `Memory:` lines 120/h → 1/h) | [`A2.md`](./execution-reports/orchestration-scaling/A2.md); reviews `/root/orch-ops/orchestration-scaling/reviews/a2-luna-review.md` | Disposable proof: one alert then one recovery, bounded rotation, `Memory:` lines 120/h → 0/h. Independent review found validation-mode escapes (production metrics path, notification override, validation root inside production metrics); all fixed and re-verified by the parent |
 | R1 | **held 2026-09-27** | §8 | Leak proven, two retainers named; heap cap deferred to R2; Stage B cleared |
 | B0 | **shipped** (`054c9d99`) | [`B0.md`](./execution-reports/orchestration-scaling/B0.md); reviews `…/reviews/b0-luna-review.md` | Positive controls re-checked by the parent (server death, restart after death, empty snapshot, audit, overlay). **New defect found after merge:** the launcher runs `server/dist` from its own checkout without checking that the build matches HEAD. A pre-fix `dist` made the first post-merge micro-soak and soak look leaky. Open follow-up B0.1: refuse or rebuild a stale `dist` (record the build commit). |
-| B0.1 | not started, **cleared** (interim wave) | — | Widened 2026-09-28: stale `dist`, end snapshot, teardown, sweep-race accounting, bounded window length |
+| B0.1 | **shipped** (`ddccf8bf`) | [`B0.1.md`](./execution-reports/orchestration-scaling/B0.1.md); reviews `…/reviews/b0-1-luna-review*.md` | Harness ready for D1 (bounded `--hours`) and E2 (24 h); final micro 29/29, retained deleted children 0 |
 | B1 | **shipped** (`5bbc95a6`; `pi-enhancement` `97a7106`, deployed to `~/.pi/agent/extensions` 2026-09-27 16:21 UTC; in production since the 2026-09-27 17:39 UTC restart) | [`B1.md`](./execution-reports/orchestration-scaling/B1.md); [`B1-confirmation-soak.md`](./execution-reports/orchestration-scaling/B1-confirmation-soak.md); reviews `…/reviews/b1-luna-review.md` | Confirmation soak `full-1790523945117-ea387201` passed: 24 h alive, post-GC ~200 MB flat, 8,092 children, trailing slope 0.31 MB/h. Accepted residuals: `SessionPool` shutdown cleanup (at review); one bounded extension slot. Third small retainer → B1.1 |
-| B1.1 | not started, **cleared** (interim wave) | — | Session-watcher unlink cleanup plus chokidar pending-write retention; synthetic churn proof |
-| B1.2 | not started, **cleared** (interim wave) | — | Attribute and remove production lag spikes (17 spike minutes in 22 h, max 919 ms); sets B2's lag threshold |
+| B1.1 | **shipped** (`a48ad8f1`; in production 2026-09-29 00:05 UTC) | [`B1.1.md`](./execution-reports/orchestration-scaling/B1.1.md); reviews `…/reviews/b1-1-luna-review*.md` | Watcher retention 0 at 3,000 files; live-session reads coalesced (1 read vs 114) |
+| B1.2 | **merged, in production** (`b55ca2e8`; restart 2026-09-29 00:05 UTC); **production telemetry comparison open** | [`B1.2.md`](./execution-reports/orchestration-scaling/B1.2.md); reviews `…/reviews/b1-2-luna-review*.md` | Reproduction p99 388–533 → 98–201 ms, spike minutes 6 → 0; proposed B2 gate 300 ms sustained / 150 ms recovery |
+| B1.3 | **shipped for 5/6** (`pi-enhancement` `7c11e1d`, deployed 2026-09-29 00:04 UTC); **`subagent` awaits owner decision A/B/C** | B1.2.md (B1.3 sections) | Fixes a latent same-cwd sharing bug in production; `subagent` misroutes notifications among same-cwd sessions today |
 | B2 | not started, **cleared** | — | Heap cap settled (unchanged). `heap_pressure` can be built now; `event_loop_lag` threshold after B1.2 |
 | B3–B4 | not started, **cleared** | — | Independent of B0–B2; may run alongside the interim wave |
 | C1–C6 | not started | — | |
