@@ -99,6 +99,7 @@ import {
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { formatPreflightProblem, preflightSpecSchema, runDispatchPreflight } from '../dispatch-preflight.js';
 import { DEFAULT_DRAIN_RETRY_AFTER_SECONDS } from '../drain-controller.js';
 import { readBoundedJsonBody as readJsonBody, RequestBodyTooLargeError } from '../request-body.js';
 import {
@@ -1576,6 +1577,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     } catch (error) {
       if (!(error instanceof AdmissionCapacityError)) throw error;
       sendAdmissionRefusal(res, error);
+      return;
+    }
+    // C4 (contract 1.53.0): dispatch preflight before any runtime work — the
+    // effective cwd always (default-on: a missing/unwritable cwd already failed
+    // the runtime spawn today, only later and less clearly), plus the caller's
+    // declared referenced paths and tools when provided. No session is created
+    // and no model token is spent on refusal.
+    const createPreflight = await runDispatchPreflight({
+      cwd,
+      paths: body.preflight?.paths,
+      tools: body.preflight?.tools,
+    });
+    if (!createPreflight.ok) {
+      sendJson(res, 400, {
+        ...enrichedErrorBody(ErrorCode.PREFLIGHT_FAILED, formatPreflightProblem(createPreflight)),
+        failures: createPreflight.failures,
+      });
       return;
     }
     let base: CreateSessionResponse | null = null;
@@ -3366,6 +3384,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (mode !== 'prompt' && mode !== 'follow_up' && mode !== 'steer') {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'mode must be prompt, follow_up, or steer'));
       return;
+    }
+
+    // C4 (contract 1.53.0): optional per-dispatch preflight. Refuses before any
+    // receipt, admission or runtime work. The session cwd is not re-checked
+    // here (it was validated at create); only this dispatch's declared items.
+    if (body.preflight !== undefined) {
+      const specParse = preflightSpecSchema.safeParse(body.preflight);
+      if (!specParse.success) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'preflight must be an object with optional `paths` (absolute) and `tools` (bare names) string arrays'));
+        return;
+      }
+      const promptPreflight = await runDispatchPreflight({ paths: specParse.data.paths, tools: specParse.data.tools });
+      if (!promptPreflight.ok) {
+        sendJson(res, 400, {
+          ...enrichedErrorBody(ErrorCode.PREFLIGHT_FAILED, formatPreflightProblem(promptPreflight)),
+          failures: promptPreflight.failures,
+        });
+        return;
+      }
     }
 
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
@@ -6952,6 +6989,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             reason: error.reason,
             message: error.message,
             retryAfterSeconds: error.retryAfterSeconds,
+          },
+        };
+      }
+      // C4 (contract 1.53.0): per-entry dispatch preflight before any runtime
+      // work — effective cwd always, plus the entry's declared paths/tools.
+      const entryPreflight = await runDispatchPreflight({
+        cwd: entry.cwd || config.validationDefaultCwd,
+        paths: entry.preflight?.paths,
+        tools: entry.preflight?.tools,
+      });
+      if (!entryPreflight.ok) {
+        return {
+          index,
+          success: false,
+          runtime: entry.runtime,
+          error: {
+            code: ErrorCode.PREFLIGHT_FAILED,
+            message: formatPreflightProblem(entryPreflight),
+            failures: entryPreflight.failures,
           },
         };
       }

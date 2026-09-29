@@ -18,6 +18,7 @@
 import { z } from 'zod';
 import { THINKING_LEVELS, isThinkingLevel } from './types.js';
 import { COMMAND_CODE_EFFORT_LEVELS } from '../command-code/command-code-model-catalog.js';
+import { preflightSpecSchema } from './dispatch-preflight.js';
 
 export const MAX_BATCH_ITEMS = 50;
 
@@ -95,6 +96,9 @@ export const createSessionBodySchema = z.object({
   parentSessionId: z.string().min(1).max(200).optional(),
   // Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in.
   agentOsCapture: agentOsCaptureSchema.optional(),
+  // Contract 1.53.0 (C4): dispatch preflight spec; the effective cwd is always
+  // checked at the route regardless of this field.
+  preflight: preflightSpecSchema.optional(),
   ...pinFields,
   ...goalField,
 }).strict().superRefine((body, ctx) => {
@@ -127,6 +131,8 @@ const batchCreateEntrySchema = z.object({
   invocationRole: invocationRoleSchema.optional(),
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
   agentOsCapture: agentOsCaptureSchema.optional(),
+  // Contract 1.53.0 (C4): dispatch preflight spec (per batch entry).
+  preflight: preflightSpecSchema.optional(),
   ...pinFields,
   ...goalField,
 }).strict().superRefine((body, ctx) => {
