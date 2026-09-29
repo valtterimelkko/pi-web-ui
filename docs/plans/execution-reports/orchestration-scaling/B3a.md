@@ -26,7 +26,7 @@ ff7e3924 b3a gate: default caps 16,384/65,536 — live proof on pristine pi-ai d
 c1bba3cb tests: pin contract-version expectations to 1.48.0 (B3a bump)
 ```
 
-Diff vs base: `git diff --stat 12d01198..HEAD` → 26 files changed, 2,244 insertions(+), 366 deletions(-).
+Diff vs base: `git diff --stat 12d01198..HEAD` → 26 files changed, 2,328 insertions(+), 366 deletions(-).
 
 ## Cap defaults — correction 02 re-decides with PACED measurements
 
@@ -67,7 +67,7 @@ All four findings accepted and fixed; commits this correction: see `complete.md`
    These are the figures cited in this bundle (superseding the overwritten first-round readings of 7,378/8,305 ms, which remain quoted as history in the correction-02 section only).
 2. **[minor] Abort-failure recovery** — the guard no longer latches before abort succeeds: exactly one abort attempt is in flight at a time; a settled rejection leaves the run un-latched so the next delta retries (bounded at 3 attempts, then one error-level log and a terminal latch for the run). RED: 2 retry tests failed against the old latch; GREEN 18/18 guard+wiring. A merely slow abort never spawns duplicate attempts (exposed by the wiring tests' synchronous burst).
 3. **[minor] Receipt hint accuracy** — the `RUN_BUDGET_EXCEEDED` hint now states the receipt persists only the code and directs parents to the session event stream (`tool_args_budget_exceeded` carries `data.scope`/`capChars`/`observedChars`, also in session diagnostics). No receipt fields added. Contract text checked: it makes no receipt-detail claim (no change needed).
-4. **[minor] Evidence accuracy** — diff stat refreshed (see the line above; correction-05 final: 26 files, 2,244 insertions); the correction-02 RED receipt added to the TDD table above.
+4. **[minor] Evidence accuracy** — diff stat refreshed (see the line above; correction-05 final: 26 files, 2,328 insertions); the correction-02 RED receipt added to the TDD table above.
 
 Also (review "also"): the **detached** boundary is now pinned by a route test — a `202 {detached:true, runId}` dispatch whose run breaches ends in a receipt `failed` with `RUN_BUDGET_EXCEEDED` through the shared `executePromptWithReceipt` path (`session-routes-tool-args-budget.test.ts`, 5 tests, all passing).
 
