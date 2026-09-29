@@ -76,7 +76,7 @@ mkdirSync(path.join(stateDir, 'logs'), { recursive: true });
 
 // ─── fixture provider (local SSE; runs in THIS process, never the server's) ──
 
-const fixtureState = { requests: 0, log: [] };
+const fixtureState = { requests: 0, log: [], aResolved: false };
 
 // Per-scenario runaway plan, set by the orchestrator before each scenario:
 // how many bytes request 1 streams before finishing, at what chunk size, and
@@ -137,22 +137,28 @@ function startFixture(port) {
     }
 
     // Every later request (session B; the control's post-run turn): a paced
-    // stream that runs for at least bMinStreamMs — THROUGHOUT A's runaway
-    // window — then finishes cleanly. ~64 B every 33 ms ≈ 1.9 KB/s, inside
-    // the measured real per-run streaming range (p50 148, p99 1,014, max
+    // stream that runs for at least bMinStreamMs AND until session A's run
+    // has resolved (+500 ms grace) — so B's stream structurally spans A's
+    // entire runaway window. ~64 B every 33 ms ≈ 1.9 KB/s, inside the
+    // measured real per-run streaming range (p50 148, p99 1,014, max
     // 6,583 B/s; measurement-v2.json).
     record.kind = 'streaming-session';
     chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
     const bPayload = 'y'.repeat(64);
     let bSent = 0;
+    let graceScheduled = false;
     const bStarted = Date.now();
     const writeB = () => {
       if (res.destroyed) return;
       chunk({ ...chunkBody, choices: [{ index: 0, delta: { content: bPayload }, finish_reason: null }] });
       bSent += 64;
       record.bytes = bSent;
-      if (Date.now() - bStarted < runawayPlan.bMinStreamMs) {
+      const elapsed = Date.now() - bStarted;
+      if (!fixtureState.aResolved || elapsed < runawayPlan.bMinStreamMs) {
         setTimeout(writeB, 33);
+      } else if (!graceScheduled) {
+        graceScheduled = true;
+        setTimeout(writeB, 500); // keep streaming 500 ms past A's resolution, then finish
       } else {
         record.streamMs = Date.now() - bStarted;
         record.finished = Date.now();
@@ -283,6 +289,8 @@ function analyseMetrics(metricsDir, windowStart, windowEnd) {
 
 async function runScenario(socketPath, token) {
   fixtureState.requests = 0; // each scenario's first provider request is its runaway
+  fixtureState.log.length = 0; // per-scenario records (stale cross-scenario records lie)
+  fixtureState.aResolved = false;
   const sessionA = await createSession(socketPath, token, 'A');
   const windowStart = Date.now();
 
@@ -292,19 +300,25 @@ async function runScenario(socketPath, token) {
   await sleep(2_000); // let A get mid-stream
   const sessionB = await createSession(socketPath, token, 'B');
   const bFiredAt = Date.now();
-  const b = await promptAndWait(socketPath, token, sessionB, 'answer briefly');
-  const bResolvedAt = Date.now();
-  const bReceiptRunId = b.response.json?.runId;
-  const bReceipt = bReceiptRunId ? await getReceipt(socketPath, token, bReceiptRunId) : undefined;
+  // Fire B WITHOUT awaiting it: B's fixture stream holds until A resolves,
+  // so awaiting B here would deadlock the completion order that is the
+  // evidence.
+  const bPromise = promptAndWait(socketPath, token, sessionB, 'answer briefly');
 
   const a = await aPromise;
   const aResolvedAt = Date.now();
+  fixtureState.aResolved = true; // B's fixture stream may now finish (500 ms grace)
+  const b = await bPromise;
+  const bResolvedAt = Date.now();
   const windowEnd = Date.now();
   const aRunId = a.response.json?.runId;
   const aReceipt = aRunId ? await getReceipt(socketPath, token, aRunId) : undefined;
+  const bReceiptRunId = b.response.json?.runId;
+  const bReceipt = bReceiptRunId ? await getReceipt(socketPath, token, bReceiptRunId) : undefined;
 
   const aErrorCode = a.response.json?.code ?? aReceipt?.errorCode;
   const bStreamRecord = fixtureState.log.find((r) => r.kind === 'streaming-session');
+  const runawayRecord = fixtureState.log.find((r) => r.kind === 'runaway');
   return {
     a: {
       httpStatus: a.response.status,
@@ -327,10 +341,16 @@ async function runScenario(socketPath, token) {
       aResolvedAt,
       bResolvedAt,
       // The correction's requirement: B streamed THROUGHOUT A's runaway
-      // window — B's own run must still be in flight when A's abort lands.
+      // window — B's run must still be in flight when A's abort lands. The
+      // fixture holds B's stream until aResolved + 500 ms, so this is
+      // structural, not timing luck.
       bSpannedARun: bResolvedAt >= aResolvedAt,
       bStreamMs: bStreamRecord?.streamMs ?? null,
       bStreamedBytes: bStreamRecord?.bytes ?? null,
+    },
+    runaway: {
+      bytesStreamed: runawayRecord?.bytes ?? null,
+      finishedCleanly: runawayRecord?.finished != null,
     },
     fixture: { requests: fixtureState.requests, log: fixtureState.log.slice() },
     metrics: analyseMetrics(path.join(stateDir, 'metrics'), windowStart, windowEnd),
