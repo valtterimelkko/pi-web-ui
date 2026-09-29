@@ -282,6 +282,28 @@ describe('DrainController', () => {
     expect(drain.status()).toMatchObject({ state: 'idle', lastOutcome: { state: 'timed_out', endedBy: 'hold_expired', cutOffSessionIds: ['goal-1'] } });
   });
 
+  it('a browser-started turn (P0, status-busy, no receipt) also keeps the drain open (B4.1)', async () => {
+    // The browser path holds the manager status flag but no SDK stream yet and
+    // no admission slot: pre-B4.1 this drain settled and the restart killed
+    // the turn. Busy is busy — the drain cannot and must not special-case it.
+    busy = [{ sessionId: 'browser-1', runtime: 'pi', busyReason: 'status' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000 });
+    expect(status.state).toBe('draining');
+    expect(status.remaining.sessions).toEqual([{ sessionId: 'browser-1', runtime: 'pi', busyReason: 'status' }]);
+    busy = [];
+    expect((await drain.waitForOutcome()).state).toBe('settled');
+  });
+
+  it('another runtime running turn (existing busy flag) keeps the drain open (B4.1)', async () => {
+    busy = [{ sessionId: 'claude-1', runtime: 'claude', busyReason: 'runtime-running' }];
+    const drain = make();
+    const { status } = drain.start({ reason: 'deploy', timeoutMs: 5_000 });
+    expect(status.state).toBe('draining');
+    busy = [];
+    expect((await drain.waitForOutcome()).state).toBe('settled');
+  });
+
   it('a failing busy accessor degrades to not-busy with a warning, like the receipt source (B4.1)', () => {
     const drain = make({ listBusySessions: () => { throw new Error('accessor down'); } });
     const { status } = drain.start({ reason: 'deploy', timeoutMs: 1_000 });
