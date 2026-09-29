@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { installFakeInternalApiCurl } from '../helpers/fake-internal-api-curl.js';
 
 /**
  * Every repo-owned restart path must name its requester (2026-09-15).
@@ -65,20 +66,19 @@ async function startFixture(dir: string): Promise<Fixture> {
   temporaryServers.push(server);
   writeFileSync(path.join(dir, 'internal-api-token'), 'token');
 
-  const responseFile = path.join(dir, 'capacity-response.json');
-  const writeResponse = (activeTurns: number): void =>
-    writeFileSync(responseFile, JSON.stringify({ available: activeTurns === 0, activeTurns, maxActiveTurns: 6 }));
-  writeResponse(0);
-
   // The sandbox blackholes connect() from processes below the vitest worker, so
-  // the capacity answer is served by a PATH curl that logs and answers exactly
-  // the expected query — the same technique restart-drainage.test.ts uses.
-  const binDir = path.join(dir, 'bin');
+  // the Internal API is served by a PATH curl shim (tests/helpers). The fake
+  // server predates B4 (POST /api/v1/drain answers 404), so the canonical
+  // drain path takes its legacy active-turn pre-flight — the path whose refusal
+  // this file asserts writes no record. The drain path's own record (with its
+  // drain= verdict) is asserted in tests/unit/drain-restart-scripts.test.ts.
   chmodSync(dir, 0o755);
-  spawnSync('mkdir', ['-p', binDir]);
-  const curl = path.join(binDir, 'curl');
-  writeFileSync(curl, `#!/usr/bin/env bash\ncat '${responseFile}'\n`);
-  chmodSync(curl, 0o755);
+  const curl = installFakeInternalApiCurl(dir, { socketPath, token: 'token' });
+  curl.setRoute('POST /api/v1/drain', { status: 404, body: { code: 'NOT_FOUND' } });
+  const writeResponse = (activeTurns: number): void =>
+    curl.setRoute('GET /api/v1/capacity', { status: 200, body: { available: activeTurns === 0, activeTurns, maxActiveTurns: 6 } });
+  writeResponse(0);
+  const binDir = curl.binDir;
 
   const auditFile = path.join(dir, 'stop-audit.log');
   const systemctlStub = path.join(dir, 'systemctl');
@@ -100,6 +100,7 @@ async function startFixture(dir: string): Promise<Fixture> {
       PI_WEB_UI_NOTIFY_SCRIPT: notifyStub,
       PI_WEB_UI_SYSTEMD_CAT: path.join(dir, 'no-such-systemd-cat'),
       PI_WEB_UI_STOP_AUDIT_FILE: auditFile,
+      ...curl.env,
       PATH: `${binDir}:${process.env.PATH}`,
     }),
   };

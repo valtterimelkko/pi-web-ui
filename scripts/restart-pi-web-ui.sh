@@ -135,6 +135,10 @@ if (( DRY_RUN )); then
 fi
 
 if (( USE_LOCK )); then
+  # B4: this path already ran its active-turn pre-flight and wrote its requester
+  # record; tell the lock wrapper not to route it through drain-then-restart
+  # (which would record the restart twice).
+  export PI_WEB_UI_RESTART_PREFLIGHTED=1
   exec "$script_dir/with-production-lock.sh" "${PI_WEB_UI_RESTART_SYSTEMCTL:-systemctl}" restart pi-web-ui
 fi
 

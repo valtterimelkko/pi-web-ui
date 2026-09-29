@@ -25,7 +25,7 @@
 #
 # USE
 #
-#   scripts/record-restart-requester.sh "$REASON" "$ARGV_ORIGINAL"
+#   scripts/record-restart-requester.sh "$REASON" "$ARGV_ORIGINAL" ["$DRAIN_VERDICT"]
 #
 # TEST SEAMS (defaults are the production values; tests override them so no test
 # can write into production's record or journal):
@@ -40,6 +40,10 @@ set -uo pipefail
 
 REASON="${1:-(unspecified)}"
 ARGV_ORIGINAL="${2:-}"
+# Optional (B4, 2026-09-29): the drain verdict the restart followed, e.g.
+# `settled,waited_ms=…,cut_off=0`, `timed_out,…,cut_off_runs=a+b`, `forced`,
+# `legacy_preflight,active_turns=0`. Omitted from the record when not given.
+DRAIN="${3:-}"
 
 AUDIT_FILE="${PI_WEB_UI_STOP_AUDIT_FILE:-/root/.pi-web-ui/stop-audit.log}"
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -67,7 +71,13 @@ tty_name="$(tty 2>/dev/null)"
 tty_name="${tty_name//$'\n'/ }"
 [[ -z "$tty_name" ]] && tty_name="none"
 
-LINE="RESTART-REQUESTED ts=$ts uid=$(id -u) user=$(id -un 2>/dev/null) pid=$$ ppid=$PPID tty=$tty_name cwd=$(pwd 2>/dev/null) reason=$(printf '%q' "$REASON") argv=$(printf '%q' "$ARGV_ORIGINAL") ancestors=$ancestors"
+# Kept as one readable key=value token: anything outside a conservative set
+# (the verdict is built from a state word, numbers and run ids) becomes '_',
+# so a crafted value can never split or forge the record.
+drain_field=""
+[[ -n "$DRAIN" ]] && drain_field=" drain=$(printf '%s' "${DRAIN:0:600}" | tr -c 'A-Za-z0-9_.,=+:-' '_')"
+
+LINE="RESTART-REQUESTED ts=$ts uid=$(id -u) user=$(id -un 2>/dev/null) pid=$$ ppid=$PPID tty=$tty_name cwd=$(pwd 2>/dev/null) reason=$(printf '%q' "$REASON") argv=$(printf '%q' "$ARGV_ORIGINAL")${drain_field} ancestors=$ancestors"
 
 # Journal first, then the durable file — the same two sinks the stop audit uses,
 # for the same reason: each has been lost at least once.
