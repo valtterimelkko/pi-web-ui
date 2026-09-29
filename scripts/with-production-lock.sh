@@ -6,11 +6,11 @@
 # command — `[sudo] systemctl restart|try-restart|reload-or-restart
 # pi-web-ui[.service]` — is routed through scripts/restart-production.sh, which
 # drains the Internal API first and records the drain verdict in the stop
-# audit. To restart without a drain, use
+# audit. The requested verb is kept (B4 correction 01): try-restart of an
+# inactive unit stays a no-op, restart/reload-or-restart keep their meaning.
+# To restart without a drain, use
 # `npm run production:drain-restart -- --force --reason "why"` (recorded).
-# A restart path that has already run its own active-turn pre-flight and
-# written its own requester record (scripts/restart-pi-web-ui.sh) sets
-# PI_WEB_UI_RESTART_PREFLIGHTED=1 so it is not routed a second time.
+# There is no bypass marker: every routed restart drains.
 #
 # Re-entrant: the lock holder exports PI_WEB_UI_PRODUCTION_LOCK_HELD; a nested
 # invocation for the same lock path (e.g. `npm run production:drain-restart`
@@ -60,12 +60,18 @@ unit_base="${unit%.service}"
 argv=("$@")
 offset=0
 [[ "${argv[0]}" == "sudo" ]] && offset=1
-if [[ -z "${PI_WEB_UI_RESTART_PREFLIGHTED:-}" && $# -eq $((offset + 3)) && "$(basename -- "${argv[offset]}")" == "systemctl" ]]; then
+if [[ $# -eq $((offset + 3)) && "$(basename -- "${argv[offset]}")" == "systemctl" ]]; then
   verb="${argv[offset + 1]}"
   target="${argv[offset + 2]}"
   if [[ "$verb" =~ ^(restart|try-restart|reload-or-restart)$ && ( "$target" == "$unit" || "$target" == "$unit_base" ) ]]; then
-    printf 'production control: routing "%s" through drain-then-restart (scripts/restart-production.sh)\n' "$*" >&2
-    exec "${argv[@]:0:offset}" bash "$script_dir/restart-production.sh" --reason "production:lock $*"
+    printf 'production control: routing "%s" through drain-then-restart (scripts/restart-production.sh --verb %s)\n' "$*" "$verb" >&2
+    if (( offset == 1 )); then
+      # sudo resets the environment; carry the lock identity explicitly so the
+      # routed script re-enters this held lock instead of deadlocking on it.
+      exec sudo env "PI_WEB_UI_PRODUCTION_LOCK=$LOCK_PATH" "PI_WEB_UI_PRODUCTION_LOCK_HELD=$LOCK_PATH" "PI_WEB_UI_SERVICE_UNIT=$unit" \
+        bash "$script_dir/restart-production.sh" --reason "production:lock $*" --verb "$verb"
+    fi
+    exec bash "$script_dir/restart-production.sh" --reason "production:lock $*" --verb "$verb"
   fi
 fi
 

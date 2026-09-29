@@ -211,6 +211,11 @@ describe('restart drainage — capacity pre-flight before production restarts', 
   // and requires --reason with --force. Its cases — including the authenticated
   // capacity query over the socket and the refusal while turns are active —
   // are in tests/unit/drain-restart-scripts.test.ts.
+  //
+  // B4 correction 01: restart-pi-web-ui.sh no longer has its own capacity-only
+  // pre-flight either; it delegates to the same drain path within its job
+  // budget. Its refusal, restart and --force (now reason-required) cases moved
+  // to tests/unit/drain-restart-scripts.test.ts. The PATH guard below stays.
 
   describe('restart-pi-web-ui.sh', () => {
     const scriptEnv = (): NodeJS.ProcessEnv => ({
@@ -227,53 +232,6 @@ describe('restart drainage — capacity pre-flight before production restarts', 
       PI_WEB_UI_FAKE_CAPACITY_TOKEN: TOKEN,
       PI_WEB_UI_FAKE_CAPACITY_RESPONSE: path.join(dir, 'capacity-response.json'),
       PATH: `${dir}:${process.env.PATH}`,
-    });
-
-    it('queries capacity and refuses with exit code 1 while active turns are in progress', () => {
-      api.setActiveTurns(4);
-
-      const result = runScript(restartScript, ['--reason', 'drainage test', '--no-lock'], {
-        ...process.env,
-        ...scriptEnv(),
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain('4');
-      expect(result.stderr).toContain('active');
-      expect(result.stderr).toContain('--force');
-      // A refused restart never stops the service, so it must not write the
-      // RESTART-REQUESTED record that stop-audit forensics reads.
-      expect(existsSync(auditFile)).toBe(false);
-      expect(readLog(systemctl.logPath)).toEqual([]);
-    });
-
-    it('proceeds to restart when active turns are zero', () => {
-      api.setActiveTurns(0);
-
-      const result = runScript(restartScript, ['--reason', 'drainage test', '--no-lock'], {
-        ...process.env,
-        ...scriptEnv(),
-      });
-
-      expect(result.status).toBe(0);
-      expect(api.requests).toHaveLength(1);
-      expect(readLog(systemctl.logPath)).toEqual(['restart pi-web-ui']);
-    });
-
-    it('treats --force as the explicit override and restarts despite active turns', () => {
-      api.setActiveTurns(5);
-
-      const result = runScript(restartScript, ['--reason', 'drainage test', '--force', '--no-lock'], {
-        ...process.env,
-        ...scriptEnv(),
-      });
-
-      expect(result.status).toBe(0);
-      expect(readLog(systemctl.logPath)).toEqual(['restart pi-web-ui']);
-      // The forced restart is still a restart: the requester record is written.
-      expect(readFileSync(auditFile, 'utf8')).toContain('RESTART-REQUESTED');
-      // The reason is recorded %q-quoted, so assert the stem, not the phrase.
-      expect(readFileSync(auditFile, 'utf8')).toContain('reason=drainage');
     });
 
     it('intercepts a bare `systemctl` call through PATH, not only the env-var seam', () => {

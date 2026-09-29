@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Canonical production restart: DRAIN, then restart (B4, 2026-09-29).
+# Canonical production restart: DRAIN, then restart (B4, 2026-09-29;
+# fail-closed and verb semantics from B4 correction 01).
 #
 # WHY
 #
@@ -10,38 +11,44 @@
 # but not yet turning), raced with new work arriving between the check and the
 # restart, and left parents of any child it did kill to find out by polling.
 #
-# WHAT IT DOES (default)
+# WHAT IT DOES
 #
-#   1. POST /api/v1/drain on the Internal API socket. The server closes
+#   0. Take the production-control lock (re-entrant: a caller already holding
+#      it through scripts/with-production-lock.sh or the npm entry point is not
+#      blocked; an independent holder makes this refuse with exit 75).
+#   1. Ask systemd whether the unit is running (`systemctl is-active`).
+#      - confirmed NOT running (inactive / failed): there are no children, so
+#        there is nothing to drain. `try-restart` is then a no-op (exit 0,
+#        recorded as RESTART-NOOP); `restart` / `reload-or-restart` start the
+#        unit, which is what those verbs mean.
+#      - anything else is treated as running.
+#   2. Running: POST /api/v1/drain on the Internal API socket. The server closes
 #      admission for new P2/P3 creates and prompts (503 SERVER_DRAINING +
 #      Retry-After; control and DELETE keep working) and answers when active
 #      turns AND nonterminal run receipts have settled, or when the drain
 #      timeout elapses (default 600 s, --drain-timeout N, 0..3600).
-#   2. `settled` → restart. `timed_out` → restart and cut the remaining runs
-#      off (they end `interrupted`, SERVER_RESTART / drain_timeout, and their
-#      parents' watches fire at boot), unless --on-timeout abort, which cancels
-#      the drain (DELETE /api/v1/drain) and restarts nothing.
-#   3. Record the requester AND the drain verdict in the stop audit
-#      (RESTART-REQUESTED ... drain=<verdict>), announce, restart the unit.
+#      `settled` → restart. `timed_out` → restart and cut the remaining runs off
+#      (they end `interrupted`, SERVER_RESTART / drain_timeout, and their parents'
+#      watches fire at boot), unless --on-timeout abort, which cancels the drain
+#      (DELETE /api/v1/drain), restarts nothing and exits 1.
+#   3. Record the requester, the verb and the drain verdict in the stop audit
+#      (RESTART-REQUESTED … drain=<verdict> verb=<verb> unit=<unit>), announce,
+#      then run the requested verb (`systemctl <verb> <unit>`).
 #
-# Restarting WITHOUT a drain needs --force plus --reason; the audit records
-# `drain=forced` and the reason.
-#
-# Edge cases, chosen deliberately:
-#   * no socket or no token          → a dead daemon has no children: restart,
-#                                      recorded `drain=skipped_no_daemon`;
-#   * socket refuses connections      → same, `drain=skipped_unreachable`;
-#   * server without /drain (404)     → the server predates B4 (e.g. the deploy
-#                                      that ships B4): fall back to the legacy
-#                                      active-turn pre-flight (refuse while > 0);
-#   * drain request times out / other → REFUSE. A daemon that accepts and never
-#     HTTP answer                       answers may be alive with children; only
-#                                       --force --reason restarts past it.
+# FAIL CLOSED. On a running unit, every state this script cannot confirm is a
+# refusal (exit 1): no socket or token, a socket that refuses connections, a
+# drain request that times out or answers anything but 200 with a known state,
+# and — on a server that predates the drain endpoint (404) — a legacy
+# /capacity answer that is not HTTP 200 with a numeric activeTurns of 0.
+# `--force --reason "why"` is the named way past any of these: it skips the
+# drain, and it refuses unless the audit file or the journal durably records
+# the override (`drain=forced`).
 #
 # USE
 #
 #   npm run production:drain-restart -- --reason "deploy contract 1.51.0"
-#   scripts/restart-production.sh --reason "why" [--drain-timeout 900] [--on-timeout abort]
+#   scripts/restart-production.sh --reason "why" [--verb restart|try-restart|reload-or-restart]
+#                                 [--drain-timeout 900] [--on-timeout restart|abort]
 #   scripts/restart-production.sh --force --reason "why no drain"   # recorded override
 #   scripts/restart-production.sh --show-targets                     # print targets, do nothing
 #
@@ -50,10 +57,10 @@
 # real restart. Use --show-targets to inspect what would be touched.
 #
 # TARGET SEAMS (defaults are the production values; tests and disposable live
-# proofs override them so nothing can touch the real service, socket, journal
-# or audit file):
+# proofs override them so nothing can touch the real service, socket, lock,
+# journal or audit file):
 #
-#   PI_WEB_UI_SERVICE_UNIT             unit to restart (default pi-web-ui.service)
+#   PI_WEB_UI_SERVICE_UNIT             unit (default pi-web-ui.service)
 #   PI_WEB_UI_INTERNAL_API_SOCKET      Internal API unix socket
 #                                      (default /root/.pi-web-ui/internal-api.sock)
 #   PI_WEB_UI_INTERNAL_API_TOKEN_FILE  bearer token file
@@ -62,23 +69,28 @@
 #   PI_WEB_UI_NOTIFY_SCRIPT            notify hook (default
 #                                      /root/pi-web-ui/scripts/notify.sh)
 #   PI_WEB_UI_STOP_AUDIT_FILE          stop audit (record-restart-requester.sh)
+#   PI_WEB_UI_PRODUCTION_LOCK          production-control lock
+#                                      (default ~/.pi-web-ui/production-control.lock)
 #   PI_WEB_UI_DRAIN_TIMEOUT_SECONDS    default drain timeout (600)
+#   PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS HTTP wait beyond the drain timeout (60);
+#                                      budgeted callers (restart-pi-web-ui.sh) lower it
 #
 # This script never runs on its own authority: production restart remains
-# owner-gated. The production lock is taken by the npm script
-# (production:drain-restart) or by with-production-lock.sh, which also routes a
-# bare `systemctl restart pi-web-ui[.service]` here.
+# owner-gated.
 
 set -euo pipefail
 
-# Captured before any argument parsing, so the record shows what was asked for.
+# Captured before any argument parsing: the record shows what was asked for,
+# and the lock re-exec below replays the exact argument vector.
 ARGV_ORIGINAL="$*"
+ORIGINAL_ARGS=("$@")
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 FORCE=0
 REASON=""
 DRAIN_TIMEOUT="${PI_WEB_UI_DRAIN_TIMEOUT_SECONDS:-600}"
 ON_TIMEOUT="restart"
+VERB="restart"
 SHOW_TARGETS=0
 while [ $# -gt 0 ]; do
   case "${1:-}" in
@@ -86,6 +98,7 @@ while [ $# -gt 0 ]; do
     --reason) REASON="${2:-}"; shift 2 ;;
     --drain-timeout) DRAIN_TIMEOUT="${2:-}"; shift 2 ;;
     --on-timeout) ON_TIMEOUT="${2:-}"; shift 2 ;;
+    --verb) VERB="${2:-}"; shift 2 ;;
     --show-targets) SHOW_TARGETS=1; shift ;;
     *)
       echo "restart-production.sh: unknown argument: ${1}" >&2
@@ -102,6 +115,10 @@ case "$ON_TIMEOUT" in
   restart|abort) ;;
   *) echo "restart-production.sh: --on-timeout must be 'restart' or 'abort' (got '${ON_TIMEOUT}')" >&2; exit 64 ;;
 esac
+case "$VERB" in
+  restart|try-restart|reload-or-restart) ;;
+  *) echo "restart-production.sh: --verb must be restart, try-restart or reload-or-restart (got '${VERB}')" >&2; exit 64 ;;
+esac
 
 UNIT="${PI_WEB_UI_SERVICE_UNIT:-pi-web-ui.service}"
 SOCKET="${PI_WEB_UI_INTERNAL_API_SOCKET:-/root/.pi-web-ui/internal-api.sock}"
@@ -109,19 +126,30 @@ TOKEN_FILE="${PI_WEB_UI_INTERNAL_API_TOKEN_FILE:-/root/.pi-web-ui/internal-api-t
 SYSTEMCTL_BIN="${PI_WEB_UI_RESTART_SYSTEMCTL:-systemctl}"
 NOTIFY_SCRIPT="${PI_WEB_UI_NOTIFY_SCRIPT:-/root/pi-web-ui/scripts/notify.sh}"
 AUDIT_FILE="${PI_WEB_UI_STOP_AUDIT_FILE:-/root/.pi-web-ui/stop-audit.log}"
+LOCK_PATH="${PI_WEB_UI_PRODUCTION_LOCK:-$HOME/.pi-web-ui/production-control.lock}"
+HTTP_SLACK="${PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS:-60}"
+if ! [[ "$HTTP_SLACK" =~ ^[0-9]+$ ]] || [ "$HTTP_SLACK" -gt 600 ]; then
+  echo "restart-production.sh: PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS must be an integer in 0..600 (got '${HTTP_SLACK}')" >&2
+  exit 64
+fi
 
 if [ "$SHOW_TARGETS" -eq 1 ]; then
-  printf 'unit=%s\nsocket=%s\ntoken_file=%s\nsystemctl=%s\nnotify=%s\nstop_audit=%s\ndrain=%s\ndrain_timeout_seconds=%s\non_timeout=%s\n' \
-    "$UNIT" "$SOCKET" "$TOKEN_FILE" "$SYSTEMCTL_BIN" "$NOTIFY_SCRIPT" "$AUDIT_FILE" \
-    "$([ "$FORCE" -eq 1 ] && echo forced || echo default)" "$DRAIN_TIMEOUT" "$ON_TIMEOUT"
+  printf 'unit=%s\nverb=%s\nsocket=%s\ntoken_file=%s\nsystemctl=%s\nnotify=%s\nstop_audit=%s\nlock=%s\ndrain=%s\ndrain_timeout_seconds=%s\ndrain_http_slack_seconds=%s\non_timeout=%s\n' \
+    "$UNIT" "$VERB" "$SOCKET" "$TOKEN_FILE" "$SYSTEMCTL_BIN" "$NOTIFY_SCRIPT" "$AUDIT_FILE" "$LOCK_PATH" \
+    "$([ "$FORCE" -eq 1 ] && echo forced || echo default)" "$DRAIN_TIMEOUT" "$HTTP_SLACK" "$ON_TIMEOUT"
   exit 0
 fi
 
 if [ "$FORCE" -eq 1 ] && [ -z "${REASON//[[:space:]]/}" ]; then
-  echo "restart-production.sh: --force skips the drain and needs --reason \"why\" (recorded in the stop audit)." >&2
+  echo "restart-production.sh: --force skips the drain and needs a non-empty --reason \"why\" (recorded in the stop audit)." >&2
   exit 64
 fi
 [ -n "${REASON//[[:space:]]/}" ] || REASON="(unspecified)"
+
+# 0. The production-control lock, re-entrantly (B4 correction 01, finding 7).
+if [ "${PI_WEB_UI_PRODUCTION_LOCK_HELD:-}" != "$LOCK_PATH" ]; then
+  exec bash "$script_dir/with-production-lock.sh" bash "$script_dir/restart-production.sh" "${ORIGINAL_ARGS[@]}"
+fi
 
 TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null || true)"
 DRAIN_SUMMARY=""
@@ -132,23 +160,58 @@ refuse() {
   exit 1
 }
 
+record() { # $1 = record kind, $2 = drain verdict
+  PI_WEB_UI_RESTART_RECORD_KIND="$1" \
+  PI_WEB_UI_RESTART_VERB="$VERB" \
+  PI_WEB_UI_RESTART_UNIT="$UNIT" \
+  PI_WEB_UI_RESTART_REQUIRE_DURABLE="$FORCE" \
+    "$script_dir/record-restart-requester.sh" "$REASON" "$ARGV_ORIGINAL" "$2"
+}
+
 legacy_preflight() {
   # The running server predates B4 (no /api/v1/drain): use the 2026-09-15
-  # active-turn pre-flight so the deploy that ships B4 is still guarded.
-  local capacity active
-  capacity="$(curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" --max-time 30 http://localhost/api/v1/capacity || true)"
-  active="$(printf '%s' "$capacity" | jq -r '.activeTurns // 0' 2>/dev/null || echo 0)"
-  if [[ "$active" =~ ^[0-9]+$ ]] && [ "$active" -gt 0 ]; then
+  # active-turn pre-flight so the deploy that ships B4 is still guarded — and
+  # accept only an unambiguous HTTP 200 with a numeric activeTurns.
+  local cap_file cap_code cap_status active
+  cap_file="$(mktemp)"
+  set +e
+  cap_code="$(curl -sS --unix-socket "$SOCKET" -H "Authorization: Bearer $TOKEN" --max-time 30 \
+    -o "$cap_file" -w '%{http_code}' http://localhost/api/v1/capacity)"
+  cap_status=$?
+  set -e
+  active="$(jq -r '.activeTurns' "$cap_file" 2>/dev/null || true)"
+  rm -f "$cap_file"
+  [ "$cap_status" -eq 0 ] || refuse "the server has no drain endpoint and its legacy capacity query failed (curl exit ${cap_status})."
+  [ "$cap_code" = "200" ] || refuse "the server has no drain endpoint and its legacy capacity query answered HTTP ${cap_code}."
+  [[ "$active" =~ ^[0-9]+$ ]] || refuse "the server has no drain endpoint and its legacy capacity answer has no numeric activeTurns."
+  if [ "$active" -gt 0 ]; then
     refuse "$active active child turn(s) in progress (server has no drain endpoint)."
   fi
-  DRAIN_SUMMARY="legacy_preflight,active_turns=${active:-0}"
+  DRAIN_SUMMARY="legacy_preflight,active_turns=${active}"
 }
+
+# 1. Is the unit running? Only inactive/failed count as confirmed not running.
+UNIT_STATE="$("$SYSTEMCTL_BIN" is-active "$UNIT" 2>/dev/null | head -n 1 || true)"
+UNIT_STATE="${UNIT_STATE//[[:space:]]/}"
+UNIT_DOWN=0
+case "$UNIT_STATE" in
+  inactive|failed) UNIT_DOWN=1 ;;
+esac
 
 if [ "$FORCE" -eq 1 ]; then
   DRAIN_SUMMARY="forced"
+elif [ "$UNIT_DOWN" -eq 1 ]; then
+  if [ "$VERB" = "try-restart" ]; then
+    # try-restart never starts a stopped unit; do not call it at all (no race).
+    record RESTART-NOOP "unit_${UNIT_STATE}_noop" || true
+    echo "${UNIT} is ${UNIT_STATE}: try-restart is a no-op; nothing was started (recorded as RESTART-NOOP)."
+    exit 0
+  fi
+  DRAIN_SUMMARY="skipped_unit_${UNIT_STATE}"
 elif [ ! -S "$SOCKET" ] || [ -z "$TOKEN" ]; then
-  DRAIN_SUMMARY="skipped_no_daemon"
+  refuse "${UNIT} is ${UNIT_STATE:-in an unknown state} but the Internal API socket or token is unavailable, so its in-flight work cannot be drained."
 else
+  # 2. Drain.
   body_file="$(mktemp)"
   trap 'rm -f "$body_file"' EXIT
   payload="$(jq -cn --arg reason "${REASON:0:500}" --argjson t "$DRAIN_TIMEOUT" '{reason: $reason, timeoutSeconds: $t}')"
@@ -156,14 +219,12 @@ else
   set +e
   http_code="$(curl -sS --unix-socket "$SOCKET" \
     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-    -X POST --data-binary "$payload" --max-time "$((DRAIN_TIMEOUT + 60))" \
+    -X POST --data-binary "$payload" --max-time "$((DRAIN_TIMEOUT + HTTP_SLACK))" \
     -o "$body_file" -w '%{http_code}' http://localhost/api/v1/drain)"
   curl_status=$?
   set -e
-  if [ "$curl_status" -eq 7 ]; then
-    DRAIN_SUMMARY="skipped_unreachable"
-  elif [ "$curl_status" -ne 0 ]; then
-    refuse "the drain request did not complete (curl exit ${curl_status}); the daemon may be alive with children."
+  if [ "$curl_status" -ne 0 ]; then
+    refuse "the drain request did not complete (curl exit ${curl_status}); ${UNIT} is ${UNIT_STATE:-in an unknown state} and may have children in flight."
   elif [ "$http_code" = "404" ]; then
     legacy_preflight
   elif [ "$http_code" != "200" ]; then
@@ -200,10 +261,13 @@ else
   fi
 fi
 
-echo "Initiating production restart of ${UNIT} (drain: ${DRAIN_SUMMARY})..."
-# Name the requester AND the drain verdict in the journal and the durable
-# record BEFORE restarting — the same shared recorder restart-pi-web-ui.sh uses.
-"$script_dir/record-restart-requester.sh" "$REASON" "$ARGV_ORIGINAL" "$DRAIN_SUMMARY" || true
-"$NOTIFY_SCRIPT" milestone "Production restart initiated" "${UNIT} restarting after drain: ${DRAIN_SUMMARY}" || true
-"$SYSTEMCTL_BIN" restart "$UNIT"
-echo "Production restart complete."
+# 3. Record, announce, act.
+echo "Initiating production ${VERB} of ${UNIT} (drain: ${DRAIN_SUMMARY})..."
+if ! record RESTART-REQUESTED "$DRAIN_SUMMARY"; then
+  if [ "$FORCE" -eq 1 ]; then
+    refuse "the forced ${VERB} could not be recorded durably (neither the audit file nor the journal accepted it)."
+  fi
+fi
+"$NOTIFY_SCRIPT" milestone "Production restart initiated" "${UNIT} ${VERB} after drain: ${DRAIN_SUMMARY}" || true
+"$SYSTEMCTL_BIN" "$VERB" "$UNIT"
+echo "Production ${VERB} complete."

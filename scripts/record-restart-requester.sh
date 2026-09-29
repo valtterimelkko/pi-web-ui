@@ -34,7 +34,19 @@
 #                               /root/.pi-web-ui/stop-audit.log)
 #   PI_WEB_UI_SYSTEMD_CAT       systemd-cat binary (default systemd-cat)
 #
-# This script always exits 0: recording must never be the reason a restart fails.
+# OPTIONAL FIELDS (B4 correction 01, set by the canonical drain-restart script):
+#
+#   PI_WEB_UI_RESTART_VERB            systemctl verb (restart, try-restart, …) → verb=
+#   PI_WEB_UI_RESTART_UNIT            unit name → unit=
+#   PI_WEB_UI_RESTART_RECORD_KIND     RESTART-REQUESTED (default) or RESTART-NOOP
+#                                     (a routed try-restart of an inactive unit:
+#                                     recorded, but nothing was stopped)
+#   PI_WEB_UI_RESTART_REQUIRE_DURABLE 1 = exit 3 unless the durable file or the
+#                                     journal accepted the line (used for --force)
+#
+# Otherwise this script exits 0: an ordinary drained restart must not fail
+# because recording failed. A FORCED restart skips the drain, so its record is
+# the only trace of the override — it fails closed instead.
 
 set -uo pipefail
 
@@ -74,21 +86,32 @@ tty_name="${tty_name//$'\n'/ }"
 # Kept as one readable key=value token: anything outside a conservative set
 # (the verdict is built from a state word, numbers and run ids) becomes '_',
 # so a crafted value can never split or forge the record.
+sanitize() { printf '%s' "${1:0:600}" | tr -c 'A-Za-z0-9_.,=+:@-' '_'; }
 drain_field=""
-[[ -n "$DRAIN" ]] && drain_field=" drain=$(printf '%s' "${DRAIN:0:600}" | tr -c 'A-Za-z0-9_.,=+:-' '_')"
+[[ -n "$DRAIN" ]] && drain_field=" drain=$(sanitize "$DRAIN")"
+[[ -n "${PI_WEB_UI_RESTART_VERB:-}" ]] && drain_field="${drain_field} verb=$(sanitize "$PI_WEB_UI_RESTART_VERB")"
+[[ -n "${PI_WEB_UI_RESTART_UNIT:-}" ]] && drain_field="${drain_field} unit=$(sanitize "$PI_WEB_UI_RESTART_UNIT")"
+KIND="RESTART-REQUESTED"
+[[ "${PI_WEB_UI_RESTART_RECORD_KIND:-}" == "RESTART-NOOP" ]] && KIND="RESTART-NOOP"
 
-LINE="RESTART-REQUESTED ts=$ts uid=$(id -u) user=$(id -un 2>/dev/null) pid=$$ ppid=$PPID tty=$tty_name cwd=$(pwd 2>/dev/null) reason=$(printf '%q' "$REASON") argv=$(printf '%q' "$ARGV_ORIGINAL")${drain_field} ancestors=$ancestors"
+LINE="${KIND} ts=$ts uid=$(id -u) user=$(id -un 2>/dev/null) pid=$$ ppid=$PPID tty=$tty_name cwd=$(pwd 2>/dev/null) reason=$(printf '%q' "$REASON") argv=$(printf '%q' "$ARGV_ORIGINAL")${drain_field} ancestors=$ancestors"
 
 # Journal first, then the durable file — the same two sinks the stop audit uses,
 # for the same reason: each has been lost at least once.
 printf '%s\n' "$LINE"
+file_ok=0
+journal_ok=0
 mkdir -p "$(dirname "$AUDIT_FILE")" 2>/dev/null
-printf '%s\n' "$LINE" >> "$AUDIT_FILE" 2>/dev/null
+printf '%s\n' "$LINE" >> "$AUDIT_FILE" 2>/dev/null && file_ok=1
 # systemd-cat gives the line a stable identifier in the journal even when this
 # script is run from a context that is not a unit's own stdout.
 systemd_cat="${PI_WEB_UI_SYSTEMD_CAT:-systemd-cat}"
 if command -v "$systemd_cat" >/dev/null 2>&1; then
-  printf '%s\n' "$LINE" | "$systemd_cat" -t pi-web-ui-restart 2>/dev/null
+  printf '%s\n' "$LINE" | "$systemd_cat" -t pi-web-ui-restart 2>/dev/null && journal_ok=1
 fi
 
+if [[ "${PI_WEB_UI_RESTART_REQUIRE_DURABLE:-0}" == "1" ]] && (( file_ok == 0 && journal_ok == 0 )); then
+  printf 'record-restart-requester: neither the audit file (%s) nor the journal accepted the record\n' "$AUDIT_FILE" >&2
+  exit 3
+fi
 exit 0

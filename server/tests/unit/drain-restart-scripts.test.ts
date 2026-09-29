@@ -37,6 +37,29 @@ function recordingStub(dir: string, name: string, logPath: string): string {
   return stub;
 }
 
+/**
+ * A `systemctl` stand-in. Mutating calls are appended to `logPath`; `is-active`
+ * answers from `stateFile` (default `active`, exit 0 only when active, like
+ * systemctl) and is logged separately so call-log assertions stay exact.
+ */
+function makeSystemctlStub(dir: string, name: string, logPath: string, stateFile: string): string {
+  const stub = path.join(dir, name);
+  writeFileSync(stub, [
+    '#!/usr/bin/env bash',
+    'if [ "${1:-}" = is-active ]; then',
+    `  printf '%s\\n' "$*" >> '${logPath}.queries'`,
+    `  s="$(cat '${stateFile}' 2>/dev/null || echo active)"`,
+    '  printf \'%s\\n\' "$s"',
+    '  [ "$s" = active ] && exit 0 || exit 3',
+    'fi',
+    `printf '%s\\n' "$*" >> '${logPath}'`,
+    'exit 0',
+    '',
+  ].join('\n'));
+  chmodSync(stub, 0o755);
+  return stub;
+}
+
 function lines(file: string): string[] {
   return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
 }
@@ -65,6 +88,8 @@ describe('drain-then-restart deploy scripts (B4)', () => {
   let notifyStub: string;
   let auditFile: string;
   let lockPath: string;
+  let unitStateFile: string;
+  const setUnitState = (state: string): void => writeFileSync(unitStateFile, `${state}\n`);
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'pi-b4-scripts-'));
@@ -75,9 +100,10 @@ describe('drain-then-restart deploy scripts (B4)', () => {
     await new Promise<void>((resolve) => holder.listen(socketPath, resolve));
     curl = installFakeInternalApiCurl(dir, { socketPath, token: TOKEN });
     systemctlLog = path.join(dir, 'systemctl.calls.log');
-    systemctlStub = recordingStub(dir, 'systemctl-stub', systemctlLog);
+    unitStateFile = path.join(dir, 'unit-state');
+    systemctlStub = makeSystemctlStub(dir, 'systemctl-stub', systemctlLog, unitStateFile);
     // PATH shim shares the log: whatever route a script takes to systemctl is seen.
-    recordingStub(curl.binDir, 'systemctl', systemctlLog);
+    makeSystemctlStub(curl.binDir, 'systemctl', systemctlLog, unitStateFile);
     // `sudo` in a routed argv just runs the rest (never the real sudo).
     writeFileSync(path.join(curl.binDir, 'sudo'), '#!/usr/bin/env bash\nexec "$@"\n');
     chmodSync(path.join(curl.binDir, 'sudo'), 0o755);
@@ -201,19 +227,149 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       expect(lines(systemctlLog)).toEqual([]);
     });
 
-    it('proceeds when the socket refuses connections (a dead daemon has no children) and records it', () => {
-      curl.setRoute('POST /api/v1/drain', { curlExit: 7 });
-      const result = run(RESTART, ['--reason', 'r']);
-      expect(result.status, result.stderr).toBe(0);
-      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
-      expect(readFileSync(auditFile, 'utf8')).toContain('drain=skipped_unreachable');
+    // Correction 01, finding 2: unknown API state on an ACTIVE unit fails closed.
+    it.each([
+      ['the socket refuses connections (curl exit 7)', () => { curl.setRoute('POST /api/v1/drain', { curlExit: 7 }); return {}; }],
+      ['there is no socket', () => ({ PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'absent.sock') })],
+      ['the token file is empty', () => { writeFileSync(tokenPath, ''); return {}; }],
+      ['the token file is missing', () => ({ PI_WEB_UI_INTERNAL_API_TOKEN_FILE: path.join(dir, 'absent-token') })],
+      ['the legacy /capacity answers non-200', () => { curl.setRoute('POST /api/v1/drain', { status: 404, body: {} }); curl.setRoute('GET /api/v1/capacity', { status: 503, body: { activeTurns: 0 } }); return {}; }],
+      ['the legacy /capacity has no numeric activeTurns', () => { curl.setRoute('POST /api/v1/drain', { status: 404, body: {} }); curl.setRoute('GET /api/v1/capacity', { status: 200, body: { activeTurns: 'zero' } }); return {}; }],
+      ['the legacy /capacity body is not JSON', () => { curl.setRoute('POST /api/v1/drain', { status: 404, body: {} }); curl.setRoute('GET /api/v1/capacity', { status: 200, body: 'oops' }); return {}; }],
+      ['the legacy /capacity query fails in transport', () => { curl.setRoute('POST /api/v1/drain', { status: 404, body: {} }); curl.setRoute('GET /api/v1/capacity', { curlExit: 7 }); return {}; }],
+    ] as Array<[string, () => Record<string, string>]>)('refuses on an active unit when %s', (_label, arrange) => {
+      setUnitState('active');
+      const extra = arrange();
+      const result = run(RESTART, ['--reason', 'r'], extra);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('Refusing');
+      expect(result.stderr).toContain('--force');
+      expect(lines(systemctlLog)).toEqual([]);
+      expect(lines(notifyLog)).toEqual([]);
+      expect(existsSync(auditFile)).toBe(false);
     });
 
-    it('proceeds without a drain when there is no socket, and records it', () => {
+    it('proceeds without a drain when the unit is confirmed inactive, and records why', () => {
+      setUnitState('inactive');
       const result = run(RESTART, ['--reason', 'r'], { PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'absent.sock') });
       expect(result.status, result.stderr).toBe(0);
       expect(curl.requests()).toEqual([]);
-      expect(readFileSync(auditFile, 'utf8')).toContain('drain=skipped_no_daemon');
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      expect(readFileSync(auditFile, 'utf8')).toContain('drain=skipped_unit_inactive');
+    });
+
+    it('treats a failed unit as not running (no children) and an unknown state as active', () => {
+      setUnitState('failed');
+      const failed = run(RESTART, ['--reason', 'r'], { PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'absent.sock') });
+      expect(failed.status, failed.stderr).toBe(0);
+      expect(readFileSync(auditFile, 'utf8')).toContain('drain=skipped_unit_failed');
+      setUnitState('activating');
+      const unknown = run(RESTART, ['--reason', 'r'], { PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'absent.sock') });
+      expect(unknown.status).toBe(1);
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+    });
+
+    it('--force --reason proceeds on an active unit with a broken API, recorded as drain=forced', () => {
+      setUnitState('active');
+      const result = run(RESTART, ['--force', '--reason', 'API wedged, owner approved'], { PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'absent.sock') });
+      expect(result.status, result.stderr).toBe(0);
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      expect(readFileSync(auditFile, 'utf8')).toContain('drain=forced');
+    });
+
+    // Correction 01, finding 1: the requested verb and its active-state semantics are kept.
+    it.each([['restart'], ['try-restart'], ['reload-or-restart']])('--verb %s on an active unit drains, then runs that verb', (verb) => {
+      setUnitState('active');
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const result = run(RESTART, ['--reason', 'r', '--verb', verb]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(curl.requests().map((r) => r.path)).toEqual(['/api/v1/drain']);
+      expect(lines(systemctlLog)).toEqual([`${verb} ${UNIT}`]);
+      expect(readFileSync(auditFile, 'utf8')).toContain(`verb=${verb}`);
+    });
+
+    it('--verb try-restart on an inactive unit is a no-op: nothing started, audit says so', () => {
+      setUnitState('inactive');
+      const result = run(RESTART, ['--reason', 'r', '--verb', 'try-restart']);
+      expect(result.status, result.stderr).toBe(0);
+      expect(curl.requests()).toEqual([]);
+      expect(lines(systemctlLog)).toEqual([]);
+      const audit = readFileSync(auditFile, 'utf8');
+      expect(audit).toMatch(/^RESTART-NOOP .*verb=try-restart/m);
+      expect(audit).not.toContain('RESTART-REQUESTED');
+      expect(result.stdout + result.stderr).toContain('no-op');
+    });
+
+    it('rejects an unknown --verb with exit 64', () => {
+      const result = run(RESTART, ['--reason', 'r', '--verb', 'stop']);
+      expect(result.status).toBe(64);
+      expect(lines(systemctlLog)).toEqual([]);
+    });
+
+    // Correction 01, finding 6: a forced restart must leave a durable record.
+    it('refuses a forced restart when neither durable audit sink records it', () => {
+      const blocker = path.join(dir, 'not-a-directory');
+      writeFileSync(blocker, '');
+      const result = run(RESTART, ['--force', '--reason', 'owner approved'], {
+        PI_WEB_UI_STOP_AUDIT_FILE: path.join(blocker, 'stop-audit.log'),
+        PI_WEB_UI_SYSTEMD_CAT: path.join(dir, 'no-such-systemd-cat'),
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/could not be recorded/);
+      expect(lines(systemctlLog)).toEqual([]);
+      expect(lines(notifyLog)).toEqual([]);
+    });
+
+    it('a forced restart proceeds when the journal sink alone records it', () => {
+      const blocker = path.join(dir, 'not-a-directory');
+      writeFileSync(blocker, '');
+      const journalLog = path.join(dir, 'systemd-cat.log');
+      const systemdCat = path.join(dir, 'systemd-cat-stub');
+      writeFileSync(systemdCat, `#!/usr/bin/env bash\ncat >> '${journalLog}'\n`);
+      chmodSync(systemdCat, 0o755);
+      const result = run(RESTART, ['--force', '--reason', 'owner approved'], {
+        PI_WEB_UI_STOP_AUDIT_FILE: path.join(blocker, 'stop-audit.log'),
+        PI_WEB_UI_SYSTEMD_CAT: systemdCat,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(journalLog, 'utf8')).toContain('drain=forced');
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+    });
+
+    it('a non-forced drained restart keeps best-effort auditing (unchanged)', () => {
+      const blocker = path.join(dir, 'not-a-directory');
+      writeFileSync(blocker, '');
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const result = run(RESTART, ['--reason', 'r'], { PI_WEB_UI_STOP_AUDIT_FILE: path.join(blocker, 'stop-audit.log') });
+      expect(result.status, result.stderr).toBe(0);
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+    });
+
+    // Correction 01, finding 7: direct invocation takes the production lock itself.
+    it('a direct invocation refuses while another process holds the production lock', async () => {
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const ready = path.join(dir, 'holder.ready');
+      const holderProcess = spawn('bash', [LOCK, 'bash', '-c', `touch '${ready}'; sleep 2`], { env: env(), stdio: 'ignore' });
+      const exited = new Promise<void>((resolve) => holderProcess.once('exit', () => resolve()));
+      for (let i = 0; i < 100 && !existsSync(ready); i++) await new Promise((r) => setTimeout(r, 20));
+      const direct = run(RESTART, ['--reason', 'racing deploy']);
+      expect(direct.status).toBe(75);
+      expect(direct.stderr).toContain('already in progress');
+      expect(curl.requests()).toEqual([]);
+      expect(lines(systemctlLog)).toEqual([]);
+      await exited;
+    });
+
+    it('a direct invocation holds the lock for its whole run', () => {
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      // The drain step probes the lock from inside the run: it must be held.
+      const probe = path.join(dir, 'lock-probe.log');
+      const notifyProbe = path.join(dir, 'notify-probe');
+      writeFileSync(notifyProbe, `#!/usr/bin/env bash\nif flock -n '${lockPath}' true; then echo free >> '${probe}'; else echo held >> '${probe}'; fi\n`);
+      chmodSync(notifyProbe, 0o755);
+      const result = run(RESTART, ['--reason', 'r'], { PI_WEB_UI_NOTIFY_SCRIPT: notifyProbe });
+      expect(result.status, result.stderr).toBe(0);
+      expect(lines(probe)).toEqual(['held']);
     });
 
     it('--force without --reason is refused: an undrained restart must say why', () => {
@@ -254,6 +410,9 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       expect(result.stdout).toContain('drain=default');
       expect(result.stdout).toContain('drain_timeout_seconds=600');
       expect(result.stdout).toContain('on_timeout=restart');
+      expect(result.stdout).toContain('verb=restart');
+      expect(result.stdout).toContain(`lock=${clean.HOME}/.pi-web-ui/production-control.lock`);
+      expect(result.stdout).toContain('drain_http_slack_seconds=60');
       expect(curl.requests()).toEqual([]);
       expect(lines(systemctlLog)).toEqual([]);
     });
@@ -270,18 +429,34 @@ describe('drain-then-restart deploy scripts (B4)', () => {
 
   describe('with-production-lock.sh', () => {
     it.each([
-      [['systemctl', 'restart', UNIT]],
-      [['systemctl', 'restart', UNIT.replace(/\.service$/, '')]],
-      [['sudo', 'systemctl', 'restart', UNIT]],
-      [['systemctl', 'try-restart', UNIT]],
-    ])('routes a bare service restart %j through drain-then-restart', (argv) => {
+      [['systemctl', 'restart', UNIT], 'restart'],
+      [['systemctl', 'restart', UNIT.replace(/\.service$/, '')], 'restart'],
+      [['sudo', 'systemctl', 'restart', UNIT], 'restart'],
+      [['systemctl', 'try-restart', UNIT], 'try-restart'],
+      [['systemctl', 'reload-or-restart', UNIT], 'reload-or-restart'],
+    ] as Array<[string[], string]>)('routes %j through drain-then-restart, keeping the verb', (argv, verb) => {
+      setUnitState('active');
       curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
       const result = run(LOCK, argv);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toContain('drain-then-restart');
       expect(curl.requests().map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/v1/drain']);
-      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      expect(lines(systemctlLog)).toEqual([`${verb} ${UNIT}`]);
       expect(readFileSync(auditFile, 'utf8')).toMatch(/reason=production:lock/);
+    });
+
+    // Correction 01, finding 1: inactive-unit regression for each routed verb.
+    it.each([
+      ['restart', [`restart ${UNIT}`], 'RESTART-REQUESTED'],
+      ['reload-or-restart', [`reload-or-restart ${UNIT}`], 'RESTART-REQUESTED'],
+      ['try-restart', [], 'RESTART-NOOP'],
+    ] as Array<[string, string[], string]>)('routed %s on an INACTIVE unit keeps systemd semantics (no drain)', (verb, calls, kind) => {
+      setUnitState('inactive');
+      const result = run(LOCK, ['systemctl', verb, UNIT]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(curl.requests()).toEqual([]);
+      expect(lines(systemctlLog)).toEqual(calls);
+      expect(readFileSync(auditFile, 'utf8')).toMatch(new RegExp(`^${kind} .*verb=${verb}`, 'm'));
     });
 
     it('leaves other commands (including other units and read-only verbs) untouched', () => {
@@ -312,17 +487,91 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       await exited;
     });
 
-    it('restart-pi-web-ui.sh (its own active-turn pre-flight) is not routed a second time', () => {
-      curl.setRoute('GET /api/v1/capacity', { status: 200, body: { activeTurns: 0 } });
-      // Production argv: the bare systemctl call on the default unit, under the lock.
-      const result = run(RESTART_PI_WEB_UI, ['--reason', 'weekly refresh'], {
-        PI_WEB_UI_SERVICE_UNIT: 'pi-web-ui.service',
-        PI_WEB_UI_RESTART_SYSTEMCTL: '',
-      });
+    it('no longer honours a "pre-flighted" bypass marker: the drain always applies', () => {
+      setUnitState('active');
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const result = run(LOCK, ['systemctl', 'restart', UNIT], { PI_WEB_UI_RESTART_PREFLIGHTED: '1' });
       expect(result.status, result.stderr).toBe(0);
-      expect(curl.requests().map((r) => `${r.method} ${r.path}`)).toEqual(['GET /api/v1/capacity']);
-      expect(lines(systemctlLog)).toEqual(['restart pi-web-ui']);
+      expect(curl.requests().map((r) => r.path)).toEqual(['/api/v1/drain']);
+    });
+  });
+
+  // Correction 01, finding 3: the Command Code weekly-refresh entry point drains too.
+  describe('restart-pi-web-ui.sh', () => {
+    const queuedOnly = {
+      ...timedOut, waitedMs: 20000, completedDuringDrain: 0,
+      initial: { activeTurns: 0, nonterminalRuns: 1 },
+      remaining: { activeTurns: 0, quarantinedTurns: 0, nonterminalRuns: 1, runs: [] },
+      cutOffRunIds: ['queued-follow-up'],
+    };
+
+    it('drains within its job budget and restarts the injected unit once', () => {
+      setUnitState('active');
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'weekly refresh']);
+      expect(result.status, result.stderr).toBe(0);
+      const [drain] = curl.requests();
+      expect(drain.path).toBe('/api/v1/drain');
+      expect(JSON.parse(drain.body ?? '{}').timeoutSeconds).toBe(20);
+      // 60 s caller budget: drain wait + HTTP slack stays well inside it.
+      expect(Number(drain.maxTime)).toBe(30);
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
       expect(lines(auditFile).filter((l) => l.startsWith('RESTART-REQUESTED'))).toHaveLength(1);
+    });
+
+    it('a queued follow-up with zero active turns is never cut off: the drain is cancelled and the restart refused', () => {
+      setUnitState('active');
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: queuedOnly });
+      curl.setRoute('DELETE /api/v1/drain', { status: 200, body: { state: 'idle', draining: false } });
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'weekly refresh']);
+      expect(result.status).toBe(1);
+      // The weekly job reads exactly this as a deferral, not a failure.
+      expect(result.stderr).toMatch(/restart-pi-web-ui: refusing restart/);
+      expect(curl.requests().map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/v1/drain', 'DELETE /api/v1/drain']);
+      expect(lines(systemctlLog)).toEqual([]);
+      expect(existsSync(auditFile)).toBe(false);
+    });
+
+    it('refuses on unknown API state like the canonical path', () => {
+      setUnitState('active');
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'weekly refresh'], { PI_WEB_UI_INTERNAL_API_SOCKET: path.join(dir, 'absent.sock') });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/restart-pi-web-ui: refusing restart/);
+      expect(lines(systemctlLog)).toEqual([]);
+    });
+
+    it.each([[['--force']], [['--force', '--reason', '   ']]])('refuses %j: a forced restart needs a non-empty reason', (args) => {
+      const result = run(RESTART_PI_WEB_UI, args);
+      expect(result.status).toBe(64);
+      expect(result.stderr).toContain('--reason');
+      expect(lines(systemctlLog)).toEqual([]);
+      expect(existsSync(auditFile)).toBe(false);
+    });
+
+    it('--force --reason restarts the injected unit without a drain, recorded', () => {
+      const result = run(RESTART_PI_WEB_UI, ['--force', '--reason', 'owner approved override']);
+      expect(result.status, result.stderr).toBe(0);
+      expect(curl.requests()).toEqual([]);
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      expect(readFileSync(auditFile, 'utf8')).toContain('drain=forced');
+    });
+
+    it('honours the injected unit and still accepts the legacy --no-lock flag', () => {
+      setUnitState('active');
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'r', '--no-lock'], { PI_WEB_UI_SERVICE_UNIT: 'pi-web-ui-other-disposable.service' });
+      expect(result.status, result.stderr).toBe(0);
+      expect(lines(systemctlLog)).toEqual(['restart pi-web-ui-other-disposable.service']);
+    });
+
+    it('--dry-run prints the targets, names the requester (drain=dry_run) and neither drains nor restarts', () => {
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'r', '--dry-run']);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`unit=${UNIT}`);
+      expect(result.stderr).toContain('dry run');
+      expect(curl.requests()).toEqual([]);
+      expect(lines(systemctlLog)).toEqual([]);
+      expect(readFileSync(auditFile, 'utf8')).toContain('drain=dry_run');
     });
   });
 });

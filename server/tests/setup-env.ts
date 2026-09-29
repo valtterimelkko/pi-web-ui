@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 
 import { installSystemctlGuard } from './systemctl-guard.js';
 
@@ -15,6 +16,16 @@ import { installSystemctlGuard } from './systemctl-guard.js';
 // to assert on a record still sets the seam itself.
 if (!process.env.PI_WEB_UI_STOP_AUDIT_FILE) {
   process.env.PI_WEB_UI_STOP_AUDIT_FILE = path.join(tmpdir(), `pi-web-ui-test-stop-audit-${process.pid}.log`);
+}
+
+// Nor may a test take production's cooperative control lock (B4 correction 01).
+// scripts/restart-production.sh now acquires the lock itself, defaulting to
+// ~/.pi-web-ui/production-control.lock; a suite that forgot the seam would
+// otherwise flock the real file and could block (or be blocked by) a deploy.
+if (!process.env.PI_WEB_UI_PRODUCTION_LOCK) {
+  // Unique per test file: files running in parallel threads of one worker share
+  // a pid, and a shared lock would make them refuse each other (exit 75).
+  process.env.PI_WEB_UI_PRODUCTION_LOCK = path.join(tmpdir(), `pi-web-ui-test-production-${process.pid}-${randomUUID()}.lock`);
 }
 
 // No test process may reach the host service manager (2026-09-15).
