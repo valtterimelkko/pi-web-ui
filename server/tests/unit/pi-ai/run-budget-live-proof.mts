@@ -67,6 +67,10 @@ const chunkBytes = Number(arg('chunk-bytes', '4096'));
 const paceChunkMs = Number(arg('pace-chunk-ms', '3'));
 const runawayBytes = Number(arg('runaway-bytes', String(17 * 1024 * 1024))); // past the 16 MiB default
 const controlOutputTokens = Number(arg('control-output-tokens', '600000')); // past the 500,000 default
+// B3c byte-cap sizing (reuses V2a's driver-cap-param.diff verbatim): override
+// PI_RUN_BUDGET_MAX_STREAMED_BYTES for the `bytes` scenario only (its
+// serveOnce normally passes {} so the server default applies).
+const bytesCap = arg('bytes-cap', '');
 if (!scratch) fail('--scratch <root> is required');
 if (!existsSync(path.join(scratch, 'state'))) fail(`scratch not built: ${scratch}`);
 
@@ -415,6 +419,7 @@ async function main() {
     paceChunkMs,
     runawayBytes,
     controlOutputTokens,
+    bytesCapOverride: bytesCap || null,
     // Pacing justification (correction 02 rates): real per-run streaming rates from
     // the measured corpus (/root/orch-ops/orchestration-scaling/b3b/measure/
     // measurement-v3.json, merged at the <2s follow-up gap on the corrected
@@ -442,7 +447,7 @@ async function main() {
       runawayPlan.completionTokens = controlOutputTokens;
       runawayPlan.chunkBytes = 4096;
       runawayPlan.bMinStreamMs = 16_000; // A aborts at ~14 s; B must stream past it
-      const server = await serveOnce({});
+      const server = await serveOnce(bytesCap ? { PI_RUN_BUDGET_MAX_STREAMED_BYTES: bytesCap } : {});
       const token = readFileSync(tokenPath, 'utf8').trim();
       verdict.scenarios.bytes = await runScenario(server.socketPath, token);
       await stopServer();
