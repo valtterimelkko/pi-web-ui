@@ -477,6 +477,11 @@ export interface ServerConfig {
   internalApiRunReceiptDir: string;
   /** Idempotency replay window for accepted runs. */
   internalApiRunIdempotencyTtlMs: number;
+  /** C2 (contract 1.57.0): start window for the run never-started watchdog (0 disables). */
+  internalApiRunStartWindowMs: number;
+  /** C2 (contract 1.57.0): post-terminal settle window bounding a synchronous
+   *  dispatch's wait for its runtime after the receipt is terminal. */
+  internalApiPostTerminalSettleMs: number;
   internalApiEventPayloadMaxBytes: number;
   internalApiEventRateLimitPerSec: number;
   /** WS-path memory robustness (2026-09-05): per-client outbound send bounds. */
@@ -713,6 +718,8 @@ export const config: ServerConfig = {
   internalApiWatchDir: process.env.INTERNAL_API_WATCH_DIR || path.join(os.homedir(), '.pi-web-ui', 'watches'),
   internalApiRunReceiptDir: process.env.INTERNAL_API_RUN_RECEIPTS_DIR || path.join(os.homedir(), '.pi-web-ui', 'run-receipts'),
   internalApiRunIdempotencyTtlMs: parseInt(process.env.INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS || String(24 * 60 * 60 * 1000), 10),
+  internalApiRunStartWindowMs: parseNonnegativeInteger(process.env.INTERNAL_API_RUN_START_WINDOW_MS, 120 * 1000, 'INTERNAL_API_RUN_START_WINDOW_MS'),
+  internalApiPostTerminalSettleMs: parseNonnegativeInteger(process.env.INTERNAL_API_POST_TERMINAL_SETTLE_MS, 10 * 1000, 'INTERNAL_API_POST_TERMINAL_SETTLE_MS'),
   internalApiEventPayloadMaxBytes: parseNonnegativeInteger(process.env.INTERNAL_API_EVENT_PAYLOAD_MAX_BYTES, 256 * 1024, 'INTERNAL_API_EVENT_PAYLOAD_MAX_BYTES'),
   internalApiEventRateLimitPerSec: parsePositiveInteger(process.env.INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC, 200, 'INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC'),
   // WS-path memory robustness (2026-09-05): per-client outbound send bounds.

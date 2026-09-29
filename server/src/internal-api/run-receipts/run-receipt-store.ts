@@ -554,7 +554,7 @@ const LIVENESS_KEYS = new Set([
   'cessation',
 ]);
 const ACTIVITY_KEYS = new Set(['eventType', 'occurredAt', 'observedAt']);
-const WATCHDOG_KEYS = new Set(['reason', 'decidedAt', 'idleTimeoutMs', 'absoluteTimeoutMs']);
+const WATCHDOG_KEYS = new Set(['reason', 'decidedAt', 'idleTimeoutMs', 'absoluteTimeoutMs', 'startWindowMs']);
 const TERMINAL_OBSERVATION_KEYS = new Set(['type', 'occurredAt', 'observedAt', 'origin', 'reason', 'late']);
 const CESSATION_KEYS = new Set(['state', 'basis', 'observedAt']);
 const OUTPUT_EVIDENCE_KEYS = new Set(['policyVersion', 'source', 'assistantMessages', 'assistantTextBlocks', 'assistantTextChars', 'toolCalls', 'disposition']);
@@ -653,6 +653,7 @@ function validateLiveness(value: RunLivenessEvidence): void {
     assertIsoTimestamp(value.watchdog.decidedAt, 'watchdog decidedAt');
     if (!Number.isFinite(value.watchdog.idleTimeoutMs) || value.watchdog.idleTimeoutMs <= 0) throw new Error('Invalid watchdog idle timeout');
     if (!Number.isFinite(value.watchdog.absoluteTimeoutMs) || value.watchdog.absoluteTimeoutMs <= 0) throw new Error('Invalid watchdog absolute timeout');
+    if (value.watchdog.startWindowMs !== undefined && (!Number.isFinite(value.watchdog.startWindowMs) || value.watchdog.startWindowMs <= 0)) throw new Error('Invalid watchdog start window');
   }
   if (value.terminalObservations) {
     if (!Array.isArray(value.terminalObservations) || value.terminalObservations.length > 4) throw new Error('Invalid terminal observations');

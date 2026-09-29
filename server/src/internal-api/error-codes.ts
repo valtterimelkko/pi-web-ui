@@ -53,6 +53,14 @@ export const ErrorCode = {
   APPROVAL_REQUEST_NOT_FOUND: 'APPROVAL_REQUEST_NOT_FOUND',
   SESSION_NOT_STREAMING: 'SESSION_NOT_STREAMING',
   TURN_STALLED: 'TURN_STALLED',
+  // Contract 1.57.0 (C2): an accepted, dispatched run produced no runtime
+  // activity inside the configurable start window and was terminalised by the
+  // start watchdog with a distinct, truthful state (not TURN_STALLED).
+  NEVER_STARTED: 'NEVER_STARTED',
+  // Contract 1.57.0 (C2): the run receipt reached a terminal state but the
+  // runtime never handed the synchronous dispatch chain back, so the response
+  // reflects the receipt's outcome instead of a transport that would hang.
+  RUN_TRANSPORT_LOST: 'RUN_TRANSPORT_LOST',
   // Contract 1.45.0 (silent no-op plan Phase 1): the Pi runtime accepted the
   // prompt but no turn ever started (the classic extension input-hook
   // swallow). The run fails fast instead of stalling to the watchdog.
@@ -312,6 +320,20 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'The runtime or its dispatch path wedged without a terminal event.',
     hint: 'Inspect the run receipt and session diagnostics before retrying.',
     docs: 'docs/TROUBLESHOOTING.md',
+  },
+  [ErrorCode.NEVER_STARTED]: {
+    httpStatus: 500,
+    description: 'An accepted, dispatched run produced no runtime activity inside the start window and was terminalised by the start watchdog.',
+    cause: 'The runtime never began the work under this run (no eligible activity event and no output evidence was ever observed).',
+    hint: 'The message never ran; re-dispatch it. Watchers were notified with runNeverStarted evidence.',
+    docs: 'docs/INTERNAL-API.md#run-receipts',
+  },
+  [ErrorCode.RUN_TRANSPORT_LOST]: {
+    httpStatus: 500,
+    description: 'The run receipt reached a terminal state but the runtime never handed the synchronous dispatch chain back; the response reflects the receipt.',
+    cause: 'The receipt was terminalised by an external decision (abort, delete, cancel) while the runtime adapter never settled its promise.',
+    hint: 'Read the run receipt for the authoritative terminal outcome; the HTTP response no longer tracks the lost transport.',
+    docs: 'docs/INTERNAL-API.md#send-prompt',
   },
   [ErrorCode.PROMPT_NOT_EXECUTED]: {
     httpStatus: 500,

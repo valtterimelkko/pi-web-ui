@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.56.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.57.0' as const;
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -1014,6 +1014,12 @@ export interface RunWatchdogEvidence {
   decidedAt: string;
   idleTimeoutMs: number;
   absoluteTimeoutMs: number;
+  /**
+   * C2 (contract 1.57.0): present on NEVER_STARTED decisions — the start
+   * window that elapsed with no runtime activity (the idle window did not
+   * decide this terminal state).
+   */
+  startWindowMs?: number;
 }
 
 export interface RunCessationEvidence {

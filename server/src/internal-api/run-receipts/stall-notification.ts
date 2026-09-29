@@ -22,10 +22,12 @@ export interface StallNotificationInput {
   runId: string;
   sessionId?: string;
   status?: string;
+  /** C2 (contract 1.57.0): NEVER_STARTED decisions word their own notice. */
+  errorCode?: string;
   liveness?: {
     /** Present on the real receipt; the watchdog block also carries it. */
     idleTimeoutMs?: number;
-    watchdog?: { reason?: string; idleTimeoutMs?: number };
+    watchdog?: { reason?: string; idleTimeoutMs?: number; startWindowMs?: number };
     cessation?: { state?: string; basis?: string };
   };
   outputEvidence?: { assistantMessages?: number; toolCalls?: number; disposition?: string };
@@ -52,6 +54,23 @@ export function buildStallNotification(receipt: StallNotificationInput): StallNo
   const { runId } = receipt;
   const sessionSuffix = receipt.sessionId ? ` for session ${receipt.sessionId}` : '';
   const windowMs = receipt.liveness?.watchdog?.idleTimeoutMs ?? receipt.liveness?.idleTimeoutMs;
+
+  // C2 (contract 1.57.0): a run the START watchdog stopped never began. It
+  // shares `no_activity` with the lost wake, but the deciding window is the
+  // start window, and the honest claim is "never started", not "lost at the
+  // idle window" and never a quarantine claim (nothing was in flight).
+  if (receipt.errorCode === 'NEVER_STARTED') {
+    const startWindowMs = receipt.liveness?.watchdog?.startWindowMs;
+    return {
+      title: `⚠️ Run never started (NEVER_STARTED): ${runId}`,
+      body:
+        `Run ${runId}${sessionSuffix} was dispatched and then terminalised by the start watchdog after ` +
+        `${startWindowMs ?? 'the start window'}ms with no runtime activity of any kind ever observed — the ` +
+        `message never began executing under this run. The receipt is recorded as failed NEVER_STARTED and ` +
+        `the run's watchers were notified; if the work still matters, re-dispatch it. ` +
+        `There is nothing to clean up and no orphan process to look for.`,
+    };
+  }
 
   if (isLostWake(receipt)) {
     return {

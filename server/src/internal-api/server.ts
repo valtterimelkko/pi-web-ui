@@ -270,6 +270,10 @@ export class InternalApiServer {
         classifyRecovery: (record) => (drainCutOff.has(record.runId) ? 'drain_timeout' : 'server_restart'),
       }),
       idempotencyTtlMs: this.config.runReceiptIdempotencyTtlMs ?? config.internalApiRunIdempotencyTtlMs,
+      // C2 (contract 1.57.0): dispatched runs with no runtime activity inside
+      // the start window terminalise NEVER_STARTED (distinct from the idle
+      // watchdog's TURN_STALLED); 0 disables start detection.
+      runStartWindowMs: config.internalApiRunStartWindowMs,
       onStalled: (receipt) => {
         // Two genuinely different events share this hook (2026-09-15):
         //
@@ -308,6 +312,16 @@ export class InternalApiServer {
         } catch {
           return false; // status lookup failure is not positive cessation evidence
         }
+      },
+      // C2 (contract 1.57.0): the operator learns a dispatched run never
+      // started without polling. The parent-watch firing sink is registered
+      // separately by the route layer (it owns the watch manager).
+      onRunNeverStarted: (receipt) => {
+        const notice = buildStallNotification(receipt);
+        void this.notificationManager?.emitExplicit({
+          title: notice.title,
+          body: notice.body,
+        }).catch(() => { /* best-effort; a failed ping must not affect terminalisation */ });
       },
     });
     await runReceiptManager.init();
