@@ -220,19 +220,38 @@ function analyseMetrics(metricsDir, windowStart, windowEnd) {
     if (time < windowStart || time > windowEnd) continue;
     samples.push(record);
   }
-  const lagValues = samples
-    .map((record) => record.lagP99Ms ?? record.lag_p99_ms ?? record.lagP99)
-    .filter((value) => typeof value === 'number');
+  const series = samples.map((record) => ({
+    atMs: record.atMs,
+    lagP99Ms: typeof record.lagP99Ms === 'number' ? record.lagP99Ms : null,
+    lagMaxMs: typeof record.lagMaxMs === 'number' ? record.lagMaxMs : null,
+  }));
+  const lagValues = series.map((point) => point.lagP99Ms).filter((value) => typeof value === 'number');
   const lagMaxValues = samples
     .map((record) => record.lagMaxMs ?? record.lag_max_ms ?? record.lagMax)
     .filter((value) => typeof value === 'number');
   if (samples.length === 0) return { available: false, reason: 'no samples in window', totalLines: lines.length };
+  // B2 gate framing for the B3a correction (02): no two CONSECUTIVE readings
+  // at or over 300 ms, plus the honest p99 max.
+  let over300 = 0;
+  let twoConsecutiveOver300 = false;
+  let consecutiveRun = 0;
+  for (const value of lagValues) {
+    if (value >= 300) {
+      over300 += 1;
+      consecutiveRun += 1;
+      if (consecutiveRun >= 2) twoConsecutiveOver300 = true;
+    } else {
+      consecutiveRun = 0;
+    }
+  }
   return {
     available: true,
     samples: samples.length,
     lagP99Max: lagValues.length ? Math.max(...lagValues) : null,
     lagMaxMax: lagMaxValues.length ? Math.max(...lagMaxValues) : null,
-    p99Over300: lagValues.filter((value) => value >= 300).length,
+    p99Over300: over300,
+    twoConsecutiveOver300,
+    series,
     sampleKeys: Object.keys(samples[0]),
   };
 }

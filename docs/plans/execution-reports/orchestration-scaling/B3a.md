@@ -1,6 +1,6 @@
 # B3a — per-run budgets on streamed tool-call arguments (patch replaced, pi-ai pristine)
 
-**Status:** complete, awaiting independent review and parent sign-off.
+**Status:** complete; cap default re-decided under parent correction 02 (2026-09-29). Awaiting independent review and parent sign-off.
 **Lane:** `b3a` · **Worktree:** `/root/.worktrees/orch-scaling/b3a-pi-web-ui` · **Branch:** `orch/b3a` (base master `12d01198`)
 **Design gate:** `01-design.md` accepted by the parent (`01-answer.md`, 2026-09-29), with one decision amended by measurement (cap defaults, below).
 
@@ -28,19 +28,21 @@ c1bba3cb tests: pin contract-version expectations to 1.48.0 (B3a bump)
 
 Diff vs base: `git diff --stat 12d01198..HEAD` → 25 files changed, 1,853 insertions(+), 366 deletions(-).
 
-## Cap defaults — decided by measurement, per the parent's rule
+## Cap defaults — correction 02 re-decides with PACED measurements
 
-The design proposed 64 KB/call + 256 KB/run (patch parity, 0/5,633 observed false positives). The parent's `01-answer.md` made the default conditional on the B2 lag gate measured with the fine-delta fixture on pristine pi-ai. Measured outcome:
+The design proposed 64 KB/call + 256 KB/run (patch parity, 0/5,633 observed false positives). The first gate (`01-answer.md`) made the default conditional on the unpaced fine-delta fixture and landed on 16,384/65,536. The parent's review (`02-correction.md`) under-specified rule corrected: the unpaced fixture is a lab worst case, the 16 KB cost is concrete (~1 in 600 real calls — big `write`s up to 36.9 KB — failing terminally), and pacing is what real generation does (collapse needs parse-time × delta-rate ≥ 1). Re-measured on pristine pi-ai with the same harness, fine deltas, all runs aborting at the cap with `RUN_BUDGET_EXCEEDED`, session B completing mid-run in 35–41 ms:
 
-| run (unpaced fine-delta fixture, ~4 B/delta, local) | cap | abort | wall | lag p99 max (A2 instrument) |
-|---|---|---|---|---|
-| cap-on | 64 KB/256 KB | at cap, `RUN_BUDGET_EXCEEDED` | 21.9 s | **8,305 ms — BREACH** |
-| cap-on | 16 KB/64 KB | at cap, `RUN_BUDGET_EXCEEDED` | 2.3 s | **93 ms — pass** |
-| cap-off (positive control) | disabled | no abort (streamed past the bound) | ~47 s | **7,378 ms — stall class shown** |
+| run | caps | pace | abort wall | lag p99 max | readings ≥300 ms | two consecutive ≥300 |
+|---|---|---|---|---|---|---|
+| 1 | 65,536/262,144 | ~90/s (`--pace-delta-ms 11`) | 184.6 s | **4 ms** (185 samples) | 0 | no |
+| 2 | 65,536/262,144 | ~300/s (`--pace-delta-ms 3`) | 52.0 s | **10 ms** (52 samples) | 0 | no |
+| 3 (record) | 32,768/131,072 | unpaced | 6.6 s | 6,268 ms (1 sample; sampler starved) | 1 | n/a |
 
-Incident-rate paced run (~90 deltas/s, the 12 September profile), 16 KB default: abort at cap after 46.3 s, **lag p99 max 3 ms across 47 samples, zero over 300 ms**; session B completed in 42 ms mid-runaway. Per the parent's rule the defaults are **16,384 / 65,536**, both numbers reported.
+**Decision (frozen rule, `02-correction.md`): run 2 passes the B2 gate → default 65,536 / 262,144.** The unpaced lab worst case (64 KB unpaced measured p99 8,305 ms, bounded by the abort) is documented as a residual risk in OBSERVABILITY.md and here, with `PI_TOOL_ARGS_MAX_CALL_CHARS=16384` as the tighter-bound remedy. The cap-off positive control (unpaced) showed the stall class (p99 7,378 ms). Raw verdicts: `/root/orch-ops/orchestration-scaling/b3a/measure/correction02-runs.json` (all three runs; per-run full logs `b3a-corr-run{1,2,3}.log` alongside), run dirs `/tmp/b3a-live2` (disposable).
 
-Accepted trade-off (recorded in docs): ~0.16% of measured real tool calls (9/5,633; largest observed argument 36.9 KB — a big `write`) would breach the 16 KB default; raising `PI_TOOL_ARGS_MAX_CALL_CHARS` is the remedy, no code change.
+### Correction 02 — voice-live-lab failures at base
+
+`tests/voice-live-lab/tier2-lean.test.ts` failed 2 tests inside the earlier parallel full-suite run. Checked per the correction: a disposable base worktree (`/tmp/b3a-base`, commit `12d01198`, node_modules symlinked, clean env) passes the file **47/47 (exit 0)** — and the same file also passes **47/47 at this lane's HEAD in an isolated clean run**. The failure was load-flakiness of the fidelity scoring inside the parallel suite, not the diff and not the base state; recorded here as requested.
 
 ## TDD receipts
 
@@ -82,7 +84,7 @@ Accepted as written in `01-design.md` §4: `npm pack @earendil-works/pi-ai@0.87.
 ## Definition of victory (frozen) — item by item
 
 - **TDD for breach detection, the terminal code in the receipt, and config bounds** — met (receipts above).
-- **Disposable live proof on pristine pi-ai: fixture reproducing the 2026-09-12 pattern; turn aborts at the cap; receipt carries the code; a second session keeps streaming; lag under the B2 threshold; positive control shows the stall class** — met, with the parent's amendment applied: at the 64 KB parity default the fine-delta fixture BREACHED the lag gate, so per the `01-answer.md` rule the default is 16,384/65,536 and both measured. At the shipped default: unpaced p99 93 ms (abort ~2.3 s), incident-paced p99 max 3 ms (47 samples, zero over 300 ms); the cap-off control showed p99 7,378 ms.
+- **Disposable live proof on pristine pi-ai: fixture reproducing the 2026-09-12 pattern; turn aborts at the cap; receipt carries the code; a second session keeps streaming; lag vs B2 threshold measured with the fine-delta fixture; positive control shows the stall class** — met; the cap default was re-decided under correction 02 with paced measurements (**65,536/262,144**; table above). At that default: incident-paced p99 max 4 ms (185 samples), fast-provider-paced p99 max 10 ms (52 samples), zero readings ≥300 ms in either; the cap-off control showed p99 7,378 ms.
 - **Patch script, postinstall entry and old guard test removed; nothing references them** — met (live-file sweep: no references; historical records preserved deliberately).
 - **Gates per the common brief; evidence bundle committed** — met, with the pre-existing b1-2b/voice failures documented above (not this lane's; proven for the factory files).
 
@@ -95,8 +97,8 @@ Accepted as written in `01-design.md` §4: `npm pack @earendil-works/pi-ai@0.87.
 
 ## Residual risks
 
-1. **False positives at 16 KB** — ~0.16% of measured real calls (9/5,633; max observed 36.9 KB). A breached turn fails terminally; remediation is `PI_TOOL_ARGS_MAX_CALL_CHARS` (bounds 1 KB–1 MB, `0` disables). If production telemetry shows legit breaches, raising the env is one line, no deploy of code.
-2. **Provider tool_stream rotation** (R1 §9 caveat): per-call accumulation may reset provider-side; the per-run total (65,536) bounds the aggregate; rotated small buffers parse cheaply, so no stall mechanism remains in that mode.
-3. **Sampler starvation during a pinned loop** — the A2 sampler itself can be delayed while the loop is saturated (one sample in the 64 KB window); the lag ring (60 s) still recorded the worst deferral. Short breach windows are therefore measured as a floor, not an overestimate.
-4. **Pre-abort CPU at the 16 KB default, unpaced worst case** ≈ 1.3 s in ≤0.72 ms slices — bounded and aborting; the unbounded mechanism (141 s measured at incident scale) is deleted.
-5. The pristine harness builds a 479 MB scratch under `/tmp` per root; disposable, never committed, cleaned by the operator or tmp reaping.
+1. **Unpaced lab worst case at the 64 KB default** — an unpaced fine-delta local stream pins the loop for its whole pre-abort window (measured p99 8,305 ms over ~22 s, bounded by the abort at the cap; the abort itself is never at risk). Real generation paces itself; at ~90 and ~300 deltas/s the measured p99 max is 4–10 ms. An operator who prefers the tighter bound sets `PI_TOOL_ARGS_MAX_CALL_CHARS=16384` (then ~0.16% of measured real calls — 9/5,633, max observed 36.9 KB — fail terminally instead; that trade-off is what correction 02 weighed and declined as the default).
+2. **Provider tool_stream rotation** (R1 §9 caveat): per-call accumulation may reset provider-side; the per-run total (262,144) bounds the aggregate; rotated small buffers parse cheaply, so no stall mechanism remains in that mode.
+3. **Sampler starvation during a pinned loop** — the A2 sampler itself can be delayed while the loop is saturated (one sample in the unpaced windows); the lag ring (60 s) still recorded the worst deferral. Short breach windows are therefore measured as a floor, not an overestimate.
+4. **Pre-abort CPU at the 64 KB default, unpaced worst case** ≈ 18 s in ≤2.25 ms slices — bounded and aborting; the unbounded mechanism (141 s measured at incident scale) is deleted.
+5. The pristine harness builds a ~479 MB scratch under `/tmp` per root; disposable, never committed, cleaned by the operator or tmp reaping.

@@ -14,17 +14,19 @@ dotenv.config();
 export const PI_TOOL_ARGS_MIN_CHARS_BOUND = 1024;
 /** Upper bound (chars) for a configured streaming tool-argument cap. */
 export const PI_TOOL_ARGS_MAX_CHARS_BOUND = 1024 * 1024;
-/** Default per-tool-call cap (B3a gate decision 2026-09-29): the live proof on
- *  pristine pi-ai with the fine-delta fixture measured the B2 lag gate (300 ms
- *  sustained) BREACHED at the 64 KB parity cap (p99 8.3 s — the unpaced stream
- *  pins the loop for the whole ~18 s pre-abort window) and PASSING at 16 KB
- *  (p99 93 ms, abort ~2.3 s). Accepted trade-off (parent rule): ~0.16% of
- *  measured real tool calls (9/5,633; the largest observed argument was
- *  36.9 KB) would now breach — operators of workloads that legitimately write
- *  big files raise PI_TOOL_ARGS_MAX_CALL_CHARS rather than code changing. */
-export const PI_TOOL_ARGS_DEFAULT_CALL_CHARS = 16 * 1024;
+/** Default per-tool-call cap (correction 02, 2026-09-29): re-decided by PACED
+ *  live measurement on pristine pi-ai — 64 KB at ~90 deltas/s: p99 max 4 ms
+ *  over 185 samples, zero ≥300 ms; at ~300 deltas/s: p99 max 10 ms over 52
+ *  samples, zero ≥300 ms (both abort at the cap with RUN_BUDGET_EXCEEDED).
+ *  Pacing is what real generation does: the collapse needs parse-time ×
+ *  delta-rate ≥ 1, and 2.2 ms × 300/s stays well under saturation. The UNPACED
+ *  lab worst case (p99 8.3 s, bounded by the abort) is documented as a residual
+ *  risk; an operator who prefers the tighter bound sets
+ *  PI_TOOL_ARGS_MAX_CALL_CHARS=16384. 64 KB keeps parity with the removed
+ *  patch and 0/5,633 observed false positives on real tool arguments. */
+export const PI_TOOL_ARGS_DEFAULT_CALL_CHARS = 64 * 1024;
 /** Default per-run (agent_start→agent_end) aggregate cap across tool calls. */
-export const PI_TOOL_ARGS_DEFAULT_TURN_CHARS = 64 * 1024;
+export const PI_TOOL_ARGS_DEFAULT_TURN_CHARS = 256 * 1024;
 
 export interface ParsedToolArgsCap {
   value: number;
