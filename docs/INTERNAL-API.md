@@ -1440,7 +1440,9 @@ control is never refused by them.
   with p99 ≥ `thresholdMs` (default 300 ms) latch the refusal; only a reading
   with p99 strictly below `recoveryMs` (default half the trigger, 150 ms)
   releases it. A reading with no samples is ignored; a latched state whose last
-  reading is older than 180 s fails open and reports `stale: true`.
+  reading is older than 180 s fails open and reports `stale: true`; a stale gap
+  resets the streak and the latch, so latching again needs fresh consecutive
+  readings. Invalid lag knobs warn and fall back to the derived defaults.
   `telemetryAvailable: false` means no reading has arrived yet (the gate is
   inert, not green).
 - Refusals for both carry `Retry-After: 30` (one A2 interval; the state cannot
