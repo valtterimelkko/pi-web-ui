@@ -7,8 +7,9 @@
  * fixture that reproduces the 2026-09-12 pattern's generation arm: one very
  * long assistant generation streaming content chunks. Scenarios:
  *
- *   bytes   — default budgets (1,000,000 output tokens / 16 MiB streamed
- *             bytes), stress-paced 4 KiB / 3 ms ≈ 1.37 MB/s (~500× the p99.9
+ *   bytes   — default budgets (1,000,000 output tokens / the configured
+ *             streamed-byte default — 4 MiB since B3c; overridable per run
+ *             with --bytes-cap), stress-paced 4 KiB / 3 ms ≈ 1.37 MB/s (~500× the p99.9
  *             real streaming rate of 2,710 B/s): the streamed-byte cap must
  *             abort the turn at the cap, the receipt must carry
  *             RUN_BUDGET_EXCEEDED, and a second session must stream
@@ -67,6 +68,10 @@ const chunkBytes = Number(arg('chunk-bytes', '4096'));
 const paceChunkMs = Number(arg('pace-chunk-ms', '3'));
 const runawayBytes = Number(arg('runaway-bytes', String(17 * 1024 * 1024))); // past the 16 MiB default
 const controlOutputTokens = Number(arg('control-output-tokens', '600000')); // past the 500,000 default
+// B3c byte-cap sizing (reuses V2a's driver-cap-param.diff verbatim): override
+// PI_RUN_BUDGET_MAX_STREAMED_BYTES for the `bytes` scenario only (its
+// serveOnce normally passes {} so the server default applies).
+const bytesCap = arg('bytes-cap', '');
 if (!scratch) fail('--scratch <root> is required');
 if (!existsSync(path.join(scratch, 'state'))) fail(`scratch not built: ${scratch}`);
 
@@ -415,6 +420,7 @@ async function main() {
     paceChunkMs,
     runawayBytes,
     controlOutputTokens,
+    bytesCapOverride: bytesCap || null,
     // Pacing justification (correction 02 rates): real per-run streaming rates from
     // the measured corpus (/root/orch-ops/orchestration-scaling/b3b/measure/
     // measurement-v3.json, merged at the <2s follow-up gap on the corrected
@@ -438,11 +444,11 @@ async function main() {
   try {
     if (wantBytes) {
       log('── scenario bytes (default budgets, stress-paced ~1.37 MB/s ≈ 300× p99.9 real rate) ──');
-      runawayPlan.bytes = 32 * 1024 * 1024; // never reached: the 16 MiB cap aborts mid-stream
+      runawayPlan.bytes = 32 * 1024 * 1024; // never reached: the byte cap aborts mid-stream
       runawayPlan.completionTokens = controlOutputTokens;
       runawayPlan.chunkBytes = 4096;
       runawayPlan.bMinStreamMs = 16_000; // A aborts at ~14 s; B must stream past it
-      const server = await serveOnce({});
+      const server = await serveOnce(bytesCap ? { PI_RUN_BUDGET_MAX_STREAMED_BYTES: bytesCap } : {});
       const token = readFileSync(tokenPath, 'utf8').trim();
       verdict.scenarios.bytes = await runScenario(server.socketPath, token);
       await stopServer();

@@ -103,11 +103,13 @@ export const PI_RUN_BUDGET_MAX_STREAMED_BYTES_BOUND = 1024 * 1024 * 1024;
 export const PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS = 1_000_000;
 /** Default per-run streamed-byte cap over all streamed assistant output
  *  (text + thinking + tool-call arguments; UTF-8 bytes; B3b correction 01:
- *  merged-run max 999,449, worst case at a 30s merge 1,050,331; 0/3,280
- *  merged runs exceed 16 MiB = 15.3× the merged max, ≥2× rule). This is the
- *  LIVE mid-stream bound: usage tokens are only reported at message end,
- *  bytes stream per delta. */
-export const PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES = 16 * 1024 * 1024;
+ *  merged-run max 999,449, worst case at a 30s merge 1,050,331; B3c re-sized
+ *  the default from live measurement: 8 MiB's worst measured end-of-run
+ *  stall was 209 ms — over the frozen <200 ms sizing rule — so 4 MiB, whose
+ *  worst measured stall was 132 ms over 5 runs; 3.99× the real merged max,
+ *  ≥2× rule). This is the LIVE mid-stream bound: usage tokens are only
+ *  reported at message end, bytes stream per delta. */
+export const PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES = 4 * 1024 * 1024;
 
 /**
  * Parse one per-run budget cap env value (B3b). Same contract as B3a's

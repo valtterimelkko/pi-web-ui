@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.53.0",
+  "contractVersion": "1.56.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,8 @@ Current contract:
 
 ### Changelog
 
+- **1.56.0** (minor — B3c re-sizes the streamed-byte budget default from live measurement). No shape, field, route or event changes; one documented default changes value.
+  - **`PI_RUN_BUDGET_MAX_STREAMED_BYTES` default `16777216` → `4194304` (16 MiB → 4 MiB).** The per-run streamed-byte cap (1.50.0) bounds a runaway before the upstream end-of-message finalisation stall approaches the B2 lag threshold; that stall scales with the finalised message size, so B3c re-sized the default from a frozen measurement rule — the largest of {8 MiB, 4 MiB} whose worst measured end-of-run stall stays under 200 ms (a two-thirds margin under the 300 ms gate) over ≥5 runs per candidate, never below 2× the real merged-run maximum (1,050,331 bytes). Measured: 12 pristine-harness `bytes`-scenario runs at the 1 s A2 cadence (5× 8 MiB, 5× 4 MiB, 2× 16 MiB positive control; every per-run verdict and A2 sample preserved with the B3c evidence) — 8 MiB's worst stall 209 ms (fails), 4 MiB's 132 ms (passes), controls 180/187 ms. 4 MiB is 3.99× the real maximum; 0/2,382 merged real runs breach it. Env override, `0`-disable and warn-and-fallback semantics unchanged; runs are unaffected except that a runaway now aborts at 4 MiB instead of 16 MiB. Rollback: set `PI_RUN_BUDGET_MAX_STREAMED_BYTES=16777216` (or revert the B3c config commit).
 - **1.53.0** (minor, additive — C4 dispatch preflight; the version number is the lane's assignment from the orchestration parent, which resolves any lane-ordering conflicts at merge). One new error code, one new optional request field on three endpoints, and one default-on check on the create paths (the brief-sanctioned behaviour change; see below).
   - **New error code `PREFLIGHT_FAILED` (400).** A dispatch preflight refused the request before any runtime work: no session was created, no runtime turn started, no model token was spent. The body carries the base `{error, code}` shape plus `failures: [{kind: "cwd"|"path"|"tool", item, problem}]` listing **every** failing item (no first-failure short-circuit). This is a caller error: fix the listed items and resend; retrying unchanged will fail again.
   - **New optional `preflight` request field** on `POST /sessions`, each `POST /sessions/batch` entry, and `POST /sessions/:id/prompt`: `{paths?: string[], tools?: string[]}`, strict object, ≤ 32 entries per array, each path ≤ 4096 chars. `paths` entries must be absolute POSIX paths and are checked for **existence only** (no content reads). `tools` entries must be bare executable names (no separators — no traversal) and are resolved against the server's `PATH`, which runtime children inherit, requiring an executable regular file. Absent = today's behaviour.

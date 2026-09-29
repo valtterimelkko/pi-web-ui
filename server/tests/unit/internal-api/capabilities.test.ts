@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.53.0',
+        contractVersion: '1.56.0',
       },
       features: {
         // Contract 1.34.0: child-orchestration surfacing (background subagents,

@@ -241,10 +241,15 @@ describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
     // the merged max, NEVER BELOW 2× → 1,000,000 (3.7× the merged max) so a
     // legitimate long agentic loop cannot trip the message-end token cap;
     // the live byte bound is the primary volume control. Streamed bytes:
-    // merged max 999,449 (30s: 1,050,331); 16 MiB stays (15.3× ≥ 2× rule),
-    // 0/3,280 merged runs breach it.
+    // merged max 999,449 (30s: 1,050,331); B3c re-sized the default from
+    // live measurement (12 pristine-harness bytes-scenario runs at 1 s A2
+    // cadence, per-run verdicts kept with the B3c evidence): the 8 MiB
+    // candidate's worst measured end-of-run stall was 209 ms (one run; the
+    // others 4–178 ms), failing the frozen <200 ms sizing rule, so the
+    // default is 4 MiB (worst measured stall 132 ms over 5 runs;
+    // 3.99× the real merged max, ≥2× rule).
     expect(PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS).toBe(1_000_000);
-    expect(PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES).toBe(16 * 1024 * 1024);
+    expect(PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES).toBe(4 * 1024 * 1024);
   });
 
   it('bounds are sane and wide enough for measured real runs', () => {
@@ -286,7 +291,7 @@ describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
   it('pair resolution: defaults when both unset; both values honoured in bounds', () => {
     expect(resolveRunBudgetCaps(undefined, undefined)).toEqual({
       outputTokens: 1_000_000,
-      streamedBytes: 16 * 1024 * 1024,
+      streamedBytes: 4 * 1024 * 1024,
       warnings: [],
     });
     expect(resolveRunBudgetCaps('100000', String(4 * 1024 * 1024))).toMatchObject({
@@ -298,7 +303,7 @@ describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
 
   it('pair resolution: invalid values warn and fall back to defaults — startup never fails', () => {
     const broken = resolveRunBudgetCaps('potato', String(BYTE_MAX + 1));
-    expect(broken).toMatchObject({ outputTokens: 1_000_000, streamedBytes: 16 * 1024 * 1024 });
+    expect(broken).toMatchObject({ outputTokens: 1_000_000, streamedBytes: 4 * 1024 * 1024 });
     expect(broken.warnings).toHaveLength(2);
     expect(broken.warnings[0]).toMatch(/PI_RUN_BUDGET_MAX_OUTPUT_TOKENS/);
     expect(broken.warnings[1]).toMatch(/PI_RUN_BUDGET_MAX_STREAMED_BYTES/);
