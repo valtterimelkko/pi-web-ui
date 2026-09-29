@@ -1048,7 +1048,15 @@ Pi runs additionally carry the streaming tool-argument budget (contract
 and the receipt terminates `failed` with `errorCode: "RUN_BUDGET_EXCEEDED"`.
 The session stream carries a `tool_args_budget_exceeded` event with
 `data.scope` (`"call" | "turn"`), `capChars` and `observedChars` just before the
-aborted turn ends. See [`OBSERVABILITY.md`](./OBSERVABILITY.md#run-budgets).
+aborted turn ends. Contract `1.50.0` (B3b) adds two more per-run budgets on
+the same code: output tokens (`PI_RUN_BUDGET_MAX_OUTPUT_TOKENS`, default
+500,000, summed from `usage.output` at assistant `message_end`) and streamed
+assistant bytes (`PI_RUN_BUDGET_MAX_STREAMED_BYTES`, default 16 MiB, live
+over text/thinking/tool-call deltas). Breaches surface a
+`run_budget_exceeded` event with `data.budget` (`"output_tokens" |
+"streamed_bytes"`; B3a's event gains the additive `data.budget:
+"tool_args"`), `cap` and `observed`. See
+[`OBSERVABILITY.md`](./OBSERVABILITY.md#run-budgets).
 
 ```text
 GET /api/v1/runs/:runId

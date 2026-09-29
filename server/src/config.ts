@@ -382,6 +382,10 @@ export interface ServerConfig {
   piToolArgsMaxCallChars: number;
   /** B3a: per-run aggregate cap on streamed tool-argument chars; 0 disables. */
   piToolArgsMaxTurnChars: number;
+  /** B3b: per-run cap on summed assistant output tokens; 0 disables. */
+  piRunBudgetMaxOutputTokens: number;
+  /** B3b: per-run cap on streamed assistant bytes (text + thinking + tool args); 0 disables. */
+  piRunBudgetMaxStreamedBytes: number;
   maxClaudeProcesses: number;
   opencodeServerPort: number;
   opencodeServerHost: string;

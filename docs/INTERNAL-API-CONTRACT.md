@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.48.0",
+  "contractVersion": "1.50.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,12 @@ Current contract:
 
 ### Changelog
 
+- **1.50.0** (minor, additive — B3b per-run output-token and streamed-byte budgets). No existing field or default changes; one new SSE event type; the 1.48.0 terminal code is widened to two more budgets.
+  - **`RUN_BUDGET_EXCEEDED` now also covers per-run output tokens and streamed bytes.** Beside B3a's tool-argument guard, every in-process Pi session enforces (a) a per-run cap on summed assistant **output tokens** (default `500000`, env `PI_RUN_BUDGET_MAX_OUTPUT_TOKENS`) and (b) a per-run cap on **streamed assistant bytes** — text + thinking + tool-call arguments, UTF-8 (default `16777216`, env `PI_RUN_BUDGET_MAX_STREAMED_BYTES`). Both derive from measured real sessions (732 files / 3,352 runs: output tokens per run p99.9 204,869 / max 267,569 — 0/3,279 runs breach 500,000; streamed bytes per run p99.9 736,295 / max 999,449 — 0/3,286 runs breach 16 MiB). `0` disables a dimension; an invalid value logs one warning and falls back — configuration never stops startup. On breach the turn aborts via the runtime's public abort and the receipt terminates `failed` with the SAME `RUN_BUDGET_EXCEEDED` code as B3a (the receipt persists only the code — which budget tripped is on the event stream).
+  - **Runtime caveat (by design):** pi-ai reports usage only in the final streaming chunk, i.e. at assistant `message_end` — so the output-token cap trips at message boundaries and the streamed-byte cap is the LIVE mid-stream bound within a message. Providers that report no usage (37 of 73,843 measured assistant messages) never trip the token cap; the byte cap still bounds them.
+  - **New SSE event `run_budget_exceeded`** (event-types registry `control`, both verbosities): `{ type, timestamp, data: { budget: "output_tokens" | "streamed_bytes", cap, observed } }`, emitted on the session's normal event stream just before the aborted turn ends.
+  - **Additive field on `tool_args_budget_exceeded`:** its `data` gains `budget: "tool_args"` so all three per-run budgets share one discriminator; the 1.48.0 fields (`scope`, `capChars`, `observedChars`, `contentIndex?`) are unchanged.
+  - Rollback: reverting the server removes the new event and the additive field; receipts already written with the code ride the existing `errorCode` field, so older stores accept them. Runs under all budgets behave exactly as before.
 - **1.48.0** (minor, additive — B3a per-run budgets on streamed tool-call arguments). No existing field or default changes; one new terminal receipt code and one new SSE event type.
   - **New terminal code `RUN_BUDGET_EXCEEDED`.** A Pi run whose streamed tool-call arguments exceed the configured budget (default 65,536 chars per tool call / 262,144 chars per run — re-decided by correction 02's PACED live measurements on pristine pi-ai: 64 KB passed the B2 lag gate at both the incident's ~90 deltas/s (p99 max 4 ms/185 samples) and ~300 deltas/s (p99 max 10 ms/52 samples), zero readings ≥300 ms; the unpaced lab worst case, preserved under correction 03, measured lag p99 max 10,615 ms over a 21.7 s pre-abort window (`measure/corr03-64k-unpaced.json`, two samples — a floor, bounded by the abort) and is documented as a residual risk with `PI_TOOL_ARGS_MAX_CALL_CHARS=16384` as the tighter-bound remedy; `0` disables) is aborted via the runtime's public abort and the receipt terminates `failed` with `errorCode: "RUN_BUDGET_EXCEEDED"`. Before 1.48.0 such a run ended with a plain `agent_end` (`stopReason: "aborted"`) and the receipt completed as `completed`, masking the breach. The synchronous prompt path answers `500` with `code: "RUN_BUDGET_EXCEEDED"` and the `runId`; detached runs surface it through the receipt and watches as usual. Parents should treat it like any terminal failure: resend smaller or raise the env caps.
   - **New SSE event `tool_args_budget_exceeded`** (event-types registry `control`, both verbosities): `{ type, timestamp, data: { scope: "call" | "turn", capChars, observedChars, contentIndex? } }`, emitted on the session's normal event stream just before the aborted turn ends.

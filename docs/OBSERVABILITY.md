@@ -843,7 +843,7 @@ transcript bodies, no cookies, no auth data. The route's schema is strict: an
 unknown field is rejected rather than stored, so transcript content cannot be
 smuggled in beside a health record.
 
-## Run budgets (B3a)
+## Run budgets (B3a + B3b)
 
 Every in-process Pi session enforces a per-run budget on streamed tool-call
 argument characters. The 2026-09-12 production stall (a runaway generation whose
@@ -899,6 +899,46 @@ patch; that patch is removed and the bound now lives in pi-web-ui, leaving
   p99 ~9.8 KB, max 36.9 KB — the 64 KB default keeps patch parity and has
   zero observed false positives (the 16 KB alternative would have failed
   ~0.16% of calls, including large legit `write`s).
+
+### Per-run output-token and streamed-byte budgets (B3b, contract 1.50.0)
+
+Beside the tool-argument guard, every in-process Pi session enforces two more
+per-run budgets against runaway generation (endless prose, thinking or tool
+calls — the same 2026-09-12 class beyond its quadratic parse arm):
+
+- **Where:** `server/src/pi/run-budget.ts`, one guard per session at the same
+  single `PiService.createSession` subscribe funnel.
+- **Caps:** `PI_RUN_BUDGET_MAX_OUTPUT_TOKENS` (default `500000` per run) and
+  `PI_RUN_BUDGET_MAX_STREAMED_BYTES` (default `16777216` = 16 MiB per run,
+  UTF-8 bytes over text + thinking + tool-call deltas). `0` disables a
+  dimension; an invalid value logs one warning and falls back — configuration
+  never stops startup.
+- **What counts:** output tokens are summed from the public `usage.output`
+  each assistant message reports at `message_end` (the runtime reports usage
+  only in the final streaming chunk — the token cap therefore trips at
+  message boundaries); streamed bytes count every `text_delta`,
+  `thinking_delta` and `toolcall_delta` as they stream, which is the LIVE
+  mid-stream bound within a message. Providers without usage reporting (37 of
+  73,843 measured assistant messages) never trip the token cap; the byte cap
+  still bounds them.
+- **On breach:** one `run_budget_exceeded` event on the session's normal
+  stream (`data: { budget: "output_tokens" | "streamed_bytes", cap, observed }`),
+  then the public `AgentSession.abort()` with the same bounded retry pattern
+  as B3a. Internal API receipts terminate `failed` with the SAME
+  `RUN_BUDGET_EXCEEDED` code (which budget tripped lives on the event — the
+  receipt persists only the code). B3a's `tool_args_budget_exceeded` event
+  now also carries `data.budget: "tool_args"` (additive) so all three budgets
+  share one discriminator.
+- **What to look for:** log component `RunBudget`, the `run_budget_exceeded`
+  event on the session event stream, and the error-code catalog hint.
+- **Calibration (measured real sessions, read-only scan of 732 files):**
+  3,352 runs — output tokens per run p50 5,981, p90 45,953, p99 130,100,
+  p99.9 204,869, max 267,569 (0/3,279 runs breach 500,000, ~1.9× the observed
+  max); streamed bytes per run p50 20,823, p90 164,160, p99 465,659, p99.9
+  736,295, max 999,449 (0/3,286 runs breach 16 MiB, ~16× the observed max).
+  Defaults must not fail realistic long turns (0 measured false positives);
+  a runaway grows without bound, so a cap above every observed run still
+  bounds it.
 
 ## Error codes & enrichment
 
