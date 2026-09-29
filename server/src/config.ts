@@ -8,6 +8,80 @@ import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 dotenv.config();
 
+// ─── Pi streaming tool-argument budget (B3a) ───────────────────────────────
+
+/** Lower bound (chars) for a configured streaming tool-argument cap. */
+export const PI_TOOL_ARGS_MIN_CHARS_BOUND = 1024;
+/** Upper bound (chars) for a configured streaming tool-argument cap. */
+export const PI_TOOL_ARGS_MAX_CHARS_BOUND = 1024 * 1024;
+/** Default per-tool-call cap: parity with the removed pi-ai patch's 64 KB abort. */
+export const PI_TOOL_ARGS_DEFAULT_CALL_CHARS = 64 * 1024;
+/** Default per-run (agent_start→agent_end) aggregate cap across tool calls. */
+export const PI_TOOL_ARGS_DEFAULT_TURN_CHARS = 256 * 1024;
+
+export interface ParsedToolArgsCap {
+  value: number;
+  /** Present (with a human-readable message) when the raw value was invalid and the fallback was used. */
+  warning?: string;
+}
+
+/**
+ * Parse one streaming tool-argument cap env value. Unlike the strict parse
+ * helpers above, an invalid value must NEVER stop production from starting
+ * (parent decision, B3a gate 2026-09-29): it reports a warning and falls back.
+ * An explicit `0` disables the cap (used by tests/positive controls) and is
+ * valid, warning-free.
+ */
+export function parseToolArgsCap(raw: string | undefined, fallback: number, name: string): ParsedToolArgsCap {
+  if (raw === undefined || raw.trim() === '') return { value: fallback };
+  const trimmed = raw.trim();
+  if (trimmed === '0') return { value: 0 };
+  if (!/^[1-9]\d*$/.test(trimmed)) {
+    return { value: fallback, warning: `${name}='${raw}' is not a valid cap; using ${fallback}.` };
+  }
+  const value = Number(trimmed);
+  if (value < PI_TOOL_ARGS_MIN_CHARS_BOUND || value > PI_TOOL_ARGS_MAX_CHARS_BOUND) {
+    return {
+      value: fallback,
+      warning: `${name}=${value} is outside the supported range [${PI_TOOL_ARGS_MIN_CHARS_BOUND}, ${PI_TOOL_ARGS_MAX_CHARS_BOUND}]; using ${fallback}.`,
+    };
+  }
+  return { value };
+}
+
+export interface ResolvedToolArgsCaps {
+  callChars: number;
+  turnChars: number;
+  warnings: string[];
+}
+
+/**
+ * Resolve the per-call and per-run caps together. Invalid values fall back
+ * individually; an inverted pair (turn cap below a nonzero call cap) resets
+ * BOTH to the defaults with one warning. An explicit 0 on either side disables
+ * that cap and is exempt from the ordering rule. Never throws.
+ */
+export function resolveToolArgsCaps(
+  callRaw: string | undefined,
+  turnRaw: string | undefined,
+): ResolvedToolArgsCaps {
+  const call = parseToolArgsCap(callRaw, PI_TOOL_ARGS_DEFAULT_CALL_CHARS, 'PI_TOOL_ARGS_MAX_CALL_CHARS');
+  const turn = parseToolArgsCap(turnRaw, PI_TOOL_ARGS_DEFAULT_TURN_CHARS, 'PI_TOOL_ARGS_MAX_TURN_CHARS');
+  const warnings = [call.warning, turn.warning].filter((w): w is string => w !== undefined);
+  if (call.value > 0 && turn.value > 0 && turn.value < call.value) {
+    warnings.push(
+      `PI_TOOL_ARGS_MAX_TURN_CHARS=${turn.value} is below PI_TOOL_ARGS_MAX_CALL_CHARS=${call.value}; ` +
+      `using the defaults (${PI_TOOL_ARGS_DEFAULT_CALL_CHARS}/${PI_TOOL_ARGS_DEFAULT_TURN_CHARS}).`,
+    );
+    return {
+      callChars: PI_TOOL_ARGS_DEFAULT_CALL_CHARS,
+      turnChars: PI_TOOL_ARGS_DEFAULT_TURN_CHARS,
+      warnings,
+    };
+  }
+  return { callChars: call.value, turnChars: turn.value, warnings };
+}
+
 // ─── Logging configuration (observability) ──────────────────────────────────
 
 /**
@@ -221,6 +295,10 @@ export interface ServerConfig {
    *  scaling 2026-09: replaces the hardcoded cap of 4 that throttled
    *  multi-agent orchestration). */
   piMaxSessions: number;
+  /** B3a: per-tool-call cap on streamed tool-argument chars; 0 disables. */
+  piToolArgsMaxCallChars: number;
+  /** B3a: per-run aggregate cap on streamed tool-argument chars; 0 disables. */
+  piToolArgsMaxTurnChars: number;
   maxClaudeProcesses: number;
   opencodeServerPort: number;
   opencodeServerHost: string;
@@ -428,6 +506,13 @@ export const config: ServerConfig = {
   claudeSessionDir: process.env.CLAUDE_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'claude-sessions'),
   sessionRegistryPath: process.env.SESSION_REGISTRY_PATH || path.join(os.homedir(), '.pi-web-ui', 'session-registry.json'),
   piMaxSessions: parsePositiveInteger(process.env.PI_MAX_SESSIONS, 20, 'PI_MAX_SESSIONS'),
+  // B3a: streamed tool-argument budget. Invalid/inverted values warn and fall
+  // back to defaults at load time — configuration must never stop startup.
+  ...((): { piToolArgsMaxCallChars: number; piToolArgsMaxTurnChars: number } => {
+    const caps = resolveToolArgsCaps(process.env.PI_TOOL_ARGS_MAX_CALL_CHARS, process.env.PI_TOOL_ARGS_MAX_TURN_CHARS);
+    for (const warning of caps.warnings) console.warn(`[config] ${warning}`);
+    return { piToolArgsMaxCallChars: caps.callChars, piToolArgsMaxTurnChars: caps.turnChars };
+  })(),
   maxClaudeProcesses: parseInt(process.env.MAX_CLAUDE_PROCESSES || '10', 10),
   opencodeServerPort: parseInt(process.env.OPENCODE_SERVER_PORT || '4096', 10),
   opencodeServerHost: process.env.OPENCODE_SERVER_HOST || '127.0.0.1',

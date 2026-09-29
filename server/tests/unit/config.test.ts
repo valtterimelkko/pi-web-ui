@@ -7,6 +7,10 @@ import {
   parseLogFormat,
   parsePositiveInteger,
   parseAbsolutePath,
+  parseToolArgsCap,
+  resolveToolArgsCaps,
+  PI_TOOL_ARGS_MAX_CHARS_BOUND,
+  PI_TOOL_ARGS_MIN_CHARS_BOUND,
   LOG_FORMATS,
   type LogLevel,
   type LogFormat,
@@ -150,5 +154,68 @@ describe('LOG_FORMAT parsing (Task 4)', () => {
   it('exports the format list and config has a valid logFormat', () => {
     expect(LOG_FORMATS).toEqual(['pretty', 'json']);
     expect(LOG_FORMATS).toContain(config.logFormat as LogFormat);
+  });
+});
+
+describe('pi streaming tool-argument caps (B3a)', () => {
+  const MIN = PI_TOOL_ARGS_MIN_CHARS_BOUND;
+  const MAX = PI_TOOL_ARGS_MAX_CHARS_BOUND;
+
+  it('single-cap parsing: unset/blank falls back, 0 disables, in-bounds values pass', () => {
+    expect(parseToolArgsCap(undefined, 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(65536);
+    expect(parseToolArgsCap('', 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(65536);
+    expect(parseToolArgsCap('   ', 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(65536);
+    expect(parseToolArgsCap('0', 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(0);
+    expect(parseToolArgsCap(' 0 ', 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(0);
+    expect(parseToolArgsCap(String(MIN), 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(MIN);
+    expect(parseToolArgsCap(String(MAX), 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(MAX);
+    expect(parseToolArgsCap('8192', 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').value).toBe(8192);
+  });
+
+  it('single-cap parsing: out-of-bounds or junk values report a warning and fall back — never throw', () => {
+    for (const invalid of ['1', String(MIN - 1), String(MAX + 1), '-5', '1.5', 'NaN', 'abc']) {
+      const resolved = parseToolArgsCap(invalid, 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS');
+      expect(resolved.value).toBe(65536);
+      expect(resolved.warning).toMatch(/PI_TOOL_ARGS_MAX_CALL_CHARS/);
+    }
+    // The 0 disable path carries no warning.
+    expect(parseToolArgsCap('0', 65536, 'PI_TOOL_ARGS_MAX_CALL_CHARS').warning).toBeUndefined();
+  });
+
+  it('pair resolution: defaults when both unset; both values honoured in bounds', () => {
+    expect(resolveToolArgsCaps(undefined, undefined)).toEqual({
+      callChars: 65536,
+      turnChars: 262144,
+      warnings: [],
+    });
+    expect(resolveToolArgsCaps('32768', '131072').warnings).toEqual([]);
+    expect(resolveToolArgsCaps('32768', '131072')).toMatchObject({ callChars: 32768, turnChars: 131072 });
+  });
+
+  it('pair resolution: invalid values warn and fall back to defaults — startup never fails', () => {
+    const broken = resolveToolArgsCaps('potato', String(MAX + 1));
+    expect(broken).toMatchObject({ callChars: 65536, turnChars: 262144 });
+    expect(broken.warnings).toHaveLength(2);
+    expect(broken.warnings[0]).toMatch(/PI_TOOL_ARGS_MAX_CALL_CHARS/);
+    expect(broken.warnings[1]).toMatch(/PI_TOOL_ARGS_MAX_TURN_CHARS/);
+  });
+
+  it('pair resolution: turn cap below call cap warns once and resets BOTH to defaults', () => {
+    const inverted = resolveToolArgsCaps('65536', '16384');
+    expect(inverted).toMatchObject({ callChars: 65536, turnChars: 262144 });
+    expect(inverted.warnings).toHaveLength(1);
+    expect(inverted.warnings[0]).toMatch(/PI_TOOL_ARGS_MAX_TURN_CHARS.*PI_TOOL_ARGS_MAX_CALL_CHARS|call cap/s);
+  });
+
+  it('pair resolution: an explicit 0 disables that cap without warning, and is exempt from the ordering rule', () => {
+    expect(resolveToolArgsCaps('0', '65536')).toMatchObject({ callChars: 0, turnChars: 65536 });
+    expect(resolveToolArgsCaps('65536', '0')).toMatchObject({ callChars: 65536, turnChars: 0 });
+    expect(resolveToolArgsCaps('0', '0')).toMatchObject({ callChars: 0, turnChars: 0 });
+    expect(resolveToolArgsCaps('0', '65536').warnings).toEqual([]);
+  });
+
+  it('config singleton exposes validated caps', () => {
+    expect(config.piToolArgsMaxCallChars).toBeGreaterThanOrEqual(0);
+    expect(config.piToolArgsMaxTurnChars).toBeGreaterThanOrEqual(0);
   });
 });
