@@ -235,10 +235,15 @@ describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
   const BYTE_MAX = PI_RUN_BUDGET_MAX_STREAMED_BYTES_BOUND;
 
   it('defaults come from the measured rule and are exported', () => {
-    // 0/3,279 measured real runs breach 500,000 output tokens per run
-    // (observed max 267,569) and 0/3,286 breach 16 MiB streamed bytes per run
-    // (observed max 999,449) — defaults must not fail realistic long turns.
-    expect(PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS).toBe(500_000);
+    // Correction 01 (measured on the guard's real boundary): 735 files /
+    // 3,353 segments merged at a <2s follow-up gap → 3,273 runs; worst case
+    // at a 30s merge max 270,689 output tokens per run. Rule: margin over
+    // the merged max, NEVER BELOW 2× → 1,000,000 (3.7× the merged max) so a
+    // legitimate long agentic loop cannot trip the message-end token cap;
+    // the live byte bound is the primary volume control. Streamed bytes:
+    // merged max 999,449 (30s: 1,050,331); 16 MiB stays (15.3× ≥ 2× rule),
+    // 0/3,280 merged runs breach it.
+    expect(PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS).toBe(1_000_000);
     expect(PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES).toBe(16 * 1024 * 1024);
   });
 
@@ -266,8 +271,8 @@ describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
 
   it('single-cap parsing: out-of-bounds or junk values report a warning and fall back — never throw', () => {
     for (const invalid of ['1', String(TOK_MIN - 1), String(TOK_MAX + 1), '-5', '1.5', 'NaN', 'abc']) {
-      const resolved = parseRunBudgetCap(invalid, 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX);
-      expect(resolved.value).toBe(500_000);
+      const resolved = parseRunBudgetCap(invalid, 1_000_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX);
+      expect(resolved.value).toBe(1_000_000);
       expect(resolved.warning).toMatch(/PI_RUN_BUDGET_MAX_OUTPUT_TOKENS/);
     }
     for (const invalid of [String(BYTE_MIN - 1), String(BYTE_MAX + 1), 'potato']) {
@@ -275,12 +280,12 @@ describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
       expect(resolved.value).toBe(16 * 1024 * 1024);
       expect(resolved.warning).toMatch(/PI_RUN_BUDGET_MAX_STREAMED_BYTES/);
     }
-    expect(parseRunBudgetCap('0', 500_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).warning).toBeUndefined();
+    expect(parseRunBudgetCap('0', 1_000_000, 'PI_RUN_BUDGET_MAX_OUTPUT_TOKENS', TOK_MIN, TOK_MAX).warning).toBeUndefined();
   });
 
   it('pair resolution: defaults when both unset; both values honoured in bounds', () => {
     expect(resolveRunBudgetCaps(undefined, undefined)).toEqual({
-      outputTokens: 500_000,
+      outputTokens: 1_000_000,
       streamedBytes: 16 * 1024 * 1024,
       warnings: [],
     });
@@ -293,7 +298,7 @@ describe('pi per-run output-token and streamed-byte caps (B3b)', () => {
 
   it('pair resolution: invalid values warn and fall back to defaults — startup never fails', () => {
     const broken = resolveRunBudgetCaps('potato', String(BYTE_MAX + 1));
-    expect(broken).toMatchObject({ outputTokens: 500_000, streamedBytes: 16 * 1024 * 1024 });
+    expect(broken).toMatchObject({ outputTokens: 1_000_000, streamedBytes: 16 * 1024 * 1024 });
     expect(broken.warnings).toHaveLength(2);
     expect(broken.warnings[0]).toMatch(/PI_RUN_BUDGET_MAX_OUTPUT_TOKENS/);
     expect(broken.warnings[1]).toMatch(/PI_RUN_BUDGET_MAX_STREAMED_BYTES/);

@@ -129,6 +129,34 @@ describe('RunBudgetGuard — streamed bytes', () => {
     expect(session.aborted).toBe(1);
     expect(session.emitted).toHaveLength(1);
   });
+
+  it('accumulation spans a queued follow-up consumed within one run (correction 01 pin)', () => {
+    // pi-agent-core's loop consumes queued follow-ups/steers INSIDE one run
+    // (one agent_start; agent-loop.js getFollowUpMessages → continue), and
+    // the guard must accumulate across them: the run boundary is agent_start,
+    // never the user message. Characterisation pin (behaviour pre-existing);
+    // the measured defaults depend on it.
+    const guard = new RunBudgetGuard({ outputTokens: 1000, streamedBytes: 0 });
+    const session = makeSession();
+    guard.observe(session, agentStart(), session.emit);
+    guard.observe(session, messageEnd('assistant', 600), session.emit);
+    // A follow-up arrives (persisted as a user message) and is consumed by
+    // the SAME running loop — no agent_start is emitted between the messages.
+    guard.observe(session, { type: 'message_start', message: { role: 'user', content: 'go on' } }, session.emit);
+    guard.observe(session, messageEnd('assistant', 600), session.emit);
+    expect(session.aborted).toBe(1);
+    expect(session.emitted).toHaveLength(1);
+    expect((session.emitted[0].data as Record<string, unknown>).budget).toBe('output_tokens');
+    expect((session.emitted[0].data as Record<string, unknown>).observed).toBe(1200);
+    // Control: a real new run (agent_start) resets the counters instead.
+    const guardB = new RunBudgetGuard({ outputTokens: 1000, streamedBytes: 0 });
+    const sessionB = makeSession();
+    guardB.observe(sessionB, agentStart(), sessionB.emit);
+    guardB.observe(sessionB, messageEnd('assistant', 600), sessionB.emit);
+    guardB.observe(sessionB, agentStart(), sessionB.emit);
+    guardB.observe(sessionB, messageEnd('assistant', 600), sessionB.emit);
+    expect(sessionB.aborted).toBe(0);
+  });
 });
 
 // ─── output-token budget ─────────────────────────────────────────────────────

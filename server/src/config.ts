@@ -91,17 +91,22 @@ export const PI_RUN_BUDGET_MAX_OUTPUT_TOKENS_BOUND = 10_000_000;
 export const PI_RUN_BUDGET_MIN_STREAMED_BYTES = 64 * 1024;
 /** Upper bound (bytes) for a configured per-run streamed-byte cap. */
 export const PI_RUN_BUDGET_MAX_STREAMED_BYTES_BOUND = 1024 * 1024 * 1024;
-/** Default per-run output-token cap (B3b, from measured real sessions):
- *  732 session files / 3,352 runs — per-run output tokens p50 5,981, p99
- *  130,100, p99.9 204,869, max 267,569; 0/3,279 runs exceed 500,000. A
- *  runaway generation grows without bound, so a cap ~1.9× the observed max
- *  never aborts a realistic long turn while still bounding the runaway. */
-export const PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS = 500_000;
+/** Default per-run output-token cap (B3b, correction 01 re-derived on the
+ *  guard's real run boundary): pi-agent-core's loop consumes queued
+ *  follow-ups INSIDE one run, so persisted user-message segments were merged
+ *  at a <2s follow-up gap (gap distribution is bimodal: 921 gaps <2s vs 1,223
+ *  ≥30s in 735 files / 3,353 segments → 3,273 merged runs). Merged max
+ *  267,569 tokens; worst case at a 30s merge 270,689. Rule: margin over the
+ *  merged max, NEVER BELOW 2× → 1,000,000 (3.7×) — deliberately loose so a
+ *  legitimate long agentic loop cannot trip this message-end cap; the
+ *  streamed-byte cap is the live volume bound. */
+export const PI_RUN_BUDGET_DEFAULT_OUTPUT_TOKENS = 1_000_000;
 /** Default per-run streamed-byte cap over all streamed assistant output
- *  (text + thinking + tool-call arguments; UTF-8 bytes; B3b, same corpus):
- *  per-run streamed bytes p50 20,823, p99 465,659, max 999,449; 0/3,286 runs
- *  exceed 16 MiB. This is the LIVE mid-stream bound: usage tokens are only
- *  reported at message end, bytes stream per delta. */
+ *  (text + thinking + tool-call arguments; UTF-8 bytes; B3b correction 01:
+ *  merged-run max 999,449, worst case at a 30s merge 1,050,331; 0/3,280
+ *  merged runs exceed 16 MiB = 15.3× the merged max, ≥2× rule). This is the
+ *  LIVE mid-stream bound: usage tokens are only reported at message end,
+ *  bytes stream per delta. */
 export const PI_RUN_BUDGET_DEFAULT_STREAMED_BYTES = 16 * 1024 * 1024;
 
 /**
