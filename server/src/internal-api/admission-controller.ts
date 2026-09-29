@@ -10,7 +10,7 @@ import {
 import { readHostPressure, type ResolvedHostPressure } from './host-pressure.js';
 import type { SessionRuntime } from './types.js';
 
-export type AdmissionRefusalReason = 'global_limit' | 'runtime_limit' | 'memory_pressure' | 'pid_pressure' | 'host_memory_pressure';
+export type AdmissionRefusalReason = 'global_limit' | 'runtime_limit' | 'memory_pressure' | 'pid_pressure' | 'host_memory_pressure' | 'heap_pressure' | 'event_loop_lag' | 'draining';
 
 /**
  * Execution priority class. P0 (browser) and P1 (Agent OS control) are
@@ -289,6 +289,17 @@ export class AdmissionController {
     this.retryAfterSeconds = c.retryAfterSeconds;
   }
 
+  private drainingState: { since: number; reason: string } | null = null;
+
+  /** B4 seam: while draining, new P2/P3 execution is refused with reason 'draining'; P0/P1 control and session disposal stay available. */
+  setDraining(state: { since: number; reason: string } | null): void {
+    this.drainingState = state;
+  }
+
+  getDraining(): { since: number; reason: string } | null {
+    return this.drainingState;
+  }
+
   async acquire(runtime: SessionRuntime, cls: AdmissionClass = 'P2'): Promise<{ release: () => void }> {
     const pressure = this.evaluatePressure();
     const reason = this.refusalReason(runtime, cls, pressure);
@@ -407,6 +418,7 @@ export class AdmissionController {
       if (memoryCritical) return 'memory_pressure';
       if (this.activeTurns >= this.maxActiveTurns) return 'global_limit';
     } else {
+      if (this.drainingState) return 'draining';
       // P2/P3 execution: refused under memory pressure, host-memory pressure, PID pressure, execution saturation, or per-runtime ceiling.
       if (memoryPressure) return 'memory_pressure';
       if (hostPressure) return 'host_memory_pressure';
