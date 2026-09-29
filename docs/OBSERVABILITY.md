@@ -908,7 +908,7 @@ calls — the same 2026-09-12 class beyond its quadratic parse arm):
 
 - **Where:** `server/src/pi/run-budget.ts`, one guard per session at the same
   single `PiService.createSession` subscribe funnel.
-- **Caps:** `PI_RUN_BUDGET_MAX_OUTPUT_TOKENS` (default `500000` per run) and
+- **Caps:** `PI_RUN_BUDGET_MAX_OUTPUT_TOKENS` (default `1000000` per run) and
   `PI_RUN_BUDGET_MAX_STREAMED_BYTES` (default `16777216` = 16 MiB per run,
   UTF-8 bytes over text + thinking + tool-call deltas). `0` disables a
   dimension; an invalid value logs one warning and falls back — configuration
@@ -934,14 +934,27 @@ calls — the same 2026-09-12 class beyond its quadratic parse arm):
   lines from component `RunBudget` appear only when abort retries fail — a
   clean breach is observable on the event stream and the receipt, not the
   log.)
-- **Calibration (measured real sessions, read-only scan of 732 files):**
-  3,352 runs — output tokens per run p50 5,981, p90 45,953, p99 130,100,
-  p99.9 204,869, max 267,569 (0/3,279 runs breach 500,000, ~1.9× the observed
-  max); streamed bytes per run p50 20,823, p90 164,160, p99 465,659, p99.9
-  736,295, max 999,449 (0/3,286 runs breach 16 MiB, ~16× the observed max).
-  Defaults must not fail realistic long turns (0 measured false positives);
-  a runaway grows without bound, so a cap above every observed run still
-  bounds it.
+- **Calibration (correction 01 — measured on the guard's real run boundary):**
+  pi-agent-core's loop consumes queued follow-ups INSIDE one run, so persisted
+  user-message segments understate per-run volume. Re-measured with a
+  conservative merge — consecutive segments with a <2s assistant→user gap are
+  one run (the gap distribution is bimodal: 921 gaps <2s vs 1,223 ≥30s across
+  735 files / 3,353 segments → 3,273 merged runs); worst case at a 30s merge:
+  2,115 runs, max 270,689 tokens / 1,050,331 bytes.
+  - output tokens per merged run: p50 6,056, p99 130,100, p99.9 204,869, max
+    267,569 (30s: 270,689) — **0/3,273 merged runs breach 1,000,000** (3.7×
+    the merged max; the 2× rule invalidated the first-round 500,000 default).
+    Deliberately loose: the token cap fires only at message end, so it must
+    not abort a legitimate long agentic loop — the byte cap is the live bound.
+  - streamed bytes per merged run: p50 21,015, p99 465,659, p99.9 736,295,
+    max 999,449 (30s: 1,050,331) — **0/3,280 merged runs breach 16 MiB**
+    (15.3× the merged max, ≥2× rule).
+  - real streaming rate (merged-run bytes/wall, includes tool time): p50
+    148 B/s, p99 1,014 B/s, p99.9 4,551 B/s, max 6,583 B/s — the live-proof
+    pacing is justified against these figures.
+  First-round (segment-view) figures are preserved in
+  `b3b/measure/measurement.json`; correction-01 figures in
+  `b3b/measure/measurement-v2.json` (lane measure dir).
 
 ## Error codes & enrichment
 

@@ -1052,7 +1052,9 @@ aborted turn ends. Contract `1.50.0` (B3b) adds two more per-run budgets on
 the same code: output tokens (`PI_RUN_BUDGET_MAX_OUTPUT_TOKENS`, default
 500,000, summed from `usage.output` at assistant `message_end`) and streamed
 assistant bytes (`PI_RUN_BUDGET_MAX_STREAMED_BYTES`, default 16 MiB, live
-over text/thinking/tool-call deltas). Breaches surface a
+over text/thinking/tool-call deltas; correction 01 re-derived the token
+default on the guard's real run boundary — queued follow-ups merge into one
+run — to 1,000,000). Breaches surface a
 `run_budget_exceeded` event with `data.budget` (`"output_tokens" |
 "streamed_bytes"`; B3a's event gains the additive `data.budget:
 "tool_args"`), `cap` and `observed`. See
