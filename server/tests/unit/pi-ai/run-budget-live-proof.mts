@@ -8,8 +8,8 @@
  * long assistant generation streaming content chunks. Scenarios:
  *
  *   bytes   — default budgets (1,000,000 output tokens / 16 MiB streamed
- *             bytes), stress-paced 4 KiB / 3 ms ≈ 1.37 MB/s (~300× the p99.9
- *             real streaming rate of 4,551 B/s): the streamed-byte cap must
+ *             bytes), stress-paced 4 KiB / 3 ms ≈ 1.37 MB/s (~500× the p99.9
+ *             real streaming rate of 2,710 B/s): the streamed-byte cap must
  *             abort the turn at the cap, the receipt must carry
  *             RUN_BUDGET_EXCEEDED, and a second session must stream
  *             THROUGHOUT A's runaway window (its own paced stream outlasts
@@ -141,7 +141,7 @@ function startFixture(port) {
     // has resolved (+500 ms grace, capped at 100 s so a wedged A cannot
     // deadlock B — A's own 120 s prompt timeout fires first). 64 B every
     // 66 ms ≈ 970 B/s ≈ the measured p99 REAL per-run streaming rate
-    // (1,014 B/s; measurement-v2.json) — B streams at a realistic rate while
+    // (1,088 B/s; measurement-v3.json) — B streams at a realistic rate while
     // spanning A's entire runaway window.
     record.kind = 'streaming-session';
     chunk({ ...chunkBody, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
@@ -415,17 +415,18 @@ async function main() {
     paceChunkMs,
     runawayBytes,
     controlOutputTokens,
-    // Pacing justification (correction 01): real per-run streaming rates from
+    // Pacing justification (correction 02 rates): real per-run streaming rates from
     // the measured corpus (/root/orch-ops/orchestration-scaling/b3b/measure/
-    // measurement-v2.json, merged at the <2s follow-up gap, includes tool
-    // time): p50 148 B/s, p90 446 B/s, p99 1,014 B/s, p99.9 4,551 B/s, max
-    // 6,583 B/s. The stress run (4096 B / 3 ms ≈ 1,367,000 B/s) is ~300× the
+    // measurement-v3.json, merged at the <2s follow-up gap on the corrected
+    // USER-ts key, includes tool time): p50 143 B/s, p90 434 B/s, p99 1,088 B/s,
+    // p99.9 2,710 B/s, max
+    // 6,583 B/s. The stress run (4096 B / 3 ms ≈ 1,367,000 B/s) is ~500× the
     // p99.9 real rate — a deliberate stress bound. The bytes-realistic run
     // streams 64 B / 3 ms ≈ 333 chunks/s ≈ 21,000 B/s at B3a's measured
     // ~300 deltas/s provider pace, ~3× the most intense real run — and still
     // aborts at its (lowered) cap, at realistic pacing.
     pacing: {
-      measuredRealBytesPerSecond: { p50: 148, p90: 446, p99: 1014, p999: 4551, max: 6583 },
+      measuredRealBytesPerSecond: { p50: 143, p90: 434, p99: 1088, p999: 2710, max: 6583 },
       stressBytesPerSecond: Math.round(chunkBytes / (paceChunkMs / 1000)),
       realisticBytesPerSecond: 21000,
       realisticChunksPerSecond: 333,

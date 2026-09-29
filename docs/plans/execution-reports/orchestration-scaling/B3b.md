@@ -110,6 +110,8 @@ Run from the worktree root; the full suite with a cleaned environment (`env -i H
 
 ## Correction 01 (parent adjudication of Luna review r1, 2026-09-29 — FINAL round)
 
+> **Correction 02 supersedes the MEASURED NUMBERS in this section** (the v2 script merged on the wrong key — the next segment's first assistant timestamp instead of its user timestamp). The decisions of correction 01 (boundary semantics, the 2× rule, tokens → 1,000,000, bytes 16 MiB unchanged) are unchanged; the corrected distributions, counts and rate figures are in **CORRECTION 02** below and in `b3b/measure/measurement-v3.json`. Reviewer-agreed: 918 joins; maxima 270,689 tokens / 1,050,331 bytes; 0 over both defaults.
+
 Both findings accepted and fixed. Commits this correction: `3be64b7a` (config default + pin), `2c840181`/`d2301347` + two follow-ups (live-proof driver v2), `aacb54e2` (docs).
 
 ### [major] Defaults re-measured on the guard's real boundary
@@ -143,3 +145,23 @@ Driver v2 (`run-budget-live-proof.mts`):
 
 - **Lag note (measured, causal isolation):** during streaming the server's lag is flat and low in EVERY scenario (8–31 ms). At the END of a run whose accumulated assistant message reached 16.7–17.8 MB there is ONE ~250–670 ms stall (varies run to run), which the 60 s p99 ring replays across subsequent 1 s samples. The cap-off control — **guard disabled** — shows the same stall (481–674 ms), proving it is the upstream finalisation/persist of a giant message, not the budget mechanism; at the realistic-scale 131 KB message there is no stall at all. The B2-gate criterion (<300 ms during the paced run) is met by both cap-on byte scenarios in the canonical run (245 ms and 31 ms, zero ≥300 readings, no two consecutive); the stall class and its variance are recorded as a residual.
 - The first correction-01 attempt additionally surfaced the out-of-lane dispatch-settling discovery recorded under Residual risks 6; the harness was hardened against it (bounded hold, 120 s prompt timeout) and cap-off re-ran clean standalone.
+
+## Correction 02 (evidence) — parent adjudication of Luna closure review r2, 2026-09-29
+
+**Scope: evidence only — no product code and no config/default changes** (the parent accepted the code and the 1,000,000 / 16 MiB defaults). The v2 measurement script merged runs on the next segment's first ASSISTANT timestamp; the correction required the next USER timestamp. `measure/session-budget-measure-v3.mjs` (kept alongside v2, never overwriting it) stores each segment's user-message timestamp and merges on `nextUserTs − previousAssistantEnd < gap`; re-ran read-only into `b3b/measure/measurement-v3.json`.
+
+**Corrected 2 s view** (735 files / 3,356 segments; gap distribution still bimodal: 921 <2s vs 491 in [2 s, 30 s) vs 1,226 ≥30s):
+
+| view | joins | runs | tokens: count / p99.9 / max | >1,000,000 | bytes: count / p99.9 / max | >16 MiB |
+|---|---|---|---|---|---|---|
+| segment (no merge) | 0 | 3,356 | 3,288 / 204,869 / 267,569 | 0 | 3,295 / 736,295 / 999,449 | 0 |
+| **merged 2 s (correct key)** | **918** | **2,382** | **2,376 / 257,194 / 270,689** | **0** | **2,382 / 896,543 / 1,050,331** | **0** |
+| merged 30 s | 1,409 | 1,900 | 1,897 / 267,569 / 270,689 | 0 | 1,900 / 1,002,071 / 1,050,331 | 0 |
+
+(The 5 s sensitivity: 1,049 joins, 2,251 runs, same maxima.) The 2 s max is now 270,689 tokens / 1,050,331 bytes — the same worst case the v2 30 s view had already used, which is why the accepted defaults were unaffected: the 2× rule (≥541,378 tokens) still mandates ≥2×270,689, and **1,000,000 = 3.7×**; bytes **16 MiB ≈ 16×** (15.97× — the earlier “15.3×” was an arithmetic slip, corrected here). 0/2,376 token runs and 0/2,382 byte runs breach the defaults.
+
+**Rate figures corrected** (dependent on the merge): per-run streamed bytes/second at the 2 s view — p50 143, p99 **1,088**, p99.9 **2,710**, max 6,583 B/s (v2 had quoted p99 1,014 / p99.9 4,551). The live-proof pacing justifications restated on the corrected basis: B's 970 B/s ≈ the measured p99 (89% of 1,088); the stress run's 1,367,000 B/s ≈ 500× the p99.9 (2,710) and ≈ 1,260× the p99; the bytes-realistic scenario's 21,000 B/s remains ~3.2× the most intense real run (6,583 B/s, unchanged).
+
+**Comparison with the reviewer's independent aggregation** (parent's 02-correction): 918 joins — **exact match**; token max 270,689 and byte max 1,050,331 — **exact match**; 0 over 1,000,000 and 0 over 16 MiB — **exact match**. Run counts differ by exactly +1 in both dimensions (v3 2,376/2,382 vs reviewer 2,375/2,381): the corpus is live (segments grew 3,353 → 3,356 between the v2 scan and the v3 scan; assistant messages 74,181 → 74,317), and the added segment forms its own run in both dimensions. No other divergence.
+
+**Docs corrected:** this bundle (correction-01 numbers superseded above; rate figures), `docs/OBSERVABILITY.md` calibration block, `docs/INTERNAL-API-CONTRACT.md` 1.50.0 changelog entry, `docs/RECENT-CHANGES.md`, and the driver's measurement-derived comment/verdict constants (`run-budget-live-proof.mts` — comments and verdict metadata only). The live proof itself is NOT re-run: no behaviour, fixture pacing or default changed, and the parent's adjudication closed the live-proof item.

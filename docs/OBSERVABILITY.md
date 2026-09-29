@@ -934,27 +934,33 @@ calls — the same 2026-09-12 class beyond its quadratic parse arm):
   lines from component `RunBudget` appear only when abort retries fail — a
   clean breach is observable on the event stream and the receipt, not the
   log.)
-- **Calibration (correction 01 — measured on the guard's real run boundary):**
-  pi-agent-core's loop consumes queued follow-ups INSIDE one run, so persisted
-  user-message segments understate per-run volume. Re-measured with a
-  conservative merge — consecutive segments with a <2s assistant→user gap are
-  one run (the gap distribution is bimodal: 921 gaps <2s vs 1,223 ≥30s across
-  735 files / 3,353 segments → 3,273 merged runs); worst case at a 30s merge:
-  2,115 runs, max 270,689 tokens / 1,050,331 bytes.
-  - output tokens per merged run: p50 6,056, p99 130,100, p99.9 204,869, max
-    267,569 (30s: 270,689) — **0/3,273 merged runs breach 1,000,000** (3.7×
-    the merged max; the 2× rule invalidated the first-round 500,000 default).
-    Deliberately loose: the token cap fires only at message end, so it must
-    not abort a legitimate long agentic loop — the byte cap is the live bound.
-  - streamed bytes per merged run: p50 21,015, p99 465,659, p99.9 736,295,
-    max 999,449 (30s: 1,050,331) — **0/3,280 merged runs breach 16 MiB**
-    (15.3× the merged max, ≥2× rule).
+- **Calibration (correction 02 — measured on the guard's real run boundary
+  with the CORRECTED merge key; pi-agent-core's loop consumes queued
+  follow-ups INSIDE one run, so persisted user-message segments are merged
+  into one run when the segment's USER timestamp is within 2 s of the
+  previous assistant end — v2 wrongly merged on the first assistant
+  timestamp):** 735 files / 3,356 segments; the gap distribution is bimodal
+  (921 gaps <2s vs 1,226 ≥30s). Merged at <2s: **918 joins → 2,382 runs** —
+  output tokens per merged run p50 9,403, p99 148,540, p99.9 257,194, max
+  **270,689**; streamed bytes p50 33,018, p99 537,833, p99.9 896,543, max
+  **1,050,331**. Worst case at a 30s merge: 1,900 runs, same maxima.
+  - output tokens: **0/2,376 merged runs breach 1,000,000** (3.7× the merged
+    max; the 2× rule vs the worst case requires ≥541,378). Deliberately
+    loose: the token cap fires only at message end, so it must not abort a
+    legitimate long agentic loop — the byte cap is the live bound.
+  - streamed bytes: **0/2,382 merged runs breach 16 MiB** (~16× the merged
+    max, ≥2× rule).
   - real streaming rate (merged-run bytes/wall, includes tool time): p50
-    148 B/s, p99 1,014 B/s, p99.9 4,551 B/s, max 6,583 B/s — the live-proof
+    143 B/s, p99 1,088 B/s, p99.9 2,710 B/s, max 6,583 B/s — the live-proof
     pacing is justified against these figures.
-  First-round (segment-view) figures are preserved in
-  `b3b/measure/measurement.json`; correction-01 figures in
-  `b3b/measure/measurement-v2.json` (lane measure dir).
+  History: the first-round segment view and the correction-01 v2 figures
+  (wrong merge key: 3,273 runs at 2s) are preserved in the lane measure dir
+  (`measurement.json`, `measurement-v2.json`); corrected figures are
+  `measurement-v3.json`. Independent reviewer aggregation (918 joins; 2,375
+  token runs / max 270,689; 2,381 byte runs / max 1,050,331) matches v3
+  exactly on joins and maxima; v3's run counts are +1 (2,376/2,382) because
+  the live corpus gained a segment between the reviewer's scan and the v3
+  scan.
 
 ## Error codes & enrichment
 
