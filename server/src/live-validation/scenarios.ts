@@ -761,17 +761,20 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         // 5b. Batch create (correction 01): per-entry body linkage on the batch
         // path; an unnamed entry from this (unregistered on the validation
         // server) driver process stays unlinked — fail safe.
-        const batchChildrenIds: string[] = [];
+        const batchNamedChildId: string[] = [];
         if (typeof client.batchCreate !== 'function') {
           assertions.push({ name: 'batch_linkage', passed: false, details: 'client lacks batchCreate' });
         } else {
           const batchOut = await client.batchCreate([
-            { runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage', parentSessionId: parent.sessionId },
-            { runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage' },
+            { runtime: context.runtime, cwd: context.cwd, parentSessionId: parent.sessionId },
+            { runtime: context.runtime, cwd: context.cwd },
           ]);
           const batchItems = batchOut.created ?? [];
           for (const item of batchItems) {
-            if (typeof item.sessionId === 'string') { createdSessions.push(item.sessionId); batchChildrenIds.push(item.sessionId); }
+            // Only the NAMED batch entry is expected under the parent filter;
+            // the unnamed one must stay unlinked (fail-safe case below).
+            if (item.index === 0 && typeof item.sessionId === 'string') { createdSessions.push(item.sessionId); batchNamedChildId.push(item.sessionId); }
+            else if (item.index === 1 && typeof item.sessionId === 'string') createdSessions.push(item.sessionId);
           }
           const named = batchItems.find((i) => i.index === 0);
           const unnamed = batchItems.find((i) => i.index === 1);
@@ -798,7 +801,7 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         });
 
         const filtered = await client.listSessions(parent.sessionId);
-        const expectedChildren = [viaBody.sessionId, viaHeader.sessionId, peerChildId, ...batchChildrenIds].sort();
+        const expectedChildren = [viaBody.sessionId, viaHeader.sessionId, peerChildId, ...batchNamedChildId].sort();
         const actualChildren = filtered.sessions.map((s) => s.sessionId).sort();
         assertions.push({
           name: 'parent_filter_exact',
