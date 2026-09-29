@@ -506,8 +506,89 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   // Contract 1.54.0 (C5): last-resort parent linkage — resolve the CALLER from
   // the unix-socket peer credentials and its /proc ancestry session identity.
+  // The ss snapshot is narrowed to this server's socket path; degradations are
+  // logged rate-limited and always fail closed.
   const peerParentResolver = deps.peerParentResolver
-    ?? createPeerParentResolver({ registry: sessionRegistry as unknown as LinkageRegistry });
+    ?? createPeerParentResolver({
+      socketPath: config.internalApiSocketPath,
+      registry: sessionRegistry as unknown as LinkageRegistry,
+      warn: (message) => logger.warn(message),
+    });
+
+  type ParentLinkSource = 'header' | 'body' | 'bash' | 'peer';
+
+  /** Contract 1.34.0/1.54.0 child linkage, shared by single create and batch
+   *  create (correction 01): header, then body parentSessionId, then in-flight
+   *  bash correlation, then peer-credential caller resolution. Persists the
+   *  linkage, fans out `child_dispatched`, and registers the terminal-turn
+   *  fan-out. Returns null (silently unlinked, display-only) when nothing
+   *  attributes the caller; an explicit value that fails to resolve stays
+   *  unlinked — the peer walk never overrides what the caller named. */
+  async function linkChildFromRequest(
+    req: IncomingMessage,
+    child: {
+      sessionId: string;
+      sessionPath: string;
+      runtime: SessionRuntime;
+      model?: string;
+      modelSelector?: string;
+      resolvedModel?: string;
+      cwd: string;
+    },
+    bodyParentId?: string,
+  ): Promise<{ parentSessionId: string; parentSource: ParentLinkSource } | null> {
+    try {
+      const headerValue = req.headers['x-parent-session'] as string | undefined;
+      const explicit = pickExplicitParentId(headerValue, bodyParentId);
+      let parentLink: ParentLink | null = null;
+      let parentSource: ParentLinkSource | undefined;
+      if (explicit) {
+        parentLink = await childLinks.resolveParent(explicit, undefined);
+        parentSource = headerValue?.trim() ? 'header' : 'body';
+      } else {
+        const correlatedKey = bashCorrelator.correlate();
+        if (correlatedKey) {
+          parentLink = await childLinks.resolveParent(undefined, correlatedKey);
+          if (parentLink) parentSource = 'bash';
+        }
+        if (!parentLink) {
+          const peer = await peerParentResolver.resolve(req);
+          if (peer) {
+            parentLink = await childLinks.resolveParent(peer.sessionId, undefined);
+            if (parentLink) parentSource = 'peer';
+          }
+        }
+      }
+      if (!parentLink || !parentSource) return null;
+      await sessionRegistry.patchSessionMeta(child.sessionId, { parentSessionId: parentLink.parentSessionId, parentSource });
+      const card = buildChildDispatchedCard({
+        childSessionId: child.sessionId,
+        runtime: child.runtime,
+        model: child.model,
+        modelSelector: child.modelSelector,
+        resolvedModel: child.resolvedModel,
+        cwd: child.cwd,
+        parentSessionId: parentLink.parentSessionId,
+      });
+      const timestamp = Date.now();
+      try {
+        broker.publish(parentLink.parentBrokerKey, { type: 'child_dispatched', timestamp, data: { sessionId: parentLink.parentSessionId, child: card } } as NormalizedEvent);
+      } catch { /* non-fatal */ }
+      try {
+        onBrowserMessage?.({ type: 'child_dispatched', sessionId: parentLink.parentSessionId, child: card });
+      } catch { /* non-fatal */ }
+      try {
+        await childLinks.linkChild(
+          { sessionId: child.sessionId, sessionPath: child.sessionPath, runtime: child.runtime, model: card.model },
+          parentLink,
+        );
+      } catch { /* non-fatal */ }
+      return { parentSessionId: parentLink.parentSessionId, parentSource };
+    } catch (linkError) {
+      logger.warn('child linkage failed (non-fatal):', linkError instanceof Error ? linkError.message : String(linkError));
+      return null;
+    }
+  }
 
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const claudeProjectsDir = deps.claudeProjectsDir ?? resolveClaudeProjectsRoot();
@@ -1911,59 +1992,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // Contract 1.34.0 child surfacing, extended by 1.54.0 (C5): link the
       // child to its parent. Sources in strict order: X-Parent-Session header,
       // body parentSessionId, in-flight bash correlation, and finally
-      // peer-credential caller resolution. An explicit (header/body) value
-      // that fails to resolve stays silently unlinked — the peer walk never
-      // overrides what the caller explicitly named. Unresolvable → unlinked
-      // (display-only, fail safe).
-      try {
-        const headerValue = req.headers['x-parent-session'] as string | undefined;
-        const explicit = pickExplicitParentId(headerValue, body.parentSessionId);
-        let parentLink: ParentLink | null = null;
-        let parentSource: 'header' | 'body' | 'bash' | 'peer' | undefined;
-        if (explicit) {
-          parentLink = await childLinks.resolveParent(explicit, undefined);
-          parentSource = headerValue?.trim() ? 'header' : 'body';
-        } else {
-          const correlatedKey = bashCorrelator.correlate();
-          if (correlatedKey) {
-            parentLink = await childLinks.resolveParent(undefined, correlatedKey);
-            if (parentLink) parentSource = 'bash';
-          }
-          if (!parentLink) {
-            const peer = await peerParentResolver.resolve(req);
-            if (peer) {
-              parentLink = await childLinks.resolveParent(peer.sessionId, undefined);
-              if (parentLink) parentSource = 'peer';
-            }
-          }
-        }
-        if (parentLink) {
-          await sessionRegistry.patchSessionMeta(base.sessionId, { parentSessionId: parentLink.parentSessionId, parentSource });
-          (base as unknown as Record<string, unknown>).parentSessionId = parentLink.parentSessionId;
-          (base as unknown as Record<string, unknown>).parentSource = parentSource;
-          const card = buildChildDispatchedCard({
-            childSessionId: base.sessionId,
-            runtime: base.runtime,
-            model: base.model,
-            modelSelector: base.modelSelector,
-            resolvedModel: base.resolvedModel,
-            cwd: base.cwd,
-            parentSessionId: parentLink.parentSessionId,
-          });
-          const timestamp = Date.now();
-          try {
-            broker.publish(parentLink.parentBrokerKey, { type: 'child_dispatched', timestamp, data: { sessionId: parentLink.parentSessionId, child: card } } as NormalizedEvent);
-          } catch { /* non-fatal */ }
-          try {
-            onBrowserMessage?.({ type: 'child_dispatched', sessionId: parentLink.parentSessionId, child: card });
-          } catch { /* non-fatal */ }
-          await childLinks.linkChild(
-            { sessionId: base.sessionId, sessionPath: base.sessionPath, runtime: base.runtime, model: card.model },
-            parentLink,
-          );
-        }
-      } catch (linkError) {
-        logger.warn('child linkage failed (non-fatal):', linkError instanceof Error ? linkError.message : String(linkError));
+      // peer-credential caller resolution (see linkChildFromRequest).
+      const link = await linkChildFromRequest(req, {
+        sessionId: base.sessionId,
+        sessionPath: base.sessionPath,
+        runtime: base.runtime,
+        model: base.model,
+        modelSelector: base.modelSelector,
+        resolvedModel: base.resolvedModel,
+        cwd: base.cwd,
+      }, body.parentSessionId);
+      if (link) {
+        (base as unknown as Record<string, unknown>).parentSessionId = link.parentSessionId;
+        (base as unknown as Record<string, unknown>).parentSource = link.parentSource;
       }
 
       // Required source-owned retention is atomic from the caller's perspective:
@@ -2147,7 +2188,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ]);
       const archivedFor = (sessionPath: string): boolean => archivedIndex.get(toV2Key(sessionPath, resolver).key) ?? false;
 
-      const all = (await sessionRegistry.listAll()).filter((entry) => entry.sdkType !== 'commandcode');
+      const registryAll = await sessionRegistry.listAll();
+      const all = registryAll.filter((entry) => entry.sdkType !== 'commandcode');
+      // Contract 1.54.0 (C5, correction 01): Command Code records live outside
+      // `all` (their runtime surface is the service, not the registry list),
+      // but their registry entries carry lineage — join it in below.
+      const commandCodeLineage = new Map(
+        registryAll
+          .filter((entry) => entry.sdkType === 'commandcode' && entry.parentSessionId)
+          .map((entry) => [entry.id, entry] as const),
+      );
       const sessions: SessionInfo[] = all.map((entry) => {
         // §6: surface live liveness, not stale registry status.
         const liveStatus = evidenceStatus(entry);
@@ -2177,10 +2227,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const commandCodeSessions = await commandCodeService.listSessions();
         sessions.push(...commandCodeSessions.map((record: CommandCodeInternalSessionRecord) => {
           const info = commandCodeSessionInfo(record);
+          const lineage = commandCodeLineage.get(info.sessionId);
           return {
             ...info,
             archived: archivedFor(info.sessionPath),
             source: 'unknown' as const,
+            ...(lineage?.parentSessionId ? { parentSessionId: lineage.parentSessionId } : {}),
+            ...(lineage?.parentSessionId && lineage.parentSource ? { parentSource: lineage.parentSource } : {}),
           };
         }));
       }
@@ -7058,6 +7111,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           logger.warn('Failed to tag batch session origin:', originError);
         }
         onSessionCreated?.(created.sessionId, created.sessionPath, created.runtime);
+        // Contract 1.54.0 (C5, correction 01): batch children get the same
+        // lineage as single creates — header, per-entry body parentSessionId,
+        // then peer-credential caller resolution. Best-effort, like origin
+        // tagging; a linkage failure never fails the batch entry.
+        let batchLink: { parentSessionId: string; parentSource: 'header' | 'body' | 'bash' | 'peer' } | null = null;
+        try {
+          batchLink = await linkChildFromRequest(req, {
+            sessionId: created.sessionId,
+            sessionPath: created.sessionPath,
+            runtime: created.runtime,
+            model: created.model,
+            modelSelector: created.modelSelector,
+            cwd: created.cwd,
+          }, entry.parentSessionId);
+        } catch (linkError) {
+          logger.warn('batch child linkage failed (non-fatal):', linkError instanceof Error ? linkError.message : String(linkError));
+        }
         const result: BatchCreateResultItem = {
           index,
           success: true,
@@ -7071,6 +7141,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           defaultEffort: created.defaultEffort,
           cwd: created.cwd,
           ...(agentOsCaptureStored ? { agentOsCapture: agentOsCaptureStored } : {}),
+          ...(batchLink ? { parentSessionId: batchLink.parentSessionId, parentSource: batchLink.parentSource } : {}),
         };
         // Optional per-entry create-time pin (see POST /sessions pin field).
         if (entry.pin) {

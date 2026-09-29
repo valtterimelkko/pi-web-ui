@@ -13,9 +13,16 @@
  *
  *   1. The accepted connection's server-side socket inode comes from
  *      /proc/self/fd/<fd>.
- *   2. `ss -xp state established` (unix_diag) maps that inode to the peer
- *      socket and its owning client pid(s).
- *   3. A bounded walk up /proc/<pid> ancestry reads each process environment
+ *   2. `ss -xp` (unix_diag) maps that inode to the peer socket. The first
+ *      snapshot is NARROWED to the Internal API socket path (`src <path>`
+ *      filter) so output stays small; if that misses (older iproute2 or a
+ *      race), the full established table is read with an explicit 8 MiB
+ *      maxBuffer. Output above maxBuffer → no linkage plus a rate-limited
+ *      warning (never a partial parse).
+ *   3. The peer end's owners come from a bounded /proc/<pid>/fd scan (the
+ *      users: column is not needed). More owners than the safe bound → the
+ *      set is truncated → NO linkage.
+ *   4. A bounded walk up /proc/<pid> ancestry reads each process environment
  *      for the session identity the server itself sets on managed runtime
  *      subprocesses: PI_WEB_UI_SESSION_ID (contract 1.47.0; Claude,
  *      Antigravity, Command Code) or PI_SESSION_ID (pi tool subprocesses).
@@ -24,14 +31,14 @@
  * harness) placed on its own subprocesses. A hostile client could set them
  * itself — exactly as it could lie via X-Parent-Session, the trust level the
  * existing linkage already accepts (display-only metadata on a local,
- * same-user socket). Two safeguards go beyond the header: every resolved value
- * must name a session in the registry, and disagreeing candidate walks yield
- * NO linkage rather than a guess. Every failure mode below returns null —
- * unlinked, never wrongly linked.
+ * same-user socket). Safeguards beyond the header (correction 01, fail-closed
+ * ambiguity): EVERY peer owner is resolved; a truncated owner set, any
+ * identity-less owner, or divergent owners give NO linkage — never a guess.
+ * The server's own environment is never consulted.
  */
 
 import { execFile } from 'node:child_process';
-import { readlink } from 'node:fs/promises';
+import { readlink, readdir } from 'node:fs/promises';
 import type { IncomingMessage } from 'node:http';
 import type { LinkageRegistry } from './child-linkage.js';
 
@@ -41,22 +48,43 @@ export const CALLER_IDENTITY_ENV_KEYS = ['PI_WEB_UI_SESSION_ID', 'PI_SESSION_ID'
 /** Depth cap for the /proc ancestry walk (defence against cycles). */
 const MAX_ANCESTRY_DEPTH = 32;
 
-/** Cap on candidate client pids per connection (fd inheritance can share fds widely). */
-const MAX_CANDIDATE_PIDS = 8;
+/** Safe bound on peer owners per connection; a larger set gives no linkage. */
+const MAX_PEER_OWNERS = 8;
+
+/** Cap on /proc directories scanned per owners lookup (fail closed beyond it). */
+const MAX_PROC_DIRS = 16384;
+
+/** maxBuffer for the ss snapshot narrowed to the Internal API socket path.
+ *  A handful of concurrent API connections at ~200 bytes per line is orders
+ *  of magnitude below this; overflow is handled, never partially parsed. */
+const SS_NARROW_MAX_BUFFER = 256 * 1024;
+
+/** maxBuffer for the full established-table fallback (8 MiB: on this host the
+ *  table is ~0.3 MB; five heads of headroom before we refuse rather than parse
+ *  a truncated snapshot). */
+const SS_FULL_MAX_BUFFER = 8 * 1024 * 1024;
+
+/** Minimum interval between two overflow warnings. */
+const WARN_INTERVAL_MS = 60_000;
 
 /** One established AF_UNIX socket from `ss -xp`. */
 export interface SocketPeerEntry {
   localInode: number;
   peerInode: number;
-  /** Pids owning this end (empty when the owner could not be read). */
+  /** Historical users: column — owner attribution now uses the /proc scan. */
   pids: number[];
 }
+
+export type SsResult =
+  | { kind: 'ok'; output: string }
+  | { kind: 'overflow' }
+  | { kind: 'unavailable' };
 
 /**
  * Parse `ss -xp state established` output. With a state filter ss drops the
  * State column, so parsing is right-anchored: [..., localPath, localInode,
- * peerPath, peerInode, users:(...)]. Only established stream sockets
- * (u_str) with a non-zero peer are relevant; everything else is ignored.
+ * peerPath, peerInode, users:(...)]. Only established stream sockets (u_str)
+ * with a non-zero peer are relevant; everything else is ignored.
  */
 export function parseSsEstablishedLines(output: string): SocketPeerEntry[] {
   const entries: SocketPeerEntry[] = [];
@@ -86,24 +114,13 @@ export function parseSsEstablishedLines(output: string): SocketPeerEntry[] {
 }
 
 /**
- * The client-side pids for the connection whose server-side end is
- * `ownInode`. Returns null when `ownInode` is absent from the snapshot (the
- * caller may retry with a fresh enumeration); [] when the peer end's owner
- * could not be attributed.
+ * The peer inode of the connection whose end is `ownInode`; null when
+ * `ownInode` is absent from the snapshot.
  */
-export function candidateClientPids(entries: SocketPeerEntry[], ownInode: number): number[] | null {
-  // Our end is normally enumerated itself: the client end is the entry whose
-  // LOCAL inode is our peer inode.
-  const ownAsLocal = entries.find((e) => e.localInode === ownInode);
-  if (ownAsLocal) {
-    const peer = entries.find((e) => e.localInode === ownAsLocal.peerInode);
-    return peer ? peer.pids.slice(0, MAX_CANDIDATE_PIDS) : [];
-  }
-  // Our line may be missing from the snapshot while the client's line (whose
-  // peer is us) is present; that line is then itself the client end.
-  const ownAsPeer = entries.find((e) => e.peerInode === ownInode);
-  if (ownAsPeer) return ownAsPeer.pids.slice(0, MAX_CANDIDATE_PIDS);
-  return null;
+export function peerInodeOf(entries: SocketPeerEntry[], ownInode: number): number | null {
+  const own = entries.find((e) => e.localInode === ownInode) ?? entries.find((e) => e.peerInode === ownInode);
+  if (!own) return null;
+  return own.localInode === ownInode ? own.peerInode : own.localInode;
 }
 
 /** First session identity value in a parsed environment, by key preference. */
@@ -119,18 +136,92 @@ export function firstIdentityValue(env: string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Run a command with an EXPLICIT maxBuffer and classify the outcome. A
+ * maxBuffer abort is reported as `overflow` — never as missing output — so a
+ * truncated snapshot can never be parsed as if it were whole.
+ */
+export function runSs(command: string, args: string[], maxBuffer: number): Promise<SsResult> {
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout: 2000, maxBuffer }, (err, stdout) => {
+      if (!err) {
+        resolve({ kind: 'ok', output: stdout });
+        return;
+      }
+      const overflow = err.code === 'ENOBUFS'
+        || err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+        || /maxbuffer/i.test(String(err.message));
+      resolve(overflow ? { kind: 'overflow' } : { kind: 'unavailable' });
+    });
+  });
+}
+
+/**
+ * Default owners lookup: a bounded /proc/<pid>/fd scan for processes holding
+ * `socket:[peerInode]`. Returns null when the scan is truncated (more owners
+ * than the safe bound, or more /proc directories than the scan cap) — the
+ * caller must give no linkage. An empty array means the peer end holds no
+ * readable owner (e.g. it already exited): also no linkage, but a distinct
+ * case for tests.
+ */
+export async function defaultPeerOwners(peerInode: number): Promise<number[] | null> {
+  let dirents: string[];
+  try {
+    dirents = await readdir('/proc');
+  } catch {
+    return null;
+  }
+  const want = `socket:[${String(peerInode)}]`;
+  const owners: number[] = [];
+  let scanned = 0;
+  for (const name of dirents) {
+    const pid = Number(name);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    if (scanned >= MAX_PROC_DIRS) return null; // truncated scan → fail closed
+    scanned += 1;
+    let fds: string[];
+    try {
+      fds = await readdir(`/proc/${name}/fd`);
+    } catch {
+      continue; // vanished or not ours to read; not an owner we can see
+    }
+    for (const fd of fds) {
+      try {
+        const link = await readlink(`/proc/${name}/fd/${fd}`);
+        if (link === want) {
+          if (!owners.includes(pid)) owners.push(pid);
+          break;
+        }
+      } catch {
+        continue; // fd vanished mid-scan
+      }
+    }
+  }
+  if (owners.length > MAX_PEER_OWNERS) return null; // truncated owner set → no linkage
+  return owners;
+}
+
 /** Injectable IO for deterministic tests. */
 export interface ParentResolverIo {
   /** readlink of /proc/self/fd/<fd> (null when unavailable). */
   readlinkFd(fd: number): Promise<string | null>;
-  /** `ss -xp state established` output (null when ss is unavailable). */
-  ssEstablished(): Promise<string | null>;
+  /**
+   * ss snapshot: 'narrow' filters to the Internal API socket path (small
+   * output); 'full' is the whole established table. Overflow and
+   * unavailability are explicit — a truncated snapshot is never returned.
+   */
+  ssEstablished(mode: 'narrow' | 'full'): Promise<SsResult>;
+  /** Owners of the peer socket end; null = truncated set (no linkage). */
+  peerOwners(peerInode: number): Promise<number[] | null>;
   /** Parsed environment entries of a pid (null when unreadable). */
   environ(pid: number): Promise<string[] | null>;
   /** Parent pid of a pid (null when unreadable or none). */
   ppid(pid: number): Promise<number | null>;
   /** This server process's pid — the walk terminator. */
   selfPid(): number;
+  /** Rate-limited warning sink (overflow and other degradations). */
+  warn(message: string): void;
+  now(): number;
   registry: LinkageRegistry;
 }
 
@@ -139,15 +230,16 @@ export interface PeerParentResolution {
   source: 'peer';
 }
 
-async function defaultSsEstablished(): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile('ss', ['-xp', 'state', 'established'], { timeout: 2000 }, (err, stdout) => {
-      resolve(err ? null : stdout);
-    });
-  });
+async function defaultSsEstablished(
+  mode: 'narrow' | 'full',
+  socketPath: string | undefined,
+): Promise<SsResult> {
+  if (mode === 'narrow' && socketPath) {
+    return runSs('ss', ['-xp', 'state', 'established', 'src', socketPath], SS_NARROW_MAX_BUFFER);
+  }
+  return runSs('ss', ['-xp', 'state', 'established'], SS_FULL_MAX_BUFFER);
 }
 
-/** Injectable IO for deterministic tests. */
 /**
  * Walk up from `startPid`, returning the first session identity value found on
  * any ancestor. Stops at selfPid (the server's own environment is never
@@ -174,19 +266,36 @@ export async function walkAncestryForSession(
 }
 
 /**
- * Create the resolver. The single public entry point is `resolve(req)`: given
- * an Internal API request over the unix socket, return the caller's registry
- * session when it can be attributed with confidence, else null.
+ * Create the resolver. `socketPath` narrows the ss snapshot to this server's
+ * Internal API socket; io entries are injectable for tests. The single public
+ * entry point is `resolve(req)`: given an Internal API request over the unix
+ * socket, return the caller's registry session when it can be attributed with
+ * confidence — unanimous, untruncated owners only — else null.
  */
-export function createPeerParentResolver(overrides: Partial<ParentResolverIo> = {}) {
+export function createPeerParentResolver(
+  overrides: Partial<ParentResolverIo> & { socketPath?: string } = {},
+) {
+  const socketPath = overrides.socketPath;
   const io: ParentResolverIo = {
     readlinkFd: (fd) => readlink(`/proc/self/fd/${String(fd)}`).catch(() => null),
-    ssEstablished: defaultSsEstablished,
+    ssEstablished: (mode) => defaultSsEstablished(mode, socketPath),
+    peerOwners: defaultPeerOwners,
     environ: defaultProcEnviron,
     ppid: defaultPpid,
     selfPid: () => process.pid,
+    warn: () => { /* default: silent; the routes factory injects the server logger */ },
+    now: () => Date.now(),
     registry: { get: async () => undefined, getByPath: async () => undefined },
     ...overrides,
+  };
+
+  let lastWarnAt = -Infinity;
+  const warnRateLimited = (message: string): void => {
+    const t = io.now();
+    if (t - lastWarnAt >= WARN_INTERVAL_MS) {
+      lastWarnAt = t;
+      try { io.warn(message); } catch { /* never fatal */ }
+    }
   };
 
   async function resolve(req: IncomingMessage): Promise<PeerParentResolution | null> {
@@ -201,23 +310,39 @@ export function createPeerParentResolver(overrides: Partial<ParentResolverIo> = 
       if (!inodeMatch) return null;
       const ownInode = Number(inodeMatch[1]);
 
-      // 2. Client pids via the ss snapshot.
-      const output = await io.ssEstablished();
-      if (output === null) return null;
-      const pids = candidateClientPids(parseSsEstablishedLines(output), ownInode);
-      if (!pids || pids.length === 0) return null;
+      // 2. Peer inode. Narrow first; fall back to the full table when the
+      // narrow snapshot is unavailable (older iproute2) or misses us.
+      let snapshot = socketPath ? await io.ssEstablished('narrow') : ({ kind: 'unavailable' } as SsResult);
+      if (snapshot.kind === 'unavailable'
+        || (snapshot.kind === 'ok' && peerInodeOf(parseSsEstablishedLines(snapshot.output), ownInode) === null)) {
+        snapshot = await io.ssEstablished('full');
+      }
+      if (snapshot.kind === 'overflow') {
+        warnRateLimited('parent-resolver: ss snapshot exceeded maxBuffer; skipping peer linkage this request (fail closed)');
+        return null;
+      }
+      if (snapshot.kind !== 'ok') return null;
+      const peerInode = peerInodeOf(parseSsEstablishedLines(snapshot.output), ownInode);
+      if (peerInode === null) return null;
 
-      // 3. Ancestry identity walk per candidate; ambiguous walks fail safe.
+      // 3. Owners of the peer end. A truncated set gives no linkage
+      // (correction 01: never resolve a partial owner list).
+      const owners = await io.peerOwners(peerInode);
+      if (!owners || owners.length === 0) return null;
+
+      // 4. Ancestry identity walk for EVERY owner; unanimity is required —
+      // any identity-less or divergent owner gives no linkage.
       const values = new Set<string>();
-      for (const pid of pids) {
+      for (const pid of owners) {
         const value = await walkAncestryForSession(pid, io);
-        if (value) values.add(value);
+        if (value === undefined) return null;
+        values.add(value);
         if (values.size > 1) return null;
       }
       if (values.size !== 1) return null;
       const claimed = [...values][0];
 
-      // 4. The identity must name a session in the registry.
+      // 5. The identity must name a session in the registry.
       const entry = (await io.registry.get(claimed).catch(() => undefined))
         ?? (await io.registry.getByPath(claimed).catch(() => undefined));
       if (!entry) return null;

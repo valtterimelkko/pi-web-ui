@@ -49,6 +49,8 @@ export interface InternalApiClientLike {
   getSocketPath?(): string;
   /** C5 (1.54.0): bearer token, for scenarios that authenticate their own subprocesses. */
   getToken?(): string;
+  /** C5 (1.54.0, correction 01): batch create, for per-entry linkage checks. */
+  batchCreate?(entries: Array<Record<string, unknown>>): Promise<import('../internal-api/types.js').BatchCreateResponse>;
 }
 
 export interface ValidationAssertion {

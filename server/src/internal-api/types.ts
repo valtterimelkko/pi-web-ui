@@ -269,6 +269,9 @@ export interface BatchCreateEntry {
   commandCodeAttestation?: CommandCodeRoleAttestationRequest;
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
+  /** Contract 1.54.0 (C5, correction 01): per-entry parent linkage, same semantics
+   *  as the single-create body field (header wins). */
+  parentSessionId?: string;
 }
 
 export interface BatchCreateRequest {
@@ -290,6 +293,10 @@ export interface BatchCreateResultItem {
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
   pinnedUntil?: string;
+  /** Contract 1.54.0 (C5, correction 01): lineage when the caller (or the entry)
+   *  named a parent. Absent when unlinked. */
+  parentSessionId?: string;
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** Contract 1.49.0: admission refusals (ADMISSION_CAPACITY_EXHAUSTED) carry reason + retryAfterSeconds. */

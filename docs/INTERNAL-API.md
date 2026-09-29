@@ -2919,14 +2919,20 @@ registry; `GET /sessions/:id` and `/info` gain additive `parentSessionId` and
 
 Contract 1.54.0 (C5) closes the remaining silent gap: when none of the above
 can attribute the caller, the server resolves it from the unix-socket
-connection itself — accepted-socket inode → client pid (`ss -xp`; Node exposes
-no SO_PEERCRED) → bounded `/proc` ancestry walk reading the session identity
-the server itself sets on managed runtime subprocesses (`PI_WEB_UI_SESSION_ID`,
-contract 1.47.0; `PI_SESSION_ID` for pi tool subprocesses). The value must
-name a registry session; ambiguity or a bogus value links nothing. Linked
-children additionally report `parentSource: "header" | "body" | "bash" |
-"peer"` (create and adopt-native responses, `GET /sessions` items, and the
-session detail endpoints), and `GET /sessions?parent=<id-or-path>` returns
+connection itself — accepted-socket inode → peer socket inode (`ss -xp`
+narrowed to the Internal API socket path, full-table fallback with an explicit
+maxBuffer; overflow → no linkage + a rate-limited warning) → peer-end owners
+via a bounded `/proc` fd scan → bounded ancestry walk reading the session
+identity the server itself sets on managed runtime subprocesses
+(`PI_WEB_UI_SESSION_ID`, contract 1.47.0; `PI_SESSION_ID` for pi tool
+subprocesses). Ambiguity is fail-closed: every owner must resolve, and
+unanimity is required — a truncated owner set, an identity-less owner, or
+divergent owners link nothing. `POST /sessions/batch` links every child the
+same way (per-entry `parentSessionId`, shared header, peer fallback),
+Command Code records carry their registry lineage on `GET /sessions` and in
+`?parent=`, and linked children report `parentSource: "header" | "body" |
+"bash" | "peer"` (create and adopt-native responses, `GET /sessions` items,
+and the session detail endpoints). `GET /sessions?parent=<id-or-path>` returns
 exactly that parent's children (`404 SESSION_NOT_FOUND` for an unresolvable
 parent value, so a typo never masquerades as an empty list).
 

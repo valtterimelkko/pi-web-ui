@@ -758,6 +758,32 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           details: `sessionId=${precedenceChildId ?? '?'} parentSessionId=${String(precedenceChild.parentSessionId)} parentSource=${String(precedenceChild.parentSource)}`,
         });
 
+        // 5b. Batch create (correction 01): per-entry body linkage on the batch
+        // path; an unnamed entry from this (unregistered on the validation
+        // server) driver process stays unlinked — fail safe.
+        const batchChildrenIds: string[] = [];
+        if (typeof client.batchCreate !== 'function') {
+          assertions.push({ name: 'batch_linkage', passed: false, details: 'client lacks batchCreate' });
+        } else {
+          const batchOut = await client.batchCreate([
+            { runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage', parentSessionId: parent.sessionId },
+            { runtime: context.runtime, cwd: context.cwd, source: 'live-validation', scenarioId: 'parent-lineage' },
+          ]);
+          const batchItems = batchOut.created ?? [];
+          for (const item of batchItems) {
+            if (typeof item.sessionId === 'string') { createdSessions.push(item.sessionId); batchChildrenIds.push(item.sessionId); }
+          }
+          const named = batchItems.find((i) => i.index === 0);
+          const unnamed = batchItems.find((i) => i.index === 1);
+          assertions.push({
+            name: 'batch_linkage',
+            passed: batchOut.createdCount === 2
+              && named?.success === true && named.parentSessionId === parent.sessionId && named.parentSource === 'body'
+              && unnamed?.success === true && unnamed.parentSessionId === undefined && unnamed.parentSource === undefined,
+            details: `createdCount=${batchOut.createdCount} named=${JSON.stringify({ p: named?.parentSessionId, s: named?.parentSource })} unnamed=${JSON.stringify({ p: unnamed?.parentSessionId, s: unnamed?.parentSource })}`,
+          });
+        }
+
         // 6. List lineage surfacing + the ?parent= filter.
         const list = await client.listSessions();
         const byId = new Map(list.sessions.map((s) => [s.sessionId, s]));
@@ -772,7 +798,7 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         });
 
         const filtered = await client.listSessions(parent.sessionId);
-        const expectedChildren = [viaBody.sessionId, viaHeader.sessionId, peerChildId].sort();
+        const expectedChildren = [viaBody.sessionId, viaHeader.sessionId, peerChildId, ...batchChildrenIds].sort();
         const actualChildren = filtered.sessions.map((s) => s.sessionId).sort();
         assertions.push({
           name: 'parent_filter_exact',

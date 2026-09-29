@@ -129,6 +129,9 @@ const batchCreateEntrySchema = z.object({
   agentOsCapture: agentOsCaptureSchema.optional(),
   ...pinFields,
   ...goalField,
+  // Contract 1.54.0 (C5, correction 01): per-entry parent linkage, same
+  // semantics as the single-create body field (header wins).
+  parentSessionId: z.string().min(1).max(200).optional(),
 }).strict().superRefine((body, ctx) => {
   if (body.runtime === 'claude' && body.model?.startsWith('profile:') && !body.model.slice('profile:'.length).trim()) {
     ctx.addIssue({

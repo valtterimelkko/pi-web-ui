@@ -367,6 +367,7 @@ export class SessionRegistryManager {
         // conversation id and parent linkage from the first write.
         antigravityConversationId: entry.antigravityConversationId,
         parentSessionId: entry.parentSessionId,
+        parentSource: entry.parentSource,
         cwd: entry.cwd,
         model: entry.model,
         thinkingLevel: entry.thinkingLevel,

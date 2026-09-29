@@ -1,17 +1,28 @@
 // C5 (contract 1.54.0) — "lineage always recorded": peer-credential caller
 // resolution. Node exposes no SO_PEERCRED on this runtime (net.Socket has no
 // getPeerCredentials), so the resolver maps the accepted connection's socket
-// inode to client pid(s) via `ss -xp` (unix_diag), then walks /proc ancestry
-// reading the session identity variables the server itself sets on managed
-// runtime subprocesses (contract 1.47.0: PI_WEB_UI_SESSION_ID; Pi keeps
-// PI_SESSION_ID). Fail safe: any ambiguity → no linkage, never a wrong link.
+// inode to the peer inode via an ss filter narrowed to the Internal API socket
+// path (full-table fallback with an explicit maxBuffer; overflow → no linkage
+// + rate-limited warning), attributes the peer end's owners with a bounded
+// /proc fd scan, and walks /proc ancestry reading the session identity
+// variables the server itself sets on managed runtime subprocesses (contract
+// 1.47.0: PI_WEB_UI_SESSION_ID; Pi keeps PI_SESSION_ID).
+//
+// Correction 01: ambiguity is fail-CLOSED — every peer owner is resolved, a
+// truncated owner set gives no linkage, and unanimity is required: any
+// identity-less or divergent owner gives no linkage.
 import { describe, it, expect } from 'vitest';
+import { execFile } from 'node:child_process';
+import net from 'node:net';
+import fs from 'node:fs';
+import { readlink } from 'node:fs/promises';
 import {
   parseSsEstablishedLines,
-  candidateClientPids,
+  peerInodeOf,
   walkAncestryForSession,
   firstIdentityValue,
   createPeerParentResolver,
+  runSs,
   type SocketPeerEntry,
   type ParentResolverIo,
 } from '../../../src/internal-api/parent-resolver.js';
@@ -47,7 +58,7 @@ describe('parseSsEstablishedLines', () => {
     expect(entries.find((e) => e.localInode === 777)).toBeUndefined(); // u_seq
   });
 
-  it('keeps entries without a users section (unreadable owner) with an empty pid list', () => {
+  it('keeps entries without a users section (owner attribution no longer relies on users:)', () => {
     const entries = parseSsEstablishedLines('u_str ESTAB 0 0 * 880  * 881');
     expect(entries).toEqual<SocketPeerEntry[]>([{ localInode: 880, peerInode: 881, pids: [] }]);
   });
@@ -58,38 +69,55 @@ describe('parseSsEstablishedLines', () => {
   });
 });
 
-describe('candidateClientPids', () => {
+describe('peerInodeOf', () => {
   const entries = parseSsEstablishedLines(SS_FIXTURE);
 
-  it('maps the accepted socket inode to the client-side pids', () => {
-    expect(candidateClientPids(entries, 120401527)).toEqual([3128373]);
+  it('returns the peer inode of the accepted (server-side) end', () => {
+    expect(peerInodeOf(entries, 120401527)).toBe(120406157);
+    expect(peerInodeOf(entries, 111)).toBe(222);
   });
 
-  it('works when our end appears as the peer (reverse enumeration direction)', () => {
-    expect(candidateClientPids(entries, 120406157)).toEqual([3128361]);
-    expect(candidateClientPids(entries, 222)).toEqual([500]);
-    expect(candidateClientPids(entries, 111)).toEqual([600]);
+  it('returns the peer inode when our end appears as the peer (reverse enumeration direction)', () => {
+    expect(peerInodeOf(entries, 120406157)).toBe(120401527);
+    expect(peerInodeOf(entries, 222)).toBe(111);
   });
 
-  it('returns null when our inode is not in the snapshot (fresh enumeration needed / race)', () => {
-    expect(candidateClientPids(entries, 424242)).toBeNull();
+  it('returns null when our inode is not in the snapshot', () => {
+    expect(peerInodeOf(entries, 424242)).toBeNull();
+  });
+});
+
+describe('runSs (explicit maxBuffer)', () => {
+  it('collects small output intact', async () => {
+    const result = await runSs('ss', ['-V'], 64 * 1024);
+    expect(result.kind).toBe('ok');
   });
 
-  it('returns [] when the peer end exists but its owner could not be read', () => {
-    const own: SocketPeerEntry[] = [
-      { localInode: 10, peerInode: 20, pids: [1] },
-      { localInode: 20, peerInode: 10, pids: [] },
-    ];
-    expect(candidateClientPids(own, 10)).toEqual([]);
-  });
+  it('reports overflow (not a crash) when output exceeds maxBuffer', async () => {
+    const overflow = await runSs('sh', ['-c', 'yes | head -c 200000'], 1024);
+    expect(overflow.kind).toBe('overflow');
+  }, 15000);
 
-  it('caps the candidate pid list (fd inheritance can attribute many processes)', () => {
-    const many = Array.from({ length: 50 }, (_, i) => i + 1);
-    const own: SocketPeerEntry[] = [
-      { localInode: 10, peerInode: 20, pids: [1] },
-      { localInode: 20, peerInode: 10, pids: many },
-    ];
-    expect(candidateClientPids(own, 10)!.length).toBeLessThanOrEqual(8);
+  it('reports unavailable when the binary is missing', async () => {
+    const result = await runSs('c5-definitely-not-a-binary', ['-V'], 64 * 1024);
+    expect(result.kind).toBe('unavailable');
+  });
+});
+
+describe('default peerOwners (bounded /proc fd scan)', () => {
+  it('finds this process as the owner of a socket inode it holds', async () => {
+    const server = net.createServer(() => {});
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const client = net.connect(typeof address === 'object' && address ? address.port : 0, '127.0.0.1');
+    await new Promise<void>((resolve) => client.on('connect', resolve));
+    const link = await readlink(`/proc/self/fd/${(client as unknown as { _handle: { fd: number } })._handle.fd}`);
+    const inode = Number(link!.match(/socket:\[(\d+)\]/)![1]);
+    const { defaultPeerOwners } = await import('../../../src/internal-api/parent-resolver.js');
+    const owners = await defaultPeerOwners(inode);
+    client.destroy();
+    server.close();
+    expect(owners).toContain(process.pid);
   });
 });
 
@@ -156,79 +184,119 @@ describe('walkAncestryForSession (injected /proc)', () => {
   });
 });
 
-describe('createPeerParentResolver (injected io, end to end)', () => {
+describe('createPeerParentResolver (correction 01: ambiguity is fail-closed)', () => {
   type ResolveReq = Parameters<ReturnType<typeof createPeerParentResolver>['resolve']>[0];
   const fakeReq = { socket: { _handle: { fd: 23 } } } as unknown as ResolveReq;
 
-  function baseIo(overrides: Partial<ParentResolverIo>): ParentResolverIo {
+  interface OwnerScenario {
+    /** owners reported by the (injected) /proc scan, in order; null = truncated set */
+    owners: number[] | null;
+    /** identity each owner's ancestry walk resolves to; undefined = identity-less */
+    identityOf?: Record<number, string | undefined>;
+  }
+
+  function scenarioIo(s: OwnerScenario, overrides: Partial<ParentResolverIo> = {}): ParentResolverIo {
     return {
       readlinkFd: async () => 'socket:[120401527]',
-      ssEstablished: async () => SS_FIXTURE,
-      environ: async (pid) => (pid === 3128373 ? ['PI_WEB_UI_SESSION_ID=managed-parent'] : null),
+      ssEstablished: async () => ({ kind: 'ok', output: SS_FIXTURE }),
+      peerOwners: async () => s.owners,
+      environ: async (pid) => {
+        const identity = s.identityOf?.[pid];
+        return identity === undefined ? ['HOME=/root'] : [`PI_WEB_UI_SESSION_ID=${identity}`];
+      },
       ppid: async () => null,
       selfPid: () => 3128361,
+      warn: () => {},
+      now: () => 1_000_000,
       registry: {
-        get: async (id: string) => (id === 'managed-parent' ? { id: 'managed-parent', sdkType: 'claude', path: 'claude/x.jsonl' } : undefined),
+        get: async (id: string) => ({ id, sdkType: 'claude', path: 'x' }),
         getByPath: async () => undefined,
       },
       ...overrides,
     };
   }
 
-  it('resolves the caller session from peer credentials and validates it against the registry', async () => {
-    const resolver = createPeerParentResolver(baseIo({}));
-    expect(await resolver.resolve(fakeReq)).toEqual({ sessionId: 'managed-parent', source: 'peer' });
+  it('links when every peer owner resolves to the same parent (unanimity)', async () => {
+    const io = scenarioIo({ owners: [100, 200, 300], identityOf: { 100: 'sess-a', 200: 'sess-a', 300: 'sess-a' } });
+    expect(await createPeerParentResolver(io).resolve(fakeReq)).toEqual({ sessionId: 'sess-a', source: 'peer' });
   });
 
-  it('returns null when the resolved identity does not name a registered session (fail safe)', async () => {
-    const io = baseIo({});
-    io.registry = { get: async () => undefined, getByPath: async () => undefined };
+  it("gives no linkage when one owner diverges (Luna's case: several A plus one B)", async () => {
+    const io = scenarioIo({ owners: [100, 200, 300], identityOf: { 100: 'sess-a', 200: 'sess-b', 300: 'sess-a' } });
     expect(await createPeerParentResolver(io).resolve(fakeReq)).toBeNull();
   });
 
-  it('returns null when two candidate pids resolve to different sessions (ambiguity → no linkage)', async () => {
-    const io = baseIo({
-      readlinkFd: async () => 'socket:[10]',
-      ssEstablished: async () =>
-        'u_str ESTAB 0 0 * 10 * 20 users:(("x",pid=1,fd=1))\n'
-        + 'u_str ESTAB 0 0 * 20 * 10 users:(("a",pid=100,fd=1),("b",pid=200,fd=2))',
-      environ: async (pid) => (pid === 100 ? ['PI_WEB_UI_SESSION_ID=sess-a'] : pid === 200 ? ['PI_WEB_UI_SESSION_ID=sess-b'] : null),
-      ppid: async () => 1,
-      selfPid: () => 1,
-      registry: {
-        get: async (id: string) => ({ id, sdkType: 'claude', path: 'x' }),
-        getByPath: async () => undefined,
+  it("gives no linkage when one owner has no identity at all (Luna's case: A plus identity-less)", async () => {
+    const io = scenarioIo({ owners: [100, 200], identityOf: { 100: 'sess-a' } }); // 200 → identity-less
+    expect(await createPeerParentResolver(io).resolve(fakeReq)).toBeNull();
+  });
+
+  it('gives no linkage when ALL owners are identity-less', async () => {
+    const io = scenarioIo({ owners: [100, 200] });
+    expect(await createPeerParentResolver(io).resolve(fakeReq)).toBeNull();
+  });
+
+  it('gives no linkage when the owner set is truncated above the safe bound (cap case)', async () => {
+    const io = scenarioIo({ owners: null });
+    expect(await createPeerParentResolver(io).resolve(fakeReq)).toBeNull();
+  });
+
+  it('gives no linkage when there are no owners at all', async () => {
+    const io = scenarioIo({ owners: [] });
+    expect(await createPeerParentResolver(io).resolve(fakeReq)).toBeNull();
+  });
+
+  it('falls back to the full ss table when the narrowed snapshot misses the connection', async () => {
+    let calls = 0;
+    const io = scenarioIo(
+      { owners: [100], identityOf: { 100: 'sess-a' } },
+      {
+        ssEstablished: async (mode) => {
+          calls += 1;
+          if (mode === 'narrow') {
+            // Narrow filter returned a snapshot without our inode (e.g. an
+            // older iproute2 that ignored the filter differently).
+            return { kind: 'ok', output: 'u_str ESTAB 0 0 * 999  * 998' };
+          }
+          return { kind: 'ok', output: SS_FIXTURE };
+        },
       },
+    );
+    expect(await createPeerParentResolver({ ...io, socketPath: '/run/api/internal-api.sock' }).resolve(fakeReq)).toEqual({ sessionId: 'sess-a', source: 'peer' });
+    expect(calls).toBe(2);
+  });
+
+  it('gives no linkage and warns rate-limited when the ss output overflows maxBuffer', async () => {
+    const warnings: string[] = [];
+    let clock = 1_000_000;
+    const io = scenarioIo({ owners: [100] }, {
+      ssEstablished: async () => ({ kind: 'overflow' }),
+      warn: (m) => warnings.push(m),
+      now: () => clock,
     });
+    const resolver = createPeerParentResolver(io);
+    expect(await resolver.resolve(fakeReq)).toBeNull();
+    expect(await resolver.resolve(fakeReq)).toBeNull();
+    expect(warnings).toHaveLength(1); // rate-limited within the window
+    clock += 61_000;
+    expect(await resolver.resolve(fakeReq)).toBeNull();
+    expect(warnings).toHaveLength(2); // window elapsed → warns again
+  });
+
+  it('gives no linkage when ss is unavailable', async () => {
+    const io = scenarioIo({ owners: [100] }, { ssEstablished: async () => ({ kind: 'unavailable' }) });
     expect(await createPeerParentResolver(io).resolve(fakeReq)).toBeNull();
-  });
-
-  it('accepts when multiple candidate pids agree on one session (fd inheritance)', async () => {
-    const io = baseIo({
-      readlinkFd: async () => 'socket:[10]',
-      ssEstablished: async () =>
-        'u_str ESTAB 0 0 * 10 * 20 users:(("x",pid=1,fd=1))\n'
-        + 'u_str ESTAB 0 0 * 20 * 10 users:(("a",pid=100,fd=1),("b",pid=200,fd=2))',
-      environ: async () => ['PI_WEB_UI_SESSION_ID=managed-parent'],
-      ppid: async () => 1,
-      selfPid: () => 1,
-    });
-    expect(await createPeerParentResolver(io).resolve(fakeReq)).toEqual({ sessionId: 'managed-parent', source: 'peer' });
-  });
-
-  it('returns null when ss is unavailable or the connection is not a real unix socket', async () => {
-    expect(await createPeerParentResolver(baseIo({ ssEstablished: async () => null })).resolve(fakeReq)).toBeNull();
-    expect(await createPeerParentResolver(baseIo({ readlinkFd: async () => null })).resolve(fakeReq)).toBeNull();
   });
 
   it('returns null for requests without a socket handle (unit-test fakes)', async () => {
-    const resolver = createPeerParentResolver(baseIo({}));
+    const resolver = createPeerParentResolver(scenarioIo({ owners: [100], identityOf: { 100: 'sess-a' } }));
     expect(await resolver.resolve({ socket: {} } as unknown as ResolveReq)).toBeNull();
     expect(await resolver.resolve({} as unknown as ResolveReq)).toBeNull();
   });
 
-  it('returns null when the ancestry walk finds no identity variables (unmanaged caller)', async () => {
-    const io = baseIo({ environ: async () => ['HOME=/root'] });
+  it('returns null when the resolved identity does not name a registered session (fail safe)', async () => {
+    const io = scenarioIo({ owners: [100], identityOf: { 100: 'sess-a' } });
+    io.registry = { get: async () => undefined, getByPath: async () => undefined };
     expect(await createPeerParentResolver(io).resolve(fakeReq)).toBeNull();
   });
 

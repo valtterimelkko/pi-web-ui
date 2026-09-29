@@ -242,6 +242,122 @@ describe('C5: lineage always recorded (contract 1.54.0)', () => {
     });
   });
 
+  describe('POST /sessions/batch linkage (correction 01)', () => {
+    const batch = async (sessions: unknown[], headers: Record<string, string> = {}) => {
+      const res = mockRes();
+      await routes.handleBatchCreate(jsonReq('POST', '/api/v1/sessions/batch', { sessions }, headers), res);
+      return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : undefined };
+    };
+
+    it('links each batch child via the per-entry body parentSessionId', async () => {
+      const out = await batch([
+        { runtime: 'antigravity', cwd: '/root/proj', parentSessionId: PARENT_ID },
+        { runtime: 'antigravity', cwd: '/root/proj', parentSessionId: PARENT_ID },
+      ]);
+      expect(out.status).toBe(200);
+      expect(out.body.createdCount).toBe(2);
+      for (const item of out.body.created) {
+        expect(item.success).toBe(true);
+        expect(item.parentSessionId).toBe(PARENT_ID);
+        expect(item.parentSource).toBe('body');
+        const entry = await registry.get(item.sessionId);
+        expect(entry?.parentSessionId).toBe(PARENT_ID);
+        expect(entry?.parentSource).toBe('body');
+      }
+      expect(peerResolve.resolve).not.toHaveBeenCalled();
+    });
+
+    it('falls back to peer resolution per batch child when no entry names a parent', async () => {
+      const out = await batch([
+        { runtime: 'antigravity', cwd: '/root/proj' },
+        { runtime: 'antigravity', cwd: '/root/proj' },
+      ]);
+      expect(out.status).toBe(200);
+      for (const item of out.body.created) {
+        expect(item.parentSessionId).toBe(PARENT_ID);
+        expect(item.parentSource).toBe('peer');
+      }
+      expect(peerResolve.resolve.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('applies the request header to every batch child (header beats body)', async () => {
+      const OTHER = '11111111-1111-4111-8111-000000000042';
+      await registry.upsert({
+        id: OTHER, sdkType: 'pi', path: '/sessions/other-parent.jsonl', cwd: '/root/proj',
+        firstMessage: 'x', messageCount: 0, status: 'idle',
+        createdAt: '2026-09-29T02:00:00.000Z', lastActivity: '2026-09-29T02:00:00.000Z',
+      });
+      const out = await batch(
+        [{ runtime: 'antigravity', cwd: '/root/proj', parentSessionId: OTHER }],
+        { 'x-parent-session': PARENT_ID },
+      );
+      expect(out.body.created[0].parentSessionId).toBe(PARENT_ID);
+      expect(out.body.created[0].parentSource).toBe('header');
+      expect((await registry.get(out.body.created[0].sessionId))?.parentSessionId).toBe(PARENT_ID);
+    });
+
+    it('leaves batch children unlinked when peer resolution refuses (fail safe)', async () => {
+      peerResolve.resolve.mockResolvedValue(null);
+      const out = await batch([{ runtime: 'antigravity', cwd: '/root/proj' }]);
+      expect(out.body.created[0].success).toBe(true);
+      expect('parentSessionId' in out.body.created[0]).toBe(false);
+      expect('parentSource' in out.body.created[0]).toBe(false);
+    });
+  });
+
+  describe('Command Code list lineage (correction 01)', () => {
+    const CC_ID = '77777777-7777-4777-8777-000000000007';
+
+    beforeEach(async () => {
+      await registry.upsert({
+        id: CC_ID, sdkType: 'commandcode', path: '/tmp/cc-session', commandCodeNativeSessionId: 'cc-native-1',
+        cwd: '/root/proj', firstMessage: 'cc', messageCount: 1, status: 'idle',
+        createdAt: '2026-09-29T03:00:00.000Z', lastActivity: '2026-09-29T03:00:00.000Z',
+        parentSessionId: PARENT_ID, parentSource: 'peer',
+      });
+      routes = createSessionRoutes({
+        claudeService: { isRunning: vi.fn(() => false) } as any,
+        opencodeService: { isRunning: vi.fn(() => false) } as any,
+        antigravityService,
+        multiSessionManager: {} as unknown as SessionRoutesDeps['multiSessionManager'],
+        sessionRegistry: registry,
+        piService: {} as any,
+        internalClientId: 'test-client',
+        commandCodeService: {
+          isEnabled: vi.fn(() => true),
+          listSessions: vi.fn(async () => [
+            {
+              sessionId: CC_ID, executionInstanceId: 'exec-cc', cwd: '/root/proj',
+              modelSelector: 'meta/muse-spark-1.2-contributor', state: 'idle', messageCount: 1,
+              firstMessage: 'cc', createdAt: '2026-09-29T03:00:00.000Z', updatedAt: '2026-09-29T03:01:00.000Z',
+            },
+          ]),
+        } as any,
+        preferencesPath: path.join(dir, 'prefs.json'),
+        watchDir: path.join(dir, 'watches'),
+        peerParentResolver: peerResolve as unknown as SessionRoutesDeps['peerParentResolver'],
+      });
+    });
+
+    it('joins command code records with registry lineage on GET /sessions', async () => {
+      const res = mockRes();
+      await routes.handleListSessions(jsonReq('GET', '/api/v1/sessions'), res);
+      const body = JSON.parse(res.body);
+      const ccItem = body.sessions.find((s: any) => s.sessionId === CC_ID);
+      expect(ccItem).toBeDefined();
+      expect(ccItem.parentSessionId).toBe(PARENT_ID);
+      expect(ccItem.parentSource).toBe('peer');
+    });
+
+    it('includes command code children in the ?parent= filter', async () => {
+      const res = mockRes();
+      await routes.handleListSessions(jsonReq('GET', `/api/v1/sessions?parent=${PARENT_ID}`), res);
+      const body = JSON.parse(res.body);
+      const ids = body.sessions.map((s: any) => s.sessionId);
+      expect(ids).toContain(CC_ID);
+    });
+  });
+
   describe('adopt-native peer fallback', () => {
     beforeEach(async () => {
       await writeJsonl(path.join(claudeProjectsDir, encodeProject(NATIVE_CWD), 'native-c5-1.jsonl'), [

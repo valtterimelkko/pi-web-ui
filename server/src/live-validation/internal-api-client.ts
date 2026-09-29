@@ -435,6 +435,11 @@ export class InternalApiClient implements InternalApiClientLike {
     return this.token;
   }
 
+  /** C5 (1.54.0): batch create (correction 01 exercises per-entry linkage). */
+  async batchCreate(entries: Array<Record<string, unknown>>): Promise<import('../internal-api/types.js').BatchCreateResponse> {
+    return this.request('POST', '/api/v1/sessions/batch', { sessions: entries });
+  }
+
   /** Answers-mode prompt (non-streaming), including idempotent replay responses. */
   async prompt(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse> {
     this.promptEvidence.delete(sessionId);
