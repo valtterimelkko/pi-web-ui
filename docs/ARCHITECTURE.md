@@ -107,9 +107,9 @@ Important files:
 - session lifecycle is actively managed by the app
 - worker isolation, idle cleanup, stale-stream handling, and pinning are important here
 
-**Global extension loading (B1.2)**
+**Global extension loading (B1.2b)**
 
-Every Pi session is created with its own `DefaultResourceLoader`, and the SDK's
+Every Pi session is created with its own `DefaultResourceLoader`. The SDK's
 extension **module cache is single-slot and cwd-keyed** — it is cleared whenever
 the cwd differs, so a session opened in a different cwd re-imports (~780 KB of
 TypeScript across the global extensions) with jiti `moduleCache: false`. On
@@ -118,21 +118,37 @@ dominant cause of the A2 event-loop lag spikes (300–919 ms with 0–3 active A
 turns; see [`plans/execution-reports/orchestration-scaling/B1.2.md`](./plans/execution-reports/orchestration-scaling/B1.2.md)).
 
 `server/src/pi/extension-factory-cache.ts` keeps one imported factory per
-**global** extension path (`<agentDir>/extensions`) for the process, invalidates
-it when the entry file or anything in its directory changes, and seeds the SDK's
-own module cache for the session's real cwd before each loader reload. The SDK
-still calls `initializeExtension` per load, so every session keeps its own
-`Extension` objects and its own extension runtime — the isolation property a
-per-cwd loader cache would have broken. Project-local (`<cwd>/.pi/extensions`),
-configured and package extensions are **not** cached: they keep loading per real
-cwd, as do skills, prompt templates, themes and project context.
+**global** extension path (`<agentDir>/extensions`) for the process, invalidating
+it when the entry file or anything in its directory changes. Each session's
+loader receives the cached factories through the SDK's **public**
+`extensionFactories` option, with `noExtensions` + `additionalExtensionPaths`
+carrying every other discovered extension so the loader's own path, order and
+error reporting stay intact; `extensionsOverride` restores the real paths and
+order the discovered set would have produced. The loader still calls
+`initializeExtension` per load, so every session keeps its own `Extension`
+objects and its own extension runtime. Factories are imported with jiti and the
+SDK's own module aliasing by `server/src/pi/sdk-extension-importer.ts` — no
+patch, no files inside `node_modules` are ever modified, and the package
+`exports` map is the only boundary used.
 
-Seeding uses an additive accessor exported by
-`scripts/patch-pi-coding-agent-extension-factory.mjs` (a guarded postinstall
-patch in the same style as `scripts/patch-pi-ai-toolstream.mjs`). When the patch
-is absent the cache is inert: the server logs one warning and uses the
-unpatched per-session path, so a missing patch degrades to today's behaviour
-rather than breaking sessions.
+**Graceful degradation.** Any failure in the factory pipeline (SDK version
+outside the validated `0.87.x` range, an unresolvable alias target, a jiti
+import failure, the override hitting frozen or changed result objects, a parity
+self-check mismatch) degrades that session to the plain uncached SDK loader —
+sessions keep working, they just open slowly. Each degradation is counted in
+`getExtensionLoaderTelemetry()` and logged as a rate-limited warning; the tests
+pin the validated SDK version loudly (they fail on an SDK bump until the alias
+map and override are re-validated).
+
+**Reload behaviour.** Code changes to cached extensions are picked up by
+`/reload` (the loader dereferences the cache's current factory). Newly added or
+removed extension **files** reach an already-open session only at its next
+open, because the loader's `additionalExtensionPaths` are fixed at construction
+by the public API; a fresh enumeration happens on every session open.
+
+Project-local (`<cwd>/.pi/extensions`), configured and package extensions are
+**not** cached: they keep loading per real cwd, as do skills, prompt templates,
+themes and project context.
 
 ### 2. Claude Code path
 

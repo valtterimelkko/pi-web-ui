@@ -29,7 +29,7 @@ import {
 import { createLogger } from '../logging/logger.js';
 import { readSessionIdentity } from './session-cwd.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
-import { getExtensionFactoryCache, runExtensionLoadCriticalSection } from './extension-factory-cache.js';
+import { createExtensionFactoryResourceLoader, refreshExtensionFactories, runExtensionLoadCriticalSection } from './extension-factory-cache.js';
 
 const logger = createLogger('PiService');
 
@@ -303,6 +303,9 @@ export class PiService {
     // the REST/Internal API model projections. The SDK's higher-level
     // createAgentSessionServices() performs this same flush; PiService creates
     // the shared ModelRuntime itself, so it must do the flush explicitly.
+    // B1.2b: the boot-time loader stays the plain constructor loader — boot is
+    // a one-off full import either way, and the factory cache pays off on the
+    // repeated per-session opens (createSessionResourceLoader).
     await runExtensionLoadCriticalSection(async () => {
       await this.resourceLoader.reload();
     });
@@ -379,40 +382,17 @@ export class PiService {
 
   private async createSessionResourceLoader(cwd: string): Promise<DefaultResourceLoader> {
     const agentDir = config.piAgentDir || `${process.cwd()}/.pi/agent`;
-    // B1.2: seed the process-cached global extension factories into the SDK's
-    // own module cache for this session's real cwd, then resolve. Seed and
-    // resolve must be ONE critical section: the SDK's extension module cache is
-    // a single process-global cwd slot, so a concurrent session open in another
-    // cwd would change the slot mid-interval, clearing this session's seeded
-    // factories and forcing both sessions to re-import on the event loop.
-    // Fail-open and inert when the SDK patch is absent — the loader then does
-    // exactly what it did before. Inside the section, each session still gets
-    // fresh Extension objects and its own runtime (initializeExtension runs per
-    // load).
-    return runExtensionLoadCriticalSection(async () => {
-      const loader = new DefaultResourceLoader({ cwd, agentDir });
-      await this.seedGlobalExtensionFactories(cwd, agentDir);
-      await loader.reload();
-      this.logExtensions(loader.getExtensions());
-      return loader;
-    });
-  }
-
-  /**
-   * Seed the SDK module cache with the cached global extension factories.
-   * Never throws: a failure here must degrade to the unpatched path, not block
-   * session creation.
-   */
-  private async seedGlobalExtensionFactories(cwd: string, agentDir: string): Promise<void> {
-    try {
-      const cache = await getExtensionFactoryCache();
-      await cache.seed(cwd, agentDir);
-    } catch (error) {
-      logger.warn(
-        `[PiService] global extension factory seeding failed for cwd ${cwd}: ` +
-        `${error instanceof Error ? error.message : String(error)} — continuing with the unpatched loader path`,
-      );
-    }
+    // B1.2b: the loader receives the process-cached global extension factories
+    // through the SDK's public `extensionFactories` option; every uncached
+    // extension (subagent, symlinked, over-budget) plus project-local,
+    // configured and package extensions load through the loader's own path at
+    // the real cwd. Build and reload run inside ONE critical section: the
+    // SDK's extension module cache is a single process-global cwd slot shared
+    // by the uncached extensions. Fail-open: any failure in the factory
+    // pipeline degrades this session to the plain uncached loader.
+    return runExtensionLoadCriticalSection(async () =>
+      createExtensionFactoryResourceLoader(cwd, agentDir, {}, (loader) => this.logExtensions(loader.getExtensions())),
+    );
   }
 
   async createSession(options: CreateSessionOptions): Promise<AgentSession> {
@@ -567,14 +547,18 @@ export class PiService {
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
-    // Round-2 review finding 1: `session.reload()` calls
-    // `DefaultResourceLoader.reload()`, which CLEARS the SDK's process-global
-    // extension cache when that loader was already loaded. It must therefore run
-    // in the same critical section as seed→load, or a reload in one session can
-    // invalidate another session's seeded factories mid-sequence. This is the
-    // path behind the normal `ctx.reload()` adapter
+    // Round-2 review finding 1 (B1.2): a session reload runs inside the same
+    // critical section as session opens, because the SDK's extension module
+    // cache is one process-global cwd slot shared by the uncached extensions.
+    // B1.2b: refresh the factory cache first so the loader's factory
+    // indirection initialises cached extensions from fresh code when their
+    // fingerprint changed. Newly added or removed extension FILES reach an
+    // already-open session only at its next open (documented in
+    // docs/ARCHITECTURE.md); code changes reload here.
+    // This is the path behind the normal `ctx.reload()` adapter
     // (extension-ui-adapter.ts → piService.reloadSession).
     await runExtensionLoadCriticalSection(async () => {
+      await refreshExtensionFactories(config.piAgentDir || `${process.cwd()}/.pi/agent`);
       await session.reload();
     });
   }

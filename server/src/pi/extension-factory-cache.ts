@@ -1,6 +1,15 @@
 import { opendir, readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import {
+  DefaultPackageManager,
+  DefaultResourceLoader,
+  SettingsManager,
+  type ExtensionAPI,
+  type LoadExtensionsResult,
+  type Extension as SdkExtension,
+} from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
+import { ExtensionImporterError, importFactoryViaJiti } from './sdk-extension-importer.js';
 
 /**
  * B1.2 — process-level extension **factory** cache.
@@ -13,13 +22,22 @@ import { createLogger } from '../logging/logger.js';
  * measured 0.3–1.7 s synchronous block on the event loop.
  *
  * What this does: import each **global** extension's default-export factory once
- * per process, watch it for changes, and hand the factory back to the SDK's own
- * module cache for the session's real cwd (via the additive
- * `seedExtensionFactory` accessor from
- * `scripts/patch-pi-coding-agent-extension-factory.mjs`). `loadExtensionsCached`
- * then reuses the factory while still calling `initializeExtension` per load, so
- * every session keeps its **own** Extension objects and its own runtime — the
- * isolation property the rejected per-cwd-loader cache broke.
+ * per process with jiti and the SDK's own module aliasing (see
+ * `sdk-extension-importer.ts`), and hand the factories to each session's
+ * `DefaultResourceLoader` through the **public** `extensionFactories` option —
+ * together with `noExtensions` + `additionalExtensionPaths` so every non-cached
+ * extension (subagent, symlinked, over-budget, project-local, configured,
+ * packages) still loads through the SDK's own discovery at the real cwd. The
+ * loader initialises each factory per session (fresh Extension objects and
+ * runtime) and `extensionsOverride` restores the exact paths, order and error
+ * labels the discovered path would have produced.
+ *
+ * Failure contract (parent 01-answer.md item 2 — degrade at runtime, alarm in
+ * CI): any failure in the factory pipeline (SDK version outside the validated
+ * range, unresolvable alias target, jiti import failure, override hitting
+ * frozen/changed result objects, parity self-check mismatch) degrades THAT
+ * session to the plain uncached SDK loader with a rate-limited warning and a
+ * diagnostics counter. The loud signal lives in the tests.
  *
  * Deliberately NOT cached: project-local extensions (`<cwd>/.pi/extensions`),
  * configured extensions and packages. Those are cwd-dependent and are still
@@ -120,10 +138,8 @@ export interface ExtensionDirEntry {
 }
 
 export interface ExtensionFactoryCacheDeps {
-  /** Import an extension module and return its default-export factory. */
+  /** Import an extension module and return its default-export factory. Defaults to the public jiti importer. */
   importFactory?: (extensionPath: string) => Promise<unknown | undefined>;
-  /** Place an already-imported factory into the SDK module cache for `cwd`. */
-  seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
   readdir?: (dir: string) => Promise<ExtensionDirEntry[]>;
   /** Streaming enumeration seam (preferred): lets the scanner stop at the budget. */
   opendir?: (dir: string) => Promise<AsyncIterable<ExtensionDirEntry>>;
@@ -444,8 +460,7 @@ export class ExtensionFactoryCache {
   private readonly maxScanDirs: number;
   private readonly allowlist: ReadonlySet<string>;
   private readonly entries = new Map<string, CacheEntry>();
-  private importFactory?: (extensionPath: string) => Promise<unknown | undefined>;
-  private seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
+  private readonly importFactory: (extensionPath: string) => Promise<unknown | undefined>;
   private counters: ExtensionFactoryCacheStats = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false, unfingerprintable: 0 };
   private scanEntryCount = 0;
   private overBudgetWarned = false;
@@ -454,19 +469,15 @@ export class ExtensionFactoryCache {
     this.maxScanEntries = deps.maxScanEntries ?? DEFAULT_MAX_SCAN_ENTRIES;
     this.maxScanDirs = deps.maxScanDirs ?? DEFAULT_MAX_SCAN_DIRS;
     this.allowlist = new Set(deps.allowlist ?? DEFAULT_SHARE_SAFE_EXTENSIONS);
-    this.importFactory = deps.importFactory;
-    this.seedFactory = deps.seedFactory;
+    this.importFactory = deps.importFactory ?? importFactoryViaJiti;
   }
 
-  /**
-   * Test seam and runtime fallback: when the SDK accessors are absent the cache
-   * stays inert (it will never import or seed), and the caller keeps today's
-   * per-session loader path.
-   */
-  setAccessors(accessors: { importFactory?: (extensionPath: string) => Promise<unknown | undefined>; seedFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean } | undefined): void {
-    this.importFactory = accessors?.importFactory;
-    this.seedFactory = accessors?.seedFactory;
+  /** The cached factory for a path, without triggering a scan (freshness indirection). */
+  peekFactory(extensionPath: string): unknown {
+    return this.entries.get(resolve(extensionPath))?.factory;
   }
+
+  /** Discover global extensions and return the allowlisted, cached factories. */
 
   get statsSnapshot(): ExtensionFactoryCacheStats {
     return { ...this.counters };
@@ -534,7 +545,6 @@ export class ExtensionFactoryCache {
   }
 
   private async importFactoryFor(path: string): Promise<unknown | undefined> {
-    if (!this.importFactory) return undefined;
     try {
       return await this.importFactory(path);
     } catch (error) {
@@ -545,25 +555,6 @@ export class ExtensionFactoryCache {
     }
   }
 
-  /**
-   * Place every cached global factory into the SDK module cache for `cwd`, so
-   * the next `DefaultResourceLoader.reload()` reuses it instead of re-importing.
-   */
-  async seed(cwd: string, agentDir: string): Promise<{ available: boolean; seeded: number }> {
-    if (!this.importFactory || !this.seedFactory) return { available: false, seeded: 0 };
-    const factories = await this.load(agentDir);
-    const resolvedCwd = resolve(cwd);
-    let seeded = 0;
-    for (const entry of factories) {
-      try {
-        if (this.seedFactory(entry.path, entry.factory, resolvedCwd)) seeded += 1;
-      } catch (error) {
-        logger.warn(`[ExtensionFactoryCache] seed failed for ${entry.path}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    return { available: true, seeded };
-  }
-
   reset(): void {
     this.entries.clear();
     this.counters = { discovered: 0, allowlisted: 0, skipped: 0, cached: 0, imports: 0, reimports: 0, pruned: 0, overBudget: false, unfingerprintable: 0 };
@@ -572,48 +563,218 @@ export class ExtensionFactoryCache {
   }
 }
 
-// ── SDK accessors (patch-present detection) ─────────────────────────────────
+// ── Factory delivery through the public SDK API (B1.2b) ─────────────────────
 
-interface ExtensionFactorySdk {
-  importExtensionFactory?: (extensionPath: string) => Promise<unknown | undefined>;
-  seedExtensionFactory?: (extensionPath: string, factory: unknown, cwd: string) => boolean;
+export interface ExtensionLoaderTelemetry {
+  fallbacks: number;
+  lastFallbackReason?: string;
+  lastFallbackAt?: string;
 }
 
-let sdkModulePromise: Promise<ExtensionFactorySdk> | undefined;
+const FALLBACK_WARN_INTERVAL_MS = 5_000;
+const fallbackTelemetry: Required<Pick<ExtensionLoaderTelemetry, 'fallbacks'>> & {
+  lastFallbackReason?: string;
+  lastFallbackAt?: string;
+  lastWarningAt: number;
+} = { fallbacks: 0, lastWarningAt: 0 };
 
-async function loadSdkModule(): Promise<ExtensionFactorySdk> {
-  sdkModulePromise ??= import('@earendil-works/pi-coding-agent') as unknown as Promise<ExtensionFactorySdk>;
-  return sdkModulePromise;
+/** Bounded copy of the degradation counter (a fallback never blocks a session). */
+export function getExtensionLoaderTelemetry(): ExtensionLoaderTelemetry {
+  return {
+    fallbacks: fallbackTelemetry.fallbacks,
+    lastFallbackReason: fallbackTelemetry.lastFallbackReason,
+    lastFallbackAt: fallbackTelemetry.lastFallbackAt,
+  };
 }
 
-/** True when the additive patch is applied and both accessors are callable. */
-export async function isExtensionFactorySeedingAvailable(): Promise<boolean> {
-  const sdk = await loadSdkModule();
-  return typeof sdk.importExtensionFactory === 'function' && typeof sdk.seedExtensionFactory === 'function';
+/** Test seam. */
+export function resetExtensionLoaderTelemetry(): void {
+  fallbackTelemetry.fallbacks = 0;
+  fallbackTelemetry.lastFallbackReason = undefined;
+  fallbackTelemetry.lastFallbackAt = undefined;
+  fallbackTelemetry.lastWarningAt = 0;
 }
 
-let warningLogged = false;
+function noteFallback(reason: string): void {
+  fallbackTelemetry.fallbacks += 1;
+  fallbackTelemetry.lastFallbackReason = reason;
+  fallbackTelemetry.lastFallbackAt = new Date().toISOString();
+  const now = Date.now();
+  if (now - fallbackTelemetry.lastWarningAt >= FALLBACK_WARN_INTERVAL_MS) {
+    fallbackTelemetry.lastWarningAt = now;
+    logger.warn(
+      `[ExtensionFactoryCache] extension factory loading degraded to the plain uncached SDK path (reason: ${reason}); ` +
+      'sessions are unaffected — session opens stay slow until the cause is fixed.',
+    );
+  }
+}
+
+/** Strip the loader's single `<inline:name>` wrapper (name = the real path). */
+const stripInlineLabel = (label: string): string | undefined =>
+  label.startsWith('<inline:') && label.endsWith('>') ? label.slice('<inline:'.length, -1) : undefined;
+
+export interface ExtensionLoaderDeps {
+  /** The process cache (default: the singleton). */
+  cache?: ExtensionFactoryCache;
+  /** Test seam: force the extensionsOverride to throw (frozen/changed result objects). */
+  forceOverrideFailure?: boolean;
+  /** Test seam: tamper with the parity self-check so it reports a mismatch. */
+  tamperParityCheck?: boolean;
+  /** Test seam: replace the plain fallback loader construction. */
+  createPlainLoader?: (cwd: string, agentDir: string) => DefaultResourceLoader;
+}
+
+/**
+ * Restore full parity on the loader's extension result: real paths, real order,
+ * rewritten error labels. Runs BEFORE the loader recomputes every sourceInfo
+ * from `metadataByPath`, so sourceInfo comes out identical to the discovered
+ * path. Throws on any structural surprise (frozen objects, missing entries) —
+ * the caller degrades that session to the plain loader.
+ */
+export function applyExtensionFactoryParity(
+  result: LoadExtensionsResult,
+  enabledOrder: readonly string[],
+  options: { tamperParityCheck?: boolean } = {},
+): LoadExtensionsResult {
+  const loaded = [...result.extensions];
+  const used = new Set<SdkExtension>();
+  const ordered: SdkExtension[] = [];
+  for (const enabledPath of enabledOrder) {
+    const resolvedPath = resolve(enabledPath);
+    const match = loaded.find((extension) => {
+      if (used.has(extension)) return false;
+      const candidate = extension.path.startsWith('<inline:') ? stripInlineLabel(extension.path) : extension.path;
+      return candidate !== undefined && resolve(candidate) === resolvedPath;
+    });
+    if (match === undefined) continue;
+    used.add(match);
+    if (match.path.startsWith('<inline:')) {
+      // Mutating public result fields; a future SDK that freezes these fails
+      // loudly here and the session degrades to the plain loader.
+      match.path = resolvedPath;
+      match.resolvedPath = resolvedPath;
+    }
+    ordered.push(match);
+  }
+  if (options.tamperParityCheck) ordered.splice(0, 1);
+  if (ordered.length !== enabledOrder.length || used.size !== loaded.length) {
+    const missing = enabledOrder.length - ordered.length;
+    throw new ExtensionImporterError(
+      `extension parity self-check failed: ${missing} expected extension(s) missing, ${loaded.length - used.size} unexpected loaded extension(s)`,
+    );
+  }
+  for (const error of result.errors) {
+    const realPath = error.path === undefined ? undefined : stripInlineLabel(error.path);
+    if (realPath !== undefined) error.path = realPath;
+  }
+  result.extensions = ordered;
+  return result;
+}
+
+/**
+ * Build the session's resource loader with cached factories delivered through
+ * the public API. Any failure inside the factory pipeline degrades to the
+ * plain uncached SDK loader (normal discovery, no factories) — never throws
+ * into session creation.
+ */
+export async function createExtensionFactoryResourceLoader(
+  cwd: string,
+  agentDir: string,
+  deps: ExtensionLoaderDeps = {},
+  onLoaded?: (loader: DefaultResourceLoader) => void,
+): Promise<DefaultResourceLoader> {
+  try {
+    return await buildFactoryBackedLoader(cwd, agentDir, deps, onLoaded);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    noteFallback(reason);
+    const loader = deps.createPlainLoader?.(cwd, agentDir) ?? new DefaultResourceLoader({ cwd, agentDir });
+    await loader.reload();
+    onLoaded?.(loader);
+    return loader;
+  }
+}
+
+async function buildFactoryBackedLoader(
+  cwd: string,
+  agentDir: string,
+  deps: ExtensionLoaderDeps,
+  onLoaded?: (loader: DefaultResourceLoader) => void,
+): Promise<DefaultResourceLoader> {
+  // Per-loader SettingsManager: the loader mutates project-trust state on it,
+  // so it must never be shared across sessions. The pre-pass reload mirrors the
+  // loader's own internal sequence (reload settings → resolve).
+  const settingsManager = SettingsManager.create(cwd, agentDir);
+  await settingsManager.reload();
+  const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+  const resolvedPaths = await packageManager.resolve();
+  const enabledOrder = resolvedPaths.extensions.filter((resource) => resource.enabled).map((resource) => resource.path);
+
+  const cache = deps.cache ?? (await getExtensionFactoryCache());
+  const factories = await cache.load(agentDir);
+  const stats = cache.stats;
+  // Systemic importer failure (SDK version out of range, alias map broken, jiti
+  // unavailable): every allowlisted extension failed to import — degrade the
+  // whole session to the plain uncached path. A single broken extension is NOT
+  // systemic: it stays uncached and the loader reports it per session, exactly
+  // like today's uncached path.
+  if (!stats.overBudget && stats.allowlisted > 0 && factories.length === 0) {
+    throw new ExtensionImporterError(
+      `all ${stats.allowlisted} allowlisted extension factories failed to import (systemic importer failure)`,
+    );
+  }
+  const factoryPaths = new Set(factories.map((factory) => resolve(factory.path)));
+  const additionalPaths = enabledOrder.filter((path) => !factoryPaths.has(resolve(path)));
+
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    noExtensions: true,
+    additionalExtensionPaths: additionalPaths,
+    extensionFactories: factories.map((factory) => ({
+      // name = the real path: the loader labels the entry `<inline:${name}>`,
+      // and applyExtensionFactoryParity strips exactly that one wrapper.
+      name: factory.path,
+      factory: (api: ExtensionAPI): void | Promise<void> => {
+        // Freshness indirection: dereference the cache's CURRENT factory so a
+        // /reload after a fingerprint change runs the new code.
+        const current = cache.peekFactory(factory.path);
+        if (typeof current !== 'function') {
+          throw new Error(`Failed to load extension: cached factory unavailable for ${factory.path} (it failed to import)`);
+        }
+        return (current as (api: ExtensionAPI) => void | Promise<void>)(api);
+      },
+    })),
+    extensionsOverride: (result: LoadExtensionsResult) => {
+      if (deps.forceOverrideFailure) {
+        throw new ExtensionImporterError('extensionsOverride hit frozen or changed result objects (simulated)');
+      }
+      return applyExtensionFactoryParity(result, enabledOrder, { tamperParityCheck: deps.tamperParityCheck });
+    },
+  });
+  await loader.reload();
+  onLoaded?.(loader);
+  return loader;
+}
+
+/**
+ * Re-read the factory cache so a subsequent loader `.reload()` initialises
+ * cached extensions from fresh code when their fingerprint changed. Part of
+ * the /reload path (pi-service), inside the extension-load critical section.
+ */
+export async function refreshExtensionFactories(agentDir: string, deps: { cache?: ExtensionFactoryCache } = {}): Promise<void> {
+  const cache = deps.cache ?? (await getExtensionFactoryCache());
+  await cache.load(agentDir);
+}
+
+// ── Process-wide cache ───────────────────────────────────────────────────────
+
 let globalCache: ExtensionFactoryCache | undefined;
 
-/** The process-wide cache, wired to the SDK accessors when the patch is present. */
+/** The process-wide cache (jiti importer by default — no patch, no accessors). */
 export async function getExtensionFactoryCache(): Promise<ExtensionFactoryCache> {
-  if (!globalCache) {
-    const sdk = await loadSdkModule();
-    const importFactory = sdk.importExtensionFactory;
-    const seedFactory = sdk.seedExtensionFactory;
-    const patched = typeof importFactory === 'function' && typeof seedFactory === 'function';
-    globalCache = new ExtensionFactoryCache({
-      importFactory: patched ? importFactory.bind(sdk) : undefined,
-      seedFactory: patched ? seedFactory.bind(sdk) : undefined,
-    });
-    if (!patched && !warningLogged) {
-      warningLogged = true;
-      logger.warn(
-        '[ExtensionFactoryCache] extension-factory accessors are absent (scripts/patch-pi-coding-agent-extension-factory.mjs not applied); ' +
-        'falling back to the unpatched per-session extension import path. Sessions are unaffected; session opens remain slow.',
-      );
-    }
-  }
+  globalCache ??= new ExtensionFactoryCache();
   return globalCache;
 }
 
@@ -621,6 +782,4 @@ export async function getExtensionFactoryCache(): Promise<ExtensionFactoryCache>
 export function resetExtensionFactoryCache(): void {
   globalCache?.reset();
   globalCache = undefined;
-  warningLogged = false;
-  sdkModulePromise = undefined;
 }
