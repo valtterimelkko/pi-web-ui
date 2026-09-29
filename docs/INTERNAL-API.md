@@ -1132,7 +1132,10 @@ should not trust an ordinary Pi `completed` receipt whose `agentEndAt` is absent
 `interrupted` is written during startup
 recovery when a process died or was restarted while a run was accepted or
 started; its `errorCode` is `SERVER_RESTART` and it is not automatically
-retried. Receipts contain identity, timestamps, status, stable error codes, bounded run-scoped token usage when a runtime terminal result measures it, additive payload-free output evidence, and payload-free liveness evidence — never prompt text, transcript bodies, event payloads, credentials, cookies, or cumulative session/context totals. `outputEvidence.disposition` distinguishes normalized text, observed terminal no-text, and unknown output evidence; it does not assess semantic answer quality. For Command Code, missing or malformed terminal usage is omitted.
+retried. Since contract `1.51.0` its `interruptionReason` is `drain_timeout`
+when a drain-then-restart announced the cut-off and `server_restart`
+otherwise, and the child's watch fires at boot (see
+[Drain-then-restart](#drain-then-restart)). Receipts contain identity, timestamps, status, stable error codes, bounded run-scoped token usage when a runtime terminal result measures it, additive payload-free output evidence, and payload-free liveness evidence — never prompt text, transcript bodies, event payloads, credentials, cookies, or cumulative session/context totals. `outputEvidence.disposition` distinguishes normalized text, observed terminal no-text, and unknown output evidence; it does not assess semantic answer quality. For Command Code, missing or malformed terminal usage is omitted.
 
 Contract `1.14.0` records the `run-activity-v1` policy and timeouts on new receipts. Only run-correlated agent/message/tool/control event classes advance the inactivity clock; this includes Pi `extension_ui_request` interactions, while `stream_activity` and observer/polling/retention activity do not. Bounded activity snapshots are persisted at most once per second, except attribution-critical control requests, and the latest observation is persisted again at terminalisation. A `TURN_STALLED` receipt retains its stable error code and adds `liveness.watchdog.reason` (`idle`, `absolute`, or `no_activity`) plus the last eligible observation. `no_activity` (additive, 2026-09-15) means the idle window elapsed with **no eligible activity event and no output evidence ever observed**: the run was accepted (and possibly marked started) but nothing ever executed under it. It is not a stalled turn, and for a watch wake it is a *lost wake* — the operator notice is worded and titled accordingly, and `stall-notification.ts` owns that wording. Consumers that switch on `reason` must handle all three values. Up to four `agent_end` observations may be retained, including observations that arrive after terminalisation. Terminal reasons are an explicit low-cardinality allowlist (`api_error_grace` currently); arbitrary runtime reason strings are omitted. Observations never reopen the receipt or reacquire capacity, and synthetic `agent_end` does not itself make either direct or queued Pi work successful. `cessation` is deliberately separate: a terminal signal may be `unconfirmed`, watchdog/restart boundaries remain `unknown`, and a synchronous Pi slash-handler return is `confirmed` only for that documented handler boundary; consumers must not infer arbitrary worker or external-side-effect quiescence. Contract `1.45.0` adds a sibling failure mode: a Pi prompt whose turn never started at all (an extension input-hook swallow) fails fast as `PROMPT_NOT_EXECUTED` after a bounded grace instead of ever reaching the watchdog; a live foreign owner of the session lease refuses the dispatch up front as `409 SESSION_OWNED_BY_OTHER_RUNTIME` (no receipt created), and a dead owner is recovered automatically before dispatch.
 
@@ -1420,6 +1423,63 @@ transition is durable. If receipt storage remains unwritable, existing permits
 stay held rather than bypassing the durability/drain fence; restore storage
 access and inspect the receipt before recovery. Adapter-idle evidence is not
 proof that every tool descendant has stopped.
+
+---
+
+### Drain-then-restart
+
+Contract `1.51.0` (B4). A restart of `pi-web-ui.service` kills every in-process
+child (KillMode=control-group). A drain lets in-flight work finish first, keeps
+new work out, and makes sure parents learn about anything the restart still
+cuts off. Operators do not call this by hand: `npm run production:drain-restart`
+(see [`DEPLOYMENT.md`](../DEPLOYMENT.md#deploy--redeploy-flow)) drives it.
+
+```
+POST   /api/v1/drain   {"reason": "deploy 1.51.0", "timeoutSeconds": 600, "holdSeconds": 300}
+GET    /api/v1/drain
+DELETE /api/v1/drain
+```
+
+- `POST` closes admission for new P2/P3 execution and **blocks** until a verdict:
+  `settled` (no active execution turns — quarantined capacity debt excluded —
+  **and** no nonterminal run receipts: `accepted`, `queued` or `started`) or
+  `timed_out` (the `timeoutSeconds` bound, `0..3600`, default `600`, elapsed).
+  `cutOffRunIds` lists the runs still in flight at a timeout: the restart will
+  cut those off. A `POST` while a drain runs joins it (`joined: true`) and its
+  own parameters are ignored. The body is validated strictly (`reason` 1–500
+  characters, integer seconds, no unknown fields).
+- After the verdict admission **stays closed** until the process restarts. If
+  no restart follows within `holdSeconds` (default `300`), the drain ends by
+  itself, admission reopens, and `GET` reports `lastOutcome.endedBy:
+  "hold_expired"`. `DELETE` ends it at once (`endedBy: "operator"`).
+- While draining, `POST /sessions`, `/sessions/batch`, `/sessions/batch/prompt`,
+  `/sessions/:id/prompt` and `/sessions/:id/transfer` answer
+  `503 SERVER_DRAINING` with `Retry-After: 30`, `reason: "draining"` and a
+  `drain` object, before any receipt exists. Pi goal control and Command Code
+  prompts reach admission and get the same code; their pre-dispatch receipt
+  ends `cancelled` with `errorCode: "SERVER_DRAINING"`. Watch wakes refused by a
+  drain record the transient `ADMISSION_CAPACITY_EXHAUSTED` wake failure and are
+  retried within their bounded retry; the watch firing itself stays in the
+  ledger. Reads, control, abort, watches, approvals, adoption and `DELETE`
+  keep working.
+- The verdict is written to `internal-api-drain.json` beside the run-receipt
+  directory. The next process reads it once at boot (then renames it
+  `internal-api-drain.json.consumed`).
+
+**After the restart.** Every run the restart cut off ends `interrupted` with
+`errorCode: "SERVER_RESTART"` (as before 1.51.0) and `interruptionReason:
+"drain_timeout"` when the drain announced it, or `"server_restart"` when the
+restart was unplanned. The parent learns without polling: for each watched
+child with such runs, the server ingests one synthetic `agent_end` (plus
+`goal_end` when that condition is still pending) through the normal watch path,
+with `data.interruptedByRestart: true`, `runId`, `runIds`, `errorCode` and
+`interruptionReason`. Once-semantics, `dataMatch`, `onFire` wakes and ledger
+persistence all apply; the firing evidence reads `event agent_end (interrupted
+by restart: run <id>, drain_timeout)`. Register
+`{"type": "event_type", "eventType": "agent_end", "dataMatch": {"interruptedByRestart": true}}`
+to watch for interruptions only. A child session whose watch was not active at
+the restart gets no firing; its receipt (`GET /api/v1/runs/:runId`) still shows
+the interruption.
 
 ---
 
