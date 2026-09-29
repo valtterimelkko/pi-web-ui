@@ -3,7 +3,6 @@ import net from 'node:net';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
@@ -42,8 +41,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
  * log, so no test can restart anything real.
  */
 
-const SCRIPTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts');
-const restartScript = path.join(SCRIPTS_DIR, 'restart-pi-web-ui.sh');
 
 const TOKEN = 'drainage-test-bearer-token';
 
@@ -170,16 +167,6 @@ function writeSystemctlPathStub(dir: string, logPath: string): string {
   writeFileSync(stubPath, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> '${logPath}'\nexit 0\n`);
   chmodSync(stubPath, 0o755);
   return stubPath;
-}
-
-/**
- * A bound on each script run so a pathological hang fails the test instead of
- * wedging the whole suite. Healthy runs finish in well under a second.
- */
-const RUN_TIMEOUT_MS = 30_000;
-
-function runScript(script: string, args: string[], env: NodeJS.ProcessEnv) {
-  return spawnSync('bash', [script, ...args], { encoding: 'utf8', timeout: RUN_TIMEOUT_MS, env });
 }
 
 describe('restart drainage — capacity pre-flight before production restarts', () => {
