@@ -134,7 +134,7 @@ import {
   resolveNativeSessionArtifact,
   type NativeRuntime,
 } from '../native-sessions.js';
-import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
+import { AdmissionCapacityError, AdmissionController, admissionRefusalHttpStatus } from '../admission-controller.js';
 import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
 import { SessionDisposalRegistry } from '../session-disposal.js';
 import { RuntimeOpError } from './batch-helpers.js';
@@ -455,6 +455,9 @@ export interface SessionRoutesDeps {
   admissionController?: AdmissionController;
   /** Optional bounded control lane for P0/P1 handlers (defaults to a bounded instance). */
   controlLane?: BoundedControlLane;
+  /** B2: separate bounded lane for session disposal (DELETE, abort), so a
+   * saturated control lane cannot starve the operations that free memory. */
+  disposalLane?: BoundedControlLane;
   /** Optional per-session disposal registry (defaults to a new instance). */
   disposal?: SessionDisposalRegistry;
   /** Pi providers denied for Internal API agent execution. */
@@ -535,6 +538,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // via deps.controlLane. (emergency/control ops bypass execution admission but
   // must NOT be unbounded — this lane is their guardrail.)
   const controlLane = deps.controlLane ?? new BoundedControlLane(8, 5000, 16);
+  // B2 (R1 finding): session disposal (DELETE) frees memory, so it must stay
+  // available at every pressure level. It is exempt from the critical-memory
+  // control floor and runs in its own small lane, so neither a control flood
+  // nor the floor can refuse the operation that relieves pressure. (Abort is
+  // floor-exempt too, but stays on the control lane.)
+  const disposalLane = deps.disposalLane ?? new BoundedControlLane(4, 5000, 32);
+
+  /** B2: one response shape for every admission refusal: 503 for pressure
+   * (memory, PID, host, heap, event-loop lag, draining), 429 for turn-slot
+   * saturation; ADMISSION_CAPACITY_EXHAUSTED + reason + Retry-After. */
+  function sendAdmissionRefusal(res: ServerResponse, error: unknown, extra: Record<string, unknown> = {}): void {
+    const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
+    res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
+    sendJson(res, admissionRefusalHttpStatus(capacityError.reason), {
+      ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message),
+      reason: capacityError.reason,
+      retryAfterSeconds: capacityError.retryAfterSeconds,
+      ...extra,
+    });
+  }
 
   /** Run a short control-side operation without consuming an execution permit.
    * Joined steering only owns delivery into an existing runtime turn; the
@@ -1519,6 +1542,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         throw error;
       }
+    }
+    // B2: creates grow memory too (R1), so resource pressure and draining refuse
+    // them before any runtime work; turn-slot saturation never does.
+    try {
+      admission.assertCreateAdmissible(runtime);
+    } catch (error) {
+      if (!(error instanceof AdmissionCapacityError)) throw error;
+      sendAdmissionRefusal(res, error);
+      return;
     }
     let base: CreateSessionResponse | null = null;
     let createdPiSessionPath: string | undefined;
@@ -3239,9 +3271,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       rawLease = await admission.acquire('commandcode', 'P2');
     } catch (error) {
       await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
-      const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
-      res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
-      sendJson(res, 429, { ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message), reason: capacityError.reason, retryAfterSeconds: capacityError.retryAfterSeconds, runId });
+      sendAdmissionRefusal(res, error, { runId });
       return;
     }
     let released = false;
@@ -3590,19 +3620,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         } catch (error) {
           directClaim?.release();
           await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
-          const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
-          res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
-          // Pressure refusals (memory/pid/host) are 503 service-unavailable — the
-          // server is under resource pressure and genuinely cannot service the
-          // turn. Capacity refusals (global/runtime limit) are 429 — retryable
+          // Pressure refusals (memory/pid/host/heap/lag) and draining are 503
+          // service-unavailable — the server cannot safely service the turn.
+          // Capacity refusals (global/runtime limit) are 429 — retryable
           // admission throttling. Both carry ADMISSION_CAPACITY_EXHAUSTED + reason.
-          const pressureStatus = capacityError.reason.endsWith('_pressure') ? 503 : 429;
-          sendJson(res, pressureStatus, {
-            ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message),
-            reason: capacityError.reason,
-            retryAfterSeconds: capacityError.retryAfterSeconds,
-            runId,
-          });
+          sendAdmissionRefusal(res, error, { runId });
           return;
         }
       }
@@ -6695,6 +6717,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Session transfer to Command Code is not supported through the Internal API'));
       return;
     }
+    // B2: a transfer that creates a new target session is a create.
+    if (body.createNew && targetSdk) {
+      try {
+        admission.assertCreateAdmissible(targetSdk as SessionRuntime);
+      } catch (error) {
+        if (!(error instanceof AdmissionCapacityError)) throw error;
+        sendAdmissionRefusal(res, error);
+        return;
+      }
+    }
 
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry) {
@@ -6867,6 +6899,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const body: BatchCreateRequest = { sessions: parsed.data.sessions as BatchCreateEntry[] };
 
     const results = await mapWithConcurrency(body.sessions, BATCH_CONCURRENCY_LIMIT, async (entry, index) => {
+      // B2: each entry is a create; pressure can change mid-batch, so gate per entry.
+      try {
+        admission.assertCreateAdmissible(entry.runtime as SessionRuntime);
+      } catch (error) {
+        if (!(error instanceof AdmissionCapacityError)) throw error;
+        return {
+          index,
+          success: false,
+          runtime: entry.runtime,
+          error: {
+            code: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED,
+            reason: error.reason,
+            message: error.message,
+            retryAfterSeconds: error.retryAfterSeconds,
+          },
+        };
+      }
       try {
         // Reuse the single-session create logic by invoking it against a
         // throwaway response collector, then translate to a result item.
@@ -7692,6 +7741,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       quarantinedRuns: runReceipts.getQuarantinedCount(),
       oldestActiveRunStartedAt: runReceipts.getOldestActiveRunStartedAt(),
       control: { inFlight: controlLane.inFlight, queued: controlLane.queued },
+      disposalLane: { inFlight: disposalLane.inFlight, queued: disposalLane.queued },
       disposalOwners: disposal.getCounts(),
     });
   }
@@ -7723,10 +7773,38 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       try { await h(...a); } finally { slot.release(); }
     };
 
+  /**
+   * B2: memory-freeing operations — session disposal (DELETE, on its own
+   * disposal lane) and abort (stopping a running turn, on the control lane).
+   * Like wrapControl but exempt from the critical-memory floor: refusing them
+   * at critical memory refuses the operations that free it (R1). They never
+   * consult execution admission, so heap pressure, event-loop lag and draining
+   * cannot refuse them either.
+   */
+  const wrapMemoryRelief = <A extends unknown[]>(lane: BoundedControlLane, h: (...a: A) => Promise<void>) =>
+    async (...a: A): Promise<void> => {
+      const res = a[1] as ServerResponse;
+      let slot: { release: () => void };
+      try {
+        slot = await lane.acquire();
+      } catch (err) {
+        if (err instanceof ControlLaneFullError) {
+          try {
+            res.setHeader('Retry-After', '2');
+            sendJson(res, 503, { error: 'Control lane saturated; retry shortly', code: 'CONTROL_LANE_FULL', retryAfterSeconds: 2 });
+          } catch { /* response already closed */ }
+          return;
+        }
+        throw err;
+      }
+      try { await h(...a); } finally { slot.release(); }
+    };
+
   return {
     ready,
     shutdown,
     controlLane,
+    disposalLane,
     disposal,
     broker,
     reapplyRetentionForSession: (sessionId: string) => pinExpiry?.reapplyForSession(sessionId) ?? Promise.resolve(),
@@ -7738,11 +7816,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleGetSessionEvidence: wrapControl(handleGetSessionEvidence),
     handleGetRunReceipt: wrapControl(handleGetRunReceipt),
     handleGetSessionHistory: wrapControl(handleGetSessionHistory),
-    handleDeleteSession: wrapControl(handleDeleteSession),
+    handleDeleteSession: wrapMemoryRelief(disposalLane, handleDeleteSession),
     handleSendPrompt,
     handleGetSessionGoal,
     handleSessionGoalControl: wrapControl(handleSessionGoalControl),
-    handleAbort: wrapControl(handleAbort),
+    handleAbort: wrapMemoryRelief(controlLane, handleAbort),
     handleSessionControl: wrapControl(handleSessionControl),
     handleRespondApproval: wrapControl(handleRespondApproval),
     // Contract 1.40.0: session adoption (P1 control-lane bounded).

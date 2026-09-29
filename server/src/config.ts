@@ -130,6 +130,60 @@ export function parseNonnegativeInteger(raw: string | undefined, fallback: numbe
   return Number(raw);
 }
 
+/** A fraction in (0, 1]; throws on anything else (fail loudly at startup). */
+export function parseFraction(raw: string | undefined, name: string): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = Number(raw.trim());
+  if (!Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`${name} must be a number in (0, 1].`);
+  }
+  return value;
+}
+
+/**
+ * B2 heap- and lag-aware admission knobs. Unset → undefined, so the
+ * controller's evidence-based defaults apply (heap 0.75/0.65 of
+ * heap_size_limit, 64 MiB per turn; lag 300 ms sustained over 2 A2 readings,
+ * recovery at half the threshold unless set).
+ */
+export function resolveAdmissionHeapLagEnv(env: NodeJS.ProcessEnv = process.env): {
+  internalApiAdmissionHeapPressureFraction?: number;
+  internalApiAdmissionHeapRecoveryFraction?: number;
+  internalApiAdmissionReservedHeapBytesPerTurn?: number;
+  internalApiAdmissionLagThresholdMs?: number;
+  internalApiAdmissionLagRecoveryMs?: number;
+  internalApiAdmissionLagSustainedReadings?: number;
+  /** Lag knobs that were invalid and fell back to the derived defaults (logged at load). */
+  internalApiAdmissionConfigWarnings?: string[];
+} {
+  const warnings: string[] = [];
+  const int = (name: string): number | undefined => {
+    const raw = env[name];
+    return raw === undefined || raw.trim() === '' ? undefined : parsePositiveInteger(raw, 1, name);
+  };
+  // Correction 01 (brief amendment): the lag knobs never stop startup; an
+  // invalid value warns and falls back to the derived default.
+  const lagInt = (name: string): number | undefined => {
+    const raw = env[name];
+    if (raw === undefined || raw.trim() === '') return undefined;
+    if (!/^[1-9]\d*$/.test(raw.trim())) {
+      warnings.push(`${name}='${raw}' is not a positive integer; using the derived default.`);
+      return undefined;
+    }
+    return Number(raw.trim());
+  };
+  const heapMb = int('INTERNAL_API_ADMISSION_HEAP_RESERVED_MB_PER_TURN');
+  return {
+    internalApiAdmissionHeapPressureFraction: parseFraction(env.INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION, 'INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION'),
+    internalApiAdmissionHeapRecoveryFraction: parseFraction(env.INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION, 'INTERNAL_API_ADMISSION_HEAP_RECOVERY_FRACTION'),
+    internalApiAdmissionReservedHeapBytesPerTurn: heapMb === undefined ? undefined : heapMb * 1024 * 1024,
+    internalApiAdmissionLagThresholdMs: lagInt('INTERNAL_API_ADMISSION_LAG_P99_MS'),
+    internalApiAdmissionLagRecoveryMs: lagInt('INTERNAL_API_ADMISSION_LAG_RECOVERY_MS'),
+    internalApiAdmissionLagSustainedReadings: lagInt('INTERNAL_API_ADMISSION_LAG_SUSTAINED_READINGS'),
+    internalApiAdmissionConfigWarnings: warnings.length > 0 ? warnings : undefined,
+  };
+}
+
 /**
  * Rate-limit cap. Accepts both documented names: RATE_LIMIT_MAX (legacy,
  * undocumented in env files) and RATE_LIMIT_MAX_REQUESTS (what every env file
@@ -367,6 +421,14 @@ export interface ServerConfig {
   /** Conservative projected PID/task reservation per admitted turn. When
    * `pids.current + this > pids.max`, execution is refused with `pid_pressure`. */
   internalApiAdmissionReservedPidsPerTurn?: number;
+  /** B2 heap/lag admission knobs (see resolveAdmissionHeapLagEnv). */
+  internalApiAdmissionHeapPressureFraction?: number;
+  internalApiAdmissionHeapRecoveryFraction?: number;
+  internalApiAdmissionReservedHeapBytesPerTurn?: number;
+  internalApiAdmissionLagThresholdMs?: number;
+  internalApiAdmissionLagRecoveryMs?: number;
+  internalApiAdmissionLagSustainedReadings?: number;
+  internalApiAdmissionConfigWarnings?: string[];
   /** Pi providers hidden and denied for agent execution on the Internal API only. */
   internalApiBlockedPiProviders: string[];
   /** Feature-gated, server-local Command Code adapter. */
@@ -589,6 +651,11 @@ export const config: ServerConfig = {
   internalApiAdmissionReservedPidsPerTurn: process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN
     ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN')
     : undefined,
+  ...((): ReturnType<typeof resolveAdmissionHeapLagEnv> => {
+    const admission = resolveAdmissionHeapLagEnv(process.env);
+    for (const warning of admission.internalApiAdmissionConfigWarnings ?? []) console.warn(`[config] ${warning}`);
+    return admission;
+  })(),
   internalApiBlockedPiProviders: parseBlockedPiProviders(process.env.INTERNAL_API_BLOCKED_PI_PROVIDERS),
   commandCodeEnabled: process.env.COMMAND_CODE_ENABLED === 'true',
   commandCodeExecutablePath: parseAbsolutePath(process.env.COMMAND_CODE_EXECUTABLE_PATH, '/root/.npm-global/bin/cmd', 'COMMAND_CODE_EXECUTABLE_PATH'),

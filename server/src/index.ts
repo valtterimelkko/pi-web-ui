@@ -191,6 +191,12 @@ async function initialize(): Promise<void> {
             admissionHostMinimumHeadroomBytes: config.internalApiAdmissionHostMinimumHeadroomBytes,
             admissionReservedBytesPerTurn: config.internalApiAdmissionReservedBytesPerTurn,
             admissionReservedPidsPerTurn: config.internalApiAdmissionReservedPidsPerTurn,
+            admissionHeapPressureFraction: config.internalApiAdmissionHeapPressureFraction,
+            admissionHeapRecoveryFraction: config.internalApiAdmissionHeapRecoveryFraction,
+            admissionReservedHeapBytesPerTurn: config.internalApiAdmissionReservedHeapBytesPerTurn,
+            admissionLagThresholdMs: config.internalApiAdmissionLagThresholdMs,
+            admissionLagRecoveryMs: config.internalApiAdmissionLagRecoveryMs,
+            admissionLagSustainedReadings: config.internalApiAdmissionLagSustainedReadings,
             commandCodeConcurrency: config.commandCodeConcurrency,
             enabled: config.internalApiEnabled,
             // Notify all WebSocket clients when a session is created via the API

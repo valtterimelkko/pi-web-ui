@@ -53,6 +53,7 @@ export class HealthTelemetry {
   private timer?: ReturnType<typeof setInterval>;
   private sampling = false;
   private failedAppends = 0;
+  private readonly readingListeners = new Set<(readings: HealthReadings) => void>();
 
   constructor(options: HealthTelemetryOptions) {
     this.config = options.config;
@@ -85,6 +86,17 @@ export class HealthTelemetry {
   /** Metrics lines that could not be persisted (alerts are unaffected). */
   get appendFailures(): number {
     return this.failedAppends;
+  }
+
+  /**
+   * B2: read-only observer of each collected reading (admission's
+   * event_loop_lag gate consumes the lag p99). Sampling, persistence and
+   * alerting are unchanged; a throwing listener is isolated. Returns an
+   * unsubscribe function.
+   */
+  onReading(listener: (readings: HealthReadings) => void): () => void {
+    this.readingListeners.add(listener);
+    return () => { this.readingListeners.delete(listener); };
   }
 
   /** Registers process sources (merged; a later registrar cannot drop a field). */
@@ -138,6 +150,14 @@ export class HealthTelemetry {
       logger.warn(`[HealthTelemetry] sample failed: ${error instanceof Error ? error.message : String(error)}`);
       this.sampling = false;
       return undefined;
+    }
+
+    for (const listener of this.readingListeners) {
+      try {
+        listener(readings);
+      } catch (error) {
+        logger.warn(`[HealthTelemetry] reading listener failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
     // Persistence and alerting are independent (correction 02, finding 3): a

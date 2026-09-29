@@ -52,7 +52,14 @@ import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from './unix-socket-owner.js';
 import { getWorkerPool } from '../routes/sessions.js';
-import { AdmissionController, admissionStartupStatus, type AdmissionControllerOptions } from './admission-controller.js';
+import {
+  AdmissionController,
+  admissionStartupStatus,
+  connectAdmissionToLagReadings,
+  createValidationPressureOverride,
+  type AdmissionControllerOptions,
+} from './admission-controller.js';
+import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
 
 const logger = createLogger('InternalAPI');
@@ -96,6 +103,13 @@ export interface InternalApiConfig {
   admissionHostMinimumHeadroomBytes?: number;
   admissionReservedBytesPerTurn?: number;
   admissionReservedPidsPerTurn?: number;
+  /** B2 heap/lag admission knobs (see AdmissionControllerOptions). */
+  admissionHeapPressureFraction?: number;
+  admissionHeapRecoveryFraction?: number;
+  admissionReservedHeapBytesPerTurn?: number;
+  admissionLagThresholdMs?: number;
+  admissionLagRecoveryMs?: number;
+  admissionLagSustainedReadings?: number;
   /** Command Code turn concurrency; mirrored as the commandcode admission limit. */
   commandCodeConcurrency?: number;
 }
@@ -119,6 +133,12 @@ export function resolveInternalApiAdmissionOptions(input: Pick<InternalApiConfig
   | 'admissionHostMinimumHeadroomBytes'
   | 'admissionReservedBytesPerTurn'
   | 'admissionReservedPidsPerTurn'
+  | 'admissionHeapPressureFraction'
+  | 'admissionHeapRecoveryFraction'
+  | 'admissionReservedHeapBytesPerTurn'
+  | 'admissionLagThresholdMs'
+  | 'admissionLagRecoveryMs'
+  | 'admissionLagSustainedReadings'
   | 'commandCodeConcurrency'
 >): AdmissionControllerOptions {
   return {
@@ -128,6 +148,12 @@ export function resolveInternalApiAdmissionOptions(input: Pick<InternalApiConfig
     hostMinimumHeadroomBytes: input.admissionHostMinimumHeadroomBytes,
     reservedBytesPerTurn: input.admissionReservedBytesPerTurn,
     reservedPidsPerTurn: input.admissionReservedPidsPerTurn,
+    heapPressureFraction: input.admissionHeapPressureFraction,
+    heapRecoveryFraction: input.admissionHeapRecoveryFraction,
+    reservedHeapBytesPerTurn: input.admissionReservedHeapBytesPerTurn,
+    lagThresholdMs: input.admissionLagThresholdMs,
+    lagRecoveryMs: input.admissionLagRecoveryMs,
+    lagSustainedReadings: input.admissionLagSustainedReadings,
     runtimeMaxActiveTurns: input.commandCodeConcurrency === undefined
       ? undefined
       : { commandcode: input.commandCodeConcurrency },
@@ -154,6 +180,8 @@ export class InternalApiServer {
   private notificationManager: NotificationManager | null = null;
   private socketOwner: UnixSocketOwner | null = null;
   private sessionRoutesShutdown: (() => Promise<void>) | null = null;
+  /** B2: unsubscribes admission from A2 lag readings on stop. */
+  private admissionLagUnsubscribe: (() => void) | null = null;
   /** The per-session event broker owned by the session routes; null before start. */
   private eventBroker: import('../internal-api/event-broker.js').InternalApiEventBroker | null = null;
   private onBrowserMessage?: (message: Record<string, unknown>) => void;
@@ -284,18 +312,31 @@ export class InternalApiServer {
       `interactiveReserve=${r.interactiveReserve} controlReserve=${r.controlReserve} ` +
       `executionCapacity=${r.executionCapacity} minHeadroom=${r.minimumHeadroomBytes} ` +
       `reserved/turn=${r.reservedBytesPerTurn} reservedPids/turn=${r.reservedPidsPerTurn} ` +
-      `hostHeadroom=${r.hostMinimumHeadroomBytes}` +
+      `hostHeadroom=${r.hostMinimumHeadroomBytes} ` +
+      `heap=${r.heapPressureFraction}/${r.heapRecoveryFraction} reservedHeap/turn=${r.reservedHeapBytesPerTurn} ` +
+      `lag=${r.lagThresholdMs}ms/${r.lagRecoveryMs}ms×${r.lagSustainedReadings}` +
       (admissionStatus.prodFallbackKnobs.length ? ` [prod-fallback: ${admissionStatus.prodFallbackKnobs.join(',')}]` : '') +
       (admissionStatus.usingDefaults ? ' [CPU-defaults]' : ''),
     );
     if (admissionStatus.warning) logger.warn(`[InternalAPI] ${admissionStatus.warning}`);
+    for (const warning of r.warnings) logger.warn(`[InternalAPI] ${warning}`);
+    // B2: validation-only pressure injection (inert unless PI_WEB_UI_VALIDATION_MODE=true).
+    // Correction 01: guarded by the validation child's identity record, not NODE_ENV.
+    const pressureOverride = createValidationPressureOverride(process.env, {
+      onRefused: (reason) => logger.warn(`[InternalAPI] admission: ${reason}`),
+    });
+    if (pressureOverride) logger.warn('[InternalAPI] admission: VALIDATION pressure override file active (INTERNAL_API_ADMISSION_TEST_PRESSURE_FILE) — disposable validation server only');
     const admissionController = new AdmissionController({
       ...admissionStatus.options,
+      pressureOverride,
       configExplicitness: {
         explicitKnobs: admissionStatus.explicitKnobs,
         prodFallbackKnobs: admissionStatus.prodFallbackKnobs,
       },
     });
+    // B2: the event_loop_lag gate consumes the A2 sampler's readings.
+    this.admissionLagUnsubscribe?.();
+    this.admissionLagUnsubscribe = connectAdmissionToLagReadings(admissionController, getHealthTelemetry());
 
     // Create routes
     const sessionRoutes = createSessionRoutes({
@@ -550,6 +591,8 @@ export class InternalApiServer {
       await notificationManager?.waitForIdle();
       this.notificationManager = null;
       this.multiSessionManager.setSessionMaterializedHandler(undefined);
+      this.admissionLagUnsubscribe?.();
+      this.admissionLagUnsubscribe = null;
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch(() => { /* preserve startup error */ });
         this.sessionRoutesShutdown = null;
@@ -605,6 +648,8 @@ export class InternalApiServer {
       await notificationManager?.waitForIdle().catch((error) => failures.push(error));
       this.notificationManager = null;
       this.multiSessionManager.setSessionMaterializedHandler(undefined);
+      this.admissionLagUnsubscribe?.();
+      this.admissionLagUnsubscribe = null;
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch((error) => failures.push(error));
         this.sessionRoutesShutdown = null;
