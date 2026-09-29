@@ -154,12 +154,14 @@ function startFixture(port) {
       bSent += 64;
       record.bytes = bSent;
       const elapsed = Date.now() - bStarted;
-      if (!fixtureState.aResolved || elapsed < runawayPlan.bMinStreamMs) {
+      const holdCap = runawayPlan.bMinStreamMs + 30_000; // bounded hold: a wedged A must not deadlock B
+      if ((!fixtureState.aResolved || elapsed < runawayPlan.bMinStreamMs) && elapsed < holdCap) {
         setTimeout(writeB, 33);
-      } else if (!graceScheduled) {
+      } else if (!graceScheduled && fixtureState.aResolved && elapsed < holdCap) {
         graceScheduled = true;
         setTimeout(writeB, 500); // keep streaming 500 ms past A's resolution, then finish
       } else {
+        record.heldUntilAResolved = fixtureState.aResolved;
         record.streamMs = Date.now() - bStarted;
         record.finished = Date.now();
         finishClean(200);
@@ -172,12 +174,12 @@ function startFixture(port) {
 
 // ─── Internal API client over the unix socket ────────────────────────────────
 
-function apiRequest(socketPath, token, method, apiPath, body) {
+function apiRequest(socketPath, token, method, apiPath, body, timeoutMs = 300_000) {
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const socket = net.connect(socketPath);
     const chunks = [];
-    socket.setTimeout(300_000);
+    socket.setTimeout(timeoutMs);
     socket.on('connect', () => {
       const headers = [
         `${method} ${apiPath} HTTP/1.1`,
@@ -237,7 +239,9 @@ async function createSession(socketPath, token, label) {
 
 async function promptAndWait(socketPath, token, sessionId, message) {
   const started = Date.now();
-  const response = await apiRequest(socketPath, token, 'POST', `/api/v1/sessions/${sessionId}/prompt`, { message });
+  // Longest legitimate runaway window is ~35 s; 120 s surfaces a wedge fast
+  // (run 3 lesson: an unresolved dispatch must not eat 300 s per scenario).
+  const response = await apiRequest(socketPath, token, 'POST', `/api/v1/sessions/${sessionId}/prompt`, { message }, 120_000);
   return { response, wallMs: Date.now() - started };
 }
 
@@ -345,6 +349,7 @@ async function runScenario(socketPath, token) {
       // fixture holds B's stream until aResolved + 500 ms, so this is
       // structural, not timing luck.
       bSpannedARun: bResolvedAt >= aResolvedAt,
+      bHeldUntilAResolved: bStreamRecord?.heldUntilAResolved ?? null,
       bStreamMs: bStreamRecord?.streamMs ?? null,
       bStreamedBytes: bStreamRecord?.bytes ?? null,
     },
