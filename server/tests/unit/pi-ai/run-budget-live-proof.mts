@@ -67,7 +67,10 @@ const scenario = arg('scenario', 'all');
 const chunkBytes = Number(arg('chunk-bytes', '4096'));
 const paceChunkMs = Number(arg('pace-chunk-ms', '3'));
 const runawayBytes = Number(arg('runaway-bytes', String(17 * 1024 * 1024))); // past the 16 MiB default
-const controlOutputTokens = Number(arg('control-output-tokens', '600000')); // past the 500,000 default
+// Cap-off control: both knobs are set to 0 in that scenario, so this is a positive
+// control for the streamed-byte cap only. 600,000 is BELOW the 1,000,000 token default,
+// so it does not prove the token cap is off; the `tokens` scenario covers that cap.
+const controlOutputTokens = Number(arg('control-output-tokens', '600000'));
 // B3c byte-cap sizing (reuses V2a's driver-cap-param.diff verbatim): override
 // PI_RUN_BUDGET_MAX_STREAMED_BYTES for the `bytes` scenario only (its
 // serveOnce normally passes {} so the server default applies).
