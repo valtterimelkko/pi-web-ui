@@ -112,6 +112,7 @@ function startFixture(port) {
         if (res.destroyed) return; // the budget aborted the request — stop feeding
         chunk({ ...chunkBody, choices: [{ index: 0, delta: { content: payload }, finish_reason: null }] });
         sent += chunkBytes;
+        record.bytes = sent; // track continuously so an aborted run still shows how much streamed
         if (sent < targetBytes) {
           if (paceChunkMs > 0) setTimeout(writeOne, paceChunkMs);
           else if (res.writableNeedDrain) setImmediate(writeOne);
