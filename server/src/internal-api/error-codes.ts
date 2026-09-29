@@ -95,6 +95,9 @@ export const ErrorCode = {
   // (2026-09-12 stall class, bounded from pi-web-ui's side; upstream packages
   // stay pristine). Terminal on the run receipt.
   RUN_BUDGET_EXCEEDED: 'RUN_BUDGET_EXCEEDED',
+  // Contract 1.51.0 (B4): the server is draining before a planned restart; new
+  // P2/P3 creates and prompts are refused, control and DELETE keep working.
+  SERVER_DRAINING: 'SERVER_DRAINING',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -486,6 +489,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'A runaway generation kept streaming tool-call argument deltas past the budget (the 2026-09-12 stall class); pi-web-ui aborted the turn via the runtime’s public abort to bound synchronous per-delta parsing.',
     hint: 'The receipt persists only this code. Which cap tripped (scope), the cap and the observed size are on the session event stream: the `tool_args_budget_exceeded` event carries `data.scope`, `data.capChars` and `data.observedChars`, and the server log carries a human-readable `ToolArgsBudget` warning. Real tool arguments are normally a few KB; resending as-is will breach again — reduce the requested payload or raise PI_TOOL_ARGS_MAX_CALL_CHARS / PI_TOOL_ARGS_MAX_TURN_CHARS.',
     docs: 'docs/OBSERVABILITY.md#run-budgets',
+  },
+  [ErrorCode.SERVER_DRAINING]: {
+    httpStatus: 503,
+    description: 'The server is draining before a planned restart and accepts no new session creates or prompts.',
+    cause: 'An operator started drain-then-restart (POST /api/v1/drain): admission refuses new P2/P3 execution while in-flight runs settle, until the restart or until the drain is cancelled or its hold window lapses.',
+    hint: 'Respect Retry-After and retry after the restart; GET /api/v1/drain shows the drain state. Control, abort, watches and DELETE keep working. Runs the restart cuts off end `interrupted` (SERVER_RESTART, interruptionReason drain_timeout) and their watches fire at boot.',
+    docs: 'docs/INTERNAL-API.md#drain-then-restart',
   },
 };
 
