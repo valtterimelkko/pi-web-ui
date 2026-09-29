@@ -1,6 +1,6 @@
 # Orchestration Scaling Readiness Plan
 
-> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **2026-09-29 follow-up (owner rule: no local patches to upstream packages):** both local patches are removed. B1.2b replaces the pi-core extension-factory patch with the public SDK API; B3a (the tool-argument part of B3) replaces the pi-ai toolstream patch with a pi-web-ui-side budget; `subagent` shipped with owner option B (B1.3). All were deployed at the 2026-09-29 10:10 UTC restart. **B1.2 production telemetry:** 0 spike minutes in the first 4 h of the patch-free build (baseline 0.77/h; §9). **Wave 2 (B2, B3b, B4) is merged** (`d017f145`, contract 1.51.0; every lane Luna-reviewed and parent-verified) and **in production since the owner-approved restart on 2026-09-29 14:44 UTC** (build `1103ef11`; restarted with `production:drain-restart`, which used its legacy pre-flight because the old server had no drain endpoint). **Next: R2.** Server-side fixes reach production only at an owner-approved restart.
+> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **2026-09-29 follow-up (owner rule: no local patches to upstream packages):** both local patches are removed. B1.2b replaces the pi-core extension-factory patch with the public SDK API; B3a (the tool-argument part of B3) replaces the pi-ai toolstream patch with a pi-web-ui-side budget; `subagent` shipped with owner option B (B1.3). All were deployed at the 2026-09-29 10:10 UTC restart. **B1.2 production telemetry:** 0 spike minutes in the first 4 h of the patch-free build (baseline 0.77/h; §9). **Wave 2 (B2, B3b, B4) is merged** (`d017f145`, contract 1.51.0; every lane Luna-reviewed and parent-verified) and **in production since the owner-approved restart on 2026-09-29 14:44 UTC** (build `1103ef11`; restarted with `production:drain-restart`, which used its legacy pre-flight because the old server had no drain endpoint). **R2 decisions held 2026-09-29 (§8):** the owner accepted the review session's recommendations, and an **R2 follow-up wave** is added (§6, after Review moment R2). **Next: the R2 follow-up wave. It starts with V2, the independent live re-runs that mark B2, B3b and B4 shipped. B4.1 (the drain misses extension-driven and browser turns) and B5 (dispose runs extension shutdown) must ship before orchestration is scaled up. Then Stage C.** Server-side fixes reach production only at an owner-approved restart.
 > **Created:** 2026-09-26 from the Pi Web UI / Internal API deep review (owner-requested).
 > **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). **Review moments** are held with the owner, in that session or, if its context is exhausted, by a fresh Opus agent that first follows §7 (handoff).
 > **Evidence:** [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md).
@@ -106,6 +106,19 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 - **`subagent`: option B.** One process-wide background registry keyed by session, with delivery routed to the owning session (B1.3).
 - Production restarts are authorised for these fixes, still with activeTurns 0, a board check and `production:lock`.
 
+**Owner decisions recorded 2026-09-29 (R2; the owner accepted the review session's recommendations):**
+- **Heap gate:** 0.75 of `heap_size_limit` stays. Production heap has never exceeded 515 MiB (about 11% of the limit).
+- **Lag gate:** 300 ms stays, unless the V2 fan-out probe shows an ordinary parent fan-out tripping it. If it does, B2.1 moves the gate to a genuinely sustained statistic and keeps p99 for A2 alerts.
+- **Production lag and watcher growth: closed, provisionally.** Lag: 0 spike minutes in 4.5 h before the wave-2 restart and none since it (baseline 0.77/h). Heap since the restart: 93–185 MiB. Watcher: B1.1. Load has been light (mean activeTurns ≤ 0.41), so E2 re-checks both under orchestration load.
+- **F1 is fixed as step B5.** Pi Web UI emits the extension shutdown event on dispose through the SDK's public API.
+- **Wave-2 residuals:**
+  - B3a's unpaced tool-argument stall is accepted; D1 is its structural fix. The review session drafts an upstream issue about quadratic partial-JSON parsing, and the owner submits it.
+  - The ~250–670 ms finalisation stall at 16–18 MB messages goes to B3c, which re-sizes the 16 MiB byte cap.
+  - The 17.8 MB dispatch whose response never arrived goes to the E1 ledger and into C2's scope.
+  - The weekly refresh's 60 s job timeout becomes a small item.
+- **Stage C: go, with a condition.** B4.1 and B5 (and B2.1 if V2 triggers it) ship before the owner scales orchestration up, because they are robustness gaps inside Stage B's own intent. C4 and C5 may run alongside the follow-up wave: they touch other code.
+- **Two new process rules** are added to §4: an intent check of every step's blind spots, and live proofs that use the owner's real child pattern.
+
 ## 4. Execution contract (applies to every step)
 
 **Anti-premature-victory rules.** A step is done only when **every** item in its *Definition of victory* is met **and** the evidence bundle below exists. "Tests pass" alone is never victory for a step with live behaviour. Mocked fetch, fixtures standing in for real runtimes, or serial runs standing in for concurrent ones do not count unless the step says so. A reviewer (the owner's review session or an independent reviewer) re-runs at least the live validation before a step is marked shipped. Self-reported PASS without a re-run is `claimed`, not `shipped`.
@@ -120,6 +133,16 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 - Isolation traps on this host: never hand-roll a server on production dirs; the Pi SDK reads `PI_CODING_AGENT_DIR`; never set `SESSION_DIR`; `NOTIFICATIONS_DIR` is not isolated by `validate:server`; workspaces go under `/root`.
 - Run the repository gates from `AGENTS.md` (docs checks, lint, typecheck, build, relevant tests) before handing in.
 - Concurrent writers use isolated worktrees with explicit owned and no-touch paths.
+
+**Intent check of blind spots (added at R2).** Every evidence bundle's "not done", "residual risks" and "cannot see" items are adjudicated against §1.1's definition of ready before the step is marked shipped. For each item, the reviewer or parent records one of three outcomes: accepted, with the reason; moved to a named step; or blocking. Found at R2: B4.md stated that the drain cannot see goal-engine or browser turns, but nobody weighed that against "children are not killed by deploys". That became B4.1.
+
+**Realistic child pattern in live proofs (added at R2).** A step that touches lifecycle, admission, deploys or budgets proves itself on at least one child in the owner's current real pattern, besides plain prompted children:
+- goal-armed;
+- the real extension set loaded, as byte-identical copies in an isolated agent directory (B1.3-live.md shows how);
+- a fresh worktree as its working directory;
+- a background shell or a watch where the step could affect them.
+
+**Wave closure includes the independent live re-run.** The parent schedules a reviewer's live re-run (not the executor's) before a wave is reported as shipped, rather than leaving it to the next review moment.
 
 **Measurement discipline.** Re-measurements at review moments reuse the same instruments: the heap-soak harness (`scripts/heap-soak/`), the Jev specs (pinned `jev-1.13.0`), and the journal/stop-audit counts in §2. That keeps before and after comparable.
 
@@ -138,7 +161,12 @@ Stage B  Contain            Wave 1 (shipped): B0 soak-harness fixes; B1 fix both
                                     B3 per-run budgets (runaway generation cannot starve the loop)
                                     B4 drain-then-restart deploys
             │
-         ── Review moment R2: confirm soak on the Stage B build; go/no-go for Stage C ──
+         ── Review moment R2 (decisions held 2026-09-29): thresholds, residuals, conditional go for Stage C ──
+            │
+         R2 follow-up wave: V2 independent live re-runs of B2/B3b/B4 (+ fan-out, byte-cap, drain-gap and F1 probes)
+                            B4.1 drain sees every busy session   B5 dispose runs extension shutdown (F1)
+                            B2.1 lag-gate statistic (only if V2's fan-out probe trips the gate)   B3c byte-cap default
+                            ── gate before scaling orchestration up: V2, B4.1, B5 (and B2.1) shipped ──
             │
 Stage C  Parent ergonomics  C1 thin parent client   C2 busy follow-up + never-started runs
          and child quality  C3 child completion receipt + verify   C4 dispatch preflight
@@ -164,6 +192,7 @@ Within a stage, steps without a dependency may run in parallel with separate own
 - A2 is independent and is worth landing early: it gives the production before-and-after for B1;
 - B3 and B4 are independent of B0–B2;
 - B0 and B1 touch disjoint paths (`scripts/heap-soak/` against `server/src/pi/` plus `pi-enhancement`), so they can run in parallel worktrees;
+- R2 follow-up wave: V2 comes first, because its probes decide B2.1 and B3c and confirm the gaps B4.1 and B5 fix. B4.1 (drain controller, restart reconciliation, Pi busy state) and B5 (Pi dispose paths in `server/src/pi/`) touch disjoint paths and may run in parallel worktrees. B2.1 touches admission and A2 only. C4 and C5 may start alongside the follow-up wave. C2 waits for B4.1, because both touch the prompt and receipt path;
 - C1 depends on C2, C4 and C5 landing in the same contract bump or before it;
 - C3 builds on C1's dispatch template;
 - D1 needs R3 authorisation.
@@ -390,7 +419,7 @@ Decide and record in §8: (a) whether there is a leak and its retainer, which se
   - The exit hook is re-registered on every launch. The persisted `background-tasks` shape is unchanged.
 - Luna rejected round 1 (5 majors) and accepted round 2. **Residual:** no live background-task check was run after the final correction (unit and runtime tests plus Luna probes only).
 
-**Finding F1 (for R2).** Pi Web UI never emits `session_shutdown` when it disposes a Pi session; only CLI new/resume/fork/quit/reload do. Extensions' shutdown cleanup therefore never runs in Web UI sessions. B1.3s works around this with `WeakRef` sweeps. A dispose-time `session_shutdown` (or equivalent) is a lifecycle fix to decide at R2.
+**Finding F1 (for R2).** Pi Web UI never emits `session_shutdown` when it disposes a Pi session; only CLI new/resume/fork/quit/reload do. Extensions' shutdown cleanup therefore never runs in Web UI sessions. B1.3s works around this with `WeakRef` sweeps. A dispose-time `session_shutdown` (or equivalent) is a lifecycle fix to decide at R2. **Decided at R2: fixed as step B5.**
 **Known gap for the store owner:** `pi-enhancement` has no working typecheck (`memory/tsconfig.json` `ignoreDeprecations` rejected; no root script).
 
 #### B2 — Heap- and lag-aware admission, heap cap aligned
@@ -455,6 +484,90 @@ Decide:
 - wave-2 residuals: B3a's unpaced tool-argument stall (bounded by the abort); a ~250–670 ms upstream finalisation stall on 16–18 MB messages (guard-independent, B3b.md); one observed 17.8 MB dispatch whose receipt terminalised but whose synchronous HTTP response never arrived (not reproduced; B3b.md, evidence in `/root/orch-ops/orchestration-scaling/b3b/measure/r2-input/`); the weekly refresh's 60 s job timeout can still interrupt a slow `systemctl restart` after a 30 s drain decision (B4.md).
 (The heap-cap choice and the third-retainer question were settled at the 2026-09-28 interim review.)
 
+**Held 2026-09-29 (decisions; §3 and §8).** The thresholds stay, with the lag gate conditional on V2. Production lag and watcher growth are provisionally closed. F1 → B5. Residuals routed. Conditional go for Stage C. **Found at R2 by code reading** (V2 confirms each live):
+- **The drain misses every turn it does not meter.** It waits for admission-metered Internal API turns and nonterminal run receipts only (`drain-controller.ts`). Pi goal-engine continuation turns, other extension-driven Pi turns and browser (P0) turns hold neither. A deploy can therefore kill a goal-armed child mid-turn, and restart reconciliation, which works from nonterminal receipts, fires no watch. Claude and Antigravity goal continuations go through the detached receipt pipeline and are counted. → B4.1.
+- **The lag gate is not "sustained".** The A2 window holds 120 samples at 500 ms, and its nearest-rank p99 is the second-largest sample. Two loop stalls of 300 ms or more inside about 60 s therefore give two consecutive high readings 30 s apart, which latches `event_loop_lag`. New-cwd Pi opens stall 359–558 ms (B1.2b), so a parent fanning out into fresh worktrees may trip the gate against itself. → V2 probe, then B2.1 if confirmed.
+- **F1 has concrete costs.** 9 of the 16 deployed extensions clean up only on `session_shutdown`, which a Web UI dispose never emits:
+  - `background-shell`: its processes are torn down only on quit/reload;
+  - `goal-engine` and `watch-wake`: their timers stay armed;
+  - `memory`: it does not save;
+  - `auto-compact-75`: its heartbeats keep running;
+  - also `subagent` and `commandcode-provider`.
+
+  The SDK's public `AgentSession.extensionRunner` can emit the event, so no upstream patch is needed. → B5.
+- **The 16 MiB byte cap sits exactly where the upstream finalisation stall appears** (~250–670 ms at 16–18 MB), while the largest real run is 1.05 MB. → B3c.
+- **Wave 2 is not yet "shipped" under §4.** Luna re-ran targeted tests and probes, and re-ran B4's pre-correction proof (23/23). Nobody independent has re-run B2's or B3b's live proof, or B4's corrected 27/27. → V2.
+
+### R2 follow-up wave (added at R2, 2026-09-29)
+
+**Intent.** Close the robustness gaps R2 found inside Stage B's own intent before the owner scales orchestration up, and complete wave 2's independent verification. Every step here follows §4, including the two rules added at R2.
+
+#### V2 — Independent live re-runs and R2 probes
+
+**Intent.** Mark B2, B3b and B4 shipped on a reviewer's re-run, and settle the questions B2.1, B3c, B4.1 and B5 depend on, with evidence rather than code reading.
+**Approach.** Build master in a detached verification worktree (node_modules symlinked; never rebuild the production checkout). Copy the wave's proof scripts, changing only their worktree and output paths:
+- `/root/orch-ops/orchestration-scaling/b2/live/`;
+- `…/b4/proof/drain-proof.mts`;
+- the repo's `server/tests/unit/pi-ai/run-budget-live-proof.mts`.
+
+Common rules for the workers: `/root/orch-ops/orchestration-scaling/r2/COMMON-BRIEF-r2.md`. No product code changes.
+**Definition of victory.**
+- [ ] Re-runs on the master build match the bundles: B2 pressure 20/20 and critical 5/5; B3b `bytes`, `bytes-realistic` and `tokens` abort with `RUN_BUDGET_EXCEEDED` while B streams, and cap-off completes; B4 27/27. Production is untouched (MainPID, start time and stop-audit hash before and after).
+- [ ] **Fan-out probe** at production-default admission and A2 settings, with the real extension set:
+  - trials: 4 creates in fresh directories as a burst and 10 s apart, plus a same-directory control, each run twice;
+  - reported per trial: stall durations, p99 per reading, whether and for how long the gate latched, and any `503 event_loop_lag`.
+- [ ] **Byte-cap data:** the `bytes` scenario 3× each at 16, 8 and 4 MiB, with the end-of-run stall measured.
+- [ ] **Drain-gap probe:**
+  - a goal-armed Pi child in an extension-driven continuation turn: the drain verdict, whether the child is killed, whether any watch fires after boot;
+  - control: a plain long prompt, which should be counted and reconciled as B4 designed.
+- [ ] **F1 probe:** a Pi child starts a background-shell task; after `DELETE`, report whether the process survives and who its parent is.
+**Not victory if:** a re-run happens on a stale build, or a probe is reported without its raw numbers.
+
+#### B4.1 — The drain sees every busy session (added at R2)
+
+**Intent.** Deploys stop killing in-flight work silently, whatever started the turn (owner's "ready": children are not killed by deploys). Goal-armed Pi children are the owner's standard orchestration pattern.
+**Scope.** `server/src/internal-api/drain-controller.ts`, restart reconciliation (`run-receipts`, `watch/watch-manager.ts`), the Pi busy-state source (`server/src/pi/`), `/api/v1/drain` status, docs, contract.
+**Approach.**
+- The settle wait also counts every resident session that is busy, whether a run, an extension (goal-engine, watch-wake deadlines, subagent) or the browser started the turn. Busy Pi sessions come from the SDK's public streaming state; other runtimes come from their existing busy flags.
+- The verdict record lists the busy sessions still in flight at a timeout.
+- At boot, reconciliation fires the ordinary interruption path for them as well: one synthetic `agent_end`, plus `goal_end` when pending, with `interruptedByRestart` and a reason. Where no receipt exists, a synthetic interruption reference identifies the turn.
+- Browser-started turns are counted and reported. Whether they block the drain or only extend it up to the timeout is decided in the step, with its rationale recorded.
+**Definition of victory.**
+- [ ] Failing tests first: a goal-engine continuation turn and a browser turn each keep the drain open; an extension-driven turn cut off at a timeout is listed and fires its parent's watch at boot; a session idle at the drain is not counted.
+- [ ] Disposable live proof on the §4 realistic pattern: a goal-armed GLM 5.3 Flash child in a continuation turn delays the drain. On a forced timeout, its parent's watch fires after boot with `interruptedByRestart`, and the wake is dispatched. The plain-prompt control is unchanged, and the B4 27-check proof still passes.
+- [ ] Contract bump and docs; Agent OS mirror updated.
+**Not victory if:** only Internal-API-started turns are counted, or the parent learns about an extension-driven interruption only by polling.
+
+#### B5 — Dispose runs extension shutdown (finding F1)
+
+**Intent.** Extensions' cleanup runs when Pi Web UI disposes a Pi session, so background processes, timers and unsaved state do not outlive the session. At orchestration scale these are leaks of processes and work, not only of memory.
+**Scope.** The Pi dispose and unload paths (`server/src/pi/multi-session-manager.ts`, `pi-service.ts`), the shared release helper B1 introduced, tests, docs. **No upstream changes** (owner rule): use the public `AgentSession.extensionRunner` with `hasHandlers`/`emit`.
+**Approach.**
+- Emit `session_shutdown` once per disposed session before the SDK object is released, bounded by a timeout (background-shell's own teardown uses 5 s), with errors caught and logged.
+- Map each path to a reason: `DELETE` and final disposal use `quit`. For idle unload of a session the user may reopen, decide whether its background tasks should survive, and record the rationale.
+- Route every dispose path through the one helper, with a per-path test (E1 class "a fix claims every path but wires one").
+- Audit that no shutdown handler writes to Agent OS or other production state from a validation child.
+**Definition of victory.**
+- [ ] Failing test per dispose path first: the shutdown event is emitted exactly once, with the mapped reason; a hanging handler is bounded by the timeout; a throwing handler does not block disposal.
+- [ ] Disposable live proof with the real extension set: a background-shell process started by a GLM 5.3 Flash child is gone after `DELETE` (a survivor on the old build is the positive control), and goal-engine and watch-wake timers do not fire after dispose.
+- [ ] The B1 listener-count regression test and a `micro` harness run stay clean (no new retention).
+**Not victory if:** only the `DELETE` path emits it, or the fix edits an extension to compensate.
+
+#### B2.1 — Lag-gate statistic (only if V2's fan-out probe trips the gate)
+
+**Intent.** The `event_loop_lag` gate refuses API work when the loop is really in danger, not after two isolated stalls.
+**Approach.** Gate on a statistic that means sustained lag: for example p95 of the 120-sample window (at least 6 stalled samples in 60 s), or p99 over more readings. Keep p99 for A2 alerts. Alternatively, or as well, remove the remaining new-cwd open stall (the uncached `subagent` load). Choose from V2's data and record why.
+**Definition of victory.**
+- [ ] Tests at the boundary: two isolated stalls do not latch; genuinely sustained lag still does.
+- [ ] V2's fan-out trial re-run: no refusal. The 12 Sep-style runaway fixture (B3) still latches the gate.
+
+#### B3c — Byte-cap default re-sized from measurement
+
+**Intent.** The streamed-byte cap bounds a runaway before the upstream end-of-message stall exceeds the B2 lag threshold.
+**Approach.** Take the default from V2's 4/8/16 MiB data: the largest value whose end-of-run stall stays under 300 ms, and never below 2× the real maximum (1,050,331 bytes). Config and docs only, unless the data says otherwise.
+**Definition of victory.**
+- [ ] Config test for the new default; B3b's live `bytes` scenario at the new default shows no end-of-run reading ≥ 300 ms; docs and contract changelog updated.
+
 ### Stage C — Parent ergonomics and child quality
 
 C1–C5 should ship in one contract bump where practical, so that C6's stability window starts from a coherent surface.
@@ -472,6 +585,7 @@ C1–C5 should ship in one contract bump where practical, so that C6's stability
 
 #### C2 — Busy follow-ups and never-started runs
 **Input added 2026-09-29 (interim wave).** A Pi session reports `busy:false` during an auto-compaction. The Internal API then accepts a prompt with `202`, and the detached run fails with "Cannot submit a prompt while compaction is in progress" (receipt `failed RUNTIME_ERROR`). The parent sees an accepted dispatch that never runs. It was observed while supervising reviewer sessions. Separately, `auto-compact-75` aborts an in-flight turn when it compacts mid-run (the turn ends with no text) and resumes by itself. Parents must not re-prompt into that window. C2 should expose compaction as busy, or queue.
+**Input added at R2.** In a B3b live-proof run, a synchronous dispatch whose 17.8 MB assistant message terminalised its receipt never got its HTTP response, on an otherwise healthy server. It was not reproduced; evidence is in `/root/orch-ops/orchestration-scaling/b3b/measure/r2-input/` and B3b.md, residual 6. This is the same class as "accepted then lost". C2's reproduction work checks whether a synchronous response can hang after a terminal receipt.
 
 **Intent.** No prompt is ever silently lost, and a run that never starts is known quickly.
 **Approach.** Reproduce first: a follow-up to a Pi session that stays busy beyond the inactivity window becomes `TURN_STALLED` and never reaches the session. Then fix it so the follow-up is either delivered after the running turn ends or refused explicitly (`409 SESSION_BUSY` with a hint), never accepted-then-dropped. Add start detection: an accepted run with no runtime activity within a configurable start window is marked with a distinct terminal state and the parent is notified.
@@ -548,7 +662,9 @@ Decide: production rollout of contained routing, and its observation gate.
 **Intent.** Stop the 74% of operator-reported problems that recur (stuck after compaction, performance, orchestration).
 **Approach.** A short ledger in `docs/` of recurring defect classes, each with a pointer to a regression test once fixed. When a class recurs, its test is added before the fix.
 **Definition of victory.**
-- [ ] The ledger exists with the classes from the 2026-09-26 operator-reports run, plus "a fix claims every path but wires one". Found at R1: `91effe69` fixed one of three dispose paths. The B1 per-path tests are its regression tests. The session watcher's unlink path is the second instance (2026-09-28), and B1.1's tests are its regression tests.
+- [ ] The ledger exists with the classes from the 2026-09-26 operator-reports run, plus "a fix claims every path but wires one". Found at R1: `91effe69` fixed one of three dispose paths. The B1 per-path tests are its regression tests. The session watcher's unlink path is the second instance (2026-09-28), and B1.1's tests are its regression tests. Added at R2:
+  - **"A mechanism sees only what it meters."** B4's drain counts admission turns and receipts, so extension-driven and browser turns escape it. B4.1's tests are the regression tests.
+  - **"A response is lost after the receipt is terminal"** (the 17.8 MB dispatch, not yet reproduced; C2).
 - [ ] Each fixed class links a regression test that fails on the pre-fix code.
 
 #### E2 — Final re-measure
@@ -571,6 +687,8 @@ Decide: close the programme, or open the next plan.
 
 - Remove orphaned `session-registry.json.*.tmp` files at boot (after confirming no writer holds them). Victory: test plus disposable boot proof.
 - Command Code admits one active turn. Revisit only if children are routed there. Victory: decision recorded at a review moment.
+- **Weekly refresh restart budget (added at R2; B4 residual).** `restart-pi-web-ui.sh` spends up to 30 s draining inside the weekly job's 60 s timeout, so a slow `systemctl restart` can outlive the job. Raise the job timeout above the drain budget plus the unit's stop timeout, or wait for readiness after a non-blocking restart. Victory: a test for the budget arithmetic and one disposable run.
+- **Upstream issue draft (added at R2; B3a residual).** Draft an issue for the pi-ai streaming tool-argument parse being quadratic, with B3a's measurements, for the owner to submit. Victory: the draft is in the B3a evidence folder and the owner has decided on it.
 
 ## 7. Handoff for the agent holding a review moment
 
@@ -618,6 +736,8 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
 - **"All paths" claims need a per-path check.** `91effe69` said every dispose path was fixed and wired one. Grep the sibling call sites a fix claims to cover.
 - **Constructor diffs do not name a leak; retainer paths and cut tests do.** When cutting one suspected retainer frees nothing, look for a second.
 - **The soak's load is API-only.** It proves heap behaviour, not production lag. Production lag came from outside the API path (§2, B1.2).
+- **Read a threshold as events, not as a statistic's name.** p99 over the 120-sample A2 window is the second-largest sample, so "two readings with p99 ≥ 300 ms" means "two stalls in about 60 s", not "a minute of lag" (R2).
+- **Ask what a mechanism cannot see.** B4's drain was correct for everything it metered, and its bundle listed what it did not meter. The gap mattered only when weighed against the owner's actual child pattern (goal-armed children) (R2).
 - **Keep long soaks rare.** The owner will not support many 24 h runs. Prefer synthetic proofs (file churn, bounded create/delete loops, `micro` runs) whenever they decide the question.
 
 ## 8. Review moment log
@@ -634,6 +754,7 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | Interim wave execution | 2026-09-28/29 | `d5db9012-…` (orchestrating) | **Routing:** children on `clinepass/cline-pass/deepseek-v4.1-flash` (owner-authorised), independent reviewer GPT-6 Luna via `openai-codex` (owner-authorised). **Quality loop:** the parent verified every hand-back (diffs, own re-runs, own probes) before Luna. Parent corrections caught: a pre-drain end snapshot; the `awaitWriteFinish` live-session regression (measured 114 reads vs 1); an id-less unlink breaking removal; the untracked-orphan misread as retention. Luna rejected each lane at least twice; every finding was closed, and the final rounds were verified by the parent. **Scope changes (parent, within the owner's autonomy grant):** B1.2's per-cwd loader cache was rejected (shared runtime); a guarded additive SDK patch was approved; **new step B1.3**; `subagent` left uncached, with the A/B decision put to the owner. **Production:** extensions deployed with a backup, then a restart at 00:05 UTC under `production:lock` (activeTurns 0). **Gates on master `ddccf8bf`:** lint, typecheck, build, docs 0; full `npm test` 6,428 passed, with 1 load-sensitive Claude SDK test failing in the full run and passing alone (untouched by this wave). **Plan changes:** status line; B0.1/B1.1/B1.2 outcomes; new B1.3; C2 input; §9 rows. |
 | Patch removal and `subagent` B (owner follow-up) | 2026-09-29 | `d5db9012-…` (orchestrating) | **Owner rules:** no local changes to upstream packages, with robust replacements; `subagent` option B; restarts authorised. **Lanes:** b1-2b and b1-3s on Claude Opus (SDK), b3a on the Pi runtime; reviewer Luna. **Parent catches:** the 16 KB cap default would fail about 1 in 600 real writes, so it was re-decided with paced measurements; b3a's evidence was overwritten (Luna) and re-run and preserved; an abort-callback race on the run boundary; b3a's deploy restore procedure would have deleted pi-ai's nested `node_modules`, so only the single patched file was restored; b1-2b's snapshot ownership (a sibling client). **Production:** 2026-09-29 10:10 UTC restart under `production:lock` (activeTurns 0). pi-coding-agent and both pi-ai copies are verified identical to npm 0.87.1, and the root `postinstall` is gone. **Gates on master `3da55e78`:** lint, typecheck, build and docs 0; server suite 6,487 passed, with 2 failures in the known load-sensitive `claude-process-pool-resilience` test (passes alone, untouched). **Agent OS** contract mirror 1.48.0 (`2636f48`). **Plan changes:** status line; §3 decisions for 2026-09-29; B1.2b; B1.3 `subagent` outcome and finding F1; B3a outcome; R2 input; §9 rows. |
 | Wave 2 execution | 2026-09-29 | `23ff1e3e-…` (Claude Code Remote Control; took over `d5db9012`) | **Owner decisions:** routing Opus (B2, B4), GLM 5.3 Flash (B3b, B1.3 live check; owner: Flash, not GLM 5.3), GPT-6 Luna reviewer per lane; goal-armed children and reviewers; reviews capped at one full round plus one closure round; keep the 64 KiB tool-argument cap; F1 and the unpaced residual to R2; one wave-2 restart, final telemetry read before it instead of a 22 h check. **Seam:** B2 and B4 built in parallel against a fixed, verbatim admission `setDraining` seam. **Quality loop:** Luna REJECT on B2 (validation override under `NODE_ENV=production`; stale lag latch) and B4 (try-restart on an inactive unit; fail-open on unknown API state; the job-path refresh bypassing the drain; interruption hidden from default wake text), ACCEPT WITH FIXES on B3b (defaults measured per user message, not per run); all closed; B3b's closure REJECT was on measurement evidence only and the parent adjudicated it after re-running the corrected script. **Integration:** `orch/wave2-integration` (conflicts in admission, sessions route refusal helper, contract changelog; B2's `sendAdmissionRefusal` now uses B4's `SERVER_DRAINING` mapping), full gates green; master fast-forwarded to `1103ef11`. Agent OS mirror 1.51.0. **Production:** owner 'go'; restart 2026-09-29 14:44 UTC under the production lock (pre-flight activeTurns 0; legacy pre-flight inside `production:drain-restart`), MainPID 2374181 → 2957930; contract 1.51.0, build `1103ef11`, new `/capacity` fields and `/drain` live, extensions loaded without cache degradation, smoke session ok. |
+| R2 | 2026-09-29 | `19aabd3f-46a1-5cca-b07a-a36c164acfe0` (Claude Code Remote Control, Opus; continuing `23ff1e3e`) | **Inputs checked:**<br>• the B2, B3b, B4 and B1.3-live bundles and all six Luna reviews;<br>• `STATE-wave2.md`;<br>• code of `drain-controller.ts`, the admission lag and heap gates, `event-loop-shed.ts` (window arithmetic), the PiService budget-guard wiring (per-session closure, no retention) and the SDK's public `session_shutdown` API;<br>• the deployed extensions' shutdown handlers;<br>• production `/capacity` (new fields sane, heap cap 4 GiB unchanged) and A2 telemetry: baseline 17 consecutive-high pairs in 22 h; patch-free build 10:10–14:44 0; since the 14:44 restart 0 apart from the boot reading; heap 93–185 MiB.<br>**Not re-run:** live proofs. The staged verification agents could not launch, because the Claude Code auto-mode safety check returned no verdict; this becomes V2. **Decisions (owner accepted the recommendations):** §3 R2 block. **Plan changes:**<br>• status line;<br>• §3 R2 decisions;<br>• §4 intent check of blind spots, realistic child pattern, and live re-run at wave closure;<br>• §5 sequence and dependencies;<br>• R2 findings;<br>• new R2 follow-up wave (V2, B4.1, B5, B2.1, B3c);<br>• B1.3 F1 → B5;<br>• C2 input;<br>• E1 classes;<br>• two small items;<br>• §7 rules;<br>• §9 rows.<br>Verification worktree `/root/.worktrees/orch-scaling/r2-verify-pi-web-ui` (detached `93e20a5f`, built). |
 
 ## 9. Status ledger
 
@@ -651,6 +772,12 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | B2 | **merged** (`d017f145`, contract 1.49.0; in production since 2026-09-29 14:44 UTC) | [`B2.md`](./execution-reports/orchestration-scaling/B2.md); reviews `…/reviews/b2-luna-review*.md` | `heap_pressure` (0.75 of `heap_size_limit`, hysteresis) and `event_loop_lag` (300 ms sustained / 150 ms recovery, confirmed by B1.2 telemetry; stale telemetry resets the latch); creates gated; non-slot refusals 503; DELETE never refused (own disposal lane); validation-only pressure override bound to the validation child identity. Luna REJECT (2 majors) → correction 01 → ACCEPT. Live 20/20 + 5/5 |
 | B3 | **tool-argument cap shipped as B3a** (`3da55e78`, contract 1.48.0, in production 2026-09-29 10:10 UTC); **output-token and streamed-byte caps merged as B3b** (`d017f145`, contract 1.50.0; in production since 2026-09-29 14:44 UTC) | [`B3a.md`](./execution-reports/orchestration-scaling/B3a.md), [`B3b.md`](./execution-reports/orchestration-scaling/B3b.md); reviews `…/reviews/b3a-luna-review*.md`, `…/b3b-luna-review*.md` | B3a replaces the removed pi-ai patch (64 KiB/256 KiB, kept by the owner 2026-09-29; unpaced residual → R2). B3b: 1,000,000 output tokens (message end) and 16 MiB streamed bytes per run, `run_budget_exceeded`; defaults from 2,382 merged real runs (max 270,689 tokens / 1,050,331 bytes, 0 over). Luna ACCEPT WITH FIXES → correction 01 → closure REJECT on evidence only → parent-adjudicated evidence correction 02 (parent re-ran the measurement). Live: paced and realistic-rate aborts at the cap, second session streaming throughout, lag p99 ≤ 245 ms |
 | B4 | **merged** (`d017f145`, contract 1.51.0; in production since 2026-09-29 14:44 UTC) | [`B4.md`](./execution-reports/orchestration-scaling/B4.md); reviews `…/reviews/b4-luna-review*.md` | `/api/v1/drain`, `SERVER_DRAINING`, settle over turns and nonterminal receipts, `interrupted_by_restart` classification with watch firings (fixed wake-text suffix, one wake per session); deploy scripts drain by default, fail closed on unknown API state, keep verb semantics, self-lock, forced restarts need a durably recorded reason. Luna REJECT (4 majors) → correction 01 → ACCEPT. Live 27/27 on a disposable unit. The wave-2 restart ran through `production:drain-restart`'s legacy pre-flight (the old server had no `/drain`); every later restart drains |
-| C1–C6 | not started | — | |
+| R2 | **decisions held 2026-09-29** | §8, §3 | Thresholds kept (lag conditional on V2); production lag and watcher growth provisionally closed; F1 → B5; conditional go for Stage C. B2, B3b and B4 stay "merged" until V2's re-runs |
+| V2 | not started (worktree built; common brief `/root/orch-ops/orchestration-scaling/r2/COMMON-BRIEF-r2.md`) | — | First step of the R2 follow-up wave. Its probes decide B2.1 and B3c |
+| B4.1 | not started | — | Gate before scaling up. The drain must count extension-driven and browser turns and reconcile them at boot |
+| B5 | not started | — | Gate before scaling up. Dispose emits `session_shutdown` (F1) |
+| B2.1 | conditional on V2 | — | Only if the fan-out probe trips the lag gate |
+| B3c | not started | — | Default from V2's 4/8/16 MiB data |
+| C1–C6 | not started | — | Conditional go at R2. C4 and C5 may run alongside the R2 follow-up wave; C2 waits for B4.1 |
 | D1–D2 | not started | — | Needs R3 authorisation |
 | E1–E2 | not started | — | |
