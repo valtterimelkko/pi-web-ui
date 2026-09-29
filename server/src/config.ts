@@ -154,9 +154,10 @@ export function resolveAdmissionHeapLagEnv(env: NodeJS.ProcessEnv = process.env)
   internalApiAdmissionLagRecoveryMs?: number;
   internalApiAdmissionLagSustainedReadings?: number;
 } {
-  const int = (name: string): number | undefined => (env[name] === undefined || env[name]!.trim() === ''
-    ? undefined
-    : parsePositiveInteger(env[name], 1, name));
+  const int = (name: string): number | undefined => {
+    const raw = env[name];
+    return raw === undefined || raw.trim() === '' ? undefined : parsePositiveInteger(raw, 1, name);
+  };
   const heapMb = int('INTERNAL_API_ADMISSION_HEAP_RESERVED_MB_PER_TURN');
   return {
     internalApiAdmissionHeapPressureFraction: parseFraction(env.INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION, 'INTERNAL_API_ADMISSION_HEAP_PRESSURE_FRACTION'),

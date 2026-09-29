@@ -372,17 +372,16 @@ describe('B2 validation-only pressure override', () => {
   });
 
   it('drives the controller: heap override replaces used bytes, lag override replaces observed p99', async () => {
-    let heapOverride: number | undefined = 900 * MiB;
-    let lagOverride: number | undefined;
+    const injected: { heap?: number; lag?: number } = { heap: 900 * MiB };
     const controller = new AdmissionController(baseOptions({
       heap: heapAt({ used: 1 }),
-      pressureOverride: { heapUsedBytes: () => heapOverride, lagP99Ms: () => lagOverride },
+      pressureOverride: { heapUsedBytes: () => injected.heap, lagP99Ms: () => injected.lag },
     }));
     await expect(controller.acquire('pi', 'P2')).rejects.toMatchObject({ reason: 'heap_pressure' });
     expect(controller.snapshot().heap.source).toBe('validation-override');
-    heapOverride = undefined;
+    injected.heap = undefined;
     (await controller.acquire('pi', 'P2')).release();
-    lagOverride = 1000;
+    injected.lag = 1000;
     controller.observeLagReading({ p99Ms: 5, atMs: Date.now(), sampleCount: 10 });
     controller.observeLagReading({ p99Ms: 5, atMs: Date.now(), sampleCount: 10 });
     await expect(controller.acquire('pi', 'P2')).rejects.toMatchObject({ reason: 'event_loop_lag' });
