@@ -507,7 +507,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       await manager.subscribeClient('client-1', '/path/to/active.jsonl');
       
       // Run cleanup
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async (pre-existing drift aligned by C2 correction 01)
       
       // Should not clean up because there are subscribers
       expect(cleanedCount).toBe(0);
@@ -529,7 +529,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       manager.unsubscribeClient('client-1', '/path/to/busy.jsonl');
       
       // Run cleanup
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async (pre-existing drift aligned by C2 correction 01)
       
       // Should not clean up because sessions persist indefinitely
       expect(cleanedCount).toBe(0);
@@ -551,7 +551,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       manager.unsubscribeClient('client-1', '/path/to/streaming.jsonl');
       
       // Run cleanup
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async (pre-existing drift aligned by C2 correction 01)
       
       // Should not clean up because sessions persist indefinitely
       expect(cleanedCount).toBe(0);
@@ -573,7 +573,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       manager.unsubscribeClient('client-1', '/path/to/idle.jsonl');
       
       // Run cleanup - should NOT clean up idle sessions
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async (pre-existing drift aligned by C2 correction 01)
       
       // Should NOT clean up because sessions persist indefinitely
       expect(cleanedCount).toBe(0);
@@ -617,7 +617,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       manager.unsubscribeClient('client-3', '/path/to/error.jsonl');
 
       // Run cleanup
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async (pre-existing drift aligned by C2 correction 01)
       
       // Only the errored, no-subscriber session should be cleaned
       expect(cleanedCount).toBe(1);
@@ -652,7 +652,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       // Advance time by 10 minutes - session should still be there
       vi.advanceTimersByTime(10 * 60 * 1000);
       
-      const cleanedCount1 = manager.cleanupInactiveSessions();
+      const cleanedCount1 = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async
       expect(cleanedCount1).toBe(0);
       expect(manager.hasSession('/path/to/old.jsonl')).toBe(true);
       
@@ -660,7 +660,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       vi.advanceTimersByTime(10 * 60 * 1000);
       
       // Now the session should be unloaded
-      const cleanedCount2 = manager.cleanupInactiveSessions();
+      const cleanedCount2 = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async
       expect(cleanedCount2).toBe(1);
       expect(manager.hasSession('/path/to/old.jsonl')).toBe(false);
       
@@ -691,7 +691,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       vi.advanceTimersByTime(5 * 60 * 1000);
       
       // Cleanup should NOT clean up because sessions persist indefinitely
-      const cleanedCount = manager.cleanupInactiveSessions();
+      const cleanedCount = await manager.cleanupInactiveSessions(); // 3b7a64ee made this async (pre-existing drift aligned by C2 correction 01)
       expect(cleanedCount).toBe(0);
       expect(manager.hasSession('/path/to/active.jsonl')).toBe(true);
       
