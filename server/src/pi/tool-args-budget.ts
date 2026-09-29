@@ -83,8 +83,17 @@ export class PiToolArgsBudgetExceededError extends Error {
 interface BudgetRunState {
   turnTotal: number;
   perCall: Map<number, number>;
+  /** Terminal latch: no further counting or abort attempts this run. */
   breached: boolean;
+  /** The synthetic reason event is emitted at most once per run. */
+  syntheticEmitted: boolean;
+  abortAttempts: number;
+  /** One abort attempt in flight at a time; retries only after a settled rejection. */
+  abortInFlight: boolean;
 }
+
+/** Bounded abort retries (correction 03): a rejected abort must not strand the run past both caps. */
+const MAX_ABORT_ATTEMPTS = 3;
 
 /**
  * Per-session guard. One instance per PiService session, captured by that
@@ -100,7 +109,7 @@ export class ToolArgsBudgetGuard {
   }
 
   private static freshRun(): BudgetRunState {
-    return { turnTotal: 0, perCall: new Map<number, number>(), breached: false };
+    return { turnTotal: 0, perCall: new Map<number, number>(), breached: false, syntheticEmitted: false, abortAttempts: 0, abortInFlight: false };
   }
 
   /**
@@ -158,31 +167,57 @@ export class ToolArgsBudgetGuard {
     observedChars: number,
     contentIndex: number | undefined,
   ): void {
-    this.run.breached = true;
-    const error = new PiToolArgsBudgetExceededError(scope, capChars, observedChars);
-    logger.warn(
-      `${error.message}${contentIndex !== undefined ? ` (contentIndex=${contentIndex})` : ''} — aborting the turn`,
-    );
     // Emit the reason BEFORE aborting so every observer sees it before the
-    // aborted turn's terminal events.
-    try {
-      emit({
-        type: TOOL_ARGS_BUDGET_EXCEEDED_EVENT,
-        timestamp: Date.now(),
-        data: {
-          scope,
-          capChars,
-          observedChars,
-          ...(contentIndex !== undefined ? { contentIndex } : {}),
-        },
-      });
-    } catch (emitError) {
-      logger.warn(`synthetic budget event could not be emitted: ${emitError instanceof Error ? emitError.message : String(emitError)}`);
+    // aborted turn's terminal events — exactly once per run.
+    if (!this.run.syntheticEmitted) {
+      this.run.syntheticEmitted = true;
+      try {
+        emit({
+          type: TOOL_ARGS_BUDGET_EXCEEDED_EVENT,
+          timestamp: Date.now(),
+          data: {
+            scope,
+            capChars,
+            observedChars,
+            ...(contentIndex !== undefined ? { contentIndex } : {}),
+          },
+        });
+      } catch (emitError) {
+        logger.warn(`synthetic budget event could not be emitted: ${emitError instanceof Error ? emitError.message : String(emitError)}`);
+      }
     }
     // Fire-and-forget: abort() awaits the run's idle transition upstream; a
-    // rejection must not escape into the event pipeline.
-    void session.abort().catch((abortError: unknown) => {
-      logger.warn(`session.abort() after budget breach failed: ${abortError instanceof Error ? abortError.message : String(abortError)}`);
-    });
+    // rejection must not escape into the event pipeline. Exactly one attempt
+    // is in flight at a time: a rejected abort leaves the run un-latched so
+    // the NEXT delta retries (bounded) — a browser session has no receipt
+    // watchdog to retry for us (correction 03) — while a merely SLOW abort
+    // never spawns duplicate attempts.
+    if (!this.run.abortInFlight) {
+      const attempt = this.run.abortAttempts + 1;
+      this.run.abortAttempts = attempt;
+      this.run.abortInFlight = true;
+      void session.abort().then(
+        () => {
+          this.run.abortInFlight = false;
+          this.run.breached = true;
+        },
+        (abortError: unknown) => {
+          this.run.abortInFlight = false;
+          if (attempt >= MAX_ABORT_ATTEMPTS) {
+            this.run.breached = true;
+            logger.error(
+              `session.abort() failed ${attempt} times after the tool-argument budget breach ` +
+                `(${abortError instanceof Error ? abortError.message : String(abortError)}); ` +
+                'giving up for this run — the run may continue past the caps',
+            );
+          } else {
+            logger.warn(
+              `session.abort() attempt ${attempt}/${MAX_ABORT_ATTEMPTS} failed after the tool-argument budget breach: ` +
+                `${abortError instanceof Error ? abortError.message : String(abortError)}; will retry on the next delta`,
+            );
+          }
+        },
+      );
+    }
   }
 }

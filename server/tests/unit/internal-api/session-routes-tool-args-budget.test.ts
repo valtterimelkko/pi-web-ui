@@ -235,6 +235,50 @@ describe('Internal API receipts carry RUN_BUDGET_EXCEEDED (B3a)', () => {
     expect(receipt?.errorCode).toBe(ErrorCode.RUN_BUDGET_EXCEEDED);
   });
 
+  it('a DETACHED dispatch (202) that breaches ends in a failed RUN_BUDGET_EXCEEDED receipt (shared executePromptWithReceipt path)', async () => {
+    const observers: Array<(event: unknown) => void> = [];
+    const agentSession = {
+      prompt: vi.fn(async () => {
+        process.nextTick(() => {
+          for (const observer of observers) {
+            observer({
+              type: TOOL_ARGS_BUDGET_EXCEEDED_EVENT,
+              timestamp: Date.now(),
+              data: { scope: 'call', capChars: 65536, observedChars: 65600 },
+            });
+          }
+          for (const observer of observers) {
+            observer({ type: 'agent_end', sessionId: 'session-1', timestamp: Date.now(), data: {} });
+          }
+        });
+      }),
+    };
+    multiSessionManager.getAgentSession.mockReturnValue(agentSession);
+    multiSessionManager.addApiObserver.mockImplementation((_path: string, observer: (event: unknown) => void) => {
+      observers.push(observer);
+    });
+
+    const res = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'do it', detach: true }),
+      res,
+      'session-1',
+    );
+    // Detached dispatch answers 202 with the runId; the breach settles later.
+    expect(res.statusCode, res.body).toBe(202);
+    const body = JSON.parse(res.body) as { runId: string; detached?: boolean };
+    expect(body.detached).toBe(true);
+    const runId = body.runId;
+    // The background execution settles asynchronously — poll the receipt.
+    let receipt = manager.get(runId);
+    for (let i = 0; i < 50 && receipt?.status !== 'failed'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      receipt = manager.get(runId);
+    }
+    expect(receipt?.status).toBe('failed');
+    expect(receipt?.errorCode).toBe(ErrorCode.RUN_BUDGET_EXCEEDED);
+  });
+
   it('the wire event type is registered in the contract surfaces and consistent across modules', () => {
     expect(SSE_EVENT_TYPES.TOOL_ARGS_BUDGET_EXCEEDED).toBe(TOOL_ARGS_BUDGET_EXCEEDED_EVENT);
     expect(REGISTRY_EVENT_TYPES).toContain(TOOL_ARGS_BUDGET_EXCEEDED_EVENT);

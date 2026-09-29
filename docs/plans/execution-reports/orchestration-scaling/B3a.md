@@ -26,7 +26,7 @@ ff7e3924 b3a gate: default caps 16,384/65,536 — live proof on pristine pi-ai d
 c1bba3cb tests: pin contract-version expectations to 1.48.0 (B3a bump)
 ```
 
-Diff vs base: `git diff --stat 12d01198..HEAD` → 25 files changed, 1,853 insertions(+), 366 deletions(-).
+Diff vs base: `git diff --stat 12d01198..HEAD` → 26 files changed, 1,986 insertions(+), 366 deletions(-).
 
 ## Cap defaults — correction 02 re-decides with PACED measurements
 
@@ -38,7 +38,7 @@ The design proposed 64 KB/call + 256 KB/run (patch parity, 0/5,633 observed fals
 | 2 | 65,536/262,144 | ~300/s (`--pace-delta-ms 3`) | 52.0 s | **10 ms** (52 samples) | 0 | no |
 | 3 (record) | 32,768/131,072 | unpaced | 6.6 s | 6,268 ms (1 sample; sampler starved) | 1 | n/a |
 
-**Decision (frozen rule, `02-correction.md`): run 2 passes the B2 gate → default 65,536 / 262,144.** The unpaced lab worst case (64 KB unpaced measured p99 8,305 ms, bounded by the abort) is documented as a residual risk in OBSERVABILITY.md and here, with `PI_TOOL_ARGS_MAX_CALL_CHARS=16384` as the tighter-bound remedy. The cap-off positive control (unpaced) showed the stall class (p99 7,378 ms). Raw verdicts: `/root/orch-ops/orchestration-scaling/b3a/measure/correction02-runs.json` (all three runs; per-run full logs `b3a-corr-run{1,2,3}.log` alongside), run dirs `/tmp/b3a-live2` (disposable).
+**Decision (frozen rule, `02-correction.md`): run 2 passes the B2 gate → default 65,536 / 262,144.** The unpaced lab worst case and the positive control were re-run and preserved under correction 03 (see below); the original unpaced readings were 8,305 ms (64 KB on) and 7,378 ms (control). Raw verdicts for the correction-02 runs: `/root/orch-ops/orchestration-scaling/b3a/measure/correction02-runs.json` (per-run full logs `b3a-corr-run{1,2,3}.log` alongside), run dirs `/tmp/b3a-live2` (disposable).
 
 ### Correction 02 — voice-live-lab failures at base
 
@@ -53,6 +53,23 @@ The design proposed 64 KB/call + 256 KB/run (patch parity, 0/5,633 observed fals
 | PiService wiring | closure reverted — `Tests 3 failed \| 1 passed (4)` | `Tests 4 passed (4)`, exit 0 |
 | receipt terminal code | breach receipts completed as `completed` (masking), `RUN_BUDGET_EXCEEDED` absent — `5 failed` | `Tests 21 passed (21)` across the four internal-api files, exit 0 |
 | default change 64K→16K | `Tests 3 failed \| 24 passed (27)` | `Tests 27 passed (27)`, exit 0 |
+| correction-02 default flip 16K→64K | `config.test.ts` — `Tests 3 failed \| 24 passed (27)` (exit 1) | `Tests 27 passed (27)`, exit 0 |
+| correction-03 abort-retry recovery | `tool-args-budget.test.ts` — `Tests 2 failed \| 12 passed (14)` (retry tests: latched guard never re-attempts) | `Tests 18 passed (18)` guard + wiring, exit 0 |
+| correction-03 detached boundary | characterisation (shared path already routed the breach correctly) — `Tests 12 passed (12)` on first run; now pinned | — |
+
+## Correction 03 (review findings, 2026-09-29)
+
+All four findings accepted and fixed; commits this correction: see `complete.md`.
+
+1. **[major] Positive control + 64 KB unpaced preserved.** Re-run at build HEAD on a fresh pristine scratch (`/tmp/b3a-live3`, markers 0/0, versions 0.87.1), each run written to its own never-overwritten files:
+   - **cap-off positive control** (`measure/corr03-capoff.{json,log}`): unpaced fine deltas, caps disabled — the run streamed **98,307 bytes past the cap bound without aborting** (receipt `completed`; the tool call executed and the turn continued), session B completed in 38 ms mid-run; **lag p99 max 23,643 ms** (1 of 2 samples ≥300 ms — the sampler itself starved mid-pin). The stall class is reproduced from preserved raw evidence.
+   - **64 KB/262 KB unpaced residual** (`measure/corr03-64k-unpaced.{json,log}`): abort at cap **21.7 s**, receipt `failed`/`RUN_BUDGET_EXCEEDED`, session B 45 ms; **lag p99 max 10,615 ms** (1 of 2 samples ≥300 ms), bounded by the abort.
+   These are the figures cited in this bundle (superseding the overwritten first-round readings of 7,378/8,305 ms, which remain quoted as history in the correction-02 section only).
+2. **[minor] Abort-failure recovery** — the guard no longer latches before abort succeeds: exactly one abort attempt is in flight at a time; a settled rejection leaves the run un-latched so the next delta retries (bounded at 3 attempts, then one error-level log and a terminal latch for the run). RED: 2 retry tests failed against the old latch; GREEN 18/18 guard+wiring. A merely slow abort never spawns duplicate attempts (exposed by the wiring tests' synchronous burst).
+3. **[minor] Receipt hint accuracy** — the `RUN_BUDGET_EXCEEDED` hint now states the receipt persists only the code and directs parents to the session event stream (`tool_args_budget_exceeded` carries `data.scope`/`capChars`/`observedChars`, also in session diagnostics). No receipt fields added. Contract text checked: it makes no receipt-detail claim (no change needed).
+4. **[minor] Evidence accuracy** — diff stat refreshed (26 files, 1,986 insertions); the correction-02 RED receipt added to the TDD table above.
+
+Also (review "also"): the **detached** boundary is now pinned by a route test — a `202 {detached:true, runId}` dispatch whose run breaches ends in a receipt `failed` with `RUN_BUDGET_EXCEEDED` through the shared `executePromptWithReceipt` path (`session-routes-tool-args-budget.test.ts`, 12/12).
 
 ## Gates (exact commands and exit codes)
 
@@ -74,7 +91,8 @@ Run from the worktree root unless noted. Full suites were run with a cleaned env
 - Driver: `systemd-run --scope --collect npx tsx server/tests/unit/pi-ai/tool-args-live-proof.mts --scratch /tmp/b3a-live --scenario both|cap-on …` (outside the production cgroup).
 - Receipt evidence (cap-on, both 64 KB and 16 KB defaults): synchronous dispatch answers `500` `{code:"RUN_BUDGET_EXCEEDED", runId}`; `GET /runs/:runId` → `status:"failed"`, `errorCode:"RUN_BUDGET_EXCEEDED"`, `servedModel:"b3a-fixture/b3a-runaway"`.
 - Second session keeps streaming: session B's prompt completed mid-runaway in 32–43 ms, receipt `completed`, in every run.
-- Positive control: caps disabled on pristine pi-ai — the run streamed past the cap bound without aborting and the lag instrument showed the stall class (p99 7,378 ms). Scaling evidence: the Phase A pristine benchmark integrated one 460 KB fine-delta generation to **140,899 ms** of parse CPU (exit 0, `measure/bench-e.output.txt`).
+- Positive control (preserved under correction 03): caps disabled on pristine pi-ai, unpaced — the run streamed 98,307 bytes past the cap bound **without aborting** (receipt `completed`) and the lag instrument showed the stall class: **p99 max 23,643 ms** (1 of 2 samples ≥300 ms; sampler starved mid-pin). Raw evidence: `measure/corr03-capoff.json` + `corr03-capoff.log` (never overwritten). Scaling evidence: the Phase A pristine benchmark integrated one 460 KB fine-delta generation to **140,899 ms** of parse CPU (exit 0, `measure/bench-e.output.txt`).
+- 64 KB/262 KB unpaced residual (preserved under correction 03): abort at cap 21.7 s, receipt `failed`/`RUN_BUDGET_EXCEEDED`, lag p99 max **10,615 ms** (bounded by the abort). Raw evidence: `measure/corr03-64k-unpaced.json` + `corr03-64k-unpaced.log`.
 - Raw verdict + run log: `/root/orch-ops/orchestration-scaling/b3a/measure/live-verdict.json`, `live-proof-run.log`. Run dir `/tmp/b3a-live` (disposable; scratch only).
 
 ## Restore procedure (parent, at deploy)
@@ -84,20 +102,20 @@ Accepted as written in `01-design.md` §4: `npm pack @earendil-works/pi-ai@0.87.
 ## Definition of victory (frozen) — item by item
 
 - **TDD for breach detection, the terminal code in the receipt, and config bounds** — met (receipts above).
-- **Disposable live proof on pristine pi-ai: fixture reproducing the 2026-09-12 pattern; turn aborts at the cap; receipt carries the code; a second session keeps streaming; lag vs B2 threshold measured with the fine-delta fixture; positive control shows the stall class** — met; the cap default was re-decided under correction 02 with paced measurements (**65,536/262,144**; table above). At that default: incident-paced p99 max 4 ms (185 samples), fast-provider-paced p99 max 10 ms (52 samples), zero readings ≥300 ms in either; the cap-off control showed p99 7,378 ms.
+- **Disposable live proof on pristine pi-ai: fixture reproducing the 2026-09-12 pattern; turn aborts at the cap; receipt carries the code; a second session keeps streaming; lag vs B2 threshold measured with the fine-delta fixture; positive control shows the stall class** — met; the cap default was re-decided under correction 02 with paced measurements (**65,536/262,144**; table above). At that default: incident-paced p99 max 4 ms (185 samples), fast-provider-paced p99 max 10 ms (52 samples), zero readings ≥300 ms in either; the cap-off control re-run under correction 03 shows the stall class from preserved raw evidence (p99 max 23,643 ms, `measure/corr03-capoff.json`).
 - **Patch script, postinstall entry and old guard test removed; nothing references them** — met (live-file sweep: no references; historical records preserved deliberately).
 - **Gates per the common brief; evidence bundle committed** — met, with the pre-existing b1-2b/voice failures documented above (not this lane's; proven for the factory files).
 
 ## Not done, and why
 
 - **Agent OS contract mirror** (`/root/agent-os/docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md`) — parent updates it at merge (gate decision 2); untouched.
-- **Browser UI notice for the breach event** — gate decision 3: none now; the wire event exists.
-- **The 5+1 b1-2b factory guard failures and 2 voice tier-2 failures in the full suite** — other lanes'/environmental; not repairable from this lane without touching excluded paths (and the factory patch itself, which the hard owner rule reserves to b1-2b).
+- **Browser UI notice for the breach event** — gate decision 3: none now; the wire event exists (the review also noted browser rendering was untested — consistent with this deliberate deferral; the event rides the normal session-event handler).
+- **The b1-2b factory guard failures and the load-flaky single failures in the full suites** — other lanes'/environmental; not repairable from this lane without touching excluded paths (and the factory patch itself, which the hard owner rule reserves to b1-2b).
 - **Priming production or the shared tree** — forbidden; the parent runs the restore procedure.
 
 ## Residual risks
 
-1. **Unpaced lab worst case at the 64 KB default** — an unpaced fine-delta local stream pins the loop for its whole pre-abort window (measured p99 8,305 ms over ~22 s, bounded by the abort at the cap; the abort itself is never at risk). Real generation paces itself; at ~90 and ~300 deltas/s the measured p99 max is 4–10 ms. An operator who prefers the tighter bound sets `PI_TOOL_ARGS_MAX_CALL_CHARS=16384` (then ~0.16% of measured real calls — 9/5,633, max observed 36.9 KB — fail terminally instead; that trade-off is what correction 02 weighed and declined as the default).
+1. **Unpaced lab worst case at the 64 KB default** — an unpaced fine-delta local stream pins the loop for its whole pre-abort window (correction 03 preserved run: abort at cap 21.7 s, lag p99 max **10,615 ms**, `measure/corr03-64k-unpaced.json`; the abort itself is never at risk). Real generation paces itself; at ~90 and ~300 deltas/s the measured p99 max is 4–10 ms. An operator who prefers the tighter bound sets `PI_TOOL_ARGS_MAX_CALL_CHARS=16384` (then ~0.16% of measured real calls — 9/5,633, max observed 36.9 KB — fail terminally instead; that trade-off is what correction 02 weighed and declined as the default).
 2. **Provider tool_stream rotation** (R1 §9 caveat): per-call accumulation may reset provider-side; the per-run total (262,144) bounds the aggregate; rotated small buffers parse cheaply, so no stall mechanism remains in that mode.
 3. **Sampler starvation during a pinned loop** — the A2 sampler itself can be delayed while the loop is saturated (one sample in the unpaced windows); the lag ring (60 s) still recorded the worst deferral. Short breach windows are therefore measured as a floor, not an overestimate.
 4. **Pre-abort CPU at the 64 KB default, unpaced worst case** ≈ 18 s in ≤2.25 ms slices — bounded and aborting; the unbounded mechanism (141 s measured at incident scale) is deleted.

@@ -484,7 +484,7 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     httpStatus: 500,
     description: 'The run was aborted because streamed tool-call arguments exceeded the configured per-call or per-run budget.',
     cause: 'A runaway generation kept streaming tool-call argument deltas past the budget (the 2026-09-12 stall class); pi-web-ui aborted the turn via the runtime’s public abort to bound synchronous per-delta parsing.',
-    hint: 'The receipt detail carries scope, cap and observed chars. Real tool arguments are normally a few KB; resending as-is will breach again — reduce the requested payload or raise PI_TOOL_ARGS_MAX_CALL_CHARS / PI_TOOL_ARGS_MAX_TURN_CHARS.',
+    hint: 'The receipt persists only this code. Which cap tripped (scope), the cap and the observed size are on the session event stream: the `tool_args_budget_exceeded` event (also in the session diagnostics) carries `data.scope`, `data.capChars` and `data.observedChars`. Real tool arguments are normally a few KB; resending as-is will breach again — reduce the requested payload or raise PI_TOOL_ARGS_MAX_CALL_CHARS / PI_TOOL_ARGS_MAX_TURN_CHARS.',
     docs: 'docs/OBSERVABILITY.md#run-budgets',
   },
 };

@@ -238,6 +238,79 @@ describe('ToolArgsBudgetGuard', () => {
     // Let any rejected promise surface on the microtask queue.
     await new Promise((resolve) => setImmediate(resolve));
   });
+
+  it('retries the abort on later deltas when abort() rejects, bounded, then logs once', async () => {
+    const guard = new ToolArgsBudgetGuard({ callChars: 64, turnChars: 8192 });
+    const emitted: Record<string, unknown>[] = [];
+    let abortCalls = 0;
+    const session = {
+      get aborted() {
+        return abortCalls;
+      },
+      abort: () => {
+        abortCalls += 1;
+        // First two attempts reject (the loop refused to stop); the third succeeds.
+        return abortCalls <= 2 ? Promise.reject(new Error('abort failed')) : Promise.resolve();
+      },
+      emitted,
+      emit: (event: Record<string, unknown>) => {
+        emitted.push(event);
+      },
+    };
+    guard.observe(session, agentStart(), session.emit);
+    feedDeltas(guard, session, 0, 128);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(1);
+
+    // Deltas keep arriving because the first abort did not stop the loop:
+    // the guard must re-attempt rather than ignoring them forever.
+    feedDeltas(guard, session, 0, 64);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(2);
+
+    feedDeltas(guard, session, 0, 64);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(3); // third attempt succeeds
+
+    // After a successful abort the guard stops retrying (one breach per run).
+    feedDeltas(guard, session, 0, 64);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(3);
+    // The synthetic reason event is emitted only once per run.
+    expect(emitted).toHaveLength(1);
+  });
+
+  it('gives up after the bounded retry budget and does not retry further', async () => {
+    const guard = new ToolArgsBudgetGuard({ callChars: 64, turnChars: 8192 });
+    const emitted: Record<string, unknown>[] = [];
+    let abortCalls = 0;
+    const session = {
+      get aborted() {
+        return abortCalls;
+      },
+      abort: () => {
+        abortCalls += 1;
+        return Promise.reject(new Error('abort failed'));
+      },
+      emitted,
+      emit: (event: Record<string, unknown>) => {
+        emitted.push(event);
+      },
+    };
+    guard.observe(session, agentStart(), session.emit);
+    feedDeltas(guard, session, 0, 128); // attempt 1
+    await new Promise((resolve) => setImmediate(resolve));
+    feedDeltas(guard, session, 0, 64); // attempt 2
+    await new Promise((resolve) => setImmediate(resolve));
+    feedDeltas(guard, session, 0, 64); // attempt 3 (last)
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(3);
+    // Retries exhausted: further deltas do not spawn more attempts (and never throw).
+    expect(() => feedDeltas(guard, session, 0, 640)).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(abortCalls).toBe(3);
+    expect(emitted).toHaveLength(1);
+  });
 });
 
 describe('PiToolArgsBudgetExceededError', () => {
