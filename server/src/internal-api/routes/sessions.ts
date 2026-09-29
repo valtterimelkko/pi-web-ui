@@ -72,6 +72,7 @@ import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
 import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildChildDispatchedCard, brokerKeyFor, type ParentLink, type LinkageRegistry } from '../child-linkage.js';
+import { createPeerParentResolver, type PeerParentResolution } from '../parent-resolver.js';
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
@@ -465,6 +466,10 @@ export interface SessionRoutesDeps {
   disposalLane?: BoundedControlLane;
   /** Optional per-session disposal registry (defaults to a new instance). */
   disposal?: SessionDisposalRegistry;
+  /** Contract 1.54.0 (C5): peer-credential caller resolution for always-on
+   *  parent lineage. Defaults to createPeerParentResolver over sessionRegistry
+   *  (real /proc + `ss`); route tests inject a stub. */
+  peerParentResolver?: { resolve(req: IncomingMessage): Promise<PeerParentResolution | null> };
   /** Pi providers denied for Internal API agent execution. */
   blockedPiProviders?: readonly string[];
   /** Feature-gated server-local Command Code runtime. */
@@ -498,6 +503,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // Contract 1.34.0 child surfacing: automatic parent linkage fallback fed by
   // the pi tool event stream (header-first linkage needs no correlation).
   const bashCorrelator = new InFlightBashCorrelator();
+
+  // Contract 1.54.0 (C5): last-resort parent linkage — resolve the CALLER from
+  // the unix-socket peer credentials and its /proc ancestry session identity.
+  const peerParentResolver = deps.peerParentResolver
+    ?? createPeerParentResolver({ registry: sessionRegistry as unknown as LinkageRegistry });
 
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const claudeProjectsDir = deps.claudeProjectsDir ?? resolveClaudeProjectsRoot();
@@ -1898,26 +1908,39 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         logger.warn('Failed to tag session origin:', originError);
       }
 
-      // Contract 1.34.0 child surfacing: link the child to its parent. Header
-      // first (X-Parent-Session), body parentSessionId second, in-flight bash
-      // correlation last. Unresolvable → silently unlinked (display-only).
+      // Contract 1.34.0 child surfacing, extended by 1.54.0 (C5): link the
+      // child to its parent. Sources in strict order: X-Parent-Session header,
+      // body parentSessionId, in-flight bash correlation, and finally
+      // peer-credential caller resolution. An explicit (header/body) value
+      // that fails to resolve stays silently unlinked — the peer walk never
+      // overrides what the caller explicitly named. Unresolvable → unlinked
+      // (display-only, fail safe).
       try {
-        const explicit = pickExplicitParentId(
-          req.headers['x-parent-session'] as string | undefined,
-          body.parentSessionId,
-        );
+        const headerValue = req.headers['x-parent-session'] as string | undefined;
+        const explicit = pickExplicitParentId(headerValue, body.parentSessionId);
         let parentLink: ParentLink | null = null;
+        let parentSource: 'header' | 'body' | 'bash' | 'peer' | undefined;
         if (explicit) {
           parentLink = await childLinks.resolveParent(explicit, undefined);
+          parentSource = headerValue?.trim() ? 'header' : 'body';
         } else {
           const correlatedKey = bashCorrelator.correlate();
           if (correlatedKey) {
             parentLink = await childLinks.resolveParent(undefined, correlatedKey);
+            if (parentLink) parentSource = 'bash';
+          }
+          if (!parentLink) {
+            const peer = await peerParentResolver.resolve(req);
+            if (peer) {
+              parentLink = await childLinks.resolveParent(peer.sessionId, undefined);
+              if (parentLink) parentSource = 'peer';
+            }
           }
         }
         if (parentLink) {
-          await sessionRegistry.patchSessionMeta(base.sessionId, { parentSessionId: parentLink.parentSessionId });
+          await sessionRegistry.patchSessionMeta(base.sessionId, { parentSessionId: parentLink.parentSessionId, parentSource });
           (base as unknown as Record<string, unknown>).parentSessionId = parentLink.parentSessionId;
+          (base as unknown as Record<string, unknown>).parentSource = parentSource;
           const card = buildChildDispatchedCard({
             childSessionId: base.sessionId,
             runtime: base.runtime,
@@ -2099,6 +2122,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         since = parsed;
       }
       const cwdFilter = query.get('cwd');
+      // Contract 1.54.0 (C5): filter by parent lineage. The value is resolved
+      // through the registry (id first, then session path) so parents may be
+      // addressed either way, matching linkage resolution; an unresolvable
+      // value is a 404 rather than a silently empty list.
+      const parentParam = query.get('parent');
+      let parentFilterId: string | undefined;
+      if (parentParam !== null) {
+        if (!parentParam.trim()) {
+          sendJson(res, 400, { error: 'parent must be a non-empty session id or session path', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        const parentEntry = (await sessionRegistry.get(parentParam)) ?? (await sessionRegistry.getByPath(parentParam));
+        if (!parentEntry) {
+          sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Parent session not found: ${parentParam}`));
+          return;
+        }
+        parentFilterId = parentEntry.id;
+      }
 
       const [archivedIndex, resolver] = await Promise.all([
         loadArchivedKeyIndex(),
@@ -2126,6 +2167,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           lastActivity: entry.lastActivity,
           archived: archivedFor(entry.path || entry.id),
           source: entry.origin ?? 'unknown',
+          // Contract 1.54.0 (C5): additive lineage surfacing so callers can
+          // count unlinked children (C1's coverage check) without N detail reads.
+          ...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
+          ...(entry.parentSessionId && entry.parentSource ? { parentSource: entry.parentSource } : {}),
         };
       });
       if (commandCodeService && commandCodeService.isEnabled()) {
@@ -2151,6 +2196,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         });
       }
       if (cwdFilter !== null) result = result.filter((s) => s.cwd === cwdFilter);
+      if (parentFilterId !== undefined) result = result.filter((s) => s.parentSessionId === parentFilterId);
       if (limit !== undefined) result = result.slice(0, limit);
 
       sendJson(res, 200, { sessions: result } satisfies ListSessionsResponse);
@@ -2438,6 +2484,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const entry = await sessionRegistry.get(sessionId);
         if (entry?.parentSessionId) {
           (detail as unknown as Record<string, unknown>).parentSessionId = entry.parentSessionId;
+          if (entry.parentSource) {
+            (detail as unknown as Record<string, unknown>).parentSource = entry.parentSource;
+          }
         }
         const all = await sessionRegistry.listAll();
         const children = all.filter((e) => e.parentSessionId === sessionId);
@@ -2491,6 +2540,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const entry = await sessionRegistry.get(sessionId);
         if (entry?.parentSessionId) {
           (detail as unknown as Record<string, unknown>).parentSessionId = entry.parentSessionId;
+          if (entry.parentSource) {
+            (detail as unknown as Record<string, unknown>).parentSource = entry.parentSource;
+          }
         }
         const all = await sessionRegistry.listAll();
         const children = all.filter((e) => e.parentSessionId === sessionId);
@@ -4089,7 +4141,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     const body = parsed.data;
 
-    const parentId = pickExplicitParentId(req.headers['x-parent-session'] as string | undefined, body.parentSessionId);
+    // Contract 1.54.0 (C5): explicit parent (header, then body) first; when the
+    // caller named no parent at all, fall back to peer-credential caller
+    // resolution. An explicit value that fails to resolve still 404s below.
+    const explicitHeaderValue = req.headers['x-parent-session'] as string | undefined;
+    let parentId = pickExplicitParentId(explicitHeaderValue, body.parentSessionId);
+    let parentSource: 'header' | 'body' | 'peer' | undefined;
+    if (parentId) {
+      parentSource = explicitHeaderValue?.trim() ? 'header' : 'body';
+    } else {
+      try {
+        const peer = await peerParentResolver.resolve(req);
+        if (peer) {
+          parentId = peer.sessionId;
+          parentSource = 'peer';
+        }
+      } catch { /* linkage is best-effort */ }
+    }
     if (parentId) {
       const parent = await resolveRegistrySession(parentId);
       if (!parent) {
@@ -4117,7 +4185,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         success: true,
         sessionId: known.id,
         runtime: body.runtime,
-        ...(parentId ? { parentSessionId: parentId } : {}),
+        ...(parentId ? { parentSessionId: parentId, ...(parentSource ? { parentSource } : {}) } : {}),
         adopted: 'existing',
         nativePath: known.path,
         ...(body.alias ? { alias: body.alias } : {}),
@@ -4161,7 +4229,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       success: true,
       sessionId: created.id,
       runtime: body.runtime,
-      ...(parentId ? { parentSessionId: parentId } : {}),
+      ...(parentId ? { parentSessionId: parentId, ...(parentSource ? { parentSource } : {}) } : {}),
       adopted: 'created',
       nativePath: resolved.nativePath,
       ...(created.cwd ? { cwd: created.cwd } : {}),

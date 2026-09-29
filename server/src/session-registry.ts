@@ -37,6 +37,10 @@ export interface RegistryEntry {
   claudeProfileBackend?: 'sdk-subscription' | 'cli-direct' | 'channel';
   /** Contract 1.34.0 child surfacing: parent session linkage when known (display-only). */
   parentSessionId?: string;
+  /** Contract 1.54.0 (C5): which source produced the linkage — X-Parent-Session
+   *  header, body parentSessionId, in-flight bash correlation, or
+   *  peer-credential caller resolution (parent-resolver.ts). */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
   /** Claude-specific: provider id (anthropic, zai, etc.) — never a secret */
   claudeProviderId?: string;
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
@@ -391,7 +395,7 @@ export class SessionRegistryManager {
    */
   async patchSessionMeta(
     id: string,
-    patch: { model?: string; thinkingLevel?: string; parentSessionId?: string },
+    patch: { model?: string; thinkingLevel?: string; parentSessionId?: string; parentSource?: 'header' | 'body' | 'bash' | 'peer' },
   ): Promise<RegistryEntry | undefined> {
     await this.load();
     const entry = this.indexById.get(id);
@@ -399,6 +403,7 @@ export class SessionRegistryManager {
     if (patch.model !== undefined) entry.model = patch.model;
     if (patch.thinkingLevel !== undefined) entry.thinkingLevel = patch.thinkingLevel;
     if (patch.parentSessionId !== undefined) entry.parentSessionId = patch.parentSessionId;
+    if (patch.parentSource !== undefined) entry.parentSource = patch.parentSource;
     entry.lastActivity = new Date().toISOString();
     await this.save();
     return entry;

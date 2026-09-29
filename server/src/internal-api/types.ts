@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.51.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.54.0' as const;
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -633,6 +633,8 @@ export interface CreateSessionResponse {
   createdAt: string;
   /** Parent session linkage when the caller identified itself (contract 1.34.0). */
   parentSessionId?: string;
+  /** Contract 1.54.0 (C5): which source produced the linkage. Absent when unlinked. */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** True when the session was pinned at creation (pin:true requested). */
@@ -680,6 +682,10 @@ export interface SessionInfo {
    *  SessionWatcher), or 'unknown' for entries created before origin
    *  tracking. Additive since 1.30.0. */
   source?: 'browser' | 'internal-api' | 'native-discovered' | 'unknown';
+  /** Parent session linkage when known (display-only). Additive since 1.54.0 (C5). */
+  parentSessionId?: string;
+  /** Which source produced the linkage. Additive since 1.54.0 (C5). */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
 }
 
 /** One natively-discovered (direct-CLI) session returned by the bounded
@@ -770,6 +776,8 @@ export interface AdoptNativeSessionResponse {
   sessionId: string;
   runtime: string;
   parentSessionId?: string;
+  /** Contract 1.54.0 (C5): which source produced the linkage. Absent when unlinked. */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer';
   /** Whether the registry entry was created fresh or an existing entry was adopted. */
   adopted: 'created' | 'existing';
   nativePath?: string;
