@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createLogger } from '../logging/logger.js';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
+import { planSpawnForSession, planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import { mapAgyUsage } from './agy-event-normalizer.js';
 import { parseAgyLine, type ParsedAgyLine } from './agy-event-types.js';
 
@@ -66,6 +67,8 @@ const ABORT_GRACE_MS = 5_000;
 export class AgyStreamProcess {
   private readonly opts: AgyStreamProcessOptions;
   private child: ChildProcess | null = null;
+  /** D0: placement plan for the current child (undefined when unplaced). */
+  private placementLaunch: { cleanup(): void } | undefined;
   private buffer = '';
   private pending: PendingTurn[] = [];
   private stallTimer: ReturnType<typeof setTimeout> | null = null;
@@ -116,9 +119,17 @@ export class AgyStreamProcess {
       { ...process.env, PATH: `/root/.local/bin:${process.env.PATH ?? ''}` },
       this.opts.sessionIdentity,
     );
-    const child = spawnFn(AGY_BINARY, this.buildArgs(), {
+    // D0 placement: the persistent agy child is bound to its antigravity session
+    // (registry session id) when present, else its own group. Unplaced when off.
+    const agyKey = this.opts.sessionIdentity?.sessionId ?? this.opts.sessionId;
+    const launch = (agyKey
+      ? planSpawnForSession(placementForSpawn(), { kind: 'rt', runtime: 'antigravity', id: agyKey }, [AGY_BINARY, ...this.buildArgs()], env)
+      : planSpawnOwn(placementForSpawn(), [AGY_BINARY, ...this.buildArgs()], env))
+      ?? { file: AGY_BINARY, args: this.buildArgs(), env, group: '', cleanup: () => {} };
+    this.placementLaunch = launch;
+    const child = spawnFn(launch.file, launch.args, {
       cwd: this.opts.cwd,
-      env,
+      env: launch.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child = child;
@@ -181,6 +192,8 @@ export class AgyStreamProcess {
     if (this.exited) return;
     this.exited = true;
     this.clearTimers();
+    this.placementLaunch?.cleanup();
+    this.placementLaunch = undefined;
     const reason: AgyTurnOutcome['reason'] = this.abortRequested ? 'aborted' : 'process-exited';
     for (const turn of this.pending) {
       clearTimeout(turn.hardTimer);

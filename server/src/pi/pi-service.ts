@@ -3,8 +3,10 @@ import {
   SessionManager,
   ModelRuntime,
   DefaultResourceLoader,
+  SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
+  type CreateAgentSessionOptions,
 } from '@earendil-works/pi-coding-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { config } from '../config.js';
@@ -28,6 +30,13 @@ import {
 } from './pi-openrouter-refresh.js';
 import { createLogger } from '../logging/logger.js';
 import { emitSessionShutdown, SESSION_SHUTDOWN_TIMEOUT_MS } from './session-shutdown.js';
+import {
+  placementForSpawn,
+  createPlacementBashToolDefinition,
+  isActiveBashOurs,
+  appendDegradeLine,
+  type PlacementConfig,
+} from '../placement/index.js';
 import { readSessionIdentity } from './session-cwd.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
 import { ToolArgsBudgetGuard } from './tool-args-budget.js';
@@ -168,6 +177,25 @@ export function releaseSessionRefsFrom(maps: SessionRefMaps, handlerKey: string,
     return true;
   }
   return false;
+}
+
+/**
+ * Correction-08 finding 1: the REAL bash-tool injection builder used by
+ * `createSession` — exported so the real call path is testable. Returns undefined
+ * when placement was not applied at start-up (byte-identical fallback).
+ */
+export function buildPlacementBashTools(
+  placementCfg: PlacementConfig,
+  sessionId: string,
+  cwd: string,
+  settings?: SettingsManager,
+): CreateAgentSessionOptions['customTools'] {
+  // The concrete bash definition is behaviour-compatible with the generic
+  // ToolDefinition element type; the variance gap is TS-only (runtime test
+  // placement-bash-tool.test.ts proves the override on the real SDK).
+  return [
+    createPlacementBashToolDefinition({ cfg: placementCfg, sessionId, cwd, settings }),
+  ] as CreateAgentSessionOptions['customTools'];
 }
 
 export class PiService {
@@ -467,12 +495,33 @@ export class PiService {
 
     const { loader: sessionResourceLoader, snapshot: sessionFactorySnapshot } = await attributor.spanAsync('pi.session.resource_loader', () => this.createSessionResourceLoader(cwd));
 
+    // D0 placement: when applied at start-up, replace the built-in bash tool via
+    // the real builder below (correction-08 finding 1: placementForSpawn, never a
+    // fresh re-resolve — a slice NAME only resolves at start-up).
+    const placementCfg = placementForSpawn();
+    let placementCustomTools: CreateAgentSessionOptions['customTools'];
+    let placementSettings: SettingsManager | undefined;
+    if (placementCfg) {
+      placementSettings = SettingsManager.create(cwd, config.piAgentDir);
+      placementCustomTools = buildPlacementBashTools(placementCfg, sessionManager.getSessionId(), cwd, placementSettings);
+    }
+
     const { session } = await attributor.spanAsync('pi.session.create_agent_session', () => createAgentSession({
       sessionManager,
       modelRuntime,
       resourceLoader: sessionResourceLoader,
       cwd,
+      ...(placementSettings ? { settingsManager: placementSettings } : {}),
+      ...(placementCustomTools ? { customTools: placementCustomTools } : {}),
     }));
+
+    // D0 upstream-change alarm (runtime half): if a future SDK stops letting
+    // customTools override built-ins, degrade to the built-in loudly rather than
+    // silently running commands in the control plane's cgroup.
+    if (placementCfg && placementCustomTools && !isActiveBashOurs(session, placementCustomTools[0])) {
+      appendDegradeLine(placementCfg, session.sessionId, 'bash-tool-not-ours');
+      logger.warn(`[PiService] Placement bash tool is not active for session ${session.sessionId}; commands will run unplaced`);
+    }
 
     // Correction 02: the session owns its factory snapshot; /reload refreshes
     // exactly this snapshot (never another session's), and releaseSessionRefs

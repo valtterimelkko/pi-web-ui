@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
+import { planSpawnForSession, placementForSpawn } from '../placement/index.js';
 import { buildCommandCodeArgs } from './command-code-config.js';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import type { CommandCodeEffort, CommandCodeRuntimeModel } from './command-code-model-catalog.js';
@@ -54,6 +55,8 @@ const SAFE_ENV_KEYS = new Set([
 export class CommandCodeProcessRunner {
   private readonly executablePath: string;
   private readonly spawn: CommandCodeSpawn;
+  /** D0: placement plan for the active child (undefined when unplaced/finished). */
+  private activeLaunch: { cleanup(): void } | undefined;
   private readonly processGraceMs: number;
   private readonly maxWallTimeMs: number;
   private readonly maxStdoutLineBytes: number;
@@ -102,12 +105,22 @@ export class CommandCodeProcessRunner {
     // One direct child process with ordinary host networking, exactly like the
     // other runtimes: validated absolute executable, private native home,
     // bounded stdio, process-group cleanup.
-    const child = this.spawn(this.executablePath, args, {
+    // D0 placement: session-bound group keyed by the cmdc session id. When off,
+    // launch is the original argv/env byte-identically.
+    const cmdEnv = applySessionIdentityEnv(controlledEnvironment(this.nativeHomeDir, input.sessionId), input.sessionIdentity);
+    const launch = planSpawnForSession(
+      placementForSpawn(),
+      { kind: 'rt', runtime: 'commandcode', id: input.sessionId },
+      [this.executablePath, ...args],
+      cmdEnv,
+    ) ?? { file: this.executablePath, args, env: cmdEnv, group: '', cleanup: () => {} };
+    this.activeLaunch = launch;
+    const child = this.spawn(launch.file, launch.args, {
       cwd: input.cwd,
       detached: true,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: applySessionIdentityEnv(controlledEnvironment(this.nativeHomeDir, input.sessionId), input.sessionIdentity),
+      env: launch.env,
     });
     const parser = new CommandCodeNdjsonParser({
       maxLineBytes: this.maxStdoutLineBytes,
@@ -162,6 +175,8 @@ export class CommandCodeProcessRunner {
       if (settled) return;
       settled = true;
       clearTimers();
+      this.activeLaunch?.cleanup();
+      this.activeLaunch = undefined;
       let parsed: ParsedCommandCodeOutput | undefined;
       if (!protocolError) {
         try {

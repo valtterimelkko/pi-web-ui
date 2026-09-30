@@ -1,0 +1,33 @@
+# Pi Web UI agents' tool processes slice (D0, plan ORCHESTRATION-SCALING-READINESS D0).
+#
+# Sibling container for every command an agent child runs (bash tool, background
+# shells, subagent/runtime CLI processes). The control plane keeps its own budget in
+# pi-web-ui.service (see pi-web-ui-control-plane.conf); neither group can starve the
+# other of memory, and under host CPU contention the control plane's CPUWeight=1000
+# outweighs this slice's 100.
+#
+# Delegate=yes (correction 09): REQUIRED. Without it systemd resets
+# cgroup.subtree_control on every daemon-reload, and child groups created in the
+# slice get NO limit files (correction-09 live check: the server enables
+# +memory +pids [+cpu] in the slice's subtree_control at start-up; delegation
+# stops systemd from clearing that on reload).
+#
+# CPU weight honesty (correction-08 finding 4): the tools slice is nested under
+# pi.slice while the service sits under system.slice — both TOP-LEVEL groups carry
+# the default weight, so under full host contention this slice can take about half
+# the host. CPUWeight=100 here governs only relative shares WITHIN pi.slice; the
+# control plane needs ~one core of 16, which is why this is acceptable.
+#
+# Install (parent's rollout, never a lane's): copy to /etc/systemd/system/, then
+# `systemctl daemon-reload && systemctl start pi-web-ui-tools.slice`.
+[Unit]
+Description=Pi Web UI agents tool processes (D0 tools slice)
+Before=slices.target
+
+[Slice]
+# Degrade before kill (owner requirement): the soft high throttles first.
+Delegate=yes
+MemoryHigh=14G
+MemoryMax=18G
+MemorySwapMax=4G
+CPUWeight=100

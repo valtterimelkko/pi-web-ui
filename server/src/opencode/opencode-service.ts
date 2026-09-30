@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -1052,7 +1053,11 @@ export class OpenCodeService {
    */
   private async warmModelCache(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      const child = execFile('opencode', ['models'], { timeout: 90_000 }, (err) => {
+      // D0: short catalog probe — own group, removed when the probe exits.
+      const probe = planSpawnOwn(placementForSpawn(), ['opencode', 'models']) ??
+        { file: 'opencode', args: ['models'], env: undefined as NodeJS.ProcessEnv | undefined, group: '', cleanup: () => {} };
+      const child = execFile(probe.file, probe.args, { timeout: 90_000, ...(probe.env ? { env: probe.env } : {}) }, (err) => {
+        probe.cleanup();
         if (err) {
           logger.warn('[OpenCodeService] `opencode models` cache warm failed:', err.message);
           resolve(false);
@@ -1060,7 +1065,7 @@ export class OpenCodeService {
           resolve(true);
         }
       });
-      child.on('error', () => resolve(false));
+      child.on('error', () => { probe.cleanup(); resolve(false); });
     });
   }
 

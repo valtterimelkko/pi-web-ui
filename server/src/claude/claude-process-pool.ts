@@ -5,6 +5,7 @@
  */
 
 import { spawn, ChildProcess, execSync } from 'node:child_process';
+import { planSpawnForSession, placementForSpawn } from '../placement/index.js';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
@@ -185,9 +186,14 @@ export class ClaudeProcessPool {
       'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,Skill,TodoWrite';
     const permissionMode = options.resolvedLaunch?.sdkOptions.permissionMode ?? 'dontAsk';
 
-    const proc = spawn(
-      executable,
-      [
+    // D0 placement: session-bound group (deterministic per claudeSessionId); when
+    // placement is off, launch is the original argv/env byte-identically.
+    const launch = planSpawnForSession(
+      placementForSpawn(),
+      { kind: 'rt', runtime: 'claude', id: options.claudeSessionId },
+      [executable, '-p', options.prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode, '--allowedTools', allowedTools, '--model', effectiveModel, ...(options.effort ? ['--effort', options.effort] : []), ...extraCliArgs.filter((a) => a !== '--model' && a !== effectiveModel), ...(options.isFollowUp ? ['--resume', options.claudeSessionId] : ['--session-id', options.claudeSessionId])],
+      claudeEnv,
+    ) ?? { file: executable, args: [
         '-p', options.prompt,
         '--output-format', 'stream-json',
         '--verbose',
@@ -196,15 +202,17 @@ export class ClaudeProcessPool {
         '--model', effectiveModel,
         ...(options.effort ? ['--effort', options.effort] : []),
         ...extraCliArgs.filter((a) => a !== '--model' && a !== effectiveModel),
-        // First turn: --session-id creates the session.
-        // Follow-up turns: --resume avoids the session lock conflict.
         ...(options.isFollowUp
           ? ['--resume', options.claudeSessionId]
           : ['--session-id', options.claudeSessionId]),
-      ],
+      ], env: claudeEnv, group: '', cleanup: () => {} };
+
+    const proc = spawn(
+      launch.file,
+      launch.args,
       {
         cwd: options.cwd,
-        env: claudeEnv,
+        env: launch.env,
         // Explicitly ignore stdin so Claude CLI does not keep waiting for input.
         // Leaving stdin open can keep the process alive and make the next turn fail
         // with "Session ID ... is already in use".
@@ -282,6 +290,9 @@ export class ClaudeProcessPool {
     });
 
     proc.on('exit', async (code, signal) => {
+      // D0: the runtime process left its session group; remove it (the group is
+      // deterministically recreated on the next spawn of the same session).
+      launch.cleanup();
       // Guard: only clean up if this process is still the active one.
       // After an abort + new spawn, a stale exit handler may fire for the old
       // process — we must not delete the new process or emit stale events.

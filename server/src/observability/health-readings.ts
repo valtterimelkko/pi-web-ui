@@ -40,6 +40,12 @@ export interface HealthReadings {
   residentSessions: number | null;
   /** Session-registry entries, `null` when no source reports them. */
   registryEntries: number | null;
+  /** D0: tools-slice memory current (bytes); `null` when placement is off or unreadable. */
+  toolsSliceMemoryBytes: number | null;
+  /** D0: tools-slice cumulative `oom_kill` count; `null` when unavailable. */
+  toolsSliceOomKills: number | null;
+  /** D0: degrade events recorded since server start (wrapper fell open, tool not ours). */
+  placementDegrades: number | null;
   /**
    * Process CPU (user + system) across the sampling interval as a percentage
    * of one core; `null` on the first sample, when there is no interval yet.
@@ -217,6 +223,10 @@ export interface HealthReadingSources {
   residentSessions?: () => number | undefined;
   /** Registry entry count; the session registry loads lazily, so this may be async. */
   registryEntries?: () => number | undefined | Promise<number | undefined>;
+  /** D0: tools-slice reading; registered by the server when placement is enabled. */
+  toolsSlice?: () => { currentBytes?: number; oomKill?: number } | undefined;
+  /** D0: degrade count (wrapper fell open, replacement bash tool not active). */
+  placementDegrades?: () => number | undefined;
   /** Default active-turn classes: terminal turn counters from the operational metrics. */
   activeTurnsFromOperationalMetrics?: () => Record<string, number>;
   /**
@@ -337,6 +347,9 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
     activeTurns,
     residentSessions: positiveOrNull(safe<number | undefined>(sources.residentSessions, undefined)),
     registryEntries: positiveOrNull(registryEntries),
+    toolsSliceMemoryBytes: positiveOrNull(safe<{ currentBytes?: number } | undefined>(sources.toolsSlice, undefined)?.currentBytes),
+    toolsSliceOomKills: positiveOrNull(safe<{ oomKill?: number } | undefined>(sources.toolsSlice, undefined)?.oomKill),
+    placementDegrades: positiveOrNull(safe<number | undefined>(sources.placementDegrades, undefined)),
   };
 }
 
