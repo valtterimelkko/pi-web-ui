@@ -43,6 +43,17 @@ item-level count from the run, not an estimate.
 | Regression tests | None possible for an unreproduced episode; the attribution defect's regression tests are [`server/tests/unit/observability/loop-stall-attribution.test.ts`](../server/tests/unit/observability/loop-stall-attribution.test.ts) (G2, 2026-09-30 — sticky-context tests fail on the pre-fix code). |
 | Status | open — cause unknown; recurrence now attributable (G2 fix, pending merge/deploy). |
 
+### A.2 Tracked performance instance — slow WebSocket consumer stalls the event loop (added by lane G2 correction 02, 2026-09-30)
+
+| Field | Value |
+| --- | --- |
+| Instance | 2026-09-30, disposable-server runs `runs/g2-ep-c/c2/e` (lane G2 factor (a)): with one WebSocket subscriber attached to a streaming turn, the server's event loop stalled — lag p99 625 ms (window ≈25–120 s after prompt), shed mode tripped at 2,340 ms, and in the worst instance (with a coincident host-load spike 4.4→10.33) a 9,330 ms stall that the server did not recover from before the driver gave up. Wire frames were constant (401 B) — the cost is not frame size; CPU stayed flat (~5%). |
+| Evidence | `samples.csv` + subscriber frame logs in the G2 run directories; full table and reading in [`docs/plans/execution-reports/orchestration-scaling/G2.md`](./plans/execution-reports/orchestration-scaling/G2.md) Part 2b. The no-subscriber control in the same harness read 2 ms. |
+| Class | Performance (event-loop stall triggered by a slow/jerky WS consumer; the outbound governor's caps bound buffered memory (4–16 MB), which small frames never approach — it bounds memory, not latency). |
+| Outcome | **Named factor, mechanism unidentified** — the stall correlates with the subscriber's consumption behaviour (625 ms with a synchronously-reading subscriber; 110 ms with a buffered reader; 2 ms ×3 subscribers) and is early-turn-bounded. Per the owner rule there is **no fix proposal**; the instance is routed to R4 (G2.md "R4 items") for diagnosis — the streaming-path span is the instrument it needs. Text-stream subscriber arms were never measured (see G2.md Part 2b arm-completion note). |
+| Regression tests | None yet — the mechanism is unidentified; a regression test becomes possible once the mechanism is named. The observability gap is tracked as the G2.md R4 streaming-span item. |
+| Status | open — R4 item (diagnosis first). |
+
 ## B. Mechanism classes named in plan §6 E1
 
 These are recurring *ways engineering fixes go wrong*, found during the plan's own reviews.

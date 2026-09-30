@@ -133,7 +133,13 @@ describe('LoopStallAttributor — stall attribution', () => {
     scheduler.fire(clock, 0);
     const stall = attributor.snapshot().stalls[0];
     expect(stall.delayMs).toBe(275);
-    expect(stall.blockedBy).toEqual([{ name: 'pi.session.resource_loader', durationMs: 300 }]);
+    // Correction 02: the enclosing label frame was also on the loop across the
+    // miss, so it is named as co-evidence (without ids — it captured none); the
+    // completed inner span remains the direct blocker.
+    expect(stall.blockedBy).toEqual([
+      { name: 'pi.session.resource_loader', durationMs: 300 },
+      { name: 'pi.multi.rehydrate_session', durationMs: 300 },
+    ]);
   });
 
   it('leaves blockedBy empty when no measured span window covers the missed tick', () => {
@@ -466,5 +472,120 @@ describe('LoopStallAttributor — correlation-context hygiene (G2)', () => {
     expect(stall).toBeDefined();
     expect(stall.context).toBeUndefined();
     attributor.stop();
+  });
+});
+
+describe('LoopStallAttributor — blamed-evidence correlation (correction 02)', () => {
+  /**
+   * Review finding 1 [major]: a stall took its ids from the innermost frame of
+   * the process-wide frame array, which under overlapping spans is whichever
+   * operation happened to be entered last — not the operation that blocked.
+   * Concurrent turns are the orchestration case. Frozen rule: ids come from the
+   * frames actually blamed (the blockedBy/stack evidence); when several run
+   * contexts are blamed, each blocker carries its own ids and the stall carries
+   * none rather than a wrong one.
+   */
+
+  const CTX_A = { requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' };
+  const CTX_B = { requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' };
+
+  function setup(clock: { now: number }, onRecord: (event: LoopStallEvent) => void) {
+    const scheduler = new FakeScheduler();
+    const attributor = new LoopStallAttributor({
+      intervalMs: 25,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+      onRecord,
+    });
+    attributor.start();
+    scheduler.fire(clock, 0); // settle the first expected tick
+    return { attributor, scheduler };
+  }
+
+  it('takes the ids from the blamed span when an unrelated pending frame is innermost (reviewer probe)', () => {
+    const clock = { now: 1_000 };
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const { attributor, scheduler } = setup(clock, (event) => {
+      if (event.kind !== 'stall') return;
+      events.push(event);
+      createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+    });
+
+    // run_B's span blocks past the threshold: its measured window covers the
+    // missed tick. No other span exists at the missed instant.
+    withCorrelation(CTX_B, () => {
+      attributor.span('operation_B', () => { clock.now += 120; });
+    });
+
+    // run_A's spanAsync is entered after the missed instant and is still
+    // pending when the overdue tick fires: it is the innermost frame, but it
+    // did not block.
+    withCorrelation(CTX_A, () => {
+      void attributor.spanAsync('operation_A', () => new Promise(() => { /* pending */ }));
+    });
+
+    scheduler.fire(clock, 0);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    expect(stall.blockedBy[0]?.name).toBe('operation_B');
+    expect(stall.blockedBy[0]?.context).toEqual(CTX_B);
+    expect(stall.context).toEqual(CTX_B); // current code: CTX_A (innermost frame) — the wrong session
+    expect(lines.some((line) => line.includes('run=run_B') && !line.includes('run_A'))).toBe(true);
+    attributor.stop();
+  });
+
+  it('reports each blamed blocker with its own ids and no single wrong one when contexts are mixed', () => {
+    const clock = { now: 1_000 };
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const { attributor, scheduler } = setup(clock, (event) => {
+      if (event.kind !== 'stall') return;
+      events.push(event);
+      createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+    });
+
+    // operation_A (run_A) is pending and was entered before the missed tick:
+    // it counts as open blocking evidence alongside operation_B (run_B).
+    withCorrelation(CTX_A, () => {
+      void attributor.spanAsync('operation_A', () => new Promise(() => { /* pending */ }));
+    });
+    withCorrelation(CTX_B, () => {
+      attributor.span('operation_B', () => { clock.now += 120; });
+    });
+
+    scheduler.fire(clock, 0);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    const byName = new Map(stall.blockedBy.map((span) => [span.name, span]));
+    expect(byName.get('operation_A')?.context).toEqual(CTX_A);
+    expect(byName.get('operation_B')?.context).toEqual(CTX_B);
+    expect(stall.context).toBeUndefined(); // mixed contexts: none rather than a wrong one
+    const line = lines.join('\n');
+    expect(line).toContain('sid=sess_A');
+    expect(line).toContain('sid=sess_B');
+    attributor.stop();
+  });
+
+  it('renders per-blocker ids in the log line when several contexts are blamed', () => {
+    const warn = vi.fn();
+    const report = createLoopStallLogReporter({ warn }, { now: () => 0 });
+    report({
+      kind: 'stall',
+      label: '<none>',
+      delayMs: 400,
+      atMs: 0,
+      stack: [],
+      blockedBy: [
+        { name: 'operation_B', durationMs: 120, context: { requestId: 'req_B', sessionId: 'sess_B', runtime: 'pi' } },
+        { name: 'operation_A', durationMs: 70, context: { requestId: 'req_A', sessionId: 'sess_A', runtime: 'pi' } },
+      ],
+    });
+    const line = String(warn.mock.calls[0][0]);
+    expect(line).toContain('operation_B (120 ms [req=req_B sid=sess_B rt=pi])');
+    expect(line).toContain('operation_A (70 ms [req=req_A sid=sess_A rt=pi])');
   });
 });

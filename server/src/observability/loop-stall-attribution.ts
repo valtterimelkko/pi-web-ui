@@ -32,13 +32,16 @@ import { getCorrelationContext, runOutsideCorrelation } from '../logging/correla
  * It is deliberately provider-free and model-free: every number it reports is
  * measured from the process clock.
  *
- * Correlation hygiene (G2): the sampler's timer chain is scheduled — and every
- * tick runs — outside any logging correlation context, so a session's ids can
- * never stick to later stall lines through the chain (the 2026-09-30 finding:
- * all stall lines since a restart carried the first session's ids). Instead,
- * each span frame captures the ids of the context that entered it, and a stall
- * carries the innermost active frame's ids: correct ids while a run's work is
- * on the loop, none after the run ends.
+ * Correlation hygiene (G2, correction 02): the sampler's timer chain is
+ * scheduled — and every tick runs — outside any logging correlation context, so
+ * a session's ids can never stick to later stall lines through the chain (the
+ * 2026-09-30 finding: all stall lines since a restart carried the first
+ * session's ids). Ids are attributed only from the frames actually blamed —
+ * completed or still-open spans covering the missed instant, and stack frames
+ * entered before it — each with its own ids; when several runs are blamed the
+ * stall carries none rather than a wrong one. Stalls are emitted through a
+ * context-bound logger so the ids are structured record fields as well as
+ * readable suffix text.
  */
 
 export type LoopSpanKind = 'sync' | 'async';
@@ -47,6 +50,8 @@ export type LoopSpanKind = 'sync' | 'async';
 export interface LoopBlockingSpan {
   name: string;
   durationMs: number;
+  /** Ids of the run that entered this span — its own, not any other frame's. */
+  context?: LoopStallContext;
 }
 
 /**
@@ -120,6 +125,8 @@ export interface LoopSpanRecord {
   name: string;
   durationMs: number;
   atMs: number;
+  /** Ids of the context that entered this span. */
+  context?: LoopStallContext;
 }
 
 export interface LoopLabelStats {
@@ -157,9 +164,10 @@ const MAX_RECENT_SPANS = 32;
 const NO_LABEL = '<none>';
 const OTHER_LABEL = '<other>';
 
-/** One active label plus the correlation ids of the context that entered it. */
+/** One active label, when it was entered, and the ids of the context that entered it. */
 interface LabelFrame {
   label: string;
+  enteredAt: number;
   context?: LoopStallContext;
 }
 
@@ -174,6 +182,11 @@ function captureStallContext(): LoopStallContext | undefined {
   if (typeof store.runtime === 'string') context.runtime = store.runtime;
   if (typeof store.executionInstanceId === 'string') context.executionInstanceId = store.executionInstanceId;
   return Object.keys(context).length > 0 ? context : undefined;
+}
+
+/** Identity of a captured context, for counting distinct blamed runs. */
+function contextKey(context: LoopStallContext): string {
+  return JSON.stringify(context);
 }
 
 const logger = createLogger('LoopAttribution');
@@ -280,14 +293,39 @@ export class LoopStallAttributor {
       const innermost = this.frames.length > 0 ? this.frames[this.frames.length - 1] : undefined;
       const label = this.normalizeLabel(innermost ? innermost.label : NO_LABEL);
       const stack = this.frames.map((frame) => frame.label);
-      // The overdue tick can only run after a blocking synchronous span exits,
-      // so the enclosing label is a level too coarse. Any measured span whose
-      // window covers the instant the tick was due is the direct evidence.
+      // The overdue tick can only run after blocking synchronous work exits, so
+      // the enclosing label is a level too coarse — and under overlapping spans
+      // the innermost REMAINING frame may be an unrelated pending operation.
+      // Ids therefore come only from the frames actually blamed: completed
+      // spans whose measured window covers the missed instant, plus still-open
+      // spans that had already started. Each carries its OWN ids; when several
+      // distinct runs are blamed the stall carries none rather than a wrong one
+      // (correction 02, review finding 1).
       const missedAt = this.expectedAt;
-      const blockedBy = this.recentSpans
-        .filter((span) => span.atMs <= missedAt && span.atMs + span.durationMs >= missedAt)
-        .map((span) => ({ name: span.name, durationMs: span.durationMs }));
-      const context = innermost?.context;
+      const blockedBy: LoopBlockingSpan[] = [];
+      for (const span of this.recentSpans) {
+        if (span.atMs <= missedAt && span.atMs + span.durationMs >= missedAt) {
+          blockedBy.push(span.context
+            ? { name: span.name, durationMs: span.durationMs, context: { ...span.context } }
+            : { name: span.name, durationMs: span.durationMs });
+        }
+      }
+      for (const frame of this.frames) {
+        // A frame entered before the missed instant and still on the stack was
+        // on the loop across the miss — blocking evidence with its own ids. A
+        // frame entered AFTER the miss (an unrelated operation that started
+        // while the loop was already behind) is not blamed.
+        if (frame.enteredAt <= missedAt) {
+          blockedBy.push(frame.context
+            ? { name: frame.label, durationMs: Math.max(0, now - frame.enteredAt), context: { ...frame.context } }
+            : { name: frame.label, durationMs: Math.max(0, now - frame.enteredAt) });
+        }
+      }
+      const blamed = new Map<string, LoopStallContext>();
+      for (const blocker of blockedBy) {
+        if (blocker.context) blamed.set(contextKey(blocker.context), blocker.context);
+      }
+      const context = blamed.size === 1 ? [...blamed.values()][0] : undefined;
       this.recordStall({ atMs: now, delayMs, label, stack, blockedBy, context });
       this.emit({ kind: 'stall', label, delayMs, atMs: now, stack, blockedBy, context });
     }
@@ -298,7 +336,7 @@ export class LoopStallAttributor {
 
   /** Push a label; the returned function pops it (idempotent). */
   enter(label: string): () => void {
-    const frame: LabelFrame = { label, context: captureStallContext() };
+    const frame: LabelFrame = { label, enteredAt: this.now(), context: captureStallContext() };
     this.frames.push(frame);
     let active = true;
     return () => {
@@ -312,24 +350,26 @@ export class LoopStallAttributor {
   /** Measure one synchronous operation. */
   span<T>(label: string, fn: () => T): T {
     const startedAt = this.now();
+    const context = captureStallContext();
     const exit = this.enter(label);
     try {
       return fn();
     } finally {
       exit();
-      this.recordSpan({ kind: 'sync', name: label, durationMs: Math.max(0, this.now() - startedAt), atMs: startedAt });
+      this.recordSpan({ kind: 'sync', name: label, durationMs: Math.max(0, this.now() - startedAt), atMs: startedAt, context });
     }
   }
 
   /** Measure one asynchronous operation (duration includes awaited work). */
   async spanAsync<T>(label: string, fn: () => Promise<T>): Promise<T> {
     const startedAt = this.now();
+    const context = captureStallContext();
     const exit = this.enter(label);
     try {
       return await fn();
     } finally {
       exit();
-      this.recordSpan({ kind: 'async', name: label, durationMs: Math.max(0, this.now() - startedAt), atMs: startedAt });
+      this.recordSpan({ kind: 'async', name: label, durationMs: Math.max(0, this.now() - startedAt), atMs: startedAt, context });
     }
   }
 
@@ -439,22 +479,67 @@ export function createLoopStallLogReporter(
       if (previous !== undefined && at - previous < minIntervalMs) return;
       lastLoggedAt.set(event.label, at);
       if (event.kind === 'stall') {
+        // Mixed blamed contexts: each blocker carries its own ids so no single
+        // wrong session is named. With one blamed run the stall-level suffix
+        // already carries the ids.
+        const distinct = new Set(event.blockedBy.filter((span) => span.context).map((span) => contextKey(span.context as LoopStallContext)));
+        const mixed = distinct.size > 1;
         const blocker = event.blockedBy.length > 0
-          ? ` blocked by ${event.blockedBy.map((span) => `${span.name} (${Math.round(span.durationMs)} ms)`).join(', ')}`
+          ? ` blocked by ${event.blockedBy.map((span) => {
+            const spanSuffix = mixed ? formatStallContextSuffix(span.context).trimStart() : '';
+            return `${span.name} (${Math.round(span.durationMs)} ms${spanSuffix ? ` ${spanSuffix}` : ''})`;
+          }).join(', ')}`
           : '';
-        sink.warn(
+        const base =
           `event-loop stall ${event.delayMs} ms attributed to ${event.label}` +
-          formatStallContextSuffix(event.context) +
           (event.stack.length > 1 ? ` (stack ${event.stack.join(' > ')})` : '') +
-          blocker,
-        );
+          blocker;
+        emitStallLine(sink, base, formatStallContextSuffix(event.context), event.context);
       } else {
-        sink.warn(`${event.spanKind} span ${event.durationMs} ms: ${event.label}`);
+        emitStallLine(sink, `${event.spanKind} span ${event.durationMs} ms: ${event.label}`, '', undefined);
       }
     } catch {
       // A logging failure must never break the instrumented path.
     }
   };
+}
+
+/** Structured correlation fields for a captured context, in logger field order. */
+function correlationFields(context: LoopStallContext): Record<string, string> {
+  const fields: Record<string, string> = {};
+  if (context.requestId) fields.requestId = context.requestId;
+  if (context.runId) fields.runId = context.runId;
+  if (context.sessionId) fields.sessionId = context.sessionId;
+  if (context.runtime) fields.runtime = context.runtime;
+  if (context.executionInstanceId) fields.executionInstanceId = context.executionInstanceId;
+  return fields;
+}
+
+/**
+ * Emit a stall/span line. When the line carries a captured context and the sink
+ * supports child loggers (the central logger does), emit through a
+ * context-bound child: the ids land as STRUCTURED record fields, so the
+ * diagnostics buffer's selectors (getRecentLogs({sessionId}) / ({runId})) find
+ * the stall (correction 02, review finding 2), and the logger renders its own
+ * readable suffix from those fields — exactly one suffix on the emitted line.
+ * Plain sinks get the manually rendered suffix appended instead, so test and
+ * custom sinks see the same ids in the text.
+ */
+function emitStallLine(
+  sink: LoopStallLogSink,
+  base: string,
+  suffix: string,
+  context: LoopStallContext | undefined,
+): void {
+  if (context) {
+    const fields = correlationFields(context);
+    const childSink = sink as LoopStallLogSink & { child?: (ctx: Record<string, unknown>) => LoopStallLogSink };
+    if (typeof childSink.child === 'function' && Object.keys(fields).length > 0) {
+      childSink.child(fields).warn(base);
+      return;
+    }
+  }
+  sink.warn(`${base}${suffix}`);
 }
 
 /**

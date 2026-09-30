@@ -8,6 +8,8 @@ import {
   scrubRecord,
   clearDiagnosticsBuffer,
 } from '../../../src/internal-api/diagnostics-buffer.js';
+import { setLogTap } from '../../../src/logging/logger.js';
+import { createLoopStallLogReporter } from '../../../src/observability/loop-stall-attribution.js';
 
 function rec(over: Partial<LogRecord> = {}): LogRecord {
   return {
@@ -182,5 +184,46 @@ describe('diagnostics ring buffer — capture & query (Task 10)', () => {
     expect(stored.msg).not.toContain('s3cr3t.tok');
     expect(JSON.stringify(stored)).not.toContain('sk-proj-1234567890abcdef');
     expect((stored as Record<string, unknown>).apiKey).toBe('[REDACTED]');
+  });
+});
+
+describe('diagnostics selector — LoopAttribution stall records (correction 02)', () => {
+  /**
+   * Review finding 2 [major]: the detached sampler's stall lines carried their
+   * run ids only inside the message text, so getRecentLogs({sessionId}) and
+   * getRecentLogs({runId}) — which filter structured record fields — missed
+   * them. The reporter must emit through a context-bound logger so the ids land
+   * as structured fields, keeping the readable suffix.
+   */
+  it('finds a stall line by sessionId and by runId from its captured context', () => {
+    clearDiagnosticsBuffer();
+    setLogTap((record) => pushDiagnosticsRecord(record));
+    try {
+      const report = createLoopStallLogReporter(); // default sink: the central logger
+      report({
+        kind: 'stall',
+        label: 'pi.session.stream',
+        delayMs: 250,
+        atMs: 0,
+        stack: ['pi.session.stream'],
+        blockedBy: [],
+        context: { requestId: 'req_diag', runId: 'run_diag', sessionId: 'sess_diag', runtime: 'pi' },
+      });
+      const bySession = getRecentLogs({ sessionId: 'sess_diag' });
+      expect(bySession.some((r) => r.component === 'LoopAttribution' && r.msg.includes('event-loop stall 250 ms'))).toBe(true);
+      const byRun = getRecentLogs({ runId: 'run_diag' });
+      expect(byRun.some((r) => r.component === 'LoopAttribution')).toBe(true);
+      const record = bySession.find((r) => r.component === 'LoopAttribution');
+      expect(record?.sessionId).toBe('sess_diag');
+      expect(record?.runId).toBe('run_diag');
+      expect(record?.requestId).toBe('req_diag');
+      expect(record?.runtime).toBe('pi');
+      // The rendered journal line keeps the readable suffix via the logger's own
+      // correlation stamp from these structured fields; the plain-sink reporter
+      // tests above pin the same suffix in message text.
+    } finally {
+      setLogTap(null);
+      clearDiagnosticsBuffer();
+    }
   });
 });

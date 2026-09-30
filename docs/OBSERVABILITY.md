@@ -501,13 +501,15 @@ with two measured, bounded instruments:
   This is a measurement, not a timing correlation: it cannot attribute a stall
   to an operation that was merely happening nearby.
 
-Correlation hygiene (G2): the sampler's timer chain runs outside any logging
-correlation context. A span frame captures the ids of the `withCorrelation`
-scope that entered it, and a stall carries the innermost active frame's ids in
-the logger's suffix style — correct ids while that run's work is on the loop,
-none after the run ends. (Before G2, the sampler inherited the first session's
-context at its lazy `start()` and stamped that session's ids onto every later
-stall line, including after the session finished.)
+Correlation hygiene (G2, correction 02): the sampler's timer chain runs outside
+any logging correlation context, so no session's ids can stick to stall lines
+through the chain (the pre-G2 defect: the first session's ids stamped every
+later stall line). Ids are attributed only from the frames actually blamed —
+completed or still-open spans whose window covers the missed instant, plus stack
+frames entered before it — each with its own ids; when several runs are blamed
+the stall carries none rather than a wrong one. Stalls are emitted through a
+context-bound logger, so the ids are structured record fields:
+`getRecentLogs({sessionId})` and `getRecentLogs({runId})` find them.
 
 Recorded lines (rate-limited to at most one per label per 5 s, so a stall storm
 cannot itself become the stall) go through the central logger and therefore land
