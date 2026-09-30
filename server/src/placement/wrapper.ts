@@ -62,38 +62,41 @@ if [ -n "$CG" ]; then
   fi
 fi
 if [ -n "$CG" ] && [ "$bounded" -eq 1 ]; then
-  fresh=0
-  if [ ! -d "$CG" ]; then
-    mkdir -p -- "$CG" 2>/dev/null || true
-    fresh=1
-  fi
-  # Write limits when the group is fresh AND unbounded: a kernel-created cgroup
-  # already contains cgroup.procs and memory.max=max, so the discriminator is the
-  # memory.max VALUE, not the file's existence (proof-caught bug, 2026-09-30).
-  cur=""
-  if [ -d "$CG" ] && [ -r "$CG/memory.max" ]; then
-    cur=$(cat "$CG/memory.max" 2>/dev/null)
-  fi
-  wrote_limits=0
-  if [ -d "$CG" ] && { [ "$fresh" -eq 1 ] || [ -z "$cur" ] || [ "$cur" = "max" ]; }; then
-    [ -n "\${PI_TOOLS_MEM_MAX:-}" ] && echo "$PI_TOOLS_MEM_MAX" > "$CG/memory.max" 2>/dev/null || note "limit-write-failed-memory-max"
-    [ -n "\${PI_TOOLS_MEM_HIGH:-}" ] && echo "$PI_TOOLS_MEM_HIGH" > "$CG/memory.high" 2>/dev/null || note "limit-write-failed-memory-high"
-    [ -n "\${PI_TOOLS_PIDS_MAX:-}" ] && echo "$PI_TOOLS_PIDS_MAX" > "$CG/pids.max" 2>/dev/null || note "limit-write-failed-pids-max"
-    [ -n "\${PI_TOOLS_SWAP_MAX:-}" ] && echo "$PI_TOOLS_SWAP_MAX" > "$CG/memory.swap.max" 2>/dev/null || note "limit-write-failed-swap-max"
-    wrote_limits=1
-  fi
-  # Correction 03 item 3: all-or-nothing. Read the limits back; any mismatch means
-  # the group is NOT bounded as required — remove it and fall open. A command never
-  # runs in a group whose memory.max is max.
-  if [ "$wrote_limits" -eq 1 ]; then
-    rb_max=$(cat "$CG/memory.max" 2>/dev/null)
-    rb_pids=$(cat "$CG/pids.max" 2>/dev/null)
-    if [ "$rb_max" != "$PI_TOOLS_MEM_MAX" ] || [ "$rb_pids" != "$PI_TOOLS_PIDS_MAX" ]; then
-      echo 1 > "$CG/cgroup.kill" 2>/dev/null
-      rm -rf -- "$CG" 2>/dev/null
-      note "limit-readback-failed"
-      CG=""
+  mkdir -p -- "$CG" 2>/dev/null || true
+  # Correction-06 finding 3: ALL-OR-NOTHING. Every required limit is written (when
+  # fresh or unbounded) and then READ BACK and compared with the configured value
+  # BEFORE exec; any write or read-back mismatch removes the group and falls open.
+  # A command never runs in a group whose limits are foreign or unbounded.
+  ok=1
+  ensure_limit() {
+    f="$CG/$1"
+    v=$(cat "$f" 2>/dev/null)
+    if [ "$v" != "$2" ]; then
+      echo "$2" > "$f" 2>/dev/null
+      v=$(cat "$f" 2>/dev/null)
     fi
+    [ "$v" = "$2" ] || { note "limit-readback-failed:$1"; ok=0; }
+  }
+  ensure_limit memory.max "$PI_TOOLS_MEM_MAX"
+  ensure_limit memory.high "$PI_TOOLS_MEM_HIGH"
+  ensure_limit pids.max "$PI_TOOLS_PIDS_MAX"
+  ensure_limit memory.swap.max "$PI_TOOLS_SWAP_MAX"
+  if [ "$ok" -ne 1 ]; then
+    echo 1 > "$CG/cgroup.kill" 2>/dev/null || true
+    rmdir -- "$CG" 2>/dev/null || true
+    note "limit-readback-failed"
+    CG=""
+  fi
+fi
+if [ -n "$CG" ]; then
+  # Answer 04: placed commands run at a normal OOM score — VERIFIED before the
+  # join, so a failed reset stays in the original cgroup (correction-06 finding 3).
+  score_file="\${PI_TOOLS_OOM_SCORE_FILE:-/proc/self/oom_score_adj}"
+  echo 0 > "$score_file" 2>/dev/null
+  score=$(cat "$score_file" 2>/dev/null)
+  if [ "$score" != "0" ]; then
+    note "oom-score-reset-failed"
+    CG=""
   fi
 fi
 if [ -n "$CG" ]; then
@@ -107,11 +110,6 @@ if [ -n "$CG" ]; then
 fi
 [ "$placed" -eq 1 ] || [ -z "\${PI_TOOLS_CG:-}" ] || note "fell-open"
 
-# Answer 04: placed commands run at a normal OOM score (the server inherits
-# OOMScoreAdjust=-500; children reset to 0 before exec).
-if [ "$placed" -eq 1 ]; then
-  echo 0 > /proc/self/oom_score_adj 2>/dev/null || note "oom-score-reset-failed"
-fi
 
 if [ "$#" -eq 0 ]; then
   exec "$SHELL_BIN"

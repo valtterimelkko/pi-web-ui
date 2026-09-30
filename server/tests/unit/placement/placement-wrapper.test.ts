@@ -73,14 +73,14 @@ describe('placement wrapper script (real script against a fake cgroup root)', ()
     expect(existsSync(path.join(root.slice, 'degrade.log'))).toBe(false);
   });
 
-  it('joins an existing group without rewriting limits', () => {
+  it('JOINED groups are held to the configured bounds (correction-06 finding 3)', () => {
     const env = writeGroupEnv(root.slice, 'pi-s2');
     mkdirSync(path.join(root.slice, 'pi-s2'), { recursive: true });
     writeFileSync(path.join(root.slice, 'pi-s2', 'memory.max'), '111\n');
     writeFileSync(path.join(root.slice, 'pi-s2', 'cgroup.procs'), '');
-    const res = runWrapper(env, ['-c', 'cat /proc/self/cgroup'], root.root);
+    const res = runWrapper(env, ['-c', 'cat "$PI_TOOLS_CG/cgroup.procs"'], root.root);
     expect(res.status).toBe(0);
-    expect(readFileSync(path.join(root.slice, 'pi-s2', 'memory.max'), 'utf8').trim()).toBe('111');
+    expect(readFileSync(path.join(root.slice, 'pi-s2', 'memory.max'), 'utf8').trim()).toBe(String(6 * GiB));
   });
 
   it('writes limits into a REAL-shaped fresh cgroup (cgroup.procs pre-exists, memory.max=max)', () => {
@@ -168,8 +168,10 @@ describe('placement wrapper script (real script against a fake cgroup root)', ()
     symlinkSync('/dev/null', path.join(root.slice, 'pi-rb', 'memory.max'));
     const res = runWrapper(env, ['-c', 'echo ran'], root.root);
     expect(res.status).toBe(0);
-    expect(existsSync(path.join(root.slice, 'pi-rb'))).toBe(false); // group removed
+    // On a real cgroupfs the emptied directory rmdirs; the fake keeps regular files
+    // (rmdir fails), so assert the CONTRACT — degrade + unplaced — not the physical rmdir.
     expect(readFileSync(path.join(root.slice, 'degrade.log'), 'utf8')).toContain('limit-readback-failed');
+    expect(res.cgroup ?? 'ran').not.toContain('pi-rb'); // unplaced
   });
 
   it('OOM SCORE (answer 04): a placed command runs at oom_score_adj 0', () => {
@@ -184,5 +186,40 @@ describe('placement wrapper script (real script against a fake cgroup root)', ()
     } finally {
       writeFileSync(selfAdj, before);
     }
+  });
+
+  // ── Correction-06 finding 3 (major): the placement is ALL-OR-NOTHING ──────
+
+  function faultCase(limitFile: string, env: Record<string, string>): { res: ReturnType<typeof runWrapper>; degrade: string } {
+    const leaf = path.join(root.slice, 'pi-fault');
+    mkdirSync(leaf, { recursive: true });
+    writeFileSync(path.join(leaf, 'cgroup.procs'), ''); // kernel shape
+    rmSync(path.join(leaf, limitFile), { force: true });
+    symlinkSync('/dev/null', path.join(leaf, limitFile)); // writes vanish; read-back empty
+    const res = runWrapper(env, ['-c', 'cat /proc/self/cgroup'], root.root);
+    const degrade = readFileSync(path.join(root.slice, 'degrade.log'), 'utf8');
+    rmSync(leaf, { recursive: true, force: true });
+    rmSync(path.join(root.slice, 'degrade.log'), { force: true });
+    return { res, degrade };
+  }
+
+  it.each([
+    ['memory.max'], ['memory.high'], ['pids.max'], ['memory.swap.max'],
+  ])('FAULT %s: a failed write/read-back leaves the command unplaced with a degrade', (limitFile) => {
+    const env = writeGroupEnv(root.slice, 'pi-fault');
+    const { res, degrade } = faultCase(limitFile, env);
+    expect(res.status).toBe(0);
+    expect(degrade).toContain('limit-readback-failed');
+    expect(res.cgroup ?? '').not.toContain('pi-fault'); // unplaced
+  });
+
+
+  it('OOM SCORE FAULT: a failed oom_score reset stays in the original cgroup with a degrade', () => {
+    const env = writeGroupEnv(root.slice, 'pi-oomf');
+    env.PI_TOOLS_OOM_SCORE_FILE = '/dev/null'; // the reset write vanishes; read-back empty
+    const res = runWrapper(env, ['-c', 'cat /proc/self/cgroup'], root.root);
+    expect(res.status).toBe(0);
+    expect(readFileSync(path.join(root.slice, 'degrade.log'), 'utf8')).toContain('oom-score-reset-failed');
+    expect(res.cgroup ?? '').not.toContain('pi-oomf'); // stayed in the original cgroup
   });
 });

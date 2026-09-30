@@ -11,7 +11,7 @@ import {
   type ResolvedPidsCapacity,
   type ResolvedMemoryEvents,
 } from './cgroup-capacity.js';
-import { resolvePlacementConfig } from '../placement/index.js';
+import { getActivePlacementConfig, resolvePlacementConfig } from '../placement/index.js';
 import { readHostPressure, type ResolvedHostPressure } from './host-pressure.js';
 import type { SessionRuntime } from './types.js';
 
@@ -522,8 +522,10 @@ export function connectAdmissionToLagReadings(
  * tool work counts against the slice's own budget, not only the server's cgroup.
  */
 export function readMemoryCapacity(): MemoryCapacity {
-  const placement = resolvePlacementConfig();
-  if (!placement.enabled) return readServiceMemoryCapacity();
+  // Correction-06 finding 1: read the APPLIED config (resolved + verified at
+  // start-up); a raw re-resolve would lose a slice NAME's root.
+  const placement = getActivePlacementConfig() ?? resolvePlacementConfig();
+  if (!placement.enabled || !placement.toolsRoot) return readServiceMemoryCapacity();
   return readSplitMemoryCapacity({ toolsCgroupPath: placement.toolsRoot });
 }
 

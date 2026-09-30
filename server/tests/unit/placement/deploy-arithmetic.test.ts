@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_PER_CHILD, MEASURED_SIZING, GiB } from '../../../src/placement/defaults.js';
 
@@ -31,16 +31,28 @@ describe('D0 deploy unit arithmetic (amendment A)', () => {
     expect(sliceMax + controlMax).toBeLessThanOrEqual(26); // host has 30G; leaves room for other tenants
   });
 
-  it('answer-04 drop-ins: OOMPolicy=continue and OOMScoreAdjust=-500, order-constrained', () => {
+  it('answer-04 + correction-06 finding 6: placement + OOM score are ONE drop-in', () => {
+    const placement = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-placement.conf'), 'utf8');
+    expect(placement).toMatch(/^Environment=PI_TOOLS_PLACEMENT=on$/m);
+    expect(placement).toMatch(/^Environment=PI_TOOLS_SLICE=pi-web-ui-tools.slice$/m);
+    expect(placement).toMatch(/^OOMScoreAdjust=-500$/m);
+    // The pairing is pinned: one file, one rollback (delete file + drain-restart).
+    expect(placement).toMatch(/ROLLBACK/i);
+    // The separate OOM-score file must NOT exist (superseded by the merged drop-in).
+    expect(existsSync(path.join(repoRoot, 'deploy/pi-web-ui-oom-score.conf'))).toBe(false);
+    // OOMPolicy stays its own independent drop-in.
     const policy = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-oom-policy.conf'), 'utf8');
     expect(policy).toMatch(/^OOMPolicy=continue$/m);
     expect(policy).not.toMatch(/^OOMPolicy=stop$/m);
-    const score = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-oom-score.conf'), 'utf8');
-    expect(score).toMatch(/^OOMScoreAdjust=-500$/m);
-    // Binding rollout order: the -500 score drop-in is installed only together with
-    // PI_TOOLS_PLACEMENT=on (otherwise unplaced children inherit -500).
-    expect(score).toMatch(/PI_TOOLS_PLACEMENT=on/);
-    expect(score).toMatch(/order/i);
+  });
+
+  it('correction-06 finding 5: system.slice ancestor MemoryLow for hierarchical protection', () => {
+    const sysLow = readFileSync(path.join(repoRoot, 'deploy/system-slice-memory-low.conf'), 'utf8');
+    expect(sysLow).toMatch(/^MemoryLow=2G$/m);
+    // The service's own MemoryLow must equal the ancestor grant (2G) for the
+    // protection to be fully effective down the hierarchy.
+    const dropin = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-control-plane.conf'), 'utf8');
+    expect(dropin).toMatch(/^MemoryLow=2G$/m);
   });
 
   it('the placement wrapper resets placed commands to oom_score_adj 0 (wrapper test asserts it live)', () => {
