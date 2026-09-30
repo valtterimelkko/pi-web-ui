@@ -168,3 +168,48 @@ Evidence preserved: `/root/l1-validation/a2-recheck/validation/proof-report.json
 | 5. Evidence: this bundle and `complete.md` with `FROZEN` last | **met** | this file; `/root/orch-ops/orchestration-scaling/l1/complete.md` |
 
 Honest weaker form: **16 of 16 live checks** and **17 of 17 A2-recheck checks** pass at build `8ff0fdb9`; the full server unit suite did not complete a clean 6050/6050 run — two runs produced 2 and 1 transient failures, every one green alone.
+
+## Correction 01 (parent adjudication of `reviews/l1-luna-review.md`)
+
+All four review findings were accepted (the review's blind-spot adjudications are recorded in that file; all were ACCEPT except the full-suite finding, which this round closes). This section records each item's closure.
+
+| Finding | Fix | RED | GREEN |
+| --- | --- | --- | --- |
+| 1 [major] cooldown anchored on the debounce-completion reading | `openIncident` compares the cooldown against the pending incident start (`pendingStartMs`) — the excursion's first crossing — and the `cooldownMs` contract says so | reviewer's exact straddled-boundary case: close at 2,000 ms, highs at 61,999 and 62,000 ms, 60 s cooldown, debounce 2 → alert emitted (exit 1; `red-correction-01.txt`) | 3 files exit 0, **53 passed** (`green-correction-01.txt`) |
+| 2 [major] full server unit suite never green | run at `nice -n 10` while the T1 load lane ran | attempt 1: exit 1 — 6047 passed, 1 failed, 3 skipped; `internal-api/session-routes-post-terminal-fence` is an **E1 ledger class instance** ("A test passes alone but fails under full-suite load"; the ledger already names this same file, C2 `baed7378`); re-run alone exit 0 | attempt 2: **exit 0 — "Test Files 494 passed (494)"; "Tests 6048 passed | 3 skipped (6051)"** (`server-unit-correction-02.txt`) |
+| 3 [minor] live-proof ballast relied on allocator/GC timing | both drivers grow page-held ballast rounds by index assignment until the post-GC retained floor clears the threshold + margin, and `evaluate()` now throws on `exceptionDetails` | the old `push(...2 000 000)` exceeds V8's argument limit and threw "Maximum call stack size exceeded" into a swallowing `evaluate()`; the driver then retained ≈3 % and rode the allocation transient (the reviewer's 10.74 % → 6.68 %) | L1 run7: **17/17**, retained floor **13.79 %**, consecutive pair 10.20 % → 13.79 % matching the incident's `startedAt`/opening reading; A2 re-validation: **18/18**, retained 14.38 % |
+| 4 [minor] stale diff stat | reviewed HEAD `def1d8b5` = **13 files, +1663/−23** (reviewer-confirmed), plus this round's changes recorded in `complete.md` | — | `git diff --stat b64e1f0b...def1d8b5` |
+| 5 [minor] docs | this section and the `complete.md` `CORRECTION 01` block | — | — |
+
+### Correction-round receipts
+
+```
+# RED (finding 1)
+$ cd server && env -u PI_MAX_SESSIONS -u OPENCODE_ENABLED -u CLAUDE_CODE_SESSION_ID -u CLAUDE_WATCH_WAKE_ARMED NODE_ENV=test npx vitest run tests/unit/observability/health-alerts.test.ts
+→ exit 1 — "Tests 1 failed | 11 passed (12)"; the failure is the reviewer's case at health-alerts.test.ts:258
+# GREEN (finding 1)
+$ … vitest run tests/unit/observability/health-alerts.test.ts tests/unit/observability/health-readings.test.ts tests/unit/observability/health-telemetry.test.ts
+→ exit 0 — "Tests 53 passed (53)"
+# Full server unit suite, nice -n 10, under the T1 load lane
+$ npx vitest run tests/unit (attempt 1) → exit 1 — 6047 passed, 1 failed, 3 skipped
+$ npx vitest run tests/unit/internal-api/session-routes-post-terminal-fence.test.ts → exit 0 — "Tests 3 passed (3)"
+$ npx vitest run tests/unit (attempt 2) → exit 0 — "Test Files 494 passed (494)"; "Tests 6048 passed | 3 skipped (6051)"
+# Other gates
+npm run lint → exit 0 — "0 errors, 296 warnings" (none in touched files)
+npm run typecheck → exit 0
+npm run build → exit 0 (at 2849dbf9; no server/src change after)
+npx vitest run tests/unit/internal-api/contract-stability-window.test.ts → exit 0 — 18 passed
+# Disposable live proofs (servers stopped and verified gone)
+node server/tests/integration/health-incident-live-proof.mjs … → exit 0 — "PROOF OK"; 17/17
+node server/tests/integration/health-telemetry-live-proof.mjs … → exit 0 — "PROOF OK"; 18/18
+```
+
+### Why the ballast had been passing
+
+`push(...Array.from({ length: 2_000_000 }, …))` exceeds V8's argument limit and throws; the drivers' `evaluate()` ignored `exceptionDetails`, so only the first `Array.from` assignment was ever retained (about 3 % of the heap) and the alert rode the allocation transient. That is exactly the reviewer's 10.74 % → 6.68 % observation, and it reproduced locally (`node -e` spread throw). Both drivers now fail loudly on an evaluation exception, measure the retained floor after a forced GC, and only then expect the debounce's consecutive high readings. The fix also surfaced, through the new exception check, a second latent driver bug (a top-level `const base` redeclaring itself across evaluations); the round expression is IIFE-wrapped.
+
+### Flake class (E1 ledger)
+
+The attempt-1 failure belongs to the ledger's open class "A test passes alone but fails under full-suite load" (`docs/RECURRING-DEFECT-LEDGER.md` §B), whose row already lists `server/tests/unit/internal-api/session-routes-post-terminal-fence.test.ts`. This lane did not edit the ledger (outside its owned paths); the instance is recorded here for the parent's E1 bookkeeping.
+
+Correction-round code/tests diff: `git diff --stat def1d8b5...HEAD` → **4 files, +186/−13** (the correction-round docs commit adds this section on top).
