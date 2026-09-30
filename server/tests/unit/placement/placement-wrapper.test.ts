@@ -79,6 +79,22 @@ describe('placement wrapper script (real script against a fake cgroup root)', ()
     expect(readFileSync(path.join(root.slice, 'pi-s2', 'memory.max'), 'utf8').trim()).toBe('111');
   });
 
+  it('writes limits into a REAL-shaped fresh cgroup (cgroup.procs pre-exists, memory.max=max)', () => {
+    // Regression for the limit-write bug the disposable proof caught: a kernel-created
+    // cgroup directory already contains cgroup.procs, so a [ ! -f cgroup.procs ]
+    // discriminator never fired and per-child limits were silently skipped.
+    const env = writeGroupEnv(root.slice, 'pi-s5');
+    mkdirSync(path.join(root.slice, 'pi-s5'), { recursive: true });
+    writeFileSync(path.join(root.slice, 'pi-s5', 'cgroup.procs'), ''); // kernel shape
+    writeFileSync(path.join(root.slice, 'pi-s5', 'memory.max'), 'max\n'); // kernel default
+    const res = runWrapper(env, ['-c', 'cat "$PI_TOOLS_CG/cgroup.procs"'], root.root);
+    expect(res.status).toBe(0);
+    expect(readFileSync(path.join(root.slice, 'pi-s5', 'memory.max'), 'utf8').trim()).toBe(String(6 * GiB));
+    expect(readFileSync(path.join(root.slice, 'pi-s5', 'memory.high'), 'utf8').trim()).toBe(String(4 * GiB));
+    expect(readFileSync(path.join(root.slice, 'pi-s5', 'pids.max'), 'utf8').trim()).toBe('2048');
+    expect(readFileSync(path.join(root.slice, 'pi-s5', 'memory.swap.max'), 'utf8').trim()).toBe(String(2 * GiB));
+  });
+
   it('refuses a group path outside the tools root, degrades, and still runs the command', () => {
     const env = { ...writeGroupEnv(root.slice, 'pi-s3'), PI_TOOLS_CG: path.join(root.root, 'elsewhere', 'g') };
     const res = runWrapper(env, ['-c', 'cat /proc/self/cgroup'], root.root);

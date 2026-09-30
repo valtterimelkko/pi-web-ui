@@ -41,10 +41,19 @@ if [ -n "$CG" ]; then
   esac
 fi
 if [ -n "$CG" ]; then
+  fresh=0
   if [ ! -d "$CG" ]; then
     mkdir -p -- "$CG" 2>/dev/null || true
+    fresh=1
   fi
-  if [ -d "$CG" ] && [ ! -f "$CG/cgroup.procs" ]; then
+  # Write limits when the group is fresh AND unbounded: a kernel-created cgroup
+  # already contains cgroup.procs and memory.max=max, so the discriminator is the
+  # memory.max VALUE, not the file's existence (proof-caught bug, 2026-09-30).
+  cur=""
+  if [ -d "$CG" ] && [ -r "$CG/memory.max" ]; then
+    cur=$(cat "$CG/memory.max" 2>/dev/null)
+  fi
+  if [ -d "$CG" ] && { [ "$fresh" -eq 1 ] || [ -z "$cur" ] || [ "$cur" = "max" ]; }; then
     [ -n "\${PI_TOOLS_MEM_MAX:-}" ] && echo "$PI_TOOLS_MEM_MAX" > "$CG/memory.max" 2>/dev/null || true
     [ -n "\${PI_TOOLS_MEM_HIGH:-}" ] && echo "$PI_TOOLS_MEM_HIGH" > "$CG/memory.high" 2>/dev/null || true
     [ -n "\${PI_TOOLS_PIDS_MAX:-}" ] && echo "$PI_TOOLS_PIDS_MAX" > "$CG/pids.max" 2>/dev/null || true
