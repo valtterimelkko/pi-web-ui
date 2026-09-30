@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { getHeapStatistics } from 'node:v8';
 import { readEventLoopLagWindow, type EventLoopLagWindow } from '../internal-api/event-loop-shed.js';
 import { getOperationalMetrics, type OperationalMetrics } from './operational-metrics.js';
@@ -39,6 +40,151 @@ export interface HealthReadings {
   residentSessions: number | null;
   /** Session-registry entries, `null` when no source reports them. */
   registryEntries: number | null;
+  /**
+   * Process CPU (user + system) across the sampling interval as a percentage
+   * of one core; `null` on the first sample, when there is no interval yet.
+   */
+  cpuPercentOfCore: number | null;
+  /** Main-thread (event-loop) CPU over the same interval, percentage of one core. */
+  mainThreadCpuPercentOfCore: number | null;
+  /**
+   * Where the main-thread figure came from: `proc-thread-self` when the Linux
+   * main-thread tick counter was read, `process-cpu` when the clearly labelled
+   * process-wide fallback is reported instead, `unavailable` when neither.
+   */
+  mainThreadCpuSource: MainThreadCpuSource;
+}
+
+export type MainThreadCpuSource = 'proc-thread-self' | 'process-cpu' | 'unavailable';
+
+/** The CPU fields of one reading, computed by `CpuUsageTracker`. */
+export interface HealthCpuReading {
+  cpuPercentOfCore: number | null;
+  mainThreadCpuPercentOfCore: number | null;
+  mainThreadCpuSource: MainThreadCpuSource;
+}
+
+export interface CpuUsageSample {
+  /** Microseconds, as returned by `process.cpuUsage()`. */
+  user: number;
+  system: number;
+}
+
+export interface ThreadCpuTicks {
+  userTicks: number;
+  systemTicks: number;
+}
+
+export interface CpuUsageTrackerOptions {
+  cpuUsage?: () => CpuUsageSample;
+  mainThreadCpuTicks?: () => ThreadCpuTicks | null;
+  /** Linux USER_HZ: clock ticks per second for `/proc` CPU counters. */
+  ticksPerSecond?: number;
+}
+
+/** Linux USER_HZ: `/proc` reports CPU in 1/100 s ticks on every supported host. */
+export const LINUX_USER_HZ = 100;
+
+/**
+ * The Linux main-thread CPU counters.
+ *
+ * `/proc/self/task/<pid>/stat` is the main thread's own `stat` (its TID is the
+ * process pid; the sampler runs on the main event loop). Fields are located
+ * from the last `)` because the process name may itself contain spaces or
+ * parentheses. Fail-open: any error or a non-Linux platform is `null`, never a
+ * thrown exception, so CPU telemetry can never take the control plane down.
+ */
+export function readMainThreadCpuTicks(pid: number = process.pid): ThreadCpuTicks | null {
+  if (process.platform !== 'linux') return null;
+  try {
+    const stat = readFileSync(`/proc/self/task/${pid}/stat`, 'utf8');
+    const closingParen = stat.lastIndexOf(')');
+    if (closingParen < 0) return null;
+    const fields = stat.slice(closingParen + 2).split(' ');
+    const userTicks = Number(fields[11]);
+    const systemTicks = Number(fields[12]);
+    if (!Number.isFinite(userTicks) || !Number.isFinite(systemTicks)) return null;
+    return { userTicks, systemTicks };
+  } catch {
+    return null;
+  }
+}
+
+function readSafely<T>(read: (() => T) | undefined): T | undefined {
+  if (!read) return undefined;
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+function percentOfOneCore(microseconds: number, elapsedMs: number): number {
+  return Math.round(((microseconds / 1_000) / elapsedMs) * 100 * 10) / 10;
+}
+
+/**
+ * Turns the process and main-thread CPU counters into per-interval percentages
+ * of one core. The tracker owns the previous sample, so it is created once per
+ * sampler (and per test) rather than per reading.
+ *
+ * `process.cpuUsage()` covers every thread of the process. The main-thread
+ * figure is the one that matters for the single event loop, and it comes from
+ * the Linux main-thread tick counter; where that is unavailable the process
+ * figure is reported instead and labelled `process-cpu`.
+ */
+export class CpuUsageTracker {
+  private readonly cpuUsage: () => CpuUsageSample;
+  private readonly mainThreadCpuTicks: () => ThreadCpuTicks | null;
+  private readonly ticksPerSecond: number;
+  private last?: { atMs: number; usage: CpuUsageSample };
+  private lastTicks?: { atMs: number; ticks: ThreadCpuTicks };
+
+  constructor(options: CpuUsageTrackerOptions = {}) {
+    this.cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
+    this.mainThreadCpuTicks = options.mainThreadCpuTicks ?? readMainThreadCpuTicks;
+    this.ticksPerSecond = options.ticksPerSecond ?? LINUX_USER_HZ;
+  }
+
+  sample(atMs: number): HealthCpuReading {
+    let cpuPercentOfCore: number | null = null;
+    const usage = readSafely(this.cpuUsage);
+    if (usage && Number.isFinite(usage.user) && Number.isFinite(usage.system)) {
+      if (this.last && atMs > this.last.atMs) {
+        const deltaMicros = Math.max(
+          0,
+          (usage.user - this.last.usage.user) + (usage.system - this.last.usage.system),
+        );
+        cpuPercentOfCore = percentOfOneCore(deltaMicros, atMs - this.last.atMs);
+      }
+      // Copy: a reader may reuse one mutable buffer for every call.
+      if (!this.last || atMs > this.last.atMs) this.last = { atMs, usage: { user: usage.user, system: usage.system } };
+    }
+
+    const ticks = readSafely(this.mainThreadCpuTicks);
+    if (ticks && Number.isFinite(ticks.userTicks) && Number.isFinite(ticks.systemTicks)) {
+      let mainThreadCpuPercentOfCore: number | null = null;
+      if (this.lastTicks && atMs > this.lastTicks.atMs) {
+        const deltaTicks = Math.max(
+          0,
+          (ticks.userTicks - this.lastTicks.ticks.userTicks) + (ticks.systemTicks - this.lastTicks.ticks.systemTicks),
+        );
+        mainThreadCpuPercentOfCore = percentOfOneCore(
+          (deltaTicks / this.ticksPerSecond) * 1_000_000,
+          atMs - this.lastTicks.atMs,
+        );
+      }
+      if (!this.lastTicks || atMs > this.lastTicks.atMs) {
+        this.lastTicks = { atMs, ticks: { userTicks: ticks.userTicks, systemTicks: ticks.systemTicks } };
+      }
+      return { cpuPercentOfCore, mainThreadCpuPercentOfCore, mainThreadCpuSource: 'proc-thread-self' };
+    }
+
+    if (cpuPercentOfCore !== null) {
+      return { cpuPercentOfCore, mainThreadCpuPercentOfCore: cpuPercentOfCore, mainThreadCpuSource: 'process-cpu' };
+    }
+    return { cpuPercentOfCore: null, mainThreadCpuPercentOfCore: null, mainThreadCpuSource: 'unavailable' };
+  }
 }
 
 /** The narrow accessor B2's admission work needs. */
@@ -73,6 +219,12 @@ export interface HealthReadingSources {
   registryEntries?: () => number | undefined | Promise<number | undefined>;
   /** Default active-turn classes: terminal turn counters from the operational metrics. */
   activeTurnsFromOperationalMetrics?: () => Record<string, number>;
+  /**
+   * CPU percentages for this reading. The sampler owns the delta state (its
+   * `CpuUsageTracker`) and passes the reading's `atMs`, so the two clocks are
+   * the same instant.
+   */
+  cpuReading?: (atMs: number) => HealthCpuReading;
 }
 
 /** Real V8 heap ceiling. Falls back to 0 rather than guessing a limit. */
@@ -140,6 +292,7 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
   const heapLimitBytes = Math.max(0, safe(sources.heapLimitBytes, readHeapLimitBytes()));
   const lagWindow = safe(sources.lagWindow, readEventLoopLagWindow());
   const admission = safe<AdmissionReading | undefined>(sources.admission, undefined);
+  const cpu = safe<HealthCpuReading | undefined>(sources.cpuReading ? () => sources.cpuReading?.(now) : undefined, undefined);
 
   const classes = admission
     ? Object.fromEntries(Object.entries(admission.classes ?? {}).map(([name, entry]) => [name, entry.active]))
@@ -172,6 +325,9 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
       : 0,
     rssBytes: Math.max(0, memory.rss),
     externalBytes: Math.max(0, memory.external),
+    cpuPercentOfCore: cpu?.cpuPercentOfCore ?? null,
+    mainThreadCpuPercentOfCore: cpu?.mainThreadCpuPercentOfCore ?? null,
+    mainThreadCpuSource: cpu?.mainThreadCpuSource ?? 'unavailable',
     lagWindowMs: lagWindow?.windowMs ?? 0,
     lagSampleCount: lagWindow?.sampleCount ?? 0,
     lagP50Ms: lagWindow?.p50Ms ?? 0,

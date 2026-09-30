@@ -1,9 +1,11 @@
 import { getHeapStatistics } from 'node:v8';
 import { describe, expect, it } from 'vitest';
 import {
+  CpuUsageTracker,
   collectHealthReadings,
   percentile,
   readHeapLimitBytes,
+  readMainThreadCpuTicks,
 } from '../../../src/observability/health-readings.js';
 
 describe('percentile', () => {
@@ -26,6 +28,80 @@ describe('readHeapLimitBytes', () => {
   });
 });
 
+describe('CpuUsageTracker', () => {
+  it('turns process CPU deltas into a percentage of one core from the injected clock and reader', () => {
+    let usage = { user: 0, system: 0 };
+    let ticks: { userTicks: number; systemTicks: number } | null = { userTicks: 0, systemTicks: 0 };
+    const tracker = new CpuUsageTracker({ cpuUsage: () => usage, mainThreadCpuTicks: () => ticks });
+
+    expect(tracker.sample(1_000_000)).toEqual({
+      cpuPercentOfCore: null,
+      mainThreadCpuPercentOfCore: null,
+      mainThreadCpuSource: 'proc-thread-self',
+    });
+
+    // 0.5 s of process CPU over 1 s wall = 50% of one core; 50 ticks at the
+    // Linux USER_HZ of 100 = 0.5 s of main-thread CPU = 50%.
+    usage = { user: 400_000, system: 100_000 };
+    ticks = { userTicks: 30, systemTicks: 20 };
+    expect(tracker.sample(1_001_000)).toEqual({
+      cpuPercentOfCore: 50,
+      mainThreadCpuPercentOfCore: 50,
+      mainThreadCpuSource: 'proc-thread-self',
+    });
+
+    // 333.3 ms over 1 s is 33.333…%, rounded to one decimal for the file.
+    usage = { user: 733_333, system: 100_000 };
+    ticks = { userTicks: 63, systemTicks: 20 };
+    expect(tracker.sample(1_002_000)).toMatchObject({ cpuPercentOfCore: 33.3, mainThreadCpuPercentOfCore: 33 });
+  });
+
+  it('falls back to the labelled process-wide figure when the main thread is unreadable', () => {
+    let usage = { user: 0, system: 0 };
+    const tracker = new CpuUsageTracker({ cpuUsage: () => usage, mainThreadCpuTicks: () => null });
+    tracker.sample(0);
+    usage = { user: 250_000, system: 0 };
+    expect(tracker.sample(1_000)).toEqual({
+      cpuPercentOfCore: 25,
+      mainThreadCpuPercentOfCore: 25,
+      mainThreadCpuSource: 'process-cpu',
+    });
+  });
+
+  it('reports unavailable when neither reader works, instead of inventing a zero', () => {
+    const tracker = new CpuUsageTracker({
+      cpuUsage: () => { throw new Error('no process cpu'); },
+      mainThreadCpuTicks: () => null,
+    });
+    expect(tracker.sample(0)).toEqual({
+      cpuPercentOfCore: null,
+      mainThreadCpuPercentOfCore: null,
+      mainThreadCpuSource: 'unavailable',
+    });
+  });
+
+  it('does not divide by a non-advancing clock', () => {
+    let usage = { user: 0, system: 0 };
+    const tracker = new CpuUsageTracker({ cpuUsage: () => usage, mainThreadCpuTicks: () => null });
+    tracker.sample(5_000);
+    usage = { user: 100_000, system: 0 };
+    expect(tracker.sample(5_000).cpuPercentOfCore).toBeNull();
+  });
+});
+
+describe('readMainThreadCpuTicks', () => {
+  it('reads the main thread tick counters on Linux and stays fail-open elsewhere', () => {
+    const ticks = readMainThreadCpuTicks();
+    if (process.platform === 'linux') {
+      expect(ticks).not.toBeNull();
+      expect(ticks?.userTicks).toBeGreaterThanOrEqual(0);
+      expect(ticks?.systemTicks).toBeGreaterThanOrEqual(0);
+    } else {
+      expect(ticks).toBeNull();
+    }
+  });
+});
+
 describe('collectHealthReadings', () => {
   it('computes the heap fraction against the real limit and includes every plan field', () => {
     const readings = collectHealthReadings({
@@ -37,6 +113,7 @@ describe('collectHealthReadings', () => {
       admission: () => ({ activeTurns: 3, classes: { P0: { active: 1 }, P1: { active: 0 }, P2: { active: 2 }, P3: { active: 0 } } }),
       residentSessions: () => 5,
       registryEntries: () => 1731,
+      cpuReading: () => ({ cpuPercentOfCore: 12.5, mainThreadCpuPercentOfCore: 7.5, mainThreadCpuSource: 'proc-thread-self' }),
     });
 
     expect(readings).toMatchObject({
@@ -56,6 +133,9 @@ describe('collectHealthReadings', () => {
       activeTurnsByClass: { P0: 1, P1: 0, P2: 2, P3: 0 },
       residentSessions: 5,
       registryEntries: 1731,
+      cpuPercentOfCore: 12.5,
+      mainThreadCpuPercentOfCore: 7.5,
+      mainThreadCpuSource: 'proc-thread-self',
     });
     expect(Number.isFinite(readings.heapFraction)).toBe(true);
   });
@@ -77,6 +157,19 @@ describe('collectHealthReadings', () => {
     expect(readings.activeTurnsByClass).toEqual({});
     expect(readings.residentSessions).toBeNull();
     expect(readings.registryEntries).toBeNull();
+    expect(readings.cpuPercentOfCore).toBeNull();
+    expect(readings.mainThreadCpuPercentOfCore).toBeNull();
+    expect(readings.mainThreadCpuSource).toBe('unavailable');
+  });
+
+  it('stays fail-open when the CPU reading source throws', () => {
+    const readings = collectHealthReadings({
+      now: () => 0,
+      cpuReading: () => { throw new Error('cpu unavailable'); },
+    });
+    expect(readings.cpuPercentOfCore).toBeNull();
+    expect(readings.mainThreadCpuPercentOfCore).toBeNull();
+    expect(readings.mainThreadCpuSource).toBe('unavailable');
   });
 
   it('defaults to the process-wide sources and produces a JSON-serialisable sample', () => {

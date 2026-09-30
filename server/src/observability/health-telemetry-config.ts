@@ -3,7 +3,16 @@ import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { validateHealthAlertThresholds, type HealthAlert, type HealthAlertThresholds } from './health-alerts.js';
+import {
+  DEFAULT_HEALTH_INCIDENT_COOLDOWN_MS,
+  DEFAULT_HEALTH_INCIDENT_DEBOUNCE_READINGS,
+  DEFAULT_HEALTH_INCIDENT_QUIET_PERIOD_MS,
+  validateHealthAlertThresholds,
+  validateHealthIncidentConfig,
+  type HealthAlert,
+  type HealthAlertThresholds,
+  type HealthIncidentConfig,
+} from './health-alerts.js';
 
 /**
  * A2 telemetry configuration and alert delivery.
@@ -26,6 +35,8 @@ export interface HealthTelemetryConfig {
   maxFileBytes: number;
   maxFiles: number;
   thresholds: HealthAlertThresholds;
+  /** Incident-grouping pacing (quiet period, cooldown, debounce). */
+  incident: HealthIncidentConfig;
   sink: HealthAlertSink;
   /** Human-readable sink target, logged at startup (proves where alerts go). */
   sinkDescription: string;
@@ -55,6 +66,10 @@ export const MIN_HEALTH_METRICS_MAX_FILE_BYTES = 1_024;
 export const MAX_HEALTH_METRICS_MAX_FILE_BYTES = 256 * 1024 * 1024;
 export const MIN_HEALTH_METRICS_MAX_FILES = 1;
 export const MAX_HEALTH_METRICS_MAX_FILES = 100;
+
+/** The longest quiet period or cooldown a grouping knob may name (24 h). */
+export const MAX_HEALTH_INCIDENT_PACING_MS = 86_400_000;
+export const MAX_HEALTH_INCIDENT_DEBOUNCE_READINGS = 100;
 
 const DEFAULT_HEAP_ALERT_FRACTION = 0.85;
 const DEFAULT_HEAP_RECOVER_FRACTION = 0.75;
@@ -184,6 +199,56 @@ function parseRatio(raw: string | undefined, fallback: number, name: string): nu
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0 || value > 1) {
     throw new Error(`${name} must be a fraction within (0, 1].`);
+  }
+  return value;
+}
+
+/**
+ * Incident-grouping pacing. Like the sampling/rotation knobs, an out-of-range
+ * value falls back to the documented default with a warning rather than
+ * disabling grouping: a typo must degrade to the safe behaviour, not to a page
+ * storm.
+ */
+export function resolveHealthIncidentConfig(env: NodeJS.ProcessEnv = process.env, warnings: string[] = []): HealthIncidentConfig {
+  const config: HealthIncidentConfig = {
+    quietPeriodMs: boundedNonNegativeInteger(
+      env.OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS,
+      DEFAULT_HEALTH_INCIDENT_QUIET_PERIOD_MS,
+      'OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS',
+      warnings,
+    ),
+    cooldownMs: boundedNonNegativeInteger(
+      env.OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS,
+      DEFAULT_HEALTH_INCIDENT_COOLDOWN_MS,
+      'OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS',
+      warnings,
+    ),
+    debounceReadings: boundedPositiveInteger(
+      env.OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS,
+      DEFAULT_HEALTH_INCIDENT_DEBOUNCE_READINGS,
+      'OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS',
+      1,
+      MAX_HEALTH_INCIDENT_DEBOUNCE_READINGS,
+      warnings,
+    ),
+  };
+  validateHealthIncidentConfig(config);
+  return config;
+}
+
+/**
+ * Non-negative whole milliseconds within the pacing bound; anything else falls
+ * back to the default with a warning.
+ */
+function boundedNonNegativeInteger(raw: string | undefined, fallback: number, name: string, warnings: string[]): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(value) || value < 0 || value > MAX_HEALTH_INCIDENT_PACING_MS) {
+    warnings.push(
+      `${name}=${trimmed} is not an integer within [0, ${MAX_HEALTH_INCIDENT_PACING_MS}]; using the default ${fallback}.`,
+    );
+    return fallback;
   }
   return value;
 }
@@ -330,6 +395,7 @@ export function createHealthTelemetryConfig(env: NodeJS.ProcessEnv = process.env
     MIN_HEALTH_METRICS_MAX_FILES, MAX_HEALTH_METRICS_MAX_FILES, warnings,
   );
   const thresholds = resolveHealthAlertThresholds(env);
+  const incident = resolveHealthIncidentConfig(env, warnings);
   const canonicalProductionRoot = canonicalisePath(realProductionMetricsDir());
   const sink = resolveAlertSink(env, dir, warnings, canonicalProductionRoot);
 
@@ -360,6 +426,7 @@ export function createHealthTelemetryConfig(env: NodeJS.ProcessEnv = process.env
         maxFileBytes,
         maxFiles,
         thresholds,
+        incident,
         sink: createNoopAlertSink(),
         sinkDescription: 'none',
         suppressOperatorNotifications: true,
@@ -376,6 +443,7 @@ export function createHealthTelemetryConfig(env: NodeJS.ProcessEnv = process.env
     maxFileBytes,
     maxFiles,
     thresholds,
+    incident,
     sink: sink.sink,
     sinkDescription: sink.description,
     suppressOperatorNotifications: sink.suppressOperatorNotifications,
