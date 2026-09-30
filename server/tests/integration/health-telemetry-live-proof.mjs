@@ -9,8 +9,12 @@
  * It proves, against a real server process:
  *   1. the metrics file grows at the configured cadence and rotates at its bound;
  *   2. lowered heap thresholds fire exactly ONE alert and then exactly ONE
- *      recovery (hysteresis; no flapping), driven by a real heap rise and a real
- *      forced GC over the Chrome DevTools Protocol;
+ *      recovered message (hysteresis plus L1 incident grouping; no flapping),
+ *      driven by a real heap rise and a real forced GC over the Chrome
+ *      DevTools Protocol. Because grouping closes an incident only after the
+ *      quiet period, the server must be started with a short
+ *      `OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS` (for example `5000`); the
+ *      driver waits `--quiet-wait-seconds` (default 20) before judging;
  *   3. alerts are captured to a file inside the run directory, the startup log
  *      says the operator is not notified, and nothing reaches the operator path;
  *   4. `[MultiSessionManager] Memory:` journal lines per hour, measured over the
@@ -45,6 +49,7 @@ const inspectPort = Number(args.get('--inspect-port'));
 const logPath = args.get('--log') ?? path.join(runDir, 'server.log');
 const journalWindowSeconds = Number(args.get('--journal-window-seconds') ?? 360);
 const mode = args.get('--mode') ?? 'proof';
+const quietWaitSeconds = Number(args.get('--quiet-wait-seconds') ?? 20);
 const productionMetricsDir = path.join(userInfo().homedir, '.pi-web-ui', 'metrics');
 const productionNotificationsDir = path.join(userInfo().homedir, '.pi-web-ui', 'notifications');
 
@@ -309,7 +314,8 @@ async function main() {
   report.numbers.piSessionsResident = Array.isArray(listed.body?.sessions) ? listed.body.sessions.length : undefined;
   check('six resident Pi sessions created', created.length === 6, `${created.length} created, registry lists ${report.numbers.piSessionsResident}`);
 
-  // ── 5. alert on a real heap rise, then exactly one recovery after GC ──────
+  // ── 5. alert on a real heap rise, then exactly one grouped recovered
+  //       message after GC plus the server's quiet period (L1 grouping) ──────
   // Only records written from here on are judged, so the proof is re-runnable
   // against a metrics directory that already holds earlier runs.
   const alertRecordsAtStart = parseAlerts().length;
@@ -329,6 +335,8 @@ async function main() {
 
   const alertLine = readLines(logPath).find((line) => line.includes('[HealthTelemetry] heap_pressure alert'));
   check('alert is also journaled with its numbers', Boolean(alertLine), alertLine ?? 'no alert log line');
+  const groupedAlertLine = readLines(logPath).find((line) => line.includes('[HealthTelemetry] heap_pressure alert: heap pressure incident:'));
+  check('the grouped incident message is journaled', Boolean(groupedAlertLine), groupedAlertLine ?? 'no grouped incident log line');
 
   await cdp.evaluate('globalThis.__a2_ballast = null; "released"');
   await cdp.collectGarbage();
@@ -337,13 +345,23 @@ async function main() {
   const recovered = await cdp.heapFraction();
   report.numbers.heapFractionAfterGc = Number(recovered.fraction.toFixed(4));
 
-  await waitFor('the heap recovery', () => newAlerts().some((alert) => alert.transition === 'recovery'), 30_000);
+  await waitFor(
+    'the grouped heap recovered message (after the server quiet period)',
+    () => newAlerts().some((alert) => alert.transition === 'recovery'),
+    quietWaitSeconds * 1_000 + 20_000,
+  );
   await sleep(15_000);
   const finalAlerts = newAlerts();
   const alerts = finalAlerts.filter((alert) => alert.transition === 'alert').length;
   const recoveries = finalAlerts.filter((alert) => alert.transition === 'recovery').length;
   report.numbers.alertRecords = finalAlerts;
-  check('no flapping: exactly one alert and one recovery after a 15 s settle', alerts === 1 && recoveries === 1, `alerts=${alerts} recoveries=${recoveries}`);
+  check('no flapping: exactly one alert and one recovered message after the settle', alerts === 1 && recoveries === 1, `alerts=${alerts} recoveries=${recoveries}`);
+  const recoveredRecord = finalAlerts.find((alert) => alert.transition === 'recovery');
+  check(
+    'the recovered message carries the incident summary',
+    Boolean(recoveredRecord?.incident) && recoveredRecord.incident.alertCrossings >= 1 && typeof recoveredRecord.incident.peakValue === 'number',
+    JSON.stringify(recoveredRecord?.incident ?? null),
+  );
 
   const recoveryLine = readLines(logPath).find((line) => line.includes('[HealthTelemetry] heap_pressure recovery'));
   check('recovery is also journaled', Boolean(recoveryLine), recoveryLine ?? 'no recovery log line');

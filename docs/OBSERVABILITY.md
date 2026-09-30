@@ -359,11 +359,12 @@ One incident per kind (`heap_pressure`, `event_loop_lag`), with independent
 state, so an open lag incident cannot silence a heap alert:
 
 - **Open.** An incident opens after `OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS`
-  readings at or above the high water mark inside one un-recovered window
-  (default `2`), so a single spike never pages. The window starts at its first
-  high reading and keeps that window's peak; it clears on a reading at or below
-  the recovery threshold, while a dead-band reading neither counts nor clears
-  (the latch is still armed). The one *alert* message is sent when it opens.
+  consecutive readings at or above the high water mark (default `2`), so a
+  single spike never pages. A reading below the high mark breaks the run; the
+  pending window itself (start, peak, crossing count) survives a dead-band
+  reading until a genuine recovery at or below the recovery threshold, so a
+  briefly interrupted excursion is still summarised whole. The one *alert*
+  message is sent when it opens.
 - **Folded crossings.** Every further raw `alert` transition while it is open is
   counted, not delivered.
 - **Close.** It closes only after the metric has stayed at or below its recovery

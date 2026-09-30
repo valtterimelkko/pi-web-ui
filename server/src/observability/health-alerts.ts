@@ -48,10 +48,11 @@ export interface HealthIncidentConfig {
   /** After an incident closes, a new alert is suppressed for this long (same kind only). */
   cooldownMs: number;
   /**
-   * Readings at or above the high water mark, inside one un-recovered window,
-   * before an incident opens; a single spike never pages. A reading at or below
-   * the recovery threshold clears the window; a dead-band reading (between the
-   * thresholds) neither counts nor clears, because the latch is still armed.
+   * Consecutive readings at or above the high water mark before an incident
+   * opens; a single spike never pages. A reading below the high mark breaks the
+   * run. The pending window (start, peak, raw-crossing count) survives a
+   * dead-band reading until a genuine recovery at or below the recovery
+   * threshold, so a briefly interrupted excursion is still summarised whole.
    */
   debounceReadings: number;
 }
@@ -174,10 +175,11 @@ interface KindIncidentState {
   lastClosedAtMs?: number;
   reopenedDuringCooldown: boolean;
   // The pending (pre-open) window: one un-recovered excursion above the high
-  // water mark, with its own start, peak and raw-crossing count.
+  // water mark, with its own start, peak and raw-crossing count, plus the
+  // consecutive-high run that decides when it opens.
   pendingStartMs?: number;
   pendingPeak: number;
-  pendingHighReadings: number;
+  pendingHighRun: number;
   pendingCrossings: number;
 }
 
@@ -188,7 +190,7 @@ function newKindState(): KindIncidentState {
     crossings: 0,
     reopenedDuringCooldown: false,
     pendingPeak: 0,
-    pendingHighReadings: 0,
+    pendingHighRun: 0,
     pendingCrossings: 0,
   };
 }
@@ -196,8 +198,8 @@ function newKindState(): KindIncidentState {
 /**
  * Folds the evaluator's raw transitions into one notification per incident.
  *
- * - an incident opens when the pending window reaches `debounceReadings` high
- *   readings; the opening message is the only *alert* the sink sees;
+ * - an incident opens after `debounceReadings` consecutive high readings (the
+ *   opening message is the only *alert* the sink sees);
  * - further raw alert crossings while it is open are counted, not delivered;
  * - it closes only after the metric stays at or below its recovery threshold
  *   for the whole quiet period; the single recovered message summarises start,
@@ -272,22 +274,26 @@ export class HealthIncidentGrouper {
       if (state.pendingStartMs === undefined) {
         state.pendingStartMs = atMs;
         state.pendingPeak = value;
-        state.pendingHighReadings = 0;
+        state.pendingHighRun = 0;
         state.pendingCrossings = 0;
       }
-      state.pendingHighReadings += 1;
+      state.pendingHighRun += 1;
       state.pendingPeak = Math.max(state.pendingPeak, value);
       if (rawAlert) state.pendingCrossings += 1;
-      if (state.pendingHighReadings < this.config.debounceReadings) return undefined;
+      if (state.pendingHighRun < this.config.debounceReadings) return undefined;
       return this.openIncident(kind, state, value, high, heapLimitBytes, atMs);
     }
 
     if (value <= low) {
       // A genuine recovery clears the pending window.
       state.pendingStartMs = undefined;
-      state.pendingHighReadings = 0;
+      state.pendingHighRun = 0;
       state.pendingCrossings = 0;
       state.pendingPeak = 0;
+    } else {
+      // Dead band: the window survives (the latch is still armed), but the
+      // consecutive-high run is broken.
+      state.pendingHighRun = 0;
     }
     return undefined;
   }
@@ -309,7 +315,7 @@ export class HealthIncidentGrouper {
     state.quietSinceMs = undefined;
     state.reopenedDuringCooldown = cooling;
     state.pendingStartMs = undefined;
-    state.pendingHighReadings = 0;
+    state.pendingHighRun = 0;
     state.pendingCrossings = 0;
     state.pendingPeak = 0;
     const incident: HealthIncidentSummary = {

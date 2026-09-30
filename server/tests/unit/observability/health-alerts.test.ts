@@ -120,10 +120,10 @@ describe('HealthAlertEvaluator', () => {
 
 /**
  * The grouper's debounce semantics under test: an incident opens after N
- * readings at or above the high water mark inside one un-recovered window, so a
- * single spike never pages; a reading at or below the recovery threshold clears
- * the window. A reading in the dead band is neither high nor recovered, so it
- * neither counts nor clears.
+ * consecutive readings at or above the high water mark, so a single spike never
+ * pages. A reading below the high mark breaks the run; a genuine recovery (at
+ * or below the recovery threshold) clears the pending window (start, peak,
+ * crossings), while a dead-band reading only breaks the run.
  */
 describe('HealthIncidentGrouper', () => {
   // Copied verbatim from the parent's l1/today-sequence.json (sha256
@@ -256,15 +256,17 @@ describe('HealthIncidentGrouper', () => {
       alertCrossings: 1,
     });
 
-    // A dead-band reading neither counts as high nor clears the window.
+    // A dead-band reading breaks the consecutive run but keeps the pending
+    // window, so the summary still spans the whole excursion.
     const drive2 = incidentDriver({ quietPeriodMs: 0, cooldownMs: 0, debounceReadings: 2 });
     expect(drive2(0, { heapFraction: 0.9 })).toHaveLength(0);
     expect(drive2(30_000, { heapFraction: 0.75 })).toHaveLength(0);
-    const opened2 = drive2(60_000, { heapFraction: 0.92 });
+    expect(drive2(60_000, { heapFraction: 0.92 })).toHaveLength(0); // run of one again
+    const opened2 = drive2(90_000, { heapFraction: 0.93 });
     expect(opened2).toHaveLength(1);
     expect(opened2[0].incident).toMatchObject({
       startedAt: new Date(0).toISOString(),
-      peakValue: 0.92,
+      peakValue: 0.93,
       alertCrossings: 1,
     });
   });
