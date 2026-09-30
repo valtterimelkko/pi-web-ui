@@ -501,13 +501,21 @@ with two measured, bounded instruments:
   This is a measurement, not a timing correlation: it cannot attribute a stall
   to an operation that was merely happening nearby.
 
+Correlation hygiene (G2): the sampler's timer chain runs outside any logging
+correlation context. A span frame captures the ids of the `withCorrelation`
+scope that entered it, and a stall carries the innermost active frame's ids in
+the logger's suffix style — correct ids while that run's work is on the loop,
+none after the run ends. (Before G2, the sampler inherited the first session's
+context at its lazy `start()` and stamped that session's ids onto every later
+stall line, including after the session finished.)
+
 Recorded lines (rate-limited to at most one per label per 5 s, so a stall storm
 cannot itself become the stall) go through the central logger and therefore land
 in the diagnostics ring buffer — `GET /api/v1/diagnostics?component=LoopAttribution`:
 
 ```
 [LoopAttribution] async span 696.4 ms: pi.session.resource_loader
-[LoopAttribution] event-loop stall 716 ms attributed to pi.multi.rehydrate_session
+[LoopAttribution] event-loop stall 716 ms attributed to pi.multi.rehydrate_session [req=req_ab1 run=run_9z sid=sess_7f rt=pi]
 ```
 
 Bounds and cost: enter/exit is a stack push/pop with no allocation; two

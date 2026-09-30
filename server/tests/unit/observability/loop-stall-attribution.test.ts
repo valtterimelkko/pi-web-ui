@@ -5,6 +5,7 @@ import {
   type LoopStallEvent,
   type LoopStallTimerHandle,
 } from '../../../src/observability/loop-stall-attribution.js';
+import { getCorrelationContext, withCorrelation } from '../../../src/logging/correlation.js';
 
 /**
  * Deterministic scheduler seam: one pending timer at a time (the attributor
@@ -311,5 +312,159 @@ describe('createLoopStallLogReporter', () => {
     const report = createLoopStallLogReporter({ warn: () => { throw new Error('sink down'); } }, {});
     const span: LoopStallEvent = { kind: 'span', spanKind: 'sync', label: 'x', durationMs: 200, atMs: 0 };
     expect(() => report(span)).not.toThrow();
+  });
+
+  it('renders captured run ids into the stall log line in the logger suffix style', () => {
+    const warn = vi.fn();
+    const report = createLoopStallLogReporter({ warn }, { now: () => 0 });
+    report({
+      kind: 'stall',
+      label: 'pi.session.stream',
+      delayMs: 250,
+      atMs: 0,
+      stack: ['pi.session.stream'],
+      blockedBy: [],
+      context: { requestId: 'req_C', sessionId: 'sess_C', runtime: 'pi' },
+    });
+    expect(warn.mock.calls[0][0]).toContain('req=req_C');
+    expect(warn.mock.calls[0][0]).toContain('sid=sess_C');
+    expect(warn.mock.calls[0][0]).toContain('rt=pi');
+  });
+
+  it('renders no id suffix when the stall carries no captured context', () => {
+    const warn = vi.fn();
+    const report = createLoopStallLogReporter({ warn }, { now: () => 0 });
+    report({ kind: 'stall', label: 'x', delayMs: 60, atMs: 0, stack: ['x'], blockedBy: [] });
+    expect(warn.mock.calls[0][0]).not.toContain('sid=');
+    expect(warn.mock.calls[0][0]).not.toContain('req=');
+  });
+});
+
+describe('LoopStallAttributor — correlation-context hygiene (G2)', () => {
+  /**
+   * G2 production finding (2026-09-30): every LoopAttribution stall line since
+   * the 09:55 restart carried the first session's req=/run=/sid= tags,
+   * including long after that session finished. The sampler is a
+   * self-rescheduling timer; if the first start() happens inside a session's
+   * withCorrelation scope (it does: the first instrumented call is a session
+   * create), the whole timer chain captures that AsyncLocalStorage context and
+   * every later stall line is stamped with it at emit time.
+   *
+   * Frozen criterion: after a run's context ends, a stall must carry none of
+   * its ids — and attribution must not be dropped altogether: a stall raised
+   * while a run's span is active still carries that run's ids, captured at
+   * span-entry time from the (correct) enclosing context.
+   */
+
+  it('does not leak a session correlation context captured at start() into later stall emissions', async () => {
+    const observedContexts: unknown[] = [];
+    const lines: string[] = [];
+    const clock = { now: 1_000 };
+    const attributor = new LoopStallAttributor({
+      intervalMs: 5,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      onRecord: (event) => {
+        observedContexts.push(getCorrelationContext());
+        createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+      },
+    });
+
+    withCorrelation({ requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' }, () => {
+      attributor.start();
+    });
+    expect(getCorrelationContext()).toBeUndefined(); // the run's context has ended
+
+    clock.now += 500; // the pending tick is now far past the stall threshold
+    await new Promise((resolve) => setTimeout(resolve, 40)); // let the real timer chain fire
+    attributor.stop();
+
+    expect(observedContexts.length).toBeGreaterThan(0);
+    for (const context of observedContexts) {
+      expect(context).toBeUndefined();
+    }
+    for (const line of lines) {
+      expect(line).not.toContain('sess_A');
+      expect(line).not.toContain('run_A');
+      expect(line).not.toContain('req_A');
+    }
+  });
+
+  it('attaches the active run ids to a stall while the run is on the stack, and none after it ends', () => {
+    const clock = { now: 1_000 };
+    const scheduler = new FakeScheduler();
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const attributor = new LoopStallAttributor({
+      intervalMs: 25,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+      onRecord: (event) => {
+        events.push(event);
+        createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+      },
+    });
+    attributor.start(); // started outside any correlation context
+
+    let exitSpan: (() => void) | undefined;
+    withCorrelation({ requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' }, () => {
+      exitSpan = attributor.enter('pi.session.stream');
+    });
+
+    // Stall while the run's span is active: the ids come from the span's frame.
+    scheduler.fire(clock, 100);
+    const during = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(during).toBeDefined();
+    expect(during.label).toBe('pi.session.stream');
+    expect(during.context).toEqual({ requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' });
+    expect(lines.some((line) => line.includes('sid=sess_B') && line.includes('run=run_B'))).toBe(true);
+
+    // The run ends; a later stall carries none of its ids.
+    exitSpan?.();
+    events.length = 0;
+    lines.length = 0;
+    scheduler.fire(clock, 100);
+    const after = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(after).toBeDefined();
+    expect(after.context).toBeUndefined();
+    expect(lines[0]).not.toContain('sess_B');
+    expect(lines[0]).not.toContain('run_B');
+    attributor.stop();
+  });
+
+  it('captures ids for nested spans from the innermost frame and unwinds them in enter/exit pairs', () => {
+    const clock = { now: 1_000 };
+    const scheduler = new FakeScheduler();
+    const events: LoopStallEvent[] = [];
+    const attributor = new LoopStallAttributor({
+      intervalMs: 25,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+      onRecord: (event) => events.push(event),
+    });
+    attributor.start();
+
+    withCorrelation({ sessionId: 'sess_outer', runtime: 'pi' }, () => {
+      const exitOuter = attributor.enter('pi.multi.create_session');
+      withCorrelation({ sessionId: 'sess_inner', requestId: 'req_inner' }, () => {
+        const exitInner = attributor.enter('pi.session.resource_loader');
+        exitInner();
+      });
+      exitOuter();
+    });
+    expect(attributor.currentStack).toEqual([]);
+
+    scheduler.fire(clock, 100);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    expect(stall.context).toBeUndefined();
+    attributor.stop();
   });
 });

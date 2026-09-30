@@ -1,4 +1,5 @@
 import { createLogger } from '../logging/logger.js';
+import { getCorrelationContext, runOutsideCorrelation } from '../logging/correlation.js';
 
 /**
  * B1.2 event-loop stall attribution.
@@ -30,6 +31,14 @@ import { createLogger } from '../logging/logger.js';
  *
  * It is deliberately provider-free and model-free: every number it reports is
  * measured from the process clock.
+ *
+ * Correlation hygiene (G2): the sampler's timer chain is scheduled — and every
+ * tick runs — outside any logging correlation context, so a session's ids can
+ * never stick to later stall lines through the chain (the 2026-09-30 finding:
+ * all stall lines since a restart carried the first session's ids). Instead,
+ * each span frame captures the ids of the context that entered it, and a stall
+ * carries the innermost active frame's ids: correct ids while a run's work is
+ * on the loop, none after the run ends.
  */
 
 export type LoopSpanKind = 'sync' | 'async';
@@ -40,6 +49,20 @@ export interface LoopBlockingSpan {
   durationMs: number;
 }
 
+/**
+ * Correlation ids captured from the logging context when the span enclosing a
+ * stall was entered. Captured at `enter()` time — never read from the ambient
+ * context at emit time — so a finished run's ids cannot stick to later stalls
+ * (the sampler's timer chain runs detached; see `start()`).
+ */
+export interface LoopStallContext {
+  requestId?: string;
+  runId?: string;
+  sessionId?: string;
+  runtime?: string;
+  executionInstanceId?: string;
+}
+
 export interface LoopStallEvent {
   kind: 'stall';
   label: string;
@@ -47,6 +70,8 @@ export interface LoopStallEvent {
   atMs: number;
   stack: string[];
   blockedBy: LoopBlockingSpan[];
+  /** Ids of the run whose span was active when the stall fired (absent when none). */
+  context?: LoopStallContext;
 }
 
 export interface LoopSpanEvent {
@@ -87,6 +112,7 @@ export interface LoopStallRecord {
   label: string;
   stack: string[];
   blockedBy: LoopBlockingSpan[];
+  context?: LoopStallContext;
 }
 
 export interface LoopSpanRecord {
@@ -131,6 +157,25 @@ const MAX_RECENT_SPANS = 32;
 const NO_LABEL = '<none>';
 const OTHER_LABEL = '<other>';
 
+/** One active label plus the correlation ids of the context that entered it. */
+interface LabelFrame {
+  label: string;
+  context?: LoopStallContext;
+}
+
+/** Snapshot the correlation ids of the context entering a span, if any. */
+function captureStallContext(): LoopStallContext | undefined {
+  const store = getCorrelationContext();
+  if (!store) return undefined;
+  const context: LoopStallContext = {};
+  if (typeof store.requestId === 'string') context.requestId = store.requestId;
+  if (typeof store.runId === 'string') context.runId = store.runId;
+  if (typeof store.sessionId === 'string') context.sessionId = store.sessionId;
+  if (typeof store.runtime === 'string') context.runtime = store.runtime;
+  if (typeof store.executionInstanceId === 'string') context.executionInstanceId = store.executionInstanceId;
+  return Object.keys(context).length > 0 ? context : undefined;
+}
+
 const logger = createLogger('LoopAttribution');
 
 export class LoopStallAttributor {
@@ -147,7 +192,7 @@ export class LoopStallAttributor {
 
   private timer?: LoopStallTimerHandle;
   private expectedAt = 0;
-  private labels: string[] = [];
+  private frames: LabelFrame[] = [];
   private sampledTicks = 0;
 
   private stallCount = 0;
@@ -195,7 +240,7 @@ export class LoopStallAttributor {
 
   /** Outermost-first active label stack (test seam; bounded by `maxLabels`). */
   get currentStack(): string[] {
-    return [...this.labels];
+    return this.frames.map((frame) => frame.label);
   }
 
   setRecordSink(onRecord: ((event: LoopStallRecordEvent) => void) | undefined): void {
@@ -205,7 +250,14 @@ export class LoopStallAttributor {
   start(): void {
     if (this.timer) return;
     this.expectedAt = this.now() + this.intervalMs;
-    this.timer = this.schedule(() => this.tick(), this.intervalMs);
+    // The first start() usually happens inside a session create's
+    // withCorrelation scope. This sampler reschedules itself forever; scheduled
+    // here as-is, the whole timer chain would capture that session's
+    // AsyncLocalStorage context and stamp its ids onto every later stall line,
+    // including long after the session ended (the G2 production finding).
+    // Schedule — and therefore run every tick — outside any correlation
+    // context; stall records carry ids only via the span frames (see enter()).
+    this.timer = runOutsideCorrelation(() => this.schedule(() => this.tick(), this.intervalMs));
     this.timer.unref?.();
   }
 
@@ -215,13 +267,19 @@ export class LoopStallAttributor {
     this.timer = undefined;
   }
 
+  /** Entry point kept on the caller's path; the body runs context-free. */
   private tick(): void {
+    runOutsideCorrelation(() => this.tickDetached());
+  }
+
+  private tickDetached(): void {
     const now = this.now();
     this.sampledTicks += 1;
     const delayMs = Math.max(0, Math.round(now - this.expectedAt));
     if (delayMs >= this.stallThresholdMs) {
-      const label = this.normalizeLabel(this.labels.length > 0 ? this.labels[this.labels.length - 1] : NO_LABEL);
-      const stack = [...this.labels];
+      const innermost = this.frames.length > 0 ? this.frames[this.frames.length - 1] : undefined;
+      const label = this.normalizeLabel(innermost ? innermost.label : NO_LABEL);
+      const stack = this.frames.map((frame) => frame.label);
       // The overdue tick can only run after a blocking synchronous span exits,
       // so the enclosing label is a level too coarse. Any measured span whose
       // window covers the instant the tick was due is the direct evidence.
@@ -229,8 +287,9 @@ export class LoopStallAttributor {
       const blockedBy = this.recentSpans
         .filter((span) => span.atMs <= missedAt && span.atMs + span.durationMs >= missedAt)
         .map((span) => ({ name: span.name, durationMs: span.durationMs }));
-      this.recordStall({ atMs: now, delayMs, label, stack, blockedBy });
-      this.emit({ kind: 'stall', label, delayMs, atMs: now, stack, blockedBy });
+      const context = innermost?.context;
+      this.recordStall({ atMs: now, delayMs, label, stack, blockedBy, context });
+      this.emit({ kind: 'stall', label, delayMs, atMs: now, stack, blockedBy, context });
     }
     this.expectedAt = now + this.intervalMs;
     this.timer = this.schedule(() => this.tick(), this.intervalMs);
@@ -239,13 +298,14 @@ export class LoopStallAttributor {
 
   /** Push a label; the returned function pops it (idempotent). */
   enter(label: string): () => void {
-    this.labels.push(label);
+    const frame: LabelFrame = { label, context: captureStallContext() };
+    this.frames.push(frame);
     let active = true;
     return () => {
       if (!active) return;
       active = false;
-      const index = this.labels.lastIndexOf(label);
-      if (index >= 0) this.labels.splice(index, 1);
+      const index = this.frames.indexOf(frame);
+      if (index >= 0) this.frames.splice(index, 1);
     };
   }
 
@@ -337,7 +397,7 @@ export class LoopStallAttributor {
 
   reset(): void {
     this.stop();
-    this.labels = [];
+    this.frames = [];
     this.sampledTicks = 0;
     this.stallCount = 0;
     this.stalls.length = 0;
@@ -384,6 +444,7 @@ export function createLoopStallLogReporter(
           : '';
         sink.warn(
           `event-loop stall ${event.delayMs} ms attributed to ${event.label}` +
+          formatStallContextSuffix(event.context) +
           (event.stack.length > 1 ? ` (stack ${event.stack.join(' > ')})` : '') +
           blocker,
         );
@@ -394,6 +455,22 @@ export function createLoopStallLogReporter(
       // A logging failure must never break the instrumented path.
     }
   };
+}
+
+/**
+ * Render a stall's captured run ids in the central logger's correlation-suffix
+ * style (` [req=… run=… sid=… rt=… exec=…]`), so stall lines stay greppable the
+ * same way after the sampler itself stopped inheriting the ambient context.
+ */
+function formatStallContextSuffix(context: LoopStallContext | undefined): string {
+  if (!context) return '';
+  const parts: string[] = [];
+  if (context.requestId) parts.push(`req=${context.requestId}`);
+  if (context.runId) parts.push(`run=${context.runId}`);
+  if (context.sessionId) parts.push(`sid=${context.sessionId}`);
+  if (context.runtime) parts.push(`rt=${context.runtime}`);
+  if (context.executionInstanceId) parts.push(`exec=${context.executionInstanceId}`);
+  return parts.length ? ` [${parts.join(' ')}]` : '';
 }
 
 let globalAttributor: LoopStallAttributor | undefined;
