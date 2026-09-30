@@ -40,8 +40,6 @@ export interface PlacementConfig {
   perChild: PlacementPerChildLimits;
 }
 
-const GiB = 1024 * 1024 * 1024;
-
 function parsePositiveInt(raw: string | undefined): number | undefined {
   if (raw === undefined || raw === '') return undefined;
   const n = Number(raw);
@@ -143,14 +141,16 @@ export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {})
       return { available: false, reason: `tools root ${raw} is outside the cgroup root ${cfg.cgroupRoot}` };
     }
     root = raw.replace(/\/+$/, '');
-  } else if (/^[A-Za-z0-9.@_-]+\.slice$/.test(raw)) {
+  } else if (/^[A-Za-z0-9.@_-]+\.(slice|service)$/.test(raw)) {
+    // A unit NAME: the slice itself, or (production since the 2026-09-30 rollout) a
+    // Delegate=yes anchor service inside it — systemd 255 ignores Delegate= on slices.
     const cg = d.systemctlShowControlGroup?.();
     if (!cg || !cg.startsWith('/')) {
-      return { available: false, reason: `slice ${raw} is not known to systemd — refusing to treat the name as a cgroup path` };
+      return { available: false, reason: `unit ${raw} is not known to systemd — refusing to treat the name as a cgroup path` };
     }
     root = path.posix.join(cfg.cgroupRoot, cg.replace(/\/+$/, ''));
   } else {
-    return { available: false, reason: `PI_TOOLS_SLICE value ${JSON.stringify(raw)} is not a slice name and not an absolute path` };
+    return { available: false, reason: `PI_TOOLS_SLICE value ${JSON.stringify(raw)} is not a slice name and not an absolute path (nor a service name)` };
   }
   if (!d.exists?.(root)) {
     return { available: false, reason: `tools root ${root} does not exist (is the slice started?)` };

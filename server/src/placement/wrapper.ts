@@ -62,7 +62,10 @@ if [ -n "$CG" ]; then
   fi
 fi
 if [ -n "$CG" ] && [ "$bounded" -eq 1 ]; then
-  mkdir -p -- "$CG" 2>/dev/null || true
+  # Only a group THIS invocation created may be killed on failure: an existing group
+  # can hold the child's running commands (rollout finding 2026-09-30).
+  fresh=0
+  if [ ! -d "$CG" ]; then mkdir -p -- "$CG" 2>/dev/null && fresh=1; fi
   # Correction-06 finding 3: ALL-OR-NOTHING. Every required limit is written (when
   # fresh or unbounded) and then READ BACK and compared with the configured value
   # BEFORE exec; any write or read-back mismatch removes the group and falls open.
@@ -82,8 +85,10 @@ if [ -n "$CG" ] && [ "$bounded" -eq 1 ]; then
   ensure_limit pids.max "$PI_TOOLS_PIDS_MAX"
   ensure_limit memory.swap.max "$PI_TOOLS_SWAP_MAX"
   if [ "$ok" -ne 1 ]; then
-    echo 1 > "$CG/cgroup.kill" 2>/dev/null || true
-    rmdir -- "$CG" 2>/dev/null || true
+    if [ "$fresh" -eq 1 ]; then
+      echo 1 > "$CG/cgroup.kill" 2>/dev/null || true
+      rmdir -- "$CG" 2>/dev/null || true
+    fi
     note "limit-readback-failed"
     CG=""
   fi

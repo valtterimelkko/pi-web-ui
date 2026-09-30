@@ -6,11 +6,10 @@
 # other of memory, and under host CPU contention the control plane's CPUWeight=1000
 # outweighs this slice's 100.
 #
-# Delegate=yes (correction 09): REQUIRED. Without it systemd resets
-# cgroup.subtree_control on every daemon-reload, and child groups created in the
-# slice get NO limit files (correction-09 live check: the server enables
-# +memory +pids [+cpu] in the slice's subtree_control at start-up; delegation
-# stops systemd from clearing that on reload).
+# No Delegate= here: systemd 255 ignores it on slice units ("not supported for this
+# unit type"), so it never protected cgroup.subtree_control from daemon-reload
+# (rollout finding 2026-09-30). Placement's root is pi-web-ui-tools-anchor.service,
+# a delegated service inside this slice; this slice stays the memory bound.
 #
 # CPU weight honesty (correction-08 finding 4): the tools slice is nested under
 # pi.slice while the service sits under system.slice — both TOP-LEVEL groups carry
@@ -19,14 +18,14 @@
 # control plane needs ~one core of 16, which is why this is acceptable.
 #
 # Install (parent's rollout, never a lane's): copy to /etc/systemd/system/, then
-# `systemctl daemon-reload && systemctl start pi-web-ui-tools.slice`.
+# `systemctl daemon-reload && systemctl start pi-web-ui-tools.slice`, then install the anchor
+# (pi-web-ui-tools-anchor.service).
 [Unit]
 Description=Pi Web UI agents tool processes (D0 tools slice)
 Before=slices.target
 
 [Slice]
 # Degrade before kill (owner requirement): the soft high throttles first.
-Delegate=yes
 MemoryHigh=14G
 MemoryMax=18G
 MemorySwapMax=4G

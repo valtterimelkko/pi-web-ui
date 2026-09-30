@@ -67,6 +67,27 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
     expect(r.toolsRoot).toBe(root);
   });
 
+  it('resolves a delegated anchor SERVICE name via systemctl show; bounded by its slice (rollout finding 2026-09-30)', () => {
+    // systemd 255 ignores Delegate= on slices, so every daemon-reload cleared the slice's
+    // subtree_control. The tools root is a Delegate=yes service inside the slice instead.
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'pi-web-ui-tools-anchor.service' });
+    const slice = '/sys/fs/cgroup/pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice';
+    const root = `${slice}/pi-web-ui-tools-anchor.service`;
+    const files: Record<string, string> = {
+      [`${root}/cgroup.controllers`]: 'cpuset cpu io memory pids\n',
+      [`${root}/cgroup.subtree_control`]: 'cpu memory pids\n',
+      [`${root}/memory.max`]: 'max\n', // the anchor itself is unlimited...
+      [`${slice}/memory.max`]: '19327352832\n', // ...its slice is the bound
+    };
+    const r = resolveToolsRoot(cfg, {
+      systemctlShowControlGroup: () => '/pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice/pi-web-ui-tools-anchor.service',
+      exists: (p) => p === root,
+      readFirstLine: (f) => files[f],
+    });
+    expect(r.available).toBe(true);
+    expect(r.toolsRoot).toBe(root);
+  });
+
   it('REJECTS a slice name systemd does not know (the 16:56 escape: an unresolved name must never become a path)', () => {
     const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'pi-d0-proof-tools.slice' });
     const r = resolveToolsRoot(cfg, { systemctlShowControlGroup: () => undefined });

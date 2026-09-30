@@ -6,23 +6,42 @@ import { DEFAULT_PER_CHILD, MEASURED_SIZING, GiB } from '../../../src/placement/
 const repoRoot = path.resolve(__dirname, '../../../..');
 
 describe('D0 deploy unit arithmetic (amendment A)', () => {
-  it('tools slice: high 14G, max 18G, swap 4G, CPUWeight 100, Delegate yes', () => {
+  it('tools slice: high 14G, max 18G, swap 4G, CPUWeight 100, and no (ignored) Delegate', () => {
     const slice = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-tools.slice'), 'utf8');
     expect(slice).toMatch(/^MemoryHigh=14G$/m); // 14 GiB = 15032385536 bytes
     expect(slice).not.toMatch(/^MemoryHigh=256M/m); // no stale 256 MiB expectations
     expect(slice).toMatch(/^MemoryMax=18G$/m);
     expect(slice).toMatch(/^MemorySwapMax=4G$/m);
     expect(slice).toMatch(/^CPUWeight=100$/m);
-    // Delegate=yes restored (correction 09): without it systemd resets
-    // subtree_control on daemon-reload and child groups lose their limit files.
-    expect(slice).toMatch(/^Delegate=yes$/m);
+    // Rollout finding 2026-09-30: systemd 255 ignores Delegate= on slice units ("not
+    // supported for this unit type"), so it never stopped daemon-reload clearing
+    // subtree_control. Delegation lives on the anchor service below.
+    expect(slice).not.toMatch(/^Delegate=/m);
   });
 
-  it('control plane drop-in: max 8G, low 2G, and NO MemoryHigh (throttling the server stalls the loop)', () => {
+  it('tools root anchor: a delegated service in the slice that survives per-child OOM kills', () => {
+    const anchor = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-tools-anchor.service'), 'utf8');
+    expect(anchor).toMatch(/^Slice=pi-web-ui-tools\.slice$/m);
+    expect(anchor).toMatch(/^Delegate=cpu memory pids$/m);
+    // No internal processes: the anchor's own process sits in a subgroup so the
+    // server may enable controllers in the anchor's subtree_control.
+    expect(anchor).toMatch(/^DelegateSubgroup=supervisor$/m);
+    // Proven on a disposable anchor: with the default OOMPolicy=stop one per-child OOM
+    // kill fails the anchor and systemd kills every placed command inside it.
+    expect(anchor).toMatch(/^OOMPolicy=continue$/m);
+    expect(anchor).not.toMatch(/^Memory(Max|High)=/m); // the slice is the bound
+  });
+
+  it('control plane drop-in: max 8G, low 2G, and NO effective MemoryHigh (throttling the server stalls the loop)', () => {
     const dropin = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-control-plane.conf'), 'utf8');
     expect(dropin).toMatch(/^MemoryMax=8G$/m);
     expect(dropin).toMatch(/^MemoryLow=2G$/m);
-    expect(dropin).not.toMatch(/^MemoryHigh=/m);
+    // Omitting the key is not enough: the base unit sets MemoryHigh=3G, which a drop-in
+    // that stays silent inherits (rollout finding, 2026-09-30). Clear it explicitly.
+    const base = readFileSync(path.join(repoRoot, 'deploy/systemd/pi-web-ui.service'), 'utf8');
+    expect(base).toMatch(/^MemoryHigh=/m);
+    const highs = dropin.match(/^MemoryHigh=.*$/gm) ?? [];
+    expect(highs).toEqual(['MemoryHigh=infinity']);
   });
 
   it('slice budget exceeds the control plane so neither starves the other of memory', () => {
@@ -37,7 +56,10 @@ describe('D0 deploy unit arithmetic (amendment A)', () => {
   it('answer-04 + correction-06 finding 6: placement + OOM score are ONE drop-in', () => {
     const placement = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-placement.conf'), 'utf8');
     expect(placement).toMatch(/^Environment=PI_TOOLS_PLACEMENT=on$/m);
-    expect(placement).toMatch(/^Environment=PI_TOOLS_SLICE=pi-web-ui-tools.slice$/m);
+    expect(placement).toMatch(/^Environment=PI_TOOLS_SLICE=pi-web-ui-tools-anchor\.service$/m);
+    // The root is resolved once at start-up, so the anchor must be up first.
+    expect(placement).toMatch(/^Wants=pi-web-ui-tools-anchor\.service$/m);
+    expect(placement).toMatch(/^After=pi-web-ui-tools-anchor\.service$/m);
     expect(placement).toMatch(/^OOMScoreAdjust=-500$/m);
     // The pairing is pinned: one file, one rollback (delete file + drain-restart).
     expect(placement).toMatch(/ROLLBACK/i);

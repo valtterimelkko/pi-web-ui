@@ -1,0 +1,37 @@
+# Pi Web UI tools root anchor (D0; rollout finding 2026-09-30).
+#
+# Placement's per-child groups live under this service's cgroup, not directly in
+# pi-web-ui-tools.slice. systemd 255 ignores Delegate= on slice units, so every
+# daemon-reload cleared the slice's cgroup.subtree_control and a live child's group
+# lost its limit files. A service CAN be delegated: systemd then never touches the
+# subtree below it. Proven on disposable units before rollout (reload keeps the
+# controllers and a live child's memory.max; see the D0 evidence bundle addendum).
+#
+# - DelegateSubgroup=supervisor: this unit's own process sits in a subgroup, so the
+#   server may enable +cpu +memory +pids in the anchor's subtree_control
+#   (cgroup v2's no-internal-processes rule).
+# - OOMPolicy=continue: REQUIRED. A per-child OOM kill counts against this unit; under
+#   the default OOMPolicy=stop the anchor fails and systemd kills every placed command
+#   of every child (proven on a disposable anchor).
+# - No memory limits here: pi-web-ui-tools.slice is the bound (18G max, 14G high).
+# - Stopping or restarting this unit kills every placed command. Do it only when no
+#   child is running, then drain-restart pi-web-ui (the root is resolved at start-up).
+#
+# Install (parent's rollout): copy to /etc/systemd/system/, then
+# `systemctl daemon-reload && systemctl enable --now pi-web-ui-tools-anchor.service`.
+[Unit]
+Description=Pi Web UI tools root anchor (D0 delegated subtree for agents' tool processes)
+Before=pi-web-ui.service
+
+[Service]
+Type=exec
+Slice=pi-web-ui-tools.slice
+Delegate=cpu memory pids
+DelegateSubgroup=supervisor
+OOMPolicy=continue
+ExecStart=/bin/sleep infinity
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

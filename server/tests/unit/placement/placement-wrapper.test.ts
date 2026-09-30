@@ -174,6 +174,22 @@ describe('placement wrapper script (real script against a fake cgroup root)', ()
     expect(res.cgroup ?? 'ran').not.toContain('pi-rb'); // unplaced
   });
 
+  it('LIMIT READ-BACK FAILURE on a PRE-EXISTING group never kills it (the child\'s running commands survive)', () => {
+    // Rollout finding 2026-09-30: a daemon-reload can strip limit files from a live
+    // group; the child's next command must degrade, not cgroup.kill its running tests.
+    const env = writeGroupEnv(root.slice, 'pi-live');
+    const g = path.join(root.slice, 'pi-live');
+    mkdirSync(g, { recursive: true });
+    writeFileSync(path.join(g, 'cgroup.procs'), '4242\n');
+    writeFileSync(path.join(g, 'cgroup.kill'), '');
+    symlinkSync('/dev/null', path.join(g, 'memory.max'));
+    const res = runWrapper(env, ['-c', 'echo ran'], root.root);
+    expect(res.status).toBe(0);
+    expect(readFileSync(path.join(root.slice, 'degrade.log'), 'utf8')).toContain('pi-live limit-readback-failed');
+    expect(readFileSync(path.join(g, 'cgroup.kill'), 'utf8')).toBe('');
+    expect(existsSync(g)).toBe(true);
+  });
+
   it('OOM SCORE (answer 04): a placed command runs at oom_score_adj 0', () => {
     const selfAdj = path.join('/proc/self', 'oom_score_adj');
     const before = readFileSync(selfAdj, 'utf8').trim();
