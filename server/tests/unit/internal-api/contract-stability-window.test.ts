@@ -81,8 +81,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openDate).toBe(WINDOW_OPEN_DATE);
     });
 
-    it('states the length is owner-set at R3 and open-ended until then', () => {
-      expect(doc).toMatch(/set by the owner at R3/);
+    it('states the owner-set length (R3: until programme close) with no calendar end date', () => {
+      expect(doc).toMatch(/Length \(owner, R3 2026-09-30\): open until the/);
       expect(parsed?.openEnded).toBe(true);
     });
 
