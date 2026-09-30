@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { planSpawnOwn, resolvePlacementConfig } from '../placement/index.js';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import pty from 'node-pty';
@@ -67,6 +68,8 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     startedAt: null,
   };
   private ptyProcess: pty.IPty | null = null;
+  /** D0: the placement plan for the current channel host process (undefined when off). */
+  private channelLaunch: { cleanup(): void } | undefined;
   private _currentModel: string | null = null;
   private _currentThinkingLevel: string | null = null;
   private lastAuthErrorAt = 0;
@@ -117,12 +120,18 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     delete env.ANTHROPIC_API_KEY;
     delete env.ANTHROPIC_AUTH_TOKEN;
 
-    const proc = pty.spawn(claudePath, args, {
+    // D0 placement: the channel host is one server-wide process — its own group,
+    // removed when it exits (not session-bound; amendment C). Unplaced when off.
+    const channelLaunch = planSpawnOwn(resolvePlacementConfig(), [claudePath, ...args], env) ??
+      { file: claudePath, args, env, group: '', cleanup: () => {} };
+    this.channelLaunch = channelLaunch;
+
+    const proc = pty.spawn(channelLaunch.file, channelLaunch.args, {
       name: 'xterm-256color',
       cols: 120,
       rows: 40,
       cwd: this.cfg.cwd,
-      env,
+      env: channelLaunch.env,
     });
 
     this.ptyProcess = proc;
@@ -175,6 +184,8 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     this.startIdleWatch();
 
     proc.onExit(({ exitCode, signal }) => {
+      this.channelLaunch?.cleanup();
+      this.channelLaunch = undefined;
       this.stopIdleWatch();
       this.isBusyState = false;
       const code = exitCode ?? (signal ? -1 : 0);

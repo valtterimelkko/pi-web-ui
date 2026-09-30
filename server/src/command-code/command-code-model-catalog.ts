@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { planSpawnOwn, resolvePlacementConfig } from '../placement/index.js';
 import { spawn } from 'node:child_process';
 import { COMMAND_CODE_EFFORT_TABLE } from './command-code-model-efforts.js';
 
@@ -162,10 +163,13 @@ async function runDiscoveryCommand(
   environment = controlledDiscoveryEnvironment(),
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Command Code discovery timeout must be positive');
-  const child = spawn(executablePath, args, {
+  // D0: discovery probe — own group, removed when it exits. Unplaced when off.
+  const launch = planSpawnOwn(resolvePlacementConfig(), [executablePath, ...args], environment) ??
+    { file: executablePath, args, env: environment, group: '', cleanup: () => {} };
+  const child = spawn(launch.file, launch.args, {
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: environment,
+    env: launch.env,
   });
   let stdout = '';
   let stderr = '';
@@ -198,6 +202,7 @@ async function runDiscoveryCommand(
       settled = true;
       clearTimeout(timer);
       if (timeoutFinalizer) clearTimeout(timeoutFinalizer);
+      launch.cleanup();
       if (error) reject(error);
       else resolve({ stdout, stderr, exitCode: code });
     };

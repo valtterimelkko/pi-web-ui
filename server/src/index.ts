@@ -9,6 +9,17 @@ import { createServer } from 'http';
 import path from 'path';
 import { createApp } from './app.js';
 import { config } from './config.js';
+import {
+  resolvePlacementConfig,
+  sweepAllGroups,
+  realCgroupIo,
+  appendDegradeLine,
+  readToolsSliceMemory,
+  readDegradeCount,
+  placementDegradeFilePath,
+  exportToolsPlacementBridge,
+} from './placement/index.js';
+import { setHealthReadingSources } from './observability/health-readings.js';
 import { WebSocketConnectionManager, wireWebSocketDrainFence } from './websocket/index.js';
 import { handleWebSocketUpgrade } from './websocket/upgrade-handler.js';
 import { initializePiService, startSessionWatcher, getPiService, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
@@ -50,6 +61,30 @@ const server = createServer(app);
 // Initialize Pi service and WebSocket manager
 async function initialize(): Promise<void> {
   try {
+    // D0: reap any tools-slice groups a previous (possibly crashed) run left behind.
+    // Amendment B: nothing in-process survives a restart, so every pre-existing group
+    // is killed and removed. No-op when the slice does not exist.
+    const placementStartupCfg = resolvePlacementConfig();
+    const swept = sweepAllGroups(realCgroupIo, placementStartupCfg);
+    if (swept > 0) {
+      logger.warn(`[Placement] Startup sweep killed and removed ${swept} stale tools group(s)`);
+      if (placementStartupCfg.enabled) appendDegradeLine(placementStartupCfg, 'startup-sweep', `removed=${swept}`);
+    }
+    if (placementStartupCfg.enabled) {
+      // D0: expose the tools slice + degrade counter to the health sampler (A2/L1
+      // read the new cgroups). Host metrics file only — no contract change.
+      setHealthReadingSources({
+        toolsSlice: () => {
+          const r = readToolsSliceMemory(placementStartupCfg);
+          return r.source === 'tools-slice' ? { currentBytes: r.currentBytes, oomKill: r.oomKill } : undefined;
+        },
+        placementDegrades: () => readDegradeCount(placementDegradeFilePath(placementStartupCfg)) ?? undefined,
+      });
+      // D0: publish the placement parameters to in-process extensions (bg_run,
+      // subagent). Absent when placement is off, so extensions stay unplaced.
+      exportToolsPlacementBridge(placementStartupCfg);
+    }
+
     // Initialize Pi service first
     await initializePiService();
     logger.info('Pi service initialized');
@@ -278,6 +313,10 @@ const shutdownCoordinator = new ShutdownCoordinator({
     { name: 'websocket-clients', run: async () => { if (wsManager) await wsManager.close(); } },
     { name: 'session-cleanup', run: () => { sessionCleanup?.stop(); } },
     { name: 'internal-api', run: async () => { if (internalApiServer) await internalApiServer.stop(); } },
+    // D0 (amendment B): children's commands must not outlive the server — kill every
+    // tools group on graceful shutdown (the drain stops sessions through the dispose
+    // funnel; this step catches anything the funnel missed, e.g. own- probe groups).
+    { name: 'placement-groups', run: () => { sweepAllGroups(realCgroupIo, resolvePlacementConfig()); } },
     // Bounded close (2026-09-15). `server.close()` alone only calls back once
     // every connection has gone, and this process holds long-lived WebSocket
     // clients by design: on 2026-09-14 18:04:17 and 21:15:56 this step never

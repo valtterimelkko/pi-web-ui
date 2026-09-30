@@ -6,6 +6,7 @@
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
+import { planSpawnForSession, resolvePlacementConfig } from '../../placement/index.js';
 import type { WorktreeManager, WorktreeInfo } from './worktree-manager.js';
 import type { TaskNode } from './plan-parser.js';
 import { createLogger } from '../../logging/logger.js';
@@ -71,6 +72,8 @@ export class SessionOrchestrator {
   private worktreeManager: WorktreeManager;
   private orchestrations: Map<string, OrchestrationState> = new Map();
   private eventCallbacks: Set<EventCallback> = new Set();
+  /** D0: placement plan per running child session (undefined entries when unplaced). */
+  private placementLaunches: Map<string, { cleanup(): void }> = new Map();
 
   constructor(worktreeManager: WorktreeManager) {
     this.worktreeManager = worktreeManager;
@@ -197,8 +200,17 @@ export class SessionOrchestrator {
     logger.info(`[SessionOrchestrator] Starting session ${sessionId} in ${worktree.path}`);
 
     try {
-      const childProcess = spawn('pi', args, {
+      // D0 placement: session-bound group keyed by the orchestration session id.
+      // When off, launch is the original argv/env byte-identically.
+      const launch = planSpawnForSession(
+        resolvePlacementConfig(),
+        { kind: 'rt', runtime: 'pi-parallel', id: sessionId },
+        ['pi', ...args],
+      ) ?? { file: 'pi', args, env: undefined as NodeJS.ProcessEnv | undefined, group: '', cleanup: () => {} };
+      this.placementLaunches.set(sessionId, launch);
+      const childProcess = spawn(launch.file, launch.args, {
         cwd: worktree.path,
+        env: launch.env,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
       });
@@ -228,6 +240,8 @@ export class SessionOrchestrator {
 
       // Handle completion
       childProcess.on('close', async (code) => {
+        this.placementLaunches.get(sessionId)?.cleanup();
+        this.placementLaunches.delete(sessionId);
         session!.endTime = new Date();
         session!.process = undefined;
 

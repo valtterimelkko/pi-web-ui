@@ -1,6 +1,7 @@
 import type { PiService } from './pi-service.js';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
+import { removeSessionGroup, resolvePlacementConfig } from '../placement/index.js';
 import { enrichSubagentEvent } from './event-forwarder.js';
 import { projectStreamingEventForTransport } from './stream-transport.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
@@ -744,6 +745,10 @@ export class MultiSessionManager {
     
     // Release the event handler and every other PiService-owned reference
     this.releasePiServiceRefs(activeSession.handlerKey, activeSession.sessionId);
+    
+    // D0: the session's tools group dies with the session (best-effort; the startup
+    // sweep and the graceful-shutdown kill-all reap whatever this misses).
+    removeSessionGroup(resolvePlacementConfig(), activeSession.sessionId);
     
     // Remove from sessions map
     this.sessions.delete(sessionPath);

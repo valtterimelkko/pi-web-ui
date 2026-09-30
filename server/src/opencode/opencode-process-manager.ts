@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { execSync } from 'node:child_process';
+import { planSpawnOwn, resolvePlacementConfig } from '../placement/index.js';
 import type { OpenCodeConfig } from './opencode-types.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -17,6 +18,8 @@ export interface OpenCodeProcessStatus {
 export class OpenCodeProcessManager {
   private config: OpenCodeConfig;
   private process: ChildProcess | null = null;
+  /** D0: placement plan for the current server process (undefined when unplaced). */
+  private launch: { cleanup(): void } | undefined;
   private starting: Promise<void> | null = null;
   private healthy: boolean = false;
   private restartCount: number = 0;
@@ -74,14 +77,22 @@ export class OpenCodeProcessManager {
       env.OPENCODE_SERVER_PASSWORD = this.config.password;
     }
 
-    this.process = spawn('opencode', args, {
+    // D0 placement: the opencode server is one server-wide process — its own group,
+    // removed when it exits. Unplaced (byte-identical argv/env) when off.
+    const launch = planSpawnOwn(resolvePlacementConfig(), ['opencode', ...args], env) ??
+      { file: 'opencode', args, env, group: '', cleanup: () => {} };
+    this.launch = launch;
+
+    this.process = spawn(launch.file, launch.args, {
       cwd: this.config.workingDir,
-      env,
+      env: launch.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     this.process.on('error', (err) => {
       logger.error('[OpenCodeProcessManager] Process error:', err.message);
+      this.launch?.cleanup();
+      this.launch = undefined;
       this.process = null;
       this.healthy = false;
       this.serverStartedAt = null;
@@ -90,6 +101,8 @@ export class OpenCodeProcessManager {
 
     this.process.on('exit', (code, signal) => {
       logger.info(`[OpenCodeProcessManager] Process exited code=${code} signal=${signal}`);
+      this.launch?.cleanup();
+      this.launch = undefined;
       this.process = null;
       this.healthy = false;
       this.serverStartedAt = null;
