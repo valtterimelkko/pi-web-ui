@@ -27,7 +27,54 @@ Current contract:
 }
 ```
 
+### Stability window
+
+> **The stability window is open.** It opened at contract **1.58.0** on
+> **2026-09-30**. Its length is **set by the owner at R3; until then the window
+> is open-ended**. (C6, orchestration-scaling plan: the contract moved
+> 1.15.0 → 1.47.0 in about eight weeks; the window lets parents, clients and
+> skills catch up with a stable surface.)
+
+Inside the window, **bug fixes only**. Allowed without owner involvement:
+
+- **Patch bumps (`1.58.x`)** for bug fixes.
+- Documentation changes (no version bump for a doc-only change).
+
+Everything below needs a **recorded owner exception** (a row in the table
+here):
+
+- Any **new route, field, error code, event type, capability feature, or
+  default change** that a client can observe.
+- **Minor bumps (`1.59.0`, …)** — inside the window a minor bump is allowed
+  only with an exception row naming the version.
+
+The guard is mechanical:
+`server/tests/unit/internal-api/contract-stability-window.test.ts` fails when
+the contract version's `major.minor` moves past `1.58` while no exception row
+names that version, and when the client snapshot's shape differs from the
+window baseline while no exception row names the current `major.minor` — this
+catches a properly **regenerated** snapshot whose route, type, error-code,
+field or schema set changed, which the existing regeneration drift test alone
+does not. The enforced baseline fingerprint is the SHA-256 of the parsed
+`docs/contract/internal-api-client-snapshot.json` at 1.58.0 with the
+`contractVersion` field removed and object keys recursively sorted
+(`851a1545ab6f15cf2d2f1d26c3a59567b5bc17e95e8d8c6e867a3ce40dd4c7e9`; the
+full-file SHA-256 at 1.58.0 is
+`fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec`). Patch
+bumps fingerprint identically because only `contractVersion` moves.
+
+Exception table (date, owner decision, what, version):
+
+| Date | Owner decision | What | Version |
+| --- | --- | --- | --- |
+
 ### Changelog
+
+- **Doc-only, no version bump (2026-09-30).** Declared the contract stability
+  window (section above): opened at 1.58.0 on 2026-09-30, length owner-set at
+  R3, bug fixes only — patch bumps and documentation — with owner exceptions
+  recorded in the window's table; minor bumps only with an exception row.
+  Guarded by `contract-stability-window.test.ts`. No wire change.
 
 - **1.58.0** (minor, additive — C3a child completion receipt, server half). A structured, parseable completion claim from every child, captured where parents already read.
   - **The block.** A child emits one fenced block at the end of its task: info string `completion`, JSON body with `"schema": "pi-completion/v1"`. Fields: `status` (`done` | `blocked` | `partial`, required), `summary`, `commands[]` (`command`, `exitCode`, `note`), `tests[]` (`name`, `result: pass|fail|skip`, `note`), `commits[]` (`sha`, `repo`, `subject`), `filesChanged[]`, `openIssues[]`, `blockedReason` (required iff `status: "blocked"`). Strict schema — unknown fields are violations; arrays and strings are bounded (block content ≤ 16,384 chars; ≤ 50 commands/commits/issues, ≤ 100 tests, ≤ 200 files). The constants are exported from `server/src/internal-api/completion/completion-schema.ts` and advertised on `GET /capabilities` as `features.runCompletionBlock` so the C1 client snapshot can carry the dispatch template without a server change.
