@@ -9,7 +9,7 @@
  *
  * Per-child defaults implement amendment A's decision rule. The floors are the answer's
  * minimums; the shipped numbers come from the measured sizing run recorded in
- * `defaults.ts` and `docs/plans/execution-reports/orchestration-scaling/D0.md`.
+ * `defaults.ts` and the D0 evidence bundle (orchestration-scaling/D0 in the plan's execution reports).
  */
 import child from 'node:child_process';
 import fs from 'node:fs';
