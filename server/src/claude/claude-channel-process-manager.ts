@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { planSpawnOwn, resolvePlacementConfig } from '../placement/index.js';
+import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import pty from 'node-pty';
@@ -122,7 +122,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
 
     // D0 placement: the channel host is one server-wide process — its own group,
     // removed when it exits (not session-bound; amendment C). Unplaced when off.
-    const channelLaunch = planSpawnOwn(resolvePlacementConfig(), [claudePath, ...args], env) ??
+    const channelLaunch = planSpawnOwn(placementForSpawn(), [claudePath, ...args], env) ??
       { file: claudePath, args, env, group: '', cleanup: () => {} };
     this.channelLaunch = channelLaunch;
 

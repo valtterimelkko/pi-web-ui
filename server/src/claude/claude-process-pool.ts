@@ -5,7 +5,7 @@
  */
 
 import { spawn, ChildProcess, execSync } from 'node:child_process';
-import { planSpawnForSession, resolvePlacementConfig } from '../placement/index.js';
+import { planSpawnForSession, placementForSpawn } from '../placement/index.js';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
@@ -189,7 +189,7 @@ export class ClaudeProcessPool {
     // D0 placement: session-bound group (deterministic per claudeSessionId); when
     // placement is off, launch is the original argv/env byte-identically.
     const launch = planSpawnForSession(
-      resolvePlacementConfig(),
+      placementForSpawn(),
       { kind: 'rt', runtime: 'claude', id: options.claudeSessionId },
       [executable, '-p', options.prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode, '--allowedTools', allowedTools, '--model', effectiveModel, ...(options.effort ? ['--effort', options.effort] : []), ...extraCliArgs.filter((a) => a !== '--model' && a !== effectiveModel), ...(options.isFollowUp ? ['--resume', options.claudeSessionId] : ['--session-id', options.claudeSessionId])],
       claudeEnv,
