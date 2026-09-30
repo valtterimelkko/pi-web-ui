@@ -273,10 +273,29 @@ The default location is `~/.pi-web-ui/metrics/health-metrics.jsonl`
 | `heapUsedBytes`, `heapTotalBytes` | `process.memoryUsage()`. |
 | `heapLimitBytes`, `heapFraction` | The real V8 `heap_size_limit` and `heapUsed / limit` — the ratio the heap alert and B2 admission use. |
 | `rssBytes`, `externalBytes` | Process RSS and external (buffer/native) memory. |
+| `cpuPercentOfCore` | Process CPU (user + system, `process.cpuUsage()` deltas) over the interval, as a percentage of one core. `null` on the first sample (no interval yet). |
+| `mainThreadCpuPercentOfCore` | Main-thread (event-loop) CPU over the same interval, percentage of one core. `null` on the first sample or when unmeasurable. |
+| `mainThreadCpuSource` | Where `mainThreadCpuPercentOfCore` came from: `proc-thread-self` (read from Linux `/proc/self/task/<pid>/stat`, the main thread's own counters), `process-cpu` (the labelled process-wide fallback used when `/proc` is unavailable), or `unavailable`. |
 | `lagP50Ms`, `lagP99Ms`, `lagMaxMs`, `lagWindowMs`, `lagSampleCount` | Event-loop lag percentiles over the last 60 s at the 500 ms shed-monitor cadence. |
 | `activeTurns`, `activeTurnsByClass` | Active turns, by runtime label by default; by admission class (P0–P3) when admission registers its snapshot. `{}` means no source could see them — never a misleading zero per class. |
 | `residentSessions` | Sessions loaded in the Pi `MultiSessionManager`, registered by that manager. `null` when unmeasured. |
 | `registryEntries` | Session-registry entries. `null` when no unique registry instance exists. |
+
+### CPU in the sample
+
+Heap and lag say how much room the process has and how late the loop is; the
+CPU fields say how busy the one thread they share is. The Pi agents run in
+process on the main event loop, so `mainThreadCpuPercentOfCore` is the quantity
+to watch for “is the event loop CPU-bound right now?”. It is read on Linux from
+`/proc/self/task/<pid>/stat` (a thread's TID equals the process pid for the main
+thread, and the sampler runs on the main thread; the `stat` fields are located
+from the last `)` because the process name may contain spaces). Where that is
+unavailable — a non-Linux host, a restricted `/proc` — the process-wide figure
+is reported instead and `mainThreadCpuSource` is `process-cpu`, because process
+CPU can exceed main-thread CPU when worker threads exist. Both percentages are
+computed from deltas against the previous sample against the same clock as the
+reading, so the two are directly comparable; neither is client-visible (the
+metrics file is a host file, not an Internal API field).
 
 Rotation is size-bounded, not count-only: the current file is
 `health-metrics.jsonl`, older generations are `health-metrics.1.jsonl`,
@@ -321,18 +340,53 @@ Two independent latches, evaluated against the same reading:
 | `heap_pressure` | `heapFraction >= OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION` (default `0.85` of `heap_size_limit`) | `heapFraction <= OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` (default `0.75`) |
 | `event_loop_lag` | `lagP99Ms >= OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` (default `500`) | `lagP99Ms <= OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` (default `200`) |
 
-Semantics: **one alert on the crossing and one recovery message on the
-clearing**, never one message per sample. Any value between the two thresholds
-is a dead band that changes nothing, which is what stops a reading that
-oscillates around the trigger from flapping. Because a recovery must be earned,
-a latch always has two thresholds and a start-up validation refuses a band whose
-low water mark is not below its high water mark.
+Semantics: **one raw transition per crossing** (an `alert` when the high water
+mark is crossed, a `recovery` when the low water mark is cleared), never one
+transition per sample. Any value between the two thresholds is a dead band that
+changes nothing, which is what stops a reading that oscillates around the
+trigger from flapping. Because a recovery must be earned, a latch always has two
+thresholds and a start-up validation refuses a band whose low water mark is not
+below its high water mark.
 
-Each transition is logged and delivered:
+Every raw transition is journaled, and every reading is written to the metrics
+file. **Operator delivery is incident-grouped** (L1): the event-loop latch may
+cross six times in twenty minutes while one host-wide stall unfolds, and the
+operator gets one message when the incident opens and one when it closes.
+
+### Incident grouping
+
+One incident per kind (`heap_pressure`, `event_loop_lag`), with independent
+state, so an open lag incident cannot silence a heap alert:
+
+- **Open.** An incident opens after `OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS`
+  readings at or above the high water mark inside one un-recovered window
+  (default `2`), so a single spike never pages. The window starts at its first
+  high reading and keeps that window's peak; it clears on a reading at or below
+  the recovery threshold, while a dead-band reading neither counts nor clears
+  (the latch is still armed). The one *alert* message is sent when it opens.
+- **Folded crossings.** Every further raw `alert` transition while it is open is
+  counted, not delivered.
+- **Close.** It closes only after the metric has stayed at or below its recovery
+  threshold for the whole quiet period
+  (`OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS`, default 10 min). The one
+  *recovered* message then carries start and end time, duration, peak value and
+  the number of folded alert crossings.
+- **Cooldown.** After a close, `OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS`
+  (default 30 min) suppresses the next *alert* message for that kind. If the
+  metric crosses again inside the cooldown, the incident reopens silently and
+  its recovered message says so.
+- **Restart.** Grouping state is in memory only: after a restart it starts
+  fresh, so an incident that was open when the process stopped is reported as a
+  new incident.
+
+The metrics file and the B2 admission gate are unchanged — grouping changes only
+what reaches the alert sink. The journal still records every raw transition, and
+logs the grouped notifications beside them:
 
 ```
 [HealthTelemetry] heap_pressure alert: heap pressure: 87.3% of the 4288 MB V8 heap limit (alert above 85.0%)
-[HealthTelemetry] heap_pressure recovery: heap pressure cleared: 74.1% of the 4288 MB V8 heap limit (recovered below 75.0%)
+[HealthTelemetry] heap_pressure alert: heap pressure incident: 87.3% of the 4288 MB V8 heap limit (alert above 85.0%); further crossings will be folded into this incident
+[HealthTelemetry] heap_pressure recovery: heap pressure incident recovered: peak 87.3% of the 4288 MB V8 heap limit, 2026-09-30T06:56:50.833Z → 2026-09-30T07:26:19.535Z (29m 29s), 6 alert crossings folded
 ```
 
 Alerting does not depend on the metrics file: if an append fails (EACCES, ENOSPC,
@@ -404,14 +458,18 @@ still answers “what was the heap?”, and
 | `OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` | `0.75` | below the high mark | Heap alert low water mark. |
 | `OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` | `500` | `>= 0` | Lag alert high water mark (ms). |
 | `OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` | `200` | below the high mark | Lag alert low water mark. |
+| `OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS` | `600000` | `0`–`86400000` | Below-recovery time that closes an incident. `0` closes on the first recovery reading. |
+| `OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS` | `1800000` | `0`–`86400000` | After a close, how long a new alert message is suppressed (per kind). `0` disables the cooldown. |
+| `OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS` | `2` | `1`–`100` | High readings inside one un-recovered window before an incident opens. `1` disables debounce. |
 | `OBSERVABILITY_HEALTH_ALERT_SINK` | `notifications` | `notifications`, `file:<absolute path>`, `none` | Alert delivery target (forced to a capture file in validation mode). |
 | `OBSERVABILITY_MEMORY_JOURNAL_MIN_DELTA_MB` | `100` | `>= 0` | Significant heap change for a `Memory:` line. |
 | `OBSERVABILITY_MEMORY_JOURNAL_HEARTBEAT_MS` | `1800000` | `>= 1` | `Memory:` heartbeat interval. |
 | `OBSERVABILITY_MEMORY_JOURNAL_HEAP_MB` | `500` | `>= 0` | Heartbeat only from this heap usage. |
 | `OBSERVABILITY_MEMORY_JOURNAL_SESSIONS` | `5` | `>= 0` | Heartbeat only above this resident-session count. |
 
-Out-of-range or non-integer sampling/rotation values **fall back to the default
-and are logged as a warning** at start-up; the interval bound exists because Node
+Out-of-range or non-integer sampling/rotation/grouping values **fall back to the
+documented default and are logged as a warning** at start-up; the interval bound
+exists because Node
 clamps a `setInterval` delay above `2**31-1` ms to 1 ms (a 30 s sampler would
 become a busy loop). A non-hysteretic alert band, a relative metrics directory or
 an unknown sink value fail fast instead. An unreadable or failing source hides a
