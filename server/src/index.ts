@@ -88,9 +88,7 @@ async function initialize(): Promise<void> {
     // A slice name is resolved via systemctl; an unresolvable, missing, unbounded
     // or controller-less root disables placement loudly (fail open per command,
     // alarm loudly at start-up) — never an unverified group.
-    let placementActive = false;
     if (startupApplied.active) {
-      placementActive = true;
       logger.info(`[Placement] tools root verified: ${startupApplied.config.toolsRoot}`);
     } else if (placementStartupCfg.enabled) {
       logger.error(`[Placement] DISABLED — tools root unavailable: ${startupApplied.reason ?? 'unknown'}`);

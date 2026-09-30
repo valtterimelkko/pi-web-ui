@@ -5,7 +5,7 @@
  * extensions never sees it and stays unplaced (01-answer.md, grant (a)).
  */
 import type { PlacementConfig } from './config.js';
-import { placementDegradeFilePath, placementWrapperPath } from './config.js';
+import { placementDegradeFilePath } from './config.js';
 import { groupPath, sessionGroupName } from './keys.js';
 import { materialiseWrapper } from './wrapper.js';
 

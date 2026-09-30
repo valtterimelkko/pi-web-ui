@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { PlacementConfig } from './config.js';
-import { placementDegradeFilePath, placementWrapperPath } from './config.js';
+import { placementDegradeFilePath } from './config.js';
 import { groupPath, ownGroupName, sessionGroupName } from './keys.js';
 import { materialiseWrapper } from './wrapper.js';
 
