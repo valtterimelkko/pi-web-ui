@@ -4,12 +4,14 @@ import path from 'path';
 import { getHeapStatistics } from 'v8';
 import {
   readServiceMemoryCapacity,
+  readSplitMemoryCapacity,
   readServicePidsCapacity,
   readServiceMemoryEvents,
   type CgroupMemorySource,
   type ResolvedPidsCapacity,
   type ResolvedMemoryEvents,
 } from './cgroup-capacity.js';
+import { resolvePlacementConfig } from '../placement/index.js';
 import { readHostPressure, type ResolvedHostPressure } from './host-pressure.js';
 import type { SessionRuntime } from './types.js';
 
@@ -173,6 +175,13 @@ export interface MemoryCapacity {
   highBytes?: number;
   /** Where current/limit were read from: the service cgroup, the cgroup root, or process RSS. */
   source?: CgroupMemorySource;
+  /**
+   * D0: the tools slice side of the split budget, when placement is enabled and the
+   * slice is readable. `currentBytes`/`limitBytes` above already include this side
+   * (the admission budget covers both groups); the fields here keep the sides apart
+   * for diagnostics and telemetry.
+   */
+  tools?: { currentBytes?: number; highBytes?: number; maxBytes?: number; source: 'tools-slice' };
 }
 
 export interface AdmissionSnapshot {
@@ -509,9 +518,13 @@ export function connectAdmissionToLagReadings(
 /**
  * Resolves this process's actual memory capacity from its nested service cgroup
  * (preferred) rather than the cgroup-root/host aggregate. See `cgroup-capacity.ts`.
+ * D0: when placement is enabled, the budget covers the tools slice too — children's
+ * tool work counts against the slice's own budget, not only the server's cgroup.
  */
 export function readMemoryCapacity(): MemoryCapacity {
-  return readServiceMemoryCapacity();
+  const placement = resolvePlacementConfig();
+  if (!placement.enabled) return readServiceMemoryCapacity();
+  return readSplitMemoryCapacity({ toolsCgroupPath: placement.toolsRoot });
 }
 
 export class AdmissionController {

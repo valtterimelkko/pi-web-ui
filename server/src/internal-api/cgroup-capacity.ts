@@ -150,6 +150,34 @@ export function readServicePidsCapacity(options: CgroupResolverOptions = {}): Re
   return { current, max, source };
 }
 
+/**
+ * D0: read the service cgroup AND the tools slice as one admission budget. The totals
+ * sum both groups (the children's tool work counts against the slice's own budget, not
+ * the server's); an unreadable side is dropped rather than fabricated (fail-open per
+ * group). `tools` keeps the sides apart for diagnostics and telemetry.
+ */
+export function readSplitMemoryCapacity(
+  options: CgroupResolverOptions & { toolsCgroupPath?: string } = {},
+): ResolvedMemoryCapacity & { tools?: { currentBytes?: number; highBytes?: number; maxBytes?: number; source: 'tools-slice' } } {
+  const base = readServiceMemoryCapacity(options);
+  const toolsPath = options.toolsCgroupPath;
+  if (!toolsPath) return base;
+  const read = options.read ?? readRealFile;
+  const toolsCurrent = readMetric(read(`${toolsPath}/memory.current`));
+  const toolsMax = readMetric(read(`${toolsPath}/memory.max`));
+  if (toolsCurrent === undefined && toolsMax === undefined) return base;
+  const toolsHigh = readMetric(read(`${toolsPath}/memory.high`));
+  return {
+    currentBytes: base.currentBytes + (toolsCurrent ?? 0),
+    limitBytes: base.limitBytes + (toolsMax ?? 0),
+    highBytes: base.highBytes !== undefined || toolsHigh !== undefined
+      ? (base.highBytes ?? 0) + (toolsHigh ?? 0)
+      : undefined,
+    source: base.source,
+    tools: { currentBytes: toolsCurrent, highBytes: toolsHigh, maxBytes: toolsMax, source: 'tools-slice' },
+  };
+}
+
 function readRealFileSafe(path: string): string | undefined {
   // Kept as a named seam so the default resolver can be audited without an extra closure.
   return readRealFile(path);
