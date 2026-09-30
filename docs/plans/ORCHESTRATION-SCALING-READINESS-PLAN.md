@@ -629,6 +629,11 @@ C1–C5 should ship in one contract bump where practical, so that C6's stability
 #### Review moment R3
 
 Inputs: C-stage evidence; re-run of the Jev specs `piwebui-orch-parent` and `piwebui-orch-children` over sessions after C shipped, compared with the §2 baseline (supervision overhead, API-misuse share, correction rate, workspace-problem rate, lineage coverage); A2 telemetry.
+**CPU input for R3 (added 2026-09-30, after the Stage C incident).** This plan has not measured CPU. The soaks (A1, B1) recorded heap and lag only, with at most ~7 concurrent children (production admits 14 API turns). The A2 telemetry has no CPU series.
+- On 2026-09-30 06:55–07:16 UTC another agent's benchmark (image builds without a CPU cap, model loads) saturated the host (~15 of 16 cores). The event loop stalled for 1–12 s, and admission correctly refused work (`ADMISSION_CAPACITY_EXHAUSTED`, `event_loop_lag`). The owner is setting `CPUWeight=1000` on the service for host contention.
+- The structural ceiling is different: every in-process Pi child's streamed events, extension loads on create/rehydrate (B1.2) and large tool outputs run on **one main thread, i.e. one core**. That main thread is the likely next scaling limit.
+- Measure before deciding Stage D: the A2 telemetry gains process and main-thread CPU (side lane L1), and a stepped concurrency test (5/10/20/30 streaming children on a disposable server) records main-thread CPU %, lag p99 and admission refusals. R3 decides Stage D (children out of process) with those numbers.
+
 Decide: whether Stage D proceeds; authorise resuming Phase 8 of the resource-scaling plan if so; the C6 window length.
 
 ### Stage D — Structural isolation
