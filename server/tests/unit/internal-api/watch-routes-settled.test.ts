@@ -146,4 +146,35 @@ describe('watch routes — contract 1.47.0 fireIfSettled + deadline', () => {
     expect(ok.status).toBe(201);
     expect(typeof ok.body.conditions[0].dueAt).toBe('number');
   });
+
+  // G3 (orchestration-scaling): the owner's spawn → prompt → wait pattern —
+  // `pi-orch wait` registers its agent_end watch with fireIfSettled:true about
+  // 0.2 s after prompting a freshly created child (T1's driver shape, unknown
+  // parent identity). T1 reported an "immediate settled-fire wake loop"; the
+  // live matrix (G3.md) shows the watch never fires early. This pins both
+  // halves of that protection at the exact registration instants the pattern
+  // produces: right after spawn (no runs yet) and right after prompt (fresh
+  // non-terminal run, session streaming).
+  it('owner spawn→prompt→wait pattern: fireIfSettled on a freshly created child never records a firing', async () => {
+    const conditions = [{ id: 'done-1', type: 'event_type', eventType: 'agent_end', once: true }];
+
+    // Spawn→wait shape: the watch lands before any prompt has created a run;
+    // a fresh child is not yet streaming, so the runs guard answers.
+    piStatus = 'idle';
+    const atSpawn = await register({ fireIfSettled: true, conditions, label: 'g3-cell-1' });
+    expect(atSpawn.status).toBe(201);
+    expect(atSpawn.body.firingCount).toBe(0);
+    expect(atSpawn.body.fireIfSettled).toMatchObject({ requested: true, settled: false, reason: 'no_runs' });
+
+    // Prompt→wait shape: the fresh run is accepted but not terminal and the
+    // child is streaming — the busy guard answers first (both guards live).
+    const fresh = await beginRun();
+    await runReceipts.markStarted(fresh);
+    piStatus = 'streaming';
+    const atPrompt = await register({ fireIfSettled: true, conditions, label: 'g3-cell-1' });
+    expect(atPrompt.status).toBe(201);
+    expect(atPrompt.body.firingCount).toBe(0);
+    expect(atPrompt.body.fireIfSettled).toMatchObject({ requested: true, settled: false });
+    expect(['busy', 'last_run_not_terminal']).toContain(atPrompt.body.fireIfSettled.reason);
+  });
 });
