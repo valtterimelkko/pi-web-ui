@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createAgentSession, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { resolvePlacementConfig } from '../../../src/placement/config.js';
+import { resetAppliedPlacement, applyStartupPlacement } from '../../../src/placement/apply-startup.js';
 import { createPlacementBashToolDefinition, createPlacementSpawnHook, PLACEMENT_ENV_KEYS } from '../../../src/placement/bash-tool.js';
 import { createBashToolDefinition } from '@earendil-works/pi-coding-agent';
 
@@ -20,7 +21,18 @@ function placementOn() {
 
 const ON = placementOn();
 
+function ensureFakeRoot(root: string): void {
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'cgroup.controllers'), 'cpu memory pids\n');
+  fs.writeFileSync(path.join(root, 'memory.max'), '1073741824\n');
+  fs.writeFileSync(path.join(root, 'memory.high'), '805306368\n');
+}
+
 describe('placement bash tool (SDK-equivalence and upstream alarm)', () => {
+  beforeEach(() => {
+    ensureFakeRoot('/tmp/d0-fake-cg/t.slice');
+    applyStartupPlacement(ON);
+  });
   const agentDir = mkdtempSync(path.join(tmpdir(), 'd0-agentdir-'));
   afterAll(() => rmSync(agentDir, { recursive: true, force: true }));
 

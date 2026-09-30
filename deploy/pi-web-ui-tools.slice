@@ -6,8 +6,15 @@
 # other of memory, and under host CPU contention the control plane's CPUWeight=1000
 # outweighs this slice's 100.
 #
-# Delegate=yes lets the server create per-child cgroups inside the slice with their
-# own memory/pids limits (amendment A defaults; env-tunable at runtime).
+# The server (root) creates and manages per-child cgroups directly (no Delegate=yes
+# needed — root can write controller files in any cgroup it owns). Correction-06
+# finding 2 + correction-08 live check confirmed root access without delegation.
+#
+# CPU weight honesty (correction-08 finding 4): the tools slice is nested under
+# pi.slice while the service sits under system.slice — both TOP-LEVEL groups carry
+# the default weight, so under full host contention this slice can take about half
+# the host. CPUWeight=100 here governs only relative shares WITHIN pi.slice; the
+# control plane needs ~one core of 16, which is why this is acceptable.
 #
 # Install (parent's rollout, never a lane's): copy to /etc/systemd/system/, then
 # `systemctl daemon-reload && systemctl start pi-web-ui-tools.slice`.
@@ -21,4 +28,3 @@ MemoryHigh=14G
 MemoryMax=18G
 MemorySwapMax=4G
 CPUWeight=100
-Delegate=yes

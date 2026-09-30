@@ -1,7 +1,7 @@
 import type { PiService } from './pi-service.js';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
-import { removeSessionGroup, resolvePlacementConfig, appendDegradeLine } from '../placement/index.js';
+import { removeSessionGroup, placementForSpawn, appendDegradeLine } from '../placement/index.js';
 import { enrichSubagentEvent } from './event-forwarder.js';
 import { projectStreamingEventForTransport } from './stream-transport.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
@@ -749,10 +749,11 @@ export class MultiSessionManager {
     // D0: the session's tools group dies with the session (best-effort; the startup
     // sweep and the graceful-shutdown kill-all reap whatever this misses).
     // Correction-06 finding 2: removal failures are health-visible (degrade line).
-    void removeSessionGroup(resolvePlacementConfig(), activeSession.sessionId).then((r) => {
+    void removeSessionGroup(placementForSpawn(), activeSession.sessionId).then((r) => {
       if (r.failures > 0) {
         logger.warn(`[MultiSessionManager] tools group removal for ${activeSession.sessionId}: ${r.failures} failure(s)`);
-        appendDegradeLine(resolvePlacementConfig(), activeSession.sessionId, `group-remove-failures=${r.failures}`);
+        const placementCfgForDegrade = placementForSpawn();
+        if (placementCfgForDegrade) appendDegradeLine(placementCfgForDegrade, activeSession.sessionId, `group-remove-failures=${r.failures}`);
       }
     }).catch(() => { /* never block dispose on cleanup */ });
 

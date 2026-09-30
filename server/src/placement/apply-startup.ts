@@ -8,6 +8,7 @@
  */
 import type { PlacementConfig } from './config.js';
 import { resolveToolsRoot, type ToolsRootDeps } from './config.js';
+import { setActiveToolsRoot } from './spawn-wrap.js';
 
 export interface AppliedStartupPlacement {
   active: boolean;
@@ -22,10 +23,22 @@ export function applyStartupPlacement(cfg: PlacementConfig, deps?: ToolsRootDeps
   const resolution = resolveToolsRoot(cfg, deps);
   if (resolution.available && resolution.toolsRoot) {
     applied = { active: true, config: { ...cfg, toolsRoot: resolution.toolsRoot } };
+    setActiveToolsRoot(resolution.toolsRoot);
   } else {
     applied = { active: false, config: cfg, reason: resolution.reason };
+    setActiveToolsRoot(undefined);
   }
   return applied;
+}
+
+/**
+ * Correction-08 finding 1: THE accessor for every spawn site. Returns the config
+ * applied at start-up (with the verified absolute root), or null when placement
+ * was not applied — callers fall back byte-identically. Spawn paths must never
+ * re-resolve the config themselves: a slice NAME only resolves here.
+ */
+export function placementForSpawn(): PlacementConfig | null {
+  return getActivePlacementConfig();
 }
 
 /** The applied config, or null before start-up applied it. */
@@ -38,7 +51,8 @@ export function getActivePlacementConfig(): PlacementConfig | null {
   return applied?.active ? applied.config : null;
 }
 
-/** Test seam. */
+/** Test seam. Also clears the spawn-side root — one mechanism, one reset. */
 export function resetAppliedPlacement(): void {
   applied = null;
+  setActiveToolsRoot(undefined);
 }

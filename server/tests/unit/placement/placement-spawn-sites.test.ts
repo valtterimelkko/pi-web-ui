@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { applyStartupPlacement, resetAppliedPlacement, placementForSpawn } from '../../../src/placement/apply-startup.js';
+import { resolvePlacementConfig } from '../../../src/placement/config.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 
@@ -44,6 +48,9 @@ function stubPlacementOn(): void {
 }
 
 function stubPlacementOff(): void {
+  // correction-08: the spawn sites consume the APPLIED config, not the env —
+  // "off" means nothing was applied at start-up.
+  resetAppliedPlacement();
   vi.stubEnv('PI_TOOLS_PLACEMENT', 'off');
   vi.stubEnv('PI_TOOLS_CGROUP_ROOT', RUN_ENV.PI_TOOLS_CGROUP_ROOT);
   vi.stubEnv('PI_TOOLS_SLICE', RUN_ENV.PI_TOOLS_SLICE);
@@ -51,7 +58,21 @@ function stubPlacementOff(): void {
 }
 
 describe('D0 spawn-site wiring', () => {
+  function ensureFakeRoot(root: string): void {
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'cgroup.controllers'), 'cpu memory pids\n');
+    fs.writeFileSync(path.join(root, 'memory.max'), '1073741824\n');
+    fs.writeFileSync(path.join(root, 'memory.high'), '805306368\n');
+  }
+
+  beforeEach(() => {
+    // the spawn sites read the APPLIED config (correction-08); the applied root is
+    // verified against the real fs at apply time — materialise the fake root.
+    ensureFakeRoot('/tmp/d0-wire-cg/t.slice');
+    applyStartupPlacement(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_CGROUP_ROOT: '/tmp/d0-wire-cg', PI_TOOLS_SLICE: '/tmp/d0-wire-cg/t.slice', PI_TOOLS_RUNTIME_DIR: '/tmp/d0-wire-rt' }));
+  });
   afterEach(() => {
+    resetAppliedPlacement();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -69,6 +90,7 @@ describe('D0 spawn-site wiring', () => {
 
     // ON: the wrapper is the executable; the argv carries the full original; env merged.
     stubPlacementOn();
+    fs.writeFileSync('/tmp/d0-ss-debug.txt', JSON.stringify({ applied: placementForSpawn() ? placementForSpawn().toolsRoot : null }));
     const onRunner = new CommandCodeProcessRunner({ spawn: fakeSpawn as never, executablePath: '/usr/bin/cmdc', nativeHomeDir: '/tmp/d0-native' });
     fakeSpawn.mockClear();
     const onRun = onRunner.run({ sessionId: 'cmd-s1', prompt: 'hi', cwd: '/tmp', maxTurns: 5, model: 'cmdc/custom-model' as never, onEvent: () => {} } as never);
@@ -143,10 +165,11 @@ describe('D0 spawn-site wiring', () => {
       };
     });
     const { ClaudeProcessPool } = await import('../../../src/claude/claude-process-pool.js');
-    vi.stubEnv('PI_TOOLS_PLACEMENT', 'on');
-    vi.stubEnv('PI_TOOLS_CGROUP_ROOT', PLACEMENT_ENV.PI_TOOLS_CGROUP_ROOT);
-    vi.stubEnv('PI_TOOLS_SLICE', PLACEMENT_ENV.PI_TOOLS_SLICE);
-    vi.stubEnv('PI_TOOLS_RUNTIME_DIR', PLACEMENT_ENV.PI_TOOLS_RUNTIME_DIR);
+    // correction-08: the site consumes the APPLIED config (not the env) — apply it
+    // AFTER vi.resetModules(): the fresh module graph has its own placement state.
+    const { applyStartupPlacement: reApply } = await import('../../../src/placement/apply-startup.js');
+    const { resolvePlacementConfig: freshCfg } = await import('../../../src/placement/config.js');
+    reApply(freshCfg({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_CGROUP_ROOT: '/tmp/d0-wire-cg', PI_TOOLS_SLICE: '/tmp/d0-wire-cg/t.slice', PI_TOOLS_RUNTIME_DIR: '/tmp/d0-wire-rt' }));
     const pool = new ClaudeProcessPool();
     const wait = pool.spawn(
       { sessionId: 'reg-1', claudeSessionId: 'claude-s1', cwd: '/tmp', prompt: 'hello' } as never,

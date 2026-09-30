@@ -31,10 +31,11 @@ import {
 import { createLogger } from '../logging/logger.js';
 import { emitSessionShutdown, SESSION_SHUTDOWN_TIMEOUT_MS } from './session-shutdown.js';
 import {
-  resolvePlacementConfig,
+  placementForSpawn,
   createPlacementBashToolDefinition,
   isActiveBashOurs,
   appendDegradeLine,
+  type PlacementConfig,
 } from '../placement/index.js';
 import { readSessionIdentity } from './session-cwd.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
@@ -176,6 +177,25 @@ export function releaseSessionRefsFrom(maps: SessionRefMaps, handlerKey: string,
     return true;
   }
   return false;
+}
+
+/**
+ * Correction-08 finding 1: the REAL bash-tool injection builder used by
+ * `createSession` — exported so the real call path is testable. Returns undefined
+ * when placement was not applied at start-up (byte-identical fallback).
+ */
+export function buildPlacementBashTools(
+  placementCfg: PlacementConfig,
+  sessionId: string,
+  cwd: string,
+  settings?: SettingsManager,
+): CreateAgentSessionOptions['customTools'] {
+  // The concrete bash definition is behaviour-compatible with the generic
+  // ToolDefinition element type; the variance gap is TS-only (runtime test
+  // placement-bash-tool.test.ts proves the override on the real SDK).
+  return [
+    createPlacementBashToolDefinition({ cfg: placementCfg, sessionId, cwd, settings }),
+  ] as CreateAgentSessionOptions['customTools'];
 }
 
 export class PiService {
@@ -475,24 +495,15 @@ export class PiService {
 
     const { loader: sessionResourceLoader, snapshot: sessionFactorySnapshot } = await attributor.spanAsync('pi.session.resource_loader', () => this.createSessionResourceLoader(cwd));
 
-    // D0 placement: when enabled, replace the built-in bash tool with the SDK's own
-    // definition carrying our spawn hook (same settings-derived options, behaviour
-    // equivalent apart from placing commands in the session's tools cgroup). The
-    // settings manager is created here and passed to the session so the replacement
-    // derives from exactly the settings the built-in would have used (amendment D).
-    // With placement off, neither option is passed: the call is byte-identical to the
-    // pre-D0 call. TDD receipt: tests/unit/placement/placement-bash-tool.test.ts.
-    const placementCfg = resolvePlacementConfig();
+    // D0 placement: when applied at start-up, replace the built-in bash tool via
+    // the real builder below (correction-08 finding 1: placementForSpawn, never a
+    // fresh re-resolve — a slice NAME only resolves at start-up).
+    const placementCfg = placementForSpawn();
     let placementCustomTools: CreateAgentSessionOptions['customTools'];
     let placementSettings: SettingsManager | undefined;
-    if (placementCfg.enabled) {
+    if (placementCfg) {
       placementSettings = SettingsManager.create(cwd, config.piAgentDir);
-      // The concrete bash definition is behaviour-compatible with the generic
-      // ToolDefinition element type; the variance gap is TS-only (runtime test
-      // placement-bash-tool.test.ts proves the override on the real SDK).
-      placementCustomTools = [
-        createPlacementBashToolDefinition({ cfg: placementCfg, sessionId: sessionManager.getSessionId(), cwd, settings: placementSettings }),
-      ] as CreateAgentSessionOptions['customTools'];
+      placementCustomTools = buildPlacementBashTools(placementCfg, sessionManager.getSessionId(), cwd, placementSettings);
     }
 
     const { session } = await attributor.spanAsync('pi.session.create_agent_session', () => createAgentSession({
@@ -507,7 +518,7 @@ export class PiService {
     // D0 upstream-change alarm (runtime half): if a future SDK stops letting
     // customTools override built-ins, degrade to the built-in loudly rather than
     // silently running commands in the control plane's cgroup.
-    if (placementCustomTools && !isActiveBashOurs(session, placementCustomTools[0])) {
+    if (placementCfg && placementCustomTools && !isActiveBashOurs(session, placementCustomTools[0])) {
       appendDegradeLine(placementCfg, session.sessionId, 'bash-tool-not-ours');
       logger.warn(`[PiService] Placement bash tool is not active for session ${session.sessionId}; commands will run unplaced`);
     }

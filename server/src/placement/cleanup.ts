@@ -125,11 +125,12 @@ export async function removeGroup(io: CgroupIo, groupPathAbs: string, timeoutMs 
  * Kill and remove a Pi session's tools group. Deterministic key (recomputable at
  * dispose); best-effort and a no-op when placement is off.
  */
-export async function removeSessionGroup(cfg: PlacementConfig, sessionId: string, io: CgroupIo = realCgroupIo): Promise<CgroupRemovalResult> {
-  // Correction-06 finding 1: consumers read the APPLIED (resolved + verified)
-  // config — a slice NAME in the raw env config never yields a root.
+export async function removeSessionGroup(cfg: PlacementConfig | null, sessionId: string, io: CgroupIo = realCgroupIo): Promise<CgroupRemovalResult> {
+  // Correction-06 finding 1 / correction-08 finding 1: consumers read the APPLIED
+  // (resolved + verified) config — a slice NAME in the raw env config never yields
+  // a root, so spawn/consumer paths must not re-resolve.
   const rc = getActivePlacementConfig() ?? cfg;
-  if (!rc.enabled || !rc.toolsRoot) return { removed: false, failures: 0 };
+  if (!rc || !rc.enabled || !rc.toolsRoot) return { removed: false, failures: 0 };
   const p = groupPath(rc, sessionGroupName('pi', undefined, sessionId));
   return p ? removeGroup(io, p) : { removed: false, failures: 0 };
 }

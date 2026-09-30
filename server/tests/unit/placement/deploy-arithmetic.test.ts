@@ -8,11 +8,13 @@ const repoRoot = path.resolve(__dirname, '../../../..');
 describe('D0 deploy unit arithmetic (amendment A)', () => {
   it('tools slice: high 14G, max 18G, swap 4G, CPUWeight 100, Delegate yes', () => {
     const slice = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-tools.slice'), 'utf8');
-    expect(slice).toMatch(/^MemoryHigh=14G$/m);
+    expect(slice).toMatch(/^MemoryHigh=14G$/m); // 14 GiB = 15032385536 bytes
+    expect(slice).not.toMatch(/^MemoryHigh=256M/m); // no stale 256 MiB expectations
     expect(slice).toMatch(/^MemoryMax=18G$/m);
     expect(slice).toMatch(/^MemorySwapMax=4G$/m);
     expect(slice).toMatch(/^CPUWeight=100$/m);
-    expect(slice).toMatch(/^Delegate=yes$/m);
+    // Delegate=yes removed (correction-08): root manages child cgroups directly
+    expect(slice).not.toMatch(/^Delegate=/m);
   });
 
   it('control plane drop-in: max 8G, low 2G, and NO MemoryHigh (throttling the server stalls the loop)', () => {
