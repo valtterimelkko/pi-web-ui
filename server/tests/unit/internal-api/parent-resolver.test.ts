@@ -105,7 +105,7 @@ describe('runSs (explicit maxBuffer)', () => {
   });
 });
 
-describe('default peerOwners (bounded /proc fd scan)', () => {
+describe('real /proc fd scan (bounded; own process)', () => {
   it('finds this process as the owner of a socket inode it holds', async () => {
     const server = net.createServer(() => {});
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -114,7 +114,17 @@ describe('default peerOwners (bounded /proc fd scan)', () => {
     await new Promise<void>((resolve) => client.on('connect', resolve));
     const link = await fsReadlink(`/proc/self/fd/${(client as unknown as { _handle: { fd: number } })._handle.fd}`);
     const inode = Number(link!.match(/socket:\[(\d+)\]/)![1]);
-    const owners = await scanPeerOwners(inode, { readdir: fsReaddir, readlink: fsReadlink });
+    // The real scan walks every /proc/<pid>, and correction 02 fails closed on
+    // any non-vanish read failure (EACCES on another user's fd directory),
+    // which an unprivileged runner cannot avoid. Restrict the dirent list to
+    // this process: the real /proc/<self>/fd readlink path is still exercised,
+    // without requiring root-only visibility of other processes. The
+    // fail-closed EACCES/EPERM semantics stay covered by the injected-io
+    // scanPeerOwners suite above.
+    const owners = await scanPeerOwners(inode, {
+      readdir: async (p) => (p === '/proc' ? [String(process.pid)] : fsReaddir(p)),
+      readlink: fsReadlink,
+    });
     client.destroy();
     server.close();
     expect(owners).toContain(process.pid);

@@ -203,7 +203,7 @@ describe('Pi control actions lazy-load (Phase 3, contract 1.45.0)', () => {
 
     const res = mockRes();
     await routes.handleCreateSession(
-      jsonReq('POST', '/api/v1/sessions', { runtime: 'pi', cwd: '/root/pi-web-ui', thinkingLevel: 'high' }),
+      jsonReq('POST', '/api/v1/sessions', { runtime: 'pi', cwd: dir, thinkingLevel: 'high' }),
       res,
     );
 
@@ -228,7 +228,7 @@ describe('Pi control actions lazy-load (Phase 3, contract 1.45.0)', () => {
 
     const res = mockRes();
     await routes.handleCreateSession(
-      jsonReq('POST', '/api/v1/sessions', { runtime: 'pi', cwd: '/root/pi-web-ui', thinkingLevel: 'max' }),
+      jsonReq('POST', '/api/v1/sessions', { runtime: 'pi', cwd: dir, thinkingLevel: 'max' }),
       res,
     );
 

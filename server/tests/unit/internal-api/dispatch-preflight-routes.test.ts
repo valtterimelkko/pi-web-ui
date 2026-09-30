@@ -287,11 +287,15 @@ describe('C4 dispatch preflight at the route level', () => {
       delete process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD;
     });
 
-    it('tool lookup uses the runtime child PATH: agy resolves for antigravity, not for pi (item 1)', async () => {
-      // Shrink the server PATH so /root/.local/bin (agy) is invisible to plain
-      // children; only the antigravity prepend may find it.
+    it('correction 01 item 1 — tool lookup resolves on the runtime child PATH at the route level (no host CLI dependency)', async () => {
+      // Shrink the server PATH to a temp bin holding a fixture executable, so
+      // the route resolves a tool this test controls — never a host-installed
+      // CLI. The runtime-specific prepend composition is pinned by the
+      // dispatch-preflight unit tests; the route wiring is what runs here.
       const bin = path.join(dir, 'bare-bin');
       await fs.mkdir(bin);
+      const fakeTool = path.join(bin, 'f1-fixture-tool');
+      await fs.writeFile(fakeTool, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
       process.env.PATH = bin;
       const antigravityService = {
         isRunning: vi.fn(() => false),
@@ -315,22 +319,36 @@ describe('C4 dispatch preflight at the route level', () => {
       } as any);
       pending.push(routes.ready.catch(() => undefined));
 
+      // A declared tool that exists on the child PATH resolves: antigravity's
+      // child PATH is the server PATH plus the agy prepend, claude's is the
+      // server PATH unchanged.
       const agyCreate = createMockRes();
       await routes.handleCreateSession(
-        createJsonReq('POST', '/api/v1/sessions', { runtime: 'antigravity', cwd: goodDir, preflight: { tools: ['agy'] } }),
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'antigravity', cwd: goodDir, preflight: { tools: ['f1-fixture-tool'] } }),
         agyCreate,
       );
       expect(agyCreate.statusCode).toBe(201);
       expect(antigravityService.createSession).toHaveBeenCalledTimes(1);
 
-      const piCreate = createMockRes();
+      const claudeCreate = createMockRes();
       await routes.handleCreateSession(
-        createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi', cwd: goodDir, preflight: { tools: ['agy'] } }),
-        piCreate,
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'claude', cwd: goodDir, preflight: { tools: ['f1-fixture-tool'] } }),
+        claudeCreate,
       );
-      expect(piCreate.statusCode).toBe(400);
-      expect(json(piCreate).code).toBe('PREFLIGHT_FAILED');
-      expect(json(piCreate).failures[0]).toEqual({ kind: 'tool', item: 'agy', problem: 'not found on PATH' });
+      expect(claudeCreate.statusCode).toBe(201);
+      expect(claudeService.createSession).toHaveBeenCalledTimes(1);
+
+      // A tool that exists nowhere is refused with the exact failure shape and
+      // never reaches the runtime.
+      const missingCreate = createMockRes();
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'antigravity', cwd: goodDir, preflight: { tools: ['f1-no-such-tool'] } }),
+        missingCreate,
+      );
+      expect(missingCreate.statusCode).toBe(400);
+      expect(json(missingCreate).code).toBe('PREFLIGHT_FAILED');
+      expect(json(missingCreate).failures[0]).toEqual({ kind: 'tool', item: 'f1-no-such-tool', problem: 'not found on PATH' });
+      expect(antigravityService.createSession).toHaveBeenCalledTimes(1); // unchanged
     });
 
     it('prompt preflight resolves tools on the session runtime PATH, not the host PATH (item 1)', async () => {
