@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createLogger } from '../logging/logger.js';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
-import { planSpawnForSession, planSpawnOwn, resolvePlacementConfig } from '../placement/index.js';
+import { planSpawnForSession, planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import { mapAgyUsage } from './agy-event-normalizer.js';
 import { parseAgyLine, type ParsedAgyLine } from './agy-event-types.js';
 
@@ -123,8 +123,8 @@ export class AgyStreamProcess {
     // (registry session id) when present, else its own group. Unplaced when off.
     const agyKey = this.opts.sessionIdentity?.sessionId ?? this.opts.sessionId;
     const launch = (agyKey
-      ? planSpawnForSession(resolvePlacementConfig(), { kind: 'rt', runtime: 'antigravity', id: agyKey }, [AGY_BINARY, ...this.buildArgs()], env)
-      : planSpawnOwn(resolvePlacementConfig(), [AGY_BINARY, ...this.buildArgs()], env))
+      ? planSpawnForSession(placementForSpawn(), { kind: 'rt', runtime: 'antigravity', id: agyKey }, [AGY_BINARY, ...this.buildArgs()], env)
+      : planSpawnOwn(placementForSpawn(), [AGY_BINARY, ...this.buildArgs()], env))
       ?? { file: AGY_BINARY, args: this.buildArgs(), env, group: '', cleanup: () => {} };
     this.placementLaunch = launch;
     const child = spawnFn(launch.file, launch.args, {
