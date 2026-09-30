@@ -5,6 +5,7 @@ import {
   type LoopStallEvent,
   type LoopStallTimerHandle,
 } from '../../../src/observability/loop-stall-attribution.js';
+import { getCorrelationContext, withCorrelation } from '../../../src/logging/correlation.js';
 
 /**
  * Deterministic scheduler seam: one pending timer at a time (the attributor
@@ -132,7 +133,15 @@ describe('LoopStallAttributor — stall attribution', () => {
     scheduler.fire(clock, 0);
     const stall = attributor.snapshot().stalls[0];
     expect(stall.delayMs).toBe(275);
-    expect(stall.blockedBy).toEqual([{ name: 'pi.session.resource_loader', durationMs: 300 }]);
+    // Correction 02: the enclosing label frame was also on the loop across the
+    // miss, so it is named as co-evidence (without ids — it captured none); the
+    // completed inner span remains the direct blocker. Evidence is ordered by
+    // start then name (correction 03), so the enclosing frame — entered at the
+    // same instant but earlier by name — comes first.
+    expect(stall.blockedBy).toEqual([
+      { name: 'pi.multi.rehydrate_session', durationMs: 300 },
+      { name: 'pi.session.resource_loader', durationMs: 300 },
+    ]);
   });
 
   it('leaves blockedBy empty when no measured span window covers the missed tick', () => {
@@ -311,5 +320,310 @@ describe('createLoopStallLogReporter', () => {
     const report = createLoopStallLogReporter({ warn: () => { throw new Error('sink down'); } }, {});
     const span: LoopStallEvent = { kind: 'span', spanKind: 'sync', label: 'x', durationMs: 200, atMs: 0 };
     expect(() => report(span)).not.toThrow();
+  });
+
+  it('renders captured run ids into the stall log line in the logger suffix style', () => {
+    const warn = vi.fn();
+    const report = createLoopStallLogReporter({ warn }, { now: () => 0 });
+    report({
+      kind: 'stall',
+      label: 'pi.session.stream',
+      delayMs: 250,
+      atMs: 0,
+      stack: ['pi.session.stream'],
+      blockedBy: [],
+      context: { requestId: 'req_C', sessionId: 'sess_C', runtime: 'pi' },
+    });
+    expect(warn.mock.calls[0][0]).toContain('req=req_C');
+    expect(warn.mock.calls[0][0]).toContain('sid=sess_C');
+    expect(warn.mock.calls[0][0]).toContain('rt=pi');
+  });
+
+  it('renders no id suffix when the stall carries no captured context', () => {
+    const warn = vi.fn();
+    const report = createLoopStallLogReporter({ warn }, { now: () => 0 });
+    report({ kind: 'stall', label: 'x', delayMs: 60, atMs: 0, stack: ['x'], blockedBy: [] });
+    expect(warn.mock.calls[0][0]).not.toContain('sid=');
+    expect(warn.mock.calls[0][0]).not.toContain('req=');
+  });
+});
+
+describe('LoopStallAttributor — correlation-context hygiene (G2)', () => {
+  /**
+   * G2 production finding (2026-09-30): every LoopAttribution stall line since
+   * the 09:55 restart carried the first session's req=/run=/sid= tags,
+   * including long after that session finished. The sampler is a
+   * self-rescheduling timer; if the first start() happens inside a session's
+   * withCorrelation scope (it does: the first instrumented call is a session
+   * create), the whole timer chain captures that AsyncLocalStorage context and
+   * every later stall line is stamped with it at emit time.
+   *
+   * Frozen criterion: after a run's context ends, a stall must carry none of
+   * its ids — and attribution must not be dropped altogether: a stall raised
+   * while a run's span is active still carries that run's ids, captured at
+   * span-entry time from the (correct) enclosing context.
+   */
+
+  it('does not leak a session correlation context captured at start() into later stall emissions', async () => {
+    const observedContexts: unknown[] = [];
+    const lines: string[] = [];
+    const clock = { now: 1_000 };
+    const attributor = new LoopStallAttributor({
+      intervalMs: 5,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      onRecord: (event) => {
+        observedContexts.push(getCorrelationContext());
+        createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+      },
+    });
+
+    withCorrelation({ requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' }, () => {
+      attributor.start();
+    });
+    expect(getCorrelationContext()).toBeUndefined(); // the run's context has ended
+
+    clock.now += 500; // the pending tick is now far past the stall threshold
+    await new Promise((resolve) => setTimeout(resolve, 40)); // let the real timer chain fire
+    attributor.stop();
+
+    expect(observedContexts.length).toBeGreaterThan(0);
+    for (const context of observedContexts) {
+      expect(context).toBeUndefined();
+    }
+    for (const line of lines) {
+      expect(line).not.toContain('sess_A');
+      expect(line).not.toContain('run_A');
+      expect(line).not.toContain('req_A');
+    }
+  });
+
+  it('attaches the active run ids to a stall while the run is on the stack, and none after it ends', () => {
+    const clock = { now: 1_000 };
+    const scheduler = new FakeScheduler();
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const attributor = new LoopStallAttributor({
+      intervalMs: 25,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+      onRecord: (event) => {
+        events.push(event);
+        createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+      },
+    });
+    attributor.start(); // started outside any correlation context
+
+    let exitSpan: (() => void) | undefined;
+    withCorrelation({ requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' }, () => {
+      exitSpan = attributor.enter('pi.session.stream');
+    });
+
+    // Stall while the run's span is active: the ids come from the span's frame.
+    scheduler.fire(clock, 100);
+    const during = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(during).toBeDefined();
+    expect(during.label).toBe('pi.session.stream');
+    expect(during.context).toEqual({ requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' });
+    expect(lines.some((line) => line.includes('sid=sess_B') && line.includes('run=run_B'))).toBe(true);
+
+    // The run ends; a later stall carries none of its ids.
+    exitSpan?.();
+    events.length = 0;
+    lines.length = 0;
+    scheduler.fire(clock, 100);
+    const after = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(after).toBeDefined();
+    expect(after.context).toBeUndefined();
+    expect(lines[0]).not.toContain('sess_B');
+    expect(lines[0]).not.toContain('run_B');
+    attributor.stop();
+  });
+
+  it('captures ids for nested spans from the innermost frame and unwinds them in enter/exit pairs', () => {
+    const clock = { now: 1_000 };
+    const scheduler = new FakeScheduler();
+    const events: LoopStallEvent[] = [];
+    const attributor = new LoopStallAttributor({
+      intervalMs: 25,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+      onRecord: (event) => events.push(event),
+    });
+    attributor.start();
+
+    withCorrelation({ sessionId: 'sess_outer', runtime: 'pi' }, () => {
+      const exitOuter = attributor.enter('pi.multi.create_session');
+      withCorrelation({ sessionId: 'sess_inner', requestId: 'req_inner' }, () => {
+        const exitInner = attributor.enter('pi.session.resource_loader');
+        exitInner();
+      });
+      exitOuter();
+    });
+    expect(attributor.currentStack).toEqual([]);
+
+    scheduler.fire(clock, 100);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    expect(stall.context).toBeUndefined();
+    attributor.stop();
+  });
+});
+
+describe('LoopStallAttributor — blamed-evidence correlation (correction 02)', () => {
+  /**
+   * Review finding 1 [major]: a stall took its ids from the innermost frame of
+   * the process-wide frame array, which under overlapping spans is whichever
+   * operation happened to be entered last — not the operation that blocked.
+   * Concurrent turns are the orchestration case. Frozen rule: ids come from the
+   * frames actually blamed (the blockedBy/stack evidence); when several run
+   * contexts are blamed, each blocker carries its own ids and the stall carries
+   * none rather than a wrong one.
+   */
+
+  const CTX_A = { requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' };
+  const CTX_B = { requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' };
+
+  function setup(clock: { now: number }, onRecord: (event: LoopStallEvent) => void) {
+    const scheduler = new FakeScheduler();
+    const attributor = new LoopStallAttributor({
+      intervalMs: 25,
+      stallThresholdMs: 50,
+      spanThresholdMs: 100,
+      now: () => clock.now,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+      onRecord,
+    });
+    attributor.start();
+    scheduler.fire(clock, 0); // settle the first expected tick
+    return { attributor, scheduler };
+  }
+
+  it('takes the ids from the blamed span when an unrelated pending frame is innermost (reviewer probe)', () => {
+    const clock = { now: 1_000 };
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const { attributor, scheduler } = setup(clock, (event) => {
+      if (event.kind !== 'stall') return;
+      events.push(event);
+      createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+    });
+
+    // run_B's span blocks past the threshold: its measured window covers the
+    // missed tick. No other span exists at the missed instant.
+    withCorrelation(CTX_B, () => {
+      attributor.span('operation_B', () => { clock.now += 120; });
+    });
+
+    // run_A's spanAsync is entered after the missed instant and is still
+    // pending when the overdue tick fires: it is the innermost frame, but it
+    // did not block.
+    withCorrelation(CTX_A, () => {
+      void attributor.spanAsync('operation_A', () => new Promise(() => { /* pending */ }));
+    });
+
+    scheduler.fire(clock, 0);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    expect(stall.blockedBy[0]?.name).toBe('operation_B');
+    expect(stall.blockedBy[0]?.context).toEqual(CTX_B);
+    expect(stall.context).toEqual(CTX_B); // current code: CTX_A (innermost frame) — the wrong session
+    expect(lines.some((line) => line.includes('run=run_B') && !line.includes('run_A'))).toBe(true);
+    attributor.stop();
+  });
+
+  it('reports each blamed blocker with its own ids and no single wrong one when contexts are mixed', () => {
+    const clock = { now: 1_000 };
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const { attributor, scheduler } = setup(clock, (event) => {
+      if (event.kind !== 'stall') return;
+      events.push(event);
+      createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+    });
+
+    // operation_A (run_A) is pending and was entered before the missed tick:
+    // it counts as open blocking evidence alongside operation_B (run_B).
+    withCorrelation(CTX_A, () => {
+      void attributor.spanAsync('operation_A', () => new Promise(() => { /* pending */ }));
+    });
+    withCorrelation(CTX_B, () => {
+      attributor.span('operation_B', () => { clock.now += 120; });
+    });
+
+    scheduler.fire(clock, 0);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    const byName = new Map(stall.blockedBy.map((span) => [span.name, span]));
+    expect(byName.get('operation_A')?.context).toEqual(CTX_A);
+    expect(byName.get('operation_B')?.context).toEqual(CTX_B);
+    expect(stall.context).toBeUndefined(); // mixed contexts: none rather than a wrong one
+    // Correction 03: overlapping evidence including an open async span (which
+    // may be suspended on I/O) is reported as CANDIDATES — the executing frame
+    // is not known — never as a certain blocker.
+    const line = lines.join('\n');
+    expect(line).toContain('candidates: operation_A [run=run_A], operation_B [run=run_B] (overlapping async spans; the executing frame is not known)');
+    expect(line).not.toContain('attributed to');
+    expect(stall.stallCandidates).toBe(2);
+    attributor.stop();
+  });
+
+  it('keeps the certain attributed-to wording when exactly one frame is blamed (correction 03)', () => {
+    const clock = { now: 1_000 };
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const { attributor, scheduler } = setup(clock, (event) => {
+      if (event.kind !== 'stall') return;
+      events.push(event);
+      createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+    });
+
+    withCorrelation(CTX_B, () => {
+      attributor.span('operation_B', () => { clock.now += 120; });
+    });
+    withCorrelation(CTX_A, () => {
+      void attributor.spanAsync('operation_A', () => new Promise(() => { /* pending */ }));
+    });
+
+    scheduler.fire(clock, 0);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    expect(stall.stallCandidates).toBeUndefined();
+    const line = lines.join('\n');
+    expect(line).toContain('attributed to');
+    expect(line).not.toContain('candidates:');
+    expect(line).toContain('run=run_B');
+    expect(line).not.toContain('run_A');
+    attributor.stop();
+  });
+
+  it('renders the candidates list in the log line when several contexts are blamed', () => {
+    const warn = vi.fn();
+    const report = createLoopStallLogReporter({ warn }, { now: () => 0 });
+    report({
+      kind: 'stall',
+      label: '<none>',
+      delayMs: 400,
+      atMs: 0,
+      stack: [],
+      blockedBy: [
+        { name: 'operation_A', durationMs: 120, openAsync: true, context: { requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' } },
+        { name: 'operation_B', durationMs: 70, context: { requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' } },
+      ],
+      context: undefined,
+      candidates: ['operation_A [run=run_A]', 'operation_B [run=run_B]'],
+      stallCandidates: 2,
+    });
+    const line = String(warn.mock.calls[0][0]);
+    expect(line).toContain('candidates: operation_A [run=run_A], operation_B [run=run_B] (overlapping async spans; the executing frame is not known)');
+    expect(line).not.toContain('attributed to');
   });
 });

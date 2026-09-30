@@ -501,13 +501,34 @@ with two measured, bounded instruments:
   This is a measurement, not a timing correlation: it cannot attribute a stall
   to an operation that was merely happening nearby.
 
+Correlation hygiene (G2, corrections 02–03): the sampler's timer chain runs
+outside any logging correlation context, so no session's ids can stick to stall
+lines through the chain (the pre-G2 defect: the first session's ids stamped
+every later stall line). Ids are attributed only from the frames actually
+blamed — completed or still-open spans whose window covers the missed instant,
+plus stack frames entered before it — each with its own ids; when several runs
+are blamed the stall carries none rather than a wrong one. Stalls are emitted
+through a context-bound logger, so the ids are structured record fields:
+`getRecentLogs({sessionId})` and `getRecentLogs({runId})` find them.
+
+Known limit (correction 03): an `async` span stays open while it waits on I/O,
+so when several blamed frames overlap the missed instant and any of them is a
+still-open async span, the executing frame is NOT known. Such stalls are
+reported as candidates — `candidates: <frame> [run=…], … (overlapping async
+spans; the executing frame is not known)` with one structured record per
+candidate context (marked `stallCandidate`, sharing a `stallId`) so every
+involved session finds them — never as a certain blocker. Exact execution
+attribution needs execution tracking (async-hooks per-resume enter/exit); that
+is the R4 observability item in
+[`plans/execution-reports/orchestration-scaling/G2.md`](./plans/execution-reports/orchestration-scaling/G2.md).
+
 Recorded lines (rate-limited to at most one per label per 5 s, so a stall storm
 cannot itself become the stall) go through the central logger and therefore land
 in the diagnostics ring buffer — `GET /api/v1/diagnostics?component=LoopAttribution`:
 
 ```
 [LoopAttribution] async span 696.4 ms: pi.session.resource_loader
-[LoopAttribution] event-loop stall 716 ms attributed to pi.multi.rehydrate_session
+[LoopAttribution] event-loop stall 716 ms attributed to pi.multi.rehydrate_session [req=req_ab1 run=run_9z sid=sess_7f rt=pi]
 ```
 
 Bounds and cost: enter/exit is a stack push/pop with no allocation; two

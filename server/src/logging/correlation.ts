@@ -55,3 +55,21 @@ export function withCorrelation<T>(context: LogContext, fn: () => T): T {
 export function newRequestId(): string {
   return `req_${randomUUID()}`;
 }
+
+/**
+ * Run `fn` with no correlation context, regardless of any enclosing
+ * {@link withCorrelation} scope. Async work scheduled inside `fn` inherits the
+ * empty context, so long-lived timers, intervals or self-rescheduling chains
+ * created here can never stamp a caller's request/run/session ids onto later
+ * log lines (the G2 finding: the loop-stall sampler's first start() happened
+ * inside a session create, and its timer chain carried that session's ids
+ * into every later stall line, including after the session ended).
+ */
+export function runOutsideCorrelation<T>(fn: () => T): T {
+  // Node's runtime contract allows an undefined store: within fn,
+  // getStore() returns undefined and every async descendant inherits that
+  // empty context. The DOM-free @types/node binding used here narrows the
+  // store parameter to LogContext, so the well-defined undefined store is
+  // passed through an explicit cast.
+  return storage.run(undefined as unknown as LogContext, fn);
+}

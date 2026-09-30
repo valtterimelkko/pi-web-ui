@@ -8,6 +8,8 @@ import {
   scrubRecord,
   clearDiagnosticsBuffer,
 } from '../../../src/internal-api/diagnostics-buffer.js';
+import { setLogTap } from '../../../src/logging/logger.js';
+import { createLoopStallLogReporter } from '../../../src/observability/loop-stall-attribution.js';
 
 function rec(over: Partial<LogRecord> = {}): LogRecord {
   return {
@@ -182,5 +184,91 @@ describe('diagnostics ring buffer — capture & query (Task 10)', () => {
     expect(stored.msg).not.toContain('s3cr3t.tok');
     expect(JSON.stringify(stored)).not.toContain('sk-proj-1234567890abcdef');
     expect((stored as Record<string, unknown>).apiKey).toBe('[REDACTED]');
+  });
+});
+
+describe('diagnostics selector — LoopAttribution stall records (correction 02)', () => {
+  /**
+   * Review finding 2 [major]: the detached sampler's stall lines carried their
+   * run ids only inside the message text, so getRecentLogs({sessionId}) and
+   * getRecentLogs({runId}) — which filter structured record fields — missed
+   * them. The reporter must emit through a context-bound logger so the ids land
+   * as structured fields, keeping the readable suffix.
+   */
+  it('finds a stall line by sessionId and by runId from its captured context', () => {
+    clearDiagnosticsBuffer();
+    setLogTap((record) => pushDiagnosticsRecord(record));
+    try {
+      const report = createLoopStallLogReporter(); // default sink: the central logger
+      report({
+        kind: 'stall',
+        label: 'pi.session.stream',
+        delayMs: 250,
+        atMs: 0,
+        stack: ['pi.session.stream'],
+        blockedBy: [],
+        context: { requestId: 'req_diag', runId: 'run_diag', sessionId: 'sess_diag', runtime: 'pi' },
+      });
+      const bySession = getRecentLogs({ sessionId: 'sess_diag' });
+      expect(bySession.some((r) => r.component === 'LoopAttribution' && r.msg.includes('event-loop stall 250 ms'))).toBe(true);
+      const byRun = getRecentLogs({ runId: 'run_diag' });
+      expect(byRun.some((r) => r.component === 'LoopAttribution')).toBe(true);
+      const record = bySession.find((r) => r.component === 'LoopAttribution');
+      expect(record?.sessionId).toBe('sess_diag');
+      expect(record?.runId).toBe('run_diag');
+      expect(record?.requestId).toBe('req_diag');
+      expect(record?.runtime).toBe('pi');
+      // The rendered journal line keeps the readable suffix via the logger's own
+      // correlation stamp from these structured fields; the plain-sink reporter
+      // tests above pin the same suffix in message text.
+    } finally {
+      setLogTap(null);
+      clearDiagnosticsBuffer();
+    }
+  });
+
+  it('finds a candidate stall for every involved session and run (correction 03)', async () => {
+    clearDiagnosticsBuffer();
+    setLogTap((record) => pushDiagnosticsRecord(record));
+    try {
+      const report = createLoopStallLogReporter(); // default sink: the central logger
+      report({
+        kind: 'stall',
+        label: '<none>',
+        delayMs: 400,
+        atMs: 1790798000000,
+        stack: [],
+        blockedBy: [
+          { name: 'operation_A', durationMs: 120, openAsync: true, context: { requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' } },
+          { name: 'operation_B', durationMs: 70, context: { requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' } },
+        ],
+        context: undefined,
+        candidates: ['operation_A [run=run_A]', 'operation_B [run=run_B]'],
+        stallCandidates: 2,
+      });
+      // Each involved session and run finds the stall, marked as a candidate.
+      for (const query of [
+        { sessionId: 'sess_A' }, { sessionId: 'sess_B' }, { runId: 'run_A' }, { runId: 'run_B' },
+      ]) {
+        const found = getRecentLogs({ ...query, component: 'LoopAttribution' });
+        expect(found.length).toBeGreaterThan(0);
+        expect(found.every((r) => (r as Record<string, unknown>).stallCandidate === true)).toBe(true);
+      }
+      // Exactly one readable journal line: precisely one record lacks the
+      // candidate marker (the readable candidates line); every stall record of
+      // this event shares one stall id.
+      const stallRecords = getRecentLogs({ component: 'LoopAttribution' });
+      const readable = stallRecords.filter((r) => (r as Record<string, unknown>).stallCandidate !== true);
+      const fs = await import('node:fs');
+      fs.writeFileSync('/tmp/g2-c03-real-dump.json', JSON.stringify(stallRecords.map((r) => ({ msg: r.msg.slice(0, 70), m: (r as Record<string, unknown>).stallCandidate, id: (r as Record<string, unknown>).stallId, sid: r.sessionId })), null, 1));
+      expect(readable.length).toBe(1);
+      expect(readable[0].msg).toContain('candidates: operation_A [run=run_A], operation_B [run=run_B]');
+      expect(readable[0].msg).toContain('(overlapping async spans; the executing frame is not known)');
+      const ids = new Set(stallRecords.map((r) => (r as Record<string, unknown>).stallId));
+      expect(ids.size).toBe(1);
+    } finally {
+      setLogTap(null);
+      clearDiagnosticsBuffer();
+    }
   });
 });
