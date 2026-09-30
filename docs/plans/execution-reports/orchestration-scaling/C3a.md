@@ -312,3 +312,135 @@ settings.json, trust.json); no heap snapshots taken; run area preserved under
 6. Live trials consumed ~15 small zai/glm-5.3-flash model calls (12 children
    + smoke + goal continuation turns, thinking low; well within the routing
    and peak-window rules).
+
+## Correction 01 (parent adjudication of reviews/c3a-luna-review.md — final implementer round)
+
+Luna's independent re-run of the original proof scored 9/12 (75%), 3/4 goal
+captures, malformed control not reproduced; the ≥ 90% criterion was not
+reproduced. All seven correction items are closed below. Commits:
+`f0ebaca1` (parser tolerance + delimiter provenance, RED-first) and the
+correction append commit.
+
+### 1. Instruction paragraph (the future C3b dispatch template)
+
+The paragraph below REPLACES the round-1 paragraph (kept above, superseded).
+It contains a literal, complete example block and names the block as the last
+thing in the final answer. Recorded verbatim:
+
+```text
+END-OF-TASK REPORT (required): the LAST thing in your final answer must be exactly this kind of fenced block (info string `completion`, JSON body):
+
+```completion
+{"schema":"pi-completion/v1","status":"done","summary":"<one line>","commands":[{"command":"<a command you ran>","exitCode":0}],"filesChanged":["<path>"]}
+```
+
+Fill in the real values; add "tests", "commits", "openIssues" or "blockedReason" fields only if they apply. Do not end your turn with only a tool call: after your final tool call, always write a short final answer that ends with the report block. Nothing after the closing fence.
+```
+
+### 2. Parser: one narrow tolerance (parent decision), delimiter provenance
+
+- A fence with info string `json` (or no info string) is ALSO accepted as the
+  block **only when** its parsed object carries exactly
+  `"schema": "pi-completion/v1"` — the schema tag is the marker; any other
+  `json` fence stays "no block". A malformed `json`-tagged fence surfaces the
+  typed error, but only when no complete `completion` block exists anywhere
+  in the text (a trailing code example after a delivered block never fakes a
+  failure). Info strings are case-sensitive; trailing whitespace tolerated.
+- Additive `completionDelimiter: "completion" | "json-tagged"` on the receipt
+  (present iff `completion` is) and `delimiter` on the session surface record
+  which delimiter matched, so parents and R3 can count fallback usage.
+- RED tests first: the tolerance suite ran 6 failed | 32 passed (38) before
+  the fix → GREEN after: the three completion files total **61 passed (61)**
+  (parser 39 incl. 12 tolerance tests, receipt capture 11 incl. the two
+  delimiter receipts, session surface 14 incl. the json-tagged tap case).
+  Contract doc updated, still **1.58.0** (unreleased).
+
+### 3. Sampling after the final session turn (settle discipline)
+
+The proof driver now reads `latestCompletion` only after the session is
+**settled**: `busy:false`, no active goal, and no `lastActivity` change
+across two consecutive 10 s polls; after any receipt that ends with no text
+it re-reads once more. **The plain-2 shape explained** (Luna's re-run:
+receipt `no-text` at 01:44:30, valid block written 01:44:48): a mid-run
+auto-compaction (the `auto-compact-75` extension, C2's accepted boundary)
+aborts the in-flight turn — the receipt terminalises with NO assistant text —
+and the extension resumes the turn BY ITSELF; the resume turn is
+extension-driven and holds **no receipt**, and it is where the model does the
+work and writes the block. The same shape occurred live in this lane:
+plain-6 (round 1) and plain-7 (round 2, same build as round 3). **Surface
+capture of that late text is CONFIRMED on the final build**: plain-7's
+receipt terminalised textless at 02:30:32Z and the surface carried the block
+with `source {"kind":"session_turn","agentEndAt":"2026-09-30T02:31:08.422Z"}`
+and `delimiter "completion"` — no fix needed (the capture works; round 2's
+sampler simply read too early, which the settle discipline now fixes).
+
+### 4. Malformed control, deterministic
+
+The child is instructed to reply with an EXACT literal (tool use and
+environment commentary explicitly prohibited); the driver verifies the
+literal verbatim in the receipt's `finalText` (`literalDelivered=true`)
+BEFORE counting the control. Round 3: `literalDelivered=true`,
+receipt `completionError = SCHEMA_VIOLATION @ schema`, surface
+`completionError = SCHEMA_VIOLATION`. (Round 2's control was invalid —
+`literalDelivered=false`, the model commented on the injected agent-os stub
+environment instead — and is not counted.)
+
+### 5. Re-run live (predeclared N = 16, ≥ 6 goal-armed)
+
+Round 2 (postmortem, NOT the counted run): the goal instruction prompts were
+refused mid-arm-turn (C2's `409 SESSION_BUSY` — the arm turn was still
+streaming), so no report instruction reached those children; three plain
+children turned tool-only (`completed` with zero assistant text — a
+weak-model shape, `outputEvidence.disposition: "no-text"`); the control was
+non-compliant. Round 3 fixes the sequencing (instruction dispatched after the
+arm turn settles), adds ONE standardised re-ask after a no-text receipt
+(counted), and hardens the control.
+
+Counted run (round 3, build `f0ebaca1`, server `/tmp/c3a-live/val-r2`,
+same isolation, 16 extensions byte-identical, `zai/glm-5.3-flash` thinking
+low, 9 plain + 7 goal-armed):
+
+- **PARSE RATE: 16/16 = 100.0%** (`count-parse-rate-r3.mjs` → exit 0,
+  item-level table below; DoV ≥ 90%).
+- **json-tagged fallback count: 0** (all 16 matched the `completion` fence).
+- Re-asks: 0 (the strengthened paragraph removed the tool-only finishes).
+- **Served-model assertion: 17/17 runs (16 children + control) served
+  `zai/glm-5.3-flash`** (`servedModel` on every receipt; 0 failures).
+- Malformed control: caught (above). Journal `/tmp/c3a-live/logs/
+  server-boot-r2.log` (1841 lines incl. round 2): 0 TURN_STALLED /
+  NEVER_STARTED / "never executed" / RUNTIME_ERROR / RUN_TRANSPORT_LOST.
+- Teardown per the amended brief line: processes stopped by exact PID
+  (remaining 0, socket gone); **both the `auth.json` and `models.json` copies
+  deleted** from the isolated agent dir (listing verified: agents,
+  extensions, models-store.json, settings.json, trust.json).
+
+Item-level table (from `count-parse-rate-r3.mjs`):
+
+| child | kind | receipt | receiptBlock | surfaceBlock | source |
+|---|---|---|---|---|---|
+| plain-1…9 | plain | completed | done/completion ×9 | done/completion ×9 | runId ×9 |
+| goal-1…7 | goal-armed | completed | done/completion ×7 | done/completion ×7 | runId ×7 |
+
+(goal children this round emitted the block in the instruction turn's
+receipt; the receipt-less `session_turn` capture is separately confirmed
+live on the same build by plain-7 of round 2 — §3 — and by 5 captures in
+round 1, four of them goal-engine continuation turns.)
+
+### 6. Unit flake (record only, not fixed here)
+
+Luna's full-suite run hit one timing failure in
+`server/tests/unit/internal-api/session-routes-post-terminal-fence.test.ts`
+(C2's file); it passes alone. Recorded for the parent's E1 ledger. It passed
+in both of this lane's full-suite runs (5990 and 6004 passed, exit 0).
+
+### 7. Gates after the correction
+
+```
+npm run lint → exit 0 (0 errors); lint:ratchet → exit 0 (violations [])
+npm run typecheck → exit 0; npm run build → exit 0 (at f0ebaca1)
+npm run docs:check-links → exit 0 (1310 links / 331 files); docs:check-agent-guides → exit 0
+full server suite → exit 0 — "Tests  6004 passed | 3 skipped (6007)" (492 files)
+```
+
+Live-trial consumption: rounds 1–3 together ≈ 45 small zai/glm-5.3-flash
+calls (thinking low), within the routing and peak-window rules.
