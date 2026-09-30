@@ -30,8 +30,10 @@ Current contract:
 ### Stability window
 
 > **The stability window is open.** It opened at contract **1.58.0** on
-> **2026-09-30**. Its length is **set by the owner at R3; until then the window
-> is open-ended**. (C6, orchestration-scaling plan: the contract moved
+> **2026-09-30**. **Length (owner, R3 2026-09-30): open until the
+> orchestration-scaling programme closes (R5).** It never blocks planned work:
+> a plan step that needs a wire change gets its exception recorded in the table
+> below; unplanned wire features stay out. (C6, orchestration-scaling plan: the contract moved
 > 1.15.0 → 1.47.0 in about eight weeks; the window lets parents, clients and
 > skills catch up with a stable surface.)
 
