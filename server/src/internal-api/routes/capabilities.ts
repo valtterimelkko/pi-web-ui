@@ -20,6 +20,12 @@ import {
   PI_WEB_UI_AGENT_OS_CAPTURE_ENV,
 } from '../../session-env-identity.js';
 import { FINAL_TEXT_MAX_CHARS } from '../run-receipts/final-text.js';
+import {
+  COMPLETION_BLOCK_MAX_CHARS,
+  COMPLETION_FENCE_INFO,
+  COMPLETION_PARSE_WINDOW_CHARS,
+  COMPLETION_SCHEMA_NAME,
+} from '../completion/completion-schema.js';
 import { DEADLINE_MIN_SECONDS, DEADLINE_MAX_SECONDS } from '../watch/condition-evaluator.js';
 
 export interface CapabilitiesRoutesDeps {
@@ -95,6 +101,16 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           runtimes: ['claude', 'antigravity', 'commandcode'],
         },
         runReceiptFinalText: { field: 'finalText', truncatedField: 'finalTextTruncated', maxChars: FINAL_TEXT_MAX_CHARS },
+        // C3a (contract 1.58.0): child completion block — schema constants so the
+        // C1 contract snapshot and clients can carry the dispatch template.
+        runCompletionBlock: {
+          schema: COMPLETION_SCHEMA_NAME,
+          fenceInfo: COMPLETION_FENCE_INFO,
+          receiptFields: { block: 'completion', error: 'completionError' },
+          sessionSurfaceField: 'latestCompletion',
+          maxBlockChars: COMPLETION_BLOCK_MAX_CHARS,
+          parseWindowChars: COMPLETION_PARSE_WINDOW_CHARS,
+        },
         watchDeadlineCondition: {
           conditionType: 'deadline',
           field: 'afterSeconds',

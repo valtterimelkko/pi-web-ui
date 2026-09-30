@@ -80,6 +80,8 @@ import { AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGo
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
+import { SessionCompletionRegistry } from '../completion/session-completion-registry.js';
+import { SessionCompletionTap } from '../completion/session-completion-tap.js';
 import { WatchGenerationMismatchError, WatchManager, WatchValidationError, type RestartInterruptedBusySession, type RestartInterruptedRun, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
 import {
@@ -449,6 +451,8 @@ export interface SessionRoutesDeps {
   postTerminalSettleMs?: number;
   /** Optional durable run-receipt manager. Direct route tests use an in-memory fallback. */
   runReceiptManager?: RunReceiptManager;
+  /** C3a (contract 1.58.0): latest-completion-per-session registry. Defaults to a new instance; tests inject a known one. */
+  sessionCompletionRegistry?: SessionCompletionRegistry;
   /** Directory for durable run receipts when no manager is injected. */
   runReceiptDir?: string;
   /** Idempotency replay window for a newly accepted run. */
@@ -637,6 +641,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
+  // C3a (contract 1.58.0): latest completion per session. The registry feeds
+  // from two sources — the run-receipt capture (source {runId}) and the
+  // broker observation tap below (source session_turn, which sees every
+  // turn source including receipt-less goal-engine continuations).
+  const sessionCompletionRegistry = deps.sessionCompletionRegistry ?? new SessionCompletionRegistry();
+  runReceipts.addCompletionListener(({ sessionId, runtime, receipt }) => {
+    try {
+      sessionCompletionRegistry.record(sessionId, {
+        source: { runId: receipt.runId },
+        capturedAt: receipt.terminalAt ?? new Date().toISOString(),
+        runtime,
+        ...(receipt.completion ? { completion: receipt.completion } : {}),
+        ...(receipt.completionError ? { completionError: receipt.completionError } : {}),
+      });
+    } catch { /* surface capture is best-effort */ }
+  });
+  const completionTap = new SessionCompletionTap({ registry: sessionCompletionRegistry });
   // C2 (contract 1.57.0): post-terminal response fence window. A synchronous
   // dispatch whose receipt is already terminal waits at most this long for its
   // runtime to hand the dispatch chain back before responding from the receipt
@@ -770,6 +791,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    */
   const broker = new InternalApiEventBroker({
     replayBufferSize: 100,
+    // C3a (contract 1.58.0): observation tap for the latest-completion-per-session
+    // surface. Fired at publish() entry — pre-rate-limit, pre-coalescing — so the
+    // tap always sees the full delta stream; covers EVERY turn source (Internal
+    // API, browser, goal-engine and other extension continuations) and every
+    // runtime that publishes here.
+    onPublish: (key, event) => completionTap.observe(key, event),
     // Deletion fence: once a session is tombstoned in the disposal registry,
     // a late runtime event cannot recreate the broker replay buffer or notify
     // subscribers. The predicate is keyed on the broker key, which for Pi is
@@ -1439,12 +1466,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     await runReceipts.init();
     const latest = runReceipts.listBySession(record.sessionId)
       .sort((a, b) => Date.parse(b.terminalAt ?? b.acceptedAt) - Date.parse(a.terminalAt ?? a.acceptedAt))[0];
+    // C3a (contract 1.58.0): Command Code sessions publish under their session
+    // id, so the id alias is the only broker key to resolve.
+    let latestCompletion: SessionDetail['latestCompletion'];
+    try {
+      latestCompletion = sessionCompletionRegistry.latestFor([record.sessionId]);
+    } catch { /* non-fatal */ }
     return {
       ...commandCodeSessionInfo(record),
       backendMode: 'subprocess',
       nativeSessionId: record.nativeSessionId,
       status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
       ...(latest?.tokenUsage ? { tokenUsage: latest.tokenUsage } : {}),
+      ...(latestCompletion ? { latestCompletion } : {}),
     };
   }
 
@@ -1555,6 +1589,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.agentOsCapture === 'enabled' || entry.agentOsCapture === 'disabled') {
       detail.agentOsCapture = entry.agentOsCapture;
     }
+    // C3a (contract 1.58.0): latest completion (or parse error) captured for
+    // this session, from a run receipt or a receipt-less session turn.
+    // Aliases cover the broker key (Pi publishes under the session path) and
+    // the registry id. Never fatal.
+    try {
+      const latestCompletion = sessionCompletionRegistry.latestFor([entry.id, entry.path]);
+      if (latestCompletion) detail.latestCompletion = latestCompletion;
+    } catch { /* non-fatal */ }
     return detail;
   }
 

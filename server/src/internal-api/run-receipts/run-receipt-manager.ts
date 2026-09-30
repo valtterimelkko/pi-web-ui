@@ -24,6 +24,9 @@ import {
 } from '../phase7-pi-shadow.js';
 import { RunReceiptStore, type PersistedRunReceipt, type RecoveredRun } from './run-receipt-store.js';
 import { FinalTextTracker } from './final-text.js';
+import { parseCompletionBlock } from '../completion/completion-parser.js';
+import { COMPLETION_PARSE_WINDOW_CHARS } from '../completion/completion-schema.js';
+import type { CompletionBlock, CompletionParseError } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
 
@@ -105,6 +108,15 @@ export interface RunReceiptManagerDeps {
   drainPollMs?: number;
 }
 
+/** C3a (contract 1.58.0): one run's completion capture, fanned out to the per-session surface. */
+export interface CompletionCaptureNotification {
+  sessionId: string;
+  runId: string;
+  runtime: SessionRuntime;
+  /** The terminal receipt carrying `completion` / `completionError` (exactly one present). */
+  receipt: RunReceipt;
+}
+
 export type ExistingRunResult =
   | { kind: 'duplicate'; receipt: RunReceipt }
   | { kind: 'conflict'; receipt: RunReceipt };
@@ -141,6 +153,8 @@ interface ActiveRun {
   outputEvidence: MutableRunOutputEvidence;
   /** Contract 1.47.0: last assistant text of the run (bounded). */
   finalText: FinalTextTracker;
+  /** Contract 1.58.0 (C3a): wider tail of the same final text, for completion-block parsing. */
+  completionText: FinalTextTracker;
 }
 
 /**
@@ -169,6 +183,8 @@ export class RunReceiptManager {
   private readonly onRunNeverStarted?: (receipt: RunReceipt) => void;
   private readonly runStartWindowMs: number;
   private readonly neverStartedListeners: Array<(receipt: RunReceipt) => void> = [];
+  /** C3a (contract 1.58.0): fired once per run whose output carried a completion block (parsed or rejected). */
+  private readonly completionListeners: Array<(capture: CompletionCaptureNotification) => void> = [];
   private readonly isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
@@ -225,6 +241,16 @@ export class RunReceiptManager {
    */
   addNeverStartedListener(listener: (receipt: RunReceipt) => void): void {
     this.neverStartedListeners.push(listener);
+  }
+
+  /**
+   * C3a (contract 1.58.0): register a listener fired once per run whose final
+   * assistant output carried a completion block — parsed (`completion`) or
+   * rejected (`completionError`). The Internal API wiring uses it to feed the
+   * per-session latest-completion surface with a `{ runId }` source.
+   */
+  addCompletionListener(listener: (capture: CompletionCaptureNotification) => void): void {
+    this.completionListeners.push(listener);
   }
 
   async findExistingRun(input: BeginRunInput): Promise<ExistingRunResult | undefined> {
@@ -369,6 +395,7 @@ export class RunReceiptManager {
     if (active) {
       observeOutputEvent(active.outputEvidence, event);
       active.finalText.observe(event);
+      active.completionText.observe(event);
     }
     const persistPhase7Shadow = Boolean(active?.phase7Shadow && (
       event.type === 'tool_execution_start' || event.type === 'agent_end'
@@ -429,6 +456,7 @@ export class RunReceiptManager {
         tokenUsageObservation,
         active ? finalizeOutputEvidence(active.outputEvidence, true) : undefined,
         active?.finalText.snapshot(),
+        active ? this.completionFromSnapshot(active) : undefined,
       );
     })
       .then(() => undefined)
@@ -492,16 +520,53 @@ export class RunReceiptManager {
         }
       : undefined;
     const finalText = active?.finalText.snapshot();
+    const completionCapture = active ? this.completionFromSnapshot(active) : {};
     const terminal = await this.store.transition(runId, status, {
       errorCode: outcome.errorCode,
       terminalAt,
       ...(finalText ? { finalText: finalText.text, finalTextTruncated: finalText.truncated } : {}),
+      ...completionCapture,
       ...(liveness ? { liveness } : {}),
       ...(outputEvidence ? { outputEvidence } : {}),
       ...(phase7Shadow ? { phase7Shadow } : {}),
     });
     this.terminalize(terminal);
+    this.fireCompletionListeners(runId, terminal);
     return toPublicReceipt(terminal);
+  }
+
+  /**
+   * C3a (contract 1.58.0): parse the run's FULL final assistant text for a
+   * completion block. The scan tail (COMPLETION_PARSE_WINDOW_CHARS) is wider
+   * than the receipt's 4096-char `finalText`, so a block early in a long
+   * final message is never cut by the tail. A run with no block carries
+   * neither field (additive absence).
+   */
+  private completionFromSnapshot(active: ActiveRun): { completion?: CompletionBlock; completionError?: CompletionParseError } {
+    const snapshot = active.completionText.snapshot();
+    if (!snapshot || snapshot.text.length === 0) return {};
+    const parsed = parseCompletionBlock(snapshot.text);
+    if (parsed.ok) return { completion: parsed.block };
+    if (parsed.error.code === 'NO_BLOCK') return {};
+    return { completionError: parsed.error };
+  }
+
+  private fireCompletionListeners(runId: string, receipt: PersistedRunReceipt): void {
+    if (this.completionListeners.length === 0) return;
+    if (receipt.completion === undefined && receipt.completionError === undefined) return;
+    const notification: CompletionCaptureNotification = {
+      sessionId: receipt.sessionId,
+      runId,
+      runtime: receipt.runtime,
+      receipt: toPublicReceipt(receipt),
+    };
+    for (const listener of this.completionListeners) {
+      try {
+        listener(notification);
+      } catch (error) {
+        logger.warn(`completion listener failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   async cancelSession(sessionId: string): Promise<void> {
@@ -727,6 +792,7 @@ export class RunReceiptManager {
       lastActivityAtMs: acceptedAtMs,
       outputEvidence: mutableOutputEvidence(record.outputEvidence),
       finalText: new FinalTextTracker(),
+      completionText: new FinalTextTracker({ maxChars: COMPLETION_PARSE_WINDOW_CHARS }),
       ...(record.phase7Shadow ? { phase7Shadow: createPhase7PiShadowState(record.phase7Shadow, acceptedAtMs) } : {}),
     });
   }

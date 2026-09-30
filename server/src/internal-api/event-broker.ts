@@ -71,6 +71,14 @@ export interface EventBrokerOptions {
    * key, publish/subscribe are dropped so a late runtime callback cannot
    * recreate the replay buffer or subscribers for a deleted session. */
   isSessionDisposed?: (sessionId: string) => boolean;
+  /**
+   * C3a (contract 1.58.0): observation tap fired at `publish()` entry —
+   * before rate-limit coalescing and payload budgeting — for every published
+   * event and its broker key. Best-effort: the broker swallows tap errors so
+   * observation can never break publishing. Late-subscriber replay does not
+   * re-fire the tap (replayed events were already observed when published).
+   */
+  onPublish?: (sessionKey: string, event: NormalizedEvent) => void;
 }
 
 const DEFAULT_REPLAY_BUFFER_SIZE = 50;
@@ -103,6 +111,7 @@ export class InternalApiEventBroker {
   private readonly shedMonitor: Pick<EventLoopShedMonitor, 'isShedding'>;
   private readonly metrics: OperationalMetrics;
   private readonly disposedCheck?: (sessionId: string) => boolean;
+  private readonly onPublish?: (sessionKey: string, event: NormalizedEvent) => void;
 
   constructor(options: EventBrokerOptions = {}) {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
@@ -116,6 +125,7 @@ export class InternalApiEventBroker {
     this.shedMonitor = options.shedMonitor ?? getEventLoopShedMonitor();
     this.metrics = options.metrics ?? getOperationalMetrics();
     this.disposedCheck = options.isSessionDisposed;
+    this.onPublish = options.onPublish;
   }
 
   /**
@@ -165,6 +175,15 @@ export class InternalApiEventBroker {
   /** Publish an event to all subscribers for a session. */
   publish(sessionId: string, event: NormalizedEvent): void {
     if (this.disposedCheck?.(sessionId)) return;
+    // C3a observation tap: pre-rate-limit, so the tap always sees the full
+    // delta stream (coalescing drops intermediate text). Best-effort.
+    if (this.onPublish) {
+      try {
+        this.onPublish(sessionId, event);
+      } catch {
+        /* observation must never break publishing */
+      }
+    }
     if (event.type === 'message_update' && this.shedMonitor.isShedding) event = shedMessageUpdate(event);
     if (event.type === 'message_update') {
       this.refill(sessionId);
