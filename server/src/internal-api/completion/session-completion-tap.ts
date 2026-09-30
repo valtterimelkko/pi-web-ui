@@ -111,6 +111,7 @@ export class SessionCompletionTap {
         source: { kind: 'session_turn', agentEndAt },
         capturedAt,
         completion: parsed.block,
+        delimiter: parsed.delimiter,
       });
     } else if (parsed.error.code !== 'NO_BLOCK') {
       // No block at all is the common case: nothing is recorded, and the

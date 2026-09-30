@@ -652,7 +652,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         source: { runId: receipt.runId },
         capturedAt: receipt.terminalAt ?? new Date().toISOString(),
         runtime,
-        ...(receipt.completion ? { completion: receipt.completion } : {}),
+        ...(receipt.completion ? { completion: receipt.completion, ...(receipt.completionDelimiter ? { delimiter: receipt.completionDelimiter } : {}) } : {}),
         ...(receipt.completionError ? { completionError: receipt.completionError } : {}),
       });
     } catch { /* surface capture is best-effort */ }

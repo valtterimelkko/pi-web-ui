@@ -26,7 +26,7 @@ import { RunReceiptStore, type PersistedRunReceipt, type RecoveredRun } from './
 import { FinalTextTracker } from './final-text.js';
 import { parseCompletionBlock } from '../completion/completion-parser.js';
 import { COMPLETION_PARSE_WINDOW_CHARS } from '../completion/completion-schema.js';
-import type { CompletionBlock, CompletionParseError } from '../types.js';
+import type { CompletionBlock, CompletionDelimiter, CompletionParseError } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
 
@@ -542,11 +542,11 @@ export class RunReceiptManager {
    * final message is never cut by the tail. A run with no block carries
    * neither field (additive absence).
    */
-  private completionFromSnapshot(active: ActiveRun): { completion?: CompletionBlock; completionError?: CompletionParseError } {
+  private completionFromSnapshot(active: ActiveRun): { completion?: CompletionBlock; completionDelimiter?: CompletionDelimiter; completionError?: CompletionParseError } {
     const snapshot = active.completionText.snapshot();
     if (!snapshot || snapshot.text.length === 0) return {};
     const parsed = parseCompletionBlock(snapshot.text);
-    if (parsed.ok) return { completion: parsed.block };
+    if (parsed.ok) return { completion: parsed.block, completionDelimiter: parsed.delimiter };
     if (parsed.error.code === 'NO_BLOCK') return {};
     return { completionError: parsed.error };
   }

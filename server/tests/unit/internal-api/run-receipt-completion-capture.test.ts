@@ -116,6 +116,20 @@ describe('C3a — completion capture on run receipts', () => {
     expect(receipt?.completionError?.fieldPath).toBe('commits.0.sha');
   });
 
+  it('records the json-tagged delimiter on the receipt when the block arrived in a json fence (correction 01)', async () => {
+    const receipt = await runWithFinalText(
+      `\`\`\`json\n${JSON.stringify({ schema: 'pi-completion/v1', status: 'done' })}\n\`\`\`\n`,
+      'json-tagged-run',
+    );
+    expect(receipt?.completion?.status).toBe('done');
+    expect(receipt?.completionDelimiter).toBe('json-tagged');
+  });
+
+  it('records the completion delimiter on the receipt for the protocol fence', async () => {
+    const receipt = await runWithFinalText(`\`\`\`completion\n${BLOCK_JSON}\n\`\`\``, 'delimiter-run');
+    expect(receipt?.completionDelimiter).toBe('completion');
+  });
+
   it('a run cancelled before any assistant text has neither field', async () => {
     const begun = await manager.beginRun({ ...baseInput, sessionId: 'cancelled-early' });
     if (begun.kind !== 'created') throw new Error('expected created');

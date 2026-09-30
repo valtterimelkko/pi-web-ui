@@ -54,12 +54,15 @@ function expectError(text: string): { code: string; message: string; fieldPath?:
 describe('completion parser — happy path', () => {
   it('accepts the canonical block and echoes the parsed fields', () => {
     const text = `Work done.\n\n${fenced(block())}\n`;
-    const parsed = expectOk(text);
+    const result = parseCompletionBlock(text);
+    if (!result.ok) throw new Error(`expected ok, got ${JSON.stringify(result.error)}`);
+    const parsed = result.block;
     expect(parsed.schema).toBe('pi-completion/v1');
     expect(parsed.status).toBe('done');
     expect(parsed.commands).toEqual([{ command: 'npm test', exitCode: 0 }]);
     expect(parsed.commits?.[0]?.sha).toBe('abcdef1234567');
     expect(parsed.filesChanged).toEqual(['server/src/example.ts']);
+    expect(result.delimiter).toBe('completion');
   });
 
   it('accepts a minimal block (schema + status only)', () => {
@@ -86,9 +89,10 @@ describe('completion parser — absence and placement', () => {
     expect(expectError('plain answer, no block').code).toBe('NO_BLOCK');
   });
 
-  it('ignores a different fence info string', () => {
-    expect(expectError(fenced(block(), 'json')).code).toBe('NO_BLOCK');
+  it('ignores a different fence info string (correction 01: `json` with the schema tag is the one tolerance)', () => {
     expect(expectError(fenced(block(), 'completion-v2')).code).toBe('NO_BLOCK');
+    expect(expectError(fenced(block(), 'jsonc')).code).toBe('NO_BLOCK');
+    expect(expectError(fenced(block(), 'Json')).code).toBe('NO_BLOCK');
   });
 
   it('the last complete block wins', () => {
@@ -220,6 +224,75 @@ describe('completion parser — schema violations name the field path', () => {
     })));
     expect(error.code).toBe('SCHEMA_VIOLATION');
     expect(error.fieldPath).toBe('filesChanged');
+  });
+});
+
+describe('completion parser — json-tagged tolerance (correction 01, parent decision)', () => {
+  const taggedJson = (content: string) => fenced(content, 'json');
+
+  it('a json fence whose object carries exactly the schema tag is parsed, with the json-tagged delimiter', () => {
+    const body = JSON.stringify({ schema: 'pi-completion/v1', status: 'done' });
+    const result = parseCompletionBlock(`${'prose'}\n\n${taggedJson(body)}\n`);
+    if (!result.ok) throw new Error(`expected ok, got ${JSON.stringify(result.error)}`);
+    expect(result.block.status).toBe('done');
+    expect(result.delimiter).toBe('json-tagged');
+  });
+
+  it('an untagged fence whose object carries the schema tag is parsed (json-tagged delimiter)', () => {
+    const body = JSON.stringify({ schema: 'pi-completion/v1', status: 'partial', blockedReason: undefined });
+    const result = parseCompletionBlock(`\`\`\`\n${body}\n\`\`\``);
+    if (!result.ok) throw new Error(`expected ok, got ${JSON.stringify(result.error)}`);
+    expect(result.block.status).toBe('partial');
+    expect(result.delimiter).toBe('json-tagged');
+  });
+
+  it('an untagged fence with plain JSON (no schema tag) is not a block', () => {
+    expect(expectError(fenced(JSON.stringify({ status: 'done' }), '')).code).toBe('NO_BLOCK');
+  });
+
+  it('a json fence without the schema tag is not a block', () => {
+    expect(expectError(fenced(JSON.stringify({ result: 'ok', items: [1, 2] }), 'json')).code).toBe('NO_BLOCK');
+  });
+
+  it('a json fence carrying a different schema value is not a block', () => {
+    expect(expectError(fenced(JSON.stringify({ schema: 'other/v1', status: 'done' }), 'json')).code).toBe('NO_BLOCK');
+  });
+
+  it('a completion fence wins over an earlier tagged json fence (last protocol block wins)', () => {
+    const body = JSON.stringify({ schema: 'pi-completion/v1', status: 'partial' });
+    const parsed = expectOk(`${taggedJson(body)}\nmiddle\n${fenced(block({ status: 'done' }))}`);
+    expect(parsed.status).toBe('done');
+  });
+
+  it('a later tagged json fence is the fallback over an earlier completion fence only by position (last wins)', () => {
+    const body = JSON.stringify({ schema: 'pi-completion/v1', status: 'blocked', blockedReason: 'later' });
+    const result = parseCompletionBlock(`${fenced(block({ status: 'done' }))}\n${taggedJson(body)}`);
+    if (!result.ok) throw new Error(`expected ok, got ${JSON.stringify(result.error)}`);
+    expect(result.block.status).toBe('blocked');
+    expect(result.block.blockedReason).toBe('later');
+    expect(result.delimiter).toBe('json-tagged');
+  });
+
+  it('a malformed tagged json fence gives the typed MALFORMED_JSON error', () => {
+    const error = expectError(`${'prose'}\n${taggedJson('{"schema": "pi-completion/v1", oops')}`);
+    expect(error.code).toBe('MALFORMED_JSON');
+  });
+
+  it('a tagged json fence with the schema tag but an invalid body gives SCHEMA_VIOLATION', () => {
+    const error = expectError(taggedJson(JSON.stringify({ schema: 'pi-completion/v1', status: 'finished' })));
+    expect(error.code).toBe('SCHEMA_VIOLATION');
+    expect(error.fieldPath).toBe('status');
+  });
+
+  it('a trailing malformed json example AFTER a valid completion block does not produce an error', () => {
+    const text = `${fenced(block())}\nExample output:\n${taggedJson('{not json')}`;
+    expect(expectOk(text).status).toBe('done');
+  });
+
+  it('the completion delimiter is recorded on the canonical block', () => {
+    const result = parseCompletionBlock(fenced(block()));
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.delimiter).toBe('completion');
   });
 });
 

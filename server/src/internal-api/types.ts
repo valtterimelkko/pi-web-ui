@@ -106,8 +106,11 @@ export interface CompletionParseError {
   fieldPath?: string;
 }
 
+/** Which delimiter matched (correction 01): the protocol fence, or the schema-tagged `json`/untagged tolerance. */
+export type CompletionDelimiter = 'completion' | 'json-tagged';
+
 export type CompletionParseResult =
-  | { ok: true; block: CompletionBlock }
+  | { ok: true; block: CompletionBlock; delimiter: CompletionDelimiter }
   | { ok: false; error: CompletionParseError };
 
 /** Where a captured completion came from: a receipted run, or a session turn observed without a receipt (goal-engine continuation turns). */
@@ -124,6 +127,8 @@ export interface SessionCompletionSurface {
   runtime?: SessionRuntime;
   /** Present when the latest block parsed and validated. Exactly one of `completion`/`completionError` is present. */
   completion?: CompletionBlock;
+  /** Which delimiter matched (correction 01); present iff `completion` is. */
+  delimiter?: CompletionDelimiter;
   /** Present when the latest block was found but failed to parse or validate. */
   completionError?: CompletionParseError;
 }
@@ -1207,6 +1212,8 @@ export interface RunReceipt {
   finalTextTruncated?: boolean;
   /** Contract 1.58.0 (C3a): the parsed completion block from the run's final assistant text, when the run's output contained one and it parsed. Absent otherwise (additive). */
   completion?: CompletionBlock;
+  /** Contract 1.58.0 (C3a, correction 01): which delimiter matched — the `completion` protocol fence or the schema-tagged `json`/untagged tolerance. Present iff `completion` is; lets parents and R3 count how often the fallback is used. */
+  completionDelimiter?: CompletionDelimiter;
   /** Contract 1.58.0 (C3a): typed parse failure for a completion block found in the run's output but rejected (malformed JSON, schema violation, oversized, unclosed). Absent when no block was found or the block parsed. */
   completionError?: CompletionParseError;
   /** Requested prompt mode (prompt / follow_up / steer). */

@@ -139,6 +139,22 @@ describe('SessionCompletionTap over the event broker (receipt-less turns)', () =
     expect(registry.latestFor(['k'])?.completion?.status).toBe('partial');
   });
 
+  it('records the delimiter on a receipt-less json-tagged capture (correction 01)', () => {
+    const registry = new SessionCompletionRegistry({ now: () => 0 });
+    const tap = new SessionCompletionTap({ registry, now: () => 0 });
+    const turn: NormalizedEvent[] = [
+      e('message_start', { message: { role: 'assistant' } }),
+      e('message_update', { assistantMessageEvent: { type: 'text_delta', delta: '```json\n' } }),
+      e('message_update', { assistantMessageEvent: { type: 'text_delta', delta: `${JSON.stringify({ schema: 'pi-completion/v1', status: 'done' })}\n` } }),
+      e('message_update', { assistantMessageEvent: { type: 'text_delta', delta: '```\n' } }),
+      e('agent_end', {}),
+    ];
+    for (const event of turn) tap.observe('k', event);
+    const latest = registry.latestFor(['k']);
+    expect(latest?.completion?.status).toBe('done');
+    expect(latest?.delimiter).toBe('json-tagged');
+  });
+
   it('never throws on adversarial event shapes', () => {
     const registry = new SessionCompletionRegistry({ now: () => 0 });
     const tap = new SessionCompletionTap({ registry, now: () => 0 });

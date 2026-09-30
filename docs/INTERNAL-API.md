@@ -1296,6 +1296,12 @@ records on the receipt:
   `result: pass|fail|skip`, `note`), `commits[]` (`sha`, `repo` path, `subject`),
   `filesChanged[]`, `openIssues[]`, and `blockedReason` (required when `status` is
   `blocked`). The schema is strict: unknown fields are `SCHEMA_VIOLATION`s.
+- `completionDelimiter` — which delimiter matched (correction 01): `completion` (the
+  protocol fence) or `json-tagged` (the one tolerance: a `json`-tagged or untagged fence
+  whose object carries exactly `"schema": "pi-completion/v1"`; any other `json` fence
+  stays "no block", and a malformed tagged fence surfaces the typed error only when no
+  complete `completion` block exists in the text). Present iff `completion` is, so
+  parents can count how often the fallback fires.
 - `completionError` — a typed error when a block was found but rejected:
   `MALFORMED_JSON`, `SCHEMA_VIOLATION` (with `fieldPath`, e.g. `commits.0.sha`),
   `OVERSIZED_BLOCK`, or `UNCLOSED_FENCE`.
@@ -1303,8 +1309,10 @@ records on the receipt:
 A run whose output contains no block has **neither** field (additive absence; nothing
 changes for existing callers). The parse never throws on model output. The parser is
 strict, bounded and pure; delimiter rules: an opening fence is a line of 3+ backticks at
-line start with the exact info string `completion`; the closing fence is the next
-backticks-only line at least as long as the opening; a new `completion` opening while a
+line start with the exact info string `completion` (or, since correction 01, `json` or
+no info string when the object carries exactly `"schema": "pi-completion/v1"` — the
+schema tag is the marker, recorded via `completionDelimiter`); the closing fence is the
+next backticks-only line at least as long as the opening; a new protocol opening while a
 block is open abandons the previous attempt (a model retry); the last complete block wins.
 Feature-detect with `features.runCompletionBlock` (which also carries the schema name,
 fence info, caps and field names so clients can build the dispatch template).
