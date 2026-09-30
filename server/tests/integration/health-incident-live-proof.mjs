@@ -26,10 +26,16 @@
  *   OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS=60000
  *   OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS=2
  *
+ * The ballast is held above the high threshold with margin and verified after a
+ * forced GC (correction 01, finding 3), so the default debounce's consecutive
+ * high readings are guaranteed rather than dependent on allocator/GC timing;
+ * the report records the consecutive high pair it used.
+ *
  * Usage (server already running):
  *   node server/tests/integration/health-incident-live-proof.mjs \
  *     --dir <validation dir> --socket <dir>/internal-api.sock \
- *     --token <dir>/internal-api-token --inspect-port <port> --log <server log>
+ *     --token <dir>/internal-api-token --inspect-port <port> --log <server log> \
+ *     [--heap-high <fraction, default 0.10>] [--sample-interval-ms <n, default 1000>]
  */
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -49,6 +55,8 @@ const socketPath = args.get('--socket') ?? path.join(runDir, 'internal-api.sock'
 const tokenPath = args.get('--token') ?? path.join(runDir, 'internal-api-token');
 const inspectPort = Number(args.get('--inspect-port'));
 const logPath = args.get('--log') ?? path.join(runDir, 'server.log');
+const heapHigh = Number(args.get('--heap-high') ?? 0.1);
+const sampleIntervalMs = Number(args.get('--sample-interval-ms') ?? 1000);
 const productionMetricsDir = path.join(userInfo().homedir, '.pi-web-ui', 'metrics');
 const productionMetricsEntriesBefore = existsSync(productionMetricsDir) ? readdirSync(productionMetricsDir) : [];
 const productionNotificationsDir = path.join(userInfo().homedir, '.pi-web-ui', 'notifications');
@@ -95,6 +103,38 @@ function parseAlerts() {
 }
 function parseSamples() {
   return readLines(metricsPath).map((line) => JSON.parse(line));
+}
+/** Every sample across all retained generations, deduplicated and time-ordered. */
+function metricSamples() {
+  const byAtMs = new Map();
+  const names = existsSync(metricsDir) ? readdirSync(metricsDir).filter((name) => name.startsWith('health-metrics')) : [];
+  for (const name of names) {
+    for (const line of readLines(path.join(metricsDir, name))) {
+      try {
+        const sample = JSON.parse(line);
+        byAtMs.set(sample.atMs, sample);
+      } catch { /* ignore a torn line, if any */ }
+    }
+  }
+  return [...byAtMs.values()].sort((a, b) => a.atMs - b.atMs);
+}
+/**
+ * The consecutive-sample pair that completed the debounce: the last pair whose
+ * second reading is at or before the alert, preferring a pair whose first
+ * reading is no more than three intervals before the incident start.
+ */
+function consecutiveHighPair(samples, high, alertAtMs, incidentStartMs) {
+  const pairs = [];
+  for (let index = 1; index < samples.length; index++) {
+    if (samples[index - 1].heapFraction >= high && samples[index].heapFraction >= high) {
+      pairs.push([samples[index - 1], samples[index]]);
+    }
+  }
+  const beforeAlert = pairs.filter((pair) => pair[1].atMs <= alertAtMs);
+  return beforeAlert.find((pair) => pair[0].atMs >= incidentStartMs - 3 * sampleIntervalMs)
+    ?? beforeAlert[beforeAlert.length - 1]
+    ?? pairs[0]
+    ?? null;
 }
 /** Raw evaluator transitions are journaled beside the grouped notifications. */
 function rawAlertLines() {
@@ -181,12 +221,36 @@ class Cdp {
   }
 }
 
-const BALLAST = 'globalThis.__l1_ballast = Array.from({ length: 2000000 }, (_, i) => ({ a: i, b: i * 2, c: "s" + i }));'
+// One round appends 2M objects to the page-held array; rounds accumulate while
+// the array is referenced, so the retained floor grows monotonically until GC.
+const BALLAST_ROUND = 'globalThis.__l1_ballast = globalThis.__l1_ballast || [];'
   + 'globalThis.__l1_ballast.push(...Array.from({ length: 2000000 }, (_, i) => ({ a: i, b: i * 2, c: "s" + i })));'
   + 'globalThis.__l1_ballast.length';
 
-async function holdBallast(cdp) {
-  await cdp.evaluate(BALLAST);
+async function addBallastRound(cdp) {
+  await cdp.evaluate(BALLAST_ROUND);
+}
+
+/**
+ * Correction 01, finding 3: guarantee the RETAINED heap floor is above the high
+ * threshold with margin, instead of relying on allocator/GC timing. Allocation
+ * rounds are followed by a forced GC, so incidental allocation transients cannot
+ * be mistaken for retained heap; rounds continue until the floor clears
+ * `high + margin`. The ballast array is referenced by the page, so it cannot be
+ * freed while it is held.
+ */
+async function ensureRetainedHigh(cdp, high, margin, maxRounds = 6) {
+  await addBallastRound(cdp);
+  await cdp.collectGarbage();
+  let fraction = (await cdp.heapFraction()).fraction;
+  let rounds = 1;
+  while (fraction < high + margin && rounds < maxRounds) {
+    await addBallastRound(cdp);
+    await cdp.collectGarbage();
+    fraction = (await cdp.heapFraction()).fraction;
+    rounds += 1;
+  }
+  return { rounds, fraction };
 }
 
 async function releaseBallast(cdp) {
@@ -239,11 +303,34 @@ async function main() {
   const rawAtStart = rawAlertLines().length;
 
   // ── 2. three real crossings, one incident: one alert + one recovered ─────
-  await holdBallast(cdp);
+  // The ballast is held above the high threshold with margin and verified after
+  // a forced GC, so the debounce's consecutive high readings are guaranteed.
+  const retained = await ensureRetainedHigh(cdp, heapHigh, 0.02);
+  report.numbers.retainedBallast = { fraction: Number(retained.fraction.toFixed(4)), rounds: retained.rounds };
+  receipt(`ballast retained floor ${(retained.fraction * 100).toFixed(2)}% after ${retained.rounds} round(s) (high threshold ${(heapHigh * 100).toFixed(1)}%)`);
+  check(
+    'the held ballast keeps the retained heap above the high threshold with margin',
+    retained.fraction >= heapHigh + 0.02,
+    `${(retained.fraction * 100).toFixed(2)}% retained after ${retained.rounds} round(s) vs high ${(heapHigh * 100).toFixed(1)}%`,
+  );
   await waitFor(
     'the grouped alert record',
     () => parseAlerts().slice(alertsAtStart).some((alert) => alert.kind === 'heap_pressure' && alert.transition === 'alert' && alert.incident),
     60_000,
+  );
+  const openedAlert = parseAlerts().slice(alertsAtStart).find((alert) => alert.transition === 'alert');
+  const startMs = Date.parse(openedAlert.incident.startedAt);
+  const pair = consecutiveHighPair(metricSamples(), heapHigh, Date.parse(openedAlert.at), startMs);
+  report.numbers.highReadingPair = pair
+    ? pair.map((sample) => ({ at: sample.at, heapFraction: sample.heapFraction }))
+    : null;
+  check(
+    'two consecutive high readings are recorded in the metrics log',
+    pair !== null && pair[1].atMs > pair[0].atMs && pair[1].atMs - pair[0].atMs <= 2 * sampleIntervalMs
+      && pair[0].heapFraction >= heapHigh && pair[1].heapFraction >= heapHigh,
+    pair
+      ? `${pair[0].at} ${(pair[0].heapFraction * 100).toFixed(2)}% → ${pair[1].at} ${(pair[1].heapFraction * 100).toFixed(2)}% (gap ${pair[1].atMs - pair[0].atMs} ms)`
+      : 'no consecutive high pair found',
   );
   const peakHigh = await cdp.heapFraction();
   report.numbers.heapFractionPeak = Number(peakHigh.fraction.toFixed(4));
@@ -253,7 +340,7 @@ async function main() {
   for (const crossing of [2, 3]) {
     await releaseBallast(cdp);
     await sleep(3_500); // at least three 1 s samples below the recovery threshold
-    await holdBallast(cdp);
+    await ensureRetainedHigh(cdp, heapHigh, 0.01);
     await waitFor(
       `raw crossing ${crossing}`,
       () => rawAlertLines().length >= rawAtStart + crossing,
@@ -310,7 +397,7 @@ async function main() {
   // ── 3. a new incident inside the cooldown is silent, and says so ─────────
   const alertsBeforeB = parseAlerts().length;
   const rawBeforeB = rawAlertLines().length;
-  await holdBallast(cdp);
+  await ensureRetainedHigh(cdp, heapHigh, 0.01);
   await waitFor('the silent reopen raw crossing', () => rawAlertLines().length > rawBeforeB, 45_000);
   await sleep(4_000); // several high samples while the incident is silently open
   const duringB = parseAlerts().slice(alertsBeforeB);

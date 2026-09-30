@@ -45,7 +45,11 @@ export interface HealthAlert {
 export interface HealthIncidentConfig {
   /** The metric must stay at or below its recovery threshold this long before an incident may close. */
   quietPeriodMs: number;
-  /** After an incident closes, a new alert is suppressed for this long (same kind only). */
+  /**
+   * After an incident closes, a new alert is suppressed for this long (same
+   * kind only), measured from the new excursion's first crossing — not from the
+   * reading that completed its debounce.
+   */
   cooldownMs: number;
   /**
    * Consecutive readings at or above the high water mark before an incident
@@ -307,7 +311,10 @@ export class HealthIncidentGrouper {
     atMs: number,
   ): HealthAlert | undefined {
     const startedAtMs = state.pendingStartMs ?? atMs;
-    const cooling = state.lastClosedAtMs !== undefined && atMs - state.lastClosedAtMs < this.config.cooldownMs;
+    // The cooldown is anchored on the first crossing that began this excursion
+    // (correction 01, finding 1): a crossing that starts inside the cooldown is
+    // suppressed even when its debounce completes on or after the boundary.
+    const cooling = state.lastClosedAtMs !== undefined && startedAtMs - state.lastClosedAtMs < this.config.cooldownMs;
     state.open = true;
     state.startedAtMs = startedAtMs;
     state.peak = state.pendingPeak;

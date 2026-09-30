@@ -242,6 +242,30 @@ describe('HealthIncidentGrouper', () => {
     expect(third[0].incident).toMatchObject({ reopenedDuringCooldown: false, startedAt: new Date(130_000).toISOString() });
   });
 
+  it('anchors the cooldown on the first crossing, not on the debounce completion (reviewer case)', () => {
+    const drive = incidentDriver({ quietPeriodMs: 0, cooldownMs: 60_000, debounceReadings: 2 });
+    // Incident 1: first high at 0, opens at 1,000 ms, closes at 2,000 ms.
+    expect(drive(0, { heapFraction: 0.9 })).toHaveLength(0);
+    expect(drive(1_000, { heapFraction: 0.9 })).toHaveLength(1);
+    const firstClose = drive(2_000, { heapFraction: 0.5 });
+    expect(firstClose).toHaveLength(1);
+    expect(firstClose[0].transition).toBe('recovery');
+    // The next crossing begins at 61,999 ms (inside the 60 s cooldown) and its
+    // second consecutive high at 62,000 ms completes the debounce exactly on the
+    // boundary. Anchored on the first crossing it is still suppressed, so it is
+    // reported as a silent reopen, not as a new alert.
+    expect(drive(61_999, { heapFraction: 0.9 })).toHaveLength(0);
+    expect(drive(62_000, { heapFraction: 0.9 })).toHaveLength(0);
+    const silentClose = drive(63_000, { heapFraction: 0.5 });
+    expect(silentClose).toHaveLength(1);
+    expect(silentClose[0]).toMatchObject({ kind: 'heap_pressure', transition: 'recovery' });
+    expect(silentClose[0].incident).toMatchObject({
+      startedAt: new Date(61_999).toISOString(),
+      reopenedDuringCooldown: true,
+    });
+    expect(silentClose[0].message).toContain('during the cooldown');
+  });
+
   it('debounces a single spike and opens after N high readings inside one un-recovered window', () => {
     const drive = incidentDriver({ quietPeriodMs: 0, cooldownMs: 0, debounceReadings: 2 });
     expect(drive(0, { heapFraction: 0.9 })).toHaveLength(0); // one high reading: pending
