@@ -63,8 +63,9 @@ that: an importable module (`src/index.ts`) and a shell-friendly CLI
   (`completionSource`: the receipt, or the session's `latestCompletion` for
   the receipt-less goal-turn class) and evidence pointers.
 - `verify` re-checks the child's completion claims against the filesystem with
-  read-only git: claimed commits exist in their claimed repos (reachable from
-  `--since`), `filesChanged` entries show evidence of change, claimed commands
+  read-only git: claimed commits exist in their claimed repos (reachability
+  checked against `--since <base>` when given), `filesChanged` entries show
+  CHANGE evidence (claimed-commit diff or working-tree dirtiness), claimed commands
   and tests are recorded, and a claimed test is re-run ONLY when the parent
   names the exact command (`--rerun "cmd"`, run in the child's cwd with a
   timeout). Nothing is ever mutated. Verdicts: `verified` (exit 0),

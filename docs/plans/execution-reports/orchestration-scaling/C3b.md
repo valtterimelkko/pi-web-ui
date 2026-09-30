@@ -331,3 +331,67 @@ task, unchanged by this lane).
 6. Live consumption: ~30 small zai/glm-5.3-flash calls (10 counted children +
    round-1/round-2 iterations + template retries), thinking max per the lane
    brief, within the routing rules.
+
+## Correction 01 (parent adjudication of reviews/c3b-luna-review.md — final implementer round)
+
+All six findings closed RED-first in `/root/pi-orch`; failing outputs saved to
+`/root/orch-ops/orchestration-scaling/c3b/red/0{1..5}-*.txt`. Client commits:
+`559aef5` (all six). No live model run this round (deterministic client logic;
+correction item 7). Client suite at the correction commit: **162/162**, tsc
+clean; worktree docs gates re-run below.
+
+1. **Goal auto-detect bypassed by early defaults** — `PiOrchClient.wait()` and
+   the CLI pre-filled `defaultConditions()` (per-turn `agent_end`) before
+   `waitOnChild` could detect a goal. Both now pass `conditions: undefined`
+   when the caller supplied none; detection runs first and applies goal or
+   plain conditions AFTER it. Tests: `test/waits-client-goal.test.ts` (3) —
+   at the CLIENT level a `wait <sessionId>` on a running-goal child registers
+   `goal_end`+`goal_state` (+deadline, no `agent_end`), matches on the
+   projection objective, does ≥1 goal read and settles `goal_achieved` with
+   the auto-detected note; at the CLI level `wait <sessionId>` and
+   `wait <sessionId> --objective` leave `conditions` undefined.
+   RED: red/01 (3 failed) → GREEN 3/3.
+2. **`waitOnChildren` preflight used the wrong objective** — preflight now
+   receives each child's DETECTED objective (`detectedByChild.get(index) ??
+   options.objective`). Test: `wait --all <goal-session>@<runId>` with a
+   completed brief-run receipt and a running→achieved goal settles
+   `goal_achieved` (no early `completed`). RED: red/02 → GREEN.
+3. **`verify --run-id` session mismatch** — the named receipt's `sessionId` is
+   pinned to the requested session BEFORE any completion/fallback work; a
+   mismatch returns `verdict: unverifiable`, summary "…receipt belongs to
+   another session (run X belongs to Y, not Z)", zero claims, exit 21, and no
+   session-detail fallback (mirrors wait's correction-04 fast-fail). Test with
+   a transport that throws on any other path. RED: red/03 → GREEN.
+4. **`filesChanged` means changed (parent decision)** — a path now verifies
+   only with CHANGE evidence: membership in a claimed commit's diff
+   (`git diff-tree --root --name-status`) or a non-empty `git status
+   --porcelain -- <path>` (modified/added/deleted/untracked). The old
+   "exists in the working tree" and tree-existence/log fallbacks are removed;
+   a clean path absent from every claimed commit is contradicted with
+   "exists but unchanged". Tests: unchanged tracked path contradicted;
+   newly untracked file verified (working tree: ?? …); modified tracked file
+   verified. RED: red/04 (unchanged-path contradicted test red) → GREEN 20/20.
+5. **Human `spawn` output shows template-delivery failure** — when
+   `raw.__templateFollowUpError` is present, human output still prints the
+   session line, adds a clear `TEMPLATE_NOT_DELIVERED` warning naming the
+   reason and the recovery, and the command exits **22** (new documented
+   `TEMPLATE_NOT_DELIVERED` in `EXIT_CODES` + README table; `--json` keeps the
+   raw fields and also exits 22). Tests: double-failure exit 22 + warning;
+   `--json` raw fields + exit 22; healthy delivery exit 0. RED: red/05 → GREEN
+   5/5; exit-codes README-sync test green.
+6. **README branch promise** — removed "when the block names a branch" from
+   the README verify section (the `pi-completion/v1` schema has no branch
+   field; the contract stability window forbids adding one). `--since <base>`
+   is documented as the reachability check; the same wording fix landed in the
+   verify module header and the CLI HELP, and the README `filesChanged` rule
+   was updated to the change-evidence wording. HELP's exit-code list now
+   reflects 13 retired and 20/21/22 added.
+7. **Evidence** — every RED run's failing output is preserved under
+   `c3b/red/`; no new live check was run (none required), so no health JSON
+   applies this round; no credentials were copied or needed.
+
+Gates after the corrections (from `/root/pi-orch` at 559aef5):
+`npm test` → exit 0 — "tests 162 / pass 162 / fail 0";
+`tsc --noEmit -p tsconfig.json` → exit 0.
+Worktree: `npm run docs:check-links` → exit 0; `docs:check-agent-guides` →
+exit 0 (this commit); drift test unchanged (7/7, snapshot untouched).
