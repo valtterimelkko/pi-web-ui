@@ -491,6 +491,26 @@ Use it as follows:
 
 While the API is marked `beta`, minor additive changes are expected. Breaking changes still require deliberate migration notes.
 
+### Downstream mirrors
+
+`server/src/internal-api/types.ts` is the machine-readable version source of
+truth (see [Contract identity](#contract-identity)). **Agent OS** keeps a
+hand-maintained mirror of this contract in its own repository (`/root/agent-os`
+on this machine):
+
+- `src/pi-web-ui/client.ts` → `CURRENT_PI_WEB_UI_CONTRACT_VERSION`
+- `tests/pi-web-ui-observability-contract.test.ts` → the version pin
+- `docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md` → the "Mirror re-synced" header, the
+  published contract example and the per-version changelog
+
+On **every** contract bump, update all four markers above — this repository's
+version constant and the three Agent OS mirror files — in the same change. The
+mirror is checked mechanically: Agent OS's
+`tests/pi-web-ui-contract-mirror-sync.test.ts` reads this repository's version
+constant (`PI_WEB_UI_REPO`, else `/root/pi-web-ui`) and fails on any drift, and
+`agent-os health` warns (never errors) when the mirror is behind. The Agent OS
+mirror doc carries the same procedure under "Keeping this mirror in step".
+
 ## Compatibility rules
 
 For `/api/v1`, preserve these rules:

@@ -137,6 +137,7 @@ Core architectural themes:
 6. **For live/external browser validation only:** use `playwright-cli`.
 7. **Before commit/push:** inspect `git status --short`, `git diff --stat`, and `git diff --cached --stat`.
 8. **Before commit/push:** explicitly verify no secrets, tokens, cookies, auth dumps, session artifacts, or local machine files are being added.
+9. **On an Internal API contract bump:** keep the downstream Agent OS mirror in step before merging — see [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) → "Downstream mirrors" (the version source of truth, the three mirror files, and the cross-repo sync test that catches drift).
 
 ## Non-negotiable security and correctness rules
 
