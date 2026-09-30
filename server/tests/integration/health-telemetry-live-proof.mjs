@@ -261,6 +261,7 @@ function sampleTimestamps() {
 
 async function main() {
   const productionBefore = existsSync(productionMetricsDir);
+  const productionEntriesBefore = existsSync(productionMetricsDir) ? readdirSync(productionMetricsDir) : [];
   if (!check('metrics file exists', existsSync(metricsPath), metricsPath)) return;
 
   // ── 1. startup line: sink target and operator suppression ─────────────────
@@ -370,7 +371,20 @@ async function main() {
   const ingressDir = path.join(runDir, 'notifications', 'ingress');
   const ingressFiles = existsSync(ingressDir) ? readdirSync(ingressDir) : [];
   check('no notification-ingress record written (operator not messaged)', ingressFiles.length === 0, `${ingressDir}: ${ingressFiles.length} file(s)`);
-  check('the production metrics path was never created', !existsSync(productionMetricsDir) && !productionBefore, `${productionMetricsDir} exists=${existsSync(productionMetricsDir)}`);
+  // The real production server legitimately keeps writing its own rotating
+  // health-metrics file, so the isolation claim is narrower: this disposable
+  // server created no NON-rotation entry there (its `alerts.jsonl` capture file
+  // would appear), and its startup line names the run-directory metrics path.
+  const productionEntriesAfter = existsSync(productionMetricsDir) ? readdirSync(productionMetricsDir) : [];
+  const newProductionEntries = productionEntriesAfter.filter(
+    (entry) => !productionEntriesBefore.includes(entry) && !/^health-metrics(\.\d+)?\.jsonl$/.test(entry),
+  );
+  report.numbers.newProductionMetricsEntries = newProductionEntries;
+  check(
+    'the disposable server created no production metrics entry',
+    newProductionEntries.length === 0 && startupLine.includes(metricsPath),
+    `new entries=${JSON.stringify(newProductionEntries)} (existed before=${productionBefore}); startup=${startupLine}`,
+  );
 
   // ── 7. journal volume under the same load ────────────────────────────────
   // Two windows: A contains the causal transitions of this run's load (boot,
