@@ -16,6 +16,7 @@ import {
   preflightSpecSchema,
   runDispatchPreflight,
   type PreflightFailure,
+  type PreflightFs,
 } from '../../../src/internal-api/dispatch-preflight.js';
 
 describe('C4 dispatch preflight — schema (preflightSpecSchema)', () => {
@@ -216,6 +217,63 @@ describe('C4 dispatch preflight — tool check (bare name on PATH the runtime wi
     await fs.writeFile(path.join(binA, 'dup-tool'), '#!/bin/sh\n', { mode: 0o755 });
     const ok = await runDispatchPreflight({ tools: ['dup-tool'], pathEnv: `${binA}:${binB}` });
     expect(ok.ok).toBe(true); // first matching directory (binA) wins
+  });
+
+  it('an unreadable PATH entry (EACCES) is skipped like a missing one, and preflight never throws', async () => {
+    const realFs = await import('node:fs/promises');
+    const locked = path.join(dir, 'locked-bin'); // never touched: the injected fs denies it
+    const deniedFs: PreflightFs = {
+      stat: async (p: string) => {
+        if (p.startsWith(locked)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        return realFs.stat(p);
+      },
+      access: async (p: string, mode: number) => {
+        if (p.startsWith(locked)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        return realFs.access(p, mode);
+      },
+    };
+    const tool = path.join(binDir, 'after-locked');
+    await fs.writeFile(tool, '#!/bin/sh\n', { mode: 0o755 });
+
+    // The unreadable entry is skipped; the later entry still resolves.
+    const report = await runDispatchPreflight({ tools: ['after-locked'], pathEnv: `${locked}:${binDir}`, fs: deniedFs });
+    expect(report.ok).toBe(true);
+
+    // A name that exists nowhere is a normal failure — the error never escapes.
+    const refused = await runDispatchPreflight({ tools: ['c4-no-such-tool'], pathEnv: `${locked}:${binDir}`, fs: deniedFs });
+    expect(refused.ok).toBe(false);
+    expect(refused.failures).toEqual([
+      { kind: 'tool', item: 'c4-no-such-tool', problem: 'not found on PATH' },
+    ] satisfies PreflightFailure[]);
+
+    // A file that exists but whose executable probe errors is skipped too.
+    const deniedAccessFs: PreflightFs = {
+      stat: realFs.stat,
+      access: async (p: string, mode: number) => {
+        if (p === path.join(binDir, 'denied-access')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        return realFs.access(p, mode);
+      },
+    };
+    await fs.writeFile(path.join(binDir, 'denied-access'), '#!/bin/sh\n', { mode: 0o755 });
+    const denied = await runDispatchPreflight({ tools: ['denied-access'], pathEnv: binDir, fs: deniedAccessFs });
+    expect(denied.ok).toBe(false);
+    expect(denied.failures[0]).toEqual({ kind: 'tool', item: 'denied-access', problem: 'not found on PATH' });
+  });
+
+  it('an erroring PATH entry (EIO on stat) is skipped without aborting the scan', async () => {
+    const realFs = await import('node:fs/promises');
+    const broken = path.join(dir, 'broken-bin');
+    const brokenFs: PreflightFs = {
+      stat: async (p: string) => {
+        if (p.startsWith(broken)) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+        return realFs.stat(p);
+      },
+      access: realFs.access,
+    };
+    const tool = path.join(binDir, 'after-broken');
+    await fs.writeFile(tool, '#!/bin/sh\n', { mode: 0o755 });
+    const report = await runDispatchPreflight({ tools: ['after-broken'], pathEnv: `${broken}:${binDir}`, fs: brokenFs });
+    expect(report.ok).toBe(true);
   });
 });
 
