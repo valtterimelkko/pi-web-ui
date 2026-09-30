@@ -1,0 +1,24 @@
+# Pi Web UI agents' tool processes slice (D0, plan ORCHESTRATION-SCALING-READINESS D0).
+#
+# Sibling container for every command an agent child runs (bash tool, background
+# shells, subagent/runtime CLI processes). The control plane keeps its own budget in
+# pi-web-ui.service (see pi-web-ui-control-plane.conf); neither group can starve the
+# other of memory, and under host CPU contention the control plane's CPUWeight=1000
+# outweighs this slice's 100.
+#
+# Delegate=yes lets the server create per-child cgroups inside the slice with their
+# own memory/pids limits (amendment A defaults; env-tunable at runtime).
+#
+# Install (parent's rollout, never a lane's): copy to /etc/systemd/system/, then
+# `systemctl daemon-reload && systemctl start pi-web-ui-tools.slice`.
+[Unit]
+Description=Pi Web UI agents tool processes (D0 tools slice)
+Before=slices.target
+
+[Slice]
+# Degrade before kill (owner requirement): the soft high throttles first.
+MemoryHigh=14G
+MemoryMax=18G
+MemorySwapMax=4G
+CPUWeight=100
+Delegate=yes
