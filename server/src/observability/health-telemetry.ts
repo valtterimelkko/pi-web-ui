@@ -1,7 +1,8 @@
 import { createLogger } from '../logging/logger.js';
-import { HealthAlertEvaluator, type HealthAlert } from './health-alerts.js';
+import { HealthAlertEvaluator, HealthIncidentGrouper, type HealthAlert } from './health-alerts.js';
 import { RotatingMetricsFile } from './health-metrics-file.js';
 import {
+  CpuUsageTracker,
   collectHealthReadings,
   getRegisteredHealthReadingSources,
   type HealthReadingSources,
@@ -34,6 +35,8 @@ export interface HealthTelemetryOptions {
   sources?: HealthReadingSources;
   metricsFile?: RotatingMetricsFile;
   now?: () => number;
+  /** Test seam; the sampler owns one tracker so its deltas are per sample. */
+  cpuTracker?: CpuUsageTracker;
 }
 
 /**
@@ -48,6 +51,8 @@ export class HealthTelemetry {
   private readonly config: HealthTelemetryConfig;
   private readonly file: RotatingMetricsFile;
   private readonly evaluator: HealthAlertEvaluator;
+  private readonly grouper: HealthIncidentGrouper;
+  private readonly cpuTracker: CpuUsageTracker;
   private readonly now: () => number;
   private sources: HealthReadingSources;
   private timer?: ReturnType<typeof setInterval>;
@@ -65,6 +70,8 @@ export class HealthTelemetry {
       maxFiles: options.config.maxFiles,
     });
     this.evaluator = new HealthAlertEvaluator({ thresholds: options.config.thresholds, now: this.now });
+    this.grouper = new HealthIncidentGrouper({ thresholds: options.config.thresholds, config: options.config.incident });
+    this.cpuTracker = options.cpuTracker ?? new CpuUsageTracker();
   }
 
   get enabled(): boolean {
@@ -142,6 +149,7 @@ export class HealthTelemetry {
         ...getRegisteredHealthReadingSources(),
         ...this.sources,
         ...await this.resolvedAsyncSources(),
+        cpuReading: (atMs) => this.cpuTracker.sample(atMs),
       });
     } catch (error) {
       // Reading collection is fail-open by construction; a failure here means a
@@ -174,8 +182,12 @@ export class HealthTelemetry {
     }
 
     try {
-      const alerts = this.evaluator.evaluate(readings);
-      for (const alert of alerts) await this.deliver(alert);
+      const transitions = this.evaluator.evaluate(readings);
+      // Every raw transition is still journaled exactly as before grouping; the
+      // sink only ever sees the incident-grouped notifications (L1).
+      for (const transition of transitions) this.logTransition(transition);
+      const notifications = this.grouper.observe(readings, transitions);
+      for (const notification of notifications) await this.deliver(notification);
     } catch (error) {
       logger.warn(`[HealthTelemetry] alert evaluation failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -184,10 +196,14 @@ export class HealthTelemetry {
     return readings;
   }
 
-  private async deliver(alert: HealthAlert): Promise<void> {
+  private logTransition(alert: HealthAlert): void {
     const line = `[HealthTelemetry] ${alert.kind} ${alert.transition}: ${alert.message}`;
     if (alert.transition === 'alert') logger.warn(line);
     else logger.info(line);
+  }
+
+  private async deliver(alert: HealthAlert): Promise<void> {
+    this.logTransition(alert);
     try {
       await this.config.sink(alert);
     } catch (error) {

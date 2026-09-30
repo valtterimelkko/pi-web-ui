@@ -9,8 +9,12 @@
  * It proves, against a real server process:
  *   1. the metrics file grows at the configured cadence and rotates at its bound;
  *   2. lowered heap thresholds fire exactly ONE alert and then exactly ONE
- *      recovery (hysteresis; no flapping), driven by a real heap rise and a real
- *      forced GC over the Chrome DevTools Protocol;
+ *      recovered message (hysteresis plus L1 incident grouping; no flapping),
+ *      driven by a real heap rise and a real forced GC over the Chrome
+ *      DevTools Protocol. Because grouping closes an incident only after the
+ *      quiet period, the server must be started with a short
+ *      `OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS` (for example `5000`); the
+ *      driver waits `--quiet-wait-seconds` (default 20) before judging;
  *   3. alerts are captured to a file inside the run directory, the startup log
  *      says the operator is not notified, and nothing reaches the operator path;
  *   4. `[MultiSessionManager] Memory:` journal lines per hour, measured over the
@@ -38,6 +42,14 @@ for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index], process.argv[index + 1]);
 }
 
+// One ballast round appends 2M page-held objects by index assignment.
+// Wrapped in an IIFE: a top-level `const base` would persist in the page's
+// global lexical scope and the second evaluation would fail on redeclaration.
+const A2_BALLAST_ROUND = '(function () { globalThis.__a2_ballast = globalThis.__a2_ballast || [];'
+  + 'const base = globalThis.__a2_ballast.length;'
+  + 'for (let i = 0; i < 2000000; i++) { globalThis.__a2_ballast[base + i] = { a: i, b: i * 2, c: "s" + i }; }'
+  + 'return globalThis.__a2_ballast.length; })()';
+
 const runDir = args.get('--dir');
 const socketPath = args.get('--socket') ?? path.join(runDir, 'internal-api.sock');
 const tokenPath = args.get('--token') ?? path.join(runDir, 'internal-api-token');
@@ -45,6 +57,7 @@ const inspectPort = Number(args.get('--inspect-port'));
 const logPath = args.get('--log') ?? path.join(runDir, 'server.log');
 const journalWindowSeconds = Number(args.get('--journal-window-seconds') ?? 360);
 const mode = args.get('--mode') ?? 'proof';
+const quietWaitSeconds = Number(args.get('--quiet-wait-seconds') ?? 20);
 const productionMetricsDir = path.join(userInfo().homedir, '.pi-web-ui', 'metrics');
 const productionNotificationsDir = path.join(userInfo().homedir, '.pi-web-ui', 'notifications');
 
@@ -206,6 +219,15 @@ class Cdp {
 
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    // Surface a thrown expression instead of swallowing it: the old ballast's
+    // `push(...2M)` exceeded the V8 argument limit and died silently here
+    // (correction 01, finding 3 diagnosis; same defect class as the L1 driver).
+    if (result.exceptionDetails) {
+      const description = result.exceptionDetails.exception?.description
+        ?? result.exceptionDetails.text
+        ?? 'unknown evaluation exception';
+      throw new Error(`Runtime.evaluate failed: ${description}`);
+    }
     return result.result?.value;
   }
 
@@ -256,6 +278,7 @@ function sampleTimestamps() {
 
 async function main() {
   const productionBefore = existsSync(productionMetricsDir);
+  const productionEntriesBefore = existsSync(productionMetricsDir) ? readdirSync(productionMetricsDir) : [];
   if (!check('metrics file exists', existsSync(metricsPath), metricsPath)) return;
 
   // ── 1. startup line: sink target and operator suppression ─────────────────
@@ -309,7 +332,8 @@ async function main() {
   report.numbers.piSessionsResident = Array.isArray(listed.body?.sessions) ? listed.body.sessions.length : undefined;
   check('six resident Pi sessions created', created.length === 6, `${created.length} created, registry lists ${report.numbers.piSessionsResident}`);
 
-  // ── 5. alert on a real heap rise, then exactly one recovery after GC ──────
+  // ── 5. alert on a real heap rise, then exactly one grouped recovered
+  //       message after GC plus the server's quiet period (L1 grouping) ──────
   // Only records written from here on are judged, so the proof is re-runnable
   // against a metrics directory that already holds earlier runs.
   const alertRecordsAtStart = parseAlerts().length;
@@ -318,8 +342,25 @@ async function main() {
   const steady = await cdp.heapFraction();
   report.numbers.heapFractionSteady = Number(steady.fraction.toFixed(4));
 
-  await cdp.evaluate('globalThis.__a2_ballast = Array.from({ length: 2000000 }, (_, i) => ({ a: i, b: i * 2, c: "s" + i })); globalThis.__a2_ballast.length');
-  await cdp.evaluate('globalThis.__a2_ballast.push(...Array.from({ length: 2000000 }, (_, i) => ({ a: i, b: i * 2, c: "s" + i }))); globalThis.__a2_ballast.length');
+  // Grow the held ballast until the post-GC RETAINED floor clears the alert
+  // threshold by a margin, rather than relying on allocation transients
+  // (correction 01, finding 3). The threshold must match the server's
+  // OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION; the default is 0.10.
+  const heapAlertFraction = Number(args.get('--heap-alert-fraction') ?? 0.1);
+  let ballastRounds = 0;
+  let retainedFraction = steady.fraction;
+  while (retainedFraction < heapAlertFraction + 0.02 && ballastRounds < 10) {
+    await cdp.evaluate(A2_BALLAST_ROUND);
+    await cdp.collectGarbage();
+    retainedFraction = (await cdp.heapFraction()).fraction;
+    ballastRounds += 1;
+  }
+  report.numbers.ballast = { rounds: ballastRounds, retainedFraction: Number(retainedFraction.toFixed(4)) };
+  check(
+    'the held ballast keeps the retained heap above the alert threshold with margin',
+    retainedFraction >= heapAlertFraction + 0.02,
+    `${(retainedFraction * 100).toFixed(2)}% retained after ${ballastRounds} round(s) vs threshold ${(heapAlertFraction * 100).toFixed(1)}%`,
+  );
   const loaded = await cdp.heapFraction();
   report.numbers.heapFractionAfterBallast = Number(loaded.fraction.toFixed(4));
 
@@ -329,6 +370,8 @@ async function main() {
 
   const alertLine = readLines(logPath).find((line) => line.includes('[HealthTelemetry] heap_pressure alert'));
   check('alert is also journaled with its numbers', Boolean(alertLine), alertLine ?? 'no alert log line');
+  const groupedAlertLine = readLines(logPath).find((line) => line.includes('[HealthTelemetry] heap_pressure alert: heap pressure incident:'));
+  check('the grouped incident message is journaled', Boolean(groupedAlertLine), groupedAlertLine ?? 'no grouped incident log line');
 
   await cdp.evaluate('globalThis.__a2_ballast = null; "released"');
   await cdp.collectGarbage();
@@ -337,13 +380,23 @@ async function main() {
   const recovered = await cdp.heapFraction();
   report.numbers.heapFractionAfterGc = Number(recovered.fraction.toFixed(4));
 
-  await waitFor('the heap recovery', () => newAlerts().some((alert) => alert.transition === 'recovery'), 30_000);
+  await waitFor(
+    'the grouped heap recovered message (after the server quiet period)',
+    () => newAlerts().some((alert) => alert.transition === 'recovery'),
+    quietWaitSeconds * 1_000 + 20_000,
+  );
   await sleep(15_000);
   const finalAlerts = newAlerts();
   const alerts = finalAlerts.filter((alert) => alert.transition === 'alert').length;
   const recoveries = finalAlerts.filter((alert) => alert.transition === 'recovery').length;
   report.numbers.alertRecords = finalAlerts;
-  check('no flapping: exactly one alert and one recovery after a 15 s settle', alerts === 1 && recoveries === 1, `alerts=${alerts} recoveries=${recoveries}`);
+  check('no flapping: exactly one alert and one recovered message after the settle', alerts === 1 && recoveries === 1, `alerts=${alerts} recoveries=${recoveries}`);
+  const recoveredRecord = finalAlerts.find((alert) => alert.transition === 'recovery');
+  check(
+    'the recovered message carries the incident summary',
+    Boolean(recoveredRecord?.incident) && recoveredRecord.incident.alertCrossings >= 1 && typeof recoveredRecord.incident.peakValue === 'number',
+    JSON.stringify(recoveredRecord?.incident ?? null),
+  );
 
   const recoveryLine = readLines(logPath).find((line) => line.includes('[HealthTelemetry] heap_pressure recovery'));
   check('recovery is also journaled', Boolean(recoveryLine), recoveryLine ?? 'no recovery log line');
@@ -352,7 +405,20 @@ async function main() {
   const ingressDir = path.join(runDir, 'notifications', 'ingress');
   const ingressFiles = existsSync(ingressDir) ? readdirSync(ingressDir) : [];
   check('no notification-ingress record written (operator not messaged)', ingressFiles.length === 0, `${ingressDir}: ${ingressFiles.length} file(s)`);
-  check('the production metrics path was never created', !existsSync(productionMetricsDir) && !productionBefore, `${productionMetricsDir} exists=${existsSync(productionMetricsDir)}`);
+  // The real production server legitimately keeps writing its own rotating
+  // health-metrics file, so the isolation claim is narrower: this disposable
+  // server created no NON-rotation entry there (its `alerts.jsonl` capture file
+  // would appear), and its startup line names the run-directory metrics path.
+  const productionEntriesAfter = existsSync(productionMetricsDir) ? readdirSync(productionMetricsDir) : [];
+  const newProductionEntries = productionEntriesAfter.filter(
+    (entry) => !productionEntriesBefore.includes(entry) && !/^health-metrics(\.\d+)?\.jsonl$/.test(entry),
+  );
+  report.numbers.newProductionMetricsEntries = newProductionEntries;
+  check(
+    'the disposable server created no production metrics entry',
+    newProductionEntries.length === 0 && startupLine.includes(metricsPath),
+    `new entries=${JSON.stringify(newProductionEntries)} (existed before=${productionBefore}); startup=${startupLine}`,
+  );
 
   // ── 7. journal volume under the same load ────────────────────────────────
   // Two windows: A contains the causal transitions of this run's load (boot,

@@ -11,7 +11,8 @@ import {
   resolveObservabilityMetricsDir,
   type HealthAlertSink,
 } from '../../../src/observability/health-telemetry.js';
-import type { HealthAlert } from '../../../src/observability/health-alerts.js';
+import type { HealthAlert, HealthIncidentConfig } from '../../../src/observability/health-alerts.js';
+import { CpuUsageTracker } from '../../../src/observability/health-readings.js';
 
 const dirs: string[] = [];
 
@@ -43,6 +44,8 @@ function telemetryOptions(overrides: {
   heapFractionHigh?: number;
   heapFractionLow?: number;
   now?: () => number;
+  incident?: Partial<HealthIncidentConfig>;
+  cpuTracker?: CpuUsageTracker;
 }) {
   return {
     config: {
@@ -57,11 +60,18 @@ function telemetryOptions(overrides: {
         lagP99HighMs: 60_000,
         lagP99LowMs: 30_000,
       },
+      incident: {
+        quietPeriodMs: 0,
+        cooldownMs: 0,
+        debounceReadings: 1,
+        ...overrides.incident,
+      },
       sink: overrides.sink ?? createNoopAlertSink(),
       sinkDescription: 'test',
       suppressOperatorNotifications: false,
       warnings: [],
     },
+    ...(overrides.cpuTracker ? { cpuTracker: overrides.cpuTracker } : {}),
     sources: {
       now: overrides.now ?? (() => 1_700_000_000_000),
       uptimeSec: () => 12,
@@ -245,6 +255,29 @@ describe('createHealthTelemetryConfig', () => {
     expect(config.sinkDescription).toBe(`ingress:/root/.pi-web-ui/notifications/ingress`);
     expect(config.thresholds.heapFractionLow).toBeLessThan(config.thresholds.heapFractionHigh);
     expect(config.thresholds.lagP99LowMs).toBeLessThan(config.thresholds.lagP99HighMs);
+    expect(config.incident).toEqual({ quietPeriodMs: 600_000, cooldownMs: 1_800_000, debounceReadings: 2 });
+  });
+
+  it('accepts incident pacing overrides from the environment', () => {
+    const config = createHealthTelemetryConfig({
+      OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS: '5000',
+      OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS: '60000',
+      OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS: '3',
+    } as NodeJS.ProcessEnv);
+    expect(config.incident).toEqual({ quietPeriodMs: 5_000, cooldownMs: 60_000, debounceReadings: 3 });
+    expect(config.warnings).toEqual([]);
+  });
+
+  it('falls back to the documented incident defaults with a warning when a knob is out of range', () => {
+    const config = createHealthTelemetryConfig({
+      OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS: '-1',
+      OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS: '86400001',
+      OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS: '0',
+    } as NodeJS.ProcessEnv);
+    expect(config.incident).toEqual({ quietPeriodMs: 600_000, cooldownMs: 1_800_000, debounceReadings: 2 });
+    expect(config.warnings.join(' ')).toContain('OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS');
+    expect(config.warnings.join(' ')).toContain('OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS');
+    expect(config.warnings.join(' ')).toContain('OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS');
   });
 
   it('captures alerts to a file in validation mode and says so through the description', () => {
@@ -362,6 +395,61 @@ describe('HealthTelemetry', () => {
       activeTurns: 0,
     });
     expect(typeof first.at).toBe('string');
+  });
+
+  it('writes the CPU fields of each sample next to heap and lag', async () => {
+    const dir = await tempDir();
+    const state: MemoryState = { heapUsed: 50_000, heapTotal: 60_000, rss: 70_000, external: 1 };
+    let usage = { user: 0, system: 0 };
+    const ticks = { userTicks: 0, systemTicks: 0 };
+    let clock = 1_700_000_000_000;
+    const cpuTracker = new CpuUsageTracker({ cpuUsage: () => usage, mainThreadCpuTicks: () => ticks });
+    const telemetry = new HealthTelemetry(telemetryOptions({ dir, state, cpuTracker, now: () => clock }));
+
+    await telemetry.sampleOnce();
+    clock += 1_000;
+    usage = { user: 300_000, system: 100_000 };
+    ticks.userTicks = 25;
+    await telemetry.sampleOnce();
+
+    const lines = (await readFile(path.join(dir, 'health-metrics.jsonl'), 'utf8')).trim().split('\n');
+    const first = JSON.parse(lines[0]);
+    const second = JSON.parse(lines[1]);
+    expect(first).toMatchObject({ cpuPercentOfCore: null, mainThreadCpuPercentOfCore: null, mainThreadCpuSource: 'proc-thread-self' });
+    expect(second).toMatchObject({ cpuPercentOfCore: 40, mainThreadCpuPercentOfCore: 25, mainThreadCpuSource: 'proc-thread-self' });
+  });
+
+  it('delivers incident-grouped messages instead of one notification per crossing', async () => {
+    const dir = await tempDir();
+    const alerts: HealthAlert[] = [];
+    let clock = 1_700_000_000_000;
+    const state: MemoryState = { heapUsed: 50_000, heapTotal: 60_000, rss: 70_000, external: 1 };
+    const telemetry = new HealthTelemetry(telemetryOptions({
+      dir,
+      state,
+      now: () => clock,
+      incident: { quietPeriodMs: 60_000, cooldownMs: 0, debounceReadings: 1 },
+      sink: async (alert) => { alerts.push(alert); },
+    }));
+
+    await telemetry.sampleOnce(); // 0.5: nothing
+    state.heapUsed = 85_000; // 0.85: the incident opens
+    await telemetry.sampleOnce();
+    state.heapUsed = 79_000; // inside the dead band: nothing sent
+    clock += 30_000;
+    await telemetry.sampleOnce();
+    state.heapUsed = 69_000; // 0.69: recovery, quiet clock starts
+    clock += 30_000;
+    await telemetry.sampleOnce();
+    clock += 60_000; // quiet period elapsed
+    await telemetry.sampleOnce();
+
+    expect(alerts.map((alert) => `${alert.kind}:${alert.transition}`)).toEqual([
+      'heap_pressure:alert',
+      'heap_pressure:recovery',
+    ]);
+    expect(alerts[1].incident).toMatchObject({ peakValue: 0.85, alertCrossings: 1 });
+    expect(alerts[1].message).toContain('incident recovered');
   });
 
   it('rotates the metrics file at its configured bound while sampling', async () => {
