@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { execSync } from 'node:child_process';
-import { planSpawnOwn, resolvePlacementConfig } from '../placement/index.js';
+import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import type { OpenCodeConfig } from './opencode-types.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -79,7 +79,7 @@ export class OpenCodeProcessManager {
 
     // D0 placement: the opencode server is one server-wide process — its own group,
     // removed when it exits. Unplaced (byte-identical argv/env) when off.
-    const launch = planSpawnOwn(resolvePlacementConfig(), ['opencode', ...args], env) ??
+    const launch = planSpawnOwn(placementForSpawn(), ['opencode', ...args], env) ??
       { file: 'opencode', args, env, group: '', cleanup: () => {} };
     this.launch = launch;
 

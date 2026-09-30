@@ -32,6 +32,8 @@ function fakeDeps() {
     readFirstLine: (f: string) =>
       f.endsWith('d0-test-tools.slice/cgroup.controllers')
         ? 'cpu memory pids\n'
+        : f.endsWith('d0-test-tools.slice/cgroup.subtree_control')
+          ? 'cpu memory pids\n'
         : f.endsWith('d0-test-tools.slice/memory.max')
           ? '1073741824\n'
           : undefined,

@@ -13,8 +13,9 @@ describe('D0 deploy unit arithmetic (amendment A)', () => {
     expect(slice).toMatch(/^MemoryMax=18G$/m);
     expect(slice).toMatch(/^MemorySwapMax=4G$/m);
     expect(slice).toMatch(/^CPUWeight=100$/m);
-    // Delegate=yes removed (correction-08): root manages child cgroups directly
-    expect(slice).not.toMatch(/^Delegate=/m);
+    // Delegate=yes restored (correction 09): without it systemd resets
+    // subtree_control on daemon-reload and child groups lose their limit files.
+    expect(slice).toMatch(/^Delegate=yes$/m);
   });
 
   it('control plane drop-in: max 8G, low 2G, and NO MemoryHigh (throttling the server stalls the loop)', () => {

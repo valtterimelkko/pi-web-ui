@@ -33,9 +33,11 @@ function fakeDeps() {
     readFirstLine: (f: string) =>
       f.endsWith('pi-web-ui-tools.slice/cgroup.controllers')
         ? 'cpu memory pids\n'
-        : f.endsWith('pi-web-ui-tools.slice/memory.max')
-          ? '12884901888\n'
-          : undefined,
+        : f.endsWith('pi-web-ui-tools.slice/cgroup.subtree_control')
+          ? 'cpu memory pids\n' // correction 09: already enabled (systemd-managed slice)
+          : f.endsWith('pi-web-ui-tools.slice/memory.max')
+            ? '12884901888\n'
+            : undefined,
   };
 }
 
@@ -104,6 +106,62 @@ describe('correction-06 finding 1: one resolved root reaches every consumer', ()
     const removed = await removeSessionGroup(applied.config, '01a0f2a6-55e9', io);
     expect(removed.removed).toBe(true);
     expect(existing.has(gp)).toBe(false);
+  });
+
+  it('CORRECTION 09: enables memory+pids in the tools root subtree_control at start-up', () => {
+    // 09-correction root cause: a Delegate=yes slice with no systemd children has an
+    // EMPTY cgroup.subtree_control, so child groups get NO limit files (the same class
+    // as the 16:56 escape: a group without limits). Start-up must enable the
+    // controllers, then read back; still-missing memory/pids => placement unavailable.
+    const root = RESOLVED;
+    const files = new Map<string, string>([
+      [`${root}/cgroup.controllers`, 'cpu memory pids\n'],
+      [`${root}/cgroup.subtree_control`, ''], // EMPTY: controllers not yet enabled
+      [`${root}/memory.max`, '12884901888\n'],
+    ]);
+    const enableCalls: Array<{ root: string; controllers: string }> = [];
+    const cfg = nameBasedConfig();
+    const deps = {
+      systemctlShowControlGroup: () => '/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice',
+      exists: (p: string) => p === root || p.startsWith(root + '/'),
+      readFirstLine: (f: string) => files.get(f),
+      enableSubtreeControllers: (r: string, controllers: string) => {
+        enableCalls.push({ root: r, controllers });
+        const now = (files.get(`${r}/cgroup.subtree_control`) ?? '').split(/\s+/).filter(Boolean);
+        for (const token of controllers.split(/\s+/).filter(Boolean)) {
+          const c = token.replace(/^\+/, '');
+          if (!now.includes(c)) now.push(c);
+        }
+        files.set(`${r}/cgroup.subtree_control`, now.join(' ') + '\n');
+      },
+    };
+    const applied = applyStartupPlacement(cfg, deps);
+    expect(applied.active).toBe(true);
+    expect(enableCalls).toHaveLength(1);
+    expect(enableCalls[0].root).toBe(root);
+    expect(enableCalls[0].controllers).toMatch(/\+memory/);
+    expect(enableCalls[0].controllers).toMatch(/\+pids/);
+    expect(files.get(`${root}/cgroup.subtree_control`)).toMatch(/memory/);
+    expect(files.get(`${root}/cgroup.subtree_control`)).toMatch(/pids/);
+  });
+
+  it('CORRECTION 09: placement unavailable when a controller cannot be enabled', () => {
+    const root = RESOLVED;
+    const cfg = nameBasedConfig();
+    const deps = {
+      systemctlShowControlGroup: () => '/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice',
+      exists: (p: string) => p === root || p.startsWith(root + '/'),
+      readFirstLine: (f: string) =>
+        f.endsWith('cgroup.controllers') ? 'cpu memory pids\n'
+        : f.endsWith('cgroup.subtree_control') ? '' // enable never takes effect
+        : f.endsWith('memory.max') ? '12884901888\n'
+        : undefined,
+      enableSubtreeControllers: () => { /* write silently does nothing */ },
+    };
+    const applied = applyStartupPlacement(cfg, deps);
+    expect(applied.active).toBe(false);
+    expect(applied.reason).toMatch(/subtree_control/);
+    expect(applied.reason).toMatch(/placement unavailable/i);
   });
 
   it('an unavailable root disables every consumer', async () => {

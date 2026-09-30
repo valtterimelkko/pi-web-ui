@@ -94,6 +94,11 @@ export interface ToolsRootDeps {
   systemctlShowControlGroup?: () => string | undefined;
   exists?: (p: string) => boolean;
   readFirstLine?: (p: string) => string | undefined;
+  /** Correction 09: write e.g. `+memory +pids` into `<root>/cgroup.subtree_control`.
+   * A slice holds no processes directly, so enabling controllers there is allowed.
+   * May throw (real cgroupfs returns EACCES/ENOENT); resolveToolsRoot falls back to
+   * the read-back check. */
+  enableSubtreeControllers?: (root: string, controllers: string) => void;
 }
 
 const defaultToolsRootDeps: ToolsRootDeps = {
@@ -113,6 +118,11 @@ const defaultToolsRootDeps: ToolsRootDeps = {
     } catch {
       return undefined;
     }
+  },
+  // Correction 09: one write enables several controllers at once (cgroupfs v2 accepts
+  // a space-separated list; already-enabled entries are a no-op).
+  enableSubtreeControllers: (root, controllers) => {
+    fs.writeFileSync(path.join(root, 'cgroup.subtree_control'), `${controllers}\n`);
   },
 };
 
@@ -148,6 +158,30 @@ export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {})
   const controllers = d.readFirstLine?.(`${root}/cgroup.controllers`) ?? '';
   if (!controllers.split(/\s+/).includes('memory')) {
     return { available: false, reason: `tools root ${root} does not expose the memory controller` };
+  }
+  // Correction 09 (root cause of the failed decisive check): a Delegate=yes slice with
+  // no systemd children has an EMPTY cgroup.subtree_control, so child groups are created
+  // WITHOUT limit files (the same class as the 16:56 escape — a group without limits).
+  // Enable the controllers this mechanism needs, then READ BACK; if memory or pids is
+  // still missing, placement is unavailable (fail-open with a clear reason).
+  const enabledNow = (): string[] =>
+    (d.readFirstLine?.(`${root}/cgroup.subtree_control`) ?? '')
+      .split(/\s+/).filter(Boolean).map((t) => t.replace(/^\+/, ''));
+  const wanted = ['memory', 'pids', ...(controllers.split(/\s+/).includes('cpu') ? ['cpu'] : [])];
+  const missing = wanted.filter((c) => !enabledNow().includes(c));
+  if (missing.length > 0) {
+    try {
+      d.enableSubtreeControllers?.(root, missing.map((c) => `+${c}`).join(' '));
+    } catch {
+      // fall through to the read-back verification
+    }
+  }
+  const stillMissing = ['memory', 'pids'].filter((c) => !enabledNow().includes(c));
+  if (stillMissing.length > 0) {
+    return {
+      available: false,
+      reason: `tools root ${root}: ${stillMissing.join(' and ')} controller(s) could not be enabled in cgroup.subtree_control — child groups would have no limit files (placement unavailable)`,
+    };
   }
   // Boundedness: the root's own memory.max, or an ancestor's (up to 4 levels),
   // must be a number — a `max` root means a runaway group is unbounded.

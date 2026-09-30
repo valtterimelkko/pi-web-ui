@@ -84,6 +84,27 @@ describe('correction-08 finding 2: bash prefix all-or-nothing (fault injection, 
     rm(degrade, { force: true });
   });
 
+  it('FAULT missing memory.max (correction 09): a group created without the limit file is refused', () => {
+    // 09-correction: cgroupfs refuses to CREATE a missing limit file — the write fails
+    // with Permission denied and the read fails with No such file. Simulated here with
+    // a directory stub (both the write and the read fail); the group must be refused.
+    const degrade = path.join(root.slice, 'degrade-nomax.log');
+    const env = { ...baseEnv(root.slice, degrade), PI_TOOLS_CG: path.join(root.slice, 'pi-nomax') };
+    const leaf = path.join(root.slice, 'pi-nomax');
+    mkdirSync(leaf, { recursive: true });
+    writeFileSync(path.join(leaf, 'cgroup.procs'), '');
+    mkdirSync(path.join(leaf, 'memory.max')); // directory stub: no creatable memory.max
+    writeFileSync(path.join(leaf, 'memory.high'), 'max\n');
+    writeFileSync(path.join(leaf, 'pids.max'), 'max\n');
+    writeFileSync(path.join(leaf, 'memory.swap.max'), 'max\n');
+    const { out } = runPrefix(root.slice, env, 'echo RAN-MARKER');
+    expect(readFileSync(path.join(leaf, 'cgroup.procs'), 'utf8')).toBe(''); // NOT joined
+    expect(readFileSync(degrade, 'utf8')).toContain('limit-readback-failed');
+    expect(out).toContain('RAN-MARKER'); // command still ran, unplaced
+    rm(leaf, { recursive: true, force: true });
+    rm(degrade, { force: true });
+  });
+
   it('FAULT oom-score: a failed score reset (before the join) leaves the command unplaced', () => {
     const degrade = path.join(root.slice, 'degrade-oom.log');
     const env = { ...baseEnv(root.slice, degrade), PI_TOOLS_OOM_SCORE_FILE: '/dev/null' };

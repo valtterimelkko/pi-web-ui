@@ -61,7 +61,7 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
     const r = resolveToolsRoot(cfg, {
       systemctlShowControlGroup: () => '/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice',
       exists: (p) => p === root,
-      readFirstLine: (f) => (f.endsWith('pi-web-ui-tools.slice/cgroup.controllers') ? 'cpu memory pids\n' : f.endsWith('pi-web-ui-tools.slice/memory.max') ? '12884901888\n' : undefined),
+      readFirstLine: (f) => (f.endsWith('pi-web-ui-tools.slice/cgroup.controllers') ? 'cpu memory pids\n' : f.endsWith('pi-web-ui-tools.slice/cgroup.subtree_control') ? 'cpu memory pids\n' : f.endsWith('pi-web-ui-tools.slice/memory.max') ? '12884901888\n' : undefined),
     });
     expect(r.available).toBe(true);
     expect(r.toolsRoot).toBe(root);
@@ -78,7 +78,7 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
     const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools' });
     const r = resolveToolsRoot(cfg, {
       exists: () => true,
-      readFirstLine: (f) => (f.endsWith('tools/cgroup.controllers') ? 'cpu memory pids\n' : f.endsWith('scope/memory.max') ? '12884901888\n' : undefined),
+      readFirstLine: (f) => (f.endsWith('tools/cgroup.controllers') ? 'cpu memory pids\n' : f.endsWith('tools/cgroup.subtree_control') ? 'cpu memory pids\n' : f.endsWith('scope/memory.max') ? '12884901888\n' : undefined),
     });
     expect(r.available).toBe(true);
     expect(r.toolsRoot).toBe('/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools');
@@ -101,6 +101,7 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
     const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools' });
     const files: Record<string, string> = {
       '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools/cgroup.controllers': 'cpuset cpu memory pids\n',
+      '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools/cgroup.subtree_control': 'cpuset cpu memory pids\n', // correction 09: controllers enabled
       '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools/memory.max': 'max\n', // leaf unbounded...
       '/sys/fs/cgroup/system.slice/d0-proof-run.scope/memory.max': '12884901888\n', // ...but the parent scope is numeric
     };

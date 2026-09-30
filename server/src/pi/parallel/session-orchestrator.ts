@@ -6,7 +6,7 @@
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
-import { planSpawnForSession, resolvePlacementConfig } from '../../placement/index.js';
+import { planSpawnForSession, placementForSpawn } from '../../placement/index.js';
 import type { WorktreeManager, WorktreeInfo } from './worktree-manager.js';
 import type { TaskNode } from './plan-parser.js';
 import { createLogger } from '../../logging/logger.js';
@@ -203,7 +203,7 @@ export class SessionOrchestrator {
       // D0 placement: session-bound group keyed by the orchestration session id.
       // When off, launch is the original argv/env byte-identically.
       const launch = planSpawnForSession(
-        resolvePlacementConfig(),
+        placementForSpawn(),
         { kind: 'rt', runtime: 'pi-parallel', id: sessionId },
         ['pi', ...args],
       ) ?? { file: 'pi', args, env: undefined as NodeJS.ProcessEnv | undefined, group: '', cleanup: () => {} };
