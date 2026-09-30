@@ -52,6 +52,8 @@ export interface LoopBlockingSpan {
   durationMs: number;
   /** Ids of the run that entered this span — its own, not any other frame's. */
   context?: LoopStallContext;
+  /** True when this evidence is a still-open async span (may be suspended on I/O, so not certainly executing). */
+  openAsync?: boolean;
 }
 
 /**
@@ -77,6 +79,10 @@ export interface LoopStallEvent {
   blockedBy: LoopBlockingSpan[];
   /** Ids of the run whose span was active when the stall fired (absent when none). */
   context?: LoopStallContext;
+  /** Correction 03: per-candidate summaries when overlapping async spans make the executing frame unknown. */
+  candidates?: string[];
+  /** Number of candidates, present only in candidates mode. */
+  stallCandidates?: number;
 }
 
 export interface LoopSpanEvent {
@@ -118,6 +124,8 @@ export interface LoopStallRecord {
   stack: string[];
   blockedBy: LoopBlockingSpan[];
   context?: LoopStallContext;
+  candidates?: string[];
+  stallCandidates?: number;
 }
 
 export interface LoopSpanRecord {
@@ -169,6 +177,8 @@ interface LabelFrame {
   label: string;
   enteredAt: number;
   context?: LoopStallContext;
+  /** Set when this frame belongs to a spanAsync: it may be suspended on I/O. */
+  asyncSpan?: boolean;
 }
 
 /** Snapshot the correlation ids of the context entering a span, if any. */
@@ -302,32 +312,51 @@ export class LoopStallAttributor {
       // distinct runs are blamed the stall carries none rather than a wrong one
       // (correction 02, review finding 1).
       const missedAt = this.expectedAt;
-      const blockedBy: LoopBlockingSpan[] = [];
+      const evidence: { startMs: number; blocker: LoopBlockingSpan }[] = [];
       for (const span of this.recentSpans) {
         if (span.atMs <= missedAt && span.atMs + span.durationMs >= missedAt) {
-          blockedBy.push(span.context
+          evidence.push({ startMs: span.atMs, blocker: span.context
             ? { name: span.name, durationMs: span.durationMs, context: { ...span.context } }
-            : { name: span.name, durationMs: span.durationMs });
+            : { name: span.name, durationMs: span.durationMs } });
         }
       }
       for (const frame of this.frames) {
         // A frame entered before the missed instant and still on the stack was
         // on the loop across the miss — blocking evidence with its own ids. A
         // frame entered AFTER the miss (an unrelated operation that started
-        // while the loop was already behind) is not blamed.
+        // while the loop was already behind) is not blamed. An async span's
+        // frame may be suspended on I/O, so it is not certainly executing.
         if (frame.enteredAt <= missedAt) {
-          blockedBy.push(frame.context
-            ? { name: frame.label, durationMs: Math.max(0, now - frame.enteredAt), context: { ...frame.context } }
-            : { name: frame.label, durationMs: Math.max(0, now - frame.enteredAt) });
+          evidence.push({ startMs: frame.enteredAt, blocker: frame.context
+            ? { name: frame.label, durationMs: Math.max(0, now - frame.enteredAt), context: { ...frame.context }, ...(frame.asyncSpan ? { openAsync: true } : {}) }
+            : { name: frame.label, durationMs: Math.max(0, now - frame.enteredAt), ...(frame.asyncSpan ? { openAsync: true } : {}) } });
         }
       }
+      // Deterministic order: by evidence start, then name.
+      evidence.sort((a, b) => (a.startMs - b.startMs) || (a.blocker.name < b.blocker.name ? -1 : a.blocker.name > b.blocker.name ? 1 : 0));
+      const blockedBy: LoopBlockingSpan[] = evidence.map((entry) => entry.blocker);
       const blamed = new Map<string, LoopStallContext>();
       for (const blocker of blockedBy) {
         if (blocker.context) blamed.set(contextKey(blocker.context), blocker.context);
       }
       const context = blamed.size === 1 ? [...blamed.values()][0] : undefined;
-      this.recordStall({ atMs: now, delayMs, label, stack, blockedBy, context });
-      this.emit({ kind: 'stall', label, delayMs, atMs: now, stack, blockedBy, context });
+      // Correction 03: when several frames overlap the missed instant and any
+      // of them is a still-open async span (which may be suspended on I/O), the
+      // executing frame is not known — report candidates, never a certain
+      // blocker.
+      const candidatesMode = blockedBy.length > 1 && blockedBy.some((blocker) => blocker.openAsync);
+      const candidates = candidatesMode
+        ? blockedBy.map((blocker) => {
+          const id = blocker.context?.runId
+            ? `run=${blocker.context.runId}`
+            : blocker.context?.sessionId
+              ? `sid=${blocker.context.sessionId}`
+              : undefined;
+          return id ? `${blocker.name} [${id}]` : blocker.name;
+        })
+        : undefined;
+      this.recordStall({ atMs: now, delayMs, label, stack, blockedBy, context, ...(candidates ? { candidates, stallCandidates: candidates.length } : {}) });
+      this.emit({ kind: 'stall', label, delayMs, atMs: now, stack, blockedBy, context, ...(candidates ? { candidates, stallCandidates: candidates.length } : {}) });
     }
     this.expectedAt = now + this.intervalMs;
     this.timer = this.schedule(() => this.tick(), this.intervalMs);
@@ -335,8 +364,8 @@ export class LoopStallAttributor {
   }
 
   /** Push a label; the returned function pops it (idempotent). */
-  enter(label: string): () => void {
-    const frame: LabelFrame = { label, enteredAt: this.now(), context: captureStallContext() };
+  enter(label: string, opts?: { asyncSpan?: boolean }): () => void {
+    const frame: LabelFrame = { label, enteredAt: this.now(), context: captureStallContext(), ...(opts?.asyncSpan ? { asyncSpan: true } : {}) };
     this.frames.push(frame);
     let active = true;
     return () => {
@@ -364,7 +393,7 @@ export class LoopStallAttributor {
   async spanAsync<T>(label: string, fn: () => Promise<T>): Promise<T> {
     const startedAt = this.now();
     const context = captureStallContext();
-    const exit = this.enter(label);
+    const exit = this.enter(label, { asyncSpan: true });
     try {
       return await fn();
     } finally {
@@ -479,6 +508,37 @@ export function createLoopStallLogReporter(
       if (previous !== undefined && at - previous < minIntervalMs) return;
       lastLoggedAt.set(event.label, at);
       if (event.kind === 'stall') {
+        // Correction 03: overlapping async spans make the executing frame
+        // unknown — print candidates, each with its own ids, never a certain
+        // `attributed to`.
+        if (event.candidates && event.candidates.length > 0) {
+          const stallId = `stall_${Math.round(event.atMs)}`;
+          const count = event.stallCandidates ?? event.candidates.length;
+          const base =
+            `event-loop stall ${event.delayMs} ms candidates: ${event.candidates.join(', ')} ` +
+            `(overlapping async spans; the executing frame is not known) [stallId=${stallId}]`;
+          // Exactly one readable journal line. It carries the shared stall id in
+          // its text and as a structured field. Per-candidate records go out
+          // context-bound so every involved session/run finds the stall via the
+          // diagnostics selectors; they are marked stallCandidate and share the
+          // same stall id.
+          const childSink = sink as LoopStallLogSink & { child?: (ctx: Record<string, unknown>) => LoopStallLogSink };
+          if (typeof childSink.child === 'function') {
+            childSink.child({ stallId }).warn(base);
+            for (const blocker of event.blockedBy) {
+              if (!blocker.context) continue;
+              childSink.child({
+                ...correlationFields(blocker.context),
+                stallCandidate: true,
+                stallCandidates: count,
+                stallId,
+              }).warn(`event-loop stall ${event.delayMs} ms candidate: ${event.candidates.join(', ')}`);
+            }
+          } else {
+            sink.warn(base);
+          }
+          return;
+        }
         // Mixed blamed contexts: each blocker carries its own ids so no single
         // wrong session is named. With one blamed run the stall-level suffix
         // already carries the ids.

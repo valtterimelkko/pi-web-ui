@@ -135,10 +135,12 @@ describe('LoopStallAttributor — stall attribution', () => {
     expect(stall.delayMs).toBe(275);
     // Correction 02: the enclosing label frame was also on the loop across the
     // miss, so it is named as co-evidence (without ids — it captured none); the
-    // completed inner span remains the direct blocker.
+    // completed inner span remains the direct blocker. Evidence is ordered by
+    // start then name (correction 03), so the enclosing frame — entered at the
+    // same instant but earlier by name — comes first.
     expect(stall.blockedBy).toEqual([
-      { name: 'pi.session.resource_loader', durationMs: 300 },
       { name: 'pi.multi.rehydrate_session', durationMs: 300 },
+      { name: 'pi.session.resource_loader', durationMs: 300 },
     ]);
   });
 
@@ -564,13 +566,46 @@ describe('LoopStallAttributor — blamed-evidence correlation (correction 02)', 
     expect(byName.get('operation_A')?.context).toEqual(CTX_A);
     expect(byName.get('operation_B')?.context).toEqual(CTX_B);
     expect(stall.context).toBeUndefined(); // mixed contexts: none rather than a wrong one
+    // Correction 03: overlapping evidence including an open async span (which
+    // may be suspended on I/O) is reported as CANDIDATES — the executing frame
+    // is not known — never as a certain blocker.
     const line = lines.join('\n');
-    expect(line).toContain('sid=sess_A');
-    expect(line).toContain('sid=sess_B');
+    expect(line).toContain('candidates: operation_A [run=run_A], operation_B [run=run_B] (overlapping async spans; the executing frame is not known)');
+    expect(line).not.toContain('attributed to');
+    expect(stall.stallCandidates).toBe(2);
     attributor.stop();
   });
 
-  it('renders per-blocker ids in the log line when several contexts are blamed', () => {
+  it('keeps the certain attributed-to wording when exactly one frame is blamed (correction 03)', () => {
+    const clock = { now: 1_000 };
+    const events: LoopStallEvent[] = [];
+    const lines: string[] = [];
+    const { attributor, scheduler } = setup(clock, (event) => {
+      if (event.kind !== 'stall') return;
+      events.push(event);
+      createLoopStallLogReporter({ warn: (line) => lines.push(line) }, { now: () => 0 })(event);
+    });
+
+    withCorrelation(CTX_B, () => {
+      attributor.span('operation_B', () => { clock.now += 120; });
+    });
+    withCorrelation(CTX_A, () => {
+      void attributor.spanAsync('operation_A', () => new Promise(() => { /* pending */ }));
+    });
+
+    scheduler.fire(clock, 0);
+    const stall = events.find((event) => event.kind === 'stall') as Extract<LoopStallEvent, { kind: 'stall' }>;
+    expect(stall).toBeDefined();
+    expect(stall.stallCandidates).toBeUndefined();
+    const line = lines.join('\n');
+    expect(line).toContain('attributed to');
+    expect(line).not.toContain('candidates:');
+    expect(line).toContain('run=run_B');
+    expect(line).not.toContain('run_A');
+    attributor.stop();
+  });
+
+  it('renders the candidates list in the log line when several contexts are blamed', () => {
     const warn = vi.fn();
     const report = createLoopStallLogReporter({ warn }, { now: () => 0 });
     report({
@@ -580,12 +615,15 @@ describe('LoopStallAttributor — blamed-evidence correlation (correction 02)', 
       atMs: 0,
       stack: [],
       blockedBy: [
-        { name: 'operation_B', durationMs: 120, context: { requestId: 'req_B', sessionId: 'sess_B', runtime: 'pi' } },
-        { name: 'operation_A', durationMs: 70, context: { requestId: 'req_A', sessionId: 'sess_A', runtime: 'pi' } },
+        { name: 'operation_A', durationMs: 120, openAsync: true, context: { requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' } },
+        { name: 'operation_B', durationMs: 70, context: { requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' } },
       ],
+      context: undefined,
+      candidates: ['operation_A [run=run_A]', 'operation_B [run=run_B]'],
+      stallCandidates: 2,
     });
     const line = String(warn.mock.calls[0][0]);
-    expect(line).toContain('operation_B (120 ms [req=req_B sid=sess_B rt=pi])');
-    expect(line).toContain('operation_A (70 ms [req=req_A sid=sess_A rt=pi])');
+    expect(line).toContain('candidates: operation_A [run=run_A], operation_B [run=run_B] (overlapping async spans; the executing frame is not known)');
+    expect(line).not.toContain('attributed to');
   });
 });

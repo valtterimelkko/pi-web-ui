@@ -226,4 +226,49 @@ describe('diagnostics selector — LoopAttribution stall records (correction 02)
       clearDiagnosticsBuffer();
     }
   });
+
+  it('finds a candidate stall for every involved session and run (correction 03)', async () => {
+    clearDiagnosticsBuffer();
+    setLogTap((record) => pushDiagnosticsRecord(record));
+    try {
+      const report = createLoopStallLogReporter(); // default sink: the central logger
+      report({
+        kind: 'stall',
+        label: '<none>',
+        delayMs: 400,
+        atMs: 1790798000000,
+        stack: [],
+        blockedBy: [
+          { name: 'operation_A', durationMs: 120, openAsync: true, context: { requestId: 'req_A', runId: 'run_A', sessionId: 'sess_A', runtime: 'pi' } },
+          { name: 'operation_B', durationMs: 70, context: { requestId: 'req_B', runId: 'run_B', sessionId: 'sess_B', runtime: 'pi' } },
+        ],
+        context: undefined,
+        candidates: ['operation_A [run=run_A]', 'operation_B [run=run_B]'],
+        stallCandidates: 2,
+      });
+      // Each involved session and run finds the stall, marked as a candidate.
+      for (const query of [
+        { sessionId: 'sess_A' }, { sessionId: 'sess_B' }, { runId: 'run_A' }, { runId: 'run_B' },
+      ]) {
+        const found = getRecentLogs({ ...query, component: 'LoopAttribution' });
+        expect(found.length).toBeGreaterThan(0);
+        expect(found.every((r) => (r as Record<string, unknown>).stallCandidate === true)).toBe(true);
+      }
+      // Exactly one readable journal line: precisely one record lacks the
+      // candidate marker (the readable candidates line); every stall record of
+      // this event shares one stall id.
+      const stallRecords = getRecentLogs({ component: 'LoopAttribution' });
+      const readable = stallRecords.filter((r) => (r as Record<string, unknown>).stallCandidate !== true);
+      const fs = await import('node:fs');
+      fs.writeFileSync('/tmp/g2-c03-real-dump.json', JSON.stringify(stallRecords.map((r) => ({ msg: r.msg.slice(0, 70), m: (r as Record<string, unknown>).stallCandidate, id: (r as Record<string, unknown>).stallId, sid: r.sessionId })), null, 1));
+      expect(readable.length).toBe(1);
+      expect(readable[0].msg).toContain('candidates: operation_A [run=run_A], operation_B [run=run_B]');
+      expect(readable[0].msg).toContain('(overlapping async spans; the executing frame is not known)');
+      const ids = new Set(stallRecords.map((r) => (r as Record<string, unknown>).stallId));
+      expect(ids.size).toBe(1);
+    } finally {
+      setLogTap(null);
+      clearDiagnosticsBuffer();
+    }
+  });
 });
