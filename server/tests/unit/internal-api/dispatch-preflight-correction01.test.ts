@@ -33,15 +33,28 @@ describe('C4 correction 01 — runtime PATH (item 1)', () => {
   it('a tool present only via the antigravity prepend resolves for antigravity and fails for pi', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'c4-corr1-'));
     try {
-      // Host fact the prepend exists for: the agy CLI lives in /root/.local/bin.
-      const agy = '/root/.local/bin/agy';
-      await fs.access(agy); // fail loudly if the host fact changes
+      // The host fact the prepend exists for: the agy CLI lives in
+      // /root/.local/bin. Simulate it through the injectable fs so this test
+      // runs on hosts (and CI runners) without the agy CLI; the PATH
+      // composition under test (runtimeChildPathEnv) stays real.
+      const prepended = '/root/.local/bin/agy';
+      const realFs = await import('node:fs/promises');
+      const hostWithAgy: PreflightFs = {
+        stat: async (p) => {
+          if (p === prepended) return { isDirectory: () => false, isFile: () => true };
+          return realFs.stat(p);
+        },
+        access: async (p, mode) => {
+          if (p === prepended && mode === realFs.constants.X_OK) return;
+          return realFs.access(p, mode);
+        },
+      };
       // Server PATH that resolves nothing (nonexistent dir), so the only way
       // 'agy' resolves is through the antigravity prepend.
       const serverPath = path.join(dir, 'resolves-nothing');
-      const ok = await runDispatchPreflight({ tools: ['agy'], pathEnv: runtimeChildPathEnv('antigravity', serverPath) });
+      const ok = await runDispatchPreflight({ tools: ['agy'], pathEnv: runtimeChildPathEnv('antigravity', serverPath), fs: hostWithAgy });
       expect(ok.ok).toBe(true);
-      const refused = await runDispatchPreflight({ tools: ['agy'], pathEnv: runtimeChildPathEnv('pi', serverPath) });
+      const refused = await runDispatchPreflight({ tools: ['agy'], pathEnv: runtimeChildPathEnv('pi', serverPath), fs: hostWithAgy });
       expect(refused.ok).toBe(false);
       expect(refused.failures[0]).toEqual({ kind: 'tool', item: 'agy', problem: 'not found on PATH' });
     } finally {
