@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { PlacementConfig } from './config.js';
-import { groupPath, sessionGroupName } from './keys.js';
+import { groupPath, isManagedGroupName, sessionGroupName } from './keys.js';
 import { getActivePlacementConfig } from './apply-startup.js';
 
 export interface CgroupIo {
@@ -152,6 +152,10 @@ export async function sweepAllGroups(io: CgroupIo, cfg: PlacementConfig): Promis
     // `cgroup.procs`; the root's kernel control files are skipped entirely (they
     // must never be counted as stale groups — correction-06 review round 2).
     if (!io.existsSync(p) || !io.existsSync(path.join(p, 'cgroup.procs'))) continue;
+    // Correction 09: only groups the server created (pi-*/rt-*/own-*). A slice may
+    // legitimately hold foreign cgroups (systemd's own *.service dirs); killing one
+    // tears the slice down and empties its subtree_control.
+    if (!isManagedGroupName(name)) continue;
     const r = await removeGroup(io, p);
     if (r.removed) removed += 1;
     failures += r.failures;

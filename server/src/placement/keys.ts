@@ -32,6 +32,17 @@ export function sessionGroupName(kind: 'pi' | 'rt', runtime: string | undefined,
   return `${prefix}-${sanitiseId(rawId)}-${shortHash(rawId)}`;
 }
 
+/**
+ * Correction 09: the ONLY group-name shapes the server ever creates under the
+ * tools root (`pi-…`, `rt-…`, `own-…`). The startup sweep must never touch any
+ * other cgroup a slice may legitimately hold — e.g. systemd's own `*.service`
+ * directories (killing the slice holder tears the slice down and empties its
+ * `cgroup.subtree_control`, which is exactly the correction-09 live-check failure).
+ */
+export function isManagedGroupName(name: string): boolean {
+  return /^(pi-|rt-|own-)/.test(name);
+}
+
 /** Fresh group for a spawn that is not session-bound (unique per call). */
 export function ownGroupName(random: (n: number) => Buffer = randomBytes): string {
   return `own-${random(6).toString('hex')}`;

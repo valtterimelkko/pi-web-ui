@@ -164,6 +164,28 @@ describe('correction-06 finding 1: one resolved root reaches every consumer', ()
     expect(applied.reason).toMatch(/placement unavailable/i);
   });
 
+  it('CORRECTION 09: sweep kills only session-shaped groups — never foreign slice residents', async () => {
+    // 09-correction live check: the sweep killed the slice HOLDER service (a systemd
+    // .service cgroup inside the slice), which tore the slice down and emptied its
+    // subtree_control. The sweep must only ever touch groups the server created.
+    const applied = applyStartupPlacement(nameBasedConfig(), fakeDeps());
+    const stale = `${RESOLVED}/pi-stale-1234-abcd1234`;
+    const holder = `${RESOLVED}/d0-final-slice-holder.service`;
+    const existing = new Set<string>([
+      RESOLVED,
+      stale, `${stale}/cgroup.procs`, `${stale}/cgroup.kill`, `${stale}/memory.max`,
+      holder, `${holder}/cgroup.procs`, `${holder}/memory.max`, // foreign: systemd's own
+      `${RESOLVED}/own-abc123`, `${RESOLVED}/own-abc123/cgroup.procs`, `${RESOLVED}/own-abc123/memory.max`,
+      `${RESOLVED}/rt-claude-sess-9-1a2b3c4d`, `${RESOLVED}/rt-claude-sess-9-1a2b3c4d/cgroup.procs`,
+    ]);
+    const io = cgroupfsLikeIo(existing);
+    const swept = await sweepAllGroups(io, applied.config);
+    expect(swept.removed).toBe(3); // stale pi group + own group + rt group
+    expect(existing.has(stale)).toBe(false);
+    expect(existing.has(holder)).toBe(true); // UNTOUCHED
+    expect(existing.has(`${holder}/cgroup.procs`)).toBe(true);
+  });
+
   it('an unavailable root disables every consumer', async () => {
     const applied = applyStartupPlacement(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'not-a-known-slice.slice' }), {
       systemctlShowControlGroup: () => undefined,
