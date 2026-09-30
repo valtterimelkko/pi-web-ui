@@ -13,6 +13,7 @@ import type {
 } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
 import { FINAL_TEXT_MAX_CHARS } from './final-text.js';
+import { COMPLETION_BLOCK_MAX_CHARS, COMPLETION_SCHEMA_NAME } from '../completion/completion-schema.js';
 
 const logger = createLogger('RunReceiptStore');
 
@@ -68,6 +69,9 @@ const ALLOWED_KEYS = new Set([
   'outputEvidence',
   'finalText',
   'finalTextTruncated',
+  'completion',
+  'completionDelimiter',
+  'completionError',
   'mode',
   'dispatchMode',
   'status',
@@ -219,7 +223,7 @@ export class RunReceiptStore {
   async transition(
     runId: string,
     status: RunReceiptStatus,
-    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow' | 'outputEvidence' | 'finalText' | 'finalTextTruncated'>> & {
+    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow' | 'outputEvidence' | 'finalText' | 'finalTextTruncated' | 'completion' | 'completionDelimiter' | 'completionError'>> & {
       /** Release a reservation that failed before runtime dispatch. */
       clearIdempotency?: boolean;
     } = {},
@@ -309,6 +313,7 @@ export class RunReceiptStore {
     tokenUsage?: RunTokenUsage,
     outputEvidence?: RunOutputEvidence,
     finalText?: { text: string; truncated: boolean },
+    completion?: { completion?: RunReceipt['completion']; completionDelimiter?: RunReceipt['completionDelimiter']; completionError?: RunReceipt['completionError'] },
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -329,6 +334,12 @@ export class RunReceiptStore {
       ...(finalText && current.finalText === undefined
         ? { finalText: finalText.text, finalTextTruncated: finalText.truncated }
         : {}),
+      // Contract 1.58.0 (C3a): completion capture, same first-wins pattern;
+      // finish() recomputes it from the live tracker while owned in-process.
+      ...(completion?.completion && current.completion === undefined
+        ? { completion: completion.completion, ...(completion.completionDelimiter ? { completionDelimiter: completion.completionDelimiter } : {}) }
+        : {}),
+      ...(completion?.completionError && current.completionError === undefined ? { completionError: completion.completionError } : {}),
     };
     if (observation && current.liveness) {
       const terminalObservation: RunTerminalObservation = {
@@ -489,6 +500,12 @@ export class RunReceiptStore {
         throw new Error('Invalid finalTextTruncated (boolean required alongside finalText)');
       }
     }
+    if (record.completion !== undefined) validateStoredCompletion(record.completion);
+    if (record.completionDelimiter !== undefined) {
+      if (record.completion === undefined) throw new Error('completionDelimiter requires completion');
+      if (!['completion', 'json-tagged'].includes(record.completionDelimiter)) throw new Error('Invalid completionDelimiter');
+    }
+    if (record.completionError !== undefined) validateStoredCompletionError(record.completionError);
     if (record.runtime !== 'commandcode' && ['effort', 'tokenUsage'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort/token usage fields require the Command Code runtime');
     if (record.mode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.mode)) {
       throw new Error('Invalid receipt mode');
@@ -606,6 +623,76 @@ function validatePhase7Shadow(value: Phase7PiShadowClassification): void {
   }
   if (value.evidence.durationMs !== undefined && (!Number.isSafeInteger(value.evidence.durationMs) || value.evidence.durationMs < 0 || value.evidence.durationMs > 7 * 24 * 60 * 60 * 1000)) {
     throw new Error('Invalid Phase 7 shadow duration');
+  }
+}
+
+/**
+ * C3a (contract 1.58.0): defence-in-depth structural bounds for a stored
+ * completion block. The parser already validated it with the zod schema;
+ * these checks keep a hand-edited or corrupted store file from loading an
+ * unbounded payload into a receipt.
+ */
+function validateStoredCompletion(value: NonNullable<RunReceipt['completion']>): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid completion block');
+  const record = value as unknown as Record<string, unknown>;
+  const keys = new Set(['schema', 'status', 'summary', 'commands', 'tests', 'commits', 'filesChanged', 'openIssues', 'blockedReason']);
+  for (const key of Object.keys(record)) {
+    if (!keys.has(key)) throw new Error(`Unsupported completion block field: ${key}`);
+  }  if (record.schema !== COMPLETION_SCHEMA_NAME) throw new Error('Invalid completion block schema name');
+  if (!['done', 'blocked', 'partial'].includes(record.status as string)) throw new Error('Invalid completion block status');
+  if (record.summary !== undefined && (typeof record.summary !== 'string' || record.summary.length > 2_000)) throw new Error('Invalid completion block summary');
+  if (record.blockedReason !== undefined && (typeof record.blockedReason !== 'string' || record.blockedReason.length > 4_000)) {
+    throw new Error('Invalid completion block blockedReason');
+  }
+  if (record.status === 'blocked' && (typeof record.blockedReason !== 'string' || record.blockedReason.length === 0)) {
+    throw new Error('Completion block with status blocked requires blockedReason');
+  }
+  const boundedArray = (key: string, max: number, itemKeys: Set<string>, itemMax: number) => {
+    const arr = record[key];
+    if (arr === undefined) return;
+    if (!Array.isArray(arr) || arr.length > max) throw new Error(`Invalid completion block ${key}`);
+    for (const item of arr) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`Invalid completion block ${key} entry`);
+      for (const ik of Object.keys(item as Record<string, unknown>)) {
+        if (!itemKeys.has(ik)) throw new Error(`Unsupported completion block ${key} field: ${ik}`);
+      }
+      for (const ik of itemKeys) {
+        const iv = (item as Record<string, unknown>)[ik];
+        if (iv === undefined) continue;
+        if (typeof iv !== 'string' && typeof iv !== 'number') throw new Error(`Invalid completion block ${key}.${ik}`);
+        if (typeof iv === 'string' && iv.length > itemMax) throw new Error(`Invalid completion block ${key}.${ik} length`);
+      }
+    }
+  };
+  boundedArray('commands', 50, new Set(['command', 'exitCode', 'note']), 2_000);
+  boundedArray('tests', 100, new Set(['name', 'result', 'note']), 2_000);
+  boundedArray('commits', 50, new Set(['sha', 'repo', 'subject']), 1_024);
+  for (const key of ['filesChanged', 'openIssues'] as const) {
+    const arr = record[key];
+    if (arr === undefined) continue;
+    if (!Array.isArray(arr) || arr.length > (key === 'filesChanged' ? 200 : 50)) throw new Error(`Invalid completion block ${key}`);
+    for (const item of arr) {
+      if (typeof item !== 'string' || item.length === 0 || item.length > 2_000) throw new Error(`Invalid completion block ${key} entry`);
+    }
+  }
+  const serialized = JSON.stringify(value);
+  if (serialized.length > COMPLETION_BLOCK_MAX_CHARS * 4) throw new Error('Completion block exceeds the storage bound');
+}
+
+function validateStoredCompletionError(value: NonNullable<RunReceipt['completionError']>): void {  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid completionError');
+  const record = value as unknown as Record<string, unknown>;
+  const keys = new Set(['code', 'message', 'fieldPath']);
+  for (const key of Object.keys(record)) {
+    if (!keys.has(key)) throw new Error(`Unsupported completionError field: ${key}`);
+  }
+  if (typeof record.code !== 'string' || !['NO_BLOCK', 'UNCLOSED_FENCE', 'OVERSIZED_BLOCK', 'MALFORMED_JSON', 'SCHEMA_VIOLATION'].includes(record.code)) {
+    throw new Error('Invalid completionError code');
+  }
+  if (typeof record.message !== 'string' || record.message.length === 0 || record.message.length > 2_000) {
+    throw new Error('Invalid completionError message');
+  }
+  if (record.fieldPath !== undefined && (typeof record.fieldPath !== 'string' || record.fieldPath.length > 500)) {
+    throw new Error('Invalid completionError fieldPath');
   }
 }
 

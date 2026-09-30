@@ -20,6 +20,15 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 export const FINAL_TEXT_MAX_CHARS = 4096;
 
+export interface FinalTextTrackerOptions {
+  /**
+   * Tail-truncation cap. Defaults to FINAL_TEXT_MAX_CHARS (4096). The C3a
+   * completion scan uses a wider window (COMPLETION_PARSE_WINDOW_CHARS) so a
+   * block early in a long final message is still inside the retained tail.
+   */
+  maxChars?: number;
+}
+
 export interface FinalTextSnapshot {
   text: string;
   truncated: boolean;
@@ -55,10 +64,15 @@ function textOfContent(content: unknown): string | undefined {
 }
 
 export class FinalTextTracker {
+  private readonly maxChars: number;
   private role: Role = 'unknown';
   private current = '';
   private currentTruncated = false;
   private previous?: FinalTextSnapshot;
+
+  constructor(options: FinalTextTrackerOptions = {}) {
+    this.maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : FINAL_TEXT_MAX_CHARS;
+  }
 
   observe(event: NormalizedEvent): void {
     const data = record(event.data);
@@ -123,8 +137,8 @@ export class FinalTextTracker {
   }
 
   private setBounded(text: string, alreadyTruncated: boolean): void {
-    if (text.length > FINAL_TEXT_MAX_CHARS) {
-      this.current = text.slice(text.length - FINAL_TEXT_MAX_CHARS);
+    if (text.length > this.maxChars) {
+      this.current = text.slice(text.length - this.maxChars);
       this.currentTruncated = true;
     } else {
       this.current = text;

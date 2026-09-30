@@ -73,7 +73,65 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.57.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.58.0' as const;
+
+// ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
+
+/** Schema name required inside every completion block. Canonical constants and the zod schema live in `completion/completion-schema.ts`. */
+export const COMPLETION_SCHEMA_NAME = 'pi-completion/v1' as const;
+/** Fence info string that opens a completion block. */
+export const COMPLETION_FENCE_INFO = 'completion' as const;
+/** Maximum characters of block content between the fences. */
+export const COMPLETION_BLOCK_MAX_CHARS = 16_384 as const;
+/** Tail window scanned for the block (and kept by the run/turn text trackers). */
+export const COMPLETION_PARSE_WINDOW_CHARS = 65_536 as const;
+
+/** Structured completion block a child emits at the end of its task (C3a). */
+export interface CompletionBlock {
+  schema: typeof COMPLETION_SCHEMA_NAME;
+  status: 'done' | 'blocked' | 'partial';
+  summary?: string;
+  commands?: Array<{ command: string; exitCode: number; note?: string }>;
+  tests?: Array<{ name: string; result: 'pass' | 'fail' | 'skip'; note?: string }>;
+  commits?: Array<{ sha: string; repo: string; subject?: string }>;
+  filesChanged?: string[];
+  openIssues?: string[];
+  blockedReason?: string;
+}
+
+/** Typed completion-block parse failure. `fieldPath` names the first schema violation. */
+export interface CompletionParseError {
+  code: 'NO_BLOCK' | 'UNCLOSED_FENCE' | 'OVERSIZED_BLOCK' | 'MALFORMED_JSON' | 'SCHEMA_VIOLATION';
+  message: string;
+  fieldPath?: string;
+}
+
+/** Which delimiter matched (correction 01): the protocol fence, or the schema-tagged `json`/untagged tolerance. */
+export type CompletionDelimiter = 'completion' | 'json-tagged';
+
+export type CompletionParseResult =
+  | { ok: true; block: CompletionBlock; delimiter: CompletionDelimiter }
+  | { ok: false; error: CompletionParseError };
+
+/** Where a captured completion came from: a receipted run, or a session turn observed without a receipt (goal-engine continuation turns). */
+export type CompletionCaptureSource =
+  | { runId: string }
+  | { kind: 'session_turn'; agentEndAt: string };
+
+/** Latest completion captured for a session (C3a), surfaced on `GET /sessions/:id`. */
+export interface SessionCompletionSurface {
+  source: CompletionCaptureSource;
+  /** When the block was captured by the server. */
+  capturedAt: string;
+  /** Present when the capture came through a run receipt. */
+  runtime?: SessionRuntime;
+  /** Present when the latest block parsed and validated. Exactly one of `completion`/`completionError` is present. */
+  completion?: CompletionBlock;
+  /** Which delimiter matched (correction 01); present iff `completion` is. */
+  delimiter?: CompletionDelimiter;
+  /** Present when the latest block was found but failed to parse or validate. */
+  completionError?: CompletionParseError;
+}
 
 /** Process-local diagnostics window; not durable history or filtered totals. */
 export interface DiagnosticsRetention {
@@ -750,6 +808,8 @@ export interface SessionDetail extends SessionInfo {
     leases: Array<{ leaseId: string; mode: 'durable' | 'resident'; expiresAt: string }>;
     latestExpiryAt?: string;
   };
+  /** Contract 1.58.0 (C3a): the latest completion block (or parse error) captured for this session, from a run receipt or from a receipt-less session turn (e.g. a goal-engine continuation), with its source and capture time. Absent when no block was ever observed. */
+  latestCompletion?: SessionCompletionSurface;
   /** Latest run-scoped usage observed from a terminal result, when available. */
   tokenUsage?: RunTokenUsage;
   nativeSessionId?: string;
@@ -1150,6 +1210,12 @@ export interface RunReceipt {
   finalText?: string;
   /** Contract 1.47.0: true when `finalText` was tail-truncated; present iff `finalText` is. */
   finalTextTruncated?: boolean;
+  /** Contract 1.58.0 (C3a): the parsed completion block from the run's final assistant text, when the run's output contained one and it parsed. Absent otherwise (additive). */
+  completion?: CompletionBlock;
+  /** Contract 1.58.0 (C3a, correction 01): which delimiter matched — the `completion` protocol fence or the schema-tagged `json`/untagged tolerance. Present iff `completion` is; lets parents and R3 count how often the fallback is used. */
+  completionDelimiter?: CompletionDelimiter;
+  /** Contract 1.58.0 (C3a): typed parse failure for a completion block found in the run's output but rejected (malformed JSON, schema violation, oversized, unclosed). Absent when no block was found or the block parsed. */
+  completionError?: CompletionParseError;
   /** Requested prompt mode (prompt / follow_up / steer). */
   mode?: PromptMode;
   /** Actual dispatch mode after state-aware promotion/rejection decisions. */
@@ -1351,6 +1417,15 @@ export interface CapabilitiesResponse {
     };
     /** Contract 1.47.0 (C2): bounded final assistant text on run receipts. */
     runReceiptFinalText: { field: 'finalText'; truncatedField: 'finalTextTruncated'; maxChars: number };
+    /** Contract 1.58.0 (C3a): child completion block schema, capture fields and per-session surface. */
+    runCompletionBlock: {
+      schema: typeof COMPLETION_SCHEMA_NAME;
+      fenceInfo: typeof COMPLETION_FENCE_INFO;
+      receiptFields: { block: 'completion'; error: 'completionError' };
+      sessionSurfaceField: 'latestCompletion';
+      maxBlockChars: number;
+      parseWindowChars: number;
+    };
     /** Contract 1.47.0 (C3): server-side `deadline` watch condition. */
     watchDeadlineCondition: { conditionType: 'deadline'; field: 'afterSeconds'; minSeconds: number; maxSeconds: number };
     /** Contract 1.47.0 (C4): `fireIfSettled` watch registration option. */

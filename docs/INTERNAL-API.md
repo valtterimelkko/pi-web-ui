@@ -931,6 +931,12 @@ Both endpoints now return enriched runtime metadata where available. For a profi
     "toolResults": 4,
     "totalMessages": 22
   },
+  "latestCompletion": {
+    "source": { "runId": "run-uuid" },
+    "capturedAt": "2026-04-28T12:05:00.000Z",
+    "runtime": "claude",
+    "completion": { "schema": "pi-completion/v1", "status": "done" }
+  },
   "lastActivityAt": 1747744075000
 }
 ```
@@ -1272,6 +1278,76 @@ payload-free; read `GET /runs/:runId`. Feature-detect with
 { "runId": "…", "status": "completed", "finalText": "All 12 tests pass.", "finalTextTruncated": false }
 ```
 
+**Child completion block (contract 1.58.0, C3a).** A child can end its task with one fenced
+block whose info string names the schema, holding JSON with
+`"schema": "pi-completion/v1"`:
+
+```completion
+{"schema":"pi-completion/v1","status":"done"}
+```
+
+The server parses the **last** complete block in the run's
+full final assistant text (a scan window of the last 65,536 characters, so a long answer
+cannot push the block out of reach; the block itself is capped at 16,384 characters) and
+records on the receipt:
+
+- `completion` — the parsed block when it validated: `status` (`done` / `blocked` /
+  `partial`), `summary`, `commands[]` (`command`, `exitCode`, `note`), `tests[]` (`name`,
+  `result: pass|fail|skip`, `note`), `commits[]` (`sha`, `repo` path, `subject`),
+  `filesChanged[]`, `openIssues[]`, and `blockedReason` (required when `status` is
+  `blocked`). The schema is strict: unknown fields are `SCHEMA_VIOLATION`s.
+- `completionDelimiter` — which delimiter matched (correction 01): `completion` (the
+  protocol fence) or `json-tagged` (the one tolerance: a `json`-tagged or untagged fence
+  whose object carries exactly `"schema": "pi-completion/v1"`; any other `json` fence
+  stays "no block", and a malformed tagged fence surfaces the typed error only when no
+  complete `completion` block exists in the text). Present iff `completion` is, so
+  parents can count how often the fallback fires.
+- `completionError` — a typed error when a block was found but rejected:
+  `MALFORMED_JSON`, `SCHEMA_VIOLATION` (with `fieldPath`, e.g. `commits.0.sha`),
+  `OVERSIZED_BLOCK`, or `UNCLOSED_FENCE`.
+
+A run whose output contains no block has **neither** field (additive absence; nothing
+changes for existing callers). The parse never throws on model output. The parser is
+strict, bounded and pure; delimiter rules: an opening fence is a line of 3+ backticks at
+line start with the exact info string `completion` (or, since correction 01, `json` or
+no info string when the object carries exactly `"schema": "pi-completion/v1"` — the
+schema tag is the marker, recorded via `completionDelimiter`); the closing fence is the
+next backticks-only line at least as long as the opening; a new protocol opening while a
+block is open abandons the previous attempt (a model retry); the last complete block wins.
+Feature-detect with `features.runCompletionBlock` (which also carries the schema name,
+fence info, caps and field names so clients can build the dispatch template).
+
+**Latest completion per session (contract 1.58.0, C3a).** Goal-driven children end in
+goal-engine continuation turns that hold **no run receipt** (a C2-accepted boundary), so
+receipt-only capture would miss most real completions. `GET /sessions/:id` (and `/info`)
+therefore carries an additive `latestCompletion` field — the latest capture for the
+session from either source, with `source` (`{"runId": "…"}` for a receipted run, or
+`{"kind": "session_turn", "agentEndAt": "…"}` for a turn observed without a receipt —
+browser, goal-engine or any extension), `capturedAt`, and exactly one of `completion` or
+`completionError`. Absent when no block was ever observed (a turn with no block records
+nothing). Observation runs at the Internal API's event-broker publish point, before
+rate-limit coalescing, for every runtime that publishes events (Pi, Claude, OpenCode,
+Antigravity, Command Code). Deliberate blind spots: a message-update stream that hits the
+broker's per-session rate limit is coalesced and loses intermediate delta text (the
+receipt path is unaffected — it observes pre-broker; under shedding a non-Pi runtime's
+session-turn capture can miss a block that its receipt still caught), and captures live
+in-process only (a restart clears the latest-per-session view; receipts stay durable).
+
+```json
+{
+  "latestCompletion": {
+    "source": { "kind": "session_turn", "agentEndAt": "2026-09-30T01:23:45.678Z" },
+    "capturedAt": "2026-09-30T01:23:46.000Z",
+    "completion": {
+      "schema": "pi-completion/v1",
+      "status": "done",
+      "commands": [{ "command": "npm test", "exitCode": 0 }],
+      "commits": [{ "sha": "abcdef1234567", "repo": "/root/repo" }]
+    }
+  }
+}
+```
+
 Receipts are persisted under `INTERNAL_API_RUN_RECEIPTS_DIR` (default
 `~/.pi-web-ui/run-receipts`). Retention targets terminal receipts older than 30
 days and terminal receipts beyond the newest 1,000 (an unexpired 24-hour
@@ -1341,7 +1417,10 @@ Contract 1.47.0 adds four feature objects (truthy when supported):
 `maxSeconds: 86400`) and `watchFireIfSettled` (`registerField:
 "fireIfSettled"`, `eventTypes: ["agent_end","goal_end"]`), plus
 `sessionAgentOsCapture` (`createField: "agentOsCapture"`, `values:
-["enabled","disabled"]`, `env: "PI_WEB_UI_AGENT_OS_CAPTURE"`).
+["enabled","disabled"]`, `env: "PI_WEB_UI_AGENT_OS_CAPTURE"`). Contract 1.58.0
+adds `runCompletionBlock` (`schema`, `fenceInfo`, `receiptFields`,
+`sessionSurfaceField`, `maxBlockChars`, `parseWindowChars`) — the child
+completion block constants for dispatch templates and contract snapshots.
 
 **Response (200):**
 ```json
