@@ -44,6 +44,7 @@ function parseEventCounter(events: string, key: string): number | undefined {
 
 export function readToolsSliceMemory(cfg: PlacementConfig, read: CgroupFileRead = realCgroupRead): ToolsSliceMemory {
   const base = cfg.toolsRoot;
+  if (!base) return { source: 'unavailable' };
   const current = parseMetric(read(path.join(base, 'memory.current')));
   const max = parseMetric(read(path.join(base, 'memory.max')));
   if (current === undefined && max === undefined) return { source: 'unavailable' };

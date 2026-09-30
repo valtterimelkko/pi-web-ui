@@ -43,9 +43,10 @@ export function ownGroupName(random: (n: number) => Buffer = randomBytes): strin
  * resolved root, and the name must be a single path segment).
  */
 export function groupPath(cfg: PlacementConfig, name: string): string | undefined {
-  if (!name || name.includes('/') || name.includes('\\') || name === '.' || name === '..') return undefined;
-  const root = path.resolve(cfg.toolsRoot);
-  const joined = path.resolve(root, name);
-  if (joined !== root && !joined.startsWith(root + path.sep)) return undefined;
+  const root = cfg.toolsRoot;
+  if (!root || !name || name.includes('/') || name.includes('\\') || name === '.' || name === '..') return undefined;
+  const resolvedRoot = path.resolve(root);
+  const joined = path.resolve(resolvedRoot, name);
+  if (joined !== resolvedRoot && !joined.startsWith(resolvedRoot + path.sep)) return undefined;
   return joined;
 }

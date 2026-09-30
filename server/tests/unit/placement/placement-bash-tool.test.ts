@@ -13,7 +13,7 @@ function placementOn() {
   return resolvePlacementConfig({
     PI_TOOLS_PLACEMENT: 'on',
     PI_TOOLS_CGROUP_ROOT: '/tmp/d0-fake-cg',
-    PI_TOOLS_SLICE: 't.slice',
+    PI_TOOLS_SLICE: '/tmp/d0-fake-cg/t.slice',
     PI_TOOLS_RUNTIME_DIR: '/tmp/d0-rt-bash',
   });
 }

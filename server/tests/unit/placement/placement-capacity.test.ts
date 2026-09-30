@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readToolsSliceMemory } from '../../../src/placement/capacity.js';
 import { resolvePlacementConfig } from '../../../src/placement/config.js';
 
-const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_CGROUP_ROOT: '/cg', PI_TOOLS_SLICE: 't.slice' });
+const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_CGROUP_ROOT: '/cg', PI_TOOLS_SLICE: '/cg/t.slice' });
 
 describe('tools slice memory reader', () => {
   it('reads current/high/max/events from the slice path', () => {

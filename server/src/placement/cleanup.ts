@@ -55,7 +55,7 @@ export function removeGroup(io: CgroupIo, groupPathAbs: string): boolean {
  * dispose); best-effort and a no-op when placement is off.
  */
 export function removeSessionGroup(cfg: PlacementConfig, sessionId: string): boolean {
-  if (!cfg.enabled) return false;
+  if (!cfg.enabled || !cfg.toolsRoot) return false;
   const p = groupPath(cfg, sessionGroupName('pi', undefined, sessionId));
   return p ? removeGroup(realCgroupIo, p) : false;
 }
@@ -67,10 +67,11 @@ export function removeSessionGroup(cfg: PlacementConfig, sessionId: string): boo
  * Returns the number of groups removed.
  */
 export function sweepAllGroups(io: CgroupIo, cfg: PlacementConfig): number {
-  if (!io.existsSync(cfg.toolsRoot)) return 0;
+  const root = cfg.toolsRoot;
+  if (!root || !io.existsSync(root)) return 0;
   let removed = 0;
-  for (const name of io.readdirSync(cfg.toolsRoot)) {
-    const p = path.join(cfg.toolsRoot, name);
+  for (const name of io.readdirSync(root)) {
+    const p = path.join(root, name);
     if (!io.existsSync(p)) continue;
     killGroup(io, p);
     try {

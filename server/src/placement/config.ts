@@ -11,6 +11,8 @@
  * minimums; the shipped numbers come from the measured sizing run recorded in
  * `defaults.ts` and `docs/plans/execution-reports/orchestration-scaling/D0.md`.
  */
+import child from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DEFAULT_PER_CHILD } from './defaults.js';
@@ -27,7 +29,13 @@ export interface PlacementConfig {
   enabled: boolean;
   cgroupRoot: string;
   slicePath: string;
-  toolsRoot: string;
+  /**
+   * Absolute cgroup path of the tools root — set directly when PI_TOOLS_SLICE is an
+   * absolute path; for a slice NAME it stays undefined until `resolveToolsRoot`
+   * resolves and verifies it at start-up (correction 03). Plans treat an undefined
+   * root as placement-unavailable (byte-identical fallback).
+   */
+  toolsRoot?: string;
   runtimeDir: string;
   perChild: PlacementPerChildLimits;
 }
@@ -43,7 +51,10 @@ function parsePositiveInt(raw: string | undefined): number | undefined {
 export function resolvePlacementConfig(env: NodeJS.ProcessEnv = process.env): PlacementConfig {
   const enabled = env.PI_TOOLS_PLACEMENT === 'on';
   const cgroupRoot = (env.PI_TOOLS_CGROUP_ROOT ?? '/sys/fs/cgroup').replace(/\/+$/, '');
-  const slicePath = (env.PI_TOOLS_SLICE ?? 'pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice').replace(/^\/+|\/+$/g, '');
+  // Correction 03: this is a SLICE NAME (resolved via `systemctl show`) or an
+  // absolute cgroup path. A bare relative path is neither and is rejected at
+  // start-up — the 16:56 escape came from treating a name as a path.
+  const slicePath = (env.PI_TOOLS_SLICE ?? 'pi-web-ui-tools.slice').replace(/\/+$/, '');
   const runtimeDir = env.PI_TOOLS_RUNTIME_DIR ?? path.join(os.homedir(), '.pi-web-ui', 'placement');
   // Amendment A decision rule: per-child max = max(8 GiB, 1.5 × measured peak),
   // high = max(6 GiB, 1.2 × peak), pids = max(2048, 2 × peak). `defaults.ts` holds the
@@ -54,11 +65,14 @@ export function resolvePlacementConfig(env: NodeJS.ProcessEnv = process.env): Pl
     pidsMax: parsePositiveInt(env.PI_TOOLS_PER_CHILD_PIDS_MAX) ?? DEFAULT_PER_CHILD.pidsMax,
     swapMaxBytes: parsePositiveInt(env.PI_TOOLS_PER_CHILD_SWAP_MAX) ?? DEFAULT_PER_CHILD.swapMaxBytes,
   };
+  const toolsRoot = slicePath.startsWith('/') && slicePath.startsWith(cgroupRoot + '/')
+    ? slicePath.replace(/\/+$/, '')
+    : undefined;
   return {
     enabled,
     cgroupRoot,
     slicePath,
-    toolsRoot: path.posix.join(cgroupRoot, slicePath),
+    toolsRoot,
     runtimeDir,
     perChild,
   };
@@ -67,6 +81,87 @@ export function resolvePlacementConfig(env: NodeJS.ProcessEnv = process.env): Pl
 /** Wrapper script + degrade log live in the server-owned runtime dir. */
 export function placementWrapperPath(cfg: PlacementConfig): string {
   return path.join(cfg.runtimeDir, 'placement-wrapper.sh');
+}
+
+export interface ToolsRootResolution {
+  available: boolean;
+  toolsRoot?: string;
+  reason?: string;
+}
+
+export interface ToolsRootDeps {
+  /** `systemctl show <unit> -p ControlGroup --value` output (undefined = unit unknown). */
+  systemctlShowControlGroup?: () => string | undefined;
+  exists?: (p: string) => boolean;
+  readFirstLine?: (p: string) => string | undefined;
+}
+
+const defaultToolsRootDeps: ToolsRootDeps = {
+  systemctlShowControlGroup: () => {
+    try {
+      const out = child.execFileSync('systemctl', ['show', resolvePlacementConfig().slicePath, '-p', 'ControlGroup', '--value'], { encoding: 'utf8' });
+      const v = out.trim();
+      return v && v !== '' ? v : undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  exists: (p) => fs.existsSync(p),
+  readFirstLine: (p) => {
+    try {
+      return fs.readFileSync(p, 'utf8').split('\n')[0];
+    } catch {
+      return undefined;
+    }
+  },
+};
+
+/**
+ * Correction 03 item 2+4: resolve and VERIFY the tools root before use.
+ * - a slice NAME is resolved with `systemctl show`; an unknown name is an error,
+ *   never silently treated as a cgroup path (the 16:56 escape);
+ * - an absolute path must sit under the cgroup root and exist;
+ * - the root must exist, expose the memory controller, and be BOUNDED: its own
+ *   `memory.max`, or an ancestor's up to 4 levels, must read as a number (not `max`).
+ */
+export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {}): ToolsRootResolution {
+  const d = { ...defaultToolsRootDeps, ...deps };
+  const raw = cfg.slicePath;
+  let root: string;
+  if (raw.startsWith('/')) {
+    if (!raw.startsWith(cfg.cgroupRoot + '/')) {
+      return { available: false, reason: `tools root ${raw} is outside the cgroup root ${cfg.cgroupRoot}` };
+    }
+    root = raw.replace(/\/+$/, '');
+  } else if (/^[A-Za-z0-9.@_-]+\.slice$/.test(raw)) {
+    const cg = d.systemctlShowControlGroup?.();
+    if (!cg || !cg.startsWith('/')) {
+      return { available: false, reason: `slice ${raw} is not known to systemd — refusing to treat the name as a cgroup path` };
+    }
+    root = path.posix.join(cfg.cgroupRoot, cg.replace(/\/+$/, ''));
+  } else {
+    return { available: false, reason: `PI_TOOLS_SLICE value ${JSON.stringify(raw)} is not a slice name and not an absolute path` };
+  }
+  if (!d.exists?.(root)) {
+    return { available: false, reason: `tools root ${root} does not exist (is the slice started?)` };
+  }
+  const controllers = d.readFirstLine?.(`${root}/cgroup.controllers`) ?? '';
+  if (!controllers.split(/\s+/).includes('memory')) {
+    return { available: false, reason: `tools root ${root} does not expose the memory controller` };
+  }
+  // Boundedness: the root's own memory.max, or an ancestor's (up to 4 levels),
+  // must be a number — a `max` root means a runaway group is unbounded.
+  let dir = root;
+  for (let depth = 0; depth <= 4 && dir.startsWith(cfg.cgroupRoot); depth++) {
+    const v = d.readFirstLine?.(`${dir}/memory.max`)?.trim();
+    if (v !== undefined && v !== '' && v !== 'max' && Number.isFinite(Number(v)) && Number(v) > 0) {
+      return { available: true, toolsRoot: root };
+    }
+    const parent = path.posix.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return { available: false, reason: `tools root ${root} is unbounded (no numeric memory.max within 4 ancestor levels)` };
 }
 
 export function placementDegradeFilePath(cfg: PlacementConfig): string {

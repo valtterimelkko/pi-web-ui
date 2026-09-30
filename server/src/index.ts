@@ -11,6 +11,8 @@ import { createApp } from './app.js';
 import { config } from './config.js';
 import {
   resolvePlacementConfig,
+  resolveToolsRoot,
+  setActiveToolsRoot,
   sweepAllGroups,
   realCgroupIo,
   appendDegradeLine,
@@ -70,19 +72,36 @@ async function initialize(): Promise<void> {
       logger.warn(`[Placement] Startup sweep killed and removed ${swept} stale tools group(s)`);
       if (placementStartupCfg.enabled) appendDegradeLine(placementStartupCfg, 'startup-sweep', `removed=${swept}`);
     }
+    // Correction 03: resolve and VERIFY the tools root before anything uses it.
+    // A slice name is resolved via systemctl; an unresolvable, missing, unbounded
+    // or controller-less root disables placement loudly (fail open per command,
+    // alarm loudly at start-up) — never an unverified group.
+    let placementActive = false;
     if (placementStartupCfg.enabled) {
+      const resolution = resolveToolsRoot(placementStartupCfg);
+      if (resolution.available && resolution.toolsRoot) {
+        setActiveToolsRoot(resolution.toolsRoot);
+        placementActive = true;
+        logger.info(`[Placement] tools root verified: ${resolution.toolsRoot}`);
+      } else {
+        logger.error(`[Placement] DISABLED — tools root unavailable: ${resolution.reason ?? 'unknown'}`);
+        appendDegradeLine(placementStartupCfg, 'startup', `tools-root-unavailable: ${resolution.reason ?? 'unknown'}`);
+      }
+    }
+    if (placementActive && placementStartupCfg.toolsRoot) {
       // D0: expose the tools slice + degrade counter to the health sampler (A2/L1
       // read the new cgroups). Host metrics file only — no contract change.
+      const verifiedCfg: typeof placementStartupCfg = { ...placementStartupCfg, toolsRoot: placementStartupCfg.toolsRoot };
       setHealthReadingSources({
         toolsSlice: () => {
-          const r = readToolsSliceMemory(placementStartupCfg);
+          const r = readToolsSliceMemory(verifiedCfg);
           return r.source === 'tools-slice' ? { currentBytes: r.currentBytes, oomKill: r.oomKill } : undefined;
         },
         placementDegrades: () => readDegradeCount(placementDegradeFilePath(placementStartupCfg)) ?? undefined,
       });
       // D0: publish the placement parameters to in-process extensions (bg_run,
-      // subagent). Absent when placement is off, so extensions stay unplaced.
-      exportToolsPlacementBridge(placementStartupCfg);
+      // subagent). Absent when placement is off/unavailable.
+      exportToolsPlacementBridge(verifiedCfg);
     }
 
     // Initialize Pi service first

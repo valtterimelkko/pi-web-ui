@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -12,6 +12,10 @@ function fakeRoot(): { root: string; slice: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), 'd0-wrap-'));
   const slice = path.join(dir, 'pi.slice', 'pi-web-ui.slice', 'pi-web-ui-tools.slice');
   mkdirSync(slice, { recursive: true });
+  // Kernel shape for correction-03 root verification: controllers + a numeric bound.
+  writeFileSync(path.join(slice, 'cgroup.controllers'), 'cpuset cpu memory pids\n');
+  writeFileSync(path.join(slice, 'cgroup.procs'), '');
+  writeFileSync(path.join(slice, 'memory.max'), '12884901888\n'); // the slice is bounded
   return { root: dir, slice, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -126,5 +130,59 @@ describe('placement wrapper script (real script against a fake cgroup root)', ()
   it('runs with no placement env at all (fail-open, no crash)', () => {
     const res = runWrapper({}, ['-c', 'echo bare'], root.root);
     expect(res.status).toBe(0);
+  });
+
+  it('ROOT MISSING: refuses to create the tools root, degrades, runs unplaced', () => {
+    const missingRoot = path.join(root.root, 'no-such-slice');
+    const env = writeGroupEnv(root.slice, 'pi-rm');
+    const badRoot = { ...env, PI_TOOLS_ROOT: missingRoot, PI_TOOLS_CG: path.join(missingRoot, 'pi-rm') };
+    const res = runWrapper(badRoot, ['-c', 'echo ran'], root.root);
+    expect(res.status).toBe(0);
+    expect(existsSync(path.join(root.root, 'no-such-slice'))).toBe(false); // never mkdir the root
+    expect(readFileSync(path.join(root.slice, 'degrade.log'), 'utf8')).toContain('root-missing');
+  });
+
+  it('ROOT UNBOUNDED: refuses a root whose memory.max is max with no numeric ancestor', () => {
+    const env = writeGroupEnv(root.slice, 'pi-ub');
+    const sharedMax = path.join(root.slice, 'memory.max');
+    const saved = readFileSync(sharedMax, 'utf8');
+    try {
+      writeFileSync(sharedMax, 'max\n'); // unbounded slice
+      const res = runWrapper(env, ['-c', 'echo ran'], root.root);
+      expect(res.status).toBe(0);
+      expect(existsSync(path.join(root.slice, 'pi-ub'))).toBe(false); // no group created
+      expect(readFileSync(path.join(root.slice, 'degrade.log'), 'utf8')).toContain('root-unbounded');
+    } finally {
+      writeFileSync(sharedMax, saved); // restore the shared fixture for later tests
+    }
+  });
+
+  it('LIMIT READ-BACK FAILURE: removes the group, degrades, runs unplaced', () => {
+    const env = writeGroupEnv(root.slice, 'pi-rb');
+    // Pre-create the leaf kernel-shaped; point its memory.max at /dev/null so the
+    // wrapper's write vanishes and the read-back comes back empty (write-or-read
+    // failure, deterministically, without needing a mutable filesystem).
+    mkdirSync(path.join(root.slice, 'pi-rb'), { recursive: true });
+    writeFileSync(path.join(root.slice, 'pi-rb', 'cgroup.procs'), '');
+    rmSync(path.join(root.slice, 'pi-rb', 'memory.max'), { force: true });
+    symlinkSync('/dev/null', path.join(root.slice, 'pi-rb', 'memory.max'));
+    const res = runWrapper(env, ['-c', 'echo ran'], root.root);
+    expect(res.status).toBe(0);
+    expect(existsSync(path.join(root.slice, 'pi-rb'))).toBe(false); // group removed
+    expect(readFileSync(path.join(root.slice, 'degrade.log'), 'utf8')).toContain('limit-readback-failed');
+  });
+
+  it('OOM SCORE (answer 04): a placed command runs at oom_score_adj 0', () => {
+    const selfAdj = path.join('/proc/self', 'oom_score_adj');
+    const before = readFileSync(selfAdj, 'utf8').trim();
+    try {
+      writeFileSync(selfAdj, '500'); // simulate the inherited -500-inherited... any non-zero inherit
+      const env = writeGroupEnv(root.slice, 'pi-oom');
+      const res = runWrapper(env, ['-c', 'cat /proc/self/oom_score_adj'], root.root);
+      expect(res.status).toBe(0);
+      expect(res.cgroup).toBe('0');
+    } finally {
+      writeFileSync(selfAdj, before);
+    }
   });
 });

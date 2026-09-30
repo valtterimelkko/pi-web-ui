@@ -40,7 +40,28 @@ if [ -n "$CG" ]; then
     *) note "refused-outside-root"; CG="" ;;
   esac
 fi
+bounded=0
 if [ -n "$CG" ]; then
+  # Correction 03: verify the tools root; NEVER create it. A missing or unbounded
+  # root means placement is unavailable — fall open with a degrade line.
+  if [ ! -d "$ROOT" ]; then
+    note "root-missing"; CG=""
+  elif ! cat "$ROOT/cgroup.controllers" 2>/dev/null | grep -qw memory; then
+    note "root-no-memory-controller"; CG=""
+  else
+    d="$ROOT"
+    i=0
+    while [ "$i" -lt 6 ] && [ "$(dirname "$d")" != "$d" ]; do
+      v=$(cat "$d/memory.max" 2>/dev/null)
+      case "$v" in
+        ""|max|*[!0-9]*) d=$(dirname "$d"); i=$((i+1)) ;;
+        *) bounded=1; break ;;
+      esac
+    done
+    [ "$bounded" -eq 1 ] || { note "root-unbounded"; CG=""; }
+  fi
+fi
+if [ -n "$CG" ] && [ "$bounded" -eq 1 ]; then
   fresh=0
   if [ ! -d "$CG" ]; then
     mkdir -p -- "$CG" 2>/dev/null || true
@@ -53,12 +74,29 @@ if [ -n "$CG" ]; then
   if [ -d "$CG" ] && [ -r "$CG/memory.max" ]; then
     cur=$(cat "$CG/memory.max" 2>/dev/null)
   fi
+  wrote_limits=0
   if [ -d "$CG" ] && { [ "$fresh" -eq 1 ] || [ -z "$cur" ] || [ "$cur" = "max" ]; }; then
-    [ -n "\${PI_TOOLS_MEM_MAX:-}" ] && echo "$PI_TOOLS_MEM_MAX" > "$CG/memory.max" 2>/dev/null || true
-    [ -n "\${PI_TOOLS_MEM_HIGH:-}" ] && echo "$PI_TOOLS_MEM_HIGH" > "$CG/memory.high" 2>/dev/null || true
-    [ -n "\${PI_TOOLS_PIDS_MAX:-}" ] && echo "$PI_TOOLS_PIDS_MAX" > "$CG/pids.max" 2>/dev/null || true
-    [ -n "\${PI_TOOLS_SWAP_MAX:-}" ] && echo "$PI_TOOLS_SWAP_MAX" > "$CG/memory.swap.max" 2>/dev/null || true
+    [ -n "\${PI_TOOLS_MEM_MAX:-}" ] && echo "$PI_TOOLS_MEM_MAX" > "$CG/memory.max" 2>/dev/null || note "limit-write-failed-memory-max"
+    [ -n "\${PI_TOOLS_MEM_HIGH:-}" ] && echo "$PI_TOOLS_MEM_HIGH" > "$CG/memory.high" 2>/dev/null || note "limit-write-failed-memory-high"
+    [ -n "\${PI_TOOLS_PIDS_MAX:-}" ] && echo "$PI_TOOLS_PIDS_MAX" > "$CG/pids.max" 2>/dev/null || note "limit-write-failed-pids-max"
+    [ -n "\${PI_TOOLS_SWAP_MAX:-}" ] && echo "$PI_TOOLS_SWAP_MAX" > "$CG/memory.swap.max" 2>/dev/null || note "limit-write-failed-swap-max"
+    wrote_limits=1
   fi
+  # Correction 03 item 3: all-or-nothing. Read the limits back; any mismatch means
+  # the group is NOT bounded as required — remove it and fall open. A command never
+  # runs in a group whose memory.max is max.
+  if [ "$wrote_limits" -eq 1 ]; then
+    rb_max=$(cat "$CG/memory.max" 2>/dev/null)
+    rb_pids=$(cat "$CG/pids.max" 2>/dev/null)
+    if [ "$rb_max" != "$PI_TOOLS_MEM_MAX" ] || [ "$rb_pids" != "$PI_TOOLS_PIDS_MAX" ]; then
+      echo 1 > "$CG/cgroup.kill" 2>/dev/null
+      rm -rf -- "$CG" 2>/dev/null
+      note "limit-readback-failed"
+      CG=""
+    fi
+  fi
+fi
+if [ -n "$CG" ]; then
   if [ -w "$CG/cgroup.procs" ]; then
     echo $$ > "$CG/cgroup.procs" 2>/dev/null && placed=1 || note "join-failed"
   elif [ -d "$CG" ] && [ -w "$CG" ]; then
@@ -68,6 +106,12 @@ if [ -n "$CG" ]; then
   fi
 fi
 [ "$placed" -eq 1 ] || [ -z "\${PI_TOOLS_CG:-}" ] || note "fell-open"
+
+# Answer 04: placed commands run at a normal OOM score (the server inherits
+# OOMScoreAdjust=-500; children reset to 0 before exec).
+if [ "$placed" -eq 1 ]; then
+  echo 0 > /proc/self/oom_score_adj 2>/dev/null || note "oom-score-reset-failed"
+fi
 
 if [ "$#" -eq 0 ]; then
   exec "$SHELL_BIN"

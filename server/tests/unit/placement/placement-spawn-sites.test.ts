@@ -21,7 +21,7 @@ function fakeChild(): ChildProcess {
 const PLACEMENT_ENV = {
   PI_TOOLS_PLACEMENT: 'on',
   PI_TOOLS_CGROUP_ROOT: '/tmp/d0-wire-cg',
-  PI_TOOLS_SLICE: 't.slice',
+  PI_TOOLS_SLICE: '/tmp/d0-wire-cg/t.slice',
   PI_TOOLS_RUNTIME_DIR: '/tmp/d0-wire-rt',
 };
 

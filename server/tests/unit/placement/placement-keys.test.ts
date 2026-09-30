@@ -35,7 +35,7 @@ describe('placement group keys', () => {
   });
 
   it('joins group paths under the tools root and refuses anything outside it', () => {
-    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on' });
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice' });
     const ok = groupPath(cfg, sessionGroupName('pi', undefined, 's1'));
     expect(ok).toBe(`${cfg.toolsRoot}/${sessionGroupName('pi', undefined, 's1')}`);
     expect(groupPath(cfg, '../escape')).toBeUndefined();

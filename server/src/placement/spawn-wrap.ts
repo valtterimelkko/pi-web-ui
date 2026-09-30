@@ -12,6 +12,26 @@ import { placementDegradeFilePath, placementWrapperPath } from './config.js';
 import { groupPath, ownGroupName, sessionGroupName } from './keys.js';
 import { materialiseWrapper } from './wrapper.js';
 
+/**
+ * Correction 03: the ACTIVE, resolved-and-verified tools root (set at server start-up
+ * after `resolveToolsRoot`). Until it is set, planning is unavailable and every
+ * planner returns null — spawn sites fall back byte-identically (fail open with a
+ * signal, never into an unverified group).
+ */
+let activeToolsRoot: string | undefined;
+export function setActiveToolsRoot(root: string | undefined): void {
+  activeToolsRoot = root;
+}
+export function getActiveToolsRoot(): string | undefined {
+  return activeToolsRoot;
+}
+
+function effectiveRoot(cfg: PlacementConfig): PlacementConfig | null {
+  const root = cfg.toolsRoot ?? activeToolsRoot;
+  if (!root) return null;
+  return { ...cfg, toolsRoot: root };
+}
+
 export interface PlacementSpawnPlan {
   /** Executable to spawn (the wrapper, or the original binary when placement is off). */
   file: string;
@@ -38,11 +58,13 @@ export type SpawnEnvVars = {
 } & Record<string, string>;
 
 export function buildPlacementEnv(cfg: PlacementConfig, group: string): SpawnEnvVars {
-  const cg = groupPath(cfg, group);
+  const rc = effectiveRoot(cfg);
+  if (!rc?.toolsRoot) throw new Error('placement: tools root unavailable');
+  const cg = groupPath(rc, group);
   if (!cg) throw new Error(`placement: refusing group outside tools root: ${group}`);
   return {
     PI_TOOLS_CG: cg,
-    PI_TOOLS_ROOT: cfg.toolsRoot,
+    PI_TOOLS_ROOT: rc.toolsRoot,
     PI_TOOLS_GROUP: group,
     PI_TOOLS_MEM_MAX: String(cfg.perChild.memoryMaxBytes),
     PI_TOOLS_MEM_HIGH: String(cfg.perChild.memoryHighBytes),
@@ -95,7 +117,9 @@ export function planSpawnForSession(
   env?: NodeJS.ProcessEnv,
 ): PlacementSpawnPlan | null {
   if (!cfg.enabled) return null;
-  return plan(cfg, sessionGroupName('rt', key.runtime, key.id), argv, env);
+  const rc = effectiveRoot(cfg);
+  if (!rc) return null;
+  return plan(rc, sessionGroupName('rt', key.runtime, key.id), argv, env);
 }
 
 /** Spawn that is not session-bound: its own unique group, removed when it exits. */
@@ -105,13 +129,17 @@ export function planSpawnOwn(
   env?: NodeJS.ProcessEnv,
 ): PlacementSpawnPlan | null {
   if (!cfg.enabled) return null;
-  return plan(cfg, ownGroupName(randomBytes), argv, env);
+  const rc = effectiveRoot(cfg);
+  if (!rc) return null;
+  return plan(rc, ownGroupName(randomBytes), argv, env);
 }
 
 /** Environment for the bash tool's in-shell placement (prefix line reads these). */
 export function placementBashEnv(cfg: PlacementConfig, sessionId: string): Record<string, string> | null {
   if (!cfg.enabled) return null;
-  return buildPlacementEnv(cfg, sessionGroupName('pi', undefined, sessionId));
+  const rc = effectiveRoot(cfg);
+  if (!rc) return null;
+  return buildPlacementEnv(rc, sessionGroupName('pi', undefined, sessionId));
 }
 
 /**
@@ -123,21 +151,29 @@ export function placementBashEnv(cfg: PlacementConfig, sessionId: string): Recor
 export function placementBashPrefixLine(_cfg: PlacementConfig): string {
   return [
     '{',
-    'if [ -n "${PI_TOOLS_CG:-}" ]; then',
+    'pl=0;',
+    'if [ -n "${PI_TOOLS_CG:-}" ] && [ -d "${PI_TOOLS_ROOT:-}" ]; then',
+    'rmax=""; [ -r "$PI_TOOLS_ROOT/memory.max" ] && rmax=$(cat "$PI_TOOLS_ROOT/memory.max" 2>/dev/null);',
+    'case "$rmax" in ""|max) p2="${PI_TOOLS_ROOT%/*}"; [ -r "$p2/memory.max" ] && rmax=$(cat "$p2/memory.max" 2>/dev/null);; esac;',
+    'case "$rmax" in ""|max|*[!0-9]*) : ;; *) pl=1 ;; esac;',
+    'fi;',
+    'if [ "$pl" -eq 1 ]; then',
     'mkdir -p -- "$PI_TOOLS_CG" 2>/dev/null || true;',
     'cur="";',
     '[ -r "$PI_TOOLS_CG/memory.max" ] && cur=$(cat "$PI_TOOLS_CG/memory.max" 2>/dev/null);',
     'if [ -d "$PI_TOOLS_CG" ] && { [ -z "$cur" ] || [ "$cur" = "max" ]; }; then',
-    '[ -n "${PI_TOOLS_MEM_MAX:-}" ] && echo "$PI_TOOLS_MEM_MAX" > "$PI_TOOLS_CG/memory.max" 2>/dev/null || true;',
+    '[ -n "${PI_TOOLS_MEM_MAX:-}" ] && echo "$PI_TOOLS_MEM_MAX" > "$PI_TOOLS_CG/memory.max" 2>/dev/null || printf \'%s bash %s limit-write-failed-memory-max\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true;',
     '[ -n "${PI_TOOLS_MEM_HIGH:-}" ] && echo "$PI_TOOLS_MEM_HIGH" > "$PI_TOOLS_CG/memory.high" 2>/dev/null || true;',
     '[ -n "${PI_TOOLS_PIDS_MAX:-}" ] && echo "$PI_TOOLS_PIDS_MAX" > "$PI_TOOLS_CG/pids.max" 2>/dev/null || true;',
     '[ -n "${PI_TOOLS_SWAP_MAX:-}" ] && echo "$PI_TOOLS_SWAP_MAX" > "$PI_TOOLS_CG/memory.swap.max" 2>/dev/null || true;',
     'fi;',
     'if [ -d "$PI_TOOLS_CG" ] && [ -w "$PI_TOOLS_CG" ]; then',
-    'echo $$ > "$PI_TOOLS_CG/cgroup.procs" 2>/dev/null || printf \'%s bash %s\\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true;',
+    'if echo $$ > "$PI_TOOLS_CG/cgroup.procs" 2>/dev/null; then echo 0 > /proc/self/oom_score_adj 2>/dev/null || true; else printf \'%s bash %s fell-open\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true; fi;',
     'else',
-    'printf \'%s bash %s\\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true;',
+    'printf \'%s bash %s fell-open\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true;',
     'fi;',
+    'else',
+    '[ -n "${PI_TOOLS_CG:-}" ] && printf \'%s bash %s root-unavailable\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true;',
     'fi; }',
   ].join('\n');
 }

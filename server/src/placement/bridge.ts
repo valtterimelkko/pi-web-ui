@@ -32,6 +32,7 @@ declare global {
 }
 
 export function exportToolsPlacementBridge(cfg: PlacementConfig): ToolsPlacementBridge {
+  if (!cfg.toolsRoot) throw new Error('placement: cannot export bridge without a resolved tools root');
   const bridge: ToolsPlacementBridge = {
     root: cfg.toolsRoot,
     wrapper: materialiseWrapper(cfg),

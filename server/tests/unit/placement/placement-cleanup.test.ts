@@ -48,7 +48,7 @@ describe('placement cleanup (real temp cgroup tree)', () => {
     makeGroup('pi-c1');
     makeGroup('rt-x-1');
     makeGroup('own-abc');
-    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_CGROUP_ROOT: dir, PI_TOOLS_SLICE: 'tools.slice' });
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_CGROUP_ROOT: dir, PI_TOOLS_SLICE: path.join(dir, 'tools.slice') });
     expect(sweepAllGroups(realIo, cfg)).toBe(3); // pi-c1, rt-x-1, own-abc (pi-a was removed above)
     expect(existsSync(slice)).toBe(true); // root survives
     expect(sweepAllGroups(realIo, cfg)).toBe(0);

@@ -31,6 +31,26 @@ describe('D0 deploy unit arithmetic (amendment A)', () => {
     expect(sliceMax + controlMax).toBeLessThanOrEqual(26); // host has 30G; leaves room for other tenants
   });
 
+  it('answer-04 drop-ins: OOMPolicy=continue and OOMScoreAdjust=-500, order-constrained', () => {
+    const policy = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-oom-policy.conf'), 'utf8');
+    expect(policy).toMatch(/^OOMPolicy=continue$/m);
+    expect(policy).not.toMatch(/^OOMPolicy=stop$/m);
+    const score = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-oom-score.conf'), 'utf8');
+    expect(score).toMatch(/^OOMScoreAdjust=-500$/m);
+    // Binding rollout order: the -500 score drop-in is installed only together with
+    // PI_TOOLS_PLACEMENT=on (otherwise unplaced children inherit -500).
+    expect(score).toMatch(/PI_TOOLS_PLACEMENT=on/);
+    expect(score).toMatch(/order/i);
+  });
+
+  it('the placement wrapper resets placed commands to oom_score_adj 0 (wrapper test asserts it live)', () => {
+    // The behavioural assertion lives in placement-wrapper.test.ts
+    // ("OOM SCORE (answer 04)") — this pin documents the pairing.
+    const wrapper = readFileSync(path.join(repoRoot, 'server/src/placement/wrapper.ts'), 'utf8');
+    expect(wrapper).toContain('/proc/self/oom_score_adj');
+    expect(wrapper).toContain('oom-score-reset-failed');
+  });
+
   it('per-child defaults follow the amendment-A decision rule from the measured sizing run', () => {
     expect(MEASURED_SIZING.memoryPeakBytes).toBeGreaterThan(0);
     expect(MEASURED_SIZING.pidsPeak).toBeGreaterThan(0);

@@ -4,7 +4,7 @@ import { resolvePlacementConfig } from '../../../src/placement/config.js';
 import { sessionGroupName } from '../../../src/placement/keys.js';
 
 const GiB = 1024 * 1024 * 1024;
-const on = () => resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_RUNTIME_DIR: '/tmp/d0-rt' });
+const on = () => resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_CGROUP_ROOT: '/cg', PI_TOOLS_SLICE: '/cg/t.slice', PI_TOOLS_RUNTIME_DIR: '/tmp/d0-rt' });
 
 describe('placement spawn planning', () => {
   it('returns null when placement is off (byte-identical argv contract)', () => {
@@ -21,8 +21,8 @@ describe('placement spawn planning', () => {
     expect(plan!.args).toEqual(['/usr/bin/claude', '-p', 'hi']);
     const group = sessionGroupName('rt', 'claude', 'sess-9');
     expect(plan!.group).toBe(group);
-    expect(plan!.env.PI_TOOLS_CG).toBe(`${on().toolsRoot}/${group}`);
-    expect(plan!.env.PI_TOOLS_ROOT).toBe(on().toolsRoot);
+    expect(plan!.env.PI_TOOLS_CG).toBe(`/cg/t.slice/${group}`);
+    expect(plan!.env.PI_TOOLS_ROOT).toBe('/cg/t.slice');
     expect(plan!.env.PI_TOOLS_MEM_MAX).toBe(String(8 * GiB));
     expect(plan!.env.PI_TOOLS_PIDS_MAX).toBe('2048');
     expect(plan!.env.FOO).toBe('1');
