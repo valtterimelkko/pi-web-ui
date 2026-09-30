@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
-import { planSpawnForSession, resolvePlacementConfig } from '../placement/index.js';
+import { planSpawnForSession, placementForSpawn } from '../placement/index.js';
 import { buildCommandCodeArgs } from './command-code-config.js';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import type { CommandCodeEffort, CommandCodeRuntimeModel } from './command-code-model-catalog.js';
@@ -109,7 +109,7 @@ export class CommandCodeProcessRunner {
     // launch is the original argv/env byte-identically.
     const cmdEnv = applySessionIdentityEnv(controlledEnvironment(this.nativeHomeDir, input.sessionId), input.sessionIdentity);
     const launch = planSpawnForSession(
-      resolvePlacementConfig(),
+      placementForSpawn(),
       { kind: 'rt', runtime: 'commandcode', id: input.sessionId },
       [this.executablePath, ...args],
       cmdEnv,

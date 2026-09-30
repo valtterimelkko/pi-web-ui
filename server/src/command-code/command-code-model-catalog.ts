@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { planSpawnOwn, resolvePlacementConfig } from '../placement/index.js';
+import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import { spawn } from 'node:child_process';
 import { COMMAND_CODE_EFFORT_TABLE } from './command-code-model-efforts.js';
 
@@ -164,7 +164,7 @@ async function runDiscoveryCommand(
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Command Code discovery timeout must be positive');
   // D0: discovery probe — own group, removed when it exits. Unplaced when off.
-  const launch = planSpawnOwn(resolvePlacementConfig(), [executablePath, ...args], environment) ??
+  const launch = planSpawnOwn(placementForSpawn(), [executablePath, ...args], environment) ??
     { file: executablePath, args, env: environment, group: '', cleanup: () => {} };
   const child = spawn(launch.file, launch.args, {
     shell: false,
