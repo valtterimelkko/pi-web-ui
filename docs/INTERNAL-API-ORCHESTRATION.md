@@ -41,7 +41,7 @@ Do not stop, restart, or redeploy `pi-web-ui.service` during validation unless t
 ## The thin parent client (`pi-orch`)
 
 Parents do not need to hand-write curl against this API. The companion repo
-`/root/pi-orch` (local-only until the owner approves publishing; no runtime
+[`valtterimelkko/pi-orch`](https://github.com/valtterimelkko/pi-orch) (no runtime
 dependencies beyond Node's standard library) provides a thin client for exactly
 that: an importable module (`src/index.ts`) and a shell-friendly CLI
 (`bin/pi-orch`) with the verbs `spawn`, `prompt`, `wait`, `result`, `verify`,
@@ -75,7 +75,7 @@ that: an importable module (`src/index.ts`) and a shell-friendly CLI
   state, goal state and last receipt.
 
 It honours `Retry-After` on 429/503 with a bounded retry budget and uses a
-documented exit-code table (`/root/pi-orch/README.md`). Output is JSON with
+documented exit-code table (the `pi-orch` README). Output is JSON with
 `--json`, human-readable otherwise.
 
 **Contract drift guard.** This repo generates a committed snapshot of the
@@ -107,7 +107,7 @@ capture wins across aliases. The client side (C3b) closes the loop:
 
 - **Dispatch template.** `pi-orch prompt` and `pi-orch spawn
   --goal-objective` append the instruction paragraph by default (one module
-  constant in `/root/pi-orch`, byte-pinned by test to the wording live-proved
+  constant in `pi-orch`, byte-pinned by test to the wording live-proved
   at a 16/16 parse rate in C3a); `--no-completion-template` opts out.
 - **Read-back.** `pi-orch result <runId>` returns the parsed block (receipt
   first, session surface for goal children), the parse error, the delimiter
@@ -119,6 +119,19 @@ capture wins across aliases. The client side (C3b) closes the loop:
   verified/contradicted/unverifiable. A parent should treat `verify`
   `contradicted` as a correction trigger — the class of failure C3 exists to
   cut.
+
+## Orchestration pack and client
+
+The discipline *around* this API — how a parent plans waves, keeps children bounded, waits without polling, demands evidence before accepting, and keeps credentials out of the artefacts — is packaged as portable agent skills in the public **[Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md)**:
+
+- **`pi-web-ui-internal-api-orchestration`** — the parent's loop against this API (discover, create, dispatch, watch, read results, verify, clean up), including the mandatory child directive and the dispatch template.
+- **`long-horizon-waiting-strategies`** — going idle safely: the pre-idle checklist, wake mechanisms per harness, model-free backstops, and liveness-correct supervision.
+- **`orchestrated-child-worker`** — the skill every dispatched child is told to follow: owned paths, commit and evidence discipline, hand-back by ending the turn, never self-sign-off.
+- **`secret-scanning`** — credential scanning with gitleaks before anything is published.
+
+The companion **`pi-orch`** client (https://github.com/valtterimelkko/pi-orch; the thin client described above) wraps the common loop — `spawn`, `prompt`, `wait`, `result`, `verify`, `cleanup`, `status` — against a drift-guarded contract snapshot, so parents stop hand-writing curl and sleeping in loops.
+
+**Agent OS is not required.** A private coordination layer the author uses; the pack works with Pi Web UI and the client alone.
 
 ## What the Internal API can do today
 
@@ -447,7 +460,7 @@ old-goal clear when its next goal starts. See the
 objective/session identity rather than accepting the first firing.
 
 A bare CLI needs a real local delivery path; a server observer alone cannot wake
-it. The Pi Enhancement [watch-wake companion](https://github.com/valtterimelkko/pi-enhancement/tree/master/watch-wake)
+it. A local `watch-wake` companion extension or mod for your harness
 provides generation-aware local watches and a `wake_deadline` tool. A deadline
 is a model-free wait-window backstop while the host event loop is alive, not a
 semantic completion judgement or a way to resurrect a dead parent. An old or

@@ -88,6 +88,7 @@ Read [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md) before planning a 
 ## Choose your docs path
 
 - **Adopting / self-hosting / evaluating the repo?** Start with [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
+- **Orchestrating agents with Pi Web UI?** Read [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md), then adopt the public [Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md) with the optional [`pi-orch`](https://github.com/valtterimelkko/pi-orch) client
 - **Choosing between runtime families?** Read [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
 - **Integrating programmatically or orchestrating agents?** Read [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
 - **Maintaining, contributing, or debugging the repo itself?** Start with [`docs/README.md`](./docs/README.md)
@@ -146,6 +147,8 @@ Current docs:
 - [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
 - [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
+
+The workflow *around* the API — parent/child discipline, waiting without polling, evidence before acceptance and secret scanning before publishing — is packaged as portable agent skills in the public [Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md), with the optional [`pi-orch`](https://github.com/valtterimelkko/pi-orch) client for the common loop.
 
 Recent power-user additions worth knowing about (current contract **`1.29.0`** — see `docs/INTERNAL-API-CONTRACT.md` as source of truth; `header_up -Authorization` only in `forward_auth`):
 - **runtime health** and filtered, secret-scrubbed **self-service diagnostics** with a bounded process-local operational snapshot

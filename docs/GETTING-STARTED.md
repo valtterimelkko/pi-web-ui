@@ -274,7 +274,20 @@ The maintainer's own preferred shape is an always-on server behind a reverse pro
 
 > **Internal API note:** `INTERNAL_API_BLOCKED_PI_PROVIDERS` defaults to empty (since 2026-09-11 both the direct metered OpenAI provider and the OpenRouter gateway catalogue are served through the Internal API; browser use unaffected; re-block any exact provider id via this env var). See `docs/INTERNAL-API-CONTRACT.md`.
 
-## 13. What to read next
+## 13. Orchestrate agents with Pi Web UI (optional)
+
+Once one runtime works end to end, the Internal API can drive child sessions across runtimes from a terminal, a script, or another agent. The orchestration *workflow* around that API is packaged as portable agent skills so a parent agent does not have to rediscover it:
+
+- **[Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md)** — the public pack (copy the skills into your own agent setup):
+  - `pi-web-ui-internal-api-orchestration` — the parent's loop: discover, create, dispatch, watch, read results, verify, clean up.
+  - `long-horizon-waiting-strategies` — how to go idle safely and supervise children without polling.
+  - `orchestrated-child-worker` — the discipline every dispatched child is told to follow (evidence, exit statuses, clean hand-back).
+  - `secret-scanning` — scan repositories and artefacts for credentials before publishing.
+- **[`pi-orch`](https://github.com/valtterimelkko/pi-orch)** — an optional thin client for the common loop (`spawn`, `prompt`, `wait`, `result`, `verify`, `cleanup`, `status`) with a drift-guarded contract snapshot.
+
+**Agent OS is not required.** A private coordination layer the author uses; the pack works with Pi Web UI and the client alone. See [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) for the API-level guide.
+
+## 14. What to read next
 
 - [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md)
 - [`PLATFORM-SUPPORT.md`](./PLATFORM-SUPPORT.md)
