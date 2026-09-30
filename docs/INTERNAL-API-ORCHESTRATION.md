@@ -57,7 +57,18 @@ that: an importable module (`src/index.ts`) and a shell-friendly CLI
   deadline. It distinguishes `interruptedByRestart`, `NEVER_STARTED`,
   `RUN_BUDGET_EXCEEDED` and `RUN_TRANSPORT_LOST`, and survives a server restart
   by re-registering the watch (`fireIfSettled`).
-- `result` returns the receipt's `finalText` plus evidence pointers.
+- `result` returns the receipt's `finalText`, the parsed completion block
+  (`completion`, C3b), the typed parse error if any (`completionError`), which
+  delimiter matched (`completionDelimiter`), which record it came from
+  (`completionSource`: the receipt, or the session's `latestCompletion` for
+  the receipt-less goal-turn class) and evidence pointers.
+- `verify` re-checks the child's completion claims against the filesystem with
+  read-only git: claimed commits exist in their claimed repos (reachable from
+  `--since`), `filesChanged` entries show evidence of change, claimed commands
+  and tests are recorded, and a claimed test is re-run ONLY when the parent
+  names the exact command (`--rerun "cmd"`, run in the child's cwd with a
+  timeout). Nothing is ever mutated. Verdicts: `verified` (exit 0),
+  `contradicted` (exit 20), `unverifiable` (exit 21).
 - `cleanup` releases the owned retention lease, then deletes the session.
 - `status` lists children by parent (`?parent=`, contract 1.54.0) with busy
   state, goal state and last receipt.
@@ -68,18 +79,45 @@ documented exit-code table (`/root/pi-orch/README.md`). Output is JSON with
 
 **Contract drift guard.** This repo generates a committed snapshot of the
 routes, request schemas, response types, error codes and contract version the
-client consumes:
-`docs/contract/internal-api-client-snapshot.json`, produced deterministically
-by `npx tsx scripts/generate-client-snapshot.ts` from the server's zod schemas
-(`session-validation.ts`, `dispatch-preflight.ts`) and internal-api types.
-`server/tests/unit/internal-api/client-snapshot-drift.test.ts` regenerates the
-snapshot and fails CI when a server schema or type changes without
-regenerating it. The client's own tests validate its builders and parsers
-against that snapshot (read from the main checkout by default, overridable via
-`PI_ORCH_SNAPSHOT_PATH`). The snapshot is not wire-visible, so it carries no
-contract bump by itself; the client learns of a newer server at runtime by
-comparing the snapshot's `contractVersion` with live `/capabilities` and flags
-a stale snapshot.
+client consumes: `docs/contract/internal-api-client-snapshot.json`, produced
+deterministically by `npx tsx scripts/generate-client-snapshot.ts` from the
+server's zod schemas (`session-validation.ts`, `dispatch-preflight.ts`) and
+internal-api types. `server/tests/unit/internal-api/client-snapshot-drift.test.ts`
+regenerates the snapshot and fails CI when a server schema or type changes
+without regenerating it. The client's own tests validate its builders and
+parsers against that snapshot (read from the main checkout by default,
+overridable via `PI_ORCH_SNAPSHOT_PATH`). The snapshot is not wire-visible, so
+it carries no contract bump by itself; the client learns of a newer server at
+runtime by comparing the snapshot's `contractVersion` with live
+`/capabilities` and flags a stale snapshot.
+
+### Child completion blocks (`pi-completion/v1`, C3a server / C3b client)
+
+Since contract 1.58.0 the server captures a structured end-of-task report from
+children: a fenced code block with info string `completion` holding one JSON
+object for schema `pi-completion/v1` (status, summary, commands with exit
+codes, tests, commits with absolute repo paths, filesChanged, openIssues,
+blockedReason). The capture is additive: runs whose final assistant text carries
+a valid block expose `completion` (+`completionDelimiter`) on the run receipt;
+a malformed block surfaces the typed `completionError` instead; and turns that
+hold no receipt (goal-engine continuations, extension resumes) are captured on
+the session surface as `latestCompletion` on `GET /sessions/:id` — newest
+capture wins across aliases. The client side (C3b) closes the loop:
+
+- **Dispatch template.** `pi-orch prompt` and `pi-orch spawn
+  --goal-objective` append the instruction paragraph by default (one module
+  constant in `/root/pi-orch`, byte-pinned by test to the wording live-proved
+  at a 16/16 parse rate in C3a); `--no-completion-template` opts out.
+- **Read-back.** `pi-orch result <runId>` returns the parsed block (receipt
+  first, session surface for goal children), the parse error, the delimiter
+  and the provenance.
+- **Verification.** `pi-orch verify <sessionId> [--run-id] [--since <base>]
+  [--rerun "cmd"]` re-checks the block's cheap facts against the filesystem
+  (read-only git, no network, no writes; only the parent-named `--rerun`
+  command is ever executed) and exits 0/20/21 for
+  verified/contradicted/unverifiable. A parent should treat `verify`
+  `contradicted` as a correction trigger — the class of failure C3 exists to
+  cut.
 
 ## What the Internal API can do today
 
