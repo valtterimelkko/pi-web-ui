@@ -42,6 +42,14 @@ for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index], process.argv[index + 1]);
 }
 
+// One ballast round appends 2M page-held objects by index assignment.
+// Wrapped in an IIFE: a top-level `const base` would persist in the page's
+// global lexical scope and the second evaluation would fail on redeclaration.
+const A2_BALLAST_ROUND = '(function () { globalThis.__a2_ballast = globalThis.__a2_ballast || [];'
+  + 'const base = globalThis.__a2_ballast.length;'
+  + 'for (let i = 0; i < 2000000; i++) { globalThis.__a2_ballast[base + i] = { a: i, b: i * 2, c: "s" + i }; }'
+  + 'return globalThis.__a2_ballast.length; })()';
+
 const runDir = args.get('--dir');
 const socketPath = args.get('--socket') ?? path.join(runDir, 'internal-api.sock');
 const tokenPath = args.get('--token') ?? path.join(runDir, 'internal-api-token');
@@ -211,6 +219,15 @@ class Cdp {
 
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    // Surface a thrown expression instead of swallowing it: the old ballast's
+    // `push(...2M)` exceeded the V8 argument limit and died silently here
+    // (correction 01, finding 3 diagnosis; same defect class as the L1 driver).
+    if (result.exceptionDetails) {
+      const description = result.exceptionDetails.exception?.description
+        ?? result.exceptionDetails.text
+        ?? 'unknown evaluation exception';
+      throw new Error(`Runtime.evaluate failed: ${description}`);
+    }
     return result.result?.value;
   }
 
@@ -325,8 +342,25 @@ async function main() {
   const steady = await cdp.heapFraction();
   report.numbers.heapFractionSteady = Number(steady.fraction.toFixed(4));
 
-  await cdp.evaluate('globalThis.__a2_ballast = Array.from({ length: 2000000 }, (_, i) => ({ a: i, b: i * 2, c: "s" + i })); globalThis.__a2_ballast.length');
-  await cdp.evaluate('globalThis.__a2_ballast.push(...Array.from({ length: 2000000 }, (_, i) => ({ a: i, b: i * 2, c: "s" + i }))); globalThis.__a2_ballast.length');
+  // Grow the held ballast until the post-GC RETAINED floor clears the alert
+  // threshold by a margin, rather than relying on allocation transients
+  // (correction 01, finding 3). The threshold must match the server's
+  // OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION; the default is 0.10.
+  const heapAlertFraction = Number(args.get('--heap-alert-fraction') ?? 0.1);
+  let ballastRounds = 0;
+  let retainedFraction = steady.fraction;
+  while (retainedFraction < heapAlertFraction + 0.02 && ballastRounds < 10) {
+    await cdp.evaluate(A2_BALLAST_ROUND);
+    await cdp.collectGarbage();
+    retainedFraction = (await cdp.heapFraction()).fraction;
+    ballastRounds += 1;
+  }
+  report.numbers.ballast = { rounds: ballastRounds, retainedFraction: Number(retainedFraction.toFixed(4)) };
+  check(
+    'the held ballast keeps the retained heap above the alert threshold with margin',
+    retainedFraction >= heapAlertFraction + 0.02,
+    `${(retainedFraction * 100).toFixed(2)}% retained after ${ballastRounds} round(s) vs threshold ${(heapAlertFraction * 100).toFixed(1)}%`,
+  );
   const loaded = await cdp.heapFraction();
   report.numbers.heapFractionAfterBallast = Number(loaded.fraction.toFixed(4));
 

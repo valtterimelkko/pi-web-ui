@@ -203,6 +203,15 @@ class Cdp {
 
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    // A thrown expression must fail the proof, not silently do nothing: the
+    // original ballast's spread-push exceeded the argument limit and was
+    // swallowed here (correction 01, finding 3 diagnosis).
+    if (result.exceptionDetails) {
+      const description = result.exceptionDetails.exception?.description
+        ?? result.exceptionDetails.text
+        ?? 'unknown evaluation exception';
+      throw new Error(`Runtime.evaluate failed: ${description}`);
+    }
     return result.result?.value;
   }
 
@@ -223,9 +232,14 @@ class Cdp {
 
 // One round appends 2M objects to the page-held array; rounds accumulate while
 // the array is referenced, so the retained floor grows monotonically until GC.
-const BALLAST_ROUND = 'globalThis.__l1_ballast = globalThis.__l1_ballast || [];'
-  + 'globalThis.__l1_ballast.push(...Array.from({ length: 2000000 }, (_, i) => ({ a: i, b: i * 2, c: "s" + i })));'
-  + 'globalThis.__l1_ballast.length';
+// Index assignment, never `push(...array)`: spreading 2M arguments exceeds the
+// V8 argument limit and threw "Maximum call stack size exceeded" in silence.
+// Wrapped in an IIFE: a top-level `const base` would persist in the page's
+// global lexical scope and the second evaluation would fail on redeclaration.
+const BALLAST_ROUND = '(function () { globalThis.__l1_ballast = globalThis.__l1_ballast || [];'
+  + 'const base = globalThis.__l1_ballast.length;'
+  + 'for (let i = 0; i < 2000000; i++) { globalThis.__l1_ballast[base + i] = { a: i, b: i * 2, c: "s" + i }; }'
+  + 'return globalThis.__l1_ballast.length; })()';
 
 async function addBallastRound(cdp) {
   await cdp.evaluate(BALLAST_ROUND);
@@ -239,7 +253,7 @@ async function addBallastRound(cdp) {
  * `high + margin`. The ballast array is referenced by the page, so it cannot be
  * freed while it is held.
  */
-async function ensureRetainedHigh(cdp, high, margin, maxRounds = 6) {
+async function ensureRetainedHigh(cdp, high, margin, maxRounds = 10) {
   await addBallastRound(cdp);
   await cdp.collectGarbage();
   let fraction = (await cdp.heapFraction()).fraction;
@@ -324,12 +338,19 @@ async function main() {
   report.numbers.highReadingPair = pair
     ? pair.map((sample) => ({ at: sample.at, heapFraction: sample.heapFraction }))
     : null;
+  // The pair must be the two readings the debounce actually consumed: the
+  // first is the incident's `startedAt`, the second is the opening alert's
+  // `at`. (Adjacent samples can be further apart than one interval when the
+  // allocation itself blocks the loop, so the tie is to the incident, not to a
+  // time gap.)
   check(
-    'two consecutive high readings are recorded in the metrics log',
-    pair !== null && pair[1].atMs > pair[0].atMs && pair[1].atMs - pair[0].atMs <= 2 * sampleIntervalMs
-      && pair[0].heapFraction >= heapHigh && pair[1].heapFraction >= heapHigh,
+    'two consecutive high readings opened the incident in the metrics log',
+    pair !== null
+      && pair[0].heapFraction >= heapHigh && pair[1].heapFraction >= heapHigh
+      && pair[0].at === openedAlert.incident.startedAt
+      && pair[1].at === openedAlert.at,
     pair
-      ? `${pair[0].at} ${(pair[0].heapFraction * 100).toFixed(2)}% → ${pair[1].at} ${(pair[1].heapFraction * 100).toFixed(2)}% (gap ${pair[1].atMs - pair[0].atMs} ms)`
+      ? `${pair[0].at} ${(pair[0].heapFraction * 100).toFixed(2)}% → ${pair[1].at} ${(pair[1].heapFraction * 100).toFixed(2)}% (gap ${pair[1].atMs - pair[0].atMs} ms; incident ${openedAlert.incident.startedAt} → ${openedAlert.at})`
       : 'no consecutive high pair found',
   );
   const peakHigh = await cdp.heapFraction();
