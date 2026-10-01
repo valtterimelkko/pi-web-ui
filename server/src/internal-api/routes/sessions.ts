@@ -5823,7 +5823,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // On a busy session the command rides the running turn and the goal state
     // may legitimately lag — the historical accepted shape is kept there.
     const before = await readProjectPiGoalState(entry.path);
-    const inspection = !isSessionBusy(entry)
+    const busy = isSessionBusy(entry);
+    const inspection = !busy
       ? (() => {
           const record = {
             action: composed.action,
@@ -5837,6 +5838,44 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : undefined;
 
     try {
+      // H2s (contract 1.58.2): a goal START on a busy session must not hold
+      // the HTTP response. The composed command still rides the running turn
+      // as an attached slash pass-through (a detached slash command on a busy
+      // session is refused), but the engine's start handler awaits the session
+      // going idle before its first goal run — awaiting the pipeline here held
+      // the response for the whole busy turn (wave 3 observed ~38 min).
+      // Dispatch fire-and-forget instead and keep the historical busy-session
+      // accepted shape (receipt null: the inner run belongs to the
+      // detached-from-response dispatch; goal is the projection at response
+      // time). The engine persists the goal file at the command boundary, so
+      // the goal starts when the session settles; callers poll GET
+      // /sessions/:id/goal or watch goal_state/goal_end.
+      if (busy && composed.action === 'start') {
+        // A compacting session refuses every input — answer that refusal here
+        // (synchronously, as the blocking path forwards it) instead of
+        // accepting-then-losing the start.
+        const busyRefusal = piBusyRefusal(entry, 'prompt');
+        if (busyRefusal) {
+          res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+          sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, busyRefusal.detail));
+          return;
+        }
+        void handleSendPrompt(synthesizePromptRequest(composed.command), createCaptureResponse(), sessionId)
+          .catch((error: unknown) => {
+            logger.errorObject(`Busy-session goal start dispatch failed for ${sessionId}`, error);
+          });
+        const after = await readProjectPiGoalState(entry.path);
+        sendJson(res, 200, {
+          sessionId,
+          runtime: 'pi',
+          action: composed.action,
+          accepted: true,
+          receipt: null,
+          goal: after,
+        });
+        return;
+      }
+
       // Reuse the entire prompt pipeline (injection check, receipts, admission,
       // busy pass-through) by dispatching the composed slash command internally.
       const innerRes = createCaptureResponse();

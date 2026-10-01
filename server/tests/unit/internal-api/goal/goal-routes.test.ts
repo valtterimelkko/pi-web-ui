@@ -272,6 +272,57 @@ describe('goal function (contract 1.27.0)', () => {
       }
     });
 
+    it('contract 1.58.2: a goal start on a BUSY session answers promptly with the accepted shape instead of holding the response until the turn settles', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
+      // The busy turn never settles on its own: the /goal start handler stays
+      // pending (its engine-side handler awaits waitForIdle) until released.
+      let releasePrompt!: () => void;
+      const gate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+      agentSession.prompt.mockImplementation(() => gate);
+
+      const res = mockRes();
+      const route = routes.handleSessionGoalControl(
+        jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'take over when idle' }),
+        res,
+        'session-1',
+      );
+
+      // The answer arrives while the busy turn is still running. Previously the
+      // route awaited the whole busy turn plus the engine's own waitForIdle
+      // (wave 3 observed ~38 min), so this waitFor timed out.
+      await vi.waitFor(() => { expect(res.body).toContain('"accepted":true'); }, { timeout: 5_000 });
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ sessionId: 'session-1', runtime: 'pi', action: 'start', accepted: true });
+      expect(body.receipt).toBeNull();
+      expect(body.goal).toMatchObject({ supported: true });
+
+      // The composed command was still dispatched through the real pipeline
+      // (attached busy pass-through — a detached slash command is refused).
+      await vi.waitFor(() => expect(agentSession.prompt).toHaveBeenCalledWith('/goal "take over when idle"'), { timeout: 5_000 });
+
+      // GET /goal stays readable while the turn runs (the caller's poll path).
+      const goalRes = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/session-1/goal'), goalRes, 'session-1');
+      expect(goalRes.statusCode).toBe(200);
+      expect(JSON.parse(goalRes.body).supported).toBe(true);
+
+      releasePrompt();
+      await route;
+    });
+
+    it('a compacting session refuses a busy goal start synchronously instead of accepting-then-losing it', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle', compacting: true });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(
+        jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'never accepted-then-lost' }),
+        res,
+        'session-1',
+      );
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe('SESSION_BUSY');
+      expect(agentSession.prompt).not.toHaveBeenCalled();
+    });
+
     it('pause composes /goal pause-now and honours the busy pass-through mid-run', async () => {
       multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
       const req = jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' });

@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.58.1",
+  "contractVersion": "1.58.2",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -73,6 +73,7 @@ Exception table (date, owner decision, what, version):
 
 ### Changelog
 
+- **1.58.2** (patch — H2s busy goal-start prompt answer; bug fix inside the C6 window). A `POST /sessions/:id/goal` `start` on a **busy Pi session** now answers promptly with the historical accepted shape instead of holding the HTTP response until the busy turn settles (wave 3 observed ~38 min: the route awaited the goal-engine command, whose start handler awaits the session going idle). The composed `/goal …` command still rides the running turn as an attached slash pass-through — the goal file is persisted at the command boundary, so the goal starts when the session settles; callers poll `GET /sessions/:id/goal` or watch `goal_state`/`goal_end`. The response keeps the accepted shape with `receipt: null` (the inner run belongs to the detached-from-response dispatch) and the projection read at response time. A compacting session is still refused synchronously with 409 `SESSION_BUSY` (accepted-then-lost stays impossible); pause/resume/clear keep the pre-1.58.2 behaviour. No new route, field, error code, event or default: the snapshot fingerprints identically to 1.58.0 apart from the version.
 - **1.58.1** (patch — I2 coalesced Pi follow-up receipts; bug fix inside the C6 window). Every follow-up drained inside one Pi agent loop reaches a terminal receipt, and no follow-up receipt is left `queued` indefinitely after its session settles idle. H2 root-cause item 3 (the G5 stranded-`queued` receipts).
   - **Coalesced delivery.** Pi drains queued follow-ups inside ONE agent loop and closes the whole drain with a single `agent_end`. Previously only the first delivered follow-up's receipt finished (with the whole loop's last assistant text); every sibling stayed `queued` forever. Now each delivered follow-up is marked started when its own user message appears, observes the assistant text up to the next follow-up's user message (or the loop's end) — so `finalText` is that follow-up's own answer — and the single `agent_end` completes every delivered follow-up's receipt (each carrying `startedAt`, `agentEndAt`, its own `finalText`). A single follow-up drained in its own loop behaves exactly as before (C2 semantics unchanged).
   - **No indefinite `queued`.** After a session settles idle, an undelivered follow-up receipt either remains deliverable — the SDK's abort path keeps the queue, so a later loop can still deliver it (the receipt stays `queued`, honestly; session delete still ends it `cancelled`, a server restart `interrupted`) — or it is terminalised `failed` with errorCode `NEVER_STARTED` (nothing ran under it; re-dispatch). The latter fires when the runtime can no longer deliver the message: the queue entry was removed but no matching user message ever arrived (consumed/transformed/cleared), or the loaded agent was unloaded (its queue died with it; a periodic settle sweep catches this). No new error code, field, route or event: the snapshot fingerprints identically to 1.58.0 apart from the version.
