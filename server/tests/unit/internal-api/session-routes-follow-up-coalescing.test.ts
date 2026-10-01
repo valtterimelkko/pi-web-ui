@@ -664,4 +664,3 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
   });
 
 });
-
