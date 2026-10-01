@@ -466,6 +466,11 @@ export interface SessionRoutesDeps {
   pinMaxTtlMs?: number;
   /** How often the pin-expiry sweep runs (ms). */
   pinExpiryIntervalMs?: number;
+  /** I2 (contract 1.58.1): how often the queued-Pi-follow-up settle sweep runs
+   * (ms). After a session settles idle with undelivered follow-up receipts,
+   * the sweep terminalises receipts the runtime can no longer deliver (queue
+   * entry gone, or the loaded agent itself unloaded). Defaults to 30s. */
+  followUpSettleSweepIntervalMs?: number;
   /** Callback to notify WebSocket clients of new sessions */
   onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
   /** Directory for Pi session files. Defaults to config. */
@@ -637,6 +642,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     antigravityDesktopConversationsDir: deps.antigravityDesktopConversationsDir ?? config.antigravityNativeDesktopConversationsDir,
   };
   const blockedPiProviders = deps.blockedPiProviders ?? config.internalApiBlockedPiProviders;
+  // I2 (contract 1.58.1): settle-sweep cadence for undelivered queued Pi
+  // follow-ups after a session settles idle.
+  const followUpSettleSweepIntervalMs = deps.followUpSettleSweepIntervalMs ?? 30_000;
   const runReceipts = deps.runReceiptManager ?? new RunReceiptManager({
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
@@ -6080,10 +6088,93 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     queuedPiRuns.delete(sessionId);
     queuedPiEventChains.delete(sessionId);
     queuedPiLastFollowUp.delete(sessionId);
+    stopFollowUpSettleSweep(sessionId);
     const observer = queuedPiObservers.get(sessionId);
     if (observer) {
       if (removed) multiSessionManager.removeApiObserver(removed.sessionPath, observer);
       queuedPiObservers.delete(sessionId);
+    }
+  }
+
+  /** I2 (contract 1.58.1): terminalise queued Pi follow-up receipts the
+   * runtime can no longer deliver. A correlation is DROPPED when
+   *  - it was armed (its queue entry was removed from an SDK queue_update
+   *    snapshot) but no matching user message_start ever arrived before the
+   *    loop ended — the SDK consumed or transformed the entry without
+   *    delivering our text; or
+   *  - it is unarmed but the SDK queue snapshot no longer holds its message
+   *    (cleared/consumed without a queue_update we could attribute), or the
+   *    loaded agent itself is gone (idle unload: its queue died with it).
+   * Dropped receipts end `failed`/`NEVER_STARTED`: nothing ran under them,
+   * the message will never be delivered, and the caller should re-dispatch.
+   * Undelivered receipts whose message is still in the SDK queue stay
+   * `queued` — the SDK's abort path keeps the queue (the loop's early return
+   * skips the drain), so a later loop can still deliver them honestly.
+   * The settle sweep re-runs this periodically once undelivered receipts
+   * remain after a settle, catching drops that happen with no further event
+   * (for example the idle unload). */
+  async function reconcileDroppedPiFollowUps(sessionId: string): Promise<void> {
+    const queue = queuedPiRuns.get(sessionId);
+    const undelivered = queue?.filter((item) => !item.delivered) ?? [];
+    if (undelivered.length === 0) return;
+    // A session still streaming is mid-drain; only reconcile settled sessions.
+    const status = multiSessionManager.getSessionStatus?.(sessionId)?.status;
+    if (status === 'busy' || status === 'streaming') {
+      armFollowUpSettleSweep(sessionId);
+      return;
+    }
+    const agent = multiSessionManager.getAgentSession(undelivered[0].sessionPath);
+    // The loaded agent (and its queue) is gone: the message can never be
+    // delivered by this process again.
+    const sdkQueue: readonly string[] = agent
+      ? [...(agent.getFollowUpMessages?.() ?? [])]
+      : [];
+    for (const item of undelivered) {
+      if (!agent) {
+        await terminaliseDroppedFollowUp(sessionId, item.runId);
+        continue;
+      }
+      const stillDeliverable = item.awaitingMessageStart
+        ? false // armed: the SDK already removed the entry; only the matching
+                // message_start could have delivered it, and it never came
+        : sdkQueue.includes(item.message);
+      if (!stillDeliverable) await terminaliseDroppedFollowUp(sessionId, item.runId);
+    }
+    if ((queuedPiRuns.get(sessionId) ?? []).some((item) => !item.delivered)) {
+      armFollowUpSettleSweep(sessionId);
+    }
+  }
+
+  async function terminaliseDroppedFollowUp(sessionId: string, runId: string): Promise<void> {
+    await runReceipts.finish(runId, {
+      status: 'failed',
+      errorCode: ErrorCode.NEVER_STARTED,
+      stallReason: 'no_activity',
+    }).catch((error) => {
+      logger.warn(`failed to terminalise dropped queued follow-up ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    removeQueuedPiRun(sessionId, runId);
+  }
+
+  /** Per-session settle sweeps for undelivered queued follow-ups. */
+  const queuedPiSettleSweeps = new Map<string, NodeJS.Timeout>();
+
+  function armFollowUpSettleSweep(sessionId: string): void {
+    if (queuedPiSettleSweeps.has(sessionId)) return;
+    const timer = setInterval(() => {
+      void reconcileDroppedPiFollowUps(sessionId).catch(() => { /* best-effort; retried next tick */ });
+      const remaining = (queuedPiRuns.get(sessionId) ?? []).filter((item) => !item.delivered);
+      if (remaining.length === 0) stopFollowUpSettleSweep(sessionId);
+    }, followUpSettleSweepIntervalMs);
+    timer.unref?.();
+    queuedPiSettleSweeps.set(sessionId, timer);
+  }
+
+  function stopFollowUpSettleSweep(sessionId: string): void {
+    const timer = queuedPiSettleSweeps.get(sessionId);
+    if (timer) {
+      clearInterval(timer);
+      queuedPiSettleSweeps.delete(sessionId);
     }
   }
 
@@ -6103,6 +6194,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       queuedPiObservers.delete(sessionId);
       queuedPiEventChains.delete(sessionId);
       queuedPiLastFollowUp.delete(sessionId);
+      stopFollowUpSettleSweep(sessionId);
       activeDirectDispatchTokens.delete(sessionId);
       nextDirectDispatchToken.delete(sessionId);
     });
@@ -6144,21 +6236,39 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             queuedPiLastFollowUp.set(sessionId, [...current]);
           }
         }
-        const active = queue.find((item) => item.delivered);
-        if (active) {
-          await runReceipts.observeEvent(active.runId, normalized);
-          if (normalized.type === 'agent_end' && !isSyntheticTerminalEvent(normalized)) {
-            await runReceipts.finish(active.runId, { status: 'completed' });
-            removeQueuedPiRun(sessionId, active.runId);
-          }
+        // I2 (contract 1.58.1): Pi drains queued follow-ups inside ONE agent
+        // loop and closes the whole drain with a single `agent_end`
+        // (pi-agent-core agent-loop: at the would-stop point the loop pulls
+        // getFollowUpMessages and continues the same loop). Correlation is a
+        // stack: the most recently delivered follow-up owns the events — each
+        // follow-up's receipt observes its own user message and the assistant
+        // text up to the NEXT follow-up's user message (or the loop's end).
+        // An earlier delivered correlation must not swallow a later sibling's
+        // message_start: the armed-sibling match below runs first, and the
+        // single agent_end settles the whole delivered stack.
+        const pending = queue.find((item) => !item.delivered);
+        if (pending?.awaitingMessageStart && queuedUserMessageMatches(normalized, pending.message)) {
+          pending.delivered = true;
+          await runReceipts.markStarted(pending.runId);
+          await runReceipts.observeEvent(pending.runId, normalized);
           return;
         }
 
-        const pending = queue[0];
-        if (!pending?.awaitingMessageStart || !queuedUserMessageMatches(normalized, pending.message)) return;
-        pending.delivered = true;
-        await runReceipts.markStarted(pending.runId);
-        await runReceipts.observeEvent(pending.runId, normalized);
+        const delivered = queue.filter((item) => item.delivered);
+        const top = delivered[delivered.length - 1];
+        if (normalized.type === 'agent_end' && !isSyntheticTerminalEvent(normalized)) {
+          for (const item of delivered) {
+            await runReceipts.observeEvent(item.runId, normalized);
+            await runReceipts.finish(item.runId, { status: 'completed' });
+            removeQueuedPiRun(sessionId, item.runId);
+          }
+          await reconcileDroppedPiFollowUps(sessionId);
+          return;
+        }
+        if (top) {
+          await runReceipts.observeEvent(top.runId, normalized);
+          return;
+        }
       }).catch((error) => {
         logger.warn(`Failed to correlate queued Pi follow-up for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       });
