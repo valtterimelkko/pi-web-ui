@@ -65,6 +65,22 @@ Receipt ledger after the run: all 5 receipts terminal (`4 × documented_handler_
 - A caller that treats the prompt `200` as "goal armed" without polling `GET /goal` could miss a rare fire-and-forget dispatch failure (see above). The contracted shape always said to poll or watch; docs state it for the busy case explicitly (`docs/INTERNAL-API.md`, contract 1.58.2 entry).
 - Two near-simultaneous busy-session starts queue in dispatch order; the second hits the engine's active-goal semantics (Q observation). Pre-existing.
 
+## Correction 03 (review REJECT → C1–C3, 2026-10-01T20:30Z; commits `660d1cee`, `18ec83c8`)
+
+**C1 (major — one acceptance boundary).** The review (h2s-luna-review) correctly found that the route's `piBusyRefusal` preflight and the fire-and-forget inner dispatch were not one acceptance boundary: a refusal arising inside the pipeline after the preflight but before dispatch (compaction starting, `ADMISSION_CAPACITY_EXHAUSTED`, draining, receipt failure) was written to the discarded capture response while the route had already answered `200 {accepted:true}` — accepted-then-lost.
+
+Fix (`660d1cee`): `handleSendPrompt` gains an internal-caller-only fourth parameter (`internal?: { onDispatchAccepted?: () => void }`; the HTTP server calls with three arguments, so the handshake is unreachable from HTTP). The callback fires at the pipeline's **last pre-dispatch refusal point** — right after `markStarted` succeeds; every refusal (busy, admission, reservation, receipt) is answered before it. The route awaits `Promise.race([accepted, captureEnded])`: on refusal it forwards the inner status, `Retry-After` (`createCaptureResponse` now records `setHeader` values instead of dropping them) and body verbatim, exactly as the blocking path would; on acceptance it answers the historical 200 accepted shape (`receipt: null`). Neither outcome waits for the busy turn or the goal.
+
+TDD: RED — new test "a refusal arising between the route preflight and the inner dispatch check is forwarded instead of accepted-then-lost" (liveness reads 1–2 = streaming, ≥3 = compacting) failed at `expect(res.statusCode).toBe(409)` while the route answered 200; GREEN — 40/40 goal-routes tests; full server unit suite → **6174 passed | 3 skipped, exit 0**. Gates re-run: lint 0 errors, `lint:ratchet -- --base aeef536f` 11 changed files / violations [], typecheck 0, build 0, docs links 0 (1336 links), agent-guides 0. Contract 1.58.2 changelog + `INTERNAL-API.md` rewritten to describe the real guarantee.
+
+**C2 (minor).** Stray blank line at EOF in `session-routes-follow-up-coalescing.test.ts` removed (`18ec83c8`); `git diff --check aeef536f...HEAD` → exit 0.
+
+**C3 (live, corrected build `18ec83c8`, run dir `/tmp/h2s-live2-20261001T2040Z`).** Same disposable-server recipe (scope `h2s-live2-srv`, `MemoryMax=12G`, health `1.58.2`, engine overlay sha256 `af6f7701…` = `pi-enhancement@8d25a72`, zai-only credentials, stub isolation; peak 1 concurrent active turn, 2 live children).
+
+- **P re-run** (`01a0f934`): busy turn 96.75 s; timed goal start **HTTP 200 in 0.0402 s** through the full acceptance handshake (reservation → admission → markStarted); goal `achieved`, runs 1, poll 1 landed 8 s after the turn ended.
+- **Abort case** (`01a0f936`): busy turn (`sleep 120`); goal start mid-turn **HTTP 200 in 0.0117 s** (accepted); `POST /abort` at 20:45:22 → `{success:true}`; the busy turn's curl finished at 15.09 s (aborted). The armed goal file survived the abort: once the aborted turn settled, the engine ran the goal — **`achieved`, runs 1**, session `idle`. Receipt ledger after the run: 4 receipts, **all terminal** — `087eb365` completed/terminal_signal (P busy turn), `a89eff85` completed/documented_handler_return (P goal-start dispatch), `2f9522d6` cancelled/terminal_signal (A busy turn, at abort), `19c996ba` cancelled/terminal_signal (A goal-start dispatch, at abort). **No receipt left `queued` or `running`** — no stranded receipt, so no parent question. Facts worth noting: the abort cancelled the goal-start receipt (it rode the aborted turn) while the goal itself — persisted at the command boundary — ran to completion afterwards; receipt and goal state tell coherent stories.
+- Cleanup: both sessions DELETE → 200; scope stopped, socket gone, zero validation processes; credential copies deleted; no heap snapshots.
+
 ## Cannot see (blind spots for adjudication)
 
 1. Concurrent multiple goal starts on ONE busy session are unit-covered only (single-start proven live).
