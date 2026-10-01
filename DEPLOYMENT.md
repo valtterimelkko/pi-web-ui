@@ -125,6 +125,7 @@ owner/mode. Keep the socket, token, receipts, watches, and retention-lease ledge
 | `INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN` | `512` | conservative projected memory reservation per admitted turn |
 | `INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN` | `96` | conservative projected PID/task reservation per admitted turn (refuses with `pid_pressure` at the cgroup `pids.max` ceiling) |
 | `PI_MAX_SESSIONS` | `20` | maximum Pi sessions kept resident in the MultiSessionManager (LRU-unloaded when idle) |
+| `PI_WEB_UI_VIEW_ONLY_SUBSCRIBE` | `off` | `on`/`true`/`1`: a browser switch to a non-resident Pi session opens it view-only (transcript and header from the session file, no agent rehydrate); the first prompt/command materialises the agent on demand. Default `off` keeps today's materialising switch. |
 
 Use `GET /api/v1/capabilities`, `GET /api/v1/capacity`, `GET /api/v1/health`, and
 `npm run internal-api:wait` to verify the local control plane. For a prompt that
