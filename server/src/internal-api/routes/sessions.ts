@@ -5901,11 +5901,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           capture.ended.then(() => 'refused' as const),
           innerSettled.then(() => 'error' as const),
         ]);
-        if (outcome === 'error') {
+        // An inner pipeline that wrote its refusal and then settled resolves
+        // both arms; forward the refusal rather than relying on arm ordering.
+        if (outcome === 'error' && capture.body === undefined) {
           sendJson(res, 500, { error: 'Internal API request failed.', code: ErrorCode.INTERNAL_ERROR });
           return;
         }
-        if (outcome === 'refused') {
+        if (outcome === 'refused' || outcome === 'error') {
           // Forward the inner refusal exactly as the blocking path would.
           const retryAfter = capture.headers['retry-after'];
           if (retryAfter !== undefined) res.setHeader('Retry-After', retryAfter);
