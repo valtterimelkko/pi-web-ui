@@ -589,4 +589,79 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     expect(receipt?.errorCode).toBeUndefined();
     expect(manager.get(runFirst)?.status).toBe('completed');
   });
+
+  it('K. queuedPiChainDepth is not wiped on queue empty while an old chain owes events (I2 residual)', async () => {
+    const sdk = await makeRoutes();
+    const runFirst = await queueFollowUp('FIRST');
+
+    // Deliver runFirst so it becomes delivered
+    setManagerStatus('streaming');
+    sdk.drainBegins('FIRST');
+    sdk.deliverMessageStart('FIRST');
+    sdk.assistantSay('ANSWER-FIRST');
+
+    // Gate manager.finish so runFirst's agent_end chain step stalls inside the loop,
+    // right after removeQueuedPiRun empties the queue.
+    let releaseFinish!: () => void;
+    const finishGate = new Promise<void>((resolve) => { releaseFinish = resolve; });
+    const realFinish = manager.finish.bind(manager);
+    manager.finish = async (id: string, update: any) => {
+      if (id === runFirst) {
+        await finishGate;
+      }
+      return realFinish(id, update);
+    };
+
+    // Emit agentEnd for runFirst. Its chained handler runs removeQueuedPiRun,
+    // which in buggy code deletes queuedPiChainDepth while this event is still in-flight.
+    sdk.agentEnd();
+
+    // Give microtasks a moment to enter manager.finish(runFirst) and stall on finishGate
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // While runFirst's agent_end is stalled on finishGate, queue a second follow-up!
+    const runSecond = await queueFollowUp('SECOND');
+
+    // Gate markStarted on runSecond so its message_start chain step stalls while in flight
+    let releaseSecondChain!: () => void;
+    const secondChainGate = new Promise<void>((resolve) => { releaseSecondChain = resolve; });
+    const realMarkStarted = manager.markStarted.bind(manager);
+    manager.markStarted = async (id: string) => {
+      if (id === runSecond) {
+        await secondChainGate;
+      }
+      return realMarkStarted(id);
+    };
+
+    // SDK begins draining runSecond: emits queue_update then deliverMessageStart (which hits the gate)
+    sdk.drainBegins('SECOND');
+    sdk.deliverMessageStart('SECOND');
+
+    // Now release runFirst's finish.
+    // In buggy code: removeQueuedPiRun deleted queuedPiChainDepth.
+    // When runFirst's finally ran, it decremented depth, under-counting depth to 0!
+    // In fixed code: queuedPiChainDepth was NOT deleted, so depth reflects the pending message_start.
+    releaseFinish();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Simulate SDK mid-drain window where SDK is not streaming and manager is idle
+    setManagerStatus('idle');
+    sdk.setStreaming(false);
+
+    // Sweep ticks land. In buggy code, queuedPiChainDepth was under-counted to 0,
+    // so the sweep tick does NOT defer on depth and drops runSecond as failed/NEVER_STARTED!
+    await new Promise((resolve) => setTimeout(resolve, sweepIntervalMs * 5));
+    expect(manager.get(runSecond)?.status).toBe('queued');
+    expect(manager.get(runSecond)?.errorCode).toBeUndefined();
+
+    // Release the second gate and finish runSecond
+    releaseSecondChain();
+    sdk.assistantSay('ANSWER-SECOND');
+    sdk.agentEnd();
+    await vi.waitFor(() => expect(manager.get(runSecond)?.status).toBe('completed'), { timeout: 2_000 });
+    expect(manager.get(runSecond)?.finalText).toBe('ANSWER-SECOND');
+    expect(manager.get(runFirst)?.status).toBe('completed');
+  });
+
 });
+

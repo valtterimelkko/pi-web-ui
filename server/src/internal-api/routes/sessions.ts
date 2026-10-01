@@ -6091,14 +6091,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     queuedPiRuns.delete(sessionId);
-    queuedPiEventChains.delete(sessionId);
     queuedPiLastFollowUp.delete(sessionId);
-    queuedPiChainDepth.delete(sessionId);
     stopFollowUpSettleSweep(sessionId);
     const observer = queuedPiObservers.get(sessionId);
     if (observer) {
       if (removed) multiSessionManager.removeApiObserver(removed.sessionPath, observer);
       queuedPiObservers.delete(sessionId);
+    }
+    // H2s (criterion 3): do not wipe chain depth or event chain while events
+    // are still owed on the chain — otherwise a follow-up accepted in this
+    // window under-counts depth when the old chain's finally decrements it.
+    if ((queuedPiChainDepth.get(sessionId) ?? 0) === 0) {
+      queuedPiChainDepth.delete(sessionId);
+      queuedPiEventChains.delete(sessionId);
     }
   }
 
@@ -6310,7 +6315,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           await reconcileDroppedPiFollowUps(sessionId);
         }
         } finally {
-          queuedPiChainDepth.set(sessionId, Math.max(0, (queuedPiChainDepth.get(sessionId) ?? 0) - 1));
+          const currentDepth = queuedPiChainDepth.get(sessionId) ?? 0;
+          const nextDepth = Math.max(0, currentDepth - 1);
+          if (nextDepth === 0) {
+            queuedPiChainDepth.delete(sessionId);
+            if (!queuedPiRuns.has(sessionId)) {
+              queuedPiEventChains.delete(sessionId);
+            }
+          } else {
+            queuedPiChainDepth.set(sessionId, nextDepth);
+          }
         }
       }).catch((error) => {
         logger.warn(`Failed to correlate queued Pi follow-up for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
