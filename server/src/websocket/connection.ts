@@ -2853,7 +2853,11 @@ export class WebSocketConnectionManager {
     await this.reconcileInterruptedSession(clientId, sessionPath, 'idle');
     this.clientViewingSession.set(clientId, sessionPath);
     this.clientCwd.set(clientId, cwd);
-    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+    // No manager-side viewing registration here: the manager's guard requires
+    // a subscription, and a view-only open deliberately has none. The
+    // connection's viewing map above is what getCurrentSessionPath reads;
+    // ensurePiAgentSession registers the manager-side ref together with the
+    // subscription it creates on first use.
 
     const { messages, fileTimestamp, headerInfo } = await this.loadSessionMessages(sessionPath);
     this.sendMessage(clientId, {
@@ -2902,6 +2906,11 @@ export class WebSocketConnectionManager {
       inflight = (async () => {
         const cwd = this.clientCwd.get(clientId) || process.cwd();
         await this.multiSessionManager.subscribeClient(clientId, sessionPath, cwd, this.getWebUIContext(clientId));
+        // Now subscribed: register the manager-side viewing ref (best-effort;
+        // a failure must not fail the user's action).
+        try {
+          this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+        } catch { /* viewing ref is bookkeeping only */ }
       })();
       inflight.catch(() => undefined); // never leave an unhandled rejection behind
       inflight.finally(() => {

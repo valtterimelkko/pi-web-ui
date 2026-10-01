@@ -114,16 +114,31 @@ describe('view-only session subscribe (PI_WEB_UI_VIEW_ONLY_SUBSCRIBE)', () => {
     };
     multi = {
       getClientSessionPath: vi.fn().mockReturnValue(undefined),
-      subscribeClient: vi.fn().mockResolvedValue({
-        sessionPath: 'x', sessionId: 'x', status: 'idle', messageCount: 0, currentStep: 0,
+      subscribeClient: vi.fn().mockImplementation(async (clientId: string, sessionPath: string) => {
+        // Real manager semantics for the viewing guard: a subscribe registers
+        // the client's subscription (the mock mirrors clientSubscriptions).
+        const subs = multi.__subscriptions.get(clientId) ?? new Set();
+        subs.add(sessionPath);
+        multi.__subscriptions.set(clientId, subs);
+        return { sessionPath, sessionId: 'x', status: 'idle', messageCount: 0, currentStep: 0 };
       }),
       unsubscribeClient: vi.fn(),
-      setClientViewingSession: vi.fn(),
+      // Real manager semantics: throws when the client is not subscribed
+      // (multi-session-manager.ts setClientViewingSession's guard) — so a
+      // view-only open cannot register a manager-side viewing ref it has no
+      // subscription for. Mirrored here to catch that class of bug.
+      setClientViewingSession: vi.fn((clientId: string, sessionPath: string) => {
+        const subs = multi.__subscriptions.get(clientId);
+        if (!subs || !subs.has(sessionPath)) {
+          throw new Error(`Client ${clientId} is not subscribed to session ${sessionPath}`);
+        }
+      }),
       getSessionStatus: vi.fn().mockReturnValue(undefined),
       getAllSessionStatuses: vi.fn().mockReturnValue([]),
       // Non-resident by default: no agent, no status.
       getAgentSession: vi.fn().mockReturnValue(undefined),
       hasSession: vi.fn().mockReturnValue(false),
+      __subscriptions: new Map<string, Set<string>>(),
     };
     (mgr as any).multiSessionManager = multi;
   });
@@ -204,11 +219,15 @@ describe('view-only session subscribe (PI_WEB_UI_VIEW_ONLY_SUBSCRIBE)', () => {
       expect(switched.thinkingLevel).toBeUndefined();
     });
 
-    it('records the viewing client on the manager without materialising', async () => {
+    it('records the viewing client connection-side without a manager viewing registration (no subscription exists)', async () => {
       const { path } = makeSessionFile(sessionEntries());
       await (mgr as any).handleSwitchSession('c1', { type: 'switch_session', sessionPath: path });
-      expect(multi.setClientViewingSession).toHaveBeenCalledWith('c1', path);
+      // The connection's own viewing map is the source for getCurrentSessionPath.
       expect((mgr as any).clientViewingSession.get('c1')).toBe(path);
+      // The manager's setClientViewingSession guard rejects unsubscribed
+      // clients — the view-only open must NOT call it (a materialise will,
+      // once a subscription exists).
+      expect(multi.setClientViewingSession).not.toHaveBeenCalled();
       expect(multi.getAgentSession).not.toHaveBeenCalledWith(path);
     });
 
@@ -229,18 +248,22 @@ describe('view-only session subscribe (PI_WEB_UI_VIEW_ONLY_SUBSCRIBE)', () => {
       path = made.path;
       await (mgr as any).handleSwitchSession('c1', { type: 'switch_session', sessionPath: path });
       sent.length = 0;
-      // After materialisation the manager holds the agent.
-      multi.subscribeClient.mockImplementation(async () => {
-        multi.getAgentSession.mockReturnValue(agentSession);
-        multi.getSessionStatus.mockReturnValue({ status: 'idle', sessionPath: path });
-        return { sessionPath: path, sessionId: 'x', status: 'idle', messageCount: 1, currentStep: 0 };
-      });
+      // Real manager semantics: the agent exists iff the client's session is
+      // materialised (subscribed) — subscribeClient flips both, exactly like
+      // the real manager's sessions map.
+      multi.getAgentSession.mockImplementation((p: string) =>
+        multi.__subscriptions.get('c1')?.has(p) ? agentSession : undefined);
+      multi.getSessionStatus.mockImplementation((p: string) =>
+        multi.__subscriptions.get('c1')?.has(p) ? { status: 'idle', sessionPath: p } : undefined);
     });
 
     it('a prompt materialises the agent and delivers the prompt (no SESSION_NOT_FOUND)', async () => {
       await (mgr as any).handlePrompt('c1', { type: 'prompt', sessionId: 'x', message: 'do the thing' });
       // 4th arg (webUIContext) is undefined in tests: no ws client is registered.
       expect(multi.subscribeClient).toHaveBeenCalledWith('c1', path, expect.any(String), undefined);
+      // Materialisation also registers the manager-side viewing ref (valid now:
+      // the client is subscribed).
+      expect(multi.setClientViewingSession).toHaveBeenCalledWith('c1', path);
       expect(agentSession.prompt).toHaveBeenCalledWith('do the thing', expect.anything());
       expect(sent.find((m) => m.type === 'error' && m.code === 'SESSION_NOT_FOUND')).toBeUndefined();
     });
@@ -304,12 +327,16 @@ describe('view-only session subscribe (PI_WEB_UI_VIEW_ONLY_SUBSCRIBE)', () => {
       await (mgr as any).handleSwitchSession('c1', { type: 'switch_session', sessionPath: made.path });
       sent.length = 0;
       let materialiseCalls = 0;
-      multi.subscribeClient.mockImplementation(async () => {
+      // Same manager semantics as the materialise suite: agent exists iff
+      // subscribed; the wrapped subscribe flips it after a 10 ms delay so both
+      // prompts race the same in-flight materialisation.
+      multi.getAgentSession.mockImplementation((p: string) =>
+        multi.__subscriptions.get('c1')?.has(p) ? agentSession : undefined);
+      const baseSubscribe = multi.subscribeClient;
+      multi.subscribeClient = vi.fn(async (clientId: string, sessionPath: string) => {
         materialiseCalls += 1;
         await new Promise((r) => setTimeout(r, 10));
-        multi.getAgentSession.mockReturnValue(agentSession);
-        multi.getSessionStatus.mockReturnValue({ status: 'idle', sessionPath: made.path });
-        return { sessionPath: made.path, sessionId: 'x', status: 'idle', messageCount: 1, currentStep: 0 };
+        return baseSubscribe(clientId, sessionPath);
       });
       await Promise.all([
         (mgr as any).handlePrompt('c1', { type: 'prompt', sessionId: 'x', message: 'first' }),
