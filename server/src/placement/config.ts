@@ -53,7 +53,10 @@ export function resolvePlacementConfig(env: NodeJS.ProcessEnv = process.env): Pl
   // absolute cgroup path. A bare relative path is neither and is rejected at
   // start-up — the 16:56 escape came from treating a name as a path.
   const slicePath = (env.PI_TOOLS_SLICE ?? 'pi-web-ui-tools.slice').replace(/\/+$/, '');
-  const runtimeDir = env.PI_TOOLS_RUNTIME_DIR ?? path.join(os.homedir(), '.pi-web-ui', 'placement');
+  // The process-wide PI_TOOLS_RUNTIME_DIR is the fallback for callers passing their own
+  // env object: in production env IS process.env; the test setup points it at a temp
+  // dir so no test writes production's wrapper or degrade log (Luna D0 live re-run).
+  const runtimeDir = env.PI_TOOLS_RUNTIME_DIR ?? process.env.PI_TOOLS_RUNTIME_DIR ?? path.join(os.homedir(), '.pi-web-ui', 'placement');
   // Amendment A decision rule: per-child max = max(8 GiB, 1.5 × measured peak),
   // high = max(6 GiB, 1.2 × peak), pids = max(2048, 2 × peak). `defaults.ts` holds the
   // measured peaks and the derived shipped values; env overrides win for ops tuning.

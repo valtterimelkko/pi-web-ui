@@ -1,5 +1,22 @@
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolvePlacementConfig, resolveToolsRoot } from '../../../src/placement/config.js';
+
+describe('test-process isolation from production placement (Luna D0 live re-run)', () => {
+  it('a config built without PI_TOOLS_RUNTIME_DIR never points at production\'s runtime dir', () => {
+    // Tests run as root: the default ~/.pi-web-ui/placement IS production's wrapper
+    // and degrade log. materialiseWrapper and appendDegradeLine write there.
+    const prod = path.join(os.homedir(), '.pi-web-ui', 'placement');
+    expect(resolvePlacementConfig({}).runtimeDir).not.toBe(prod);
+    expect(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on' }).runtimeDir).not.toBe(prod);
+  });
+
+  it('inherited placement variables are stripped (a placed production shell injects them)', () => {
+    const inherited = Object.keys(process.env).filter((k) => k.startsWith('PI_TOOLS_') && k !== 'PI_TOOLS_RUNTIME_DIR');
+    expect(inherited).toEqual([]);
+  });
+});
 
 describe('placement config', () => {
   it('defaults to disabled', () => {

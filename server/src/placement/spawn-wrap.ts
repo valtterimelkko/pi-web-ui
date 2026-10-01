@@ -156,6 +156,9 @@ export function placementBashPrefixLine(_cfg: PlacementConfig): string {
     '{',
     'pl=0; ok=1;',
     'sf="${PI_TOOLS_OOM_SCORE_FILE:-/proc/self/oom_score_adj}";',
+    // Luna D0 live re-run finding 2: reset the score whenever placement is requested,
+    // so a fallback command does not keep the control plane's -500.
+    '[ -n "${PI_TOOLS_CG:-}" ] && echo 0 > "$sf" 2>/dev/null;',
     'if [ -n "${PI_TOOLS_CG:-}" ] && [ -d "${PI_TOOLS_ROOT:-}" ]; then',
     'rmax=""; [ -r "$PI_TOOLS_ROOT/memory.max" ] && rmax=$(cat "$PI_TOOLS_ROOT/memory.max" 2>/dev/null);',
     'case "$rmax" in ""|max) p2="${PI_TOOLS_ROOT%/*}"; [ -r "$p2/memory.max" ] && rmax=$(cat "$p2/memory.max" 2>/dev/null);; esac;',

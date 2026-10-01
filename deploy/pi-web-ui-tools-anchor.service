@@ -13,9 +13,17 @@
 # - OOMPolicy=continue: REQUIRED. A per-child OOM kill counts against this unit; under
 #   the default OOMPolicy=stop the anchor fails and systemd kills every placed command
 #   of every child (proven on a disposable anchor).
+# - ExitType=cgroup + OOMScoreAdjust=-1000 (Luna D0 live re-run finding 3, proven on
+#   disposable units): if the anchor's own sleeper dies, the unit stays active while any
+#   placed command remains, so the commands and their limits survive; the kernel never
+#   picks the sleeper (placed commands are reset to score 0 by the wrapper, not
+#   inherited from here). When the last command exits, Restart= brings the anchor back.
+# - ExecStart re-enables +cpu +memory +pids in the anchor's own subtree_control, so a
+#   restarted anchor (fresh cgroup) is usable at once. `$$` and `%%` are systemd
+#   escapes; an unescaped `${...}` is expanded by systemd itself, to an empty string.
 # - No memory limits here: pi-web-ui-tools.slice is the bound (18G max, 14G high).
-# - Stopping or restarting this unit kills every placed command. Do it only when no
-#   child is running, then drain-restart pi-web-ui (the root is resolved at start-up).
+# - A deliberate `systemctl stop`/`restart` still kills every placed command. Do it
+#   only when no child is running, then drain-restart pi-web-ui.
 #
 # Install (parent's rollout): copy to /etc/systemd/system/, then
 # `systemctl daemon-reload && systemctl enable --now pi-web-ui-tools-anchor.service`.
@@ -29,7 +37,9 @@ Slice=pi-web-ui-tools.slice
 Delegate=cpu memory pids
 DelegateSubgroup=supervisor
 OOMPolicy=continue
-ExecStart=/bin/sleep infinity
+OOMScoreAdjust=-1000
+ExitType=cgroup
+ExecStart=/bin/sh -c 'r=/sys/fs/cgroup$$(sed -n "s|^0::||;s|/supervisor$$||p" /proc/self/cgroup); [ -d "$$r" ] || exit 1; echo "+cpu +memory +pids" > "$$r/cgroup.subtree_control" || exit 1; exec sleep infinity'
 Restart=always
 RestartSec=2
 

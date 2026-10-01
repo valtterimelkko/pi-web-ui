@@ -30,6 +30,18 @@ describe('D0 deploy unit arithmetic (amendment A)', () => {
     // kill fails the anchor and systemd kills every placed command inside it.
     expect(anchor).toMatch(/^OOMPolicy=continue$/m);
     expect(anchor).not.toMatch(/^Memory(Max|High)=/m); // the slice is the bound
+    // Luna D0 live re-run finding 3 (proven on disposable units): the anchor's own
+    // process dying must not take the placed commands with it. ExitType=cgroup keeps
+    // the unit active while any placed command remains; -1000 keeps the kernel off
+    // the sleeper; a restart re-enables the controllers itself.
+    expect(anchor).toMatch(/^ExitType=cgroup$/m);
+    expect(anchor).toMatch(/^OOMScoreAdjust=-1000$/m);
+    const exec = anchor.match(/^ExecStart=(.*)$/m)?.[1] ?? '';
+    expect(exec).toContain('cgroup.subtree_control');
+    expect(exec).toContain('+cpu +memory +pids');
+    // systemd expands ${…} and % in ExecStart: shell variables must be written $$.
+    expect(exec).not.toMatch(/(^|[^$])\$\{/);
+    expect(exec).not.toMatch(/(^|[^$])\$[a-z(]/);
   });
 
   it('control plane drop-in: max 8G, low 2G, and NO effective MemoryHigh (throttling the server stalls the loop)', () => {

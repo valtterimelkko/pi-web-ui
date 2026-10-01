@@ -39,6 +39,17 @@ if (!process.env.PI_WEB_UI_PRODUCTION_LOCK) {
 // through. See tests/systemctl-guard.ts.
 installSystemctlGuard();
 
+// Nor may a test see or touch production's D0 placement (2026-09-30). A Pi child's
+// placed bash commands carry PI_TOOLS_* from the production server, so a suite run
+// from such a shell inherited them (one placement-off assertion failed), and placement
+// configs built without a runtime dir resolved to production's ~/.pi-web-ui/placement,
+// where the wrapper and the degrade log live. Strip the inherited variables and give
+// every test process its own runtime dir; suites that need placement set it themselves.
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('PI_TOOLS_')) delete process.env[key];
+}
+process.env.PI_TOOLS_RUNTIME_DIR = path.join(tmpdir(), `pi-web-ui-test-placement-${process.pid}-${randomUUID()}`);
+
 // Unit/integration subjects use explicit env fixtures, never a developer's
 // on-disk .env. Keep parse() real for validation-env fixture tests. This does
 // not alter the application loader or source/compiled live-validation mode.

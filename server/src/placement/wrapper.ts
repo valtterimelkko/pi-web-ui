@@ -34,6 +34,18 @@ note() {
 }
 
 placed=0
+# Answer 04 + Luna D0 live re-run finding 2: whenever placement is requested, reset the
+# OOM score FIRST, so a command that later falls open does not keep the control plane's
+# -500 in the server's cgroup. A failed reset is verified and stays unplaced.
+if [ -n "$CG" ]; then
+  score_file="\${PI_TOOLS_OOM_SCORE_FILE:-/proc/self/oom_score_adj}"
+  echo 0 > "$score_file" 2>/dev/null
+  score=$(cat "$score_file" 2>/dev/null)
+  if [ "$score" != "0" ]; then
+    note "oom-score-reset-failed"
+    CG=""
+  fi
+fi
 if [ -n "$CG" ]; then
   case "$CG" in
     "$ROOT"/*) : ;;
@@ -63,9 +75,11 @@ if [ -n "$CG" ]; then
 fi
 if [ -n "$CG" ] && [ "$bounded" -eq 1 ]; then
   # Only a group THIS invocation created may be killed on failure: an existing group
-  # can hold the child's running commands (rollout finding 2026-09-30).
+  # can hold the child's running commands (rollout finding 2026-09-30). The exclusive
+  # mkdir (no -p, no prior -d test) is the ownership token: a racing peer's create makes
+  # ours fail (Luna D0 live re-run finding 1). The root's existence was verified above.
   fresh=0
-  if [ ! -d "$CG" ]; then mkdir -p -- "$CG" 2>/dev/null && fresh=1; fi
+  mkdir -- "$CG" 2>/dev/null && fresh=1
   # Correction-06 finding 3: ALL-OR-NOTHING. Every required limit is written (when
   # fresh or unbounded) and then READ BACK and compared with the configured value
   # BEFORE exec; any write or read-back mismatch removes the group and falls open.
@@ -90,17 +104,6 @@ if [ -n "$CG" ] && [ "$bounded" -eq 1 ]; then
       rmdir -- "$CG" 2>/dev/null || true
     fi
     note "limit-readback-failed"
-    CG=""
-  fi
-fi
-if [ -n "$CG" ]; then
-  # Answer 04: placed commands run at a normal OOM score — VERIFIED before the
-  # join, so a failed reset stays in the original cgroup (correction-06 finding 3).
-  score_file="\${PI_TOOLS_OOM_SCORE_FILE:-/proc/self/oom_score_adj}"
-  echo 0 > "$score_file" 2>/dev/null
-  score=$(cat "$score_file" 2>/dev/null)
-  if [ "$score" != "0" ]; then
-    note "oom-score-reset-failed"
     CG=""
   fi
 fi

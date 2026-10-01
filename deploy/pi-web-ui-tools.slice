@@ -3,8 +3,7 @@
 # Sibling container for every command an agent child runs (bash tool, background
 # shells, subagent/runtime CLI processes). The control plane keeps its own budget in
 # pi-web-ui.service (see pi-web-ui-control-plane.conf); neither group can starve the
-# other of memory, and under host CPU contention the control plane's CPUWeight=1000
-# outweighs this slice's 100.
+# other of memory. CPU: see the weight note below; the two groups are not siblings.
 #
 # No Delegate= here: systemd 255 ignores it on slice units ("not supported for this
 # unit type"), so it never protected cgroup.subtree_control from daemon-reload

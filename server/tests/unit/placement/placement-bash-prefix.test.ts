@@ -129,6 +129,16 @@ describe('correction-08 finding 2: bash prefix all-or-nothing (fault injection, 
     expect(existsSync(path.join(degrade))).toBe(false);
   });
 
+  it('FALLBACK SCORE: a command that falls open runs at score 0, not the server\'s -500 (Luna D0 live re-run finding 2)', () => {
+    const degrade = path.join(root.slice, 'degrade-fbscore.log');
+    const scoreFile = path.join(root.root, 'score-fb');
+    writeFileSync(scoreFile, '-500\n');
+    const env = { ...baseEnv(root.slice, degrade), PI_TOOLS_ROOT: path.join(root.root, 'gone2'), PI_TOOLS_CG: path.join(root.root, 'gone2', 'pi-x'), PI_TOOLS_OOM_SCORE_FILE: scoreFile };
+    const { out } = runPrefix(root.slice, env, 'echo RAN-FB');
+    expect(out).toContain('RAN-FB');
+    expect(readFileSync(scoreFile, 'utf8').trim()).toBe('0');
+  });
+
   it('ROOT MISSING: never creates the root; degrades; command runs', () => {
     const degrade = path.join(root.slice, 'degrade-noroot.log');
     const env = { ...baseEnv(root.slice, degrade), PI_TOOLS_ROOT: path.join(root.root, 'gone'), PI_TOOLS_CG: path.join(root.root, 'gone', 'pi-x') };

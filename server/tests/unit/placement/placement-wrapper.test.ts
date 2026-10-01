@@ -190,6 +190,43 @@ describe('placement wrapper script (real script against a fake cgroup root)', ()
     expect(existsSync(g)).toBe(true);
   });
 
+  it('RACE: a group a peer creates between the check and the create is not "fresh" — its commands are never killed', () => {
+    // Luna D0 live re-run finding 1: `[ -d ] || mkdir -p` let two first-use wrappers
+    // both believe they created the group. A PATH-shimmed mkdir plays the racing peer:
+    // it creates the group (with a joined command and a limit that fails read-back)
+    // immediately before the wrapper's own mkdir runs.
+    const shimDir = mkdtempSync(path.join(tmpdir(), 'd0-race-shim-'));
+    writeFileSync(path.join(shimDir, 'mkdir'), [
+      '#!/bin/sh',
+      'for a in "$@"; do case "$a" in -*) ;; *) d="$a" ;; esac; done',
+      '/bin/mkdir -p "$d"; : > "$d/cgroup.kill"; printf "4242\\n" > "$d/cgroup.procs"; ln -sf /dev/null "$d/memory.max"',
+      'exec /bin/mkdir "$@"',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    try {
+      const env = { ...writeGroupEnv(root.slice, 'pi-race'), PATH: `${shimDir}:${process.env.PATH ?? ''}` };
+      const res = runWrapper(env, ['-c', 'echo ran'], root.root);
+      expect(res.status).toBe(0);
+      const g = path.join(root.slice, 'pi-race');
+      expect(readFileSync(path.join(g, 'cgroup.kill'), 'utf8')).toBe('');
+      expect(existsSync(g)).toBe(true);
+    } finally {
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('FALLBACK SCORE: a command that falls open runs at oom_score_adj 0, not the server\'s -500', () => {
+    // Luna D0 live re-run finding 2: fallback paths skipped the reset, so an unplaced
+    // command kept the control plane's protection in the server's cgroup.
+    const scoreFile = path.join(root.root, 'score-fallback');
+    writeFileSync(scoreFile, '-500\n');
+    const missingRoot = path.join(root.root, 'no-such-root');
+    const env = { ...writeGroupEnv(root.slice, 'pi-fb'), PI_TOOLS_ROOT: missingRoot, PI_TOOLS_CG: path.join(missingRoot, 'pi-fb'), PI_TOOLS_OOM_SCORE_FILE: scoreFile };
+    const res = runWrapper(env, ['-c', 'echo ran'], root.root);
+    expect(res.status).toBe(0);
+    expect(readFileSync(scoreFile, 'utf8').trim()).toBe('0');
+  });
+
   it('OOM SCORE (answer 04): a placed command runs at oom_score_adj 0', () => {
     const selfAdj = path.join('/proc/self', 'oom_score_adj');
     const before = readFileSync(selfAdj, 'utf8').trim();
