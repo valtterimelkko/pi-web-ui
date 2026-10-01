@@ -1,6 +1,6 @@
 # Orchestration Scaling Readiness Plan
 
-> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **2026-09-29 follow-up (owner rule: no local patches to upstream packages):** both local patches are removed. B1.2b replaces the pi-core extension-factory patch with the public SDK API; B3a (the tool-argument part of B3) replaces the pi-ai toolstream patch with a pi-web-ui-side budget; `subagent` shipped with owner option B (B1.3). All were deployed at the 2026-09-29 10:10 UTC restart. **B1.2 production telemetry:** 0 spike minutes in the first 4 h of the patch-free build (baseline 0.77/h; §9). **Wave 2 (B2, B3b, B4) is merged** (`d017f145`, contract 1.51.0; every lane Luna-reviewed and parent-verified) and **in production since the owner-approved restart on 2026-09-29 14:44 UTC** (build `1103ef11`; restarted with `production:drain-restart`, which used its legacy pre-flight because the old server had no drain endpoint). **R2 decisions held 2026-09-29 (§8):** the owner accepted the review session's recommendations, and an **R2 follow-up wave** is added (§6, after Review moment R2). **R2 follow-up wave shipped 2026-09-29** (V2; B4.1, B5, B3c; B2.1 dropped) together with **C4, C5**, the weekly-refresh budget and the E1 ledger (wave 3, contract 1.56.0; in production since the drain-restart on 2026-09-29 20:59 UTC, §8). **C2, C1 and C3a merged 2026-09-30 and in production since the drain-restart at 03:33 UTC** (contract 1.58.0, build `6544b886`; the orchestration skill now prefers the `pi-orch` client). **C6 stability window declared 2026-09-30** (opens at 1.58.0; the owner sets its length at R3). **C3b (client half of C3) shipped 2026-09-30** (`/root/pi-orch` `559aef5`: completion template, `result`, `verify`; Luna REJECT → correction 01 → closure ACCEPT). **Stage C is complete. R3 opened 2026-09-30 (§8):** the review verified Stage C and read the CPU evidence. It found that agents' tool commands share the service's cgroup, that one session slowed production at two active turns, and that the zai route stops working above about 5–8 concurrent children. An **R3 follow-up wave (G1–G5)** is added. **R3 decisions held 2026-09-30 (§3):** Stage D starts with **D0** (move agents' tool processes out of the control plane's cgroup); D1 and Phase 8 are decided at R4; the admission cap stays at 15; the C6 window runs to programme close without blocking planned work; the Jev re-measure moves into E2; and E2's 24 h soak becomes a bounded run. **Next: the R3 follow-up wave and D0, orchestrated by the R3 session.** **Wave complete (2026-09-30):** G1–G5 and D0 accepted and merged; G2 and D0 in production since 23:09 UTC (D0 needed a same-night fix: a delegated anchor service, because systemd ignores `Delegate=` on slices); the independent Luna production live re-run returned ACCEPT WITH FIXES; its fixes and the closure round's one remaining correction are deployed (D0 §11). R4 is next. **Host OOM incident at 16:56 UTC:** a D0 proof escaped its memory limits, and the kernel killed production Pi Web UI and the orchestrator. The owner decided the host OOM policy and extra D0 scope; both are recorded in §3 and D0. Side work after Stage C (owner requests 2026-09-30, outside this plan): publishing `pi-orch` and a public skill pack; GitHub CI portability fix (`45831561`); the Agent OS contract-mirror guard. Server-side fixes reach production only at an owner-approved restart.
+> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **2026-09-29 follow-up (owner rule: no local patches to upstream packages):** both local patches are removed. B1.2b replaces the pi-core extension-factory patch with the public SDK API; B3a (the tool-argument part of B3) replaces the pi-ai toolstream patch with a pi-web-ui-side budget; `subagent` shipped with owner option B (B1.3). All were deployed at the 2026-09-29 10:10 UTC restart. **B1.2 production telemetry:** 0 spike minutes in the first 4 h of the patch-free build (baseline 0.77/h; §9). **Wave 2 (B2, B3b, B4) is merged** (`d017f145`, contract 1.51.0; every lane Luna-reviewed and parent-verified) and **in production since the owner-approved restart on 2026-09-29 14:44 UTC** (build `1103ef11`; restarted with `production:drain-restart`, which used its legacy pre-flight because the old server had no drain endpoint). **R2 decisions held 2026-09-29 (§8):** the owner accepted the review session's recommendations, and an **R2 follow-up wave** is added (§6, after Review moment R2). **R2 follow-up wave shipped 2026-09-29** (V2; B4.1, B5, B3c; B2.1 dropped) together with **C4, C5**, the weekly-refresh budget and the E1 ledger (wave 3, contract 1.56.0; in production since the drain-restart on 2026-09-29 20:59 UTC, §8). **C2, C1 and C3a merged 2026-09-30 and in production since the drain-restart at 03:33 UTC** (contract 1.58.0, build `6544b886`; the orchestration skill now prefers the `pi-orch` client). **C6 stability window declared 2026-09-30** (opens at 1.58.0; the owner sets its length at R3). **C3b (client half of C3) shipped 2026-09-30** (`/root/pi-orch` `559aef5`: completion template, `result`, `verify`; Luna REJECT → correction 01 → closure ACCEPT). **Stage C is complete. R3 opened 2026-09-30 (§8):** the review verified Stage C and read the CPU evidence. It found that agents' tool commands share the service's cgroup, that one session slowed production at two active turns, and that the zai route stops working above about 5–8 concurrent children. An **R3 follow-up wave (G1–G5)** is added. **R3 decisions held 2026-09-30 (§3):** Stage D starts with **D0** (move agents' tool processes out of the control plane's cgroup); D1 and Phase 8 are decided at R4; the admission cap stays at 15; the C6 window runs to programme close without blocking planned work; the Jev re-measure moves into E2; and E2's 24 h soak becomes a bounded run. **Next: the R3 follow-up wave and D0, orchestrated by the R3 session.** **Wave complete (2026-09-30):** G1–G5 and D0 accepted and merged; G2 and D0 in production since 23:09 UTC (D0 needed a same-night fix: a delegated anchor service, because systemd ignores `Delegate=` on slices); the independent Luna production live re-run returned ACCEPT WITH FIXES; its fixes and the closure round's one remaining correction are deployed (D0 §11). R4 is next. **Host OOM incident at 16:56 UTC:** a D0 proof escaped its memory limits, and the kernel killed production Pi Web UI and the orchestrator. The owner decided the host OOM policy and extra D0 scope; both are recorded in §3 and D0. Side work after Stage C (owner requests 2026-09-30, outside this plan): publishing `pi-orch` and a public skill pack; GitHub CI portability fix (`45831561`); the Agent OS contract-mirror guard. **R4 held 2026-10-01 (§3, §8):** wave 4 verified against production; D1 and Phase 8 are not started (reopened only on the trigger in §3); the admission cap stays at 15. An **R4 follow-up wave (H1–H3)** is added: the browser session-view cost that latched the admission lag gate in production, root causes of empty, cancelled and goal-idle child runs, and a small-items batch. **E2 waits for real orchestration use** (a population trigger, not a waiting window). Server-side fixes reach production only at an owner-approved restart.
 > **Created:** 2026-09-26 from the Pi Web UI / Internal API deep review (owner-requested).
 > **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). **Review moments** are held with the owner, in that session or, if its context is exhausted, by a fresh Opus agent that first follows §7 (handoff).
 > **Evidence:** [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md).
@@ -140,6 +140,18 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 - **Proof containment is a standing rule** (§4, *Memory containment for proofs*).
 - **For R4:** a memory cap for Claude Code sessions under the remote-control server (outside D0's reach), and whether to place the Web UI terminal shell (see R4 inputs).
 
+**Owner decisions recorded 2026-10-01 (R4; the owner accepted the review session's recommendations):**
+- **Wave 4 is accepted.** The review re-checked CI, the D0 production layout (server and anchor unit values, slice limits, no `system.control` memory overrides, no degrades, production build `28238791`, deployed extensions byte-identical to pi-enhancement `2c7a24d`) and re-ran both placement suites. Findings are in the *R4 review reading* under Review moment R4.
+- **D1 and Phase 8: not started.** The basis is T1 (15 turns use ~28% of one core, heap < 0.8 GiB, one-core saturation extrapolated at ~54 turns) and production telemetry, not G5: G5 peaked at 4 concurrent turns on a build without D0. **Reopen trigger:** production heap or lag pressure that G2's attribution assigns to in-process agents, or a decision to raise admission towards ~25 concurrent streaming turns.
+- **Admission cap stays at 15.** Providers bind first (zai about 5, enforced by `pi-orch`); revisit after E2.
+- **Claude Code remote-control server memory cap:** `MemoryHigh=8G`, `MemoryMax=10G`, `OOMPolicy=continue` on the user unit `claude-rc.service`, maintained through the `/root/rc` repository's rules, applied live without a restart (H3; the live change still needs the owner's go at the time). Peak use was 6.8 GB on 2026-10-01, with no limit and `OOMPolicy=stop`.
+- **Web UI terminal shell:** place it in the tools slice (H3).
+- **Routing:** lanes on systems and infrastructure (cgroups, systemd, process lifecycle, rollout) use a stronger implementer (GLM 5.3 at high or max, GPT-6 Luna, or a Claude Sonnet child where the owner allows); Flash stays for bounded lanes. Evidence: D0 on Flash needed nine correction rounds, with fixes claimed but not made and a wrong root cause.
+- **Exception to §1.1 (review agent writes no code):** during an owner-authorised rollout, the orchestrator may write fixes for a production incident it is handling, provided each fix is test-first and independently reviewed before the wave closes (as D0's rollout fixes were).
+- **Review deviations in wave 4, accepted:** G3 and G4 were checked by the parent only (G3 adds a pinning test; G4 changes no product code); G2's final correction was not re-reviewed (observability output only).
+- **G4's upstream SDK seam draft stays held** (external submission needs the owner). The `agent-os-inject` process spawn per session create goes to the Agent OS backlog.
+- **Next:** the R4 follow-up wave H1–H3, started without waiting. **E2 waits for real use:** it starts once the owner's real orchestration since D0 gives its Jev re-measure a population (at least 5 real parent sessions using `pi-orch`, with at least 30 children between them), or at the owner's call. No waiting window is scheduled.
+
 ## 4. Execution contract (applies to every step)
 
 **Anti-premature-victory rules.** A step is done only when **every** item in its *Definition of victory* is met **and** the evidence bundle below exists. "Tests pass" alone is never victory for a step with live behaviour. Mocked fetch, fixtures standing in for real runtimes, or serial runs standing in for concurrent ones do not count unless the step says so. A reviewer (the owner's review session or an independent reviewer) re-runs at least the live validation before a step is marked shipped. Self-reported PASS without a re-run is `claimed`, not `shipped`.
@@ -171,6 +183,8 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 - allocation tests stop themselves at a fixed ceiling;
 - a script asserts the target group and its limit before each allocating arm;
 - at least 12 GB must be free before starting.
+
+**Load claims state their concurrency and build (added at R4).** A trial, proof or soak reports, next to its headline, the peak concurrent active turns it reached, the build revision it ran (and whether that build contains the change under test), the sample count behind each lag or CPU figure, and whether its cgroup topology matches production's. The reviewer checks these before accepting the headline. Found at R4: G5's "10 children" peaked at 4 concurrent turns on a build without D0; D0's proof (c) had one lag sample; D0's proof (a) ran on a nested layout unlike production's.
 
 **Measurement discipline.** Re-measurements at review moments reuse the same instruments: the heap-soak harness (`scripts/heap-soak/`), the Jev specs (pinned `jev-1.13.0`), and the journal/stop-audit counts in §2. That keeps before and after comparable.
 
@@ -208,10 +222,15 @@ Stage D  Structural         D0 agents' tool processes out of the control plane's
                             D1 contained child execution (Phase 7 shadow → routing; Phase 8 resumed if authorised)
                             D2 decompose the sessions route module along D1's seams
             │
-         ── Review moment R4: failure-domain proof; production rollout decision ──
+         ── Review moment R4 (held 2026-10-01): D1 and Phase 8 not started (trigger in §3) ──
+            │
+         R4 follow-up wave: H1 session view without a full agent rehydrate (lag-gate latch from browsing)
+                            H2 child-run outcomes: empty final, cancelled-empty, goal settles idle
+                            H3 small items (WebSocket backpressure, streaming telemetry, terminal shell,
+                               degrade counter, DELETE cost, receipt inflation, claude-rc memory cap)
             │
 Stage E  Prove and keep     E1 recurring-defect ledger (runs alongside from Stage B on)
-                            E2 final re-measure (second 24 h soak + Jev re-run)
+                            E2 final re-measure (bounded soak + Jev re-run), once real use gives a population
             │
          ── Review moment R5: programme close or next plan ──
 ```
@@ -227,7 +246,8 @@ Within a stage, steps without a dependency may run in parallel with separate own
 - C1 depends on C2, C4 and C5 landing in the same contract bump or before it;
 - C3 builds on C1's dispatch template;
 - R3 follow-up wave: G1 (`pi-orch` and skill), G2 (attribution and the Pi streaming path), G3 (watch path) and G4 (Pi session create) touch disjoint paths and may run in parallel worktrees. G5 runs after G1 and G3, so it measures the fixed client and watch behaviour;
-- D0 may run alongside G1–G4: it touches process spawning and the unit and cgroup layout, not their paths. Its adversarial proof (c) can share G5's realistic load. D1 needs R4 authorisation.
+- D0 may run alongside G1–G4: it touches process spawning and the unit and cgroup layout, not their paths. Its adversarial proof (c) can share G5's realistic load. D1 was not authorised at R4.
+- R4 follow-up wave: H1 (Pi session subscribe and rehydrate path, WebSocket handling), H2 (run receipts, `pi-orch`, goal-engine in `pi-enhancement`) and H3's items touch largely disjoint paths and may run in parallel worktrees. H1 and H3's WebSocket backpressure both touch `server/src/websocket/`: give them one owner or a fixed seam. E2 follows the wave and its population trigger.
 
 ## 6. Steps
 
@@ -758,6 +778,9 @@ Decide: whether Stage D proceeds; authorise resuming Phase 8 of the resource-sca
   - every proof follows §4's *Memory containment for proofs*.
 - [ ] Production rollout under an owner-authorised drain-restart. After it, production telemetry shows the server cgroup's memory near the server's own use, and the children's work in the tools slice.
 **Not victory if:** a single aggregate hard limit can kill unrelated children's commands in ordinary work, placement silently fails open without a signal, or the proof uses only synthetic commands with no real child.
+**R4 (2026-10-01): two corrections to the record.**
+- **CPU weight.** In production the tools slice sits at `pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice` (systemd nests dashed slice names), a top-level peer of `system.slice` and `user.slice`, all at weight 100. The server's `CPUWeight=1000` acts only inside `system.slice`. So the tools are **not** weighted below the control plane; the server keeps its loop because it needs about one core, far below its share. Proof (a) ran on a nested layout, so it does not show this topology; E2 adds a burner arm on it. The server's weight never protected it against commands in `user.slice` (Claude Code remote-control sessions).
+- **Real load.** Since the final deploy, production has run one active turn in about 7 h (tools slice peak 1.16 GB), and G5 ran before D0 merged. The split under real child load is still unexercised; E2 covers it.
 
 #### D1 — Contained child execution
 
@@ -770,6 +793,8 @@ Decide: whether Stage D proceeds; authorise resuming Phase 8 of the resource-sca
 - [ ] Production rollout only after R4, owner-gated.
 
 **R3 (2026-09-30):** not authorised yet. It is decided at R4 on G2's root cause of the 11:43 episode, G5's real-trial numbers and D0's result.
+
+**R4 (2026-10-01):** not started; the reopen trigger is in §3's R4 block. D2 waits for D1's seams.
 
 #### D2 — Decompose the sessions route module
 
@@ -795,6 +820,53 @@ Inputs: the R3 follow-up wave (G1–G5) and D0 evidence bundles; production tele
 - honesty gap in child reports: D0's child claimed fixes it had not made and a wrong root cause (caught by the Luna closure and parent verification); keep file:line claims and real-path tests in correction briefs.
 Decide: whether D1 (per-session workers) and Phase 8 proceed; production rollout of contained routing, and its observation gate; whether to raise the admission cap.
 
+**R4 held 2026-10-01** (decisions in §3's R4 block). **R4 review reading:**
+- **Wave 4 quality.** Well executed and accurately handed off: every production value in `R4-HANDOFF.md` matched; CI green; placement suites 96/96 (server) and 18/18 (pi-enhancement) re-run; rollout scripts abort on active turns, running placed commands and unpushed HEAD. Not re-run: `verify-d0.sh` (it spawns a production child).
+- **New production finding: browsing sessions latches the admission lag gate.** 2026-10-01 05:49:47–05:53:30 UTC, one browser client sent 58 `switch_session` messages; 56 cold rehydrates produced 50 loop stalls totalling 11.8 s (max 503 ms). A2 lag p99 read 342, 380, 383, 360, 322 and 340 ms for six consecutive readings with zero active turns, and resident sessions rose from 1 to the cap of 20. With the gate at 300 ms over two readings, admission was latched for about 3 minutes (derived from the code and readings; no API traffic arrived, so no refusal was logged). Subscribing to a non-resident Pi session rehydrates a full agent (all extensions plus the skills walk), the cost G4 measured for a create. G4's "no saving without an upstream seam" holds for creates, not for viewing. → H1.
+- **D0 under real load is unexercised**, and G5 does not cover it (4 concurrent turns, pre-D0 build). → E2.
+- **D0's CPU-weight claim was wrong** (see D0's R4 note). → plan text corrected; E2 burner arm.
+- **Child-run outcomes nobody owned.** G5 runs with content: zai 12/16, GPT-6 Luna 8/14 (the rest completed with empty final text or were cancelled with none); the parent's goal settled `idle` instead of achieved, as in wave 3's goal anomalies. Neither was on the E1 ledger. → H2.
+- **Housekeeping.** `placementDegrades` is cumulative (72, all from 2026-09-30), so alerts cannot tell a new degrade from an old one (→ H3). Stale bundle headers in `G2.md` and `D0.md` corrected at R4. The Definition-of-victory checkboxes in this plan are not ticked; §9 is the record of completion.
+
+### R4 follow-up wave (added at R4, 2026-10-01)
+
+**Intent.** Remove what would make scaled-up orchestration unreliable or expensive before E2 measures it: browser activity that blocks children, child runs that end without their answer, and the small items R3 and R4 routed. These steps change no Internal API wire contract, so they fit the C6 window. Every step follows §4, including its new load-claims rule.
+
+#### H1 — Session view without a full agent rehydrate
+
+**Intent.** Opening or switching to a session in the browser never stalls the event loop enough to latch admission's lag gate or slow children's streams.
+**Evidence.** The R4 review reading (58 switches, 11.8 s of stalls, gate latched about 3 minutes). Code: `MultiSessionManager` rehydrates a full agent when a client subscribes to a non-resident session. Also seen: a 357 ms stall attributed to `<none>` on `get_sessions` with about 1,950 registry entries.
+**Approach.**
+1. Reproduce on a disposable server with G4's instrument (real extension set and skills corpus): a burst of switches to non-resident sessions, alone and alongside API children. Measure main-thread time per switch, lag readings, gate latches and refusals. Positive control: the old code latches the gate.
+2. Attribute what viewing needs (transcript replay) versus what only prompting needs (agent creation, extension binding, skills).
+3. Fix only a validated cause (owner rule). Candidate, to be proven, not assumed: a view-only subscribe that replays the transcript from the session file and creates the agent on the first prompt or command. Alternatives if that is unsafe: pacing or serialising cold rehydrates. Keep B1.3's isolation guarantees; no upstream changes.
+4. Attribute the `get_sessions` stall and fix it if validated.
+**Definition of victory.**
+- [ ] Reproduction with numbers and the positive control.
+- [ ] Failing tests first; fix; the switch burst alongside children keeps lag p99 under 300 ms with no gate latch and no refusals, on the realistic child pattern; independent live re-run.
+**Not victory if:** the gate threshold is raised, or browser-caused lag is excluded from the gate, without removing the stall.
+
+#### H2 — Child-run outcomes: empty final, cancelled-empty, goal settles idle
+
+**Intent.** A child's run ends with its answer, and a goal ends achieved or failed, so parents do not spend recovery rounds (§1's goal: verified child work per unit of parent effort).
+**Evidence.** G5 first runs: zai 8 completed (2 with empty final text) and 2 cancelled of 10; GPT-6 Luna 7 completed (3 empty) and 3 cancelled of 10; second runs all clean. The parent's goal settled `idle` and the driver hit its deadline. Wave 3: a goal marked `failed` ("run ended in under 15000ms") while the child kept working; a goal start on a busy session held its response ~38 min.
+**Approach.** The R4 root-cause investigations come first (reports in `/root/orch-ops/orchestration-scaling/r4/`). Each cause is classed as a measurement artefact (fix the classifier and document), a client behaviour (`pi-orch`), a server defect, a goal-engine defect (`pi-enhancement`), or a provider empty completion (E1 watch list). Fix only validated causes, test-first, in the owning repository.
+**Definition of victory.**
+- [ ] Each cause class: a failing test, the fix, and a live re-run on at least two routes with the realistic child pattern.
+- [ ] G5's receipt-breakdown instrument re-run on the fixed build shows the classes gone, or each remaining case explained.
+- [ ] E1 rows link the regression tests.
+
+#### H3 — Small items (batch)
+
+Each item has its own test or check; one lane may take several.
+- **Slow WebSocket consumer backpressure** (G2's d1 arm: 625 ms p99). Victory: G2's harness d1 arm under 300 ms, with the old code as the positive control.
+- **Streaming-path span and per-provider chunk-rate telemetry** (G2's proposal), so an 11:43-type stall can be attributed; the E1 row for that episode stays open until then.
+- **Web UI terminal shell in the tools slice** (D0's one-line switch). Victory: a test, then a production check after the next owner-approved restart.
+- **`placementDegrades` per boot** (or as a delta), so alerts see new degrades. Victory: a test.
+- **Pi session `DELETE` costs ~1 s** of timer-shaped wall time (G4 §6). Attribute; fix only a validated cause.
+- **Receipt inflation from refused-prompt retries** (G3): fix in `pi-orch` unless attribution shows a server cause. Victory: a test that a refused-then-retried prompt leaves one receipt per real attempt.
+- **Claude Code remote-control server memory cap** (§3 R4 block), applied through `/root/rc` with the owner's go. Victory: the effective values read back, and a deliberately oversized command in a test session is killed without stopping the server.
+
 ### Stage E — Prove and keep
 
 #### E1 — Recurring-defect ledger (runs alongside from Stage B onward)
@@ -805,6 +877,7 @@ Decide: whether D1 (per-session workers) and Phase 8 proceed; production rollout
 - [ ] The ledger exists with the classes from the 2026-09-26 operator-reports run, plus "a fix claims every path but wires one". Found at R1: `91effe69` fixed one of three dispose paths. The B1 per-path tests are its regression tests. The session watcher's unlink path is the second instance (2026-09-28), and B1.1's tests are its regression tests. Added at R2:
   - **"A mechanism sees only what it meters."** B4's drain counts admission turns and receipts, so extension-driven and browser turns escape it. B4.1's tests are the regression tests.
   - **"A response is lost after the receipt is terminal"** (the 17.8 MB dispatch, not yet reproduced; C2).
+  Added at R4: **"A child run ends without its answer"** (completed with empty final text, or cancelled with none; G5) and **"A goal settles idle instead of achieved or failed"** (G5; wave 3's goal anomalies). H2 owns both.
 - [ ] Each fixed class links a regression test that fails on the pre-fix code.
 
 #### E2 — Final re-measure
@@ -814,10 +887,17 @@ Decide: whether D1 (per-session workers) and Phase 8 proceed; production rollout
 - Its load adds B1.2's browser-like session-open reproduction alongside the API children, so lag regressions show up, not only heap.
 - Plus a re-run of all five Jev specs over the period since Stage C shipped. This includes R3's parent and child re-measure (moved here at R3): supervision overhead, API-misuse share, correction rate, workspace-problem rate and lineage coverage against §2, with the programme's own lanes reported separately.
 - Plus a production-telemetry comparison against the §2 A2 baseline.
+- **Added at R4.**
+  - **Start trigger:** the owner's real orchestration since D0 gives the Jev re-measure a population (at least 5 real parent sessions using `pi-orch`, with at least 30 children between them), or the owner calls it. No waiting window is scheduled.
+  - **D0 under real load:** at least 8 concurrent real turns on at least two routes, with children running test suites or builds and placement on. Report server-cgroup memory against the server's own use and the children's work in the tools slice.
+  - **Browser burst during orchestration:** H1's switch burst runs alongside the children; the gate must not latch.
+  - **D0 proofs nobody has run yet**, on a disposable unit that mirrors production's topology (tools slice under `pi.slice`): a CPU burner on every core; host-level OOM victim selection; the loaded `MemoryLow` eviction contrast; orphans after a hard server crash. Every proof follows §4's containment rule.
+  - **Route outcomes:** runs with content per route, with H2's instrument.
 **Definition of victory.**
 - [ ] Soak verdict: no growth beyond the A1 threshold, or growth explained and bounded; lag under B2's threshold throughout.
 - [ ] Production telemetry: spike-minute count and heap floor compared with the §2 baseline over a stated window.
 - [ ] Jev comparison table against §2, with the same model pin and specs, and deltas stated with n.
+- [ ] (R4) The D0 real-load and contained proofs above, each stating peak concurrency, build and sample counts (§4).
 
 #### Review moment R5
 
@@ -844,7 +924,8 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
    - Re-run the retainer summary on its snapshots. Until B0.1 ships, the harness does not take the end snapshot. Take it through the inspector before `cli.ts stop` (method in `B1-confirmation-soak.md` §5).
    Historical (R1): `scripts/heap-soak/README.md` and the soak run directory `/root/.pi-web-ui/validation/heap-soak/full-1790411484255-ec8b813c/` (`report.md`, `samples.csv`, `events.jsonl`, `snapshots/`, `run-state.json`). Check status with `npx tsx scripts/heap-soak/cli.ts status --run-id full-1790411484255-ec8b813c`. If `report.md` is missing after the window, run `… cli.ts report --run-id full-1790411484255-ec8b813c`; it works on partial data. If the server died mid-run, that is a result: read `events.jsonl` and the threshold snapshots. Compare snapshots by constructor (the report's snapshot section), and read `A1-harness.md` §11 for the early Gate 1 signal.
 5. `agent-os recall "orchestration scaling readiness"` for anything captured since.
-6. For R4: the orchestrator's hand-off `/root/orch-ops/orchestration-scaling/R4-HANDOFF.md` first (what shipped, owner grants, incidents, production layout, **pending** recommendations, cheapest decisive checks), then `D0.md` §10–§11 and the G1–G5 bundles. R3's equivalent is `R3-HANDOFF.md` in the same directory.
+6. For R5: §3's R4 block and the *R4 review reading* under Review moment R4, then the H1–H3 bundles and E2. The R4 root-cause reports are in `/root/orch-ops/orchestration-scaling/r4/`.
+7. For R4 (historical): the orchestrator's hand-off `/root/orch-ops/orchestration-scaling/R4-HANDOFF.md` first (what shipped, owner grants, incidents, production layout, **pending** recommendations, cheapest decisive checks), then `D0.md` §10–§11 and the G1–G5 bundles. R3's equivalent is `R3-HANDOFF.md` in the same directory.
 
 **Durable locations:**
 
@@ -888,6 +969,8 @@ This section exists so a fresh Opus agent can hold any review moment with the sa
 - **Ask what a mechanism cannot see.** B4's drain was correct for everything it metered, and its bundle listed what it did not meter. The gap mattered only when weighed against the owner's actual child pattern (goal-armed children) (R2).
 - **An isolation proof must be contained by something other than the mechanism it proves** (2026-09-30: D0's placement bug put a test allocation in an unlimited root-level cgroup, and the host OOM killed production). See §4 *Memory containment for proofs*.
 - **Host OOM policy matters.** `vm.oom_kill_allocating_task=1` kills whichever task is allocating, which means random victims; this host now runs with 0.
+- **Read a trial's concurrency and build before its headline** (R4). "10 children" was 4 concurrent turns on a build without the change under test. See §4's load-claims rule.
+- **Viewing a session is not free** (R4). A browser switch to a non-resident Pi session rehydrates a full agent; a burst of switches latched admission's lag gate in production with no API work running (H1).
 - **Keep long soaks rare.** The owner will not support many 24 h runs. Prefer synthetic proofs (file churn, bounded create/delete loops, `micro` runs) whenever they decide the question.
 
 ## 8. Review moment log
@@ -909,6 +992,7 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | Stage C completion + side work | 2026-09-30 | `19aabd3f-…` (orchestrating; owner authority as wave 3, plus the requests below) | **Stage C:** C2, C1, C3a/C3b and C6 shipped (Luna-reviewed or parent-verified; see §9 and the C*.md bundles); production drain-restarts 03:33 and 09:55 UTC, contract 1.58.0 and stability window open. **Owner side requests:** `pi-orch` published as a public repo; public Pi Web UI orchestration skill pack; Agent OS contract-mirror guard (M1); gitleaks + secret scanning, no paid CI. **Incidents:** an external benchmark starved the event loop (owner set `CPUWeight=1000`; L1 groups lag alerts per incident and adds CPU telemetry); GitHub CI red since wave 3 fixed by F1; a voided C1 live run on an unapproved route (credential rule tightened). **R3 inputs:** T1 CPU load test ([`T1-CPU-LOAD.md`](./execution-reports/orchestration-scaling/T1-CPU-LOAD.md); summary in the *CPU input for R3* note in §6). **Reviewer entry point:** `/root/orch-ops/orchestration-scaling/R3-HANDOFF.md` (lanes, owner decisions, incidents, open items); detailed log `STATE-wave3.md`. |
 | R3 (opened) | 2026-09-30 | `a7de099d-34d5-562a-a8ae-9faf8f1e7fbb` (fresh Opus; Claude Code Remote Control, from `R3-HANDOFF.md`) | **Inputs checked:** Stage C bundles and Luna reviews; T1 report, driver and raw data; production A2/L1 telemetry and the unit journal since the 09:55 restart (per-turn CPU, the 11:43 episode, `LoopAttribution` tags, the service cgroup's consumed CPU and memory peaks); CI on pi-web-ui, pi-orch and agent-workflow-skills; production build and `CPUWeight`. Re-ran: C6 guard + client drift tests 25/25, `pi-orch` 197/197, Agent OS mirror 1.58.0. Not re-run: live proofs. **Findings:** *R3 review reading* in §6; Stage C met §4's independent live re-run for C2 only. **Owner input:** the CPU test was motivated by host-wide contention (another agent's benchmark), not the Internal API's own CPU; a parent can spread children across providers; minimise waiting (no more long soaks or waiting windows). **Plan changes (owner accepted):** status line; *R3 review reading*; R3 opened paragraph; new R3 follow-up wave G1–G5; §5 sequence and dependencies; §9 rows (R3, G1–G5, the stale C1 publishing note). **Decisions (owner accepted the recommendations; §3 R3 block):** D0 authorised, D1 and Phase 8 to R4; cap 15; C6 window to R5 without blocking planned steps; Jev re-measure into E2; E2 soak bounded; GLM children with DeepSeek fallback; DeepSeek route kept; opencode-go 400s on the E1 watch list; pack sync as a small item; worktree clean-up. **Further plan changes:** status line; §3 R3 block; R3 held; new D0; D1 note; R4 inputs; E2; small item; §5; §9. **Next review moment: R4**, after the R3 follow-up wave and D0. |
 | R3 follow-up wave execution (complete; production deployed) | 2026-09-30 | `a7de099d-…` (orchestrating; owner authority: autonomous, GLM children with DeepSeek fallback, production restarts in this wave) | Lanes on GLM 5.3 Flash (`pi` · `zai`), reviewer GPT-6 Luna. **Accepted and merged:** G3 (not a watch defect; T1's loop was refusal retries; pinning test) and G4 (session-create cost attributed; no safe ≥ 30 % saving without an upstream seam; upstream draft for R4). **Also accepted:** G1 (`pi-orch` `285d253`), G5 (`9a450c3a`), G2 (`f426bf7f`), D0 (`db2fd3f0`). **Production:** restart 22:50 UTC (D0 phase 1 + G2), control-plane budget applied live, restart 23:09 UTC (anchor fix); a real child's command verified placed after each. **Rollout findings, fixed test-first:** `set-property` overrides outranked the control-plane drop-in and the base unit's `MemoryHigh=3G` would have been inherited; `Delegate=` is ignored on slices (placement degraded after every daemon-reload); the wrapper could kill a child's own running commands on a read-back failure; CI's lint ratchet caught four unused bindings the local gates missed (`lint:ratchet` is now in the parent's gate list). **Incident:** the host OOM at 16:56 (§3). Owner decisions: host OOM policy; D0 unit settings; proof containment. **Plan changes:** status; §3 block; §4 containment rule; R3 reading corrected (G3); D0 targets and DoV (d)–(e); R4 inputs; §7 rules; §9 rows. |
+| R4 | 2026-10-01 | `8caabeec-cfa7-595a-9257-c38ca0f73ff6` (fresh Opus; Claude Code Remote Control, from `R4-HANDOFF.md`) | **Inputs checked:** `R4-HANDOFF.md`, `STATE-wave4.md`, the D0 and G1–G5 bundles and the D0 production live-review rounds; CI on pi-web-ui and pi-orch; production unit and cgroup values (server, anchor, tools slice, `system.slice`, `system.control` overrides), the degrade log, the production build revision and the deployed extension copies; A2 telemetry and the unit journal since the final D0 deploy; the claude-rc unit. **Re-ran:** placement suites (server 96/96, pi-enhancement 18/18) in memory-capped scopes. **Not re-run:** `verify-d0.sh` (it spawns a production child). **Findings:** *R4 review reading* (browser session switching latched the admission lag gate for about 3 minutes; D0 unexercised under real load; the CPU-weight claim was wrong; child-run outcomes nobody owned; a cumulative degrade counter). **Decisions (owner accepted the recommendations; §3 R4 block):** wave 4 accepted; D1 and Phase 8 not started, with a reopen trigger; cap 15; claude-rc memory cap; terminal shell placed; routing for systems lanes; the rollout-fix exception to §1.1; wave-4 review deviations accepted; G4 draft held; E2 on a population trigger. **Root-cause investigations** for H2 dispatched (two read-only Claude Sonnet children; reports in `/root/orch-ops/orchestration-scaling/r4/`). **Plan changes:** status line; §3 R4 block; §4 load-claims rule; §5 sequence and dependencies; D0 R4 note; D1 R4 note; R4 held and its review reading; new R4 follow-up wave H1–H3; E1 classes; E2 additions; §7 read order and rules; §9 rows; stale headers in `G2.md` and `D0.md`. |
 
 ## 9. Status ledger
 
@@ -946,5 +1030,9 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | G4 | **accepted** 2026-09-30 (no product change; merged `f81f5ed9`) | [`G4.md`](./execution-reports/orchestration-scaling/G4.md) | ~410 ms of main-thread time per orchestrated create, ~47% of it the SDK skills walk; no safe ≥ 30% saving without an upstream seam (draft for R4) |
 | G5 | **accepted** 2026-09-30 (parent-verified; success rates corrected by the parent from the reviewer's recount; merged `9a450c3a`) | [`G5.md`](./execution-reports/orchestration-scaling/G5.md) | One real GLM parent, 10 children (6 zai at route limit 4, 4 Luna), disposable 12 GB-capped server: control plane idle (main thread 2.2% mean, 25% peak, lag max 93 ms, no refusals); children's commands peaked at 4.7 cores in the server's cgroup, the risk D0 removes |
 | D0 | **accepted and deployed** 2026-09-30 (merged `db2fd3f0`; rollout fixes `3bf9685e`, `e3984639`; production restarts 22:50 and 23:09 UTC, then 00:01 and 00:26 UTC on 2026-10-01, under the wave's restart authority; Luna production live re-run fixes `b40ab9ea` and closure-round correction `28238791`, pi-enhancement `9a959a5`, `2c7a24d`) | [`D0.md`](./execution-reports/orchestration-scaling/D0.md) §10 | Placed commands run in per-child groups (8 GiB max, 6 GiB high, 2048 pids, 2 GiB swap, score 0) under a delegated anchor service in the 18 GiB tools slice; the server has its own 8 GiB budget (no `MemoryHigh`, 2 GiB protected), `OOMPolicy=continue`, score -500. Post-deploy defect fixed the same night: systemd ignores `Delegate=` on slices, so daemon-reloads disabled placement; the anchor survives a reload with a live group (verified in production). Telemetry check of the split under real load is an R4 input |
-| D1–D2 | not started | — | Decided at R4 |
-| E1–E2 | not started | — | |
+| R4 | **held 2026-10-01** (session `8caabeec`); decisions in §3 | §6 *R4 review reading*, §8 | Wave 4 accepted; D1 and Phase 8 not started (reopen trigger in §3); E2 waits for a real-use population |
+| H1 | not started (added at R4) | — | Browser session view without a full agent rehydrate; production lag-gate latch 2026-10-01 05:50 UTC |
+| H2 | **root-cause investigation in progress** (added at R4) | `/root/orch-ops/orchestration-scaling/r4/` | Empty-final and cancelled-empty child runs; goals that settle idle |
+| H3 | not started (added at R4) | — | Small items: WebSocket backpressure, streaming telemetry, terminal shell placement, degrade counter per boot, `DELETE` cost, receipt inflation, claude-rc memory cap |
+| D1–D2 | **not started; not authorised at R4** | — | Reopen trigger in §3 R4 block |
+| E1–E2 | not started | — | E1: R4 added two classes (H2). E2: starts on the population trigger in §3 R4 block, after H1–H3 |
