@@ -178,8 +178,9 @@ describe('C2 — post-terminal response fence', () => {
 
     // Let the dispatch begin, then terminalise the receipt from the outside
     // (what POST /sessions/:id/abort does) without any runtime completion.
-    await new Promise((r) => setTimeout(r, 40));
-    expect(manager.get('run-1')?.status).toBe('started');
+    // Wait for the condition, not a fixed 40 ms: under full-suite load the dispatch
+    // had not started yet and the assertion saw 'accepted' (E1 load-flake class).
+    await vi.waitFor(() => expect(manager.get('run-1')?.status).toBe('started'), { timeout: 5_000, interval: 10 });
     await manager.cancelSession('session-1');
     expect(manager.get('run-1')?.status).toBe('cancelled');
 
@@ -242,8 +243,9 @@ describe('C2 — post-terminal response fence', () => {
     const res = mockRes();
     const dispatch = routes.handleSendPrompt(req, res, 'cc-hang');
 
-    await new Promise((r) => setTimeout(r, 40));
-    expect(manager.get('run-1')?.status).toBe('started');
+    // Wait for the condition, not a fixed 40 ms: under full-suite load the dispatch
+    // had not started yet and the assertion saw 'accepted' (E1 load-flake class).
+    await vi.waitFor(() => expect(manager.get('run-1')?.status).toBe('started'), { timeout: 5_000, interval: 10 });
     await manager.cancelSession('cc-hang');
     expect(manager.get('run-1')?.status).toBe('cancelled');
 
