@@ -139,6 +139,16 @@ describe('correction-08 finding 2: bash prefix all-or-nothing (fault injection, 
     expect(readFileSync(scoreFile, 'utf8').trim()).toBe('0');
   });
 
+  it('FALLBACK SCORE FAULT: a failed reset on the root-unavailable path is reported, and the command still runs (Luna closure round)', () => {
+    const degrade = path.join(root.slice, 'degrade-fbfault.log');
+    const scoreDir = mkdtempSync(path.join(tmpdir(), 'd0-score-dir-')); // a directory: the reset write fails
+    const env = { ...baseEnv(root.slice, degrade), PI_TOOLS_ROOT: path.join(root.root, 'gone3'), PI_TOOLS_CG: path.join(root.root, 'gone3', 'pi-x'), PI_TOOLS_OOM_SCORE_FILE: scoreDir };
+    const { out } = runPrefix(root.slice, env, 'echo RAN-FBFAULT');
+    expect(out).toContain('RAN-FBFAULT');
+    expect(readFileSync(degrade, 'utf8')).toContain('oom-score-reset-failed');
+    rmSync(scoreDir, { recursive: true, force: true });
+  });
+
   it('ROOT MISSING: never creates the root; degrades; command runs', () => {
     const degrade = path.join(root.slice, 'degrade-noroot.log');
     const env = { ...baseEnv(root.slice, degrade), PI_TOOLS_ROOT: path.join(root.root, 'gone'), PI_TOOLS_CG: path.join(root.root, 'gone', 'pi-x') };

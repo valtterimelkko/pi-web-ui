@@ -156,9 +156,11 @@ export function placementBashPrefixLine(_cfg: PlacementConfig): string {
     '{',
     'pl=0; ok=1;',
     'sf="${PI_TOOLS_OOM_SCORE_FILE:-/proc/self/oom_score_adj}";',
-    // Luna D0 live re-run finding 2: reset the score whenever placement is requested,
-    // so a fallback command does not keep the control plane's -500.
-    '[ -n "${PI_TOOLS_CG:-}" ] && echo 0 > "$sf" 2>/dev/null;',
+    // Luna D0 live re-run finding 2 + closure round: whenever placement is requested,
+    // reset the score FIRST, read it back, and report a failure before any branch. A
+    // failed reset blocks the join; the command still runs (never fail a command because
+    // placement failed) at its inherited score, with the alarm in the degrade log.
+    'if [ -n "${PI_TOOLS_CG:-}" ]; then echo 0 > "$sf" 2>/dev/null; osc="$(cat "$sf" 2>/dev/null)"; [ "$osc" = "0" ] || { ok=0; printf \'%s bash %s oom-score-reset-failed\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true; }; fi;',
     'if [ -n "${PI_TOOLS_CG:-}" ] && [ -d "${PI_TOOLS_ROOT:-}" ]; then',
     'rmax=""; [ -r "$PI_TOOLS_ROOT/memory.max" ] && rmax=$(cat "$PI_TOOLS_ROOT/memory.max" 2>/dev/null);',
     'case "$rmax" in ""|max) p2="${PI_TOOLS_ROOT%/*}"; [ -r "$p2/memory.max" ] && rmax=$(cat "$p2/memory.max" 2>/dev/null);; esac;',
@@ -171,7 +173,6 @@ export function placementBashPrefixLine(_cfg: PlacementConfig): string {
     'check_limit memory.high "${PI_TOOLS_MEM_HIGH:-}";',
     'check_limit pids.max "${PI_TOOLS_PIDS_MAX:-}";',
     'check_limit memory.swap.max "${PI_TOOLS_SWAP_MAX:-}";',
-    'echo 0 > "$sf" 2>/dev/null; osc="$(cat "$sf" 2>/dev/null)"; [ "$osc" = "0" ] || { ok=0; printf \'%s bash %s oom-score-reset-failed\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true; };',
     'if [ "$ok" -eq 1 ]; then',
     'echo $$ > "$PI_TOOLS_CG/cgroup.procs" 2>/dev/null && pl=1 || printf \'%s bash %s fell-open\n\' "$(date -u +%FT%TZ)" "${PI_TOOLS_GROUP:-unknown}" >> "$PI_TOOLS_DEGRADE_FILE" 2>/dev/null || true;',
     'else',
