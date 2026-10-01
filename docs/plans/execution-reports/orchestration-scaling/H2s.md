@@ -81,6 +81,14 @@ TDD: RED — new test "a refusal arising between the route preflight and the inn
 - **Abort case** (`01a0f936`): busy turn (`sleep 120`); goal start mid-turn **HTTP 200 in 0.0117 s** (accepted); `POST /abort` at 20:45:22 → `{success:true}`; the busy turn's curl finished at 15.09 s (aborted). The armed goal file survived the abort: once the aborted turn settled, the engine ran the goal — **`achieved`, runs 1**, session `idle`. Receipt ledger after the run: 4 receipts, **all terminal** — `087eb365` completed/terminal_signal (P busy turn), `a89eff85` completed/documented_handler_return (P goal-start dispatch), `2f9522d6` cancelled/terminal_signal (A busy turn, at abort), `19c996ba` cancelled/terminal_signal (A goal-start dispatch, at abort). **No receipt left `queued` or `running`** — no stranded receipt, so no parent question. Facts worth noting: the abort cancelled the goal-start receipt (it rode the aborted turn) while the goal itself — persisted at the command boundary — ran to completion afterwards; receipt and goal state tell coherent stories.
 - Cleanup: both sessions DELETE → 200; scope stopped, socket gone, zero validation processes; credential copies deleted; no heap snapshots.
 
+## Correction 04 (parent review of `660d1cee`, 2026-10-01T20:55Z; commit this round)
+
+**Hang gap in the acceptance race.** If `handleSendPrompt` **rejected** (an exception escaping before `onDispatchAccepted` and before any `res.end` — e.g. a throw from `runReceipts.attachLease`), neither race arm settled: the `.catch` only logged and the HTTP request hung forever. Same for a pathological settle-without-acceptance-and-without-response.
+
+Fix: the inner promise's settlement is a **third race arm**. On rejection or on settle-without-acceptance-and-without-refusal the route answers `500 {error: 'Internal API request failed.', code: INTERNAL_ERROR}` — the same shape the blocking path's handler (server.ts top-level catch) produces — and the existing log line is kept.
+
+TDD: RED — new test "a pipeline rejection before acceptance answers 500 instead of hanging the request" (seam: `manager.attachLease` stubbed to throw; liveness streaming; rejection escapes before `markStarted` and before any capture `end`) timed out at vitest's 5000 ms — the route hung; GREEN — `41 passed (41)`. Gates: full server unit suite **6178 passed, 0 failed, exit 0**; typecheck 0; `lint:ratchet -- --base aeef536f` 11 changed files, `violations: []`; `git diff --check aeef536f...HEAD` exit 0. No live re-run (per the correction); the fast-accept and refusal-forwarding behaviour is unchanged and still covered by the existing 40 tests.
+
 ## Cannot see (blind spots for adjudication)
 
 1. Concurrent multiple goal starts on ONE busy session are unit-covered only (single-start proven live).

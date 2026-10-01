@@ -5885,14 +5885,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const capture = createCaptureResponse();
         let signalAccepted: () => void = () => undefined;
         const accepted = new Promise<void>((resolve) => { signalAccepted = resolve; });
-        void handleSendPrompt(synthesizePromptRequest(composed.command), capture, sessionId, { onDispatchAccepted: signalAccepted })
-          .catch((error: unknown) => {
-            logger.errorObject(`Busy-session goal start dispatch failed for ${sessionId}`, error);
-          });
+        const innerDispatch = handleSendPrompt(synthesizePromptRequest(composed.command), capture, sessionId, { onDispatchAccepted: signalAccepted });
+        innerDispatch.catch((error: unknown) => {
+          logger.errorObject(`Busy-session goal start dispatch failed for ${sessionId}`, error);
+        });
+        // Correction 04: the inner pipeline's settlement is a third race arm —
+        // if it rejects (an exception escaping before onDispatchAccepted and
+        // before any refusal is written) or settles with neither acceptance nor
+        // a response, neither arm above would fire and the HTTP request would
+        // hang forever. Answer 500 INTERNAL_ERROR, as the blocking path's
+        // handler (server.ts top-level catch) would.
+        const innerSettled = innerDispatch.then(() => 'settled' as const, () => 'settled' as const);
         const outcome = await Promise.race([
           accepted.then(() => 'accepted' as const),
           capture.ended.then(() => 'refused' as const),
+          innerSettled.then(() => 'error' as const),
         ]);
+        if (outcome === 'error') {
+          sendJson(res, 500, { error: 'Internal API request failed.', code: ErrorCode.INTERNAL_ERROR });
+          return;
+        }
         if (outcome === 'refused') {
           // Forward the inner refusal exactly as the blocking path would.
           const retryAfter = capture.headers['retry-after'];

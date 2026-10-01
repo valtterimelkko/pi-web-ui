@@ -344,6 +344,28 @@ describe('goal function (contract 1.27.0)', () => {
       expect(agentSession.prompt).not.toHaveBeenCalled();
     });
 
+    it('contract 1.58.2 correction 04: a pipeline rejection before acceptance answers 500 instead of hanging the request', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
+      // The inner pipeline rejects after admission but before markStarted and
+      // before any refusal is written to the capture response: neither the
+      // accepted nor the refused race arm can fire.
+      const originalAttachLease = manager.attachLease.bind(manager);
+      manager.attachLease = vi.fn(() => { throw new Error('lease attach exploded'); });
+      try {
+        const res = mockRes();
+        await routes.handleSessionGoalControl(
+          jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'must not hang' }),
+          res,
+          'session-1',
+        );
+        expect(res.statusCode).toBe(500);
+        expect(JSON.parse(res.body).code).toBe('INTERNAL_ERROR');
+        expect(agentSession.prompt).not.toHaveBeenCalled();
+      } finally {
+        manager.attachLease = originalAttachLease;
+      }
+    });
+
     it('pause composes /goal pause-now and honours the busy pass-through mid-run', async () => {
       multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
       const req = jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' });
