@@ -152,6 +152,12 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 - **G4's upstream SDK seam draft stays held** (external submission needs the owner). The `agent-os-inject` process spawn per session create goes to the Agent OS backlog.
 - **Next:** the R4 follow-up wave H1–H3, started without waiting. **E2 waits for real use:** it starts once the owner's real orchestration since D0 gives its Jev re-measure a population (at least 5 real parent sessions using `pi-orch`, with at least 30 children between them), or at the owner's call. No waiting window is scheduled.
 
+**Owner decisions recorded 2026-10-01 (after R4, on H2's root causes):**
+- **Interim fixes I1–I4 run before the H wave**, limited to robustness fixes for goal children driven through the Internal API. Interactive use of `/goal` with `auto-compact-75` must not regress (the owner relies on it in long sessions and has seen no problems there). Each fix needs heavy live validation, which may use GLM 5.3 Flash freely (`zai`, no cost to the owner).
+- **Orchestration of the interim fixes and the H wave goes through the Internal API**, not the parent's own Claude subagents (Claude quota is scarce). Owner routing, used together and always quota-aware: GLM 5.3 (`pi` · `zai/glm-5.3`) for **one** bounded child per 5-hour zai window; GLM 5.3 Flash (`pi` · `zai/glm-5.3-flash`) for 1–3 bounded children on less critical work; Gemini 3.8 Flash on the `antigravity` runtime for 1–2 children at most (weekly quota); DeepSeek v4.1 Flash on the `pi` runtime via `commandcode` and `opencode-go` for up to 5 children across both providers; GPT-6 Luna (`pi` · `openai-codex` only) for one child, preferably reviews. After the interim fixes, goal-armed children again if the goal path proves reliable.
+- **Production restart authority:** "you have authority for prod restarts during the interim-phase and during the wave" (owner, 2026-10-01). Protocol unchanged: activeTurns 0, board check, `production:lock`, drain-restart, verification.
+- **Claude Code remote-control server memory cap** prepared in `/root/rc` (`571e79e`); the owner applies it.
+
 ## 4. Execution contract (applies to every step)
 
 **Anti-premature-victory rules.** A step is done only when **every** item in its *Definition of victory* is met **and** the evidence bundle below exists. "Tests pass" alone is never victory for a step with live behaviour. Mocked fetch, fixtures standing in for real runtimes, or serial runs standing in for concurrent ones do not count unless the step says so. A reviewer (the owner's review session or an independent reviewer) re-runs at least the live validation before a step is marked shipped. Self-reported PASS without a re-run is `claimed`, not `shipped`.
@@ -247,6 +253,7 @@ Within a stage, steps without a dependency may run in parallel with separate own
 - C3 builds on C1's dispatch template;
 - R3 follow-up wave: G1 (`pi-orch` and skill), G2 (attribution and the Pi streaming path), G3 (watch path) and G4 (Pi session create) touch disjoint paths and may run in parallel worktrees. G5 runs after G1 and G3, so it measures the fixed client and watch behaviour;
 - D0 may run alongside G1–G4: it touches process spawning and the unit and cgroup layout, not their paths. Its adversarial proof (c) can share G5's realistic load. D1 was not authorised at R4.
+- R4 interim fixes: I1 (`pi-orch`), I2 (server follow-up correlation), I3 (goal engine in `pi-enhancement`) and I4 (canonical skills) touch different repositories and run in parallel; their integrated proof follows all three. The H wave starts after them.
 - R4 follow-up wave: H1 (Pi session subscribe and rehydrate path, WebSocket handling), H2 (run receipts, `pi-orch`, goal-engine in `pi-enhancement`) and H3's items touch largely disjoint paths and may run in parallel worktrees. H1 and H3's WebSocket backpressure both touch `server/src/websocket/`: give them one owner or a fixed seam. E2 follows the wave and its population trigger.
 
 ## 6. Steps
@@ -828,6 +835,34 @@ Decide: whether D1 (per-session workers) and Phase 8 proceed; production rollout
 - **Child-run outcomes nobody owned.** G5 runs with content: zai 12/16, GPT-6 Luna 8/14 (the rest completed with empty final text or were cancelled with none); the parent's goal settled `idle` instead of achieved, as in wave 3's goal anomalies. Neither was on the E1 ledger. → H2.
 - **Housekeeping.** `placementDegrades` is cumulative (72, all from 2026-09-30), so alerts cannot tell a new degrade from an old one (→ H3). Stale bundle headers in `G2.md` and `D0.md` corrected at R4. The Definition-of-victory checkboxes in this plan are not ticked; §9 is the record of completion.
 
+### R4 interim fixes (added 2026-10-01, before the R4 follow-up wave)
+
+**Intent.** Make goal-armed children driven through the Internal API settle honestly, so parents stop spending recovery rounds and the H wave can use goals again. Scope is limited to the defects H2's root causes proved (see H2 *Root causes*). **Interactive `/goal` use, with `auto-compact-75`, must behave exactly as before**, apart from no longer pausing on errors Pi retries by itself. Every change follows §4 (strict TDD, disposable live proof, independent review), and live proofs may use GLM 5.3 Flash on `zai` freely.
+
+#### I1 — `pi-orch`: template delivery, goal waits, outcome classes (H2 items 1, 2, 6 and the restart edge)
+- A completion-template follow-up whose receipt is still `queued` or otherwise non-terminal is healthy: no re-send. Re-send only on a terminal failure.
+- A wait given the caller's raw goal objective settles on the goal that `pi-orch` armed with the templated objective.
+- A synthetic `goal_end` from restart reconciliation is reported as interrupted, not `goal_failed`.
+- `result` and any receipt summary count a slash-command handler-return receipt as a command, not an empty final answer.
+**Victory:** a failing test first for each; `pi-orch` CI green; a disposable live run in which goal children spawned with the template get it exactly once, and `pi-orch wait` with the raw objective returns the goal outcome.
+
+#### I2 — Server: every follow-up drained in one agent loop reaches a terminal receipt (H2 item 3)
+- When Pi delivers several queued follow-ups inside one agent loop, each one is marked started when its user message appears and finishes at the loop's end; none stays `queued` after delivery.
+- No follow-up receipt stays `queued` indefinitely after its session settles idle: it is delivered and finished, or ends in a typed terminal state. Any wire-visible change is a C6 patch bump.
+**Victory:** a failing test on the real correlation path (two follow-ups queued behind one live turn, one `agent_end`); the full gate list including `lint:ratchet`; a disposable live run with a real GLM child reproducing G5's shape (a goal child plus queued follow-ups) shows every receipt terminal; independent review and live re-run; production deploy under the owner's restart authority.
+
+#### I3 — Goal engine: errors that Pi retries do not count (H2 item 5)
+- An `agent_end` whose provider error Pi will retry automatically does not count towards the goal's error pause. Judge the error once the run settles, through the SDK's public events (`agent_before_settle` carries the run outcome; `agent_settled` fires after retries), never by patching the SDK.
+- Everything else stays as it is: question and budget pauses, the three-strike rule for real errors, compaction handling with `auto-compact-75`, and the verifier's marker rules.
+**Victory:** a failing test (a retried 429 then success leaves the goal running; three unretried errors still pause it); the goal-engine and `auto-compact-75` suites green; a live interactive Pi CLI session with the lane's copies in an isolated agent directory shows a goal surviving a compaction and completing, and a mock provider's 429-then-success leaves the goal running; independent review; deployed to `~/.pi/agent/extensions` with a backup.
+
+#### I4 — Child skill: the goal marker's exact form (H2 item 4, wording part)
+The `agent-os-child` skill states the exact achieved-marker line the goal verifier accepts, so children stop ending with a bare `GOAL_ACHIEVED` line that it rejects. Canonical skills source, via skill-creator. **Victory:** the wording matches the verifier's accepted form, checked against the goal engine's verifier code.
+
+**Not in the interim fixes** (they stay in H2): judging only the last assistant message (the duplicate template that triggered it is removed by I1; the engine change needs care for interactive sessions), the busy goal-start hold, the rehydrate pause and provider-abort classification.
+
+**Integrated proof before deploy.** After I1–I3 merge: a disposable server on the integrated build runs goal children through `pi-orch` in the owner's real pattern (real extension set, fresh worktrees, completion template) on GLM 5.3 Flash, plus the interactive compaction check. G5's receipt-breakdown instrument shows no empty-final arm receipts counted as failures, no duplicate templates and no stranded `queued` receipts. A reviewer's independent live re-run closes the interim fixes (§4).
+
 ### R4 follow-up wave (added at R4, 2026-10-01)
 
 **Intent.** Remove what would make scaled-up orchestration unreliable or expensive before E2 measures it: browser activity that blocks children, child runs that end without their answer, and the small items R3 and R4 routed. These steps change no Internal API wire contract, so they fit the C6 window. Every step follows §4, including its new load-claims rule.
@@ -1040,6 +1075,7 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | G5 | **accepted** 2026-09-30 (parent-verified; success rates corrected by the parent from the reviewer's recount; merged `9a450c3a`) | [`G5.md`](./execution-reports/orchestration-scaling/G5.md) | One real GLM parent, 10 children (6 zai at route limit 4, 4 Luna), disposable 12 GB-capped server: control plane idle (main thread 2.2% mean, 25% peak, lag max 93 ms, no refusals); children's commands peaked at 4.7 cores in the server's cgroup, the risk D0 removes |
 | D0 | **accepted and deployed** 2026-09-30 (merged `db2fd3f0`; rollout fixes `3bf9685e`, `e3984639`; production restarts 22:50 and 23:09 UTC, then 00:01 and 00:26 UTC on 2026-10-01, under the wave's restart authority; Luna production live re-run fixes `b40ab9ea` and closure-round correction `28238791`, pi-enhancement `9a959a5`, `2c7a24d`) | [`D0.md`](./execution-reports/orchestration-scaling/D0.md) §10 | Placed commands run in per-child groups (8 GiB max, 6 GiB high, 2048 pids, 2 GiB swap, score 0) under a delegated anchor service in the 18 GiB tools slice; the server has its own 8 GiB budget (no `MemoryHigh`, 2 GiB protected), `OOMPolicy=continue`, score -500. Post-deploy defect fixed the same night: systemd ignores `Delegate=` on slices, so daemon-reloads disabled placement; the anchor survives a reload with a live group (verified in production). Telemetry check of the split under real load is an R4 input |
 | R4 | **held 2026-10-01** (session `8caabeec`); decisions in §3 | §6 *R4 review reading*, §8 | Wave 4 accepted; D1 and Phase 8 not started (reopen trigger in §3); E2 waits for a real-use population |
+| I1–I4 | **in progress** 2026-10-01 (interim fixes before the H wave) | `/root/orch-ops/orchestration-scaling/i*/` | `pi-orch` template and waits; server follow-up correlation; goal-engine retry accounting; child-skill marker wording |
 | H1 | not started (added at R4) | — | Browser session view without a full agent rehydrate; production lag-gate latch 2026-10-01 05:50 UTC |
 | H2 | **root causes found 2026-10-01; fixes not started** (added at R4) | `/root/orch-ops/orchestration-scaling/r4/rootcause-*.md` | Seven causes across `pi-orch`, the server, the goal engine and the child skill; no provider failure, and no child failed at child level (H2 *Root causes*) |
 | H3 | not started (added at R4) | — | Small items: WebSocket backpressure, streaming telemetry, terminal shell placement, degrade counter per boot, `DELETE` cost, receipt inflation, claude-rc memory cap |
