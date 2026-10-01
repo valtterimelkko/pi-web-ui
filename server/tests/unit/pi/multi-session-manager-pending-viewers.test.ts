@@ -129,13 +129,48 @@ describe('MultiSessionManager pending viewers (H1 correction M1)', () => {
     expect(manager.getClientSubscriptions('viewer')).toEqual([]);
   });
 
-  it('a pending registration consumed by attach does not resurrect after a deliberate dispose (no stale events, no leak)', async () => {
+  it('a pending registration consumed by attach does not resurrect after a deliberate dispose of a NON-viewing attach (no stale events, no leak)', async () => {
     const { manager } = makeManager(broadcast);
     manager.registerPendingViewer('viewer', PATH);
     await manager.subscribeClient('api-client', PATH); // materialise + attach
     expect(manager.getSubscribers(PATH)).toContain('viewer');
-    await manager.disposeLoadedSession(PATH); // dispose clears subscribers + subscriptions
+    // 'viewer' has no viewing-map entry here (not a browser viewer in this
+    // scenario), so a deliberate dispose drops it for good — same guarantee
+    // as a regular subscriber without a view.
+    await manager.disposeLoadedSession(PATH);
     await manager.subscribeClient('api-client', PATH); // later re-materialisation
-    expect(manager.getSubscribers(PATH)).not.toContain('viewer'); // same guarantee as a regular subscriber
+    expect(manager.getSubscribers(PATH)).not.toContain('viewer');
+  });
+
+  it('(parent Q2) a VIEWING client disposed underneath is re-registered as pending: a later materialisation reaches it', async () => {
+    const { manager, piService } = makeManager(broadcast);
+    manager.registerPendingViewer('viewer', PATH);
+    await manager.subscribeClient('api-client', PATH); // materialise + attach the viewer
+    // The connection layer records the browser viewer on the manager's viewing
+    // map for BOTH open kinds (setClientViewingSession):
+    manager.setClientViewingSession('viewer', PATH);
+    // Another path deliberately unloads the session (Internal API dispose):
+    await manager.disposeLoadedSession(PATH);
+    // Subscribers are gone ... but the viewer is PENDING again (not silent):
+    // no live agent remains, and the viewer is listed in the subscription map
+    // (getSubscribers includes pending viewers by documented contract).
+    expect(manager.getSessionStatus(PATH)).toBeUndefined();
+    expect(manager.getClientSubscriptions('viewer')).toContain(PATH); // listed for disconnect cleanup
+    // Master behaviour preserved: the viewing map is still cleared on dispose.
+    expect(manager.getClientSessionPath('viewer')).toBeUndefined();
+    // A later materialisation (goal continuation, another tab) re-attaches it:
+    await manager.subscribeClient('api-client', PATH);
+    expect(manager.getSubscribers(PATH)).toContain('viewer');
+    fireAgentEvent(manager, piService, { type: 'message', message: { role: 'assistant' } });
+    expect(broadcast.mock.calls.map((c) => c[0])).toContain('viewer');
+  });
+
+  it('(parent Q2) a non-viewing subscriber (e.g. the API client) is NOT re-registered on dispose', async () => {
+    const { manager } = makeManager(broadcast);
+    await manager.subscribeClient('api-client', PATH);
+    await manager.disposeLoadedSession(PATH);
+    expect(manager.getClientSubscriptions('api-client')).toEqual([]);
+    await manager.subscribeClient('other', PATH);
+    expect(manager.getSubscribers(PATH)).not.toContain('api-client');
   });
 });

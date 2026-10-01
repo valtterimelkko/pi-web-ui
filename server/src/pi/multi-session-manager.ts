@@ -763,7 +763,22 @@ export class MultiSessionManager {
     // Remove from sessions map
     this.sessions.delete(sessionPath);
     this.extensionUiSnapshots.delete(sessionPath);
-    
+
+    // H1 correction M1 (parent Q2): capture the BROWSER VIEWERS being detached
+    // — clients that were attached subscribers AND name this path in the
+    // manager's viewing map (the connection records that for BOTH open kinds).
+    // They are re-registered as PENDING viewers after the cleanup below, so a
+    // later materialisation (goal continuation, another tab, the API) re-attaches
+    // them and their open tab keeps receiving events. Non-viewing subscribers
+    // (the Internal API's synthetic client, the recovery handle) are NOT
+    // re-registered — master's dispose semantics for them are unchanged, and a
+    // phantom pending entry would pin future sessions. Eviction paths never
+    // arrive here with viewers (they only dispose sessions with zero
+    // subscribers), so this is purely the deliberate-dispose case.
+    const detachedViewers = [...activeSession.subscribers].filter(
+      (clientId) => this.clientViewingSession.get(clientId) === sessionPath,
+    );
+
     // Clear client viewing references
     for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
       if (viewingPath === sessionPath) {
@@ -780,6 +795,26 @@ export class MultiSessionManager {
         }
       }
     }
+
+    // H1 correction M1 (parent Q2): re-register the detached browser viewers
+    // as PENDING — their tab is still open (the connection's own viewing map is
+    // untouched by this dispose), so the next materialisation re-attaches them.
+    // The pending entry is bounded: it is consumed by the next attach and
+    // removed by switch-away/disconnect through the normal unsubscribe path.
+    for (const clientId of detachedViewers) {
+      let pending = this.pendingViewersByPath.get(sessionPath);
+      if (!pending) {
+        pending = new Set();
+        this.pendingViewersByPath.set(sessionPath, pending);
+      }
+      pending.add(clientId);
+      const subs = this.clientSubscriptions.get(clientId) ?? new Set<string>();
+      subs.add(sessionPath);
+      this.clientSubscriptions.set(clientId, subs);
+    }
+    if (detachedViewers.length > 0) {
+      logger.info(`[MultiSessionManager] Re-registered ${detachedViewers.length} viewer(s) of ${sessionPath} as pending after dispose`);
+    }
   }
 
   /** Explicitly dispose a loaded session before its backing files are deleted. */
@@ -788,7 +823,13 @@ export class MultiSessionManager {
     return this.disposeSession(sessionPath, shutdown).then(() => true);
   }
 
-  /** Public read: client ids currently subscribed to a session. */
+  /** Public read: client ids currently subscribed to a session — INCLUDING
+   *  pending (view-only) viewers, whose registrations live in the same
+   *  subscription map. Callers that need "attached to the live agent" must
+   *  check `getSessionStatus(path)` first (pending viewers only exist while no
+   *  agent is materialised). The one production caller today (B5 recovery)
+   *  treats the list as "clients to re-attach after dispose→rehydrate", for
+   *  which including pending viewers is exactly right. */
   getSubscribers(sessionPath: string): string[] {
     const result: string[] = [];
     for (const [clientId, subscriptions] of this.clientSubscriptions.entries()) {
@@ -1317,10 +1358,9 @@ export class MultiSessionManager {
       this.pendingViewersByPath.set(sessionPath, pending);
     }
     pending.add(clientId);
-    if (!this.clientSubscriptions.has(clientId)) {
-      this.clientSubscriptions.set(clientId, new Set());
-    }
-    this.clientSubscriptions.get(clientId)!.add(sessionPath);
+    const subs = this.clientSubscriptions.get(clientId) ?? new Set<string>();
+    subs.add(sessionPath);
+    this.clientSubscriptions.set(clientId, subs);
   }
 
   /**
