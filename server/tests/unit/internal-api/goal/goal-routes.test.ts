@@ -323,6 +323,27 @@ describe('goal function (contract 1.27.0)', () => {
       expect(agentSession.prompt).not.toHaveBeenCalled();
     });
 
+    it('contract 1.58.2 correction C1: a refusal arising between the route preflight and the inner dispatch check is forwarded instead of accepted-then-lost', async () => {
+      // Busy at the route's own preflight (isSessionBusy + piBusyRefusal = the
+      // first two liveness reads), then flips to auto-compaction before the
+      // inner prompt pipeline performs its own piBusyRefusal check.
+      let statusCalls = 0;
+      multiSessionManager.getSessionStatus.mockImplementation(() => {
+        statusCalls += 1;
+        return statusCalls <= 2 ? { status: 'streaming' } : { status: 'idle', compacting: true };
+      });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(
+        jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'never accepted-then-lost' }),
+        res,
+        'session-1',
+      );
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe('SESSION_BUSY');
+      expect((res.headers as Record<string, unknown>)['retry-after']).toBeDefined();
+      expect(agentSession.prompt).not.toHaveBeenCalled();
+    });
+
     it('pause composes /goal pause-now and honours the busy pass-through mid-run', async () => {
       multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
       const req = jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' });

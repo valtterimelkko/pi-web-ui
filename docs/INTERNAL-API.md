@@ -3152,14 +3152,19 @@ watch `goal_end` — never treat the start receipt as "goal done".
 **Busy Pi sessions answer promptly (contract 1.58.2).** A `start` on a busy Pi
 session no longer holds the HTTP response until the running turn settles (the
 engine's start handler waits for idle; wave 3 held one POST ~38 minutes). The
-route answers at once with the same accepted shape, `receipt: null` (the inner
-run belongs to the detached-from-response dispatch) and the projection read at
-response time. The composed `/goal …` command still rides the running turn as
-an attached slash pass-through: the engine persists the goal file at the
-command boundary, so the goal starts when the session settles — poll `GET
-/goal` or watch `goal_state`/`goal_end`. A compacting session is still refused
-synchronously with 409 `SESSION_BUSY`; pause/resume/clear behave exactly as
-before.
+preflight and the dispatch form one acceptance boundary: the route answers as
+soon as the inner prompt pipeline either refuses — the refusal's status,
+`Retry-After` and body are forwarded verbatim (compaction starting between the
+route's preflight and the dispatch, admission capacity, draining, receipt
+failure) — or passes its last pre-dispatch refusal point (the run receipt is
+started and the runtime dispatch is about to begin). It never waits for the
+busy turn or the goal to finish. The answer carries the same accepted shape,
+`receipt: null` (the inner run belongs to the detached-from-response dispatch)
+and the projection read at response time. The composed `/goal …` command still
+rides the running turn as an attached slash pass-through: the engine persists
+the goal file at the command boundary, so the goal starts when the session
+settles — poll `GET /goal` or watch `goal_state`/`goal_end`. Pause/resume/clear
+behave exactly as before.
 
 A non-blank Pi extension `pauseReason` is projected through `pausedReason` and
 `lastReason` from contract 1.35.0; pending questions and error classifications
