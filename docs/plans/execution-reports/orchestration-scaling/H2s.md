@@ -56,9 +56,9 @@ Receipt ledger after the run: all 5 receipts terminal (`4 × documented_handler_
 
 ## Not done and why
 
-- **Production engine deploy**: production `~/.pi/agent/extensions/goal-engine` still runs the I3 copy; the budget-pause reason reaches production `GET /goal` only after the parent deploys the H2g merge (`8d25a72`). Server-side, nothing further is needed (the pass-through already ships here).
+- **Production engine deploy** (*stale at writing: the parent deployed H2g `8d25a72` at 19:43*): production `~/.pi/agent/extensions/goal-engine` still runs the I3 copy; the budget-pause reason reaches production `GET /goal` only after the parent deploys the H2g merge (`8d25a72`). Server-side, nothing further is needed (the pass-through already ships here).
 - **Start-on-active-goal without `--replace` (Q observation)**: the queued start did not visibly arm a new goal nor raise a `pendingQuestion` — the engine's start handler returned at the command boundary with no state change. Pre-existing engine semantics (identical handler execution before and after this lane's change — only the response timing moved); H2g's domain. Recorded as an observation, not probed further.
-- **Admission-pressure refusals of the fire-and-forget inner dispatch** cannot be forwarded to a caller that already received `accepted: true` (the response is gone). They are receipted (`rejectBeforeDispatch`) and logged; the caller discovers via `GET /goal`. The deterministic refusal (compaction) *is* forwarded synchronously via the pre-check.
+- ~~**Admission-pressure refusals of the fire-and-forget inner dispatch** cannot be forwarded~~ — **superseded by correction 03** (`660d1cee`): every pre-dispatch refusal, admission included, is now forwarded before the route answers (see *Correction 03*).
 
 ## Residual risks
 
@@ -95,3 +95,10 @@ TDD: RED — new test "a pipeline rejection before acceptance answers 500 instea
 2. `resume`/`clear` on a busy session still block until the turn settles (unchanged, out of the frozen criterion); if the parent wants them prompt too, that is a follow-up with its own live proof.
 3. The live proof ran 1–2 concurrent sessions, not the §1.1 load profile; the change is response-timing only and the unit suite covers the route matrix.
 4. Q's start-on-active-goal outcome is observed, not explained (engine internals, H2g's lane).
+
+## Parent closure (after the DeepSeek review, ACCEPT WITH FIXES)
+
+- `294fb38e` (parent): the busy-start route reads the capture state, so a written refusal is forwarded even when the pipeline's settlement arm wins; 500 only when nothing was written. Replaces the arm-ordering reasoning in *Correction 04*.
+- Parent added the admission-refusal forwarding test the review asked for (`429 ADMISSION_CAPACITY_EXHAUSTED` + `Retry-After`, raised inside the pipeline after the route preflight); mutation-checked (disabling the refusal arm makes it fail with 500).
+- Final diff vs `aeef536f`: see the merge commit; `docs/contract/internal-api-client-snapshot.json` changed by the mandated 1.58.2 bump (outside the brief's path list, required).
+

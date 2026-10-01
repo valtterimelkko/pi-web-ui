@@ -18,6 +18,7 @@ import { createSessionRoutes, type SessionRoutesDeps } from '../../../../src/int
 import { RunReceiptManager } from '../../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { piGoalStatePath } from '../../../../src/internal-api/goal/pi-goal.js';
+import { AdmissionCapacityError, AdmissionController } from '../../../../src/internal-api/admission-controller.js';
 
 function jsonReq(method: string, url: string, body?: unknown): IncomingMessage {
   const req = new PassThrough() as IncomingMessage;
@@ -342,6 +343,27 @@ describe('goal function (contract 1.27.0)', () => {
       expect(JSON.parse(res.body).code).toBe('SESSION_BUSY');
       expect((res.headers as Record<string, unknown>)['retry-after']).toBeDefined();
       expect(agentSession.prompt).not.toHaveBeenCalled();
+    });
+
+    it('contract 1.58.2 (review): an admission refusal inside the pipeline is forwarded with its status and Retry-After, not accepted-then-lost', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
+      const acquire = vi.spyOn(AdmissionController.prototype, 'acquire')
+        .mockRejectedValueOnce(new AdmissionCapacityError('global_limit'));
+      try {
+        const res = mockRes();
+        await routes.handleSessionGoalControl(
+          jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'refused by admission' }),
+          res,
+          'session-1',
+        );
+        expect(acquire).toHaveBeenCalled();
+        expect(res.statusCode).toBe(429);
+        expect(JSON.parse(res.body).code).toBe('ADMISSION_CAPACITY_EXHAUSTED');
+        expect((res.headers as Record<string, unknown>)['retry-after']).toBeDefined();
+        expect(agentSession.prompt).not.toHaveBeenCalled();
+      } finally {
+        acquire.mockRestore();
+      }
     });
 
     it('contract 1.58.2 correction 04: a pipeline rejection before acceptance answers 500 instead of hanging the request', async () => {
