@@ -294,42 +294,6 @@ export function extractSessionHeaderInfo(entries: unknown[]): { model?: string; 
   return { ...(model !== undefined ? { model } : {}), ...(thinkingLevel !== undefined ? { thinkingLevel } : {}) };
 }
 
-/** H1 (approved Option 3): the cheap change signature guarding the serialised
- *  sessions_list frame cache — a fold over every pi entry (id, messageCount,
- *  lastActivity — any append/remove/edit moves it), the registry origins, and
- *  per-runtime list folds (small lists, folded fully so a middle-entry change
- *  cannot hide). Identical signature ⇒ the cached frame is reused verbatim. */
-function sessionsListCacheKey(
-  piSessions: Array<{ id: string; messageCount: number; lastActivity?: { getTime?: () => number } }>,
-  originByPath: Map<string, string>,
-  originById: Map<string, string>,
-  ...runtimeLists: ReadonlyArray<ReadonlyArray<unknown>>
-): string {
-  type RuntimeEntry = { id?: unknown; sessionId?: unknown; messageCount?: unknown; lastActivity?: unknown; updatedAt?: unknown };
-  let pi = 0;
-  for (const s of piSessions) {
-    pi = (Math.imul(pi, 31) + hashString(`${s.id}:${s.messageCount}:${s.lastActivity?.getTime?.() ?? 0}`)) | 0;
-  }
-  let origins = 0;
-  for (const [k, v] of originByPath) origins = (Math.imul(origins, 31) + hashString(`${k}=${v}`)) | 0;
-  for (const [k, v] of originById) origins = (Math.imul(origins, 31) + hashString(`${k}=${v}`)) | 0;
-  const runtime = runtimeLists.map((list) => {
-    let h = list.length;
-    for (const raw of list) {
-      const e = raw as RuntimeEntry;
-      h = (Math.imul(h, 31) + hashString(`${String(e.id ?? e.sessionId ?? '')}:${String(e.messageCount ?? 0)}:${String(e.lastActivity ?? e.updatedAt ?? '')}`)) | 0;
-    }
-    return h;
-  }).join(',');
-  return `${piSessions.length}:${pi}:${origins}:${runtime}`;
-}
-
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
-  return h;
-}
-
 function isCoalescableSessionEvent(message: unknown): boolean {
   if (!message || typeof message !== 'object') return false;
   const envelope = message as { type?: unknown; event?: { type?: unknown } | null };
@@ -554,11 +518,6 @@ export class WebSocketConnectionManager {
   /** H1: in-flight lazy materialisations per session path, so concurrent first
    *  prompts share one subscribeClient call. */
   private piMaterialiseInflight = new Map<string, Promise<void>>();
-  /** H1 (approved Option 3): serialised sessions_list frame cache — reused
-   *  while the pi-list digest, registry-origin digest and per-runtime list
-   *  signatures are unchanged. One entry, replaced on change. */
-  private sessionsListCache: { key: string; frame: string } | null = null;
-  private sessionsListCacheStats = { hits: 0, misses: 0 };
   private opencodeService: OpenCodeService;
   private opencodeSessionIds: Set<string> = new Set();
   private opencodeSubs = new OpenCodeSessionSubscribers();
@@ -2854,12 +2813,14 @@ export class WebSocketConnectionManager {
     this.clientViewingSession.set(clientId, sessionPath);
     this.clientCwd.set(clientId, cwd);
     // No manager-side viewing registration here: the manager's guard requires
-    // a subscription, and a view-only open deliberately has none. The
-    // connection's viewing map above is what getCurrentSessionPath reads;
-    // ensurePiAgentSession registers the manager-side ref together with the
-    // subscription it creates on first use.
+    // a subscription, and a view-only open deliberately has none. Instead the
+    // viewer is registered as a PENDING viewer (correction M1): the moment any
+    // path materialises the agent, the manager attaches it as a real
+    // subscriber, so live events flow without a reload. Switch-away and
+    // disconnect remove the registration through the normal unsubscribe path.
+    this.multiSessionManager.registerPendingViewer(clientId, sessionPath);
 
-    const { messages, fileTimestamp, headerInfo } = await this.loadSessionMessages(sessionPath);
+    const { messages, fileTimestamp, headerInfo } = await this.loadSessionMessages(sessionPath, true);
     this.sendMessage(clientId, {
       type: 'session_switched',
       sessionId,
@@ -2885,6 +2846,16 @@ export class WebSocketConnectionManager {
       /* surfacing is best-effort */
     }
     logger.info(`[handleSwitchSession] Client ${clientId} opened ${sessionPath} view-only (no agent materialised)`);
+  }
+
+  /** H1 correction M3: the in-memory runtime routing sets as the switch/prompt
+   *  paths maintain them — a hint, exactly as those paths use it. Used only to
+   *  keep non-Pi session ids away from the Pi-only lazy materialiser. */
+  private isNonPiSessionPath(sessionPath: string): boolean {
+    return this.claudeSessionIds.has(sessionPath)
+      || this.opencodeSessionIds.has(sessionPath)
+      || this.antigravitySessionIds.has(sessionPath)
+      || this.commandCodeSessionIds.has(sessionPath);
   }
 
   /**
@@ -3247,11 +3218,11 @@ export class WebSocketConnectionManager {
    * Load messages from a session file (JSONL format)
    * Returns messages and file modification timestamp for cache invalidation
    */
-  private async loadSessionMessages(sessionPath: string): Promise<{ messages: SessionMessage[]; fileTimestamp: number; headerInfo?: { model?: string; thinkingLevel?: string } }> {
-    return getLoopStallAttributor().spanAsync('pi.browser.load_session_messages', () => this.readSessionMessages(sessionPath));
+  private async loadSessionMessages(sessionPath: string, includeHeaderInfo = false): Promise<{ messages: SessionMessage[]; fileTimestamp: number; headerInfo?: { model?: string; thinkingLevel?: string } }> {
+    return getLoopStallAttributor().spanAsync('pi.browser.load_session_messages', () => this.readSessionMessages(sessionPath, includeHeaderInfo));
   }
 
-  private async readSessionMessages(sessionPath: string): Promise<{ messages: SessionMessage[]; fileTimestamp: number; headerInfo?: { model?: string; thinkingLevel?: string } }> {
+  private async readSessionMessages(sessionPath: string, includeHeaderInfo = false): Promise<{ messages: SessionMessage[]; fileTimestamp: number; headerInfo?: { model?: string; thinkingLevel?: string } }> {
     try {
       if (!sessionPath) {
         return { messages: [], fileTimestamp: 0 };
@@ -3275,9 +3246,11 @@ export class WebSocketConnectionManager {
       }
 
       const messages: SessionMessage[] = parsePiSessionHistory(entries) as SessionMessage[];
-      // H1: the file's last model/thinking feeds a view-only open's header
-      // (same pass, same entries — no second read).
-      const headerInfo = extractSessionHeaderInfo(entries);
+      // H1: the file's last model/thinking feeds a view-only open's header.
+      // Computed ONLY on the view-only path (correction m4): the legacy
+      // materialising path takes model/thinking from the live agent, so the
+      // pass over long transcripts is never paid there.
+      const headerInfo = includeHeaderInfo ? extractSessionHeaderInfo(entries) : undefined;
 
       return { messages, fileTimestamp, headerInfo };
     } catch (error) {
@@ -3312,25 +3285,6 @@ export class WebSocketConnectionManager {
       }
     } catch { /* provenance is best-effort */ }
 
-    // H1 (approved Option 3): fetch every runtime list FIRST (cheap reads of
-    // in-memory state / small stores — identical failure semantics to the
-    // previous inline try/catch blocks), so the payload cache can decide
-    // whether the expensive part (formatting ~2k entries and serialising the
-    // frame) runs at all. Phase A measured 70–130 ms main-thread per call at
-    // ~1,966 entries; the socket write is the only unavoidable remainder.
-    const claudeEntries = await this.safeRuntimeList('Claude', () => this.claudeService.listSessions());
-    const opencodeEntries = await this.safeRuntimeList('OpenCode', () => this.opencodeService.listSessions());
-    const antigravityEntries = await this.safeRuntimeList('Antigravity', () => this.antigravityService.listSessions());
-    const commandCodeEntries = await this.safeRuntimeList('Command Code', () => this.commandCodeService.listSessions());
-
-    const cacheKey = sessionsListCacheKey(piSessions, originByPath, originById, claudeEntries, opencodeEntries, antigravityEntries, commandCodeEntries);
-    const cached = this.sessionsListCache;
-    if (cached && cached.key === cacheKey) {
-      this.sessionsListCacheStats.hits += 1;
-      this.sendRawSessionList(clientId, cached.frame);
-      return;
-    }
-
     const formattedPiSessions: Array<{
       id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
       firstMessage: string; messageCount: number; cwd: string;
@@ -3348,22 +3302,29 @@ export class WebSocketConnectionManager {
       origin: originByPath.get(s.path) ?? originById.get(s.id),
     }));
 
+    // Also load Claude sessions from the registry
     let allSessions = formattedPiSessions;
-    const formattedClaudeSessions = claudeEntries.map(entry => ({
-      id: entry.id,
-      path: entry.id,  // For Claude sessions, path == id
-      sdkType: 'claude' as const,
-      firstMessage: entry.firstMessage || '',
-      messageCount: entry.messageCount || 0,
-      cwd: entry.cwd || '',
-      name: undefined,
-      createdAt: entry.createdAt || new Date().toISOString(),
-      lastActivity: entry.lastActivity || new Date().toISOString(),
-      origin: entry.origin,
-    }));
-    allSessions = [...allSessions, ...formattedClaudeSessions];
+    try {
+      const claudeEntries = await this.claudeService.listSessions();
+      const formattedClaudeSessions = claudeEntries.map(entry => ({
+        id: entry.id,
+        path: entry.id,  // For Claude sessions, path == id
+        sdkType: 'claude' as const,
+        firstMessage: entry.firstMessage || '',
+        messageCount: entry.messageCount || 0,
+        cwd: entry.cwd || '',
+        name: undefined,
+        createdAt: entry.createdAt || new Date().toISOString(),
+        lastActivity: entry.lastActivity || new Date().toISOString(),
+        origin: entry.origin,
+      }));
+      allSessions = [...formattedPiSessions, ...formattedClaudeSessions];
+    } catch (e) {
+      logger.warn('[handleGetSessions] Failed to load Claude sessions:', e instanceof Error ? e.message : String(e));
+    }
 
-    {
+    try {
+      const opencodeEntries = await this.opencodeService.listSessions();
       const formattedOpencodeSessions = opencodeEntries.map(entry => ({
         id: entry.id,
         path: entry.id,
@@ -3377,9 +3338,12 @@ export class WebSocketConnectionManager {
         origin: entry.origin,
       }));
       allSessions = [...allSessions, ...formattedOpencodeSessions];
+    } catch (e) {
+      logger.warn('[handleGetSessions] Failed to load OpenCode sessions:', e instanceof Error ? e.message : String(e));
     }
 
-    {
+    try {
+      const antigravityEntries = await this.antigravityService.listSessions();
       const formattedAntigravitySessions = antigravityEntries.map(entry => ({
         id: entry.id,
         path: entry.id,
@@ -3393,9 +3357,12 @@ export class WebSocketConnectionManager {
         origin: entry.origin,
       }));
       allSessions = [...allSessions, ...formattedAntigravitySessions];
+    } catch (e) {
+      logger.warn('[handleGetSessions] Failed to load Antigravity sessions:', e instanceof Error ? e.message : String(e));
     }
 
-    {
+    try {
+      const commandCodeEntries = await this.commandCodeService.listSessions();
       const commandCodeModels = this.commandCodeService.getModels();
       const formattedCommandCodeSessions = commandCodeEntries.map((entry) => {
         const effortSpec = commandCodeModels.find((model) => model.id === entry.modelSelector);
@@ -3417,48 +3384,15 @@ export class WebSocketConnectionManager {
         };
       });
       allSessions = [...allSessions, ...formattedCommandCodeSessions];
-    }
-
-    // H1: cache the serialised frame; identical inputs reuse it verbatim.
-    const frame = JSON.stringify({ type: 'sessions_list', sessions: allSessions });
-    this.sessionsListCache = { key: cacheKey, frame };
-    this.sessionsListCacheStats.misses += 1;
-    this.sendRawSessionList(clientId, frame);
-  }
-
-  /** H1: read a runtime session list with today's failure semantics (warn and
-   *  continue with an empty list). */
-  private async safeRuntimeList<T>(label: string, fetch: () => Promise<T[]>): Promise<T[]> {
-    try {
-      return await fetch();
     } catch (e) {
-      logger.warn(`[handleGetSessions] Failed to load ${label} sessions:`, e instanceof Error ? e.message : String(e));
-      return [];
+      logger.warn('[handleGetSessions] Failed to load Command Code sessions:', e instanceof Error ? e.message : String(e));
     }
-  }
 
-  /** H1: send a pre-serialised frame through the same outbound path
-   *  sendMessage uses (the sessions_list payload is not coalescable). */
-  private sendRawSessionList(clientId: string, frame: string): void {
-    const client = this.clients.get(clientId);
-    if (client && client.ws.readyState === WebSocket.OPEN) {
-      this.outbound.send(client.ws, frame, {
-        coalescable: false,
-        clientId,
-        onQueued: () => getOperationalMetrics().recordWsUpdateQueued(),
-        onSlowClientClosed: (id: string | undefined, reason: string) => {
-          getOperationalMetrics().recordWsSlowClientClosed(reason);
-          logger.warn(`[Connection] Closed slow WebSocket consumer ${id}: ${reason}`);
-        },
-      });
-    }
+    this.sendMessage(clientId, {
+      type: 'sessions_list',
+      sessions: allSessions,
+    });
   }
-
-  /** H1: payload-cache counters (tests + observability). */
-  getSessionsListCacheStats(): { hits: number; misses: number } {
-    return { ...this.sessionsListCacheStats };
-  }
-
   private async handleGetSessionTree(
     clientId: string,
     _message: { type: 'get_session_tree'; sessionId: string }
@@ -3865,16 +3799,21 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'compact'; customInstructions?: string }
   ): Promise<void> {
-    // H1: resolve through the connection's viewing map (same as set_model /
-    // session info) instead of the manager's subscription map — a view-only
-    // open has no manager subscription yet, and for subscribed clients the
-    // viewing map is the session the user actually sees (they could only
-    // disagree when a cross-runtime switch left a stale manager subscription,
-    // where compacting the stale session was wrong anyway). The manager-map
-    // fallback inside getCurrentSessionPath preserves the no-view case.
-    const sessionPath = this.getCurrentSessionPath(clientId);
+    // H1 correction M3: with the flag OFF, master's resolution exactly (the
+    // manager's subscription map — including its stale-cross-runtime-switch
+    // behaviour). With the flag ON, resolve the VIEWED session but compact
+    // only Pi sessions: a non-Pi viewed session must never be handed to the
+    // Pi-only materialiser; it answers with the same not-found error master
+    // produced for a non-Pi id.
+    const sessionPath = this.viewOnlySubscribeEnabled
+      ? this.getCurrentSessionPath(clientId)
+      : this.multiSessionManager.getClientSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    if (this.viewOnlySubscribeEnabled && this.isNonPiSessionPath(sessionPath)) {
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
       return;
     }
 

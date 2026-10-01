@@ -250,6 +250,9 @@ export class MultiSessionManager {
   private sessions: Map<string, ActiveSession> = new Map(); // sessionPath -> ActiveSession
   private clientSubscriptions: Map<string, Set<string>> = new Map(); // clientId -> Set<sessionPath>
   private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
+  /** H1 correction M1: view-only viewers per session path, attached as real
+   *  subscribers the moment any path materialises the agent. */
+  private pendingViewersByPath = new Map<string, Set<string>>();
   private subscriptionQueues = new Map<string, Promise<void>>();
   private webUIContextProvider?: WebUIContextProvider;
   private sessionMaterializedHandler?: (sessionId: string, sessionPath: string) => Promise<void> | void;
@@ -1247,6 +1250,16 @@ export class MultiSessionManager {
       };
 
       this.sessions.set(sessionPath, activeSession);
+      // H1 correction M1: attach every pending (view-only) viewer the moment
+      // the agent exists — from here on they receive events like subscribers.
+      const pendingViewers = this.pendingViewersByPath.get(sessionPath);
+      if (pendingViewers && pendingViewers.size > 0) {
+        for (const pendingClientId of pendingViewers) {
+          this.attachClientToSession(pendingClientId, sessionPath, activeSession);
+        }
+        this.pendingViewersByPath.delete(sessionPath);
+        logger.info(`[MultiSessionManager] Attached ${pendingViewers.size} pending viewer(s) to ${sessionPath} at materialisation`);
+      }
       await this.notifySessionMaterialized(activeSession);
       logger.info(`[MultiSessionManager] Session rehydrated: ${agentSession.sessionId}`);
     } else if (webUIContext) {
@@ -1268,11 +1281,68 @@ export class MultiSessionManager {
     return this.getSessionStatus(sessionPath)!;
   }
 
+  /** H1 correction M1: attach a client to an ACTIVE session — the exact
+   *  bookkeeping every subscribe performs (subscriber set + per-client
+   *  subscription map), factored out so pending-viewer attachment cannot drift
+   *  from a real subscribe. */
+  private attachClientToSession(clientId: string, sessionPath: string, activeSession: ActiveSession): void {
+    activeSession.subscribers.add(clientId);
+    activeSession.lastActivity = new Date();
+    if (!this.clientSubscriptions.has(clientId)) {
+      this.clientSubscriptions.set(clientId, new Set());
+    }
+    this.clientSubscriptions.get(clientId)!.add(sessionPath);
+  }
+
+  /**
+   * H1 correction M1: register a VIEW-ONLY viewer for a session that has no
+   * agent yet (the connection layer opens the file without materialising).
+   * The registration is listed in the client's subscriptions so the existing
+   * switch-away/disconnect cleanup removes it, and `subscribeClientUnlocked`
+   * attaches every pending viewer the moment ANY path materialises the agent
+   * (Internal API, goal continuation, worker, another tab) — from then on the
+   * viewer receives every broadcast event like any subscriber. If the agent
+   * is already resident (race with the connection's pre-check), attach
+   * immediately — there is no view-only shortcut for a live agent.
+   */
+  registerPendingViewer(clientId: string, sessionPath: string): void {
+    const activeSession = this.sessions.get(sessionPath);
+    if (activeSession) {
+      this.attachClientToSession(clientId, sessionPath, activeSession);
+      return;
+    }
+    let pending = this.pendingViewersByPath.get(sessionPath);
+    if (!pending) {
+      pending = new Set();
+      this.pendingViewersByPath.set(sessionPath, pending);
+    }
+    pending.add(clientId);
+    if (!this.clientSubscriptions.has(clientId)) {
+      this.clientSubscriptions.set(clientId, new Set());
+    }
+    this.clientSubscriptions.get(clientId)!.add(sessionPath);
+  }
+
   /**
    * Unsubscribe a client from a session.
    * Sessions are kept alive if they have subscribers or are busy/streaming.
    */
   unsubscribeClient(clientId: string, sessionPath: string): void {
+    // H1 correction M1: a leaving viewer must not be attached by a later
+    // materialisation — drop any pending registration FIRST, because a
+    // pending-only path has no active session yet (the early return below
+    // used to leave the registration behind).
+    const pending = this.pendingViewersByPath.get(sessionPath);
+    if (pending) {
+      pending.delete(clientId);
+      if (pending.size === 0) this.pendingViewersByPath.delete(sessionPath);
+      const clientSubsEarly = this.clientSubscriptions.get(clientId);
+      if (clientSubsEarly?.has(sessionPath) && !this.sessions.has(sessionPath)) {
+        clientSubsEarly.delete(sessionPath);
+        if (clientSubsEarly.size === 0) this.clientSubscriptions.delete(clientId);
+      }
+    }
+
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) {
       return; // Session doesn't exist, nothing to do

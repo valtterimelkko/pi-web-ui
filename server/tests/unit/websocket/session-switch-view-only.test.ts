@@ -12,7 +12,7 @@
  * Raw run evidence behind these tests: docs/plans/execution-reports/orchestration-scaling/H1.md.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -114,6 +114,7 @@ describe('view-only session subscribe (PI_WEB_UI_VIEW_ONLY_SUBSCRIBE)', () => {
     };
     multi = {
       getClientSessionPath: vi.fn().mockReturnValue(undefined),
+      registerPendingViewer: vi.fn(),
       subscribeClient: vi.fn().mockImplementation(async (clientId: string, sessionPath: string) => {
         // Real manager semantics for the viewing guard: a subscribe registers
         // the client's subscription (the mock mirrors clientSubscriptions).
@@ -231,11 +232,89 @@ describe('view-only session subscribe (PI_WEB_UI_VIEW_ONLY_SUBSCRIBE)', () => {
       expect(multi.getAgentSession).not.toHaveBeenCalledWith(path);
     });
 
+    it('registers the viewer with the manager as a PENDING viewer (live events once materialised, correction M1)', async () => {
+      const { path } = makeSessionFile(sessionEntries());
+      await (mgr as any).handleSwitchSession('c1', { type: 'switch_session', sessionPath: path });
+      expect(multi.registerPendingViewer).toHaveBeenCalledWith('c1', path);
+    });
+
+    it('does NOT register a pending viewer when the agent is resident (subscribes as today)', async () => {
+      multi.getSessionStatus.mockReturnValue({ status: 'idle', sessionPath: 'x' });
+      const { path } = makeSessionFile(sessionEntries());
+      await (mgr as any).handleSwitchSession('c1', { type: 'switch_session', sessionPath: path });
+      expect(multi.registerPendingViewer).not.toHaveBeenCalled();
+      expect(multi.subscribeClient).toHaveBeenCalled();
+    });
+
     it('an error switch (missing file) reports the identity error, not a crash', async () => {
       await expect(
         (mgr as any).handleSwitchSession('c1', { type: 'switch_session', sessionPath: '/nonexistent/x.jsonl' }),
       ).rejects.toThrow();
       expect(sent.find((m) => m.type === 'session_switched')).toBeUndefined();
+    });
+  });
+
+  describe('correction M3: compact resolution is runtime-aware (flag on) and master-exact (flag off)', () => {
+    let piPath: string;
+    const claudePath = '/claude/session-b';
+
+    beforeEach(async () => {
+      const made = makeSessionFile(sessionEntries());
+      piPath = made.path;
+      (mgr as any).clientViewingSession.set('c1', claudePath);
+      (mgr as any).claudeSessionIds.add(claudePath);
+      // master's manager viewing map can still name the Pi session after a
+      // cross-runtime switch — the exact case the reviewer flagged.
+      multi.getClientSessionPath.mockReturnValue(piPath);
+      sent.length = 0;
+    });
+
+    it('flag OFF: resolves through the manager subscription map exactly like master (stale Pi session)', async () => {
+      (mgr as any).viewOnlySubscribeEnabled = false;
+      agentSession.compact.mockResolvedValue({ summary: 's', tokensBefore: 1 });
+      multi.getAgentSession.mockImplementation((p: string) => (p === piPath ? agentSession : undefined));
+      await (mgr as any).handleCompact('c1', { type: 'compact' });
+      expect(agentSession.compact).toHaveBeenCalledTimes(1); // master compacts the stale Pi session
+      expect(multi.subscribeClient).not.toHaveBeenCalled(); // no materialisation of anything
+      expect(sent.find((m) => m.type === 'error')).toBeUndefined();
+    });
+
+    it('flag ON: never hands a non-Pi viewed session to the Pi materialiser (defined SESSION_NOT_FOUND answer)', async () => {
+      (mgr as any).viewOnlySubscribeEnabled = true;
+      await (mgr as any).handleCompact('c1', { type: 'compact' });
+      expect(multi.subscribeClient).not.toHaveBeenCalledWith('c1', claudePath, expect.anything(), expect.anything());
+      expect(multi.subscribeClient).not.toHaveBeenCalled();
+      expect(agentSession.compact).not.toHaveBeenCalled();
+      expect(sent.find((m) => m.type === 'error' && m.code === 'SESSION_NOT_FOUND')).toBeDefined();
+    });
+
+    it('flag ON: compacts a viewed PI session (materialising on demand)', async () => {
+      (mgr as any).viewOnlySubscribeEnabled = true;
+      agentSession.compact.mockResolvedValue({ summary: 's', tokensBefore: 1 });
+      agentSession.getContextUsage.mockReturnValue({ contextWindow: 1000, tokens: 100, percent: 0.1 });
+      (mgr as any).clientViewingSession.set('c1', piPath);
+      multi.getAgentSession.mockImplementation((p: string) =>
+        multi.__subscriptions.get('c1')?.has(p) ? agentSession : undefined);
+      await (mgr as any).handleCompact('c1', { type: 'compact' });
+      expect(multi.subscribeClient).toHaveBeenCalledWith('c1', piPath, expect.any(String), undefined);
+      expect(agentSession.compact).toHaveBeenCalledTimes(1);
+      expect(sent.find((m) => m.type === 'error')).toBeUndefined();
+    });
+  });
+
+  describe('correction m4: header info is derived only on the view-only path', () => {
+    it('flag OFF (materialising) switch: model comes from the LIVE agent, never from the file', async () => {
+      (mgr as any).viewOnlySubscribeEnabled = false;
+      // The file carries a model_change of zai/glm-5.3-flash (sessionEntries());
+      // the live agent reports a different model — the legacy path must use the agent's.
+      multi.getSessionStatus.mockReturnValue({ status: 'idle', sessionPath: 'x' });
+      multi.getAgentSession.mockImplementation((p: string) =>
+        multi.__subscriptions.get('c1')?.has(p) ? agentSession : undefined);
+      agentSession.model = { provider: 'anthropic', id: 'claude-x' };
+      const { path } = makeSessionFile(sessionEntries());
+      await (mgr as any).handleSwitchSession('c1', { type: 'switch_session', sessionPath: path });
+      const switched = sent.find((m) => m.type === 'session_switched');
+      expect(switched.model).toBe('anthropic/claude-x');
     });
   });
 
