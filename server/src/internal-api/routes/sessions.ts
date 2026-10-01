@@ -773,6 +773,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const queuedPiObservers = new Map<string, (event: unknown) => void>();
   const queuedPiEventChains = new Map<string, Promise<void>>();
   const queuedPiLastFollowUp = new Map<string, string[]>();
+  /** Correction 01: events handed to the per-session chain but not yet fully
+   * processed (the chain lags on receipt IO). The drop reconcile defers while
+   * this is non-zero so a sweep tick can never read live-SDK state that is
+   * ahead of the chain's own processing (post-drain lag under load). */
+  const queuedPiChainDepth = new Map<string, number>();
   const queuedRunDisposalRegistered = new Set<string>();
 
   function claimDirectDispatch(sessionId: string): { token: number; release: () => void } | undefined {
@@ -6088,6 +6093,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     queuedPiRuns.delete(sessionId);
     queuedPiEventChains.delete(sessionId);
     queuedPiLastFollowUp.delete(sessionId);
+    queuedPiChainDepth.delete(sessionId);
     stopFollowUpSettleSweep(sessionId);
     const observer = queuedPiObservers.get(sessionId);
     if (observer) {
@@ -6117,13 +6123,35 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const queue = queuedPiRuns.get(sessionId);
     const undelivered = queue?.filter((item) => !item.delivered) ?? [];
     if (undelivered.length === 0) return;
-    // A session still streaming is mid-drain; only reconcile settled sessions.
-    const status = multiSessionManager.getSessionStatus?.(sessionId)?.status;
-    if (status === 'busy' || status === 'streaming') {
+    // Correction 01 (race review): never decide a drop while this session's
+    // event chain still has unprocessed events — the live SDK state can be
+    // AHEAD of the chain under load (the chain lags on receipt IO), and a
+    // mid-lag tick would read post-drain truth (idle, mirror spliced) before
+    // the chain has correlated the delivery.
+    if ((queuedPiChainDepth.get(sessionId) ?? 0) > 0) {
       armFollowUpSettleSweep(sessionId);
       return;
     }
     const agent = multiSessionManager.getAgentSession(undelivered[0].sessionPath);
+    // Correction 01 (race review): defer while the runtime may still be
+    // draining this follow-up. The manager is keyed by session PATH, not the
+    // Internal API session id — the status lookup MUST use the correlation's
+    // sessionPath (an id lookup always misses and left the guard dead). The
+    // SDK's own streaming truth is read as well, so a lagging manager status
+    // cannot open the drop window while a real loop is mid-drain.
+    const statusInfo = multiSessionManager.getSessionStatus?.(undelivered[0].sessionPath);
+    let sdkStreaming = false;
+    try {
+      sdkStreaming = (agent as { isStreaming?: unknown } | undefined)?.isStreaming === true;
+    } catch {
+      /* a throwing getter is not streaming evidence */
+    }
+    if (statusInfo?.status === 'busy' || statusInfo?.status === 'streaming'
+      || statusInfo?.sdkStreaming === true || statusInfo?.compacting === true
+      || sdkStreaming) {
+      armFollowUpSettleSweep(sessionId);
+      return;
+    }
     // The loaded agent (and its queue) is gone: the message can never be
     // delivered by this process again.
     const sdkQueue: readonly string[] = agent
@@ -6194,6 +6222,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       queuedPiObservers.delete(sessionId);
       queuedPiEventChains.delete(sessionId);
       queuedPiLastFollowUp.delete(sessionId);
+      queuedPiChainDepth.delete(sessionId);
       stopFollowUpSettleSweep(sessionId);
       activeDirectDispatchTokens.delete(sessionId);
       nextDirectDispatchToken.delete(sessionId);
@@ -6203,8 +6232,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   function ensureQueuedPiObserver(sessionId: string, sessionPath: string): void {
     if (queuedPiObservers.has(sessionId)) return;
     const observer = (event: unknown) => {
+      // Correction 01: count this event as pending from hand-off (synchronous)
+      // until its chained processing finishes, so the drop reconcile can tell
+      // "the SDK settled" from "the chain merely lags behind the SDK".
+      queuedPiChainDepth.set(sessionId, (queuedPiChainDepth.get(sessionId) ?? 0) + 1);
       const previous = queuedPiEventChains.get(sessionId) ?? Promise.resolve();
       const next = previous.then(async () => {
+        try {
         const queue = queuedPiRuns.get(sessionId);
         if (!queue?.length) return;
         const normalized = event as NormalizedEvent;
@@ -6267,7 +6301,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         if (top) {
           await runReceipts.observeEvent(top.runId, normalized);
-          return;
+        }
+        // Correction 01 (race review): a SYNTHETIC terminal event never
+        // completes a delivered run (its cessation basis stays synthetic), but
+        // the undelivered set may now be undeliverable (the loop died): run the
+        // drop reconcile on every agent_end, not only non-synthetic ones.
+        if (normalized.type === 'agent_end') {
+          await reconcileDroppedPiFollowUps(sessionId);
+        }
+        } finally {
+          queuedPiChainDepth.set(sessionId, Math.max(0, (queuedPiChainDepth.get(sessionId) ?? 0) - 1));
         }
       }).catch((error) => {
         logger.warn(`Failed to correlate queued Pi follow-up for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -6304,6 +6347,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       queuedPiRuns.set(sessionId, queue);
       ensureQueuedRunDisposal(sessionId);
       ensureQueuedPiObserver(sessionId, entry.path);
+      // Correction 01 (race review): the settle sweep is armed at ACCEPT, not
+      // only from a reconcile after a non-synthetic agent_end — a loop that
+      // dies to a synthetic api_error_grace agent_end (or a session never
+      // prompted again) still needs the sweep to notice an idle unload; and
+      // queuePiFollowUp's waitForTerminal (which releases the model read
+      // lease) must always have a terminalisation path available.
+      armFollowUpSettleSweep(sessionId);
       await agentSession.followUp(message);
       const followUpQueue = agentSession.getFollowUpMessages();
       const queueIndex = followUpQueue.length - 1;

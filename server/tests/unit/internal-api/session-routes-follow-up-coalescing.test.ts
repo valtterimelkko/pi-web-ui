@@ -60,9 +60,12 @@ function mockRes(): ServerResponse & { body: string; statusCode: number; headers
 }
 
 function entry(overrides: Record<string, unknown> = {}) {
+  // Correction 01 (minor): the registry entry's path is DISTINCT from its
+  // route id, exactly as production — the manager is keyed by PATH, so a
+  // keyed-by-path status mock lets tests see id/path keying mistakes.
   return {
     id: 'session-1',
-    path: 'session-1',
+    path: 'session-path-1',
     sdkType: 'pi',
     cwd: '/root/pi-web-ui',
     model: 'provider/model',
@@ -107,6 +110,8 @@ function createSdkSimulator(emitRaw: (event: RawEvent) => void) {
   let clock = 1_000;
   const ts = () => (clock += 1);
   const queueUpdate = () => emit({ type: 'queue_update', timestamp: ts(), steering: [], followUp: [...followUpQueue] });
+  /** The SDK's public streaming truth (read by the settle reconcile). */
+  let streaming = false;
   return {
     agentSession: {
       prompt: vi.fn().mockResolvedValue(undefined),
@@ -114,9 +119,14 @@ function createSdkSimulator(emitRaw: (event: RawEvent) => void) {
       steer: vi.fn().mockResolvedValue(undefined),
       abort: vi.fn().mockResolvedValue(undefined),
       getFollowUpMessages: vi.fn(() => [...followUpQueue]),
+      get isStreaming(): boolean { return streaming; },
     },
-    /** SDK takes one queued follow-up for delivery: shrink mirror, then user message_start. */
+    setStreaming(value: boolean): void { streaming = value; },
+    /** SDK takes one queued follow-up for delivery: shrink mirror, then user
+     * message_start. Models the SDK's streaming truth: a draining loop is
+     * streaming until its agent_end. */
     drainOne(text: string): void {
+      streaming = true;
       const index = followUpQueue.indexOf(text);
       if (index !== -1) followUpQueue.splice(index, 1);
       queueUpdate();
@@ -128,6 +138,7 @@ function createSdkSimulator(emitRaw: (event: RawEvent) => void) {
     },
     /** A drained follow-up whose delivered text does not match what the API caller sent. */
     drainTransformed(actual: string): void {
+      streaming = true;
       const index = followUpQueue.indexOf(actual);
       if (index !== -1) followUpQueue.splice(index, 1);
       queueUpdate();
@@ -148,7 +159,32 @@ function createSdkSimulator(emitRaw: (event: RawEvent) => void) {
       });
     },
     agentEnd(): void {
+      streaming = false;
       emit({ type: 'agent_end', timestamp: ts(), data: {} });
+    },
+    /** The manager's synthetic terminal (api_error_grace): data.synthetic true. */
+    syntheticAgentEnd(): void {
+      streaming = false;
+      emit({ type: 'agent_end', timestamp: ts(), data: { synthetic: true, reason: 'api_error_grace' } });
+    },
+    /** The SDK takes one queued follow-up for delivery and the mirror splice +
+     * queue_update have landed, but the public user message_start has NOT yet
+     * reached listeners (the mid-drain window: queue_update fires before the
+     * matching message_start in AgentSession._handleAgentEvent). The loop is
+     * streaming for the whole window. */
+    drainBegins(text: string): void {
+      streaming = true;
+      const index = followUpQueue.indexOf(text);
+      if (index !== -1) followUpQueue.splice(index, 1);
+      queueUpdate();
+    },
+    /** Emit only the user message_start for an already-spliced follow-up. */
+    deliverMessageStart(text: string): void {
+      emit({
+        type: 'message_start',
+        timestamp: ts(),
+        message: { role: 'user', content: [{ type: 'text', text }] },
+      });
     },
     /** clearQueue(): mirror emptied + one queue_update (the SDK's public clear). */
     clearQueue(): void {
@@ -173,11 +209,19 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
   let routes: ReturnType<typeof createSessionRoutes>;
   let now: number;
   let agentSession: ReturnType<typeof createSdkSimulator>['agentSession'] | undefined;
+  /** Manager status keyed by session PATH (the manager's key), as production. */
+  let statusByPath: Record<string, { status: string; sdkStreaming?: boolean; compacting?: boolean }>;
+  /** Model read-lease spy: queuePiFollowUp takes one lease per accepted follow-up. */
+  let leaseAcquired: number;
+  let leaseReleased: number;
   const sweepIntervalMs = 15;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-followup-coalescing-'));
     now = Date.parse('2026-07-15T12:00:00.000Z');
+    statusByPath = { 'session-path-1': { status: 'streaming' } };
+    leaseAcquired = 0;
+    leaseReleased = 0;
     registry = {
       get: vi.fn().mockResolvedValue(entry()),
       listAll: vi.fn().mockResolvedValue([entry()]),
@@ -199,10 +243,13 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     };
     opencodeService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false), replyPermission: vi.fn() };
     antigravityService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false) };
-    piService = { setModel: vi.fn().mockResolvedValue(undefined) };
+    piService = {
+      setModel: vi.fn().mockResolvedValue(undefined),
+      acquireSessionModelLock: vi.fn(async () => { leaseAcquired += 1; return () => { leaseReleased += 1; }; }),
+    };
     multiSessionManager = {
-      getAgentSession: vi.fn(() => agentSession),
-      getSessionStatus: vi.fn(() => ({ status: 'streaming' })),
+      getAgentSession: vi.fn((key: string) => (key === 'session-path-1' ? agentSession : undefined)),
+      getSessionStatus: vi.fn((key: string) => statusByPath[key]),
       subscribeClient: vi.fn().mockResolvedValue(undefined),
       unsubscribeClient: vi.fn().mockResolvedValue(undefined),
       addApiObserver: vi.fn(),
@@ -250,8 +297,18 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
       }
     });
     agentSession = sdk.agentSession;
-    multiSessionManager.getAgentSession.mockReturnValue(sdk.agentSession);
     return sdk;
+  }
+
+  /** Set the manager's status for the session's PATH (the manager's key). */
+  function setManagerStatus(status: string, extra: { sdkStreaming?: boolean; compacting?: boolean } = {}): void {
+    statusByPath['session-path-1'] = { status, ...extra };
+  }
+
+  /** Simulate the manager's idle unload: agent gone, status idle. */
+  function unloadAgent(): void {
+    agentSession = undefined;
+    setManagerStatus('idle');
   }
 
   /** Queue one follow_up behind the live turn; returns its runId. */
@@ -278,7 +335,7 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     sdk.assistantSay('ANSWER-ONE');
     sdk.drainOne('SECOND');
     sdk.assistantSay('ANSWER-TWO');
-    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle' });
+    setManagerStatus('idle');
     sdk.agentEnd();
     await vi.waitFor(() => expect(manager.get(runOne)?.status).toBe('completed'));
 
@@ -304,7 +361,7 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     // correlation is armed (queue shrink observed) yet never matches.
     sdk.drainTransformed('PLANNED');
     sdk.assistantSay('ANSWER-TO-SOMETHING-ELSE');
-    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle' });
+    setManagerStatus('idle');
     sdk.agentEnd();
     await vi.waitFor(() => expect(manager.get(runId)?.status).not.toBe('queued'));
 
@@ -325,7 +382,7 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     // agent_end without draining SECOND, and the SDK queue keeps SECOND.
     sdk.drainOne('FIRST');
     sdk.assistantSay('ANSWER-ONE');
-    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle' });
+    setManagerStatus('idle');
     sdk.agentEnd();
     await vi.waitFor(() => expect(manager.get(runOne)?.status).toBe('completed'));
 
@@ -335,9 +392,10 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     expect(manager.get(runTwo)?.finalText).toBeUndefined();
 
     // A later loop (next prompt) drains SECOND inside its own agent loop.
-    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
+    setManagerStatus('streaming');
     sdk.drainOne('SECOND');
     sdk.assistantSay('ANSWER-TWO');
+    setManagerStatus('idle');
     sdk.agentEnd();
     await vi.waitFor(() => expect(manager.get(runTwo)?.status).toBe('completed'));
     expect(manager.get(runTwo)?.finalText).toBe('ANSWER-TWO');
@@ -350,7 +408,7 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     // clearQueue(): mirror emptied, queue_update shrink arms the correlation.
     sdk.clearQueue();
     sdk.assistantSay('ANSWER-WITHOUT-IT');
-    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle' });
+    setManagerStatus('idle');
     sdk.agentEnd();
     await vi.waitFor(() => expect(manager.get(runId)?.status).not.toBe('queued'));
 
@@ -365,13 +423,13 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     const runId = await queueFollowUp('WAITING');
 
     // Abort-shaped settle: the follow-up stays queued (still in the SDK queue).
+    setManagerStatus('idle');
     sdk.agentEnd();
     await settle();
     expect(manager.get(runId)?.status).toBe('queued');
 
     // The manager unloads the idle session: the agent (and its queue) is gone.
-    multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle' });
-    multiSessionManager.getAgentSession.mockReturnValue(undefined);
+    unloadAgent();
 
     await vi.waitFor(() => expect(manager.get(runId)?.status).toBe('failed'), { timeout: 2_000 });
     const receipt = manager.get(runId);
@@ -392,5 +450,143 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     expect(receipt?.status).toBe('completed');
     expect(receipt?.finalText).toBe('ANSWER-ONLY');
     expect(receipt?.startedAt).toBeDefined();
+  });
+
+  // ── Correction 01: focused race tests (review G/H/I) ─────────────────────
+
+  it('G. a sweep tick inside a later loop\'s mid-drain window cannot fail the receipt (SDK streaming truth)', async () => {
+    const sdk = await makeRoutes();
+    const runId = await queueFollowUp('MIDDRAIN');
+
+    // The live turn the follow-up was queued behind ends (non-synthetic
+    // agent_end): the reconcile keeps the receipt queued (still in the SDK
+    // queue) and arms the settle sweep.
+    setManagerStatus('idle');
+    sdk.agentEnd();
+    await settle();
+
+    // A LATER loop starts and drains the follow-up: the SDK splices the mirror
+    // and emits the post-shrink queue_update BEFORE the public user
+    // message_start — and the SDK itself reports streaming (drainBegins models
+    // the streaming truth for the whole window).
+    setManagerStatus('streaming');
+    sdk.drainBegins('MIDDRAIN');
+    await settle();
+
+    // Sweep ticks land inside the mid-drain window (armed above; >4 intervals).
+    await new Promise((resolve) => setTimeout(resolve, sweepIntervalMs * 5));
+    expect(manager.get(runId)?.status).toBe('queued');
+
+    // The loop then delivers the message and answers; the receipt completes
+    // with its own final text — never a false NEVER_STARTED.
+    sdk.deliverMessageStart('MIDDRAIN');
+    sdk.assistantSay('ANSWER-MIDDRAIN');
+    sdk.agentEnd();
+    await vi.waitFor(() => expect(manager.get(runId)?.status).toBe('completed'));
+    const receipt = manager.get(runId);
+    expect(receipt?.errorCode).toBeUndefined();
+    expect(receipt?.startedAt).toBeDefined();
+    expect(receipt?.finalText).toBe('ANSWER-MIDDRAIN');
+    expect(leaseStats().released).toBeGreaterThanOrEqual(1);
+  });
+
+  it('H. a lagging-vs-streaming manager status still defers via the PATH-keyed lookup alone', async () => {
+    const sdk = await makeRoutes();
+    const runId = await queueFollowUp('PATHKEYED');
+
+    // Live turn ends; reconcile keeps the receipt queued and arms the sweep.
+    sdk.agentEnd();
+    await settle();
+
+    // A later loop drains the follow-up, but this SDK's isStreaming getter
+    // reads FALSE (lagging/absent getter — the reconcile must not rely on it
+    // alone): only the manager's PATH-keyed status says streaming.
+    setManagerStatus('streaming');
+    sdk.drainBegins('PATHKEYED');
+    sdk.setStreaming(false);
+    await new Promise((resolve) => setTimeout(resolve, sweepIntervalMs * 5));
+    expect(manager.get(runId)?.status).toBe('queued');
+
+    sdk.deliverMessageStart('PATHKEYED');
+    sdk.assistantSay('ANSWER-PATHKEYED');
+    setManagerStatus('idle');
+    sdk.agentEnd();
+    await vi.waitFor(() => expect(manager.get(runId)?.status).toBe('completed'));
+    const receipt = manager.get(runId);
+    expect(receipt?.errorCode).toBeUndefined();
+    expect(receipt?.finalText).toBe('ANSWER-PATHKEYED');
+  });
+
+  it('I. a session that never sees a non-synthetic agent_end still settles: sweep armed at accept, lease released', async () => {
+    const sdk = await makeRoutes();
+    expect(leaseStats().acquired).toBe(0);
+    const runId = await queueFollowUp('NEVERENDED');
+    expect(leaseStats().acquired).toBe(1);
+
+    // The turn dies and the manager emits its SYNTHETIC api_error_grace
+    // agent_end: no non-synthetic terminal boundary ever fires for this loop.
+    setManagerStatus('idle');
+    sdk.syntheticAgentEnd();
+    await settle();
+
+    // The manager then idle-unloads the session (agent and queue gone) and SIX
+    // sweep intervals elapse: the receipt must terminalise and the model read
+    // lease queuePiFollowUp took must be released (a later setModel waits on it).
+    unloadAgent();
+    await new Promise((resolve) => setTimeout(resolve, sweepIntervalMs * 6));
+
+    const receipt = manager.get(runId);
+    expect(receipt?.status).not.toBe('queued');
+    expect(receipt?.status).toBe('failed');
+    expect(receipt?.errorCode).toBe('NEVER_STARTED');
+    expect(receipt?.terminalAt).toBeDefined();
+    expect(leaseStats().released).toBeGreaterThanOrEqual(1);
+  });
+
+  function leaseStats(): { acquired: number; released: number } {
+    return { acquired: leaseAcquired, released: leaseReleased };
+  }
+
+  it('J. a sweep tick while the event chain lags behind a finished SDK cannot drop the delivery (load window)', async () => {
+    const sdk = await makeRoutes();
+    const runFirst = await queueFollowUp('LAGONE');
+    const runSecond = await queueFollowUp('LAGTWO');
+
+    // Live turn ends; reconcile keeps both queued and arms the sweep.
+    setManagerStatus('idle');
+    sdk.agentEnd();
+    await settle();
+    expect(manager.get(runFirst)?.status).toBe('queued');
+    expect(manager.get(runSecond)?.status).toBe('queued');
+
+    // A later loop drains BOTH follow-ups, but the chain stalls on the FIRST
+    // delivery's markStarted (receipt IO under load): the SECOND follow-up's
+    // queue_update/message_start and the loop's agent_end all queue behind.
+    // The SDK has already finished the whole loop (streaming false, manager
+    // idle, mirror spliced) while the chain still owes every delivery event.
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+    const realMarkStarted = manager.markStarted.bind(manager);
+    manager.markStarted = async (id: string) => { await gate; return realMarkStarted(id); };
+    setManagerStatus('streaming');
+    sdk.drainOne('LAGONE');
+    sdk.drainOne('LAGTWO');
+    sdk.agentEnd();
+    setManagerStatus('idle');
+    sdk.setStreaming(false);
+
+    // Sweep ticks land while the chain still owes events: they must defer on
+    // the pending-event depth (every other settle signal is false here — the
+    // second follow-up is unarmed with its mirror entry already spliced), not
+    // drop a delivery the chain is about to correlate.
+    await new Promise((resolve) => setTimeout(resolve, sweepIntervalMs * 5));
+    expect(manager.get(runSecond)?.status).toBe('queued');
+    expect(manager.get(runSecond)?.errorCode).toBeUndefined();
+
+    releaseGate();
+    await vi.waitFor(() => expect(manager.get(runSecond)?.status).toBe('completed'), { timeout: 2_000 });
+    const receipt = manager.get(runSecond);
+    expect(receipt?.errorCode).toBeUndefined();
+    expect(manager.get(runFirst)?.status).toBe('completed');
   });
 });
