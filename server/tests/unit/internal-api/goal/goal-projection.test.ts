@@ -165,6 +165,22 @@ describe('projectPiGoalState — canonical status mapping', () => {
     expect(question.lastReason).toBe('Which API should I use?');
   });
 
+  // H2s (2026-10-01): the budget pauseReason originates in the goal engine
+  // (lane H2g sets gs.pauseReason = "budget" in recordGoalSpend); this pin
+  // guards the projection's pass-through of any engine-recorded reason. The
+  // projection must NOT derive a reason from spend figures — a second source
+  // of truth would mask an engine that failed to record one.
+  it('paused: pauseReason recorded by engine (e.g. "budget") is preserved', () => {
+    const p = projectPiGoalState({
+      ...BASE_STATE,
+      objective: 'x',
+      status: 'paused',
+      pauseReason: 'budget',
+    } as never);
+    expect(p.status).toBe('paused');
+    expect(p.pausedReason).toBe('budget');
+  });
+
   it('failed: a governor error-pause surfaces as "failed"', () => {
     const p = projectPiGoalState({
       ...BASE_STATE,

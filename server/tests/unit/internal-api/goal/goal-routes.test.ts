@@ -18,6 +18,7 @@ import { createSessionRoutes, type SessionRoutesDeps } from '../../../../src/int
 import { RunReceiptManager } from '../../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { piGoalStatePath } from '../../../../src/internal-api/goal/pi-goal.js';
+import { AdmissionCapacityError, AdmissionController } from '../../../../src/internal-api/admission-controller.js';
 
 function jsonReq(method: string, url: string, body?: unknown): IncomingMessage {
   const req = new PassThrough() as IncomingMessage;
@@ -269,6 +270,121 @@ describe('goal function (contract 1.27.0)', () => {
         expect(body.goal).toMatchObject({ supported: true, status: 'running', objective: 'write the thing', maxRuns: 5 });
       } finally {
         process.env.HOME = prevHome;
+      }
+    });
+
+    it('contract 1.58.2: a goal start on a BUSY session answers promptly with the accepted shape instead of holding the response until the turn settles', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
+      // The busy turn never settles on its own: the /goal start handler stays
+      // pending (its engine-side handler awaits waitForIdle) until released.
+      let releasePrompt!: () => void;
+      const gate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+      agentSession.prompt.mockImplementation(() => gate);
+
+      const res = mockRes();
+      const route = routes.handleSessionGoalControl(
+        jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'take over when idle' }),
+        res,
+        'session-1',
+      );
+
+      // The answer arrives while the busy turn is still running. Previously the
+      // route awaited the whole busy turn plus the engine's own waitForIdle
+      // (wave 3 observed ~38 min), so this waitFor timed out.
+      await vi.waitFor(() => { expect(res.body).toContain('"accepted":true'); }, { timeout: 5_000 });
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ sessionId: 'session-1', runtime: 'pi', action: 'start', accepted: true });
+      expect(body.receipt).toBeNull();
+      expect(body.goal).toMatchObject({ supported: true });
+
+      // The composed command was still dispatched through the real pipeline
+      // (attached busy pass-through — a detached slash command is refused).
+      await vi.waitFor(() => expect(agentSession.prompt).toHaveBeenCalledWith('/goal "take over when idle"'), { timeout: 5_000 });
+
+      // GET /goal stays readable while the turn runs (the caller's poll path).
+      const goalRes = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/session-1/goal'), goalRes, 'session-1');
+      expect(goalRes.statusCode).toBe(200);
+      expect(JSON.parse(goalRes.body).supported).toBe(true);
+
+      releasePrompt();
+      await route;
+    });
+
+    it('a compacting session refuses a busy goal start synchronously instead of accepting-then-losing it', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle', compacting: true });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(
+        jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'never accepted-then-lost' }),
+        res,
+        'session-1',
+      );
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe('SESSION_BUSY');
+      expect(agentSession.prompt).not.toHaveBeenCalled();
+    });
+
+    it('contract 1.58.2 correction C1: a refusal arising between the route preflight and the inner dispatch check is forwarded instead of accepted-then-lost', async () => {
+      // Busy at the route's own preflight (isSessionBusy + piBusyRefusal = the
+      // first two liveness reads), then flips to auto-compaction before the
+      // inner prompt pipeline performs its own piBusyRefusal check.
+      let statusCalls = 0;
+      multiSessionManager.getSessionStatus.mockImplementation(() => {
+        statusCalls += 1;
+        return statusCalls <= 2 ? { status: 'streaming' } : { status: 'idle', compacting: true };
+      });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(
+        jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'never accepted-then-lost' }),
+        res,
+        'session-1',
+      );
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe('SESSION_BUSY');
+      expect((res.headers as Record<string, unknown>)['retry-after']).toBeDefined();
+      expect(agentSession.prompt).not.toHaveBeenCalled();
+    });
+
+    it('contract 1.58.2 (review): an admission refusal inside the pipeline is forwarded with its status and Retry-After, not accepted-then-lost', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
+      const acquire = vi.spyOn(AdmissionController.prototype, 'acquire')
+        .mockRejectedValueOnce(new AdmissionCapacityError('global_limit'));
+      try {
+        const res = mockRes();
+        await routes.handleSessionGoalControl(
+          jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'refused by admission' }),
+          res,
+          'session-1',
+        );
+        expect(acquire).toHaveBeenCalled();
+        expect(res.statusCode).toBe(429);
+        expect(JSON.parse(res.body).code).toBe('ADMISSION_CAPACITY_EXHAUSTED');
+        expect((res.headers as Record<string, unknown>)['retry-after']).toBeDefined();
+        expect(agentSession.prompt).not.toHaveBeenCalled();
+      } finally {
+        acquire.mockRestore();
+      }
+    });
+
+    it('contract 1.58.2 correction 04: a pipeline rejection before acceptance answers 500 instead of hanging the request', async () => {
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'streaming' });
+      // The inner pipeline rejects after admission but before markStarted and
+      // before any refusal is written to the capture response: neither the
+      // accepted nor the refused race arm can fire.
+      const originalAttachLease = manager.attachLease.bind(manager);
+      manager.attachLease = vi.fn(() => { throw new Error('lease attach exploded'); });
+      try {
+        const res = mockRes();
+        await routes.handleSessionGoalControl(
+          jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'must not hang' }),
+          res,
+          'session-1',
+        );
+        expect(res.statusCode).toBe(500);
+        expect(JSON.parse(res.body).code).toBe('INTERNAL_ERROR');
+        expect(agentSession.prompt).not.toHaveBeenCalled();
+      } finally {
+        manager.attachLease = originalAttachLease;
       }
     });
 

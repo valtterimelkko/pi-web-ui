@@ -3669,6 +3669,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
+    // C1 (contract 1.58.2): internal-caller-only handshake. Never populated
+    // from the HTTP path (the server calls this with three arguments); lets
+    // the goal-control route resolve its acceptance boundary at the pipeline's
+    // last pre-dispatch refusal point instead of guessing.
+    internal?: { onDispatchAccepted?: () => void },
   ): Promise<void> {
     const body = await readJsonBody<SendPromptRequest>(req);
     if (!body || !body.message) {
@@ -4063,6 +4068,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 500, { error: 'Failed to start run', code: ErrorCode.INTERNAL_ERROR, runId });
         return;
       }
+      // C1 (contract 1.58.2): every pre-dispatch refusal (busy, admission,
+      // reservation, receipt) is answered above this line; from here the run
+      // receipt is started and the runtime dispatch is about to begin. This is
+      // the acceptance boundary internal callers wait on.
+      internal?.onDispatchAccepted?.();
 
       let runtimeDispatchStarted = false;
       return withCorrelation({
@@ -5079,18 +5089,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    * this object, which the caller then interprets and (on success) augments
    * with a fresh goal projection.
    */
-  function createCaptureResponse(): ServerResponse & { statusCode: number; body: string } {
+  function createCaptureResponse(): ServerResponse & { statusCode: number; body: string; headers: Record<string, string>; ended: Promise<void> } {
     const chunks: Buffer[] = [];
     const res = new Writable({
       write(chunk: Buffer, _enc: unknown, cb: (e?: Error | null) => void) { chunks.push(chunk); cb(); },
-    }) as unknown as ServerResponse & { statusCode: number; body: string };
+    }) as unknown as ServerResponse & { statusCode: number; body: string; headers: Record<string, string>; ended: Promise<void> };
     let ended = false;
+    // C1 (contract 1.58.2): capture setHeader values (Retry-After travels in
+    // refusals) and expose the response's end as a promise, so an internal
+    // caller can distinguish "pipeline refused" from "dispatch accepted".
+    let signalEnded: () => void = () => undefined;
+    const endedPromise = new Promise<void>((resolve) => { signalEnded = resolve; });
+    res.headers = {};
+    res.ended = endedPromise;
     res.statusCode = 200;
-    res.setHeader = (() => res) as never;
+    res.setHeader = ((_name: string, _value: unknown) => { res.headers[String(_name).toLowerCase()] = String(_value); return res; }) as never;
     res.writeHead = ((_code: number) => { res.statusCode = _code; return res; }) as never;
     res.end = ((_data?: string | Buffer) => {
       if (_data !== undefined) chunks.push(Buffer.isBuffer(_data) ? _data : Buffer.from(_data));
-      if (!ended) { ended = true; res.body = Buffer.concat(chunks).toString(); }
+      if (!ended) { ended = true; res.body = Buffer.concat(chunks).toString(); signalEnded(); }
       return res;
     }) as never;
     res.on = (() => res) as never;
@@ -5823,7 +5840,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // On a busy session the command rides the running turn and the goal state
     // may legitimately lag — the historical accepted shape is kept there.
     const before = await readProjectPiGoalState(entry.path);
-    const inspection = !isSessionBusy(entry)
+    const busy = isSessionBusy(entry);
+    const inspection = !busy
       ? (() => {
           const record = {
             action: composed.action,
@@ -5837,6 +5855,79 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : undefined;
 
     try {
+      // H2s (contract 1.58.2): a goal START on a busy session must not hold
+      // the HTTP response. The composed command still rides the running turn
+      // as an attached slash pass-through (a detached slash command on a busy
+      // session is refused), but the engine's start handler awaits the session
+      // going idle before its first goal run — awaiting the pipeline here held
+      // the response for the whole busy turn (wave 3 observed ~38 min).
+      // C1 (correction 03): the preflight and the dispatch are ONE acceptance
+      // boundary. The route responds only after the inner pipeline either
+      // refused (its status, Retry-After and body are forwarded verbatim, as
+      // the blocking path would) or passed its last pre-dispatch refusal point
+      // (the run receipt is markStarted and the runtime dispatch is about to
+      // begin). It never waits for the busy turn or the goal to finish. The
+      // historical accepted shape is kept (receipt null: the inner run belongs
+      // to the detached-from-response dispatch; goal is the projection at
+      // response time). The engine persists the goal file at the command
+      // boundary, so the goal starts when the session settles; callers poll
+      // GET /sessions/:id/goal or watch goal_state/goal_end.
+      if (busy && composed.action === 'start') {
+        // A compacting session refuses every input — answer that refusal here
+        // (synchronously, as the blocking path forwards it) instead of
+        // accepting-then-losing the start.
+        const busyRefusal = piBusyRefusal(entry, 'prompt');
+        if (busyRefusal) {
+          res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+          sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, busyRefusal.detail));
+          return;
+        }
+        const capture = createCaptureResponse();
+        let signalAccepted: () => void = () => undefined;
+        const accepted = new Promise<void>((resolve) => { signalAccepted = resolve; });
+        const innerDispatch = handleSendPrompt(synthesizePromptRequest(composed.command), capture, sessionId, { onDispatchAccepted: signalAccepted });
+        innerDispatch.catch((error: unknown) => {
+          logger.errorObject(`Busy-session goal start dispatch failed for ${sessionId}`, error);
+        });
+        // Correction 04: the inner pipeline's settlement is a third race arm —
+        // if it rejects (an exception escaping before onDispatchAccepted and
+        // before any refusal is written) or settles with neither acceptance nor
+        // a response, neither arm above would fire and the HTTP request would
+        // hang forever. Answer 500 INTERNAL_ERROR, as the blocking path's
+        // handler (server.ts top-level catch) would.
+        const innerSettled = innerDispatch.then(() => 'settled' as const, () => 'settled' as const);
+        const outcome = await Promise.race([
+          accepted.then(() => 'accepted' as const),
+          capture.ended.then(() => 'refused' as const),
+          innerSettled.then(() => 'error' as const),
+        ]);
+        // An inner pipeline that wrote its refusal and then settled resolves
+        // both arms; forward the refusal rather than relying on arm ordering.
+        if (outcome === 'error' && capture.body === undefined) {
+          sendJson(res, 500, { error: 'Internal API request failed.', code: ErrorCode.INTERNAL_ERROR });
+          return;
+        }
+        if (outcome === 'refused' || outcome === 'error') {
+          // Forward the inner refusal exactly as the blocking path would.
+          const retryAfter = capture.headers['retry-after'];
+          if (retryAfter !== undefined) res.setHeader('Retry-After', retryAfter);
+          let refusalBody: unknown = capture.body;
+          try { refusalBody = JSON.parse(capture.body); } catch { /* non-JSON body forwarded as-is */ }
+          sendJson(res, capture.statusCode || 500, refusalBody);
+          return;
+        }
+        const after = await readProjectPiGoalState(entry.path);
+        sendJson(res, 200, {
+          sessionId,
+          runtime: 'pi',
+          action: composed.action,
+          accepted: true,
+          receipt: null,
+          goal: after,
+        });
+        return;
+      }
+
       // Reuse the entire prompt pipeline (injection check, receipts, admission,
       // busy pass-through) by dispatching the composed slash command internally.
       const innerRes = createCaptureResponse();
@@ -6091,14 +6182,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     queuedPiRuns.delete(sessionId);
-    queuedPiEventChains.delete(sessionId);
     queuedPiLastFollowUp.delete(sessionId);
-    queuedPiChainDepth.delete(sessionId);
     stopFollowUpSettleSweep(sessionId);
     const observer = queuedPiObservers.get(sessionId);
     if (observer) {
       if (removed) multiSessionManager.removeApiObserver(removed.sessionPath, observer);
       queuedPiObservers.delete(sessionId);
+    }
+    // H2s (criterion 3): do not wipe chain depth or event chain while events
+    // are still owed on the chain — otherwise a follow-up accepted in this
+    // window under-counts depth when the old chain's finally decrements it.
+    if ((queuedPiChainDepth.get(sessionId) ?? 0) === 0) {
+      queuedPiChainDepth.delete(sessionId);
+      queuedPiEventChains.delete(sessionId);
     }
   }
 
@@ -6310,7 +6406,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           await reconcileDroppedPiFollowUps(sessionId);
         }
         } finally {
-          queuedPiChainDepth.set(sessionId, Math.max(0, (queuedPiChainDepth.get(sessionId) ?? 0) - 1));
+          const currentDepth = queuedPiChainDepth.get(sessionId) ?? 0;
+          const nextDepth = Math.max(0, currentDepth - 1);
+          if (nextDepth === 0) {
+            queuedPiChainDepth.delete(sessionId);
+            if (!queuedPiRuns.has(sessionId)) {
+              queuedPiEventChains.delete(sessionId);
+            }
+          } else {
+            queuedPiChainDepth.set(sessionId, nextDepth);
+          }
         }
       }).catch((error) => {
         logger.warn(`Failed to correlate queued Pi follow-up for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
