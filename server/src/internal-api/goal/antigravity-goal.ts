@@ -22,10 +22,16 @@
 import { exec } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import type { AgyCompletedTurn } from '../../antigravity/antigravity-service.js';
 import type { GoalVerificationInfo, SessionGoalProjection } from './types.js';
 
 /** Exact self-report marker the goal prompts ask the model to emit. */
 export const AGY_GOAL_SENTINEL = 'GOAL_STATUS: ACHIEVED';
+
+/** Consecutive provider-error turns after which the sweeper pauses the goal
+ *  (contract 1.58.3, mirroring the Pi goal engine's three-strike rule: errors
+ *  1..n-1 retry the continuation, the nth pauses). */
+export const AGY_GOAL_MAX_CONSECUTIVE_ERRORS = 3;
 
 const SENTINEL_RE = /GOAL_STATUS:\s*ACHIEVED/i;
 
@@ -99,9 +105,14 @@ export interface AntigravityGoalRecord {
   verifyCommand?: string;
   maxRuns: number;
   status: 'running' | 'paused' | 'achieved' | 'failed' | 'cleared';
-  /** Verification cycles consumed (completed turns processed for this goal). */
+  /** Verification cycles consumed (completed turns processed for this goal).
+   *  Provider-error strikes do not consume a run (contract 1.58.3). */
   runs: number;
-  pausedReason?: 'user' | 'budget';
+  pausedReason?: 'user' | 'budget' | 'error';
+  /** Consecutive provider-error strikes in the current armed cycle. Reset by a
+   *  successful turn; the pause ends the cycle and resets it (the count that
+   *  caused a pause is stated in `lastReason`). */
+  consecutiveErrors?: number;
   /** Last verifier message / governor note. */
   lastReason?: string;
   verification?: GoalVerificationInfo;
@@ -288,8 +299,9 @@ export interface AgyGoalSweeperDeps {
   /** Runtime liveness — never verify/continue a streaming session. */
   isRunning: (sessionId: string) => boolean;
   getStore: () => AntigravityGoalControlStore;
-  /** Latest finalized turn of the session (null when none). */
-  readLastCompletedTurn: (sessionId: string) => Promise<{ completedAt: number; response: string } | null>;
+  /** Latest finalized turn of the session (null when none), carrying its
+   *  provider-error truth (contract 1.58.3). */
+  readLastCompletedTurn: (sessionId: string) => Promise<AgyCompletedTurn | null>;
   /** Session cwd for verifyCommand execution. */
   sessionCwd: (sessionId: string) => Promise<string | undefined>;
   /** Send the continuation prompt through the normal detached pipeline. */
@@ -359,19 +371,56 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
           // Turn-driven advance: each completed turn is processed exactly once.
           if (record.lastVerifiedTurnAt !== undefined && turn.completedAt <= record.lastVerifiedTurnAt) continue;
 
+          // Provider-error strike (contract 1.58.3). A finalized error turn has no
+          // assistant answer to verify, so it must never advance the goal as an
+          // ordinary unmet turn (the H2s Gemini session burned 27 of 40 runs that
+          // way). Consecutive strikes pause the goal; a successful turn resets the
+          // count. Strikes 1..n-1 retry the continuation, mirroring the Pi goal
+          // engine's three-strike rule for real errors (retry, then pause).
+          if (turn.status === 'error') {
+            const strikes = (record.consecutiveErrors ?? 0) + 1;
+            const errorText = turn.error?.trim() || turn.response.trim() || 'unknown provider error';
+            if (strikes >= AGY_GOAL_MAX_CONSECUTIVE_ERRORS) {
+              const patched = await deps.getStore().patch(sessionId, {
+                status: 'paused',
+                pausedReason: 'error',
+                // The counter belongs to the running cycle: the pause ends it and a
+                // resume starts a fresh three-strike window. The count that caused
+                // the pause is stated in lastReason.
+                consecutiveErrors: 0,
+                lastReason: `goal paused after ${strikes} consecutive provider errors; last error: ${errorText}`,
+                lastVerifiedTurnAt: turn.completedAt,
+              });
+              publishIfChanged(sessionId, patched);
+              continue;
+            }
+            const patched = await deps.getStore().patch(sessionId, {
+              consecutiveErrors: strikes,
+              lastReason: `provider error (strike ${strikes}/${AGY_GOAL_MAX_CONSECUTIVE_ERRORS}): ${errorText}`,
+              lastVerifiedTurnAt: turn.completedAt,
+            });
+            publishIfChanged(sessionId, patched);
+            await deps.dispatch(sessionId, buildAgyGoalContinuationPrompt(record.objective, record.verifyCommand !== undefined));
+            continue;
+          }
+
           const cwd = (await deps.sessionCwd(sessionId)) ?? process.cwd();
           const result = deps.verify
             ? await deps.verify(record, turn)
             : await verifyAgyGoalTurn({ verifyCommand: record.verifyCommand, response: turn.response, cwd, timeoutMs: deps.config.verifyTimeoutMs });
 
           const runs = record.runs + 1;
+          // This turn succeeded: any run of consecutive provider errors is over.
+          // Clear a stale strike note rather than carrying it into the projection.
+          const recovered = (record.consecutiveErrors ?? 0) > 0;
           if (result.met) {
             const patched = await deps.getStore().patch(sessionId, {
               status: 'achieved',
               completedAt: now(),
               runs,
               verification: result.verification,
-              lastReason: result.verification.message ?? record.lastReason,
+              lastReason: result.verification.message ?? (recovered ? undefined : record.lastReason),
+              consecutiveErrors: 0,
               lastVerifiedTurnAt: turn.completedAt,
             });
             publishIfChanged(sessionId, patched);
@@ -385,6 +434,7 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
               runs,
               verification: result.verification,
               lastReason: `goal run budget exhausted (${record.maxRuns} runs) without achieving the goal; start or resume to re-arm`,
+              consecutiveErrors: 0,
               lastVerifiedTurnAt: turn.completedAt,
             });
             publishIfChanged(sessionId, patched);
@@ -394,7 +444,8 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
           const patched = await deps.getStore().patch(sessionId, {
             runs,
             verification: result.verification,
-            lastReason: result.verification.message ?? record.lastReason,
+            lastReason: result.verification.message ?? (recovered ? undefined : record.lastReason),
+            consecutiveErrors: 0,
             lastVerifiedTurnAt: turn.completedAt,
           });
           publishIfChanged(sessionId, patched);
