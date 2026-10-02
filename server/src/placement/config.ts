@@ -224,6 +224,11 @@ export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {},
     if (now !== screened) {
       return { available: false, reason: `tools root changed since screening (${screened} -> ${now})` };
     }
+    // The screened root skips the raw-path branch below, so its containment
+    // check runs here, before any write.
+    if (!screened.startsWith(cfg.cgroupRoot + '/')) {
+      return { available: false, reason: `tools root ${screened} is outside the cgroup root ${cfg.cgroupRoot}` };
+    }
     root = screened;
   } else {
     const cand = candidateToolsRootPath(cfg, d);

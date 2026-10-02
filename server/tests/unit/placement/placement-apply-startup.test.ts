@@ -384,3 +384,30 @@ describe('J6 correction 03: apply runs the SCREENED root — no second resolutio
     }
   });
 });
+
+describe('J6 correction 03 (parent): a screened root is still contained in the cgroup root', () => {
+  beforeEach(() => {
+    resetAppliedPlacement();
+  });
+
+  it('a screened canonical root OUTSIDE the cgroup root is refused before any write', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'run-owned.service' });
+    const outside = '/tmp/not-a-cgroup/run-owned.service';
+    const writes: string[] = [];
+    const applied = applyStartupPlacement(
+      cfg,
+      {
+        realpath: (p) => p,
+        exists: () => true,
+        readFirstLine: (f) => (f.endsWith('/memory.max') ? '12884901888\n' : f.endsWith('/cgroup.subtree_control') ? '' : 'cpu memory pids\n'),
+        enableSubtreeControllers: (root) => {
+          writes.push(root);
+        },
+      },
+      { screenedCanonicalRoot: outside },
+    );
+    expect(applied.active).toBe(false);
+    expect(applied.reason).toMatch(/outside the cgroup root/);
+    expect(writes).toEqual([]);
+  });
+});
