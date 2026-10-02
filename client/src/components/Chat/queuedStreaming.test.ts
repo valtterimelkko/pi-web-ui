@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { removeDeliveredQueuedChips, type QueuedStreamingMessage } from './MessageInput';
+import { expectedEchoIndexFor, removeDeliveredQueuedChips, type QueuedStreamingMessage } from './MessageInput';
 
 // Hb6 correction 02: queued-streaming chips (steer/follow-up sent while a run
 // is streaming) stayed visible after their prompt was delivered because the
@@ -65,5 +65,29 @@ describe('removeDeliveredQueuedChips (Hb6 correction 02)', () => {
       user([{ type: 'thinking', thinking: 'Only this exact text' }]),
     ];
     expect(removeDeliveredQueuedChips(queue, transcript)).toEqual(queue);
+  });
+
+  it('a chip queued after an identical earlier prompt is not cleared by that earlier echo (review: one-to-one)', () => {
+    const history = [user(blockOf('same text'))];
+    const queue = [{ ...chip('same text', 'q-new'), expectedEchoIndex: 1 }];
+    expect(removeDeliveredQueuedChips(queue, history).map((c) => c.id)).toEqual(['q-new']);
+    expect(removeDeliveredQueuedChips(queue, [...history, user(blockOf('same text'))])).toHaveLength(0);
+  });
+
+  it('one echo clears exactly one of two identical queued chips, in queue order', () => {
+    const queue = [
+      { ...chip('dup', 'q-a'), expectedEchoIndex: 0 },
+      { ...chip('dup', 'q-b'), expectedEchoIndex: 1 },
+    ];
+    expect(removeDeliveredQueuedChips(queue, [user(blockOf('dup'))]).map((c) => c.id)).toEqual(['q-b']);
+    expect(removeDeliveredQueuedChips(queue, [user(blockOf('dup')), user(blockOf('dup'))])).toHaveLength(0);
+  });
+
+  it('expectedEchoIndexFor counts prior identical user messages and identical chips still pending', () => {
+    const history = [user(blockOf('x')), user('x'), user(blockOf('y'))];
+    const pending = [chip('x', 'q1'), chip('z', 'q2')];
+    expect(expectedEchoIndexFor('x', history, pending)).toBe(3);
+    expect(expectedEchoIndexFor('y', history, pending)).toBe(1);
+    expect(expectedEchoIndexFor('new', history, pending)).toBe(0);
   });
 });

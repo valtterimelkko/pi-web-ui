@@ -23,24 +23,51 @@ export interface QueuedStreamingMessage {
   id: string;
   mode: 'steer' | 'followUp';
   text: string;
+  /** How many user messages with this (trimmed) text must already exist before
+   * this chip's own echo: prior identical history plus identical chips still
+   * pending at enqueue time. Absent means 0 (the first matching echo). */
+  expectedEchoIndex?: number;
+}
+
+type TranscriptMessage = { role: string; content: unknown };
+
+// `Map` is shadowed by the lucide-react icon import, hence globalThis.Map.
+function userTextCounts(transcript: TranscriptMessage[]): globalThis.Map<string, number> {
+  const counts = new globalThis.Map<string, number>();
+  for (const m of transcript) {
+    if (m.role !== 'user') continue;
+    const text = messageTextOf(m.content as Parameters<typeof messageTextOf>[0]).trim();
+    counts.set(text, (counts.get(text) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Baseline for a chip queued now: identical user messages already in the
+ * transcript plus identical chips still waiting for their echo. */
+export function expectedEchoIndexFor(
+  text: string,
+  transcript: TranscriptMessage[],
+  pending: QueuedStreamingMessage[],
+): number {
+  const key = text.trim();
+  const pendingSame = pending.filter((item) => item.text.trim() === key).length;
+  return (userTextCounts(transcript).get(key) ?? 0) + pendingSame;
 }
 
 /** Hb6 correction 02: drop queued-streaming chips whose prompt has been
- * delivered — i.e. a matching user message now exists in the transcript. The
- * match uses the SAME text extraction as the optimistic-echo reconciliation
- * (`messageTextOf`): the echoed user message carries a text-block array, so a
- * string-only comparison left chips visible forever. Conservative: exact
- * (trimmed) equality, role user, nothing broader; queue order preserved. */
+ * delivered. The match uses the SAME text extraction as the optimistic-echo
+ * reconciliation (`messageTextOf`): the echoed user message carries a
+ * text-block array, so a string-only comparison left chips visible forever.
+ * Matching is one-to-one: a chip counts as delivered only once the transcript
+ * holds more identical (trimmed) user messages than its `expectedEchoIndex`,
+ * so an earlier identical prompt cannot clear a new chip and one echo clears
+ * only one of two identical chips. Queue order preserved. */
 export function removeDeliveredQueuedChips(
   queue: QueuedStreamingMessage[],
-  transcript: Array<{ role: string; content: unknown }>,
+  transcript: TranscriptMessage[],
 ): QueuedStreamingMessage[] {
-  const delivered = new Set(
-    transcript
-      .filter((m) => m.role === 'user')
-      .map((m) => messageTextOf(m.content as Parameters<typeof messageTextOf>[0]).trim()),
-  );
-  return queue.filter((item) => !delivered.has(item.text.trim()));
+  const counts = userTextCounts(transcript);
+  return queue.filter((item) => (counts.get(item.text.trim()) ?? 0) <= (item.expectedEchoIndex ?? 0));
 }
 
 interface MessageInputProps {
@@ -267,6 +294,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
         id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         mode,
         text: message,
+        expectedEchoIndex: expectedEchoIndexFor(message, transcript, q),
       }]);
       if (currentSessionId) setDraft(currentSessionId, '');
       setInputValue('');
