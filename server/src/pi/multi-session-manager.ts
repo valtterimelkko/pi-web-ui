@@ -253,6 +253,13 @@ export class MultiSessionManager {
   /** H1 correction M1: view-only viewers per session path, attached as real
    *  subscribers the moment any path materialises the agent. */
   private pendingViewersByPath = new Map<string, Set<string>>();
+  /** H1 correction 04 (D1): clients that OPENED this path view-only — recorded
+   *  by registerPendingViewer and KEPT after attach, so a deliberate dispose
+   *  can re-register exactly these (and only these) as pending. Never written
+   *  with the flag off (viewOnlySwitchSession is the only caller), so flag-off
+   *  dispose is master-identical by construction. Cleared by unsubscribeClient
+   *  (switch-away / disconnect). */
+  private viewOnlyViewersByPath = new Map<string, Set<string>>();
   private subscriptionQueues = new Map<string, Promise<void>>();
   private webUIContextProvider?: WebUIContextProvider;
   private sessionMaterializedHandler?: (sessionId: string, sessionPath: string) => Promise<void> | void;
@@ -764,20 +771,15 @@ export class MultiSessionManager {
     this.sessions.delete(sessionPath);
     this.extensionUiSnapshots.delete(sessionPath);
 
-    // H1 correction M1 (parent Q2): capture the BROWSER VIEWERS being detached
-    // — clients that were attached subscribers AND name this path in the
-    // manager's viewing map (the connection records that for BOTH open kinds).
-    // They are re-registered as PENDING viewers after the cleanup below, so a
-    // later materialisation (goal continuation, another tab, the API) re-attaches
-    // them and their open tab keeps receiving events. Non-viewing subscribers
-    // (the Internal API's synthetic client, the recovery handle) are NOT
-    // re-registered — master's dispose semantics for them are unchanged, and a
-    // phantom pending entry would pin future sessions. Eviction paths never
-    // arrive here with viewers (they only dispose sessions with zero
-    // subscribers), so this is purely the deliberate-dispose case.
-    const detachedViewers = [...activeSession.subscribers].filter(
-      (clientId) => this.clientViewingSession.get(clientId) === sessionPath,
-    );
+    // H1 correction 04 (D1): re-register ONLY the recorded view-only viewers of
+    // this path (registerPendingViewer is the single writer, and the
+    // view-only switch path only runs with the flag on — so with the flag off
+    // nothing is ever recorded and dispose is master-identical by
+    // construction). The record is KEPT (not consumed) so repeated
+    // dispose→materialise lifecycles keep re-registering the still-open view;
+    // it ends when the viewer switches away or disconnects (unsubscribeClient).
+    // Every other subscriber is handled exactly as on master below.
+    const detachedViewOnlyViewers = this.viewOnlyViewersByPath.get(sessionPath) ?? new Set<string>();
 
     // Clear client viewing references
     for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
@@ -801,7 +803,7 @@ export class MultiSessionManager {
     // untouched by this dispose), so the next materialisation re-attaches them.
     // The pending entry is bounded: it is consumed by the next attach and
     // removed by switch-away/disconnect through the normal unsubscribe path.
-    for (const clientId of detachedViewers) {
+    for (const clientId of detachedViewOnlyViewers) {
       let pending = this.pendingViewersByPath.get(sessionPath);
       if (!pending) {
         pending = new Set();
@@ -812,8 +814,8 @@ export class MultiSessionManager {
       subs.add(sessionPath);
       this.clientSubscriptions.set(clientId, subs);
     }
-    if (detachedViewers.length > 0) {
-      logger.info(`[MultiSessionManager] Re-registered ${detachedViewers.length} viewer(s) of ${sessionPath} as pending after dispose`);
+    if (detachedViewOnlyViewers.size > 0) {
+      logger.info(`[MultiSessionManager] Re-registered ${detachedViewOnlyViewers.size} view-only viewer(s) of ${sessionPath} as pending after dispose`);
     }
   }
 
@@ -1347,6 +1349,14 @@ export class MultiSessionManager {
    * immediately — there is no view-only shortcut for a live agent.
    */
   registerPendingViewer(clientId: string, sessionPath: string): void {
+    // Correction 04 (D1): the explicit view-only record — the ONLY input the
+    // dispose path may use for re-registration.
+    let viewOnly = this.viewOnlyViewersByPath.get(sessionPath);
+    if (!viewOnly) {
+      viewOnly = new Set();
+      this.viewOnlyViewersByPath.set(sessionPath, viewOnly);
+    }
+    viewOnly.add(clientId);
     const activeSession = this.sessions.get(sessionPath);
     if (activeSession) {
       this.attachClientToSession(clientId, sessionPath, activeSession);
@@ -1381,6 +1391,13 @@ export class MultiSessionManager {
         clientSubsEarly.delete(sessionPath);
         if (clientSubsEarly.size === 0) this.clientSubscriptions.delete(clientId);
       }
+    }
+    // Correction 04 (D1): leaving also ends the view-only record, so a later
+    // dispose can no longer re-register this client for this path.
+    const viewOnly = this.viewOnlyViewersByPath.get(sessionPath);
+    if (viewOnly) {
+      viewOnly.delete(clientId);
+      if (viewOnly.size === 0) this.viewOnlyViewersByPath.delete(sessionPath);
     }
 
     const activeSession = this.sessions.get(sessionPath);

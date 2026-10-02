@@ -129,18 +129,12 @@ describe('MultiSessionManager pending viewers (H1 correction M1)', () => {
     expect(manager.getClientSubscriptions('viewer')).toEqual([]);
   });
 
-  it('a pending registration consumed by attach does not resurrect after a deliberate dispose of a NON-viewing attach (no stale events, no leak)', async () => {
-    const { manager } = makeManager(broadcast);
-    manager.registerPendingViewer('viewer', PATH);
-    await manager.subscribeClient('api-client', PATH); // materialise + attach
-    expect(manager.getSubscribers(PATH)).toContain('viewer');
-    // 'viewer' has no viewing-map entry here (not a browser viewer in this
-    // scenario), so a deliberate dispose drops it for good — same guarantee
-    // as a regular subscriber without a view.
-    await manager.disposeLoadedSession(PATH);
-    await manager.subscribeClient('api-client', PATH); // later re-materialisation
-    expect(manager.getSubscribers(PATH)).not.toContain('viewer');
-  });
+  // (Removed by correction 04: the old "non-viewing attach does not resurrect"
+  // case used registerPendingViewer — which by the D1 contract IS the
+  // view-only record, so it must resurrect after dispose. True non-viewing
+  // parity — an ordinary materialising subscriber with a viewing-map entry —
+  // is covered by the (04 D1) flag-off parity test below and by the real
+  // connection-path tests in session-switch-dispose-parity.test.ts.)
 
   it('(parent Q2) a VIEWING client disposed underneath is re-registered as pending: a later materialisation reaches it', async () => {
     const { manager, piService } = makeManager(broadcast);
@@ -172,5 +166,17 @@ describe('MultiSessionManager pending viewers (H1 correction M1)', () => {
     expect(manager.getClientSubscriptions('api-client')).toEqual([]);
     await manager.subscribeClient('other', PATH);
     expect(manager.getSubscribers(PATH)).not.toContain('api-client');
+  });
+
+  it('(04 D1) flag-off parity at the manager level: an ordinary subscriber that also has a viewing-map entry is NOT re-registered on dispose', async () => {
+    const { manager } = makeManager(broadcast);
+    // An ordinary materialising browser switch: subscribeClient + the
+    // connection records the manager-side viewing ref (master's flow).
+    await manager.subscribeClient('browser-1', PATH);
+    manager.setClientViewingSession('browser-1', PATH);
+    await manager.disposeLoadedSession(PATH);
+    expect(manager.getClientSubscriptions('browser-1')).toEqual([]); // master: nothing left
+    await manager.subscribeClient('api-worker', PATH); // later materialisation
+    expect(manager.getSubscribers(PATH)).not.toContain('browser-1'); // master: not attached
   });
 });
