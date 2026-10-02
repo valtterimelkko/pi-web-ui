@@ -513,6 +513,35 @@ describe('createAgyGoalSweeper — resume continuation that could not dispatch (
     expect(h.dispatched).toHaveLength(1);
   });
 
+  it('re-checks the goal before dispatching: a pause or clear that lands during the turn read wins (review r2)', async () => {
+    for (const action of ['pause', 'clear', 'start'] as const) {
+      const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+      h.turns.set('s1', { completedAt: 300, response: 'x' });
+      h.deps.readLastCompletedTurn = async (id) => {
+        if (action === 'pause') await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+        if (action === 'clear') await h.store.patch(id, { status: 'cleared', autoContinue: false, clearedAt: 1 });
+        if (action === 'start') await h.store.patch(id, { objective: 'New objective', runs: 0, pendingContinuation: false, consecutiveErrors: 0 });
+        return h.turns.get(id) ?? null;
+      };
+      await createAgyGoalSweeper(h.deps).sweepOnce();
+      expect(h.dispatched, action).toHaveLength(0);
+    }
+  });
+
+  it('re-checks before a strike-retry or an unmet-turn continuation too: a pause during verification wins', async () => {
+    const h = await harness({ err: record({ maxRuns: 40 }), unmet: record({ maxRuns: 40 }) });
+    h.turns.set('err', { completedAt: 500, response: 'boom', status: 'error', error: 'boom' });
+    h.turns.set('unmet', { completedAt: 500, response: 'still working' });
+    const read = h.deps.readLastCompletedTurn;
+    h.deps.readLastCompletedTurn = async (id) => {
+      const turn = await read(id);
+      await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+      return turn;
+    };
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+
   it('does not dispatch a pending continuation for a paused goal or a busy session', async () => {
     const h = await harness({
       paused: record({ status: 'paused', pausedReason: 'user', autoContinue: false, lastVerifiedTurnAt: 300, pendingContinuation: true }),

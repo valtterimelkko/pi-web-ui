@@ -361,6 +361,18 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
       } catch {
         return;
       }
+      // Re-read just before a dispatch: the turn read and verification are
+      // asynchronous, so a pause, clear or restart can land after the record
+      // above was read. A continuation is sent only if the goal is still armed
+      // and still at the cursor this sweep advanced from (review r2, 1.58.3).
+      const stillArmed = async (sessionId: string, cursor: number | undefined, requirePending = false): Promise<AntigravityGoalRecord | null> => {
+        const fresh = await deps.getStore().get(sessionId);
+        if (!fresh || fresh.status !== 'running' || fresh.autoContinue === false) return null;
+        if (fresh.lastVerifiedTurnAt !== cursor) return null;
+        if (requirePending && !fresh.pendingContinuation) return null;
+        return deps.isRunning(sessionId) ? null : fresh;
+      };
+      const continuationFor = (rec: AntigravityGoalRecord) => buildAgyGoalContinuationPrompt(rec.objective, rec.verifyCommand !== undefined);
       for (const sessionId of sessionIds) {
         try {
           const record = await deps.getStore().get(sessionId);
@@ -378,8 +390,9 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             // settling) left no new turn to advance from: dispatch the owed
             // continuation now. A refused dispatch throws and is retried on the
             // next sweep; the flag clears only once a dispatch is accepted.
-            if (record.pendingContinuation) {
-              await deps.dispatch(sessionId, buildAgyGoalContinuationPrompt(record.objective, record.verifyCommand !== undefined));
+            const owed = record.pendingContinuation ? await stillArmed(sessionId, record.lastVerifiedTurnAt, true) : null;
+            if (owed) {
+              await deps.dispatch(sessionId, continuationFor(owed));
               await deps.getStore().patch(sessionId, { pendingContinuation: false });
             }
             continue;
@@ -415,7 +428,9 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             // the session is still settling (the route's admission lease can
             // outlive the turn's finalisation), the strike must not be consumed —
             // the next sweep re-processes the same turn and retries the dispatch.
-            await deps.dispatch(sessionId, buildAgyGoalContinuationPrompt(record.objective, record.verifyCommand !== undefined));
+            const armedForRetry = await stillArmed(sessionId, record.lastVerifiedTurnAt);
+            if (!armedForRetry) continue;
+            await deps.dispatch(sessionId, continuationFor(armedForRetry));
             const patched = await deps.getStore().patch(sessionId, {
               consecutiveErrors: strikes,
               lastReason: `provider error (strike ${strikes}/${AGY_GOAL_MAX_CONSECUTIVE_ERRORS}): ${errorText}`,
@@ -470,7 +485,8 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             lastVerifiedTurnAt: turn.completedAt,
           });
           publishIfChanged(sessionId, patched);
-          await deps.dispatch(sessionId, buildAgyGoalContinuationPrompt(record.objective, record.verifyCommand !== undefined));
+          const armedForNext = await stillArmed(sessionId, turn.completedAt);
+          if (armedForNext) await deps.dispatch(sessionId, continuationFor(armedForNext));
         } catch {
           /* per-session isolation: one bad session cannot stop the sweep */
         }
