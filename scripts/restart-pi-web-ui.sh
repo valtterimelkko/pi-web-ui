@@ -24,6 +24,12 @@
 # API state cannot be confirmed, the drain is cancelled, nothing is restarted,
 # and this script exits 1 with a "refusing restart" line.
 #
+# J1 (2026-10-02): a production-checkout guard refusal comes back with its own
+# canonical exit status (3) and is passed through with its own message
+# ("refusing restart (production checkout guard) …"). It is checkout state, not
+# load: the Command Code weekly refresh must fail on it (its catalogue is
+# already pushed), never read it as a capacity deferral.
+#
 # The canonical path takes the production-control lock itself (re-entrantly),
 # names the requester in the journal and the durable stop audit, and honours
 # the same target seams (PI_WEB_UI_SERVICE_UNIT, PI_WEB_UI_INTERNAL_API_SOCKET,
@@ -90,7 +96,13 @@ fi
 PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS="${PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS:-10}" \
   bash "$script_dir/restart-production.sh" "${args[@]}"
 status=$?
-if (( status == 1 )); then
+if (( status == 3 )); then
+  # J1: the canonical path's checkout guard refused (wrong branch, dirty tree,
+  # unreadable state, missing/unverifiable or stale-by-content build identity).
+  # Checkout state — a restart cannot help. Distinct from the drain refusal
+  # below so the weekly job reports it as the hard failure it is.
+  printf 'restart-pi-web-ui: refusing restart (production checkout guard): the production checkout did not pass its safety guard (detail above); nothing was restarted.\n' >&2
+elif (( status == 1 )); then
   printf 'restart-pi-web-ui: refusing restart: the drain did not settle within %ss or the Internal API state could not be confirmed (details above); nothing was restarted.\n' "$DRAIN_TIMEOUT" >&2
 fi
 exit "$status"

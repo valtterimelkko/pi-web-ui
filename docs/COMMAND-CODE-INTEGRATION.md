@@ -115,9 +115,12 @@ current as the CLI advertises new models (typically weekly). One run:
 3. regenerates the effort table (provider-free probes) so new models gain
    their effort selector, and grows `COMMAND_CODE_EXCLUDED_MODELS` by the
    proven-ineligible ids;
-4. typechecks the server, runs the focused command-code unit tests, rebuilds
+4. typechecks the server, runs the focused command-code unit tests, builds
    `server/dist`, commits and pushes exactly the two catalogue files on the
-   current branch;
+   current branch, then builds once more so the build identity names the
+   pushed revision — the production restart guard judges built content by
+   revision, so without this second build the guard would refuse the restart
+   below (plan §6 J1);
 5. restarts `pi-web-ui` once the Internal API reports no active turns
    (startup discovery is when the new models go live in the browser selector
    and the Internal API), then posts a Telegram summary via `scripts/notify.sh`.
@@ -130,7 +133,11 @@ current as the CLI advertises new models (typically weekly). One run:
    each part to its source file, so a change to the drain defaults or the
    unit's stop timeout fails a test instead of outliving the job). A drain
    that cannot settle in time is still refused by the wrapper itself and
-   read as a deferral, not a failure.
+   read as a deferral, not a failure. A **checkout-guard refusal** (exit 3,
+   `refusing restart (production checkout guard) …`) is different: the
+   checkout state will not fix itself, the catalogue is already pushed but
+   NOT live, so the job fails its run (and posts the failure) instead of
+   deferring — see the guard section in [`DEPLOYMENT.md`](../DEPLOYMENT.md).
 
 Nothing here bumps the Internal API contract: catalogue growth is data, not an
 API change, and the runtime catalogue fails open, so even a skipped week only

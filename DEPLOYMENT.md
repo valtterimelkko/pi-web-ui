@@ -618,12 +618,15 @@ automatically, keeping the verb. Restarting **without** a drain needs
 records `drain=forced` and the reason, and a forced restart refuses if neither
 the audit file nor the journal accepted that record.
 
-`scripts/restart-pi-web-ui.sh` (the Command Code weekly refresh's restart,
-60 s budget) goes through the same path with a 20 s drain, 10 s HTTP slack and
+`scripts/restart-pi-web-ui.sh` (the Command Code weekly refresh's restart)
+goes through the same path with a 20 s drain, 10 s HTTP slack and
 `--on-timeout abort`: if the drain cannot settle in time, or the API state is
 unknown, it cancels the drain, restarts nothing and exits 1 with
 `restart-pi-web-ui: refusing restart …`, which the weekly job treats as
-"restart deferred". Its `--force` also needs a non-empty `--reason`.
+"restart deferred". A checkout-guard refusal passes through with **exit 3**
+and `refusing restart (production checkout guard) …`, which the weekly job
+reports as a hard failure (the catalogue is pushed but not live). Its
+`--force` also needs a non-empty `--reason`.
 `npm run production:drain-restart -- --show-targets` prints the unit, socket,
 token file, audit file and drain defaults without touching anything. For
 disposable proofs every target is injectable (`PI_WEB_UI_SERVICE_UNIT`,
@@ -632,15 +635,24 @@ disposable proofs every target is injectable (`PI_WEB_UI_SERVICE_UNIT`,
 `PI_WEB_UI_STOP_AUDIT_FILE`, `PI_WEB_UI_PRODUCTION_LOCK`). The drain API itself
 is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md#drain-then-restart).
 
-**Production checkout safety guard (Hb4).** Before initiating drain or restart,
-`scripts/restart-production.sh` validates that the production checkout directory
-(`CHECKOUT_DIR`, default `/root/pi-web-ui`, overrideable via `--checkout-dir` or
-`PI_WEB_UI_CHECKOUT_DIR`):
+**Production checkout safety guard (Hb4; content-based since J1, 2026-10-02).**
+Before initiating drain or restart, `scripts/restart-production.sh` validates
+that the production checkout directory (`CHECKOUT_DIR`, default `/root/pi-web-ui`,
+overrideable via `--checkout-dir` or `PI_WEB_UI_CHECKOUT_DIR`):
+
 1. Is on the expected branch (default `master`, overrideable via `--expected-branch` or `PI_WEB_UI_EXPECTED_BRANCH`).
 2. Has no unstaged modifications or staged changes on tracked files (untracked files are ignored).
-3. Has an up-to-date compiled build in `server/dist/build-identity/embedded-manifest.json` whose revision matches current `HEAD`.
+3. Has a compiled build in `server/dist/build-identity/embedded-manifest.json` whose **built content is current for `HEAD`**: the manifest records the revision the build was made from; the guard refuses only when a *build input* — the paths in `BUILD_INPUT_POLICY` (`server/src/build-identity/manifest.ts`: server/client/shared/internal-api-mcp sources, workspace and TypeScript configs, the declared validation scripts, lockfiles; mirrored as `BUILD_INPUT_PATHS` in the script and pinned to the policy by test) — differs between that revision and `HEAD`. Commits that touch no build input (docs, plans) do **not** need a rebuild before restarting. An unknown manifest revision or a failing diff refuses (fails closed).
 
-If any check fails, the restart is refused before draining. Passing `--force --reason "<why>"` skips these safety checks and records `drain=forced`.
+Every refusal from these checks is a **checkout-guard refusal**: exit **3** with
+`ERROR: Refusing production restart (checkout guard): …` — distinct from a drain
+refusal (exit **1**, `ERROR: Refusing production restart: …`). Reading a refusal:
+exit 3 means the checkout itself is not restartable (fix or rebuild it; a restart
+cannot help); exit 1 means load/in-flight work (wait). `scripts/restart-pi-web-ui.sh`
+passes both through with their own messages, and the Command Code weekly refresh
+fails its run on a guard refusal (catalogue pushed but not live) while deferring on
+a drain refusal. Passing `--force --reason "<why>"` skips these safety checks and
+records `drain=forced`.
 
 ### Process isolation, slice placement, and working-set memory capacity (Hb4)
 
