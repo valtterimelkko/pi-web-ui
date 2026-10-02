@@ -68,6 +68,22 @@ export interface HealthReadings {
    * windows as a side effect.
    */
   streaming: StreamingWindowSummary | null;
+  /**
+   * J3: admission's total active turns (its own permit counter). Absent — not
+   * null — when no admission counts source is wired, so unwired metrics rows
+   * grow by zero bytes.
+   */
+  admissionActiveTurns?: number;
+  /** J3: admission's per-class active counts (P0–P3). Absent when unwired. */
+  admissionTurnsByClass?: Record<string, number>;
+  /** J3: admission's per-runtime active counts, when the snapshot exposes them. Absent when unwired or unexposed. */
+  admissionTurnsByRuntime?: Record<string, number>;
+  /**
+   * J3: what admission exposes of the oldest still-active run's start
+   * (receipt-derived; usually absent — and always absent for a leaked permit,
+   * which holds no receipt). Absent when unwired or unexposed.
+   */
+  admissionOldestActiveRunStartedAt?: string;
 }
 
 export type MainThreadCpuSource = 'proc-thread-self' | 'process-cpu' | 'unavailable';
@@ -218,6 +234,23 @@ export interface AdmissionReading {
 }
 
 /**
+ * J3: admission's live counts, recorded NEXT TO the runtime's operational counts
+ * (never instead of them — the operational-metrics counts stay in
+ * `activeTurns`/`activeTurnsByClass` so the metrics row keeps its meaning).
+ * Structurally satisfied by the admission controller's snapshot, which carries
+ * `activeTurns`, per-class `classes` and per-runtime `runtimes` counts.
+ * `oldestActiveRunStartedAt` is what admission exposes of the oldest active
+ * run — receipt-derived and usually absent, and empty in exactly the leak case
+ * (a leaked permit holds no receipt).
+ */
+export interface AdmissionCountsReading {
+  activeTurns: number;
+  classes: Record<string, { active: number }>;
+  runtimes?: Record<string, { activeTurns: number }>;
+  oldestActiveRunStartedAt?: string;
+}
+
+/**
  * Injectable seams. Every source is optional and fail-open: a missing or
  * throwing source yields a null/zero field, never an exception, so telemetry
  * can never take the control plane down.
@@ -229,6 +262,12 @@ export interface HealthReadingSources {
   heapLimitBytes?: () => number;
   lagWindow?: () => EventLoopLagWindow | undefined;
   admission?: () => AdmissionReading | undefined;
+  /**
+   * J3: admission's live per-class/per-runtime counts, recorded beside the
+   * operational counts for the turn-count-mismatch detector. Fail-open: a
+   * missing, throwing or malformed source simply omits the fields.
+   */
+  admissionCounts?: () => AdmissionCountsReading | undefined;
   residentSessions?: () => number | undefined;
   /** Registry entry count; the session registry loads lazily, so this may be async. */
   registryEntries?: () => number | undefined | Promise<number | undefined>;
@@ -296,6 +335,39 @@ function activeTurnsFromOperationalMetrics(metrics: OperationalMetrics = getOper
 }
 
 /**
+ * J3: fail-open projection of the admission counts source. A missing, throwing
+ * or malformed reading yields `undefined`, so every admission field is omitted
+ * and the detector treats admission as unwired (never as a misleading zero).
+ */
+interface ValidatedAdmissionCounts {
+  activeTurns: number;
+  /** Flattened per-class active counts (the row carries numbers, not `{active}`). */
+  classes: Record<string, number>;
+  runtimes?: Record<string, number>;
+  oldestActiveRunStartedAt?: string;
+}
+
+function readAdmissionCounts(read: (() => AdmissionCountsReading | undefined) | undefined): ValidatedAdmissionCounts | undefined {
+  const counts = safe<AdmissionCountsReading | undefined>(read, undefined);
+  if (!counts || !Number.isFinite(counts.activeTurns) || counts.activeTurns < 0) return undefined;
+  const classes: Record<string, number> = {};
+  for (const [name, entry] of Object.entries(counts.classes ?? {})) {
+    if (entry && Number.isFinite(entry.active) && entry.active >= 0) classes[name] = entry.active;
+  }
+  let runtimes: Record<string, number> | undefined;
+  if (counts.runtimes) {
+    runtimes = {};
+    for (const [name, entry] of Object.entries(counts.runtimes)) {
+      if (entry && Number.isFinite(entry.activeTurns) && entry.activeTurns >= 0) runtimes[name] = entry.activeTurns;
+    }
+  }
+  const oldest = typeof counts.oldestActiveRunStartedAt === 'string' && counts.oldestActiveRunStartedAt.length > 0
+    ? counts.oldestActiveRunStartedAt
+    : undefined;
+  return { activeTurns: counts.activeTurns, classes, ...(runtimes ? { runtimes } : {}), ...(oldest ? { oldestActiveRunStartedAt: oldest } : {}) };
+}
+
+/**
  * Collect one reading from the provided sources (defaults = the real process:
  * `process.memoryUsage()`, the V8 heap limit, the shared lag window and the
  * global operational metrics).
@@ -313,6 +385,7 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
   const heapLimitBytes = Math.max(0, safe(sources.heapLimitBytes, readHeapLimitBytes()));
   const lagWindow = safe(sources.lagWindow, readEventLoopLagWindow());
   const admission = safe<AdmissionReading | undefined>(sources.admission, undefined);
+  const admissionCounts = readAdmissionCounts(sources.admissionCounts);
   const cpu = safe<HealthCpuReading | undefined>(sources.cpuReading ? () => sources.cpuReading?.(now) : undefined, undefined);
 
   const classes = admission
@@ -369,6 +442,12 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
         : undefined,
     ),
     streaming: safe<StreamingWindowSummary | undefined>(sources.streaming, undefined) ?? null,
+    ...(admissionCounts ? {
+      admissionActiveTurns: admissionCounts.activeTurns,
+      admissionTurnsByClass: admissionCounts.classes,
+      ...(admissionCounts.runtimes ? { admissionTurnsByRuntime: admissionCounts.runtimes } : {}),
+      ...(admissionCounts.oldestActiveRunStartedAt ? { admissionOldestActiveRunStartedAt: admissionCounts.oldestActiveRunStartedAt } : {}),
+    } : {}),
   };
 }
 

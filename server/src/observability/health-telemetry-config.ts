@@ -254,15 +254,30 @@ function boundedNonNegativeInteger(raw: string | undefined, fallback: number, na
 }
 
 /** Heap + lag hysteresis bands. Fail-fast: a band that cannot be hysteretic is an error. */
-export function resolveHealthAlertThresholds(env: NodeJS.ProcessEnv = process.env): HealthAlertThresholds {
+export function resolveHealthAlertThresholds(env: NodeJS.ProcessEnv = process.env, warnings: string[] = []): HealthAlertThresholds {
   const thresholds: HealthAlertThresholds = {
     heapFractionHigh: parseRatio(env.OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION, DEFAULT_HEAP_ALERT_FRACTION, 'OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION'),
     heapFractionLow: parseRatio(env.OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION, DEFAULT_HEAP_RECOVER_FRACTION, 'OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION'),
     lagP99HighMs: parseNonNegativeNumber(env.OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS, DEFAULT_LAG_ALERT_MS, 'OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS'),
     lagP99LowMs: parseNonNegativeNumber(env.OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS, DEFAULT_LAG_RECOVER_MS, 'OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS'),
+    // J3: optional — unset means the evaluator's defaults (3 / 2 consecutive readings).
+    turnCountMismatchAlertReadings: optionalPositiveReadings(env.OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS, 'OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS', warnings),
+    turnCountMismatchRecoveryReadings: optionalPositiveReadings(env.OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS, 'OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS', warnings),
   };
   validateHealthAlertThresholds(thresholds);
   return thresholds;
+}
+
+/** J3: optional consecutive-reading count; unset stays unset, a bad value warns and stays unset. */
+function optionalPositiveReadings(raw: string | undefined, name: string, warnings: string[]): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(value) || value < 1) {
+    warnings.push(`${name}=${trimmed} is not a positive integer; using the default.`);
+    return undefined;
+  }
+  return value;
 }
 
 function resolveNotificationsDir(env: NodeJS.ProcessEnv): string {
@@ -394,7 +409,7 @@ export function createHealthTelemetryConfig(env: NodeJS.ProcessEnv = process.env
     env.OBSERVABILITY_METRICS_MAX_FILES, DEFAULT_HEALTH_METRICS_MAX_FILES, 'OBSERVABILITY_METRICS_MAX_FILES',
     MIN_HEALTH_METRICS_MAX_FILES, MAX_HEALTH_METRICS_MAX_FILES, warnings,
   );
-  const thresholds = resolveHealthAlertThresholds(env);
+  const thresholds = resolveHealthAlertThresholds(env, warnings);
   const incident = resolveHealthIncidentConfig(env, warnings);
   const canonicalProductionRoot = canonicalisePath(realProductionMetricsDir());
   const sink = resolveAlertSink(env, dir, warnings, canonicalProductionRoot);
@@ -478,7 +493,7 @@ export function createIngressAlertSink(options: { ingressDir: string; now?: () =
       ready = true;
     }
     const at = now();
-    const kindLabel = alert.kind === 'heap_pressure' ? 'heap pressure' : 'event-loop lag';
+    const kindLabel = alert.kind === 'heap_pressure' ? 'heap pressure' : alert.kind === 'turn_count_mismatch' ? 'turn-count mismatch' : 'event-loop lag';
     const record = {
       version: 1,
       idempotencyKey: `health-alert-${alert.kind}-${alert.transition}-${at}`,

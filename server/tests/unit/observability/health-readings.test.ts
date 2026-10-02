@@ -1,6 +1,7 @@
 import { getHeapStatistics } from 'node:v8';
 import { describe, expect, it } from 'vitest';
 import {
+  type AdmissionCountsReading,
   CpuUsageTracker,
   collectHealthReadings,
   percentile,
@@ -191,5 +192,62 @@ describe('collectHealthReadings', () => {
     });
     expect(readings.placementDegrades).toBe(3);
     expect(receivedSinceMs).toBe(1_700_000_000_000);
+  });
+
+  describe('admissionCounts source (J3)', () => {
+    const counts: AdmissionCountsReading = {
+      activeTurns: 1,
+      classes: { P0: { active: 0 }, P1: { active: 0 }, P2: { active: 1 }, P3: { active: 0 } },
+      runtimes: { pi: { activeTurns: 1 }, claude: { activeTurns: 0 }, opencode: { activeTurns: 0 }, antigravity: { activeTurns: 0 }, commandcode: { activeTurns: 0 } },
+      oldestActiveRunStartedAt: '2026-10-02T06:35:00.000Z',
+    };
+
+    it('records admission counts next to (not instead of) the runtime operational counts', () => {
+      const readings = collectHealthReadings({
+        now: () => 1_700_000_000_000,
+        activeTurnsFromOperationalMetrics: () => ({ pi: 0 }),
+        admissionCounts: () => counts,
+      });
+      // Runtime truth stays in the existing fields (operational metrics).
+      expect(readings.activeTurns).toBe(0);
+      expect(readings.activeTurnsByClass).toEqual({ pi: 0 });
+      // Admission's view lands beside it.
+      expect(readings.admissionActiveTurns).toBe(1);
+      expect(readings.admissionTurnsByClass).toEqual({ P0: 0, P1: 0, P2: 1, P3: 0 });
+      expect(readings.admissionTurnsByRuntime).toEqual({ pi: 1, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 });
+      expect(readings.admissionOldestActiveRunStartedAt).toBe('2026-10-02T06:35:00.000Z');
+    });
+
+    it('adds no admission fields at all when the source is unwired, so the metrics row is byte-identical in size', () => {
+      const readings = collectHealthReadings({ now: () => 1_700_000_000_000 });
+      expect(readings.admissionActiveTurns).toBeUndefined();
+      expect(readings.admissionTurnsByClass).toBeUndefined();
+      expect(readings.admissionTurnsByRuntime).toBeUndefined();
+      expect(readings.admissionOldestActiveRunStartedAt).toBeUndefined();
+      expect(JSON.stringify(readings)).not.toContain('admission');
+    });
+
+    it('stays fail-open when the admission counts source throws or returns junk', () => {
+      const throwing = collectHealthReadings({
+        now: () => 1_700_000_000_000,
+        admissionCounts: () => { throw new Error('admission snapshot unavailable'); },
+      });
+      expect(throwing.admissionActiveTurns).toBeUndefined();
+      const junk = collectHealthReadings({
+        now: () => 1_700_000_000_000,
+        admissionCounts: () => ({ activeTurns: Number.NaN, classes: {} }),
+      });
+      expect(junk.admissionActiveTurns).toBeUndefined();
+    });
+
+    it('omits optional detail admission does not expose (no runtimes map, no oldest run)', () => {
+      const readings = collectHealthReadings({
+        now: () => 1_700_000_000_000,
+        admissionCounts: () => ({ activeTurns: 2, classes: { P0: { active: 0 }, P1: { active: 0 }, P2: { active: 2 }, P3: { active: 0 } } }),
+      });
+      expect(readings.admissionActiveTurns).toBe(2);
+      expect(readings.admissionTurnsByRuntime).toBeUndefined();
+      expect(readings.admissionOldestActiveRunStartedAt).toBeUndefined();
+    });
   });
 });
