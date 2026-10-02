@@ -60,6 +60,7 @@ import {
   type AdmissionControllerOptions,
 } from './admission-controller.js';
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
+import { createValidationLeakOverride } from '../observability/admission-leak-override.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
 import { DrainController, composeInterruptedBusySessions, consumeDrainRecord, createBusySessionSource, type DrainBusySession } from './drain-controller.js';
 import { createDrainRoutes, isExecutionEntryRequest } from './routes/drain.js';
@@ -393,6 +394,27 @@ export class InternalApiServer {
     // B2: the event_loop_lag gate consumes the A2 sampler's readings.
     this.admissionLagUnsubscribe?.();
     this.admissionLagUnsubscribe = connectAdmissionToLagReadings(admissionController, getHealthTelemetry());
+
+    // J3: admission's counts feed the A2 sampler's turn-count-mismatch detector
+    // (plan §6 J3 — a detector, not a fix; admission behaviour is unchanged).
+    // Correction 02: the source is the read-only activeCounts() — NOT
+    // snapshot(), whose pressure evaluation latches admission's heap gate and
+    // re-reads cgroup/PID/host sources synchronously. Fail-open: a throwing
+    // source omits the fields instead of breaking the sample. The leak
+    // decoration is validation-only (identity-gated; see
+    // createValidationLeakOverride) so a disposable server can plant the
+    // 2026-10-02-style stuck permit for the live proof; production never
+    // constructs it.
+    const validationLeak = createValidationLeakOverride(process.env, {
+      onRefused: (reason) => logger.warn(`[InternalAPI] admission: ${reason}`),
+    });
+    if (validationLeak) logger.warn(`[InternalAPI] admission: VALIDATION leak injection active (${validationLeak.describe()})`);
+    getHealthTelemetry().registerSources({
+      admissionCounts: () => {
+        const counts = admissionController.activeCounts();
+        return validationLeak ? validationLeak.apply(counts) : counts;
+      },
+    });
 
     // B4 drain-then-restart: closes admission through the shared seam and
     // waits for active turns AND nonterminal receipts before a restart.

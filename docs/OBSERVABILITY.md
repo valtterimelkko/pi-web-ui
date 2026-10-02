@@ -278,6 +278,8 @@ The default location is `~/.pi-web-ui/metrics/health-metrics.jsonl`
 | `mainThreadCpuSource` | Where `mainThreadCpuPercentOfCore` came from: `proc-thread-self` (read from Linux `/proc/self/task/<pid>/stat`, the main thread's own counters), `process-cpu` (the labelled process-wide fallback used when `/proc` is unavailable), or `unavailable`. |
 | `lagP50Ms`, `lagP99Ms`, `lagMaxMs`, `lagWindowMs`, `lagSampleCount` | Event-loop lag percentiles over the last 60 s at the 500 ms shed-monitor cadence. |
 | `activeTurns`, `activeTurnsByClass` | Active turns, by runtime label by default; by admission class (P0–P3) when admission registers its snapshot. `{}` means no source could see them — never a misleading zero per class. |
+| `admissionActiveTurns`, `admissionTurnsByClass`, `admissionTurnsByRuntime` | J3: admission's own live counts (total, per class P0–P3, per runtime), recorded **beside** — never instead of — the operational counts above. The fields are absent (not zero) when admission is not wired, so unwired rows grow by zero bytes; wired rows grow by +170 bytes at most (measured over the retained live samples, compact `JSON.stringify` serialisation). |
+| `admissionOldestActiveRunStartedAt` | J3: what admission exposes of the oldest still-active run's start (receipt-derived, overlaid by the `/capacity` route, usually absent — and always absent for a leaked permit, which holds no receipt). Absent when unexposed. |
 | `residentSessions` | Sessions loaded in the Pi `MultiSessionManager`, registered by that manager. `null` when unmeasured. |
 | `registryEntries` | Session-registry entries. `null` when no unique registry instance exists. |
 
@@ -339,6 +341,34 @@ Two independent latches, evaluated against the same reading:
 |---|---|---|
 | `heap_pressure` | `heapFraction >= OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION` (default `0.85` of `heap_size_limit`) | `heapFraction <= OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` (default `0.75`) |
 | `event_loop_lag` | `lagP99Ms >= OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` (default `500`) | `lagP99Ms <= OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` (default `200`) |
+| `turn_count_mismatch` (J3) | admission has held **more** active turns than the runtime telemetry for `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS` consecutive readings (default `3`) | agreement has held for `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS` consecutive readings (default `2`) |
+
+The third row is the J3 leak detector (plan §6 J3 — a detector, not a fix). On
+2026-10-02 production's `/capacity` reported `activeTurns: 1` (class P2) for
+about 19 minutes while no session was busy, the drain counted 0 turns and 0
+nonterminal runs, and this metrics file's `activeTurns` read 0 throughout — a
+permit that is never released shrinks capacity silently until a restart. The
+sampler now records admission's counts (via `admissionCounts`, wired from the
+Internal API server through the read-only `activeCounts()` getter — correction
+02: `snapshot()` evaluates pressure and would move admission's heap latch)
+beside the operational counts. Each reading is in one of three states: **leak**
+(admission above the telemetry, by the total or any per-runtime count),
+**equal**, or **reverse** (telemetry above admission, no leak anywhere).
+
+The detector is **one-sided**: leak readings arm the alert and only equal
+readings count towards recovery. Reverse readings — legitimate, because
+receipts can be joined to another turn's permit (a steer onto a busy session
+holds no permit of its own) — neither open nor close an incident, and a single
+leak reading is a turn-boundary race that breaks the arm run. Three consecutive
+leak readings (~90 s at the 30 s cadence) cannot be a turn-boundary race
+(acquire → receipt-record and terminalise → release are one async hop, at most
+one reading) nor the §11 quarantine fence (a cancel/fail with unconfirmed
+cessation holds the lease at most 30 s past terminalise). A leaked permit
+persists until a restart, so it pages. The alert message names admission's
+non-zero classes, the per-runtime admission-vs-telemetry detail and — when
+exposed — the oldest receipt-derived run's start (absent in exactly the leak
+case). Admission behaviour is unchanged; the fix waits for an attributed
+instance (owner rule: no fix without a reproduction).
 
 Semantics: **one raw transition per crossing** (an `alert` when the high water
 mark is crossed, a `recovery` when the low water mark is cleared), never one
@@ -355,7 +385,7 @@ operator gets one message when the incident opens and one when it closes.
 
 ### Incident grouping
 
-One incident per kind (`heap_pressure`, `event_loop_lag`), with independent
+One incident per kind (`heap_pressure`, `event_loop_lag`, `turn_count_mismatch`), with independent
 state, so an open lag incident cannot silence a heap alert:
 
 - **Open.** An incident opens after `OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS`
@@ -364,7 +394,11 @@ state, so an open lag incident cannot silence a heap alert:
   pending window itself (start, peak, crossing count) survives a dead-band
   reading until a genuine recovery at or below the recovery threshold, so a
   briefly interrupted excursion is still summarised whole. The one *alert*
-  message is sent when it opens.
+  message is sent when it opens. The turn-count mismatch kind debounces with
+  the alert reading count itself (default `3`) rather than this knob, so both
+  layers require the same run and the operator page lands exactly at the Nth
+  disagreeing reading — a lone boundary-race reading after a close can never
+  open a new incident on its own.
 - **Folded crossings.** Every further raw `alert` transition while it is open is
   counted, not delivered.
 - **Close.** It closes only after the metric has stayed at or below its recovery
@@ -461,7 +495,10 @@ still answers “what was the heap?”, and
 | `OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` | `200` | below the high mark | Lag alert low water mark. |
 | `OBSERVABILITY_HEALTH_ALERT_QUIET_PERIOD_MS` | `600000` | `0`–`86400000` | Below-recovery time that closes an incident. `0` closes on the first recovery reading. |
 | `OBSERVABILITY_HEALTH_ALERT_COOLDOWN_MS` | `1800000` | `0`–`86400000` | After a close, how long a new alert message is suppressed (per kind). `0` disables the cooldown. |
-| `OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS` | `2` | `1`–`100` | High readings inside one un-recovered window before an incident opens. `1` disables debounce. |
+| `OBSERVABILITY_HEALTH_ALERT_DEBOUNCE_READINGS` | `2` | `1`–`100` | High readings inside one un-recovered window before an incident opens. `1` disables debounce. The `turn_count_mismatch` kind always uses the mismatch alert reading count instead. |
+| `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS` | `3` | `2`–`100` | J3: consecutive leak readings before the mismatch alert arms. Bounded (correction 02): 1 would page on a single boundary-race reading; out-of-range values fall back to the default with a startup warning. |
+| `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS` | `2` | `>= 1` | J3: consecutive agreeing readings that clear the mismatch latch. |
+| `INTERNAL_API_ADMISSION_TEST_LEAK_FILE` | (unset) | absolute path inside the validation record dir | J3, validation only: a JSON file `{ leakActiveTurns?, leakClass?, leakRuntime? }` naming a phantom admission permit the sampler decorates the counts with, so a disposable server can prove the mismatch alert end-to-end. Refused unless every `createValidationPressureOverride` identity gate passes (validation child flags, this process's identity record, socket and file inside the record dir, record dir outside the production state root); production cannot construct it. Admission behaviour is never changed. |
 | `OBSERVABILITY_HEALTH_ALERT_SINK` | `notifications` | `notifications`, `file:<absolute path>`, `none` | Alert delivery target (forced to a capture file in validation mode). |
 | `OBSERVABILITY_MEMORY_JOURNAL_MIN_DELTA_MB` | `100` | `>= 0` | Significant heap change for a `Memory:` line. |
 | `OBSERVABILITY_MEMORY_JOURNAL_HEARTBEAT_MS` | `1800000` | `>= 1` | `Memory:` heartbeat interval. |

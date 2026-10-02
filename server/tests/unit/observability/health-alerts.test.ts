@@ -315,3 +315,224 @@ describe('HealthIncidentGrouper', () => {
     expect(lagClosed.map((entry) => `${entry.kind}:${entry.transition}`)).toEqual(['event_loop_lag:recovery']);
   });
 });
+
+/**
+ * J3 — admission vs runtime turn-count mismatch detector. One-sided by design:
+ * admission holding MORE active turns than the runtime telemetry is the leak
+ * direction (a permit that is never released shrinks capacity silently); the
+ * reverse happens legitimately (receipts joined to another turn's permit). A
+ * leaked permit is planted as admission counts 1 / runtime 0.
+ */
+describe('turn-count mismatch (J3)', () => {
+  const leak = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 0 },
+    admissionActiveTurns: 1,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 1, P3: 0 },
+    admissionTurnsByRuntime: { pi: 1, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+  const agree = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 0 },
+    admissionActiveTurns: 0,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 0, P3: 0 },
+    admissionTurnsByRuntime: { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+
+  it('fires exactly one alert on the Nth consecutive disagreeing reading and names the classes', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    expect(evaluator.evaluate(leak({ atMs: 1000 }))).toEqual([]);
+    expect(evaluator.evaluate(leak({ atMs: 31_000 }))).toEqual([]);
+    const alert = evaluator.evaluate(leak({ atMs: 61_000 }));
+    expect(alert).toHaveLength(1);
+    expect(alert[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'alert', value: 1 });
+    expect(alert[0].message).toContain('P2');
+    expect(alert[0].message).toContain('1');
+    expect(alert[0].message).toContain('pi');
+    // Still armed: further disagreeing readings produce nothing.
+    expect(evaluator.evaluate(leak({ atMs: 91_000 }))).toEqual([]);
+  });
+
+  it('never fires on a genuine turn boundary (one disagreeing reading between agreeing ones)', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    expect(evaluator.evaluate(agree())).toEqual([]);
+    // Turn starts: admission acquired the permit, operational metrics lag one async hop.
+    expect(evaluator.evaluate(leak())).toEqual([]);
+    // Turn recorded: agreement again.
+    expect(evaluator.evaluate(agree({ activeTurnsByClass: { pi: 1 }, admissionActiveTurns: 1, admissionTurnsByClass: { P0: 0, P1: 0, P2: 1, P3: 0 }, admissionTurnsByRuntime: { pi: 1, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 } }))).toEqual([]);
+    // Turn ends: release and terminal race the other way.
+    expect(evaluator.evaluate(leak())).toEqual([]);
+    expect(evaluator.evaluate(agree())).toEqual([]);
+    expect(evaluator.snapshot().turnCountMismatch).toMatchObject({ alerting: false });
+  });
+
+  it('recovers exactly once after the agreement holds, and a single agreement does not recover', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    evaluator.evaluate(leak());
+    evaluator.evaluate(leak());
+    expect(evaluator.evaluate(leak({ atMs: 61_000 }))).toHaveLength(1);
+    // One agreeing reading (a boundary race) does NOT recover.
+    expect(evaluator.evaluate(agree())).toEqual([]);
+    expect(evaluator.evaluate(leak())).toEqual([]);
+    // Agreement held for R=2 consecutive readings recovers exactly once.
+    expect(evaluator.evaluate(agree())).toEqual([]);
+    const recovery = evaluator.evaluate(agree());
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery', value: 0 });
+    expect(evaluator.evaluate(agree())).toEqual([]);
+  });
+
+  it('never fires in the reverse direction (runtime active without a permit is legitimate)', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    for (let i = 0; i < 6; i += 1) {
+      expect(evaluator.evaluate(readings({ activeTurnsByClass: { pi: 2 }, admissionActiveTurns: 0, admissionTurnsByClass: { P0: 0, P1: 0, P2: 0, P3: 0 } }))).toEqual([]);
+    }
+  });
+
+  it('never evaluates when admission is unwired (fields absent)', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    for (let i = 0; i < 5; i += 1) {
+      expect(evaluator.evaluate(readings())).toEqual([]);
+    }
+    expect(evaluator.snapshot().turnCountMismatch).toMatchObject({ alerting: false });
+  });
+
+  it('catches a per-runtime excess even when the totals agree', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    const crossed = readings({
+      activeTurnsByClass: { pi: 0, claude: 2 },
+      admissionActiveTurns: 2,
+      admissionTurnsByClass: { P0: 0, P1: 0, P2: 2, P3: 0 },
+      admissionTurnsByRuntime: { pi: 1, claude: 1, opencode: 0, antigravity: 0, commandcode: 0 },
+    });
+    expect(evaluator.evaluate(crossed)).toEqual([]);
+    expect(evaluator.evaluate(crossed)).toEqual([]);
+    const alert = evaluator.evaluate(crossed);
+    expect(alert).toHaveLength(1);
+    expect(alert[0].message).toContain('pi');
+  });
+
+  it('rejects non-positive reading counts in the thresholds', () => {
+    expect(() => validateHealthAlertThresholds({ ...THRESHOLDS, turnCountMismatchAlertReadings: 0 })).toThrow(/turnCountMismatchAlertReadings/);
+    expect(() => validateHealthAlertThresholds({ ...THRESHOLDS, turnCountMismatchRecoveryReadings: 0 })).toThrow(/turnCountMismatchRecoveryReadings/);
+    expect(() => validateHealthAlertThresholds({ ...THRESHOLDS, turnCountMismatchAlertReadings: 1.5 })).toThrow(/turnCountMismatchAlertReadings/);
+  });
+
+  it('folds the mismatch into exactly one incident alert and one recovered notification', () => {
+    const grouper = new HealthIncidentGrouper({
+      thresholds: THRESHOLDS,
+      config: { quietPeriodMs: 0, cooldownMs: 0, debounceReadings: 2 },
+    });
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    // Driven exactly as the sampler drives it: evaluator transitions feed the grouper.
+    const drive = (r: HealthReadings): HealthAlert[] => grouper.observe(r, evaluator.evaluate(r));
+    expect(drive(leak({ atMs: 1000 }))).toEqual([]);
+    expect(drive(leak({ atMs: 31_000 }))).toEqual([]);
+    const opened = drive(leak({ atMs: 61_000 }));
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'alert' });
+    expect(opened[0].incident).toMatchObject({ alertCrossings: 1 });
+    expect(opened[0].message).toContain('P2');
+    // Raw alert only at the arm reading; the incident stays open while the excess persists.
+    expect(drive(leak({ atMs: 91_000 }))).toEqual([]);
+    // quietPeriodMs 0: the first agreeing reading closes the incident — exactly one recovery.
+    const closed = drive(agree({ atMs: 121_000 }));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery' });
+    expect(closed[0].incident).toMatchObject({ durationMs: 120_000, alertCrossings: 1 });
+    expect(drive(agree({ atMs: 151_000 }))).toEqual([]);
+    // A lone boundary-race reading after the close must never re-page.
+    expect(drive(leak({ atMs: 181_000 }))).toEqual([]);
+  });
+});
+
+/**
+ * Correction 02, finding 2: three states — leak (admission > telemetry),
+ * equal, reverse (telemetry > admission). Reverse stays non-alerting but must
+ * neither open nor close an incident; only equal readings count towards
+ * recovery.
+ */
+describe('turn-count mismatch tri-state (correction 02)', () => {
+  const leak = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 0 },
+    admissionActiveTurns: 1,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 1, P3: 0 },
+    admissionTurnsByRuntime: { pi: 1, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+  const equal = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 0 },
+    admissionActiveTurns: 0,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 0, P3: 0 },
+    admissionTurnsByRuntime: { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+  const reverse = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 1, claude: 1 },
+    admissionActiveTurns: 0,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 0, P3: 0 },
+    admissionTurnsByRuntime: { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+
+  it('does not recover on reverse readings — only equal readings count (evaluator)', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    evaluator.evaluate(leak({ atMs: 1000 }));
+    evaluator.evaluate(leak({ atMs: 31_000 }));
+    expect(evaluator.evaluate(leak({ atMs: 61_000 }))).toHaveLength(1); // armed
+    // Two reverse readings: still armed, no recovery, no new alert.
+    expect(evaluator.evaluate(reverse({ atMs: 91_000 }))).toEqual([]);
+    expect(evaluator.evaluate(reverse({ atMs: 121_000 }))).toEqual([]);
+    // Two equal readings recover exactly once.
+    expect(evaluator.evaluate(equal({ atMs: 151_000 }))).toEqual([]);
+    const recovery = evaluator.evaluate(equal({ atMs: 181_000 }));
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery' });
+  });
+
+  it('a reverse reading breaks the arm run without recovering (latch tri-state)', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    expect(evaluator.evaluate(leak({ atMs: 1000 }))).toEqual([]);
+    expect(evaluator.evaluate(leak({ atMs: 31_000 }))).toEqual([]);
+    // A reverse reading between leaks breaks the consecutive-leak run...
+    expect(evaluator.evaluate(reverse({ atMs: 61_000 }))).toEqual([]);
+    expect(evaluator.evaluate(leak({ atMs: 91_000 }))).toEqual([]);
+    expect(evaluator.evaluate(leak({ atMs: 121_000 }))).toEqual([]);
+    // ...so the alert arms on the third CONSECUTIVE leak reading.
+    const alert = evaluator.evaluate(leak({ atMs: 151_000 }));
+    expect(alert).toHaveLength(1);
+    expect(alert[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'alert', value: 1 });
+  });
+
+  it('keeps the incident open through a reverse interval longer than the quiet period (grouper)', () => {
+    const grouper = new HealthIncidentGrouper({
+      thresholds: THRESHOLDS,
+      config: { quietPeriodMs: 1000, cooldownMs: 0, debounceReadings: 1 },
+    });
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    const drive = (r: HealthReadings): HealthAlert[] => grouper.observe(r, evaluator.evaluate(r));
+    expect(drive(leak({ atMs: 1000 }))).toEqual([]);
+    expect(drive(leak({ atMs: 31_000 }))).toEqual([]);
+    expect(drive(leak({ atMs: 61_000 }))).toHaveLength(1); // incident opens
+
+    // A reverse interval far longer than the quiet period: the incident must
+    // neither close nor page.
+    let at = 61_000;
+    for (let i = 0; i < 5; i += 1) {
+      at += 60_000; // 5 minutes of reverse readings, quiet period is 1s
+      expect(drive(reverse({ atMs: at }))).toEqual([]);
+    }
+
+    // The leak returns: still the same single open incident, no new alert.
+    expect(drive(leak({ atMs: at + 60_000 }))).toEqual([]);
+
+    // Equal readings past the quiet period close it exactly once.
+    at += 60_000;
+    expect(drive(equal({ atMs: at }))).toEqual([]);
+    const closed = drive(equal({ atMs: at + 2_000 }));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery' });
+    expect(closed[0].incident).toMatchObject({ reopenedDuringCooldown: false });
+    expect(drive(equal({ atMs: at + 4_000 }))).toEqual([]);
+  });
+});

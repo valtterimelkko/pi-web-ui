@@ -8,6 +8,7 @@ import {
   createHealthTelemetryConfig,
   createIngressAlertSink,
   createNoopAlertSink,
+  resolveHealthAlertThresholds,
   resolveObservabilityMetricsDir,
   type HealthAlertSink,
 } from '../../../src/observability/health-telemetry.js';
@@ -540,5 +541,172 @@ describe('alert sinks', () => {
     expect(record.body).toContain('lag is high');
     expect(Date.parse(record.expiresAt)).toBeGreaterThan(Date.parse(record.createdAt));
     expect(record.idempotencyKey).toMatch(/^health-alert-/);
+  });
+});
+
+/**
+ * J3 — the turn-count mismatch detector through the real sampler chain:
+ * planted sources → reading (with admission fields beside the runtime counts)
+ * → evaluator → grouper → sink. A leaked permit (admission 1, runtime 0)
+ * pages exactly once; a one-reading boundary race never pages; clearing the
+ * leak recovers exactly once.
+ */
+describe('J3 turn-count mismatch through the sampler chain', () => {
+  type Counts = {
+    activeTurns: number;
+    runtimeActive: number;
+    classes: Record<string, { active: number }>;
+    runtimes: Record<string, { activeTurns: number }>;
+  };
+  const leakCounts: Counts = {
+    activeTurns: 1,
+    runtimeActive: 0,
+    classes: { P0: { active: 0 }, P1: { active: 0 }, P2: { active: 1 }, P3: { active: 0 } },
+    runtimes: { pi: { activeTurns: 1 }, claude: { activeTurns: 0 }, opencode: { activeTurns: 0 }, antigravity: { activeTurns: 0 }, commandcode: { activeTurns: 0 } },
+  };
+  const agreeCounts: Counts = {
+    activeTurns: 0,
+    runtimeActive: 0,
+    classes: { P0: { active: 0 }, P1: { active: 0 }, P2: { active: 0 }, P3: { active: 0 } },
+    runtimes: { pi: { activeTurns: 0 }, claude: { activeTurns: 0 }, opencode: { activeTurns: 0 }, antigravity: { activeTurns: 0 }, commandcode: { activeTurns: 0 } },
+  };
+
+  function j3Options(dir: string, sink: HealthAlertSink, getCounts: (() => Counts) | undefined, tick: { now: number }) {
+    const options = telemetryOptions({ dir, sink, state: { heapUsed: 10, heapTotal: 100, rss: 20, external: 1 }, incident: { quietPeriodMs: 0, cooldownMs: 0, debounceReadings: 1 } });
+    return {
+      ...options,
+      sources: {
+        ...options.sources,
+        activeTurnsFromOperationalMetrics: () => (getCounts ? { pi: getCounts().runtimeActive } : { pi: 0 }),
+        ...(getCounts ? { admissionCounts: getCounts } : {}),
+        now: () => {
+          tick.now += 30_000;
+          return tick.now;
+        },
+      },
+    };
+  }
+
+  it('pages once for a planted leak, never for a boundary race, and recovers once', async () => {
+    const dir = await tempDir();
+    const delivered: HealthAlert[] = [];
+    const tick = { now: 1_700_000_000_000 };
+    const holder: { counts: Counts } = { counts: leakCounts };
+    const telemetry = new HealthTelemetry(j3Options(dir, async (alert) => { delivered.push(alert); }, () => holder.counts, tick));
+
+    // Two leaking readings: below N=3, nothing pages; the row still records both sides.
+    const first = await telemetry.sampleOnce();
+    expect(first?.admissionActiveTurns).toBe(1);
+    expect(first?.activeTurnsByClass).toEqual({ pi: 0 });
+    expect(first?.admissionTurnsByClass).toEqual({ P0: 0, P1: 0, P2: 1, P3: 0 });
+    expect(delivered).toEqual([]);
+    await telemetry.sampleOnce();
+    expect(delivered).toEqual([]);
+
+    // The Nth consecutive disagreeing reading: exactly one alert.
+    await telemetry.sampleOnce();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'alert' });
+    expect(delivered[0].message).toContain('P2');
+    await telemetry.sampleOnce();
+    expect(delivered).toHaveLength(1); // still armed: no repeat
+
+    // The leak clears: with the harness's quietPeriodMs 0 the incident closes at
+    // the first agreeing reading — exactly one recovery notification. (The
+    // evaluator's own R-consecutive-agreement gating is asserted at evaluator
+    // level in health-alerts.test.ts; in production the 10-minute quiet period
+    // paces this notification.)
+    holder.counts = agreeCounts;
+    await telemetry.sampleOnce();
+    expect(delivered).toHaveLength(2);
+    expect(delivered[1]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery' });
+    // A lone boundary-race reading after the close never re-pages.
+    holder.counts = leakCounts;
+    await telemetry.sampleOnce();
+    expect(delivered).toHaveLength(2);
+    holder.counts = agreeCounts;
+    await telemetry.sampleOnce();
+    expect(delivered).toHaveLength(2); // no repeat
+    await telemetry.stop();
+  });
+
+  it('never pages on a single disagreeing reading (turn boundary)', async () => {
+    const dir = await tempDir();
+    const delivered: HealthAlert[] = [];
+    const tick = { now: 1_700_000_000_000 };
+    const holder: { counts: Counts } = { counts: agreeCounts };
+    const telemetry = new HealthTelemetry(j3Options(dir, async (alert) => { delivered.push(alert); }, () => holder.counts, tick));
+    await telemetry.sampleOnce(); // agree
+    holder.counts = leakCounts;
+    await telemetry.sampleOnce(); // one boundary-race reading (acquire before the receipt records)
+    holder.counts = agreeCounts;
+    await telemetry.sampleOnce(); // agreement again (the receipt recorded)
+    holder.counts = leakCounts;
+    await telemetry.sampleOnce(); // release/terminal race the other way
+    holder.counts = agreeCounts;
+    await telemetry.sampleOnce();
+    expect(delivered).toEqual([]);
+    await telemetry.stop();
+  });
+
+  it('adds zero bytes to the metrics row when admission is unwired and a bounded amount when wired', async () => {
+    const unwiredDir = await tempDir();
+    const tick = { now: 1_700_000_000_000 };
+    const unwired = new HealthTelemetry(j3Options(unwiredDir, createNoopAlertSink(), undefined, tick));
+    await unwired.sampleOnce();
+    const unwiredLine = (await readFile(path.join(unwired.metricsPath), 'utf8')).trim().split('\n').at(-1) ?? '';
+    expect(unwiredLine).not.toContain('admission');
+
+    const wiredDir = await tempDir();
+    const wired = new HealthTelemetry(j3Options(wiredDir, createNoopAlertSink(), () => leakCounts, tick));
+    await wired.sampleOnce();
+    const wiredLine = (await readFile(path.join(wired.metricsPath), 'utf8')).trim().split('\n').at(-1) ?? '';
+    expect(wiredLine).toContain('"admissionActiveTurns":1');
+    const unwiredBytes = Buffer.byteLength(unwiredLine);
+    const wiredBytes = Buffer.byteLength(wiredLine);
+    // Bounded row growth: the wired row adds the admission fields only.
+    expect(wiredBytes - unwiredBytes).toBeGreaterThan(0);
+    expect(wiredBytes - unwiredBytes).toBeLessThanOrEqual(400);
+    await unwired.stop();
+    await wired.stop();
+  });
+});
+
+describe('J3 alert knob resolution', () => {
+  it('resolves the turn-count mismatch reading knobs from the environment', () => {
+    const thresholds = resolveHealthAlertThresholds({
+      OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '5',
+      OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS: '2',
+    } as NodeJS.ProcessEnv);
+    expect(thresholds.turnCountMismatchAlertReadings).toBe(5);
+    expect(thresholds.turnCountMismatchRecoveryReadings).toBe(2);
+  });
+
+  it('leaves the knobs unset by default and falls back with a warning on a bad value', () => {
+    const defaults = resolveHealthAlertThresholds({} as NodeJS.ProcessEnv);
+    expect(defaults.turnCountMismatchAlertReadings).toBeUndefined();
+    expect(defaults.turnCountMismatchRecoveryReadings).toBeUndefined();
+    const warnings: string[] = [];
+    const bad = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '0' } as NodeJS.ProcessEnv, warnings);
+    expect(bad.turnCountMismatchAlertReadings).toBeUndefined();
+    expect(warnings.some((line) => line.includes('OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS'))).toBe(true);
+  });
+});
+
+describe('J3 alert knob bounds (correction 02)', () => {
+  it('accepts the 2..100 range for the run-length knob', () => {
+    const low = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '2' } as NodeJS.ProcessEnv);
+    expect(low.turnCountMismatchAlertReadings).toBe(2);
+    const high = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '100' } as NodeJS.ProcessEnv);
+    expect(high.turnCountMismatchAlertReadings).toBe(100);
+  });
+
+  it('falls back with a warning outside 2..100', () => {
+    const warnings: string[] = [];
+    const one = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '1' } as NodeJS.ProcessEnv, warnings);
+    expect(one.turnCountMismatchAlertReadings).toBeUndefined();
+    const hundredOne = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '101' } as NodeJS.ProcessEnv, warnings);
+    expect(hundredOne.turnCountMismatchAlertReadings).toBeUndefined();
+    expect(warnings.filter((line) => line.includes('OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS'))).toHaveLength(2);
   });
 });

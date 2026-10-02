@@ -6,7 +6,7 @@ import type { HealthReadings } from './health-readings.js';
  * than a message per sample.
  */
 
-export type HealthAlertKind = 'heap_pressure' | 'event_loop_lag';
+export type HealthAlertKind = 'heap_pressure' | 'event_loop_lag' | 'turn_count_mismatch';
 export type HealthAlertTransition = 'alert' | 'recovery';
 
 export interface HealthAlertThresholds {
@@ -18,7 +18,26 @@ export interface HealthAlertThresholds {
   lagP99HighMs: number;
   /** Lag p99 (ms) that clears it. */
   lagP99LowMs: number;
+  /**
+   * J3: consecutive readings with admission holding more active turns than the
+   * runtime telemetry before the turn-count-mismatch alert arms. Defaults to
+   * 3 (~90 s at the 30 s sampler interval): turn-boundary races span at most
+   * one reading, and the §11 quarantine fence holds a lease at most 30 s past
+   * a cancel/fail, so only a genuine stuck permit sustains three.
+   */
+  turnCountMismatchAlertReadings?: number;
+  /** J3: consecutive agreeing readings that clear it (default 2). */
+  turnCountMismatchRecoveryReadings?: number;
 }
+
+export const DEFAULT_TURN_MISMATCH_ALERT_READINGS = 3;
+export const DEFAULT_TURN_MISMATCH_RECOVERY_READINGS = 2;
+/**
+ * J3 (correction 02): the grouper value a reverse reading maps to — strictly
+ * inside the dead band `(0, 1)` so it neither opens an incident (≥ high 1)
+ * nor starts the close quiet clock (≤ low 0).
+ */
+export const J3_MISMATCH_REVERSE_BAND = 0.5;
 
 export interface HealthAlert {
   kind: HealthAlertKind;
@@ -59,6 +78,14 @@ export interface HealthIncidentConfig {
    * threshold, so a briefly interrupted excursion is still summarised whole.
    */
   debounceReadings: number;
+  /**
+   * J3: per-kind debounce override. The turn-count mismatch defaults to the
+   * evaluator's own N (turnCountMismatchAlertReadings), so both layers require
+   * the same consecutive run: the operator alert fires exactly at the Nth
+   * disagreeing reading, and a lone boundary-race reading after a close can
+   * never open a new incident on its own.
+   */
+  debounceReadingsByKind?: Partial<Record<HealthAlertKind, number>>;
 }
 
 export const DEFAULT_HEALTH_INCIDENT_QUIET_PERIOD_MS = 10 * 60_000;
@@ -91,6 +118,11 @@ export function validateHealthIncidentConfig(config: HealthIncidentConfig): void
   }
   if (!Number.isSafeInteger(config.debounceReadings) || config.debounceReadings < 1) {
     throw new Error(`debounceReadings must be an integer of at least 1 (got ${config.debounceReadings}).`);
+  }
+  for (const [kind, debounce] of Object.entries(config.debounceReadingsByKind ?? {})) {
+    if (!Number.isSafeInteger(debounce) || (debounce as number) < 1) {
+      throw new Error(`debounceReadingsByKind[${kind}] must be an integer of at least 1 (got ${debounce}).`);
+    }
   }
 }
 
@@ -125,6 +157,14 @@ export function validateHealthAlertThresholds(thresholds: HealthAlertThresholds)
   }
   if (!(lagP99LowMs >= 0 && lagP99LowMs < lagP99HighMs)) {
     throw new Error(`lagP99LowMs must be >= 0 and below lagP99HighMs (got ${lagP99LowMs} >= ${lagP99HighMs}).`);
+  }
+  for (const [name, value] of [
+    ['turnCountMismatchAlertReadings', thresholds.turnCountMismatchAlertReadings],
+    ['turnCountMismatchRecoveryReadings', thresholds.turnCountMismatchRecoveryReadings],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
+      throw new Error(`${name} must be a positive integer number of consecutive readings (got ${value}).`);
+    }
   }
 }
 
@@ -163,6 +203,93 @@ export class HysteresisLatch {
   describe(): { alerting: boolean; high: number; low: number; name: string } {
     return { alerting: this.alerting, high: this.high, low: this.low, name: this.name };
   }
+}
+
+/**
+ * J3: a run-length latch for the turn-count mismatch over the tri-state delta
+ * (correction 02). A single disagreeing reading is a turn-boundary race and
+ * must never fire, so the alert arms only after `alertReadings` consecutive
+ * leak readings (delta > 0), and recovers only after `recoveryReadings`
+ * consecutive equal readings (delta === 0). A reverse reading (delta < 0) is
+ * neither: it breaks both runs and never opens or closes anything.
+ */
+export class ConsecutiveReadingsLatch {
+  private armedState = false;
+  private leakRun = 0;
+  private equalRun = 0;
+
+  constructor(
+    private readonly name: string,
+    private readonly alertReadings: number,
+    private readonly recoveryReadings: number,
+  ) {}
+
+  get armed(): boolean {
+    return this.armedState;
+  }
+
+  evaluate(value: number): HealthAlertTransition | undefined {
+    if (value < 0) {
+      // Reverse: non-alerting, non-recovering — reset both runs.
+      this.leakRun = 0;
+      this.equalRun = 0;
+      return undefined;
+    }
+    if (this.armedState) {
+      if (value === 0) {
+        this.equalRun += 1;
+        if (this.equalRun >= this.recoveryReadings) {
+          this.armedState = false;
+          this.equalRun = 0;
+          this.leakRun = 0;
+          return 'recovery';
+        }
+        return undefined;
+      }
+      this.equalRun = 0;
+      return undefined;
+    }
+    if (value > 0) {
+      this.leakRun += 1;
+      if (this.leakRun >= this.alertReadings) {
+        this.armedState = true;
+        this.equalRun = 0;
+        return 'alert';
+      }
+      return undefined;
+    }
+    this.leakRun = 0;
+    return undefined;
+  }
+
+  describe(): { alerting: boolean; alertReadings: number; recoveryReadings: number; name: string } {
+    return { alerting: this.armedState, alertReadings: this.alertReadings, recoveryReadings: this.recoveryReadings, name: this.name };
+  }
+}
+
+/**
+ * J3: the signed admission-vs-telemetry delta in three states (correction 02):
+ * `> 0` — leak (admission holds more active turns than the runtime telemetry;
+ * the value is the worst positive excess across the total and any per-runtime
+ * mismatch), `=== 0` — equal, `< 0` — reverse (telemetry above admission
+ * somewhere and no leak anywhere; e.g. receipts joined to another turn's
+ * permit — legitimate, never alerting). `undefined` when admission is unwired
+ * (the fields are absent), so an unwired sampler never evaluates this alert.
+ */
+export function turnCountMismatchDelta(readings: HealthReadings): number | undefined {
+  const admission = readings.admissionActiveTurns;
+  if (admission === undefined || !Number.isFinite(admission)) return undefined;
+  const telemetry = readings.activeTurnsByClass ?? {};
+  const runtimeTotal = Object.values(telemetry).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+  const diffs: number[] = [admission - runtimeTotal];
+  for (const [runtime, count] of Object.entries(readings.admissionTurnsByRuntime ?? {})) {
+    if (!Number.isFinite(count)) continue;
+    diffs.push(count - (telemetry[runtime] ?? 0));
+  }
+  const worstLeak = Math.max(...diffs);
+  if (worstLeak > 0) return worstLeak;
+  const worstReverse = Math.min(...diffs);
+  return worstReverse < 0 ? worstReverse : 0;
 }
 
 export interface HealthIncidentGrouperOptions {
@@ -220,6 +347,7 @@ export class HealthIncidentGrouper {
   private readonly config: HealthIncidentConfig;
   private readonly heap = newKindState();
   private readonly lag = newKindState();
+  private readonly mismatch = newKindState();
 
   constructor(options: HealthIncidentGrouperOptions) {
     validateHealthAlertThresholds(options.thresholds);
@@ -228,22 +356,45 @@ export class HealthIncidentGrouper {
       quietPeriodMs: options.config?.quietPeriodMs ?? DEFAULT_HEALTH_INCIDENT_QUIET_PERIOD_MS,
       cooldownMs: options.config?.cooldownMs ?? DEFAULT_HEALTH_INCIDENT_COOLDOWN_MS,
       debounceReadings: options.config?.debounceReadings ?? DEFAULT_HEALTH_INCIDENT_DEBOUNCE_READINGS,
+      debounceReadingsByKind: {
+        turn_count_mismatch: this.thresholds.turnCountMismatchAlertReadings ?? DEFAULT_TURN_MISMATCH_ALERT_READINGS,
+        ...options.config?.debounceReadingsByKind,
+      },
     };
     validateHealthIncidentConfig(this.config);
   }
 
+  /** Effective debounce for one kind (per-kind override, else the shared default). */
+  private debounceFor(kind: HealthAlertKind): number {
+    return this.config.debounceReadingsByKind?.[kind] ?? this.config.debounceReadings;
+  }
+
   /**
    * Consumes one reading and the raw transitions the evaluator produced for it.
-   * Returns the 0–2 notifications (one per kind) that should reach the sink.
+   * Returns the 0–3 notifications (one per kind) that should reach the sink.
    */
   observe(readings: HealthReadings, transitions: readonly HealthAlert[] = []): HealthAlert[] {
     const atMs = Number.isFinite(readings.atMs) ? readings.atMs : Date.now();
     const rawAlert = (kind: HealthAlertKind) => transitions.some((entry) => entry.kind === kind && entry.transition === 'alert');
     const notifications: HealthAlert[] = [];
-    const heap = this.observeKind('heap_pressure', this.heap, readings.heapFraction, this.thresholds.heapFractionHigh, this.thresholds.heapFractionLow, readings.heapLimitBytes, atMs, rawAlert('heap_pressure'));
+    const heap = this.observeKind('heap_pressure', this.heap, readings.heapFraction, this.thresholds.heapFractionHigh, this.thresholds.heapFractionLow, readings.heapLimitBytes, atMs, rawAlert('heap_pressure'), this.debounceFor('heap_pressure'));
     if (heap) notifications.push(heap);
-    const lag = this.observeKind('event_loop_lag', this.lag, readings.lagP99Ms, this.thresholds.lagP99HighMs, this.thresholds.lagP99LowMs, 0, atMs, rawAlert('event_loop_lag'));
+    const lag = this.observeKind('event_loop_lag', this.lag, readings.lagP99Ms, this.thresholds.lagP99HighMs, this.thresholds.lagP99LowMs, 0, atMs, rawAlert('event_loop_lag'), this.debounceFor('event_loop_lag'));
     if (lag) notifications.push(lag);
+    // J3: the mismatch tri-state delta (undefined when admission is unwired).
+    // The grouper sees a mapped value: leak → excess (≥1, the high water mark),
+    // equal → 0 (the recovery mark), reverse → a dead-band value strictly
+    // between, so a reverse reading neither opens an incident nor starts the
+    // close quiet clock (correction 02, finding 2). The grouper's mismatch
+    // debounce matches the evaluator's N, so the incident opens exactly at the
+    // Nth consecutive leak reading and a single boundary-race reading never
+    // opens one after a close.
+    const mismatchDelta = turnCountMismatchDelta(readings);
+    if (mismatchDelta !== undefined) {
+      const grouperValue = mismatchDelta > 0 ? mismatchDelta : mismatchDelta === 0 ? 0 : J3_MISMATCH_REVERSE_BAND;
+      const mismatch = this.observeKind('turn_count_mismatch', this.mismatch, grouperValue, 1, 0, 0, atMs, rawAlert('turn_count_mismatch'), this.debounceFor('turn_count_mismatch'), readings);
+      if (mismatch) notifications.push(mismatch);
+    }
     return notifications;
   }
 
@@ -256,6 +407,8 @@ export class HealthIncidentGrouper {
     heapLimitBytes: number,
     atMs: number,
     rawAlert: boolean,
+    debounceReadings: number,
+    readings?: HealthReadings,
   ): HealthAlert | undefined {
     if (state.open) {
       if (value >= high) {
@@ -284,8 +437,8 @@ export class HealthIncidentGrouper {
       state.pendingHighRun += 1;
       state.pendingPeak = Math.max(state.pendingPeak, value);
       if (rawAlert) state.pendingCrossings += 1;
-      if (state.pendingHighRun < this.config.debounceReadings) return undefined;
-      return this.openIncident(kind, state, value, high, heapLimitBytes, atMs);
+      if (state.pendingHighRun < debounceReadings) return undefined;
+      return this.openIncident(kind, state, value, high, heapLimitBytes, atMs, readings);
     }
 
     if (value <= low) {
@@ -309,6 +462,7 @@ export class HealthIncidentGrouper {
     high: number,
     heapLimitBytes: number,
     atMs: number,
+    readings?: HealthReadings,
   ): HealthAlert | undefined {
     const startedAtMs = state.pendingStartMs ?? atMs;
     // The cooldown is anchored on the first crossing that began this excursion
@@ -339,7 +493,7 @@ export class HealthIncidentGrouper {
       at: new Date(atMs).toISOString(),
       value,
       threshold: high,
-      message: this.alertMessage(kind, value, high, heapLimitBytes),
+      message: this.alertMessage(kind, value, high, heapLimitBytes, readings),
       incident,
     };
   }
@@ -382,10 +536,20 @@ export class HealthIncidentGrouper {
     };
   }
 
-  private alertMessage(kind: HealthAlertKind, value: number, high: number, heapLimitBytes: number): string {
+  private alertMessage(kind: HealthAlertKind, value: number, high: number, heapLimitBytes: number, readings?: HealthReadings): string {
     const tail = 'further crossings will be folded into this incident';
     if (kind === 'heap_pressure') {
       return `heap pressure incident: ${(value * 100).toFixed(1)}% of the ${Math.round(heapLimitBytes / 1_048_576)} MB V8 heap limit (alert above ${(high * 100).toFixed(1)}%); ${tail}`;
+    }
+    if (kind === 'turn_count_mismatch') {
+      const classes = Object.entries(readings?.admissionTurnsByClass ?? {}).filter(([, n]) => n > 0).map(([c, n]) => `${c}: ${n}`).join(', ') || 'none';
+      const perRuntime = Object.entries(readings?.admissionTurnsByRuntime ?? {})
+        .map(([runtime, n]) => `${runtime} admission ${n} vs telemetry ${readings?.activeTurnsByClass?.[runtime] ?? 0}`)
+        .join(', ') || 'per-runtime counts unavailable';
+      const oldest = readings?.admissionOldestActiveRunStartedAt
+        ? `; oldest receipt-derived run started ${readings.admissionOldestActiveRunStartedAt}`
+        : '; no receipt-derived active run (a leaked permit holds no receipt)';
+      return `turn-count mismatch incident: admission holds ${readings?.admissionActiveTurns ?? '?'} active turn(s) (classes ${classes}) against telemetry excess ${value} sustained (${perRuntime})${oldest}; ${tail}`;
     }
     return `event-loop lag incident: p99 ${Math.round(value)} ms (alert above ${high} ms); ${tail}`;
   }
@@ -393,14 +557,16 @@ export class HealthIncidentGrouper {
   private recoveryMessage(kind: HealthAlertKind, incident: HealthIncidentSummary, heapLimitBytes: number): string {
     const peak = kind === 'heap_pressure'
       ? `peak ${(incident.peakValue * 100).toFixed(1)}% of the ${Math.round(heapLimitBytes / 1_048_576)} MB V8 heap limit`
-      : `peak p99 ${Math.round(incident.peakValue)} ms`;
+      : kind === 'turn_count_mismatch'
+        ? `peak admission-vs-telemetry excess ${incident.peakValue} active turn(s)`
+        : `peak p99 ${Math.round(incident.peakValue)} ms`;
     const crossings = incident.alertCrossings === 1
       ? '1 alert crossing folded'
       : `${incident.alertCrossings} alert crossings folded`;
     const reopened = incident.reopenedDuringCooldown
       ? '; reopened during the cooldown without a new alert'
       : '';
-    const subject = kind === 'heap_pressure' ? 'heap pressure' : 'event-loop lag';
+    const subject = kind === 'heap_pressure' ? 'heap pressure' : kind === 'turn_count_mismatch' ? 'turn-count mismatch' : 'event-loop lag';
     return `${subject} incident recovered: ${peak}, ${incident.startedAt} → ${incident.endedAt} (${formatIncidentDuration(incident.durationMs ?? 0)}), ${crossings}${reopened}`;
   }
 }
@@ -419,13 +585,24 @@ export interface HealthAlertEvaluatorOptions {
 export class HealthAlertEvaluator {
   private readonly heapLatch: HysteresisLatch;
   private readonly lagLatch: HysteresisLatch;
+  private readonly mismatchLatch: ConsecutiveReadingsLatch;
+  private readonly turnAlertReadings: number;
+  private readonly turnRecoveryReadings: number;
   private readonly now: () => number;
 
   constructor(options: HealthAlertEvaluatorOptions) {
-    validateHealthAlertThresholds(options.thresholds);
+    this.turnAlertReadings = options.thresholds.turnCountMismatchAlertReadings ?? DEFAULT_TURN_MISMATCH_ALERT_READINGS;
+    this.turnRecoveryReadings = options.thresholds.turnCountMismatchRecoveryReadings ?? DEFAULT_TURN_MISMATCH_RECOVERY_READINGS;
+    // Re-validate with the effective values so defaults are covered too.
+    validateHealthAlertThresholds({
+      ...options.thresholds,
+      turnCountMismatchAlertReadings: this.turnAlertReadings,
+      turnCountMismatchRecoveryReadings: this.turnRecoveryReadings,
+    });
     this.now = options.now ?? Date.now;
     this.heapLatch = new HysteresisLatch('heap_pressure', options.thresholds.heapFractionHigh, options.thresholds.heapFractionLow);
     this.lagLatch = new HysteresisLatch('event_loop_lag', options.thresholds.lagP99HighMs, options.thresholds.lagP99LowMs);
+    this.mismatchLatch = new ConsecutiveReadingsLatch('turn_count_mismatch', this.turnAlertReadings, this.turnRecoveryReadings);
   }
 
   evaluate(readings: HealthReadings): HealthAlert[] {
@@ -470,18 +647,56 @@ export class HealthAlertEvaluator {
       });
     }
 
+    // J3: admission holding more active turns than the runtime telemetry, for
+    // N consecutive readings, is a stuck permit. Unwired (no admission
+    // fields) never evaluates — a missing source is not a zero mismatch.
+    const mismatchDelta = turnCountMismatchDelta(readings);
+    if (mismatchDelta !== undefined) {
+      const mismatchTransition = this.mismatchLatch.evaluate(mismatchDelta);
+      if (mismatchTransition) {
+        alerts.push({
+          kind: 'turn_count_mismatch',
+          transition: mismatchTransition,
+          at,
+          value: Math.max(0, mismatchDelta),
+          threshold: mismatchTransition === 'alert' ? this.turnAlertReadings : this.turnRecoveryReadings,
+          message: mismatchTransition === 'alert'
+            ? this.mismatchAlertMessage(readings, Math.max(0, mismatchDelta))
+            : this.mismatchRecoveryMessage(readings),
+        });
+      }
+    }
+
     return alerts;
+  }
+
+  private mismatchAlertMessage(readings: HealthReadings, excess: number): string {
+    const classes = Object.entries(readings.admissionTurnsByClass ?? {}).filter(([, n]) => n > 0).map(([c, n]) => `${c}: ${n}`).join(', ') || 'none';
+    const perRuntime = Object.entries(readings.admissionTurnsByRuntime ?? {})
+      .map(([runtime, n]) => `${runtime} admission ${n} vs telemetry ${readings.activeTurnsByClass?.[runtime] ?? 0}`)
+      .join(', ') || 'per-runtime counts unavailable';
+    const oldest = readings.admissionOldestActiveRunStartedAt
+      ? `; oldest receipt-derived run started ${readings.admissionOldestActiveRunStartedAt}`
+      : '; no receipt-derived active run (a leaked permit holds no receipt)';
+    return `turn-count mismatch: admission holds ${readings.admissionActiveTurns} active turn(s) (classes ${classes}) against telemetry excess ${excess} for ${this.turnAlertReadings} consecutive readings (${perRuntime})${oldest}`;
+  }
+
+  private mismatchRecoveryMessage(readings: HealthReadings): string {
+    return `turn-count mismatch cleared: admission ${readings.admissionActiveTurns} active turn(s), telemetry ${Object.values(readings.activeTurnsByClass ?? {}).reduce((sum, value) => sum + value, 0)} (agreement held for ${this.turnRecoveryReadings} consecutive readings)`;
   }
 
   snapshot(): {
     heap: { alerting: boolean; high: number; low: number };
     lag: { alerting: boolean; highMs: number; lowMs: number };
+    turnCountMismatch: { alerting: boolean; alertReadings: number; recoveryReadings: number };
   } {
     const heap = this.heapLatch.describe();
     const lag = this.lagLatch.describe();
+    const mismatch = this.mismatchLatch.describe();
     return {
       heap: { alerting: heap.alerting, high: heap.high, low: heap.low },
       lag: { alerting: lag.alerting, highMs: lag.high, lowMs: lag.low },
+      turnCountMismatch: { alerting: mismatch.alerting, alertReadings: mismatch.alertReadings, recoveryReadings: mismatch.recoveryReadings },
     };
   }
 }
