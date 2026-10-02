@@ -69,6 +69,47 @@ function detachMessageContent(message: unknown): unknown {
   return { ...source, content };
 }
 
+/** Hb2 (doubled-first-chunk fix): marker the manager's skill-content transform
+ * sets on its synthetic placeholder message. The placeholder exists at emit
+ * time by construction (it replaces the whole content array), and the client
+ * renders it from the start frame — so the neutralisation below must preserve
+ * it while stripping everything else. */
+export const SKILL_CONTENT_MARKER = 'skill-content';
+
+function isSkillMarkedMessage(message: unknown): boolean {
+  return !!message
+    && typeof message === 'object'
+    && (message as Record<string, unknown>).customType === SKILL_CONTENT_MARKER;
+}
+
+/** Hb2 (doubled-first-chunk fix): the pi-ai adapters mutate ONE shared output
+ * object in place as provider chunks land, and the agent loop emits
+ * `message_start` with a shallow copy of it. The event crosses several async
+ * hops before this projection runs, so the content array already holds the
+ * first streamed chunk by then (captured live: start content "HB" + the same
+ * "HB" again as the first text_delta — the browser rendered both). The wire
+ * contract is that clients rebuild streamed content from deltas, so an
+ * assistant start frame carries typed-EMPTY blocks: types and order are
+ * preserved, streamed payloads are dropped. Synthetic (skill-marked) starts
+ * and user-role frames pass through untouched. */
+function neutraliseStreamedStartContent(message: unknown): unknown {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
+  const source = message as Record<string, unknown>;
+  if (!Array.isArray(source.content)) return source;
+  const content = source.content.map((block) => {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) return block;
+    const typed = block as Record<string, unknown>;
+    if (typed.type === 'text') {
+      return { ...typed, text: typeof typed.text === 'string' ? '' : typed.text };
+    }
+    if (typed.type === 'thinking') {
+      return { ...typed, thinking: typeof typed.thinking === 'string' ? '' : typed.thinking };
+    }
+    return { ...typed };
+  });
+  return { ...source, content };
+}
+
 /**
  * Project a raw Pi SDK streaming event for any transport/retention boundary
  * (browser WebSocket fan-out, Internal API normalization/broker, direct SSE).
@@ -83,7 +124,14 @@ export function projectStreamingEventForTransport<T extends StreamingEvent>(even
     } as T;
   }
   if (event.type === 'message_start') {
-    return { ...event, message: detachMessageContent(event.message) } as T;
+    const detached = detachMessageContent(event.message);
+    const role = detached && typeof detached === 'object'
+      ? (detached as Record<string, unknown>).role
+      : undefined;
+    if (role === 'assistant' && !isSkillMarkedMessage(detached)) {
+      return { ...event, message: neutraliseStreamedStartContent(detached) } as T;
+    }
+    return { ...event, message: detached } as T;
   }
   return event;
 }

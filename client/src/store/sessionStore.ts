@@ -476,6 +476,51 @@ interface SessionCache {
   lastAccess: number;
 }
 
+/** Hb2 fill-on-end: the server neutralises streamed content on assistant
+ * message_start frames (the doubled-first-chunk fix), so an assistant message
+ * that has content but NO deltas — an error or aborted reply that arrives as
+ * start+end only — would render empty. On message_end, fill each text/thinking
+ * block whose streamed payload is empty from the terminal message (positionally
+ * matched; missing terminal blocks are appended). NEVER replaces non-empty
+ * streamed text: that would mask stream bugs and fight tool-call rendering.
+ * Returns undefined when nothing needed changing (no state write). */
+function fillEmptyStreamedBlocksFromEnd(
+  streamed: Message['content'],
+  final: Message['content'],
+): ContentPart[] | undefined {
+  const streamedArray: ContentPart[] = Array.isArray(streamed)
+    ? streamed.map((part) => ({ ...part }))
+    : typeof streamed === 'string' && streamed
+      ? [{ type: 'text', text: streamed }]
+      : [];
+  const finalArray: ContentPart[] = Array.isArray(final)
+    ? final
+    : typeof final === 'string' && final
+      ? [{ type: 'text', text: final }]
+      : [];
+  let changed = false;
+  for (let i = 0; i < finalArray.length; i++) {
+    const finalPart = finalArray[i];
+    if (!finalPart || (finalPart.type !== 'text' && finalPart.type !== 'thinking')) continue;
+    const finalPayload = finalPart.type === 'text' ? (finalPart.text ?? '') : (finalPart.thinking ?? '');
+    if (!finalPayload) continue;
+    if (i >= streamedArray.length) {
+      streamedArray.push({ ...finalPart });
+      changed = true;
+      continue;
+    }
+    const streamedPart = streamedArray[i];
+    if (streamedPart.type !== finalPart.type) continue;
+    const streamedPayload = streamedPart.type === 'text' ? (streamedPart.text ?? '') : (streamedPart.thinking ?? '');
+    if (streamedPayload) continue;
+    streamedArray[i] = streamedPart.type === 'text'
+      ? { ...streamedPart, text: finalPayload }
+      : { ...streamedPart, thinking: finalPayload };
+    changed = true;
+  }
+  return changed ? streamedArray : undefined;
+}
+
 /**
  * Estimate message size in bytes for cache tracking
  */
@@ -2241,8 +2286,23 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'message_end': {
+            // Hb2 fill-on-end (main path): same contract as the session_event
+            // handler — fill empty streamed blocks from the terminal message,
+            // never replace non-empty streamed text. The terminal frame may
+            // carry no id (the raw pi message has none), so fall back to the
+            // latest assistant message.
+            const { message: msgData } = msg as { message?: { id?: string; role?: string; content?: Message['content'] } };
+            if (msgData && msgData.role !== 'user') {
+              const state = get();
+              const target =
+                (msgData.id && state.messages.some((m) => m.id === msgData.id) ? state.messages.find((m) => m.id === msgData.id) : undefined)
+                ?? [...state.messages].reverse().find((m) => m.role === 'assistant');
+              if (target && target.role === 'assistant') {
+                const filled = fillEmptyStreamedBlocksFromEnd(target.content, msgData.content ?? []);
+                if (filled) get().updateMessage(target.id, { content: filled });
+              }
+            }
             // Message streaming complete - update cache metadata
-            const { message: msgData } = msg as { message?: { id: string } };
             if (msgData?.id) {
               set((state) => {
                 const sessionId = state.currentSessionId;
@@ -2989,6 +3049,29 @@ export const useSessionStore = create<SessionState>()(
                 break;
               }
               
+              case 'message_end': {
+                // Hb2 fill-on-end: an assistant message whose streamed blocks
+                // are empty (start+end only — error/abort shape, or anything
+                // the neutralised start frame never followed with deltas)
+                // takes its text from the terminal message. Non-empty streamed
+                // text is never replaced.
+                const endMessage = (event as { message?: { role?: string; content?: Message['content'] } }).message;
+                if (endMessage && endMessage.role !== 'user') {
+                  const storedId = currentStoredMessageIdBySession.get(sessionId);
+                  const trackedId = currentMessageIdBySession.get(sessionId);
+                  const messages = get().sessionData[sessionId]?.messages ?? [];
+                  const target =
+                    (storedId && messages.some((m) => m.id === storedId) ? messages.find((m) => m.id === storedId) : undefined)
+                    ?? (trackedId && messages.some((m) => m.id === trackedId) ? messages.find((m) => m.id === trackedId) : undefined)
+                    ?? [...messages].reverse().find((m) => m.role === 'assistant');
+                  if (target && target.role === 'assistant') {
+                    const filled = fillEmptyStreamedBlocksFromEnd(target.content, endMessage.content ?? []);
+                    if (filled) get().updateMessageInSession(sessionId, target.id, { content: filled });
+                  }
+                }
+                break;
+              }
+
               case 'tool_execution_start': {
                 const raw = event as Record<string, unknown>;
                 const toolCallId = (raw.toolCallId ?? raw.id ?? `tool_${Date.now()}`) as string;

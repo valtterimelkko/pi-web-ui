@@ -3,7 +3,7 @@ import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
 import { removeSessionGroup, placementForSpawn, appendDegradeLine } from '../placement/index.js';
 import { enrichSubagentEvent } from './event-forwarder.js';
-import { projectStreamingEventForTransport } from './stream-transport.js';
+import { projectStreamingEventForTransport, SKILL_CONTENT_MARKER } from './stream-transport.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
 import { MemoryJournalPolicy, resolveMemoryJournalPolicyOptions } from '../observability/memory-journal-policy.js';
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
@@ -1690,6 +1690,12 @@ export class MultiSessionManager {
       ...event,
       message: {
         ...event.message,
+        // Hb2: mark the synthetic placeholder so the transport projection
+        // preserves its content — the placeholder exists at emit time by
+        // construction, and the client renders it from the start frame.
+        // Ordinary assistant starts keep the typed-empty neutralisation
+        // (streamed text must reach the client only as deltas).
+        customType: SKILL_CONTENT_MARKER,
         content: [{ type: 'text', text: placeholder }]
       }
     };

@@ -90,6 +90,76 @@ describe('projectStreamingEventForTransport', () => {
       .toContain('Skill loaded: demo');
   });
 
+  // Hb2: the doubled-first-chunk defect. The pi-ai adapter mutates one shared
+  // output object in place as HTTP chunks land; the agent loop emits
+  // message_start with a shallow copy of it; by the time the projection runs
+  // the content array already holds the first streamed chunk. The client
+  // renders start content AND the same chunk again as the first text_delta.
+  // The wire contract says the client rebuilds streamed content from deltas,
+  // so an assistant message_start frame must never carry streamed text.
+  it('neutralises streamed text in an assistant message_start (the doubled-first-chunk race shape)', () => {
+    // The projection receives the event AFTER the adapter's first chunk
+    // mutated the shared content array — exactly what production captures show.
+    const event = {
+      type: 'message_start',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'HB' }], provider: 'zai', model: 'glm-5.3-flash' },
+    };
+    const projected = projectStreamingEventForTransport(event as any);
+    const content = (projected.message as { content: Array<{ type: string; text?: string }> }).content;
+    expect(content).toEqual([{ type: 'text', text: '' }]);
+  });
+
+  it('neutralises every streamed block type in an assistant message_start, preserving block order and types', () => {
+    const event = {
+      type: 'message_start',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'User wants exact reply' },
+          { type: 'text', text: 'HB' },
+        ],
+      },
+    };
+    const projected = projectStreamingEventForTransport(event as any);
+    const content = (projected.message as { content: Array<{ type: string; text?: string; thinking?: string }> }).content;
+    expect(content).toEqual([
+      { type: 'thinking', thinking: '' },
+      { type: 'text', text: '' },
+    ]);
+  });
+
+  it('leaves an assistant message_start with empty or absent content untouched in shape', () => {
+    const empty = { type: 'message_start', message: { role: 'assistant', content: [] } };
+    expect((projectStreamingEventForTransport(empty as any).message as { content: unknown[] }).content).toEqual([]);
+    const absent = { type: 'message_start', message: { role: 'assistant' } };
+    expect((projectStreamingEventForTransport(absent as any).message as { content: unknown }).content).toBeUndefined();
+  });
+
+  it('passes user-role message_start content through verbatim (prompt echoes carry their text)', () => {
+    const event = {
+      type: 'message_start',
+      message: { role: 'user', content: [{ type: 'text', text: 'Reply with exactly one line: HB2LIVE and nothing else.' }] },
+    };
+    const projected = projectStreamingEventForTransport(event as any);
+    expect((projected.message as { content: Array<{ text: string }> }).content[0].text)
+      .toBe('Reply with exactly one line: HB2LIVE and nothing else.');
+  });
+
+  it('preserves the marked synthetic skill placeholder on an assistant message_start', () => {
+    const event = {
+      type: 'message_start',
+      message: {
+        role: 'assistant',
+        customType: 'skill-content',
+        content: [{ type: 'text', text: '📚 **Skill loaded: demo**' }],
+      },
+    };
+    const projected = projectStreamingEventForTransport(event as any);
+    const message = projected.message as { content: Array<{ text: string }>; customType?: string };
+    expect(message.content[0].text).toContain('Skill loaded: demo');
+    expect(message.customType).toBe('skill-content');
+  });
+
   it('passes terminal and tool events through unchanged (same reference, full fidelity)', () => {
     const finalMessage = { role: 'assistant', content: [{ type: 'text', text: 'final answer' }] };
     for (const event of [
