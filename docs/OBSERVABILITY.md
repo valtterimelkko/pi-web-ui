@@ -349,15 +349,20 @@ about 19 minutes while no session was busy, the drain counted 0 turns and 0
 nonterminal runs, and this metrics file's `activeTurns` read 0 throughout — a
 permit that is never released shrinks capacity silently until a restart. The
 sampler now records admission's counts (via `admissionCounts`, wired from the
-Internal API server) beside the operational counts, and the excess — the worst
-of the total and any per-runtime mismatch — latches the alert.
+Internal API server through the read-only `activeCounts()` getter — correction
+02: `snapshot()` evaluates pressure and would move admission's heap latch)
+beside the operational counts. Each reading is in one of three states: **leak**
+(admission above the telemetry, by the total or any per-runtime count),
+**equal**, or **reverse** (telemetry above admission, no leak anywhere).
 
-It is deliberately **one-sided**: admission holding more active turns than the
-runtimes report is the leak direction; the reverse (telemetry above admission)
-happens legitimately, because receipts can be joined to another turn's permit.
-Three consecutive readings (~90 s at the 30 s cadence) cannot be a turn-boundary
-race (acquire → receipt-record and terminalise → release are one async hop, at
-most one reading) nor the §11 quarantine fence (a cancel/fail with unconfirmed
+The detector is **one-sided**: leak readings arm the alert and only equal
+readings count towards recovery. Reverse readings — legitimate, because
+receipts can be joined to another turn's permit (a steer onto a busy session
+holds no permit of its own) — neither open nor close an incident, and a single
+leak reading is a turn-boundary race that breaks the arm run. Three consecutive
+leak readings (~90 s at the 30 s cadence) cannot be a turn-boundary race
+(acquire → receipt-record and terminalise → release are one async hop, at most
+one reading) nor the §11 quarantine fence (a cancel/fail with unconfirmed
 cessation holds the lease at most 30 s past terminalise). A leaked permit
 persists until a restart, so it pages. The alert message names admission's
 non-zero classes, the per-runtime admission-vs-telemetry detail and — when
