@@ -12,7 +12,7 @@
 //   teardown [--run-dir D]
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runOk, tryRun, sleep, waitFor } from './lib/exec.mjs';
 import {
   ensureSlice, startAnchor, startServer, assertToolsRootIsOurs, placedGroupsSnapshot,
@@ -210,7 +210,9 @@ async function runThis(args) {
   const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), path.basename(args[0]));
   await runOk(process.execPath, [script, ...args.slice(1)], { timeoutMs: 300_000 });
 }
-main().catch((err) => {
-  console.error(`[arm4] ${err.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(`[arm4] ${err.message}`);
+    process.exitCode = 1;
+  });
+}

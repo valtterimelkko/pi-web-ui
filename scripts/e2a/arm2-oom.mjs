@@ -13,6 +13,7 @@
 //   smoke-proof --out F                 plumbing smoke: 8 MiB holders in e2a-3-oomproof-smoke
 //                                       (MemoryMax=2G), NO OOM triggered.
 import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { runOk, tryRun, sleep } from './lib/exec.mjs';
@@ -21,6 +22,44 @@ import { rankCandidates, pickVictim, parseMemoryEvents, interpretOomProof } from
 const UNIT_READ = 'e2a-3-oomread';
 const UNIT_PROOF = 'e2a-3-oomproof';
 const SELF_CAP_BYTES = 10 * 1024 ** 3; // allocation tests self-cap at 10 GiB (COMMON-BRIEF-e2.md Host safety)
+
+/**
+ * Deliberate-OOM arms live in e2a-oom.slice (STRESS-GATE.md, 2026-10-02 21:50 amendment):
+ * the guard excuses an OOM kill only when THIS slice's own memory.events moved. The unit
+ * still carries its own MemoryMax; the slice is the guard's accounting umbrella.
+ */
+export const OOM_ARM_SLICE = 'e2a-oom.slice';
+
+/** Pure guard: the unit's unified cgroup path must sit under the OOM-arm slice. */
+export function assertCgroupUnderSlice(cgroupPath, slice = OOM_ARM_SLICE) {
+  const norm = `/${String(cgroupPath ?? '').replace(/^\/+|\/+$/g, '')}`;
+  const prefix = `/${slice.replace(/^\/+|\/+$/g, '')}/`;
+  if (!norm.startsWith(prefix)) {
+    throw new Error(`refusing to allocate: cgroup path ${cgroupPath} is not under /${slice}/ (guard would trip)`);
+  }
+  return norm;
+}
+
+/** systemd-run argv for the contained-OOM unit (arm 2b). */
+export function buildOomProofUnitArgv({
+  unit = UNIT_PROOF,
+  slice = OOM_ARM_SLICE,
+  memoryMax = '6G',
+  runtimeMaxSec = 300,
+  payloadPath,
+  out,
+  bytesPerSide = '3.5G',
+}) {
+  return [
+    'systemd-run', `--unit=${unit}`, '--collect', '--quiet',
+    `--property=Slice=${slice}`,
+    `--property=MemoryMax=${memoryMax}`,
+    '--property=MemorySwapMax=0',
+    '--property=OOMPolicy=continue',
+    `--property=RuntimeMaxSec=${runtimeMaxSec}`,
+    '--', process.execPath, payloadPath, 'proof-payload', '--out', out, '--bytes-per-side', bytesPerSide,
+  ];
+}
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -119,36 +158,41 @@ async function main() {
     // Arm 2b — contained OOM. Stress arm: the caller (arm runner) must hold the gate + lock.
     const out = arg('--out', '/root/e2a-runs/a3/arm2/oomproof.json');
     fs.mkdirSync(path.dirname(out), { recursive: true });
-    const perSide = arg('--bytes-per-side', '3.5G');
-    const argv = [
-      'systemd-run', `--unit=${UNIT_PROOF}`, '--collect', '--quiet',
-      '--property=MemoryMax=6G',
-      '--property=MemorySwapMax=0',
-      '--property=OOMPolicy=continue',
-      '--property=RuntimeMaxSec=300',
-      '--', process.execPath, await selfPath(), 'proof-payload', '--out', out, '--bytes-per-side', perSide,
-    ];
+    const argv = buildOomProofUnitArgv({
+      payloadPath: await selfPath(),
+      out,
+      bytesPerSide: arg('--bytes-per-side', '3.5G'),
+    });
     await runOk(argv[0], argv.slice(1));
-    console.log(JSON.stringify({ started: UNIT_PROOF, out }));
+    // Driver-side path assertion: the unit's real cgroup must be under e2a-oom.slice.
+    const cgOut = await runOk('systemctl', ['show', UNIT_PROOF, '-p', 'ControlGroup', '--no-pager']);
+    const cg = /^ControlGroup=(.+)$/m.exec(cgOut.stdout.trim())?.[1];
+    assertCgroupUnderSlice(cg);
+    console.log(JSON.stringify({ started: UNIT_PROOF, cgroup: cg, out }));
     return;
   }
 
   if (cmd === 'proof-payload') {
     const out = arg('--out');
     const perSideBytes = parseSize(arg('--bytes-per-side', '3.5G'));
+    // FIRST, before any allocation: this unit must live under e2a-oom.slice
+    // (STRESS-GATE 21:50 amendment — the guard excuses kills only there).
+    assertCgroupUnderSlice(readOwnCgroupPath());
     const self = await selfPath();
-    const spawnAlloc = (adj, bytes, holdSec) => new Promise((resolve, reject) => {
+    const spawnAlloc = (adj, bytes, holdSec) => new Promise((resolve) => {
       const child = execFile(process.execPath, [self, 'alloc', '--adj', String(adj), '--bytes', String(bytes), '--hold-sec', String(holdSec)], (err, stdout) => {
-        resolve({ adj, code: err?.code ?? 0, stdout });
+        // A SIGKILLed child reports code=null + signal='SIGKILL'; the shell convention is 137.
+        const code = err ? (err.code ?? (err.signal === 'SIGKILL' ? 137 : -1)) : 0;
+        resolve({ adj, code, signal: err?.signal, stdout });
       });
-      child.on('error', reject);
+      child.on('error', () => {});
     });
     // The -500 allocator (plays the server) fills first and holds; the 0-score one (plays a placed
     // tool) keeps allocating — together they must exceed the unit's MemoryMax.
-    const lowAdj = spawnAlloc(-500, perSideBytes, 240);
+    const lowAdjPromise = spawnAlloc(-500, perSideBytes, 240);
     await sleep(4000); // let it take its allocation first
-    const zeroAdj = spawnAlloc(0, Math.min(perSideBytes * 1.5, SELF_CAP_BYTES), 60);
-    const [lowResult, zeroResult] = await Promise.all([lowAdj, zeroAdj]);
+    const zeroAdjPromise = spawnAlloc(0, Math.min(Math.round(perSideBytes * 1.5), SELF_CAP_BYTES), 60);
+    const zeroResult = await zeroAdjPromise; // settles at the kernel kill
     // Unit-level evidence while the survivor still holds the unit open:
     let events = {};
     try {
@@ -159,14 +203,18 @@ async function main() {
     const unitActive = await tryRun('systemctl', ['is-active', UNIT_PROOF]);
     const result = {
       at: new Date().toISOString(),
-      lowAdj: { exitCode: lowResult.code, stdout: lowResult.stdout?.trim() },
-      zeroAdj: { exitCode: zeroResult.code, stdout: zeroResult.stdout?.trim() },
+      zeroAdj: { exitCode: zeroResult.code, signal: zeroResult.signal, stdout: zeroResult.stdout?.trim() },
       unitEvents: events,
       unitActiveDuringHold: unitActive?.trim(),
     };
+    // Give the survivor a short observation window, then record its state either way.
+    const lowEarly = await Promise.race([lowAdjPromise, sleep(20_000).then(() => null)]);
+    result.lowAdj = lowEarly
+      ? { exitCode: lowEarly.code, signal: lowEarly.signal, stdout: lowEarly.stdout?.trim(), stillHolding: false }
+      : { stillHolding: true, note: 'survivor was still alive and holding its allocation 20 s after the kill' };
     fs.writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
-    await sleep(15_000); // hold the unit open so the driver can observe is-active post-kill
-    process.exit(lowResult.code === 0 ? 0 : 1);
+    await sleep(10_000); // keep the unit open so the driver can observe is-active post-kill
+    process.exit(0);
   }
 
   if (cmd === 'proof-verify') {
@@ -174,13 +222,14 @@ async function main() {
     const out = arg('--out');
     const payload = JSON.parse(fs.readFileSync(out, 'utf8'));
     const unitActive = await tryRun('systemctl', ['is-active', UNIT_PROOF]);
+    const lowAlive = payload.lowAdj.stillHolding === true || payload.lowAdj.exitCode === 0;
     const verdict = interpretOomProof({
-      lowAdjProcessAlive: payload.lowAdj.exitCode === 0,
+      lowAdjProcessAlive: lowAlive,
       zeroAdjProcessExitCode: payload.zeroAdj.exitCode,
       unitOomKills: payload.unitEvents.oom_kill ?? 0,
       unitActiveAfter: payload.unitActiveDuringHold === 'active' || unitActive?.trim() === 'active',
     });
-    const result = { ...payload, unitActiveAtVerify: unitActive?.trim(), verdict };
+    const result = { ...payload, lowAdjAliveAtVerify: lowAlive, unitActiveAtVerify: unitActive?.trim(), verdict };
     fs.writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
     console.log(JSON.stringify(verdict));
     process.exitCode = verdict.pass ? 0 : 1;
@@ -234,12 +283,18 @@ function readOwnCgroupDir() {
   return /^0::(.+)$/m.exec(text)?.[1];
 }
 
+function readOwnCgroupPath() {
+  return readOwnCgroupDir();
+}
+
 async function readOwnUnitDir(unit) {
   const out = await tryRun('systemctl', ['show', unit, '-p', 'ControlGroup', '--no-pager']);
   return out ? `/sys/fs/cgroup${/ControlGroup=(.+)$/.exec(out)?.[1]}` : `/sys/fs/cgroup/system.slice/${unit}`;
 }
 
-main().catch((err) => {
-  console.error(`[arm2] ${err.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(`[arm2] ${err.message}`);
+    process.exitCode = 1;
+  });
+}

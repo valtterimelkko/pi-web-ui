@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runOk, tryRun, sleep, waitFor } from './lib/exec.mjs';
 import { parseMemoryEvents as parseMemoryEventsFallthrough } from './lib/oomrank.mjs';
 import { parseMemoryCurrent, parseMemoryStat, summariseMemoryLowContrast } from './lib/memlow.mjs';
@@ -18,6 +18,40 @@ import { parseMemoryCurrent, parseMemoryStat, summariseMemoryLowContrast } from 
 const UNIT = 'e2a-3-memlow';
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
+// Deliberate-OOM arm: the hog may OOM at the unit limit — must live in e2a-oom.slice
+// (STRESS-GATE.md 21:50 amendment; see arm2-oom.mjs OOM_ARM_SLICE comment).
+const OOM_ARM_SLICE = 'e2a-oom.slice';
+
+/** Pure guard: the unit's unified cgroup path must sit under the OOM-arm slice. */
+export function assertCgroupUnderSlice(cgroupPath, slice = OOM_ARM_SLICE) {
+  const norm = `/${String(cgroupPath ?? '').replace(/^\/+|\/+$/g, '')}`;
+  const prefix = `/${slice.replace(/^\/+|\/+$/g, '')}/`;
+  if (!norm.startsWith(prefix)) {
+    throw new Error(`refusing to run the memlow hog: cgroup path ${cgroupPath} is not under /${slice}/ (guard would trip)`);
+  }
+  return norm;
+}
+
+/** systemd-run argv for the MemoryLow contrast unit (arm 3). */
+export function buildMemlowUnitArgv({
+  unit = UNIT,
+  slice = OOM_ARM_SLICE,
+  scale = SCALES.full,
+  payloadPath,
+  outDir,
+  scaleName = 'full',
+}) {
+  return [
+    'systemd-run', `--unit=${unit}`, '--collect', '--quiet',
+    `--property=Slice=${slice}`,
+    `--property=MemoryMax=${scale.unitMemoryMax}`,
+    `--property=MemoryLow=${scale.unitMemoryLow}`,
+    '--property=MemorySwapMax=0',
+    `--property=RuntimeMaxSec=${scale.runtimeMaxSec}`,
+    '--property=Delegate=yes',
+    '--', process.execPath, payloadPath, 'payload', '--out-dir', outDir, '--scale', scaleName,
+  ];
+}
 
 const SCALES = {
   full: { fileBytes: 1536 * MiB, hogTargetBytes: Math.round(7.2 * GiB), unitMemoryMax: '8G', unitMemoryLow: '4G', sibLow: 2 * GiB, runtimeMaxSec: 900, passes: 6 },
@@ -45,16 +79,12 @@ async function main() {
         await runOk('dd', ['if=/dev/zero', `of=${file}`, 'bs=1M', `count=${Math.round(scale.fileBytes / MiB)}`], { timeoutMs: 120_000 });
       }
     }
-    const argv = [
-      'systemd-run', `--unit=${UNIT}`, '--collect', '--quiet',
-      `--property=MemoryMax=${scale.unitMemoryMax}`,
-      `--property=MemoryLow=${scale.unitMemoryLow}`,
-      '--property=MemorySwapMax=0',
-      `--property=RuntimeMaxSec=${scale.runtimeMaxSec}`,
-      '--property=Delegate=yes',
-      '--', process.execPath, self, 'payload', '--out-dir', outDir, '--scale', scaleName,
-    ];
+    const argv = buildMemlowUnitArgv({ payloadPath: self, outDir, scaleName });
     await runOk(argv[0], argv.slice(1));
+    // Driver-side path assertion: the unit's real cgroup must be under e2a-oom.slice.
+    const cgOut = await runOk('systemctl', ['show', UNIT, '-p', 'ControlGroup', '--no-pager']);
+    const cg = /^ControlGroup=(.+)$/m.exec(cgOut.stdout.trim())?.[1];
+    assertCgroupUnderSlice(cg);
     const resultsPath = path.join(outDir, 'results.json');
     await waitFor(() => fs.existsSync(resultsPath), { timeoutMs: (scale.runtimeMaxSec - 10) * 1000, pollMs: 2000, label: 'memlow results' });
     await tryRun('systemctl', ['stop', UNIT]);
@@ -74,6 +104,9 @@ async function main() {
     const outDir = arg('--out-dir');
     const scaleName = arg('--scale', 'full');
     const scale = SCALES[scaleName];
+    // FIRST, before any pressure: this unit must live under e2a-oom.slice
+    // (STRESS-GATE 21:50 amendment — the guard excuses kills only there).
+    assertCgroupUnderSlice(readOwnCgroup());
     const cgRoot = readOwnCgroup();
     const fsRoot = `/sys/fs/cgroup${cgRoot}`;
     // Move self into a control subgroup so controllers can be enabled (no-internal-process rule).
@@ -264,7 +297,9 @@ function fileURLToPathSelf() {
   return fileURLToPath(import.meta.url);
 }
 
-main().catch((err) => {
-  console.error(`[arm3] ${err.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(`[arm3] ${err.message}`);
+    process.exitCode = 1;
+  });
+}

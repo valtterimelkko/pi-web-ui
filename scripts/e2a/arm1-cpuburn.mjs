@@ -8,6 +8,7 @@
 //   sample-psi --out F --seconds N       append PSI/load samples every 5 s (JSONL) — proof the burn saturated the host
 //   selftest-smoke --state-dir D         plumbing smoke: sleep payload for 3 s + flag on/off against a TEST state dir (no CPU burn)
 import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { runOk, tryRun, sleep, waitFor } from './lib/exec.mjs';
 import { setGuardFlag, clearGuardFlag } from './lib/gate.mjs';
@@ -116,7 +117,9 @@ function sampleNow() {
   };
 }
 
-main().catch((err) => {
-  console.error(`[arm1] ${err.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(`[arm1] ${err.message}`);
+    process.exitCode = 1;
+  });
+}
