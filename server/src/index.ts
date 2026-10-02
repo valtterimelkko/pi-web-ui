@@ -12,7 +12,6 @@ import { config } from './config.js';
 import {
   resolvePlacementConfig,
   applyStartupPlacement,
-  resetAppliedPlacement,
   startupSweepConfig,
   sweepAllGroups,
   realCgroupIo,

@@ -139,7 +139,7 @@ const defaultToolsRootDeps: ToolsRootDeps = {
  */
 export type CandidateToolsRoot = { ok: true; path: string } | { ok: false; reason: string };
 
-export function candidateToolsRootPath(cfg: PlacementConfig, deps: ToolsRootDeps = {}): CandidateToolsRoot {
+export function candidateToolsRootPath(cfg: Pick<PlacementConfig, 'cgroupRoot' | 'slicePath'>, deps: ToolsRootDeps = {}): CandidateToolsRoot {
   const d = { ...defaultToolsRootDeps, ...deps };
   const raw = cfg.slicePath;
   if (raw.startsWith('/')) {

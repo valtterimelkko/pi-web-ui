@@ -114,7 +114,7 @@ export interface ValidationPlacementCheckDeps {
  * `cgroup.subtree_control` enable, no wrapper, no sweep.
  */
 export function validationPlacementRefusalForConfig(
-  cfg: Pick<PlacementConfig, 'enabled' | 'slicePath'>,
+  cfg: Pick<PlacementConfig, 'cgroupRoot' | 'enabled' | 'slicePath'>,
   deps: ValidationPlacementCheckDeps,
 ): ValidationPlacementRefusal | null {
   if (!cfg.enabled) return null;
