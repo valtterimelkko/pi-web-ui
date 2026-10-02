@@ -374,14 +374,17 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
         expectedTurnAt: number | undefined,
         requirePending = false,
       ): Promise<AntigravityGoalRecord | null> => {
+        // Turn first, goal record last: the record is the final read before the
+        // dispatch, so a pause or clear that lands during the turn read still
+        // wins (review r4).
+        if (deps.isRunning(sessionId)) return null;
+        const latest = await deps.readLastCompletedTurn(sessionId);
+        if ((latest?.completedAt ?? undefined) !== expectedTurnAt) return null;
         const fresh = await deps.getStore().get(sessionId);
         if (!fresh || fresh.status !== 'running' || fresh.autoContinue === false) return null;
         if (fresh.lastVerifiedTurnAt !== cursor) return null;
         if (requirePending && !fresh.pendingContinuation) return null;
-        if (deps.isRunning(sessionId)) return null;
-        const latest = await deps.readLastCompletedTurn(sessionId);
-        if ((latest?.completedAt ?? undefined) !== expectedTurnAt) return null;
-        return fresh;
+        return deps.isRunning(sessionId) ? null : fresh;
       };
       const continuationFor = (rec: AntigravityGoalRecord) => buildAgyGoalContinuationPrompt(rec.objective, rec.verifyCommand !== undefined);
       for (const sessionId of sessionIds) {

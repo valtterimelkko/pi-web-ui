@@ -576,6 +576,23 @@ describe('createAgyGoalSweeper — resume continuation that could not dispatch (
     expect((await h.store.get('s1'))?.runs).toBe(1);
   });
 
+  it('a pause or clear that lands during the guard\'s own latest-turn read still wins (review r4)', async () => {
+    for (const action of ['pause', 'clear'] as const) {
+      const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+      let reads = 0;
+      h.deps.readLastCompletedTurn = async (id) => {
+        reads += 1;
+        if (reads === 2) {
+          if (action === 'pause') await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+          else await h.store.patch(id, { status: 'cleared', autoContinue: false, clearedAt: 1 });
+        }
+        return { completedAt: 300, response: 'x' };
+      };
+      await createAgyGoalSweeper(h.deps).sweepOnce();
+      expect(h.dispatched, action).toHaveLength(0);
+    }
+  });
+
   it('does not dispatch a pending continuation for a paused goal or a busy session', async () => {
     const h = await harness({
       paused: record({ status: 'paused', pausedReason: 'user', autoContinue: false, lastVerifiedTurnAt: 300, pendingContinuation: true }),
