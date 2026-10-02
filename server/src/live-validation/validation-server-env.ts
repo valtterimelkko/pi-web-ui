@@ -27,19 +27,17 @@ interface ValidationIsolationInput {
 export const PLACEMENT_ENV_PREFIX = 'PI_TOOLS_';
 
 /**
- * Delete every inherited `PI_TOOLS_*` key from `env` in place, except keys the
- * caller explicitly requested for this run. Returns the dropped key names (for
- * the launcher's console evidence). Must run BEFORE the env file is loaded, so
- * an explicitly requested key — absent after the strip — is set from the file.
+ * Delete every inherited `PI_TOOLS_*` key from `env` in place. Returns the
+ * dropped key names (for the launcher's console evidence). Must run BEFORE the
+ * env file is loaded: the loader only FILLS MISSING keys, so any ambient value
+ * that survived the strip would silently override the caller's explicit file
+ * value. The --env-key allowlist decides which keys the env file must then
+ * provide; the environment itself is never the source of a placement value.
  */
-export function stripInheritedPlacementEnv(
-  env: NodeJS.ProcessEnv,
-  explicitlyRequested: ReadonlySet<string>,
-): string[] {
+export function stripInheritedPlacementEnv(env: NodeJS.ProcessEnv): string[] {
   const dropped: string[] = [];
   for (const key of Object.keys(env)) {
     if (!key.startsWith(PLACEMENT_ENV_PREFIX)) continue;
-    if (explicitlyRequested.has(key)) continue;
     delete env[key];
     dropped.push(key);
   }

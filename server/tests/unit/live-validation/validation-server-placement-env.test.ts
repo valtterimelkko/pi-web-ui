@@ -39,7 +39,7 @@ describe('J6: inherited placement env is stripped from the disposable server env
     expect(PLACEMENT_ENV_PREFIX).toBe('PI_TOOLS_');
   });
 
-  it('strips every inherited PI_TOOLS_* key when none was explicitly requested', () => {
+  it('strips every inherited PI_TOOLS_* key', () => {
     const env: NodeJS.ProcessEnv = {
       PATH: '/usr/bin:/bin',
       PI_TOOLS_PLACEMENT: 'on',
@@ -52,7 +52,7 @@ describe('J6: inherited placement env is stripped from the disposable server env
       PI_TOOLS_PIDS_MAX: '2048',
       PI_TOOLS_DEGRADE_FILE: '/root/.pi-web-ui/placement/degrade.log',
     };
-    const dropped = stripInheritedPlacementEnv(env, new Set());
+    const dropped = stripInheritedPlacementEnv(env);
     expect(dropped).toContain('PI_TOOLS_PLACEMENT');
     expect(dropped).toContain('PI_TOOLS_SLICE');
     expect(dropped).toContain('PI_TOOLS_RUNTIME_DIR');
@@ -69,20 +69,26 @@ describe('J6: inherited placement env is stripped from the disposable server env
     expect(env.PI_WEB_UI_VALIDATION_MODE).toBeUndefined();
   });
 
-  it('keeps a PI_TOOLS_* key that the caller explicitly requested for this run', () => {
+  it('strips even a key the caller will re-request — the env file, not the ambient env, is the source', () => {
+    // The env-file loader only FILLS MISSING keys, so an ambient value that
+    // survived the strip would silently override the caller's explicit file
+    // value (found live in proof phaseB-run-20261002T133739Z arm2: the child
+    // got production's anchor instead of the run's own unit). The launcher
+    // therefore strips ALL inherited PI_TOOLS_* keys; --env-key only decides
+    // which keys the env file must then provide.
     const env: NodeJS.ProcessEnv = {
       PI_TOOLS_PLACEMENT: 'on',
-      PI_TOOLS_SLICE: 'j6-proof.service',
+      PI_TOOLS_SLICE: 'pi-web-ui-tools-anchor.service',
     };
-    const dropped = stripInheritedPlacementEnv(env, new Set(['PI_TOOLS_PLACEMENT', 'PI_TOOLS_SLICE']));
-    expect(dropped).toEqual([]);
-    expect(env.PI_TOOLS_PLACEMENT).toBe('on');
-    expect(env.PI_TOOLS_SLICE).toBe('j6-proof.service');
+    const dropped = stripInheritedPlacementEnv(env);
+    expect(dropped.sort()).toEqual(['PI_TOOLS_PLACEMENT', 'PI_TOOLS_SLICE'].sort());
+    expect(env.PI_TOOLS_PLACEMENT).toBeUndefined();
+    expect(env.PI_TOOLS_SLICE).toBeUndefined();
   });
 
   it('reports nothing dropped when the environment carries no placement keys', () => {
     const env: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin', HOME: '/root' };
-    expect(stripInheritedPlacementEnv(env, new Set())).toEqual([]);
+    expect(stripInheritedPlacementEnv(env)).toEqual([]);
   });
 
   it('always pins the placement runtime dir inside the validation directory', () => {

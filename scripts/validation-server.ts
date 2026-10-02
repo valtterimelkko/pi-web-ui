@@ -70,11 +70,12 @@ async function main(): Promise<void> {
   const validationArgs = process.argv.slice(2);
   const validationEnvFile = resolveValidationEnvFile(validationArgs);
   const validationEnvKeys = resolveValidationEnvKeys(validationArgs);
-  // J6: inherited placement env must never reach the disposable server unless
-  // the caller explicitly requested those keys for this run (--env-file plus
-  // --env-key PI_TOOLS_*). Runs BEFORE the env-file load so an explicitly
-  // requested key — absent after the strip — is set from the file.
-  const droppedPlacementKeys = stripInheritedPlacementEnv(process.env, new Set(validationEnvKeys));
+  // J6: inherited placement env must never reach the disposable server. ALL
+  // PI_TOOLS_* keys are stripped unconditionally (the env-file loader only
+  // fills missing keys, so a surviving ambient value would silently override
+  // the caller's explicit file value); the --env-key allowlist then decides
+  // which keys the env file must provide.
+  const droppedPlacementKeys = stripInheritedPlacementEnv(process.env);
   if (droppedPlacementKeys.length > 0) {
     console.error(`[validation-server] dropped inherited placement env: ${droppedPlacementKeys.join(', ')}`);
   }
