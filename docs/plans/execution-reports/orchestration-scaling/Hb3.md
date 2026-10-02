@@ -34,7 +34,7 @@ Design (recorded): per reading window the metrics line carries
 close/abandon semantics, nearest-rank percentiles, ring bound (exact count, bounded samples), per-provider
 rate from injected clock, unknown-provider fold, provider cap + truncation flag, mid-stream gap, no gap
 across message boundary, gap reset on `message_start` (aborted stream), window take/reset, non-chunk and
-non-delta events ignored, tracked-session LRU bound, additive sampler-only reading field, env knob resolution.
+non-delta events ignored, tracked-session FIFO bound (insertion-order eviction; chosen over LRU — the cap is a leak bound, not a cache — recorded per correction 02), additive sampler-only reading field, env knob resolution.
 
 - RED (module absent): `cd server && env -u PI_MAX_SESSIONS -u OPENCODE_ENABLED -u CLAUDE_CODE_SESSION_ID -u CLAUDE_WATCH_WAKE_ARMED NODE_ENV=test npx vitest run tests/unit/observability/streaming-telemetry.test.ts`
   → **exit 1** — `Failed to load url ../../../src/observability/streaming-telemetry.js … Does the file exist?` (1 file failed, no tests).
@@ -65,8 +65,8 @@ Row size bound: with `streaming` present, metrics rows measured ≤ **805 bytes*
 Blind spots (per the plan §4 rule):
 1. **Span ends at dispatch, not at the socket write.** Frames queued by the WebSocket outbound governor under
    backpressure are counted at hand-off; the later write is the WebSocket lane's path (Hb1) and is observable
-   through the existing queued-frame counters. A stall living entirely inside the governor queue shows in
-   lag/queued counters, not in `spans`.
+   through the existing queued-frame counters. **Accepted as is by the parent (correction 02, item 5)** — the
+   governor's queued-frame counters cover that boundary.
 2. **A blocked main thread delays receipts too** — a pure receipt-side gap cannot by itself distinguish
    provider pause from server block; the reading guide (gap + spans + lag + CPU jointly) is the attribution,
    and arm g demonstrates exactly that joint signature.
@@ -140,7 +140,7 @@ statically per the repo's convention — index.ts loads only inside the pi harne
 
 ### Interactive non-regression (owner rule; requirement 3)
 
-Real interactive-shaped runs: `pi --print --mode json` on the approved `zai/glm-5.3-flash` route, isolated
+Headless quit-path runs (the extensions' `session_shutdown` quit path is shared with the interactive TUI): `pi --print --mode json` on the approved `zai/glm-5.3-flash` route, isolated
 agent dirs whose extensions are the deployed set with ONLY the two `shutdownAll` files swapped
 (baseline = deployed copies; patched = the worktree's files). Shutdown tail = last stdout event → process
 exit, where the extension `session_shutdown` emission lives (model-turn noise stays out). Run dir
@@ -206,3 +206,37 @@ upstream RED test that pins this.
   untouched — the parent deploys the reviewed `orch/hb3` pi-enhancement commit (`4dd81d5`) with its backup.
   Until then, production keeps paying the ~1 s teardown.
 - Production checks (terminal shell placement etc.) are other lanes' items; nothing here touched production.
+
+## 5. Correction 02 (parent, after the DeepSeek review ACCEPT WITH FIXES) — applied
+
+Review: `../reviews/hb3-deepseek-review.md`; correction: `01-answer.md`'s sibling
+`/root/orch-ops/orchestration-scaling/hb3/02-correction.md` (all minor; the pi-enhancement `shutdownAll`
+fix is accepted as is and unchanged — `4dd81d5` untouched this round). In the pi-web-ui worktree only:
+
+1. **Bounded memory on insert** — `providers` is now capped at INSERT time: the first `maxProviders`
+   distinct providers keep their buckets and every later provider folds into a reserved `other` bucket
+   (live map ≤ `maxProviders + 1` by construction); `providersTruncated` is set when folding happened and
+   the take-time sort/slice is gone. New seam `liveStreamingProviderBuckets()`. RED first: with
+   `maxProviders: 2` and 50 distinct providers the live map held 50 (test failed on the seam and on the
+   fold summary); GREEN: map ≤ 3, `other` carries chunks 48/10 as asserted. The pre-correction
+   "top chunks kept" behaviour is superseded (arrival order decides); its test rewritten to the fold
+   semantics. A real provider literally named `other` merges into the fold bucket (documented).
+2. **Safety-property regression test** — registers `streaming` on a sampler instance's sources (the exact
+   shape `getHealthTelemetry` uses) and asserts `getHealthReadings().streaming` is `null` (admission never
+   drains a window) while the first `sampleOnce()` returns the window and the second reports it empty
+   (consumed exactly once). Passes as a pin by construction; it fails if anyone registers the source
+   globally.
+3. **`streamingEnabled` under vitest** — derived from the effective sampler enablement
+   (`process.env.VITEST ? false : config.enabled`) in `getHealthTelemetry()`; RED test asserts
+   `isStreamingTelemetryEnabled() === false` after `getHealthTelemetry()` under the runner (it was `true`).
+4. **Wording** — `sessionStreams` eviction is FIFO (insertion-order; chosen over LRU — the cap is a leak
+   bound, not a cache); bundle and test wording corrected. The non-regression runs used
+   `pi --print --mode json`: renamed "headless quit path" (the `session_shutdown` quit path is shared with
+   the interactive TUI).
+5. **Accepted as is (recorded)** — the span ends at in-process dispatch, not the socket write; the
+   governor's queued-frame counters cover that boundary (OBSERVABILITY.md "Boundaries" + blind spot 1
+   annotated).
+
+Correction gates (all at the correction commit, from the worktree): observability suites, full server unit
+suite, typecheck, `npm run lint:ratchet -- --base master`, docs checks, `git diff --check master...HEAD` —
+receipts in `complete.md`.

@@ -258,13 +258,17 @@ export function getHealthTelemetry(): HealthTelemetry {
     // Hb3: streaming-path telemetry shares the A2 sampler's lifecycle (its
     // fields reach the stream through this sampler only) and can be turned off
     // independently with OBSERVABILITY_STREAMING_TELEMETRY=off (the on/off
-    // overhead proof uses that knob). The window-consuming source is passed
-    // ONLY here — sampler-scoped, so the reusable getHealthReadings() accessor
-    // never drains windows as a side effect.
-    const streamingEnabled = config.enabled && resolveStreamingTelemetryEnv(process.env).enabled;
+    // overhead proof uses that knob). Correction 02 (review finding 5): the
+    // derivation uses the EFFECTIVE sampler enablement — under the test runner
+    // the sampler is forced off, so the streaming module must be too, or test
+    // files would accumulate undrained windows. The window-consuming source is
+    // passed ONLY here — sampler-scoped, so the reusable getHealthReadings()
+    // accessor never drains windows as a side effect.
+    const effectiveConfig = process.env.VITEST ? { ...config, enabled: false } : config;
+    const streamingEnabled = effectiveConfig.enabled && resolveStreamingTelemetryEnv(process.env).enabled;
     configureStreamingTelemetry({ enabled: streamingEnabled });
     globalTelemetry = new HealthTelemetry({
-      config: process.env.VITEST ? { ...config, enabled: false } : config,
+      config: effectiveConfig,
       sources: {
         registryEntries: defaultRegistryEntries,
         ...(streamingEnabled ? { streaming: () => takeStreamingWindow() ?? undefined } : {}),

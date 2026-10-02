@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import {
   configureStreamingTelemetry,
+  isStreamingTelemetryEnabled,
+  liveStreamingProviderBuckets,
   observeStreamingChunkDelivered,
   observeStreamingChunkReceipt,
   resetStreamingTelemetry,
@@ -8,7 +13,8 @@ import {
   takeStreamingWindow,
   type StreamingWindowSummary,
 } from '../../../src/observability/streaming-telemetry.js';
-import { collectHealthReadings } from '../../../src/observability/health-readings.js';
+import { clearHealthReadingSources, collectHealthReadings, getHealthReadings } from '../../../src/observability/health-readings.js';
+import { HealthTelemetry, createNoopAlertSink, getHealthTelemetry, resetHealthTelemetry } from '../../../src/observability/health-telemetry.js';
 
 /**
  * Hb3 (plan H3 item 2): streaming-path telemetry aggregates, per reading
@@ -131,16 +137,19 @@ describe('streaming telemetry', () => {
     expect(w!.providers['unknown']).toEqual({ chunks: 1, bytes: 2, chunksPerSec: expect.any(Number) });
   });
 
-  it('caps the provider map at maxProviders and flags truncation (top chunks kept)', () => {
+  it('caps the provider map at insert: later providers fold into the reserved other bucket', () => {
     configureStreamingTelemetry({ enabled: true, now: clock, maxProviders: 2 });
     for (let i = 0; i < 5; i++) observeStreamingChunkReceipt('s1', deltaEvent('p-small', 'a'));
     for (let i = 0; i < 50; i++) observeStreamingChunkReceipt('s1', deltaEvent('p-big', 'a'));
     for (let i = 0; i < 10; i++) observeStreamingChunkReceipt('s1', deltaEvent('p-mid', 'a'));
+    // Arrival order decides: the first maxProviders keys keep their buckets,
+    // every later provider folds into the reserved 'other' bucket.
     const w = takeStreamingWindow();
     expect(w!.providersTruncated).toBe(true);
-    expect(Object.keys(w!.providers).sort()).toEqual(['p-big', 'p-mid']);
+    expect(Object.keys(w!.providers).sort()).toEqual(['other', 'p-big', 'p-small']);
+    expect(w!.providers['p-small'].chunks).toBe(5);
     expect(w!.providers['p-big'].chunks).toBe(50);
-    expect(w!.providers['p-mid'].chunks).toBe(10);
+    expect(w!.providers['other'].chunks).toBe(10);
   });
 
   it('records a mid-stream provider gap between consecutive deltas of one open stream', () => {
@@ -235,5 +244,89 @@ describe('streaming telemetry', () => {
     expect(resolveStreamingTelemetryEnv({ OBSERVABILITY_STREAMING_TELEMETRY: 'on' }).enabled).toBe(true);
     expect(resolveStreamingTelemetryEnv({ OBSERVABILITY_STREAMING_TELEMETRY: 'yes' }).enabled).toBe(true);
     expect(resolveStreamingTelemetryEnv({ OBSERVABILITY_STREAMING_TELEMETRY: 'bogus' }).enabled).toBe(true);
+  });
+
+  it('bounds the LIVE provider map on insert: many distinct providers stay within maxProviders + 1', () => {
+    // Review finding 1 (02-correction): the cap must hold at insert time, not
+    // only at window-take — a provider id that changes per chunk would
+    // otherwise grow the live map to the window's chunk count.
+    configureStreamingTelemetry({ enabled: true, now: clock, maxProviders: 2 });
+    for (let i = 0; i < 50; i++) {
+      observeStreamingChunkReceipt('s1', deltaEvent(`provider-${i}`, 'a'));
+    }
+    expect(liveStreamingProviderBuckets()).toBeLessThanOrEqual(3); // maxProviders + reserved 'other'
+    const w = takeStreamingWindow();
+    expect(w!.providersTruncated).toBe(true);
+    expect(w!.providers['other'].chunks).toBe(48);
+    expect(w!.providers['provider-0'].chunks).toBe(1);
+    expect(w!.providers['provider-1'].chunks).toBe(1);
+  });
+
+  it('surfaces windows through the sampler ONLY: getHealthReadings never drains, sampleOnce consumes exactly once', async () => {
+    // Review finding 3 (02-correction): pin the sampler-only registration
+    // property — a future setHealthReadingSources({ streaming }) refactor
+    // would otherwise regress silently and make admission drain windows.
+    clearHealthReadingSources();
+    const dir = await mkdtemp(path.join(tmpdir(), 'hb3-telemetry-'));
+    try {
+      configureStreamingTelemetry({ enabled: true, now: clock });
+      const telemetry = new HealthTelemetry({
+        config: {
+          enabled: true,
+          dir,
+          intervalMs: 1_000,
+          maxFileBytes: 100_000,
+          maxFiles: 3,
+          thresholds: { heapFractionHigh: 0.8, heapFractionLow: 0.7, lagP99HighMs: 60_000, lagP99LowMs: 30_000 },
+          incident: { quietPeriodMs: 0, cooldownMs: 0, debounceReadings: 1 },
+          sink: createNoopAlertSink(),
+          sinkDescription: 'test',
+          suppressOperatorNotifications: false,
+          warnings: [],
+        },
+        sources: {
+          now: clock,
+          uptimeSec: () => 12,
+          memoryUsage: () => ({ heapUsed: 50_000, heapTotal: 60_000, rss: 70_000, external: 1 }),
+          heapLimitBytes: () => 100_000,
+          lagWindow: () => ({ windowMs: 60_000, sampleCount: 5, p50Ms: 1, p99Ms: 2, maxMs: 3 }),
+          // The sampler-scoped registration — the shape getHealthTelemetry uses.
+          streaming: () => takeStreamingWindow() ?? undefined,
+        },
+      });
+
+      observeStreamingChunkReceipt('s1', deltaEvent('zai', 'abc'));
+      t += 5;
+      observeStreamingChunkDelivered();
+
+      // The reusable accessor (B2 admission) must neither see nor drain windows.
+      expect(getHealthReadings().streaming).toBeNull();
+
+      const first = await telemetry.sampleOnce();
+      expect(first?.streaming?.providers['zai']?.chunks).toBe(1);
+      expect(first?.streaming?.spans?.count).toBe(1);
+
+      // Consumed exactly once: the next sample reports an empty window.
+      const second = await telemetry.sampleOnce();
+      expect(second?.streaming?.spans).toBeNull();
+      expect(Object.keys(second?.streaming?.providers ?? {})).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      resetStreamingTelemetry();
+    }
+  });
+
+  it('getHealthTelemetry keeps streaming telemetry disabled under the test runner', () => {
+    // Review finding 5 (02-correction): streamingEnabled must derive from the
+    // EFFECTIVE sampler enablement, so test files neither accumulate undrained
+    // windows nor pay hook work the disabled sampler would never read.
+    expect(process.env.VITEST).toBeDefined(); // meaningful only under the runner
+    try {
+      getHealthTelemetry();
+      expect(getHealthTelemetry().enabled).toBe(false);
+      expect(isStreamingTelemetryEnabled()).toBe(false);
+    } finally {
+      resetHealthTelemetry();
+    }
   });
 });

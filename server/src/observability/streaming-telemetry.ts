@@ -94,6 +94,16 @@ interface OpenSpan {
 
 const DELTA_TYPES = new Set(['text_delta', 'thinking_delta', 'toolcall_delta']);
 
+/**
+ * Reserved fold bucket (review of 2026-10-02, correction 02 item 1): when a NEW
+ * provider key would exceed `maxProviders`, its chunks fold into `other` and
+ * `providersTruncated` is set — at INSERT time, so the live map is bounded by
+ * construction (at most `maxProviders` real keys + the reserved bucket), never
+ * only in the emitted summary. A real provider literally named `other` merges
+ * into the fold bucket (documented in docs/OBSERVABILITY.md).
+ */
+const OTHER_BUCKET = 'other';
+
 let config: StreamingTelemetryConfig | null = null;
 
 // Window accumulators (reset by takeStreamingWindow).
@@ -105,6 +115,7 @@ let gapCount = 0;
 let gapMax = 0;
 let gapProvider: string | null = null;
 let providers = new Map<string, { chunks: number; bytes: number }>();
+let providersFolded = false;
 
 // Cross-window state (kept between takes).
 const sessionStreams = new Map<string, SessionStreamState>();
@@ -144,6 +155,16 @@ export function configureStreamingTelemetry(options: {
   windowStartedAtMs = config.now();
 }
 
+/** Test/ops seam: number of provider buckets currently held in the live window state. */
+export function liveStreamingProviderBuckets(): number {
+  return providers.size;
+}
+
+/** Test seam: whether the hooks currently do aggregation work (module configured enabled). */
+export function isStreamingTelemetryEnabled(): boolean {
+  return config?.enabled ?? false;
+}
+
 /** Test/process teardown seam. */
 export function resetStreamingTelemetry(): void {
   config = null;
@@ -155,6 +176,7 @@ export function resetStreamingTelemetry(): void {
   gapMax = 0;
   gapProvider = null;
   providers = new Map();
+  providersFolded = false;
   sessionStreams.clear();
   openSpan = null;
 }
@@ -224,11 +246,22 @@ export function observeStreamingChunkReceipt(sessionId: string, event: unknown):
   const provider = readProvider(event);
   const bytes = typeof event.assistantMessageEvent.delta === 'string' ? event.assistantMessageEvent.delta.length : 0;
 
-  // Per-provider window rate.
-  const bucket = providers.get(provider) ?? { chunks: 0, bytes: 0 };
+  // Per-provider window rate — capped ON INSERT: the first `maxProviders`
+  // distinct providers keep their buckets; every later provider folds into the
+  // reserved `other` bucket, so the live map stays bounded by construction.
+  let key = provider;
+  let bucket = providers.get(key);
+  if (!bucket && key !== OTHER_BUCKET && providers.size >= config.maxProviders) {
+    key = OTHER_BUCKET;
+    bucket = providers.get(key);
+    providersFolded = true;
+  }
+  if (!bucket) {
+    bucket = { chunks: 0, bytes: 0 };
+    providers.set(key, bucket);
+  }
   bucket.chunks += 1;
   bucket.bytes += bytes;
-  providers.set(provider, bucket);
 
   // Provider gap: interval since the previous delta of this open stream.
   const state = touchSession(sessionId);
@@ -303,16 +336,9 @@ export function takeStreamingWindow(): StreamingWindowSummary | null {
     : null;
 
   const seconds = windowMs / 1000;
-  let entries = [...providers.entries()];
-  let providersTruncated = false;
-  if (entries.length > config.maxProviders) {
-    entries = entries
-      .sort((a, b) => b[1].chunks - a[1].chunks)
-      .slice(0, config.maxProviders);
-    providersTruncated = true;
-  }
+  // The live map is already bounded (insert-time fold); emit it as-is.
   const providersSummary: Record<string, StreamingProviderRate> = {};
-  for (const [name, bucket] of entries) {
+  for (const [name, bucket] of providers) {
     providersSummary[name] = {
       chunks: bucket.chunks,
       bytes: bucket.bytes,
@@ -328,6 +354,8 @@ export function takeStreamingWindow(): StreamingWindowSummary | null {
   gapMax = 0;
   gapProvider = null;
   providers = new Map();
+  const providersTruncated = providersFolded;
+  providersFolded = false;
 
   return { windowMs, spans, providerGap, providers: providersSummary, providersTruncated };
 }

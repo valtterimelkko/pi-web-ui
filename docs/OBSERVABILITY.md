@@ -612,8 +612,11 @@ so an 11:43-type stall can be attributed from the metrics file alone:
 - **`providers`** — per provider: chunk count, delta bytes, and chunks/s over
   the window, from the `text_delta` / `thinking_delta` / `toolcall_delta`
   events the provider actually sent (partial message's `provider`; `unknown`
-  when absent). Capped at 8 providers per window (highest chunk counts win;
-  `providersTruncated` flags the fold).
+  when absent). Capped at 8 providers — enforced at INSERT time (correction 02,
+  review finding 1): the first 8 distinct providers keep their buckets and
+  every later provider folds into a reserved `other` bucket, so the live map
+  is bounded by construction and `providersTruncated` is set when folding
+  happened. A real provider literally named `other` merges into that bucket.
 - **`providerGap`** — the largest interval between consecutive chunk receipts
   inside one open message stream (reset by `message_start`/`message_end` /
   `agent_start`, so tool gaps between messages never count), with the count of
@@ -628,7 +631,9 @@ healthy. Read the three fields (plus lag/CPU) jointly.
 
 **Boundaries.** The span ends at transport dispatch, before the WebSocket
 outbound governor's backpressure queue (queued-frame delay is visible through
-the existing queued-frame counters and belongs to the WebSocket lane). Cost:
+the existing queued-frame counters and belongs to the WebSocket lane) — a
+boundary the lane review examined and the parent accepted as is (correction 02,
+item 5). Cost:
 per delta chunk O(1) map/counter work, no logging; percentiles are computed
 once per window at sample time; when disabled the hooks are one boolean check
 per event. The field is additive on the metrics FILE only (not the Internal API
