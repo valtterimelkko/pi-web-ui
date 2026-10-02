@@ -2,6 +2,7 @@ import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { SessionPool } from './session-pool.js';
 import { summarizeSubagentDetails, type JSONRPCNotification, type SubagentToolSummary } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
+import { observeStreamingChunkDelivered } from '../observability/streaming-telemetry.js';
 
 const logger = createLogger('EventForwarder');
 
@@ -154,6 +155,8 @@ export class EventForwarder {
       : message;
 
     this.wsSender(clientId, payload);
+    // Hb3: delivery boundary of the streaming-path span (single-client path).
+    observeStreamingChunkDelivered();
   }
 
   /**
@@ -181,6 +184,8 @@ export class EventForwarder {
       : notification;
 
     this.wsSender(clientId, payload);
+    // Hb3: delivery boundary of the streaming-path span (JSON-RPC path).
+    observeStreamingChunkDelivered();
   }
 
   private generateId(): string {

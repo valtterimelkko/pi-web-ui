@@ -38,6 +38,7 @@ import {
   type PlacementConfig,
 } from '../placement/index.js';
 import { readSessionIdentity } from './session-cwd.js';
+import { observeStreamingChunkReceipt } from '../observability/streaming-telemetry.js';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
 import { ToolArgsBudgetGuard } from './tool-args-budget.js';
 import { RunBudgetGuard } from './run-budget.js';
@@ -554,6 +555,9 @@ export class PiService {
       streamedBytes: config.piRunBudgetMaxStreamedBytes,
     });
     session.subscribe((event) => {
+      // Hb3: streaming-path receipt stamp — must run BEFORE the handler so the
+      // span covers the whole delivery (projection, fan-out, observers).
+      observeStreamingChunkReceipt(session.sessionId, event);
       const handler = this.eventHandlers.get(options.clientId);
       if (handler) {
         handler(event);

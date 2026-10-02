@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { getHeapStatistics } from 'node:v8';
 import { readEventLoopLagWindow, type EventLoopLagWindow } from '../internal-api/event-loop-shed.js';
 import { getOperationalMetrics, type OperationalMetrics } from './operational-metrics.js';
+import type { StreamingWindowSummary } from './streaming-telemetry.js';
 
 /**
  * A2 heap/event-loop telemetry: one reading of the process health that matters
@@ -59,6 +60,14 @@ export interface HealthReadings {
    * process-wide fallback is reported instead, `unavailable` when neither.
    */
   mainThreadCpuSource: MainThreadCpuSource;
+  /**
+   * Hb3: streaming-path summary for this reading window (span receipt→dispatch,
+   * per-provider chunk rate, max provider gap). `null` when streaming telemetry
+   * is disabled or no streaming source is registered — the source is
+   * sampler-only, so the reusable `getHealthReadings()` accessor never drains
+   * windows as a side effect.
+   */
+  streaming: StreamingWindowSummary | null;
 }
 
 export type MainThreadCpuSource = 'proc-thread-self' | 'process-cpu' | 'unavailable';
@@ -227,6 +236,8 @@ export interface HealthReadingSources {
   toolsSlice?: () => { currentBytes?: number; oomKill?: number } | undefined;
   /** D0: degrade count (wrapper fell open, replacement bash tool not active). */
   placementDegrades?: () => number | undefined;
+  /** Hb3: streaming-path window summary (sampler-only; consumes the window). */
+  streaming?: () => StreamingWindowSummary | undefined;
   /** Default active-turn classes: terminal turn counters from the operational metrics. */
   activeTurnsFromOperationalMetrics?: () => Record<string, number>;
   /**
@@ -350,6 +361,7 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
     toolsSliceMemoryBytes: positiveOrNull(safe<{ currentBytes?: number } | undefined>(sources.toolsSlice, undefined)?.currentBytes),
     toolsSliceOomKills: positiveOrNull(safe<{ oomKill?: number } | undefined>(sources.toolsSlice, undefined)?.oomKill),
     placementDegrades: positiveOrNull(safe<number | undefined>(sources.placementDegrades, undefined)),
+    streaming: safe<StreamingWindowSummary | undefined>(sources.streaming, undefined) ?? null,
   };
 }
 
