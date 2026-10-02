@@ -410,4 +410,61 @@ describe('runWeeklyRefresh', () => {
       );
     });
   });
+
+  // J1 (plan §6): the restart guard judges built content, not HEAD, and guard
+  // refusals get their own wrapper exit status and message. The job must
+  // report a guard refusal as the hard failure it is (the catalogue was
+  // already committed and the changes are NOT live), never as a capacity
+  // deferral — that misreading is exactly the J1 defect.
+  describe('restart guard classification (J1)', () => {
+    const GUARD_REFUSAL_STDERR =
+      'restart-pi-web-ui: refusing restart (production checkout guard): the production checkout did not pass its safety guard (detail above); nothing was restarted.';
+
+    it('fails the run naming the checkout guard when the wrapper refuses on the guard', async () => {
+      resolveProcess = (command, args) => {
+        if (command === RESTART_SCRIPT) return { exitCode: 3, stderr: GUARD_REFUSAL_STDERR };
+        return defaultResolver(command, args);
+      };
+
+      await expect(runWeeklyRefresh([], options())).rejects.toThrow(/^pi-web-ui restart refused by the production checkout guard/);
+      // The catalogue was committed and pushed before the refused restart.
+      expect(invocations.some(({ command, args }) => command === 'git' && args[0] === 'push')).toBe(true);
+    });
+
+    it('still defers (the capacity reading) on the wrapper drain refusal: exit 1 with the drain wording', async () => {
+      resolveProcess = (command, args) => {
+        if (command === RESTART_SCRIPT) {
+          return {
+            exitCode: 1,
+            stderr: 'restart-pi-web-ui: refusing restart: the drain did not settle within 20s or the Internal API state could not be confirmed (details above); nothing was restarted.',
+          };
+        }
+        return defaultResolver(command, args);
+      };
+
+      const result = await runWeeklyRefresh([], options());
+      expect(result.restarted).toBe(false);
+    });
+
+    it('pins the guard marker and exit status to the wrapper sources the job classifies', async () => {
+      const wrapper = await readFile(path.join(REPO_ROOT, 'scripts', 'restart-pi-web-ui.sh'), 'utf8');
+      expect(wrapper).toContain('refusing restart (production checkout guard)');
+      expect(wrapper).toMatch(/status == 3/);
+      const canonical = await readFile(path.join(REPO_ROOT, 'scripts', 'restart-production.sh'), 'utf8');
+      expect(canonical).toContain('Refusing production restart (checkout guard)');
+      expect(canonical).toMatch(/exit 3/);
+    });
+
+    it('rebuilds the server after committing so the build identity names the committed revision', async () => {
+      const result = await runWeeklyRefresh([], options());
+
+      expect(result.committed).toBe(true);
+      const pushIndex = invocations.findIndex(({ command, args }) => command === 'git' && args[0] === 'push');
+      expect(pushIndex).toBeGreaterThan(-1);
+      const rebuildAfterPush = invocations
+        .slice(pushIndex + 1)
+        .some(({ command, args }) => command === 'npm' && args[0] === 'run' && args.includes('build'));
+      expect(rebuildAfterPush, 'expected a server build invocation after git push (the guard reads that build identity)').toBe(true);
+    });
+  });
 });
