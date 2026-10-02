@@ -41,7 +41,7 @@ item-level count from the run, not an estimate.
 | Factors tried (disposable server, T1 sampler instrument, frozen decision rule: ≥+20 pp CPU over 5 min or lag p99 ≥200 ms, removal control in the same harness) | long thinking stream — flat ~4%, lag ≤3 ms; long text stream — flat ~4%, lag ≤2 ms; long streamed tool-call argument — real upstream quadratic (measured 18.1 s main-thread CPU per 64 KiB call; per-delta cost 0→1.6 ms) but bounded by B3a (`budget_exceeded` validated live) and excluded by the episode's own evidence; ~194k-token context + streaming — flat ~4.1%; real extension set vs none — no difference; browser-subscriber fan-out — no CPU rise ever, lag p99 up to 625 ms once tracking subscriber consumption speed (110 ms with a faster reader, 2 ms ×3 subscribers, 2 ms no-subscriber control), early-turn-bounded, frames constant 401 B; real `zai/glm-5.3-flash` streaming (thinking high, captured through a tee proxy) — true small increments (~3 chars/chunk, ~45 chunks/s), never cumulative text, same shape class as the calibrated mock. |
 | Outcome | **Not reproduced** — no factor produces the linear CPU rise; no speculative fix merged (owner rule). Attribution fix shipped so the next episode names its session. Secondary finding routed to the R4 proposal in G2.md: subscriber-path lag sensitivity (governor bounds memory, not latency) + missing streaming-path observability (span + per-provider delta/chunk-rate counter). |
 | Regression tests | None possible for an unreproduced episode; the attribution defect's regression tests are [`server/tests/unit/observability/loop-stall-attribution.test.ts`](../server/tests/unit/observability/loop-stall-attribution.test.ts) (G2, 2026-09-30 — sticky-context tests fail on the pre-fix code). |
-| Status | open — cause unknown; recurrence now attributable (G2 fix, pending merge/deploy). |
+| Status | open — cause unknown; recurrence now attributable (G2 attribution fix in production since 2026-09-30 22:50 UTC; hb3's streaming-path telemetry in production since 2026-10-02 06:54 UTC). |
 
 ### A.2 Tracked performance instance — slow WebSocket consumer stalls the event loop (added by lane G2 correction 02, 2026-09-30)
 
@@ -52,7 +52,7 @@ item-level count from the run, not an estimate.
 | Class | Performance (event-loop stall triggered by a slow/jerky WS consumer; the outbound governor's caps bound buffered memory (4–16 MB), which small frames never approach — it bounds memory, not latency). |
 | Outcome | **Named factor, mechanism unidentified** — the stall correlates with the subscriber's consumption behaviour (625 ms with a synchronously-reading subscriber; 110 ms with a buffered reader; 2 ms ×3 subscribers) and is early-turn-bounded. Per the owner rule there is **no fix proposal**; the instance is routed to R4 (G2.md "R4 items") for diagnosis — the streaming-path span is the instrument it needs. Text-stream subscriber arms were never measured (see G2.md Part 2b arm-completion note). |
 | Regression tests | None yet — the mechanism is unidentified; a regression test becomes possible once the mechanism is named. The observability gap is tracked as the G2.md R4 streaming-span item. |
-| Status | open — R4 item (diagnosis first). |
+| Status | closed — not reproduced on master (hb1, 2026-10-02: 8 arms including G2's exact mock shape and a host-load pair; [`Hb1.md`](./plans/execution-reports/orchestration-scaling/Hb1.md)). Reopen with a new instance. |
 
 ## B. Mechanism classes named in plan §6 E1
 
