@@ -618,12 +618,15 @@ automatically, keeping the verb. Restarting **without** a drain needs
 records `drain=forced` and the reason, and a forced restart refuses if neither
 the audit file nor the journal accepted that record.
 
-`scripts/restart-pi-web-ui.sh` (the Command Code weekly refresh's restart,
-60 s budget) goes through the same path with a 20 s drain, 10 s HTTP slack and
+`scripts/restart-pi-web-ui.sh` (the Command Code weekly refresh's restart)
+goes through the same path with a 20 s drain, 10 s HTTP slack and
 `--on-timeout abort`: if the drain cannot settle in time, or the API state is
 unknown, it cancels the drain, restarts nothing and exits 1 with
 `restart-pi-web-ui: refusing restart …`, which the weekly job treats as
-"restart deferred". Its `--force` also needs a non-empty `--reason`.
+"restart deferred". A checkout-guard refusal passes through with **exit 3**
+and `refusing restart (production checkout guard) …`, which the weekly job
+reports as a hard failure (the catalogue is pushed but not live). Its
+`--force` also needs a non-empty `--reason`.
 `npm run production:drain-restart -- --show-targets` prints the unit, socket,
 token file, audit file and drain defaults without touching anything. For
 disposable proofs every target is injectable (`PI_WEB_UI_SERVICE_UNIT`,
@@ -632,15 +635,24 @@ disposable proofs every target is injectable (`PI_WEB_UI_SERVICE_UNIT`,
 `PI_WEB_UI_STOP_AUDIT_FILE`, `PI_WEB_UI_PRODUCTION_LOCK`). The drain API itself
 is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md#drain-then-restart).
 
-**Production checkout safety guard (Hb4).** Before initiating drain or restart,
-`scripts/restart-production.sh` validates that the production checkout directory
-(`CHECKOUT_DIR`, default `/root/pi-web-ui`, overrideable via `--checkout-dir` or
-`PI_WEB_UI_CHECKOUT_DIR`):
-1. Is on the expected branch (default `master`, overrideable via `--expected-branch` or `PI_WEB_UI_EXPECTED_BRANCH`).
-2. Has no unstaged modifications or staged changes on tracked files (untracked files are ignored).
-3. Has an up-to-date compiled build in `server/dist/build-identity/embedded-manifest.json` whose revision matches current `HEAD`.
+**Production checkout safety guard (Hb4; content-based since J1, tightened by J1 correction 03, 2026-10-02).**
+Before initiating drain or restart, `scripts/restart-production.sh` validates
+that the production checkout directory (`CHECKOUT_DIR`, default `/root/pi-web-ui`,
+overrideable via `--checkout-dir` or `PI_WEB_UI_CHECKOUT_DIR`):
 
-If any check fails, the restart is refused before draining. Passing `--force --reason "<why>"` skips these safety checks and records `drain=forced`.
+1. Exists, is a git repository, and is on the expected branch (default `master`, overrideable via `--expected-branch` or `PI_WEB_UI_EXPECTED_BRANCH`).
+2. Has no unstaged modifications or staged changes on tracked files, and **no untracked, ignored, or modified files under the declared build inputs** (`BUILD_INPUT_POLICY` paths — the build digests the working tree without consulting `.gitignore`, so even an ignored file under an input root would feed a future rebuild; fail closed by owner decision). Untracked or ignored files outside the build inputs remain ignored.
+3. Has a compiled build in `server/dist/build-identity/embedded-manifest.json` whose **built content is current for `HEAD`**: the manifest records the revision the build was made from; the guard refuses only when a *build input* differs between that revision and `HEAD` — excluding what the build itself never digests (files named `*.map` or `.env*`, and the policy's `excludedFileNames`, mirrored as git pathspec excludes and pinned by test). Commits that touch no digested input (docs, plans, sourcemaps) do **not** need a rebuild before restarting. An unknown manifest revision or a failing diff refuses (fails closed).
+
+Every refusal from these checks is a **checkout-guard refusal**: exit **3** with
+`ERROR: Refusing production restart (checkout guard): …` — distinct from a drain
+refusal (exit **1**, `ERROR: Refusing production restart: …`). Reading a refusal:
+exit 3 means the checkout itself is not restartable (fix or rebuild it; a restart
+cannot help); exit 1 means load/in-flight work (wait). `scripts/restart-pi-web-ui.sh`
+passes both through with their own messages, and the Command Code weekly refresh
+fails its run on a guard refusal (catalogue pushed but not live) while deferring on
+a drain refusal. Passing `--force --reason "<why>"` skips these safety checks and
+records `drain=forced`.
 
 ### Process isolation, slice placement, and working-set memory capacity (Hb4)
 

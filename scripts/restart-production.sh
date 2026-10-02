@@ -170,6 +170,16 @@ refuse() {
   exit 1
 }
 
+# J1 (2026-10-02): the checkout guard has its own exit status (3) and message
+# prefix, distinct from a drain refusal (1): a guard refusal is checkout state
+# a restart cannot help, and callers (restart-pi-web-ui.sh, the Command Code
+# weekly refresh) must not read it as load.
+refuse_guard() {
+  echo "ERROR: Refusing production restart (checkout guard): $1" >&2
+  echo "Rebuild ('npm run build') if server sources changed, or fix the checkout. Pass --force --reason \"why\" to override (recorded)." >&2
+  exit 3
+}
+
 record() { # $1 = record kind, $2 = drain verdict
   PI_WEB_UI_RESTART_RECORD_KIND="$1" \
   PI_WEB_UI_RESTART_VERB="$VERB" \
@@ -200,17 +210,73 @@ legacy_preflight() {
   DRAIN_SUMMARY="legacy_preflight,active_turns=${active}"
 }
 
+# J1: the paths the compiled build reads — mirrors BUILD_INPUT_POLICY in
+# server/src/build-identity/manifest.ts (source roots, config and declared
+# script files, lockfiles — the inputs the embedded manifest digests).
+# Pinned by server/tests/unit/drain-restart-scripts.test.ts: drift in either
+# copy fails a test instead of silently changing guard semantics.
+BUILD_INPUT_PATHS=(
+  "server/src"
+  "client/src"
+  "client/public"
+  "shared/src"
+  "packages/internal-api-mcp/src"
+  "package.json"
+  "server/package.json"
+  "client/package.json"
+  "shared/package.json"
+  "packages/internal-api-mcp/package.json"
+  "tsconfig.json"
+  "server/tsconfig.json"
+  "client/tsconfig.json"
+  "client/tsconfig.node.json"
+  "shared/tsconfig.json"
+  "packages/internal-api-mcp/tsconfig.json"
+  "client/vite.config.ts"
+  "client/index.html"
+  "client/tailwind.config.js"
+  "client/postcss.config.js"
+  "scripts/live-validate.ts"
+  "scripts/long-horizon-validate.ts"
+  "scripts/validation-server.ts"
+  "scripts/validation-server-child.ts"
+  "scripts/validation-server-stop.mjs"
+  "scripts/health-probe.sh"
+  "scripts/wait-for-internal-api.mjs"
+  "scripts/test-workspaces.mjs"
+  "package-lock.json"
+  "npm-shrinkwrap.json"
+  "pnpm-lock.yaml"
+  "yarn.lock"
+)
+
+# J1 correction 03 (finding 3): the build digests a file under a declared
+# input only when isAllowedFile (server/src/build-identity/manifest.ts)
+# accepts it: excludedFileNames, names starting .env, and names ending .map
+# are never digested. The git comparison mirrors exactly those exclusions as
+# pathspec excludes (pinned by test), so a commit changing only e.g. a .map
+# is not "stale". The policy's excludedDirectoryNames are walk-level prunes;
+# tracked files inside such directories cannot occur in a clean checkout, and
+# an anomaly there fails towards refusal, never towards allow.
+BUILD_INPUT_EXCLUDES=(
+  ":(exclude)**/*.map"
+  ":(exclude)**/.env*"
+  ":(exclude)**/embedded-manifest.json"
+  ":(exclude)**/manifest.generated.ts"
+  ":(exclude)**/test-results.json"
+)
+
 check_production_checkout_safety() {
   if [ "$FORCE" -eq 1 ]; then
     return 0
   fi
 
   if [ ! -d "$CHECKOUT_DIR" ]; then
-    refuse "production checkout directory '$CHECKOUT_DIR' does not exist."
+    refuse_guard "production checkout directory '$CHECKOUT_DIR' does not exist."
   fi
 
   if ! git -C "$CHECKOUT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-    refuse "production checkout at '$CHECKOUT_DIR' is not a git repository."
+    refuse_guard "production checkout at '$CHECKOUT_DIR' is not a git repository."
   fi
 
   # Hb4 correction 02 (Luna review M1): a check that CANNOT RUN must read as
@@ -220,47 +286,119 @@ check_production_checkout_safety() {
   local current_branch branch_status
   current_branch="$(git -C "$CHECKOUT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)" && branch_status=0 || branch_status=$?
   if [ "$branch_status" -ne 0 ]; then
-    refuse "could not verify the production checkout at '$CHECKOUT_DIR': 'git rev-parse --abbrev-ref HEAD' failed (exit ${branch_status})."
+    refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git rev-parse --abbrev-ref HEAD' failed (exit ${branch_status})."
   fi
   if [ "$current_branch" != "$EXPECTED_BRANCH" ]; then
-    refuse "production checkout at '$CHECKOUT_DIR' is on branch '${current_branch}', expected '${EXPECTED_BRANCH}'."
+    refuse_guard "production checkout at '$CHECKOUT_DIR' is on branch '${current_branch}', expected '${EXPECTED_BRANCH}'."
   fi
 
   local dirty_tracked status_status
   dirty_tracked="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" && status_status=0 || status_status=$?
   if [ "$status_status" -ne 0 ]; then
-    refuse "could not verify the production checkout at '$CHECKOUT_DIR': 'git status --porcelain' failed (exit ${status_status})."
+    refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git status --porcelain' failed (exit ${status_status})."
   fi
   if [ -n "$dirty_tracked" ]; then
-    refuse "production checkout at '$CHECKOUT_DIR' has modified or staged tracked files:\n${dirty_tracked}"
+    refuse_guard "production checkout at '$CHECKOUT_DIR' has modified or staged tracked files:\n${dirty_tracked}"
+  fi
+
+  # J1 correction 03 (finding 1, fail closed by owner decision) + correction 05
+  # (FINAL): untracked, ignored, or modified files under the DECLARED BUILD
+  # INPUTS make "the built content corresponds to HEAD" false for any future
+  # rebuild — the build digests the working tree without consulting .gitignore
+  # (only BUILD_INPUT_POLICY's own exclusions), so an ignored file under an
+  # input root would be built while invisible to a plain status. Refused
+  # whether or not the manifest revision equals HEAD.
+  local untracked_inputs status_untracked
+  set +e
+  untracked_inputs="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=all --ignored=matching -- "${BUILD_INPUT_PATHS[@]}" 2>/dev/null)"
+  status_untracked=$?
+  set -e
+  if [ "$status_untracked" -ne 0 ]; then
+    refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git status --porcelain -- <build inputs>' failed (exit ${status_untracked})."
+  fi
+  # Post-filter (correction 05): keep only entries under the declared inputs —
+  # with --ignored=matching, git can report ignored SIBLING directories outside
+  # the pathspecs (e.g. server/dist/) when exclude pathspecs are also given, so
+  # the policy exclusions are applied here instead of as pathspecs: drop what
+  # the build never digests (isAllowedFile: *.map, .env*, excludedFileNames),
+  # mirroring the diff's pathspec excludes.
+  local input_state="" line entry_path entry_base in_inputs
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    entry_path="${line:3}"
+    in_inputs=0
+    for root in "${BUILD_INPUT_PATHS[@]}"; do
+      case "$entry_path" in
+        "$root"/*|"$root") in_inputs=1; break ;;
+      esac
+    done
+    [ "$in_inputs" -eq 1 ] || continue
+    entry_base="${entry_path##*/}"
+    case "$entry_base" in
+      *.map|.env*|embedded-manifest.json|manifest.generated.ts|test-results.json) continue ;;
+    esac
+    input_state="${input_state}${line}"
+  done <<< "$untracked_inputs"
+  if [ -n "$input_state" ]; then
+    refuse_guard "production checkout at '$CHECKOUT_DIR' has untracked, ignored, or modified files under the declared build inputs (a rebuild would digest content git cannot see):\n${input_state}"
   fi
 
   local manifest_path
   manifest_path="$CHECKOUT_DIR/server/dist/build-identity/embedded-manifest.json"
   if [ ! -f "$manifest_path" ]; then
-    refuse "production checkout at '$CHECKOUT_DIR' has no built server/dist build identity at '${manifest_path}' (run 'npm run build' before restarting)."
+    refuse_guard "production checkout at '$CHECKOUT_DIR' has no built server/dist build identity at '${manifest_path}' (run 'npm run build' before restarting)."
   fi
 
   local manifest_rev manifest_status
   manifest_rev="$(jq -r '.revision // empty' "$manifest_path" 2>/dev/null)" && manifest_status=0 || manifest_status=$?
   if [ "$manifest_status" -ne 0 ]; then
-    refuse "could not verify the production checkout at '$CHECKOUT_DIR': the build identity at '${manifest_path}' could not be read (jq exit ${manifest_status})."
+    refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': the build identity at '${manifest_path}' could not be read (jq exit ${manifest_status})."
   fi
   if [ -z "$manifest_rev" ] || [ "$manifest_rev" = "unknown" ]; then
-    refuse "production checkout at '$CHECKOUT_DIR' has an invalid or unknown build revision in '${manifest_path}'."
+    refuse_guard "production checkout at '$CHECKOUT_DIR' has an invalid or unknown build revision in '${manifest_path}'."
   fi
 
   local head_rev head_status
   head_rev="$(git -C "$CHECKOUT_DIR" rev-parse HEAD 2>/dev/null)" && head_status=0 || head_status=$?
   if [ "$head_status" -ne 0 ]; then
-    refuse "could not verify the production checkout at '$CHECKOUT_DIR': 'git rev-parse HEAD' failed (exit ${head_status})."
+    refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git rev-parse HEAD' failed (exit ${head_status})."
   fi
+
+  # J1 (2026-10-02): judge staleness by BUILT CONTENT, not HEAD equality. A
+  # docs-only commit after the build used to block every restart although the
+  # compiled content was identical; conversely the weekly refresh's committed
+  # catalogue left the manifest naming the pre-commit revision. The build
+  # inputs (BUILD_INPUT_PATHS above) are exactly what the build digested, so
+  # content equality with HEAD is decidable in git: an empty diff between the
+  # build revision and HEAD over those paths means the compiled content is
+  # current. Everything unverifiable still refuses (fail closed).
   if [ "$manifest_rev" != "$head_rev" ]; then
-    refuse "production checkout at '$CHECKOUT_DIR' server/dist build revision '${manifest_rev}' does not match HEAD '${head_rev}' (dist is stale; rebuild before restarting)."
+    # The build writes a full hex object id; anything else is not a revision
+    # this repo's build could have recorded (also keeps it out of arg parsing).
+    local rev_pattern='^[0-9a-fA-F]{7,64}$'
+    if ! [[ "$manifest_rev" =~ $rev_pattern ]]; then
+      refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': the build revision in '${manifest_path}' is not a git object id ('${manifest_rev}'), so staleness cannot be judged by content (rebuild to refresh the build identity)."
+    fi
+    if ! git -C "$CHECKOUT_DIR" cat-file -e -- "${manifest_rev}^{commit}" 2>/dev/null; then
+      refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': the build revision '${manifest_rev}' is not a commit git knows, so staleness cannot be judged by content (rebuild to refresh the build identity)."
+    fi
+    local diff_status changed_inputs
+    set +e
+    git -C "$CHECKOUT_DIR" diff --quiet "$manifest_rev" "$head_rev" -- "${BUILD_INPUT_PATHS[@]}" "${BUILD_INPUT_EXCLUDES[@]}" 2>/dev/null
+    diff_status=$?
+    set -e
+    if [ "$diff_status" -gt 1 ]; then
+      refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git diff ${manifest_rev}..HEAD -- <build inputs>' failed (exit ${diff_status}); whether server/dist is stale cannot be judged."
+    fi
+    if [ "$diff_status" -eq 1 ]; then
+      changed_inputs="$(git -C "$CHECKOUT_DIR" diff --name-only "$manifest_rev" "$head_rev" -- "${BUILD_INPUT_PATHS[@]}" "${BUILD_INPUT_EXCLUDES[@]}" 2>/dev/null | head -n 8 | tr '\n' ' ')"
+      refuse_guard "production checkout at '$CHECKOUT_DIR' server/dist was built from '${manifest_rev}' but build inputs changed by HEAD '${head_rev}' (${changed_inputs}); dist is stale; rebuild before restarting."
+    fi
+    echo "Checkout guard: server/dist was built from '${manifest_rev}', HEAD is '${head_rev}', and no build input changed in between: the compiled content is current (docs-only commits need no rebuild)."
   fi
 }
 
-# 0b. Production checkout safety guard (H-wave incident: refuse if wrong branch, dirty/staged tracked files, or stale dist).
+# 0b. Production checkout safety guard (H-wave incident: refuse if wrong branch, dirty/staged tracked files, or a stale dist; J1: staleness judged by built content, guard refusals exit 3).
 check_production_checkout_safety
 
 # 1. Is the unit running? Only inactive/failed count as confirmed not running.

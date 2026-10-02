@@ -4,11 +4,13 @@
 #
 # WHY
 #
-# This is the restart entry point of scripts/command-code-weekly-refresh.ts,
+# This is the restart entry point of scripts/command-code-weekly-refresh.mts,
 # which runs it with a budget that covers the whole cycle — drain (20 s) +
 # HTTP slack (10 s) + the unit's stop timeout (30 s) + a 90 s start margin,
 # see RESTART_JOB_BUDGET_* in that script — and reads exit 1 + "refusing
-# restart" on stderr as "restart deferred" (not a failure). Until B4
+# restart" on stderr as "restart deferred" (not a failure), while a
+# checkout-guard refusal (exit 3, "refusing restart (production checkout
+# guard)") passes through as the hard failure it is. Until B4
 # correction 01 it had
 # its own pre-flight that looked only at `activeTurns`: a follow-up accepted but
 # not yet turning (zero active turns) was cut off silently, `--force` needed no
@@ -23,6 +25,12 @@
 # job never cuts work off. If the drain cannot settle in time, or the Internal
 # API state cannot be confirmed, the drain is cancelled, nothing is restarted,
 # and this script exits 1 with a "refusing restart" line.
+#
+# J1 (2026-10-02): a production-checkout guard refusal comes back with its own
+# canonical exit status (3) and is passed through with its own message
+# ("refusing restart (production checkout guard) …"). It is checkout state, not
+# load: the Command Code weekly refresh must fail on it (its catalogue is
+# already pushed), never read it as a capacity deferral.
 #
 # The canonical path takes the production-control lock itself (re-entrantly),
 # names the requester in the journal and the durable stop audit, and honours
@@ -90,7 +98,13 @@ fi
 PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS="${PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS:-10}" \
   bash "$script_dir/restart-production.sh" "${args[@]}"
 status=$?
-if (( status == 1 )); then
+if (( status == 3 )); then
+  # J1: the canonical path's checkout guard refused (wrong branch, dirty tree,
+  # unreadable state, missing/unverifiable or stale-by-content build identity).
+  # Checkout state — a restart cannot help. Distinct from the drain refusal
+  # below so the weekly job reports it as the hard failure it is.
+  printf 'restart-pi-web-ui: refusing restart (production checkout guard): the production checkout did not pass its safety guard (detail above); nothing was restarted.\n' >&2
+elif (( status == 1 )); then
   printf 'restart-pi-web-ui: refusing restart: the drain did not settle within %ss or the Internal API state could not be confirmed (details above); nothing was restarted.\n' "$DRAIN_TIMEOUT" >&2
 fi
 exit "$status"

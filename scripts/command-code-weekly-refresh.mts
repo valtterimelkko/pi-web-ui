@@ -15,8 +15,10 @@
  * model must succeed first, and only explicit plan rejections or exit-4
  * permission denials exclude a model), so a flaky week can never hide usable
  * models. When files change, the job typechecks the server, runs the focused
- * catalogue tests, commits and pushes just those files on the current branch,
- * then restarts pi-web-ui — via scripts/restart-pi-web-ui.sh, which names its
+ * catalogue tests, builds, commits and pushes just those files on the current
+ * branch, then rebuilds once more so the build identity names the pushed
+ * revision (J1: the restart guard judges built content by revision), and
+ * restarts pi-web-ui — via scripts/restart-pi-web-ui.sh, which names its
  * requester in the journal/stop audit and takes the production lock — once the
  * live busy-session count is zero, deferring otherwise; every step summarised
  * over Telegram via scripts/notify.sh.
@@ -182,10 +184,27 @@ function processExitDescription(result: ProcResult): string {
  * not a failure of this job: the catalogue has already been committed by the
  * time the wrapper runs, and the changes simply go live at the next restart.
  * Only this documented refusal is read as a deferral; every other non-zero
- * restart exit stays a hard failure.
+ * restart exit stays a hard failure. A checkout-guard refusal carries the
+ * guard marker, so a future wrapper bug that emitted the marker with exit 1
+ * still cannot be misread as load (that misreading is the J1 defect).
  */
+const RESTART_GUARD_REFUSAL_MARKER = 'production checkout guard';
+
 function isRestartCapacityRefusal(result: ProcResult): boolean {
-  return !result.timedOut && result.exitCode === 1 && /refusing restart/.test(result.stderr);
+  return !result.timedOut && result.exitCode === 1 && /refusing restart/.test(result.stderr) && !result.stderr.includes(RESTART_GUARD_REFUSAL_MARKER);
+}
+
+/**
+ * scripts/restart-production.sh exits 3 when its production-checkout guard
+ * refuses (wrong branch, dirty tracked files, unreadable git state, missing or
+ * unverifiable build identity, or build inputs changed after the build — J1).
+ * That is checkout state, not load: a restart cannot help, and the catalogue
+ * is already pushed, so the run fails loudly instead of deferring — deferring
+ * here is exactly how the refreshed catalogue once never loaded under a
+ * misleading "capacity" reason.
+ */
+function isRestartGuardRefusal(result: ProcResult): boolean {
+  return !result.timedOut && result.exitCode === 3 && result.stderr.includes(RESTART_GUARD_REFUSAL_MARKER);
 }
 
 function probeEligibility(model: string, paths: WeeklyRefreshPaths, run: ProcessRunner): Promise<ProcResult> {
@@ -377,6 +396,23 @@ export async function runWeeklyRefresh(
   }
   summary.committed = committed;
 
+  // J1 (plan §6): the restart guard judges the built content by revision. The
+  // commit above moved HEAD past the revision the pre-commit build recorded,
+  // so rebuild once more: the build identity must name the pushed revision or
+  // the checkout guard would refuse the restart below. The pre-commit build
+  // keeps its role as a commit gate; the files are identical, so a failure
+  // here is infrastructural — and must be loud, because the catalogue is
+  // pushed but NOT live.
+  if (committed) {
+    const rebuild = await run('npm', ['run', 'build', '--workspace=server'], {
+      timeoutMs: 10 * 60_000,
+      cwd: paths.repoRoot,
+    });
+    if (!processSucceeded(rebuild)) {
+      throw new Error(`server build failed after catalogue commit — the catalogue is pushed but NOT live (exit ${processExitDescription(rebuild)}):\n${rebuild.stderr.slice(-2_000)}`);
+    }
+  }
+
   // 8. Idle-aware restart so the running server re-discovers the catalogue
   //    (discovery happens at init). Idleness is decided from the live
   //    busy-session count (GET /api/v1/sessions, entries with busy === true),
@@ -416,6 +452,10 @@ export async function runWeeklyRefresh(
       const restart = await run(paths.restartScript, ['--reason', RESTART_REASON], { timeoutMs: RESTART_JOB_BUDGET_MS, cwd: paths.repoRoot });
       if (processSucceeded(restart)) {
         restarted = true;
+      } else if (isRestartGuardRefusal(restart)) {
+        throw new Error(
+          `pi-web-ui restart refused by the production checkout guard (the catalogue commit is pushed but NOT live): ${restart.stderr.trim().slice(-300)}`,
+        );
       } else if (isRestartCapacityRefusal(restart)) {
         restartDeferredReason = restart.stderr.trim().replace(/^restart-pi-web-ui:\s*/, '').slice(-200);
         console.warn(`! restart refused by its own capacity pre-flight (${restartDeferredReason}); restart deferred`);

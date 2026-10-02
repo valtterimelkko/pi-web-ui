@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installFakeInternalApiCurl, type FakeInternalApiCurl } from '../helpers/fake-internal-api-curl.js';
+import { BUILD_INPUT_POLICY } from '../../src/build-identity/manifest.js';
 
 /**
  * B4 drain-then-restart deploy scripts.
@@ -91,25 +92,33 @@ function createGitRepoFixture(
     corruptIndex?: boolean;
     /** Point HEAD at a ref that does not resolve (Luna 02 correction M1). */
     brokenHeadRef?: boolean;
+    /** J1: an extra commit AFTER the build — the manifest names the pre-commit revision. */
+    postBuildCommit?: Record<string, string>;
+    /** J1 correction 03: untracked files under declared build inputs. */
+    untrackedInputs?: string[];
+    /** J1 correction 05: gitignored files under declared build inputs (the build digests them; it does not consult .gitignore). */
+    ignoredInputs?: string[];
   } = {}
-): { repoDir: string; headSha: string } {
+): { repoDir: string; headSha: string; buildSha: string } {
   const branch = options.branch ?? 'master';
   mkdirSync(repoDir, { recursive: true });
   spawnSync('git', ['init', '-b', branch], { cwd: repoDir, stdio: 'ignore' });
   spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoDir, stdio: 'ignore' });
   spawnSync('git', ['config', 'user.name', 'Test'], { cwd: repoDir, stdio: 'ignore' });
-  writeFileSync(path.join(repoDir, '.gitignore'), 'server/dist/\n');
+  writeFileSync(path.join(repoDir, '.gitignore'), `server/dist/\n${(options.ignoredInputs ?? []).map((p) => `${p}\n`).join('')}`);
   writeFileSync(path.join(repoDir, 'tracked-file.txt'), 'version 1\n');
   spawnSync('git', ['add', '.gitignore', 'tracked-file.txt'], { cwd: repoDir, stdio: 'ignore' });
   spawnSync('git', ['commit', '-m', 'initial commit'], { cwd: repoDir, stdio: 'ignore' });
 
-  const headSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).stdout.trim();
+  // J1: the revision the build identity names (HEAD at build time). A fixture
+  // postBuildCommit then moves HEAD past it without touching the manifest.
+  const buildSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).stdout.trim();
 
   if (!options.manifestMissing) {
     const manifestDir = path.join(repoDir, 'server', 'dist', 'build-identity');
     mkdirSync(manifestDir, { recursive: true });
     const manifestPath = path.join(manifestDir, 'embedded-manifest.json');
-    const revision = options.manifestRevision ?? headSha;
+    const revision = options.manifestRevision ?? buildSha;
     writeFileSync(
       manifestPath,
       JSON.stringify(
@@ -145,7 +154,33 @@ function createGitRepoFixture(
     writeFileSync(path.join(repoDir, '.git', 'HEAD'), 'ref: refs/heads/no-such-branch\n');
   }
 
-  return { repoDir, headSha };
+  if (options.postBuildCommit) {
+    for (const [relPath, content] of Object.entries(options.postBuildCommit)) {
+      const abs = path.join(repoDir, relPath);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      writeFileSync(abs, content);
+    }
+    spawnSync('git', ['add', '-A'], { cwd: repoDir, stdio: 'ignore' });
+    spawnSync('git', ['commit', '-m', 'post-build commit (J1 fixture)'], { cwd: repoDir, stdio: 'ignore' });
+  }
+
+  if (options.untrackedInputs) {
+    for (const relPath of options.untrackedInputs) {
+      const abs = path.join(repoDir, relPath);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      writeFileSync(abs, 'untracked build input\n');
+    }
+  }
+  if (options.ignoredInputs) {
+    for (const relPath of options.ignoredInputs) {
+      const abs = path.join(repoDir, relPath);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      writeFileSync(abs, 'ignored build input\n');
+    }
+  }
+
+  const headSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).stdout.trim();
+  return { repoDir, headSha, buildSha };
 }
 
 describe('drain-then-restart deploy scripts (B4)', () => {
@@ -540,8 +575,8 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         const repo = path.join(dir, 'wrong-branch-repo');
         createGitRepoFixture(repo, { branch: 'orch/h1' });
         const result = run(RESTART, ['--reason', 'branch test'], { PI_WEB_UI_CHECKOUT_DIR: repo });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
         expect(result.stderr).toContain("branch 'orch/h1'");
         expect(result.stderr).toContain("expected 'master'");
         expect(curl.requests()).toEqual([]);
@@ -553,8 +588,8 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         const repo = path.join(dir, 'dirty-unstaged-repo');
         createGitRepoFixture(repo, { dirtyTracked: true });
         const result = run(RESTART, ['--reason', 'dirty unstaged'], { PI_WEB_UI_CHECKOUT_DIR: repo });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
         expect(result.stderr).toContain('modified or staged tracked files');
         expect(result.stderr).toContain('tracked-file.txt');
         expect(curl.requests()).toEqual([]);
@@ -566,8 +601,8 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         const repo = path.join(dir, 'dirty-staged-repo');
         createGitRepoFixture(repo, { stagedTracked: true });
         const result = run(RESTART, ['--reason', 'dirty staged'], { PI_WEB_UI_CHECKOUT_DIR: repo });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
         expect(result.stderr).toContain('modified or staged tracked files');
         expect(result.stderr).toContain('tracked-file.txt');
         expect(curl.requests()).toEqual([]);
@@ -583,8 +618,8 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         const repo = path.join(dir, 'corrupt-index-repo');
         createGitRepoFixture(repo, { corruptIndex: true });
         const result = run(RESTART, ['--reason', 'corrupt index'], { PI_WEB_UI_CHECKOUT_DIR: repo });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
         expect(result.stderr).toContain('could not verify the production checkout');
         expect(result.stderr).toMatch(/git status .*failed/);
         expect(result.stderr).toContain('--force');
@@ -598,8 +633,8 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         const repo = path.join(dir, 'broken-head-repo');
         createGitRepoFixture(repo, { brokenHeadRef: true });
         const result = run(RESTART, ['--reason', 'broken head'], { PI_WEB_UI_CHECKOUT_DIR: repo });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
         expect(result.stderr).toContain('could not verify the production checkout');
         expect(result.stderr).toMatch(/rev-parse --abbrev-ref HEAD.*failed/);
         expect(curl.requests()).toEqual([]);
@@ -621,21 +656,24 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         const repo = path.join(dir, 'missing-manifest-repo');
         createGitRepoFixture(repo, { manifestMissing: true });
         const result = run(RESTART, ['--reason', 'missing manifest'], { PI_WEB_UI_CHECKOUT_DIR: repo });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
         expect(result.stderr).toContain('server/dist build identity');
         expect(curl.requests()).toEqual([]);
         expect(lines(systemctlLog)).toEqual([]);
         expect(existsSync(auditFile)).toBe(false);
       });
 
-      it('refuses restart before draining when server/dist build identity revision does not match HEAD', () => {
-        const repo = path.join(dir, 'stale-manifest-repo');
+      // J1: with content-based staleness, a manifest revision git cannot
+      // resolve is UNVERIFIABLE, not merely "different" — it refuses fail-closed
+      // with the guard status instead of the old revision-equality wording.
+      it('fails closed when the manifest revision is unknown to git: staleness cannot be judged by content (J1)', () => {
+        const repo = path.join(dir, 'unknown-rev-repo');
         createGitRepoFixture(repo, { manifestRevision: '0123456789abcdef0123456789abcdef01234567' });
-        const result = run(RESTART, ['--reason', 'stale manifest'], { PI_WEB_UI_CHECKOUT_DIR: repo });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain('Refusing production restart');
-        expect(result.stderr).toMatch(/revision .* does not match HEAD/);
+        const result = run(RESTART, ['--reason', 'unknown revision'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toContain('could not verify the production checkout');
         expect(curl.requests()).toEqual([]);
         expect(lines(systemctlLog)).toEqual([]);
         expect(existsSync(auditFile)).toBe(false);
@@ -652,6 +690,25 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         expect(audit).toMatch(/reason=emergency.*override/);
       });
 
+      it('refuses restart before draining when the checkout directory does not exist, with the guard contract (J1 correction 03)', () => {
+        const result = run(RESTART, ['--reason', 'missing checkout'], { PI_WEB_UI_CHECKOUT_DIR: path.join(dir, 'does-not-exist') });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+      });
+
+      it('refuses restart before draining when the checkout is not a git repository, with the guard contract (J1 correction 03)', () => {
+        const notARepo = path.join(dir, 'not-a-repo');
+        mkdirSync(notARepo, { recursive: true });
+        const result = run(RESTART, ['--reason', 'not git'], { PI_WEB_UI_CHECKOUT_DIR: notARepo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toContain('not a git repository');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+      });
+
       it('honours --checkout-dir and --expected-branch CLI options', () => {
         const repo = path.join(dir, 'custom-options-repo');
         createGitRepoFixture(repo, { branch: 'custom-feature' });
@@ -664,6 +721,133 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         expect(result.status, result.stderr).toBe(0);
         expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
         expect(readFileSync(auditFile, 'utf8')).toContain('drain=settled');
+      });
+    });
+
+    // J1 (plan §6): the guard judges the BUILT CONTENT, not HEAD equality. The
+    // manifest revision may lag HEAD when only files outside the build inputs
+    // changed (docs commits); staleness is judged by diffing the build inputs
+    // (mirroring BUILD_INPUT_POLICY, pinned below) between the manifest
+    // revision and HEAD. Unverifiable states still refuse (guard exit 3).
+    describe('checkout guard judges built content, not HEAD (J1)', () => {
+      it('(a) restarts after a docs-only commit: no build input changed, no rebuild needed', () => {
+        const repo = path.join(dir, 'docs-only-repo');
+        createGitRepoFixture(repo, { postBuildCommit: { 'docs/note.md': 'a docs change\n' } });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'docs-only deploy'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr + result.stdout).toMatch(/no build input changed|content is current/i);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+        expect(readFileSync(auditFile, 'utf8')).toContain('drain=settled');
+      });
+
+      it('(c) still refuses when a build input changed after the build (server source), with the guard status, naming the path', () => {
+        const repo = path.join(dir, 'source-change-repo');
+        createGitRepoFixture(repo, { postBuildCommit: { 'server/src/models.ts': 'export const v = 2;\n' } });
+        const result = run(RESTART, ['--reason', 'stale source'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toMatch(/stale/i);
+        expect(result.stderr).toContain('server/src/models.ts');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it.each([
+        ['a config file', { 'package.json': '{\n  "name": "fixture",\n  "version": "0.0.2"\n}\n' }],
+        ['the lockfile', { 'package-lock.json': '{\n  "name": "fixture",\n  "lockfileVersion": 3\n}\n' }],
+      ])('(c) still refuses when %s changed after the build', (_label, files) => {
+        const repo = path.join(dir, `inputs-${Math.random().toString(36).slice(2, 8)}`);
+        createGitRepoFixture(repo, { postBuildCommit: files });
+        const result = run(RESTART, ['--reason', 'stale inputs'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('the guard build-input list mirrors BUILD_INPUT_POLICY (the staleness source of truth)', () => {
+        const script = readFileSync(RESTART, 'utf8');
+        const block = script.match(/BUILD_INPUT_PATHS=\(\n([\s\S]*?)\n\)/);
+        expect(block, 'restart-production.sh must declare BUILD_INPUT_PATHS').not.toBeNull();
+        const declared = (block?.[1] ?? '').replace(/["']/g, ' ').split(/\s+/).filter(Boolean);
+        const expected = [
+          ...BUILD_INPUT_POLICY.sourceRoots,
+          ...BUILD_INPUT_POLICY.configFiles,
+          ...BUILD_INPUT_POLICY.scriptFiles,
+          ...BUILD_INPUT_POLICY.lockfileNames,
+        ];
+        expect([...new Set(declared)].sort()).toEqual([...new Set(expected)].sort());
+      });
+
+      it('(03-1) refuses when an untracked file sits under a declared build input (source root), with the guard contract', () => {
+        const repo = path.join(dir, 'untracked-input-repo');
+        createGitRepoFixture(repo, { untrackedInputs: ['server/src/untracked-model.ts', 'client/public/untracked.txt'] });
+        const result = run(RESTART, ['--reason', 'untracked build input'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toContain('build inputs');
+        expect(result.stderr).toContain('server/src/untracked-model.ts');
+        expect(result.stderr).toContain('client/public/untracked.txt');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('(03-1) still proceeds when untracked files sit OUTSIDE the build inputs (repo root)', () => {
+        const repo = path.join(dir, 'untracked-root-repo');
+        createGitRepoFixture(repo, { untracked: true });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'root untracked ok'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      });
+
+      it('(05) refuses when an IGNORED file sits under a declared build input: the build digests it without consulting .gitignore', () => {
+        const repo = path.join(dir, 'ignored-input-repo');
+        createGitRepoFixture(repo, { ignoredInputs: ['client/public/ignored-asset.txt'] });
+        const result = run(RESTART, ['--reason', 'ignored build input'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toContain('build inputs');
+        expect(result.stderr).toContain('client/public/ignored-asset.txt');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('(05) still proceeds when an ignored file under an input root is policy-excluded (*.map is never digested)', () => {
+        const repo = path.join(dir, 'ignored-map-repo');
+        createGitRepoFixture(repo, { ignoredInputs: ['client/public/ignored-sourcemap.js.map'] });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'ignored map ok'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      });
+
+      it('(03-3) a commit changing only a policy-excluded file (.map) is not stale', () => {
+        const repo = path.join(dir, 'map-only-repo');
+        createGitRepoFixture(repo, { postBuildCommit: { 'shared/src/protocol-types.js.map': '{"version":3,"file":"protocol-types.js"}\n' } });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'map-only change'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+        expect(readFileSync(auditFile, 'utf8')).toContain('drain=settled');
+      });
+
+      it('(03-3) the guard exclusions mirror the build policy (excludedFileNames, .env*, .map) as pathspec excludes', () => {
+        const script = readFileSync(RESTART, 'utf8');
+        const block = script.match(/BUILD_INPUT_EXCLUDES=\(\n([\s\S]*?)\n\)/);
+        expect(block, 'restart-production.sh must declare BUILD_INPUT_EXCLUDES').not.toBeNull();
+        const declared = (block?.[1] ?? '').replace(/["']/g, ' ').split(/\s+/).filter(Boolean);
+        const expected = [
+          ':(exclude)**/*.map',
+          ':(exclude)**/.env*',
+          ...BUILD_INPUT_POLICY.excludedFileNames.map((name) => `:(exclude)**/${name}`),
+        ];
+        expect([...new Set(declared)].sort()).toEqual([...new Set(expected)].sort());
       });
     });
   });
@@ -822,6 +1006,39 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       expect(curl.requests()).toEqual([]);
       expect(lines(systemctlLog)).toEqual([]);
       expect(readFileSync(auditFile, 'utf8')).toContain('drain=dry_run');
+    });
+
+    // J1: the wrapper must not dress a checkout-guard refusal up as a drain
+    // refusal — the weekly job defers on drain refusals but must report a
+    // guard refusal as the hard failure it is (the catalogue was already
+    // committed and the changes are NOT live).
+    it('(J1 d) reports a checkout-guard refusal as a guard refusal: exit 3 and a distinct message, not the drain wording', () => {
+      const repo = path.join(dir, 'wrapper-guard-repo');
+      createGitRepoFixture(repo, { postBuildCommit: { 'server/src/models.ts': 'export const v = 2;\n' } });
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'weekly refresh'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+      expect(result.status).toBe(3);
+      expect(result.stderr).toMatch(/restart-pi-web-ui: refusing restart \(production checkout guard\)/);
+      expect(result.stderr).not.toMatch(/drain did not settle/);
+      expect(lines(systemctlLog)).toEqual([]);
+    });
+
+    it('(J1 03-2) reports a missing checkout directory as a guard refusal (exit 3), not a drain refusal', () => {
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'missing checkout'], { PI_WEB_UI_CHECKOUT_DIR: path.join(dir, 'absent-checkout') });
+      expect(result.status).toBe(3);
+      expect(result.stderr).toMatch(/restart-pi-web-ui: refusing restart \(production checkout guard\)/);
+      expect(result.stderr).not.toMatch(/drain did not settle/);
+      expect(lines(systemctlLog)).toEqual([]);
+    });
+
+    it('(J1 a) restarts after a docs-only commit through the wrapper', () => {
+      const repo = path.join(dir, 'wrapper-docs-repo');
+      createGitRepoFixture(repo, { postBuildCommit: { 'README.md': 'docs\n' } });
+      setUnitState('active');
+      curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'weekly refresh'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+      expect(result.status, result.stderr).toBe(0);
+      expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      expect(readFileSync(auditFile, 'utf8')).toContain('drain=settled');
     });
   });
 });
