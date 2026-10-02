@@ -22,14 +22,14 @@ const GiB = 1024 ** 3;
 // (STRESS-GATE.md 21:50 amendment; see arm2-oom.mjs OOM_ARM_SLICE comment).
 const OOM_ARM_SLICE = 'e2a-oom.slice';
 
-/** Pure guard: the unit's unified cgroup path must sit under the OOM-arm slice. */
+/** Pure guard: the unit's unified cgroup path must sit inside the OOM-arm slice's subtree
+ *  (systemd name-derived nesting: /e2a.slice/e2a-oom.slice/<unit>). */
 export function assertCgroupUnderSlice(cgroupPath, slice = OOM_ARM_SLICE) {
-  const norm = `/${String(cgroupPath ?? '').replace(/^\/+|\/+$/g, '')}`;
-  const prefix = `/${slice.replace(/^\/+|\/+$/g, '')}/`;
-  if (!norm.startsWith(prefix)) {
-    throw new Error(`refusing to run the memlow hog: cgroup path ${cgroupPath} is not under /${slice}/ (guard would trip)`);
+  const norm = `/${String(cgroupPath ?? '').replace(/^\/+|\/+$/g, '')}/`;
+  if (!norm.includes(`/${slice}/`)) {
+    throw new Error(`refusing to run the memlow hog: cgroup path ${cgroupPath} is not inside /${slice}/ (guard would trip)`);
   }
-  return norm;
+  return norm.replace(/\/+$/, '');
 }
 
 /** systemd-run argv for the MemoryLow contrast unit (arm 3). */

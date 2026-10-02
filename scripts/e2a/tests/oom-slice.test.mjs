@@ -26,9 +26,9 @@ test('arm 3 unit argv pins Slice=e2a-oom.slice plus the containment properties',
   assert.ok(text.includes('Delegate=yes'));
 });
 
-test('assertCgroupUnderSlice accepts e2a-oom.slice paths and rejects anything else', () => {
-  assert.equal(assertCgroupUnderSlice('/e2a-oom.slice/e2a-3-oomproof.service'), '/e2a-oom.slice/e2a-3-oomproof.service');
-  assert.equal(assertCgroupUnderSlice('e2a-oom.slice/e2a-3-memlow.service'), '/e2a-oom.slice/e2a-3-memlow.service');
+test('assertCgroupUnderSlice accepts the name-derived e2a-oom.slice subtree and rejects anything else', () => {
+  assert.equal(assertCgroupUnderSlice('/e2a.slice/e2a-oom.slice/e2a-3-oomproof.service'), '/e2a.slice/e2a-oom.slice/e2a-3-oomproof.service');
+  assert.equal(assertCgroupUnderSlice('e2a-oom.slice/e2a-3-oomproof.service'), '/e2a-oom.slice/e2a-3-oomproof.service');
   assert.throws(() => assertCgroupUnderSlice('/system.slice/e2a-3-oomproof.service'), /guard would trip/);
   assert.throws(() => assertCgroupUnderSlice('/e2a.slice/e2a-3.slice/e2a-3-oomproof.service'), /guard would trip/);
   assert.throws(() => assertCgroupUnderSlice(undefined), /guard would trip/);
@@ -36,6 +36,6 @@ test('assertCgroupUnderSlice accepts e2a-oom.slice paths and rejects anything el
 });
 
 test('arm 3 assertion module behaves identically', () => {
-  assert.doesNotThrow(() => assertMemlowSlice('/e2a-oom.slice/e2a-3-memlow.service'));
+  assert.doesNotThrow(() => assertMemlowSlice('/e2a.slice/e2a-oom.slice/e2a-3-memlow.service'));
   assert.throws(() => assertMemlowSlice('/system.slice/e2a-3-memlow.service'), /guard would trip/);
 });

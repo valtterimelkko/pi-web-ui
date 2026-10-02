@@ -30,14 +30,15 @@ const SELF_CAP_BYTES = 10 * 1024 ** 3; // allocation tests self-cap at 10 GiB (C
  */
 export const OOM_ARM_SLICE = 'e2a-oom.slice';
 
-/** Pure guard: the unit's unified cgroup path must sit under the OOM-arm slice. */
+/** Pure guard: the unit's unified cgroup path must sit inside the OOM-arm slice's subtree.
+ *  systemd derives a slice's parent from its name, so the real path is
+ *  /e2a.slice/e2a-oom.slice/<unit> — match the slice subtree anywhere in the path. */
 export function assertCgroupUnderSlice(cgroupPath, slice = OOM_ARM_SLICE) {
-  const norm = `/${String(cgroupPath ?? '').replace(/^\/+|\/+$/g, '')}`;
-  const prefix = `/${slice.replace(/^\/+|\/+$/g, '')}/`;
-  if (!norm.startsWith(prefix)) {
-    throw new Error(`refusing to allocate: cgroup path ${cgroupPath} is not under /${slice}/ (guard would trip)`);
+  const norm = `/${String(cgroupPath ?? '').replace(/^\/+|\/+$/g, '')}/`;
+  if (!norm.includes(`/${slice}/`)) {
+    throw new Error(`refusing to allocate: cgroup path ${cgroupPath} is not inside /${slice}/ (guard would trip)`);
   }
-  return norm;
+  return norm.replace(/\/+$/, '');
 }
 
 /** systemd-run argv for the contained-OOM unit (arm 2b). */
