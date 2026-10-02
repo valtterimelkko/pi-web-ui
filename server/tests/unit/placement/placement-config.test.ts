@@ -247,3 +247,66 @@ describe('tools root resolution (J6 correction 02: canonicalise before any write
     }
   });
 });
+
+describe('tools root resolution (J6 correction 03: screened root hand-off, degenerate cgroup root)', () => {
+  const controllerFiles = (root: string): Record<string, string> => ({
+    [`${root}/cgroup.controllers`]: 'cpu memory pids\n',
+    [`${root}/cgroup.subtree_control`]: 'cpu memory pids\n',
+    [`${root}/memory.max`]: 'max\n',
+    [`${root.replace(/\/[^/]+$/, '')}/memory.max`]: '12884901888\n',
+  });
+
+  it('rejects a degenerate cgroup root (/) before anything else', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/tmp/some-run', PI_TOOLS_CGROUP_ROOT: '/' });
+    expect(cfg.cgroupRoot).toBe('');
+    const r = resolveToolsRoot(cfg, { realpath: (p) => p, exists: () => true, readFirstLine: (f) => controllerFiles('/tmp/some-run')[f] });
+    expect(r.available).toBe(false);
+    expect(r.reason).toMatch(/degenerate/i);
+  });
+
+  it('rejects an empty-string cgroup root', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/tmp/some-run', PI_TOOLS_CGROUP_ROOT: '' });
+    const r = resolveToolsRoot(cfg, { realpath: (p) => p, exists: () => true, readFirstLine: (f) => controllerFiles('/tmp/some-run')[f] });
+    expect(r.available).toBe(false);
+    expect(r.reason).toMatch(/degenerate/i);
+  });
+
+  it('uses the SCREENED canonical root instead of re-resolving the raw slice path', () => {
+    // The raw slice path is an alias pointing somewhere else entirely; the
+    // screened root is a different, verified path. Resolution must use the
+    // screened path and never look at the alias again.
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/tmp/alias-that-must-be-ignored' });
+    const screened = '/sys/fs/cgroup/system.slice/screened-run.service';
+    const r = resolveToolsRoot(
+      cfg,
+      {
+        realpath: (p) => (p === screened ? screened : `/tmp/evil-resolution-of-${p}`),
+        exists: (p) => p === screened,
+        readFirstLine: (f) => controllerFiles(screened)[f],
+        enableSubtreeControllers: () => { throw new Error('must not be reached in this fixture (already enabled)'); },
+      },
+      { screenedCanonicalRoot: screened },
+    );
+    expect(r.available).toBe(true);
+    expect(r.toolsRoot).toBe(screened);
+  });
+
+  it('fails closed when the screened root changed since screening (no write)', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/tmp/alias' });
+    const screened = '/sys/fs/cgroup/system.slice/screened-run.service';
+    let wrote = 0;
+    const r = resolveToolsRoot(
+      cfg,
+      {
+        realpath: (p) => (p === screened ? '/sys/fs/cgroup/pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice/retargeted' : p),
+        exists: () => true,
+        readFirstLine: (f) => (f.endsWith('cgroup.controllers') || f.endsWith('cgroup.subtree_control') ? 'cpu memory pids\n' : '12884901888\n'),
+        enableSubtreeControllers: () => { wrote += 1; },
+      },
+      { screenedCanonicalRoot: screened },
+    );
+    expect(r.available).toBe(false);
+    expect(r.reason).toMatch(/changed since screening/i);
+    expect(wrote).toBe(0);
+  });
+});

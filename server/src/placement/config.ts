@@ -112,6 +112,17 @@ function mergeDeps(deps: ToolsRootDeps): ToolsRootDeps {
   return { ...defaultToolsRootDeps, ...supplied };
 }
 
+/**
+ * J6 correction 03: a cgroup root of '' or '/' (the empty-ish forms
+ * `PI_TOOLS_CGROUP_ROOT=/` and `PI_TOOLS_CGROUP_ROOT=` normalise to) makes
+ * every `startsWith(cgroupRoot + '/')` containment check pass — degenerate,
+ * and treated as invalid wherever a cgroup root is consumed. The production
+ * default `/sys/fs/cgroup` is unaffected.
+ */
+export function isDegenerateCgroupRoot(cgroupRoot: string | undefined): boolean {
+  return (cgroupRoot ?? '').replace(/\/+$/, '') === '';
+}
+
 const defaultToolsRootDeps: ToolsRootDeps = {
   // J6 correction 02: the unit comes from the ARGUMENT (the config's own
   // slicePath), never from a re-read of process.env — a caller whose config
@@ -180,25 +191,59 @@ export function candidateToolsRootPath(cfg: Pick<PlacementConfig, 'cgroupRoot' |
  * - the root must exist, expose the memory controller, and be BOUNDED: its own
  *   `memory.max`, or an ancestor's up to 4 levels, must read as a number (not `max`).
  */
-export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {}): ToolsRootResolution {
+export interface ResolveToolsRootOptions {
+  /**
+   * J6 correction 03: the canonical root the validation gate already screened.
+   * When given, resolution does NOT re-resolve the raw slice path (the alias
+   * may have been retargeted between screening and apply — the TOCTOU window):
+   * it uses the screened path and re-canonicalises it immediately before the
+   * first write. Any difference fails closed: unavailable, "tools root changed
+   * since screening", no write and no sweep.
+   */
+  screenedCanonicalRoot?: string;
+}
+
+export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {}, options: ResolveToolsRootOptions = {}): ToolsRootResolution {
   const d = mergeDeps(deps);
-  const cand = candidateToolsRootPath(cfg, d);
-  if (!cand.ok) {
-    return { available: false, reason: cand.reason };
+  // J6 correction 03: a degenerate cgroup root invalidates every containment
+  // check — refuse before resolving anything.
+  if (isDegenerateCgroupRoot(cfg.cgroupRoot)) {
+    return { available: false, reason: `cgroup root ${JSON.stringify(cfg.cgroupRoot)} is degenerate — refusing to resolve any tools root against it` };
   }
-  let root = cand.path;
-  if (root.startsWith('/') && !root.startsWith(cfg.cgroupRoot + '/')) {
-    return { available: false, reason: `tools root ${root} is outside the cgroup root ${cfg.cgroupRoot}` };
-  }
-  // J6 correction 02: canonicalise BEFORE any write, then re-check containment —
-  // a symlink inside the cgroup root may point anywhere.
-  try {
-    root = d.realpath ? d.realpath(root) : fs.realpathSync(root);
-  } catch {
-    return { available: false, reason: `tools root ${cand.path} cannot be canonicalised` };
-  }
-  if (!root.startsWith(cfg.cgroupRoot + '/')) {
-    return { available: false, reason: `tools root ${root} resolves outside the cgroup root ${cfg.cgroupRoot}` };
+  const screened = options.screenedCanonicalRoot?.replace(/\/+$/, '');
+  let root: string;
+  if (screened) {
+    // The root that is applied must be the root that was screened: re-
+    // canonicalise the screened path immediately, fail closed on any change.
+    let now: string;
+    try {
+      now = d.realpath ? d.realpath(screened) : fs.realpathSync(screened);
+    } catch {
+      return { available: false, reason: `tools root ${screened} changed since screening (cannot be canonicalised)` };
+    }
+    if (now !== screened) {
+      return { available: false, reason: `tools root changed since screening (${screened} -> ${now})` };
+    }
+    root = screened;
+  } else {
+    const cand = candidateToolsRootPath(cfg, d);
+    if (!cand.ok) {
+      return { available: false, reason: cand.reason };
+    }
+    root = cand.path;
+    if (root.startsWith('/') && !root.startsWith(cfg.cgroupRoot + '/')) {
+      return { available: false, reason: `tools root ${root} is outside the cgroup root ${cfg.cgroupRoot}` };
+    }
+    // J6 correction 02: canonicalise BEFORE any write, then re-check containment —
+    // a symlink inside the cgroup root may point anywhere.
+    try {
+      root = d.realpath ? d.realpath(root) : fs.realpathSync(root);
+    } catch {
+      return { available: false, reason: `tools root ${cand.path} cannot be canonicalised` };
+    }
+    if (!root.startsWith(cfg.cgroupRoot + '/')) {
+      return { available: false, reason: `tools root ${root} resolves outside the cgroup root ${cfg.cgroupRoot}` };
+    }
   }
   if (!d.exists?.(root)) {
     return { available: false, reason: `tools root ${root} does not exist (is the slice started?)` };

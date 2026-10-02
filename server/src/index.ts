@@ -87,11 +87,17 @@ async function initialize(): Promise<void> {
     // in one coordinate system). A refusal skips resolve and sweep entirely —
     // no write of any kind, at startup OR shutdown.
     let placementRefusal: ValidationPlacementRefusal | null = null;
+    let screenedCanonicalRoot: string | undefined;
     if (placementStartupCfg.enabled && config.validationMode) {
-      placementRefusal = validationPlacementRefusalForConfig(placementStartupCfg, {
+      const verdict = validationPlacementRefusalForConfig(placementStartupCfg, {
         cgroupRoot: placementStartupCfg.cgroupRoot,
         selfCgroupPath: readSelfCgroup(),
       });
+      placementRefusal = verdict.refusal;
+      // J6 correction 03: hand the SCREENED canonical root to the apply — the
+      // applied root must be the root that was screened, never a fresh raw
+      // resolution (the alias may have been retargeted in between).
+      screenedCanonicalRoot = verdict.canonical;
     }
     if (placementRefusal) {
       startupApplied = {
@@ -103,7 +109,7 @@ async function initialize(): Promise<void> {
       appendDegradeLine(placementStartupCfg, 'validation-placement-refused', placementRefusal);
     } else {
       startupApplied = placementStartupCfg.enabled
-        ? applyStartupPlacement(placementStartupCfg)
+        ? applyStartupPlacement(placementStartupCfg, undefined, { screenedCanonicalRoot })
         : { active: false, config: placementStartupCfg, reason: 'placement off' };
     }
     // J6 correction 02: the sweeps (startup and shutdown) run only for an

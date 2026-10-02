@@ -26,7 +26,7 @@
  */
 import fs from 'node:fs';
 import type { PlacementConfig } from './config.js';
-import { candidateToolsRootPath } from './config.js';
+import { candidateToolsRootPath, isDegenerateCgroupRoot } from './config.js';
 
 /** The production tools slice: every root at or under it belongs to production. */
 export const PRODUCTION_TOOLS_SLICE_NAME = 'pi-web-ui-tools.slice';
@@ -56,7 +56,20 @@ export type ValidationPlacementRefusal =
   | 'production-name-form'
   | 'production-tools-slice-root'
   | 'own-cgroup-root'
-  | 'not-canonicalisable';
+  | 'not-canonicalisable'
+  | 'cgroup-root-invalid';
+
+/**
+ * J6 correction 03: the gate hands back the canonical path it screened, so the
+ * startup apply can use EXACTLY that root (fail closed if it changed) instead
+ * of re-resolving the raw slice path — the hand-back window is the TOCTOU the
+ * correction closes.
+ */
+export interface ValidationPlacementVerdict {
+  refusal: ValidationPlacementRefusal | null;
+  /** The canonicalised candidate — present when `refusal` is null. */
+  canonical?: string;
+}
 
 function atOrUnderPath(p: string, segment: string): boolean {
   return p.replace(/\/+$/, '').split('/').includes(segment);
@@ -116,30 +129,36 @@ export interface ValidationPlacementCheckDeps {
 export function validationPlacementRefusalForConfig(
   cfg: Pick<PlacementConfig, 'cgroupRoot' | 'enabled' | 'slicePath'>,
   deps: ValidationPlacementCheckDeps,
-): ValidationPlacementRefusal | null {
-  if (!cfg.enabled) return null;
+): ValidationPlacementVerdict {
+  if (!cfg.enabled) return { refusal: null };
+  // J6 correction 03: a degenerate cgroup root ('' or '/') makes every
+  // containment check pass — refuse it outright.
+  if (isDegenerateCgroupRoot(cfg.cgroupRoot) || isDegenerateCgroupRoot(deps.cgroupRoot)) {
+    return { refusal: 'cgroup-root-invalid' };
+  }
   // NAME-form tripwires need no filesystem access at all.
   const raw = cfg.slicePath.replace(/\/+$/, '');
   if (raw === PRODUCTION_TOOLS_ANCHOR_SLICE || raw === PRODUCTION_TOOLS_SLICE_NAME) {
-    return 'production-name-form';
+    return { refusal: 'production-name-form' };
   }
   if (raw.startsWith('/') && atOrUnderPath(raw, PRODUCTION_TOOLS_SLICE_NAME)) {
-    return 'production-tools-slice-root';
+    return { refusal: 'production-tools-slice-root' };
   }
   // Candidate path (read-only), then canonicalise BEFORE anything is written.
   const cand = candidateToolsRootPath(cfg, { systemctlShowControlGroup: deps.systemctlShowControlGroup });
-  if (!cand.ok) return 'not-canonicalisable';
+  if (!cand.ok) return { refusal: 'not-canonicalisable' };
   let canonical: string;
   try {
     canonical = (deps.realpath ?? fs.realpathSync)(cand.path);
   } catch {
-    return 'not-canonicalisable';
+    return { refusal: 'not-canonicalisable' };
   }
-  return validationPlacementRefusal({
+  const refusal = validationPlacementRefusal({
     validationMode: true,
     cfg,
     cgroupRoot: deps.cgroupRoot,
     resolvedRoot: canonical,
     selfCgroupPath: deps.selfCgroupPath,
   });
+  return refusal ? { refusal } : { refusal: null, canonical };
 }

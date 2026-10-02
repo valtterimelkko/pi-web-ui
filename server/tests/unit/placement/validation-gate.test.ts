@@ -21,7 +21,7 @@ import {
   PRODUCTION_TOOLS_ANCHOR_SLICE,
   PRODUCTION_TOOLS_SLICE_NAME,
   validationPlacementRefusal,
-  validationPlacementRefusalForConfig,
+  validationPlacementRefusalForConfig as forConfig,
 } from '../../../src/placement/validation-gate.js';
 import { candidateToolsRootPath } from '../../../src/placement/config.js';
 import { resolvePlacementConfig } from '../../../src/placement/config.js';
@@ -159,11 +159,11 @@ describe('J6 correction 02: canonicalise the candidate before any write, then ga
       symlinkSync(target, alias);
       // Explicit fs realpath (the composed check must canonicalise, never
       // compare the raw symlink path — the raw form carries no slice segment).
-      const refusal = validationPlacementRefusalForConfig(
+      const verdict = forConfig(
         resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: alias }),
         { cgroupRoot: tmp, selfCgroupPath: '/system.slice/pi-web-ui.service', realpath: (p) => realpathSync(p) },
       );
-      expect(refusal).toBe('production-tools-slice-root');
+      expect(verdict.refusal).toBe('production-tools-slice-root');
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -174,11 +174,11 @@ describe('J6 correction 02: canonicalise the candidate before any write, then ga
     try {
       const dangling = join(tmp, 'dangling');
       symlinkSync(join(tmp, 'missing-target'), dangling);
-      const refusal = validationPlacementRefusalForConfig(
+      const verdict = forConfig(
         resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: dangling }),
         { cgroupRoot: tmp },
       );
-      expect(refusal).toBe('not-canonicalisable');
+      expect(verdict.refusal).toBe('not-canonicalisable');
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -191,11 +191,11 @@ describe('J6 correction 02: canonicalise the candidate before any write, then ga
       mkdirSync(target, { recursive: true });
       const alias = join(tmp, 'alias');
       symlinkSync(target, alias);
-      const refusal = validationPlacementRefusalForConfig(
+      const verdict = forConfig(
         resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: alias }),
         { cgroupRoot: tmp, selfCgroupPath: null },
       );
-      expect(refusal).toBe('production-tools-slice-root');
+      expect(verdict.refusal).toBe('production-tools-slice-root');
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -209,7 +209,7 @@ describe('J6 correction 02: canonicalise the candidate before any write, then ga
     // phaseB-run-20261002T150126Z arm2). The dep must be called with the
     // config's own slicePath.
     const asked: string[] = [];
-    const refusal = validationPlacementRefusalForConfig(
+    const verdict = forConfig(
       resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'j6-run.service' }),
       {
         cgroupRoot: '/sys/fs/cgroup',
@@ -222,20 +222,20 @@ describe('J6 correction 02: canonicalise the candidate before any write, then ga
       },
     );
     expect(asked).toContain('j6-run.service');
-    expect(refusal).toBeNull();
+    expect(verdict.refusal).toBeNull();
   });
 
   it('still refuses the production NAME forms and allows the run-owned unit through the composed check', () => {
     const deps = { cgroupRoot: '/sys/fs/cgroup', selfCgroupPath: '/system.slice/pi-web-ui.service' };
     expect(
-      validationPlacementRefusalForConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: PRODUCTION_TOOLS_ANCHOR_SLICE }), deps),
+      forConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: PRODUCTION_TOOLS_ANCHOR_SLICE }), deps).refusal,
     ).toBe('production-name-form');
     expect(
-      validationPlacementRefusalForConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'j6b-031fe826.service' }), {
+      forConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'j6b-031fe826.service' }), {
         ...deps,
         systemctlShowControlGroup: () => '/system.slice/j6b-031fe826.service',
         realpath: (p) => p, // synthetic target: the run-owned path is not on the real fs
-      }),
+      }).refusal,
     ).toBeNull();
   });
 
@@ -247,10 +247,47 @@ describe('J6 correction 02: canonicalise the candidate before any write, then ga
       const alias = join(tmp, 'alias');
       symlinkSync(target, alias);
       expect(
-        validationPlacementRefusalForConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'off', PI_TOOLS_SLICE: alias }), { cgroupRoot: tmp }),
+        forConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'off', PI_TOOLS_SLICE: alias }), { cgroupRoot: tmp }).refusal,
       ).toBeNull();
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe('J6 correction 03: the gate hands back the canonical root it screened', () => {
+  it('returns the canonical candidate alongside a null refusal', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'j6-c03-verdict-'));
+    try {
+      const target = join(tmp, 'real', 'safe-unit');
+      mkdirSync(target, { recursive: true });
+      const alias = join(tmp, 'alias');
+      symlinkSync(target, alias);
+      const verdict = forConfig(
+        resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: alias }),
+        { cgroupRoot: tmp, realpath: (p) => realpathSync(p) },
+      );
+      expect(verdict.refusal).toBeNull();
+      expect(verdict.canonical).toBe(realpathSync(alias));
+      expect(verdict.canonical).not.toBe(alias);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('J6 correction 03: a degenerate cgroup root is refused', () => {
+  it.each([
+    ['/', '/'],
+    ['empty string', ''],
+  ])('refuses PI_TOOLS_CGROUP_ROOT=%s as cgroup-root-invalid', (_label, root) => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/tmp/some-run', PI_TOOLS_CGROUP_ROOT: root });
+    expect(cfg.cgroupRoot).toBe('');
+    expect(forConfig(cfg, { cgroupRoot: cfg.cgroupRoot, realpath: (p) => p }).refusal).toBe('cgroup-root-invalid');
+  });
+
+  it('does not flag the production default', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/j6-run.service' });
+    expect(forConfig(cfg, { cgroupRoot: cfg.cgroupRoot, realpath: (p) => p, selfCgroupPath: null }).refusal).toBeNull();
   });
 });

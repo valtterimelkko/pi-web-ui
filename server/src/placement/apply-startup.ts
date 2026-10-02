@@ -7,7 +7,7 @@
  * slice NAME never yields a root from `resolvePlacementConfig` alone).
  */
 import type { PlacementConfig } from './config.js';
-import { resolveToolsRoot, type ToolsRootDeps } from './config.js';
+import { resolveToolsRoot, type ToolsRootDeps, type ResolveToolsRootOptions } from './config.js';
 import { setActiveToolsRoot } from './spawn-wrap.js';
 
 export interface AppliedStartupPlacement {
@@ -19,8 +19,11 @@ export interface AppliedStartupPlacement {
 let applied: AppliedStartupPlacement | null = null;
 
 /** Apply (resolve + verify + store) once at server start-up. */
-export function applyStartupPlacement(cfg: PlacementConfig, deps?: ToolsRootDeps): AppliedStartupPlacement {
-  const resolution = resolveToolsRoot(cfg, deps);
+export function applyStartupPlacement(cfg: PlacementConfig, deps?: ToolsRootDeps, options?: ResolveToolsRootOptions): AppliedStartupPlacement {
+  // J6 correction 03: options may carry the SCREENED canonical root — resolution
+  // then uses exactly that path (fail closed on change) instead of re-resolving
+  // the raw slice path.
+  const resolution = resolveToolsRoot(cfg, deps, options);
   if (resolution.available && resolution.toolsRoot) {
     applied = { active: true, config: { ...cfg, toolsRoot: resolution.toolsRoot } };
     setActiveToolsRoot(resolution.toolsRoot);

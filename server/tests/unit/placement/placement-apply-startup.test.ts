@@ -11,7 +11,9 @@ import { readToolsSliceMemory } from '../../../src/placement/capacity.js';
 import { exportToolsPlacementBridge, clearToolsPlacementBridge, readToolsPlacementBridge } from '../../../src/placement/bridge.js';
 import { sweepAllGroups, removeSessionGroup, realCgroupIo, type CgroupIo } from '../../../src/placement/cleanup.js';
 import { sessionGroupName } from '../../../src/placement/keys.js';
+import { validationPlacementRefusalForConfig } from '../../../src/placement/validation-gate.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 /**
@@ -283,3 +285,102 @@ describe('J6 correction 02: the sweep runs only for a validated, active applied 
 void resolveToolsRoot;
 void buildPlacementEnv;
 void fs;
+
+const { readFileSync } = fs;
+
+describe('J6 correction 03: apply runs the SCREENED root — no second resolution of the raw alias', () => {
+  beforeEach(() => {
+    resetAppliedPlacement();
+  });
+
+  it('hands the screened canonical root through applyStartupPlacement; the raw alias is never re-resolved', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/tmp/alias-raw' });
+    const screened = '/sys/fs/cgroup/system.slice/screened-run.service';
+    const applied = applyStartupPlacement(
+      cfg,
+      {
+        realpath: (p) => (p === screened ? screened : `/tmp/evil-${p}`),
+        exists: (p) => p === screened,
+        readFirstLine: (f) =>
+          f.endsWith('screened-run.service/cgroup.controllers')
+            ? 'cpu memory pids\n'
+            : f.endsWith('screened-run.service/cgroup.subtree_control')
+              ? 'cpu memory pids\n'
+              : f.endsWith('/memory.max')
+                ? '12884901888\n'
+                : undefined,
+      },
+      { screenedCanonicalRoot: screened },
+    );
+    expect(applied.active).toBe(true);
+    expect(applied.config.toolsRoot).toBe(screened); // the screened root, not a fresh raw resolution
+  });
+
+  it('RACE: gate screens a safe alias, the alias is retargeted to a fake pi-web-ui-tools.slice tree, apply fails closed — no write, no sweep, planted group survives', async () => {
+    const { mkdtempSync, mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync, realpathSync } = fs;
+    const { tmpdir } = os;
+    const tmp = mkdtempSync(path.join(tmpdir(), 'j6-c03-race-'));
+    try {
+      // The screened target: a plain safe unit directory in the run's own tree.
+      const safe = path.join(tmp, 'real', 'safe-unit');
+      mkdirSync(safe, { recursive: true });
+      // The evil tree: a directory NAMED like the production tools slice holding a
+      // planted managed group — a temp tree, never the real production path.
+      const evil = path.join(tmp, 'real', 'pi-web-ui-tools.slice', 'evil-unit');
+      mkdirSync(evil, { recursive: true });
+      const planted = path.join(evil, 'pi-planted-1234-abcd1234');
+      mkdirSync(planted, { recursive: true });
+      writeFileSync(path.join(planted, 'cgroup.procs'), '');
+      writeFileSync(path.join(planted, 'cgroup.kill'), '');
+      // Make the evil tree look verifiable so a WRONG (re-resolving) apply would
+      // happily activate it (this is exactly the pre-fix behaviour under test).
+      writeFileSync(path.join(evil, 'cgroup.controllers'), 'cpu memory pids\n');
+      const evilSubtreeFixture = 'cpu memory pids\n';
+      writeFileSync(path.join(evil, 'cgroup.subtree_control'), evilSubtreeFixture);
+      writeFileSync(path.join(tmp, 'memory.max'), '12884901888\n');
+
+      const alias = path.join(tmp, 'alias');
+      symlinkSync(safe, alias);
+      const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: alias, PI_TOOLS_CGROUP_ROOT: tmp });
+
+      // 1. The gate screens the SAFE target and hands back the canonical path.
+      const verdict = validationPlacementRefusalForConfig(cfg, { cgroupRoot: tmp, realpath: (p) => realpathSync(p) });
+      expect(verdict.refusal).toBeNull();
+      const screened = verdict.canonical as string;
+      expect(screened).toBe(safe);
+
+      // 2. The race: retarget the alias at the evil tree and take the safe
+      //    target away (the screened path no longer exists — a re-resolving
+      //    apply would now activate the evil tree).
+      rmSync(alias);
+      symlinkSync(evil, alias);
+      rmSync(safe, { recursive: true });
+
+      // 3. Apply with the SCREENED root: fail closed — the screened path no longer
+      //    canonicalises, so placement is unavailable and NOTHING is written.
+      const applied = applyStartupPlacement(
+        cfg,
+        { realpath: (p) => realpathSync(p) },
+        { screenedCanonicalRoot: screened },
+      );
+      expect(applied.active).toBe(false);
+      expect(applied.reason).toMatch(/changed since screening/i);
+
+      // No subtree_control write anywhere in the temp tree (the pre-fix code
+      // resolved the alias afresh, activated the evil tree and enabled
+      // controllers there — which would have appended '+memory +pids').
+      expect(readFileSync(path.join(evil, 'cgroup.subtree_control'), 'utf8')).toBe(evilSubtreeFixture);
+
+      // 4. The sweep runs on nothing: startupSweepConfig must not carry a root.
+      const sc = startupSweepConfig(applied);
+      expect(sc.enabled).toBe(false);
+      expect(sc.toolsRoot).toBeUndefined();
+      const existing = new Set<string>([evil, planted, `${planted}/cgroup.procs`, `${planted}/cgroup.kill`]);
+      const swept = await sweepAllGroups(cgroupfsLikeIo(existing), sc);
+      expect(swept).toEqual({ removed: 0, failures: 0 });
+      expect(existing.has(planted)).toBe(true); // the planted fake group survives
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
