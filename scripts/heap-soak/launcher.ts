@@ -187,6 +187,13 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
       // artificial cgroup constraint this harness invented, which throttled
       // admission below what production actually allows.
       TasksMax: '8192',
+      // J6 belt: a transient unit's environment starts from the systemd
+      // MANAGER's environment, so a future `systemctl set-environment
+      // PI_TOOLS_…` would silently leak production's placement config into the
+      // soak server (probe 2026-10-02: on this host's systemd 255,
+      // UnsetEnvironment removes even explicit --setenv entries). The env map
+      // below is an explicit allowlist; this removes the one residual vector.
+      UnsetEnvironment: 'PI_TOOLS_PLACEMENT PI_TOOLS_SLICE PI_TOOLS_CGROUP_ROOT PI_TOOLS_RUNTIME_DIR',
     },
     env: {
       NODE_OPTIONS: '--max-old-space-size=4096', // production's own heap cap

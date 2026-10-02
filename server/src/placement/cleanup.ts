@@ -142,6 +142,10 @@ export async function removeSessionGroup(cfg: PlacementConfig | null, sessionId:
  * Returns the number of groups removed and the health-visible failure count.
  */
 export async function sweepAllGroups(io: CgroupIo, cfg: PlacementConfig): Promise<{ removed: number; failures: number }> {
+  // J6: the sweep is a placement mechanism — it may only ever run for an
+  // ENABLED placement. A config that was refused (validation gate) or never
+  // applied must never sweep, whatever its toolsRoot field carries.
+  if (!cfg.enabled) return { removed: 0, failures: 0 };
   const root = cfg.toolsRoot;
   if (!root || !io.existsSync(root)) return { removed: 0, failures: 0 };
   let removed = 0;

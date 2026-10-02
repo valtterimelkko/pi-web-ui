@@ -244,6 +244,44 @@ Only when the user explicitly asks to validate against the running production We
 npm run validate:live -- --allow-production --runtime claude --scenario smoke
 ```
 
+## Disposable-server environment contract (J6, 2026-10-02)
+
+Production runs with placement on (`PI_TOOLS_PLACEMENT=on`,
+`PI_TOOLS_SLICE=pi-web-ui-tools-anchor.service`), and the placement wrapper
+exports the whole `PI_TOOLS_*` family into every placed shell. A disposable
+server that inherits any of it would resolve **production's** tools root and
+its startup/shutdown sweep would SIGKILL every other session's live commands
+(the Hb5 host hazard, 2026-10-02). The launcher now enforces the contract, so
+agents no longer need an `env -u` prefix:
+
+- **Inherited `PI_TOOLS_*` never reaches the server.** The launcher strips every
+  inherited `PI_TOOLS_*` key (logging what it dropped). The environment itself is
+  never the source of a placement value.
+- **Explicit placement for a proof** goes through the env file, which is the only
+  channel: `--env-file <file> --env-key PI_TOOLS_PLACEMENT --env-key
+  PI_TOOLS_SLICE …`. The file's value always wins over any ambient value.
+- **The placement runtime dir is always pinned** inside the validation directory
+  (`<dir>/placement`), so wrapper and degrade artifacts never land in
+  production's `~/.pi-web-ui/placement` — even for an explicitly placement-enabled
+  proof.
+- **Validation mode refuses foreign roots** (`validation-placement-refused` in
+  the degrade log): the production anchor/tools slice by name or absolute path
+  (pre-resolution, before any `cgroup.subtree_control` write), any resolved root
+  at or under `pi-web-ui-tools.slice`, and the server's own cgroup.
+  `sweepAllGroups` additionally never runs for a disabled placement config.
+
+Proof recipe for a placement-enabled disposable run: create the run's own
+unit with `systemd-run --unit=<unit> --collect -p Delegate=yes -p
+DelegateSubgroup=supervisor -p MemoryMax=256M -- sleep 3600` (the supervisor
+subgroup keeps the root process-free so `resolveToolsRoot` can enable
+controllers — a plain sleep main process makes placement resolve unavailable),
+point `PI_TOOLS_SLICE` at `<unit>` via the env file, and assert before booting
+that the resolved root is not production's anchor. Worked example (all four
+arms, with a planted managed group that must survive start and stop):
+`/root/orch-ops/orchestration-scaling/j6/proof/proof-phaseB.sh` (evidence:
+`phaseB-run-20261002T134124Z`). The heap-soak launcher additionally sets
+`UnsetEnvironment` for the four placement config keys on its server unit.
+
 ## Retained experimental MCP adapter validation
 
 The Internal API MCP adapter is retained but inactive; no MCP/tunnel service is

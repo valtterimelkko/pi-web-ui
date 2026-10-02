@@ -7,7 +7,7 @@
  * slice NAME never yields a root from `resolvePlacementConfig` alone).
  */
 import type { PlacementConfig } from './config.js';
-import { resolveToolsRoot, type ToolsRootDeps } from './config.js';
+import { resolveToolsRoot, type ToolsRootDeps, type ResolveToolsRootOptions } from './config.js';
 import { setActiveToolsRoot } from './spawn-wrap.js';
 
 export interface AppliedStartupPlacement {
@@ -19,8 +19,11 @@ export interface AppliedStartupPlacement {
 let applied: AppliedStartupPlacement | null = null;
 
 /** Apply (resolve + verify + store) once at server start-up. */
-export function applyStartupPlacement(cfg: PlacementConfig, deps?: ToolsRootDeps): AppliedStartupPlacement {
-  const resolution = resolveToolsRoot(cfg, deps);
+export function applyStartupPlacement(cfg: PlacementConfig, deps?: ToolsRootDeps, options?: ResolveToolsRootOptions): AppliedStartupPlacement {
+  // J6 correction 03: options may carry the SCREENED canonical root — resolution
+  // then uses exactly that path (fail closed on change) instead of re-resolving
+  // the raw slice path.
+  const resolution = resolveToolsRoot(cfg, deps, options);
   if (resolution.available && resolution.toolsRoot) {
     applied = { active: true, config: { ...cfg, toolsRoot: resolution.toolsRoot } };
     setActiveToolsRoot(resolution.toolsRoot);
@@ -39,6 +42,18 @@ export function applyStartupPlacement(cfg: PlacementConfig, deps?: ToolsRootDeps
  */
 export function placementForSpawn(): PlacementConfig | null {
   return getActivePlacementConfig();
+}
+
+/**
+ * J6 correction 02: the startup and shutdown sweeps run ONLY for an applied
+ * config that is ACTIVE (resolved and verified, canonical root). A failed or
+ * refused resolution must leave no sweepable root: a raw `toolsRoot` from an
+ * unapplied config — the absolute-path form carries one before verification —
+ * must never reach `sweepAllGroups`.
+ */
+export function startupSweepConfig(applied: AppliedStartupPlacement): PlacementConfig {
+  if (applied.active && applied.config.toolsRoot) return applied.config;
+  return { ...applied.config, enabled: false, toolsRoot: undefined };
 }
 
 /** The applied config, or null before start-up applied it. */

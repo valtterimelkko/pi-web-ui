@@ -27,6 +27,9 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 
 function fakeDeps() {
   return {
+    // J6 correction 02: the realpath dep defaults to the real fs; this fixture
+    // models a synthetic tree, so it pins canonicalisation to identity.
+    realpath: (p: string) => p,
     systemctlShowControlGroup: () => '/pi.slice/d0.slice/d0-test.slice/d0-test-tools.slice',
     exists: (p: string) => p === RESOLVED || p.startsWith(RESOLVED + '/'),
     readFirstLine: (f: string) =>
