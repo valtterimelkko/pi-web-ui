@@ -180,7 +180,9 @@ const MAX_CACHED_SESSIONS = 2;
 export const OPTIMISTIC_USER_ID_PREFIX = 'optimistic_';
 
 /** Rendered text of a Message content (string or text-block array). */
-function messageTextOf(content: Message['content']): string {
+/** Rendered text of a Message content (string or text-block array). Shared with
+ * the composer's queued-streaming chip clearing (Hb6 correction 02). */
+export function messageTextOf(content: Message['content']): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content.map((part) => (part && part.type === 'text' ? part.text ?? '' : '')).join('');

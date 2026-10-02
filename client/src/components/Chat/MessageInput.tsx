@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect, memo } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles, Map, Wrench, CornerUpRight, Clock } from 'lucide-react';
 import { DictationButton, type DictationButtonState } from './DictationButton';
-import { useChatStore, useSessionStore, useDraftStore, OPTIMISTIC_USER_ID_PREFIX } from '../../store';
+import { useChatStore, useSessionStore, useDraftStore, OPTIMISTIC_USER_ID_PREFIX, messageTextOf } from '../../store';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
@@ -19,10 +19,28 @@ import {
   streamingComposeIsQueueOnly,
 } from '../../lib/piExtensionControls';
 
-interface QueuedStreamingMessage {
+export interface QueuedStreamingMessage {
   id: string;
   mode: 'steer' | 'followUp';
   text: string;
+}
+
+/** Hb6 correction 02: drop queued-streaming chips whose prompt has been
+ * delivered — i.e. a matching user message now exists in the transcript. The
+ * match uses the SAME text extraction as the optimistic-echo reconciliation
+ * (`messageTextOf`): the echoed user message carries a text-block array, so a
+ * string-only comparison left chips visible forever. Conservative: exact
+ * (trimmed) equality, role user, nothing broader; queue order preserved. */
+export function removeDeliveredQueuedChips(
+  queue: QueuedStreamingMessage[],
+  transcript: Array<{ role: string; content: unknown }>,
+): QueuedStreamingMessage[] {
+  const delivered = new Set(
+    transcript
+      .filter((m) => m.role === 'user')
+      .map((m) => messageTextOf(m.content as Parameters<typeof messageTextOf>[0]).trim()),
+  );
+  return queue.filter((item) => !delivered.has(item.text.trim()));
 }
 
 interface MessageInputProps {
@@ -155,15 +173,11 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
   // A queued message is delivered once the matching user message reaches the
   // transcript (the server replays it into the session when the runtime
-  // accepts the steer/follow-up).
+  // accepts the steer/follow-up). Matching uses the shared text extraction so
+  // text-block-array echoes count as delivered too (Hb6 correction 02).
   useEffect(() => {
     if (queuedStreaming.length === 0) return;
-    const delivered = new Set(
-      transcript
-        .filter((m) => m.role === 'user' && typeof m.content === 'string')
-        .map((m) => (m.content as string).trim()),
-    );
-    setQueuedStreaming((q) => q.filter((item) => !delivered.has(item.text)));
+    setQueuedStreaming((q) => removeDeliveredQueuedChips(q, transcript));
   }, [transcript, queuedStreaming.length]);
 
   // If the run ends without the message appearing (e.g. aborted), drop the
