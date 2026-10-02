@@ -24,7 +24,7 @@ import {
   UNIT_STOP_TIMEOUT_SECONDS,
   type ProcessRunner,
   type WeeklyRefreshPaths,
-} from '../../../../scripts/command-code-weekly-refresh.js';
+} from '../../../../scripts/command-code-weekly-refresh.mts';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 

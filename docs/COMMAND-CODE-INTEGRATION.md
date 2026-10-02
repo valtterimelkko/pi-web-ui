@@ -129,7 +129,7 @@ current as the CLI advertises new models (typically weekly). One run:
    60 s: drain (20 s) + HTTP slack (10 s) + the unit's stop timeout (30 s,
    `TimeoutStopSec` in `deploy/systemd/pi-web-ui.service`) + a 90 s readiness
    margin = 150 s (`RESTART_JOB_BUDGET_MS` in
-   `scripts/command-code-weekly-refresh.ts`; the weekly-refresh tests pin
+   `scripts/command-code-weekly-refresh.mts`; the weekly-refresh tests pin
    each part to its source file, so a change to the drain defaults or the
    unit's stop timeout fails a test instead of outliving the job). A drain
    that cannot settle in time is still refused by the wrapper itself and

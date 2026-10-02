@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runWeeklyRefresh, runProcess, type ProcessRunner } from '../../../../scripts/command-code-weekly-refresh.js';
+import { runWeeklyRefresh, runProcess, type ProcessRunner } from '../../../../scripts/command-code-weekly-refresh.mts';
 
 /**
  * J1 disposable proof, arm 3, as a permanent regression test: the REAL
