@@ -58,6 +58,23 @@ const EXCEPTION_ROW: StabilityExceptionRow = {
   version: '1.59',
 };
 
+/**
+ * The live table's single row (J4, 2026-10-02): a RETROACTIVE record of the
+ * owner-accepted 1.58.5 working-set change. The changelog had already
+ * documented it as a wire-identical bug fix (the snapshot fingerprints
+ * identically to 1.58.0 apart from the version), so this row records the
+ * semantic change — it grants nothing. The guard keeps the shape check
+ * strict: a patch-version row never satisfies the snapshot-shape exception
+ * lookup, because shape changes ride minor bumps whose rows name the
+ * major.minor (pinned below).
+ */
+const RETROACTIVE_1_58_5_ROW: StabilityExceptionRow = {
+  date: '2026-10-02',
+  decision: 'post-H-b review (owner accepted)',
+  what: '1.58.5: /capacity memory.currentBytes and admission memory checks report working set (current − inactive_file), not total',
+  version: '1.58.5',
+};
+
 describe('contract stability window (C6)', () => {
   const doc = readFileSync(contractDocPath, 'utf8');
   const committed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as ClientContractSnapshot;
@@ -86,8 +103,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the exception table and tolerates it being empty', () => {
-      expect(parsed?.exceptions).toEqual([]);
+    it('parses the live exception table: exactly the retroactive 1.58.5 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -219,6 +236,23 @@ describe('contract stability window (C6)', () => {
       const verdict = guardSnapshotShape(added, [EXCEPTION_ROW], '1.59.0');
       expect(verdict.ok).toBe(true);
       expect(verdict.problems).toEqual([]);
+    });
+
+    it('the retroactive 1.58.5 row does not loosen the snapshot shape guard', () => {
+      // The guard checks major.minor, and a patch-version row (1.58.5) is a
+      // bug-fix record, never a shape admission: inside the window shape
+      // changes ride minor bumps whose rows name the major.minor. Both the
+      // live table and a synthetic twin of its row must refuse a simulated
+      // 1.58.5 shape change — otherwise the row would silently admit any
+      // unauthorised shape drift for the rest of the window.
+      const added = bumpedSnapshot((clone) => {
+        (clone.types.SessionInfo.fields as Record<string, unknown>).newWireField = { type: 'string' };
+      });
+      const withLiveRows = guardSnapshotShape(added, parsed!.exceptions, INTERNAL_API_CONTRACT_VERSION);
+      expect(withLiveRows.ok).toBe(false);
+      expect(withLiveRows.problems.join(' ')).toMatch(/no exception row/);
+      const withSyntheticTwin = guardSnapshotShape(added, [RETROACTIVE_1_58_5_ROW], '1.58.5');
+      expect(withSyntheticTwin.ok).toBe(false);
     });
   });
 });

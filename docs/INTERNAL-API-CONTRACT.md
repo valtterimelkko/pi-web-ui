@@ -70,6 +70,7 @@ Exception table (date, owner decision, what, version):
 
 | Date | Owner decision | What | Version |
 | --- | --- | --- | --- |
+| 2026-10-02 | post-H-b review (owner accepted) | 1.58.5: /capacity memory.currentBytes and admission memory checks report working set (current − inactive_file), not total | 1.58.5 |
 
 ### Changelog
 
