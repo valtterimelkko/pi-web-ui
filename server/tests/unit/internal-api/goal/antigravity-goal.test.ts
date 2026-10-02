@@ -214,11 +214,11 @@ function record(overrides: Partial<AntigravityGoalRecord> = {}): AntigravityGoal
 }
 
 interface SweeperHarness {
-  events: Array<{ sessionId: string; event: { type: string } }>;
+  events: Array<{ sessionId: string; event: { type: string; data?: Record<string, unknown> } }>;
   dispatched: Array<{ sessionId: string; message: string }>;
   store: AntigravityGoalControlStore;
   dir: string;
-  turns: Map<string, { completedAt: number; response: string } | null>;
+  turns: Map<string, { completedAt: number; response: string; status?: 'done' | 'error'; error?: string } | null>;
   running: Set<string>;
   deps: AgyGoalSweeperDeps;
 }
@@ -334,7 +334,277 @@ describe('createAgyGoalSweeper', () => {
   });
 });
 
+// ─── provider-error strikes (contract 1.58.3) ────────────────────────────────
+
+/** Real error strings from the H2s Gemini session `cefdf34a-abf7-441f-b075-5af3d980c1b1`
+ *  (2026-10-01): every one of its 27 turns was finalized `status: "error"` and the
+ *  old sweeper continued into each one as if it were an ordinary unmet turn. */
+const AGY_H2S_ERROR_500 = 'INTERNAL (code 500): Internal error encountered.';
+const AGY_H2S_ERROR_503 =
+  'Our servers are experiencing high traffic right now, please try again in a minute. (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server)';
+
+describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', () => {
+  it('counts a provider-error turn as a strike instead of consuming a run, and retries', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(after?.lastReason).toContain(AGY_H2S_ERROR_500);
+    // One retry continuation (Pi's three-strike rule retries between strikes),
+    // not an ordinary unmet-turn advance.
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.events.map((e) => e.event.type)).toEqual(['goal_state']);
+    expect(h.events[0].event.data).toMatchObject({ status: 'running', runs: 0, pausedReason: null });
+  });
+
+  it('pauses after three consecutive strikes with pausedReason error, naming the last error, and dispatches nothing further', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 300, response: 'timeout', status: 'error', error: 'timeout' });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'paused', pausedReason: 'error', runs: 0, lastVerifiedTurnAt: 300 });
+    expect(after?.lastReason).toContain('timeout');
+    expect(after?.lastReason).toMatch(/3 consecutive provider errors/);
+    // Only the two retries; the pausing strike dispatches nothing.
+    expect(h.dispatched).toHaveLength(2);
+
+    const pausedEvent = h.events.map((e) => e.event).find((e) => e.data?.status === 'paused');
+    expect(pausedEvent).toMatchObject({
+      type: 'goal_state',
+      data: { status: 'paused', pausedReason: 'error', lastReason: expect.stringContaining('timeout') },
+    });
+    expect(h.events.some((e) => e.event.type === 'goal_end')).toBe(false);
+
+    // A re-sweep of the same turn neither re-pauses nor dispatches again.
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(2);
+  });
+
+  it('a refused retry does not consume the strike: the next sweep retries the same turn exactly once', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    let attempts = 0;
+    h.deps.dispatch = async (id, message) => {
+      attempts += 1;
+      // The live race: the route's admission lease can outlive the turn's
+      // finalisation, so an immediate continuation is refused 409.
+      if (attempts === 1) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    const sweeper = createAgyGoalSweeper(h.deps);
+
+    await sweeper.sweepOnce();
+    const refused = await h.store.get('s1');
+    expect(refused?.consecutiveErrors).toBeUndefined();
+    expect(refused?.lastVerifiedTurnAt).toBeUndefined();
+    expect(h.dispatched).toHaveLength(0);
+
+    // The next sweep retries the SAME turn and records the strike exactly once.
+    await sweeper.sweepOnce();
+    const recovered = await h.store.get('s1');
+    expect(recovered).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(h.dispatched).toHaveLength(1);
+
+    // And the strike is not double-counted on a further sweep.
+    await sweeper.sweepOnce();
+    expect((await h.store.get('s1'))?.consecutiveErrors).toBe(1);
+  });
+
+  it('a successful turn resets the strike count and clears the stale error note', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 300, response: 'still working on the goal' });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0, lastVerifiedTurnAt: 300 });
+    expect(after?.lastReason ?? null).toBeNull();
+    expect(h.dispatched).toHaveLength(3); // 2 retries + the ordinary unmet continuation
+  });
+
+  it('resume re-arms: a resumed goal starts a fresh strike cycle', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    for (const at of [100, 200, 300]) {
+      h.turns.set('s1', { completedAt: at, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+      await sweeper.sweepOnce();
+    }
+    expect((await h.store.get('s1'))?.status).toBe('paused');
+
+    // Exactly what the route's resume action patches (sessions.ts): status running,
+    // pause reason cleared, auto-continue armed again.
+    await h.store.patch('s1', { status: 'running', pausedReason: undefined, autoContinue: true });
+    h.turns.set('s1', { completedAt: 400, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', consecutiveErrors: 1 });
+    expect(h.dispatched).toHaveLength(3); // the resumed cycle's strike 1 retries rather than re-pausing
+  });
+
+  it('classifies by the reader truth, not response text: a done turn mentioning an error is an ordinary turn', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: `Not yet done. Note: earlier we saw ${AGY_H2S_ERROR_500}`, status: 'done' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0 });
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('treats legacy turns (no status field) as successful turns, exactly as before', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: 'legacy response' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0 });
+  });
+});
+
 // ─── config ──────────────────────────────────────────────────────────────────
+
+describe('createAgyGoalSweeper — resume continuation that could not dispatch (contract 1.58.3 review)', () => {
+  it('dispatches a pending continuation for an already-verified turn and clears the flag only once accepted', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    h.turns.set('s1', { completedAt: 300, response: 'provider error', status: 'error', error: 'provider error' });
+    let refuse = true;
+    h.deps.dispatch = async (id, message) => {
+      if (refuse) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(await h.store.get('s1')).toMatchObject({ status: 'running', pendingContinuation: true, lastVerifiedTurnAt: 300 });
+    expect(h.dispatched).toHaveLength(0);
+
+    refuse = false;
+    await sweeper.sweepOnce();
+    const after = await h.store.get('s1');
+    expect(after?.pendingContinuation).toBeFalsy();
+    expect(after).toMatchObject({ status: 'running', lastVerifiedTurnAt: 300 });
+    expect(after?.consecutiveErrors ?? 0).toBe(0);
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.dispatched[0].message).toContain('Ship it');
+
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('a newer completed turn supersedes a pending continuation (processed once, no extra dispatch)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    h.turns.set('s1', { completedAt: 400, response: 'still working' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    const after = await h.store.get('s1');
+    expect(after?.pendingContinuation).toBeFalsy();
+    expect(after).toMatchObject({ status: 'running', runs: 1, lastVerifiedTurnAt: 400 });
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('re-checks the goal before dispatching: a pause or clear that lands during the turn read wins (review r2)', async () => {
+    for (const action of ['pause', 'clear', 'start'] as const) {
+      const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+      h.turns.set('s1', { completedAt: 300, response: 'x' });
+      h.deps.readLastCompletedTurn = async (id) => {
+        if (action === 'pause') await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+        if (action === 'clear') await h.store.patch(id, { status: 'cleared', autoContinue: false, clearedAt: 1 });
+        if (action === 'start') await h.store.patch(id, { objective: 'New objective', runs: 0, pendingContinuation: false, consecutiveErrors: 0 });
+        return h.turns.get(id) ?? null;
+      };
+      await createAgyGoalSweeper(h.deps).sweepOnce();
+      expect(h.dispatched, action).toHaveLength(0);
+    }
+  });
+
+  it('re-checks before a strike-retry or an unmet-turn continuation too: a pause during verification wins', async () => {
+    const h = await harness({ err: record({ maxRuns: 40 }), unmet: record({ maxRuns: 40 }) });
+    h.turns.set('err', { completedAt: 500, response: 'boom', status: 'error', error: 'boom' });
+    h.turns.set('unmet', { completedAt: 500, response: 'still working' });
+    const read = h.deps.readLastCompletedTurn;
+    h.deps.readLastCompletedTurn = async (id) => {
+      const turn = await read(id);
+      await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+      return turn;
+    };
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('a turn that completes between the snapshot and the dispatch wins: no stale continuation now, one for the newer turn next sweep (review r3)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    let reads = 0;
+    h.deps.readLastCompletedTurn = async () => {
+      reads += 1;
+      return reads === 1 ? { completedAt: 300, response: 'x' } : { completedAt: 400, response: 'still working' };
+    };
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    expect(await h.store.get('s1')).toMatchObject({ lastVerifiedTurnAt: 400, runs: 1 });
+  });
+
+  it('an unmet-turn continuation refused at dispatch stays owed and is retried (review r3)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: 'still working' });
+    let refuse = true;
+    h.deps.dispatch = async (id, message) => {
+      if (refuse) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(await h.store.get('s1')).toMatchObject({ runs: 1, lastVerifiedTurnAt: 500, pendingContinuation: true });
+    expect(h.dispatched).toHaveLength(0);
+    refuse = false;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    expect((await h.store.get('s1'))?.pendingContinuation).toBeFalsy();
+    expect((await h.store.get('s1'))?.runs).toBe(1);
+  });
+
+  it('a pause or clear that lands during the guard\'s own latest-turn read still wins (review r4)', async () => {
+    for (const action of ['pause', 'clear'] as const) {
+      const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+      let reads = 0;
+      h.deps.readLastCompletedTurn = async (id) => {
+        reads += 1;
+        if (reads === 2) {
+          if (action === 'pause') await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+          else await h.store.patch(id, { status: 'cleared', autoContinue: false, clearedAt: 1 });
+        }
+        return { completedAt: 300, response: 'x' };
+      };
+      await createAgyGoalSweeper(h.deps).sweepOnce();
+      expect(h.dispatched, action).toHaveLength(0);
+    }
+  });
+
+  it('does not dispatch a pending continuation for a paused goal or a busy session', async () => {
+    const h = await harness({
+      paused: record({ status: 'paused', pausedReason: 'user', autoContinue: false, lastVerifiedTurnAt: 300, pendingContinuation: true }),
+      busy: record({ lastVerifiedTurnAt: 300, pendingContinuation: true }),
+    });
+    h.turns.set('paused', { completedAt: 300, response: 'x' });
+    h.turns.set('busy', { completedAt: 300, response: 'x' });
+    h.running.add('busy');
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+});
 
 describe('loadAgyGoalAutoContinueConfig', () => {
   it('defaults are sane and env overrides apply', () => {

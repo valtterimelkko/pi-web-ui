@@ -854,6 +854,39 @@ describe('goal function (contract 1.27.0)', () => {
       await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
     });
 
+    it('contract 1.58.3 review: resume and start open a fresh strike window, and a refused resume leaves a pending continuation', async () => {
+      agyEntry();
+      let finishTurn: (() => void) | undefined;
+      antigravityService.sendPrompt.mockImplementation((_id: string, _message: string, _broadcast: unknown, complete: (error?: Error) => void) => {
+        finishTurn = () => complete();
+        return Promise.resolve();
+      });
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' }), mockRes(), 'session-1');
+      const recordPath = path.join(dir, 'antigravity-sessions', 'goal-control', 'session-1.json');
+      const withStrike = JSON.parse(await fs.readFile(recordPath, 'utf8'));
+      await fs.writeFile(recordPath, JSON.stringify({ ...withStrike, consecutiveErrors: 1 }));
+
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'pause' }), mockRes(), 'session-1');
+      const resume = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'resume' }), resume, 'session-1');
+      expect(resume.statusCode, resume.body).toBe(200);
+      const resumed = JSON.parse(await fs.readFile(recordPath, 'utf8'));
+      expect(resumed.consecutiveErrors ?? 0).toBe(0);
+      // The held turn refuses the resume dispatch (409 SESSION_BUSY): the
+      // continuation must stay owed, or the sweeper never wakes the goal.
+      expect(resumed.pendingContinuation).toBe(true);
+
+      await fs.writeFile(recordPath, JSON.stringify({ ...resumed, consecutiveErrors: 2 }));
+      const restart = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it again' }), restart, 'session-1');
+      expect(restart.statusCode, restart.body).toBe(200);
+      const restarted = JSON.parse(await fs.readFile(recordPath, 'utf8'));
+      expect(restarted.consecutiveErrors ?? 0).toBe(0);
+
+      finishTurn?.();
+      await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+    });
+
     it('start re-arms a goal without failing while the previous turn is still settling', async () => {
       agyEntry();
       let finishTurn: (() => void) | undefined;

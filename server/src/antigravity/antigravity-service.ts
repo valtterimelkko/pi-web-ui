@@ -16,7 +16,7 @@ import { createLogger } from '../logging/logger.js';
 import { parseAgyModelsOutput, toCatalogEntries, canonicalizeAgyModelId, resolveModelSlug, type AgyModelEntry, type ParsedAgyModel } from './agy-models.js';
 import { AgyStreamProcess, type AgyTurnOutcome } from './agy-stream-process.js';
 import { AgyEventNormalizer } from './agy-event-normalizer.js';
-import type { AgyStoredToolCall, AgyStoredUsage } from './antigravity-session-store.js';
+import type { AgyStoredToolCall, AgyStoredUsage, AntigravityTurn } from './antigravity-session-store.js';
 import { AGY_STORED_TOOL_LIMIT, AGY_STORED_TOOL_OUTPUT_LIMIT } from './antigravity-session-store.js';
 
 const logger = createLogger('AntigravityService');
@@ -160,6 +160,46 @@ interface ActiveSessionMeta {
 
 function blankMeta(now = Date.now()): ActiveSessionMeta {
   return { lastActivity: now, pinned: false, pinClaims: new Set(), status: 'idle', backgroundTasks: new Map() };
+}
+
+/** Latest finalized turn of a session, in the shape the antigravity goal sweeper
+ *  consumes (contract 1.38.0; error truth added at 1.58.3). `status: 'error'`
+ *  marks a turn that ended in a provider/runtime error with no assistant answer —
+ *  the goal manager counts it as an error strike, never as an unmet turn. */
+export interface AgyCompletedTurn {
+  completedAt: number;
+  response: string;
+  status: 'done' | 'error';
+  /** The error the runtime recorded (present when status === 'error'). */
+  error?: string;
+}
+
+/**
+ * Summarise the latest finalized turn of a loaded history.
+ *
+ * Stream mode stores turn completion in `turnDurationMs` finalization order;
+ * `timestamp` is the turn start, so the derived completion instant is guarded
+ * monotonically across finalized turns — identical timestamps can never make the
+ * sweeper skip a newer turn. `running` turns are not finalized; a legacy line
+ * with no `status` field is `done`. A finalized `error` turn carries agy's own
+ * terminal verdict (reason/error), which is what the goal sweeper classifies.
+ */
+export function summarizeLastCompletedTurn(history: AntigravityTurn[]): AgyCompletedTurn | null {
+  const finalized = history.filter((t) => t.status !== 'running');
+  const last = finalized[finalized.length - 1];
+  if (!last) return null;
+  let prevDerived = -Infinity;
+  for (const t of finalized) {
+    const derived = t.turnDurationMs !== undefined ? t.timestamp + t.turnDurationMs : t.timestamp;
+    prevDerived = derived > prevDerived ? derived : prevDerived + 1;
+  }
+  const summary: AgyCompletedTurn = {
+    completedAt: prevDerived,
+    response: last.response ?? '',
+    status: last.status === 'error' ? 'error' : 'done',
+  };
+  if (last.error !== undefined) summary.error = last.error;
+  return summary;
 }
 
 export class AntigravityService {
@@ -1002,22 +1042,11 @@ export class AntigravityService {
   }
 
   /** Contract 1.38.0 goal sweeper: latest finalized turn (null when none).
-   *  Stream mode stores turn completion in `turnDurationMs` finalization order;
-   *  `timestamp` is the turn start, which preserves ordering well enough for
-   *  the sweeper's process-once bookkeeping. */
-  async getLastCompletedTurn(sessionId: string): Promise<{ completedAt: number; response: string } | null> {
-    const history = await this.store.loadHistory(sessionId);
-    const finalized = history.filter((t) => t.status !== 'running');
-    const last = finalized[finalized.length - 1];
-    if (!last) return null;
-    // Derived completion instant, guarded monotonically across finalized turns
-    // so identical timestamps can never make the sweeper skip a newer turn.
-    let prevDerived = -Infinity;
-    for (const t of finalized) {
-      const derived = t.turnDurationMs !== undefined ? t.timestamp + t.turnDurationMs : t.timestamp;
-      prevDerived = derived > prevDerived ? derived : prevDerived + 1;
-    }
-    return { completedAt: prevDerived, response: last.response ?? '' };
+   *  Contract 1.58.3: the summary carries the turn's error truth so the goal
+   *  manager can treat a provider-error turn as an error strike instead of an
+   *  ordinary unmet turn. */
+  async getLastCompletedTurn(sessionId: string): Promise<AgyCompletedTurn | null> {
+    return summarizeLastCompletedTurn(await this.store.loadHistory(sessionId));
   }
 
   /** Contract 1.38.0 goal sweeper: registry cwd for verifyCommand execution. */
