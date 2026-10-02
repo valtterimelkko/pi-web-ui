@@ -394,13 +394,17 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
               publishIfChanged(sessionId, patched);
               continue;
             }
+            // Retry first, record second: if the continuation is refused because
+            // the session is still settling (the route's admission lease can
+            // outlive the turn's finalisation), the strike must not be consumed —
+            // the next sweep re-processes the same turn and retries the dispatch.
+            await deps.dispatch(sessionId, buildAgyGoalContinuationPrompt(record.objective, record.verifyCommand !== undefined));
             const patched = await deps.getStore().patch(sessionId, {
               consecutiveErrors: strikes,
               lastReason: `provider error (strike ${strikes}/${AGY_GOAL_MAX_CONSECUTIVE_ERRORS}): ${errorText}`,
               lastVerifiedTurnAt: turn.completedAt,
             });
             publishIfChanged(sessionId, patched);
-            await deps.dispatch(sessionId, buildAgyGoalContinuationPrompt(record.objective, record.verifyCommand !== undefined));
             continue;
           }
 

@@ -388,6 +388,36 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
     expect(h.dispatched).toHaveLength(2);
   });
 
+  it('a refused retry does not consume the strike: the next sweep retries the same turn exactly once', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    let attempts = 0;
+    h.deps.dispatch = async (id, message) => {
+      attempts += 1;
+      // The live race: the route's admission lease can outlive the turn's
+      // finalisation, so an immediate continuation is refused 409.
+      if (attempts === 1) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    const sweeper = createAgyGoalSweeper(h.deps);
+
+    await sweeper.sweepOnce();
+    const refused = await h.store.get('s1');
+    expect(refused?.consecutiveErrors).toBeUndefined();
+    expect(refused?.lastVerifiedTurnAt).toBeUndefined();
+    expect(h.dispatched).toHaveLength(0);
+
+    // The next sweep retries the SAME turn and records the strike exactly once.
+    await sweeper.sweepOnce();
+    const recovered = await h.store.get('s1');
+    expect(recovered).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(h.dispatched).toHaveLength(1);
+
+    // And the strike is not double-counted on a further sweep.
+    await sweeper.sweepOnce();
+    expect((await h.store.get('s1'))?.consecutiveErrors).toBe(1);
+  });
+
   it('a successful turn resets the strike count and clears the stale error note', async () => {
     const h = await harness({ s1: record({ maxRuns: 40 }) });
     const sweeper = createAgyGoalSweeper(h.deps);
