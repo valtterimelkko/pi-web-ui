@@ -1,6 +1,6 @@
 # Orchestration Scaling Readiness Plan
 
-> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **2026-09-29 follow-up (owner rule: no local patches to upstream packages):** both local patches are removed. B1.2b replaces the pi-core extension-factory patch with the public SDK API; B3a (the tool-argument part of B3) replaces the pi-ai toolstream patch with a pi-web-ui-side budget; `subagent` shipped with owner option B (B1.3). All were deployed at the 2026-09-29 10:10 UTC restart. **B1.2 production telemetry:** 0 spike minutes in the first 4 h of the patch-free build (baseline 0.77/h; §9). **Wave 2 (B2, B3b, B4) is merged** (`d017f145`, contract 1.51.0; every lane Luna-reviewed and parent-verified) and **in production since the owner-approved restart on 2026-09-29 14:44 UTC** (build `1103ef11`; restarted with `production:drain-restart`, which used its legacy pre-flight because the old server had no drain endpoint). **R2 decisions held 2026-09-29 (§8):** the owner accepted the review session's recommendations, and an **R2 follow-up wave** is added (§6, after Review moment R2). **R2 follow-up wave shipped 2026-09-29** (V2; B4.1, B5, B3c; B2.1 dropped) together with **C4, C5**, the weekly-refresh budget and the E1 ledger (wave 3, contract 1.56.0; in production since the drain-restart on 2026-09-29 20:59 UTC, §8). **C2, C1 and C3a merged 2026-09-30 and in production since the drain-restart at 03:33 UTC** (contract 1.58.0, build `6544b886`; the orchestration skill now prefers the `pi-orch` client). **C6 stability window declared 2026-09-30** (opens at 1.58.0; the owner sets its length at R3). **C3b (client half of C3) shipped 2026-09-30** (`/root/pi-orch` `559aef5`: completion template, `result`, `verify`; Luna REJECT → correction 01 → closure ACCEPT). **Stage C is complete. R3 opened 2026-09-30 (§8):** the review verified Stage C and read the CPU evidence. It found that agents' tool commands share the service's cgroup, that one session slowed production at two active turns, and that the zai route stops working above about 5–8 concurrent children. An **R3 follow-up wave (G1–G5)** is added. **R3 decisions held 2026-09-30 (§3):** Stage D starts with **D0** (move agents' tool processes out of the control plane's cgroup); D1 and Phase 8 are decided at R4; the admission cap stays at 15; the C6 window runs to programme close without blocking planned work; the Jev re-measure moves into E2; and E2's 24 h soak becomes a bounded run. **Next: the R3 follow-up wave and D0, orchestrated by the R3 session.** **Wave complete (2026-09-30):** G1–G5 and D0 accepted and merged; G2 and D0 in production since 23:09 UTC (D0 needed a same-night fix: a delegated anchor service, because systemd ignores `Delegate=` on slices); the independent Luna production live re-run returned ACCEPT WITH FIXES; its fixes and the closure round's one remaining correction are deployed (D0 §11). R4 is next. **Host OOM incident at 16:56 UTC:** a D0 proof escaped its memory limits, and the kernel killed production Pi Web UI and the orchestrator. The owner decided the host OOM policy and extra D0 scope; both are recorded in §3 and D0. Side work after Stage C (owner requests 2026-09-30, outside this plan): publishing `pi-orch` and a public skill pack; GitHub CI portability fix (`45831561`); the Agent OS contract-mirror guard. **R4 held 2026-10-01 (§3, §8):** wave 4 verified against production; D1 and Phase 8 are not started (reopened only on the trigger in §3); the admission cap stays at 15. An **R4 follow-up wave (H1–H3)** is added: the browser session-view cost that latched the admission lag gate in production, root causes of empty, cancelled and goal-idle child runs, and a small-items batch. **E2 waits for real orchestration use** (a population trigger, not a waiting window). Server-side fixes reach production only at an owner-approved restart. **Interim fixes I1–I5, the H wave and wave H-b shipped 2026-10-01/02** (production 1.58.5, build `10895fd5`, view-only opens on). **Post-H-b review held 2026-10-02 (§8):** the work is of good quality and on intent; a small **post-H-b follow-up (J1–J4)** is added. **The owner accepted every recommendation (§3, 2026-10-02):** E2 is split into E2a (engineering proofs and the missing independent live re-run, on the final build) and E2b (the Jev re-measure on a trigger that also counts Claude Code parents). E2 has not started in practice: since Stage C, `pi-orch` has been used only by the programme's own proof drivers. R5 stays after E2. **Wave J shipped 2026-10-02** (J1–J6, V3; production since the drain-restart at 16:47 UTC, build `dc9a32a6`, contract 1.58.5 unchanged). **Next: E2a + the E2b trigger; it needs the owner's go and a fresh restart grant.** **Wave K (durable runs) is planned for after R5, behind its entry review K0 (§6).**
+> **Status:** R1 held 2026-09-27; interim review held 2026-09-28 (§8). Wave 1 (A2, B0, B1) and the **interim wave (B0.1, B1.1, B1.2 with B1.3)** are shipped and in production since the owner-approved restart on 2026-09-29 00:05 UTC. **2026-09-29 follow-up (owner rule: no local patches to upstream packages):** both local patches are removed. B1.2b replaces the pi-core extension-factory patch with the public SDK API; B3a (the tool-argument part of B3) replaces the pi-ai toolstream patch with a pi-web-ui-side budget; `subagent` shipped with owner option B (B1.3). All were deployed at the 2026-09-29 10:10 UTC restart. **B1.2 production telemetry:** 0 spike minutes in the first 4 h of the patch-free build (baseline 0.77/h; §9). **Wave 2 (B2, B3b, B4) is merged** (`d017f145`, contract 1.51.0; every lane Luna-reviewed and parent-verified) and **in production since the owner-approved restart on 2026-09-29 14:44 UTC** (build `1103ef11`; restarted with `production:drain-restart`, which used its legacy pre-flight because the old server had no drain endpoint). **R2 decisions held 2026-09-29 (§8):** the owner accepted the review session's recommendations, and an **R2 follow-up wave** is added (§6, after Review moment R2). **R2 follow-up wave shipped 2026-09-29** (V2; B4.1, B5, B3c; B2.1 dropped) together with **C4, C5**, the weekly-refresh budget and the E1 ledger (wave 3, contract 1.56.0; in production since the drain-restart on 2026-09-29 20:59 UTC, §8). **C2, C1 and C3a merged 2026-09-30 and in production since the drain-restart at 03:33 UTC** (contract 1.58.0, build `6544b886`; the orchestration skill now prefers the `pi-orch` client). **C6 stability window declared 2026-09-30** (opens at 1.58.0; the owner sets its length at R3). **C3b (client half of C3) shipped 2026-09-30** (`/root/pi-orch` `559aef5`: completion template, `result`, `verify`; Luna REJECT → correction 01 → closure ACCEPT). **Stage C is complete. R3 opened 2026-09-30 (§8):** the review verified Stage C and read the CPU evidence. It found that agents' tool commands share the service's cgroup, that one session slowed production at two active turns, and that the zai route stops working above about 5–8 concurrent children. An **R3 follow-up wave (G1–G5)** is added. **R3 decisions held 2026-09-30 (§3):** Stage D starts with **D0** (move agents' tool processes out of the control plane's cgroup); D1 and Phase 8 are decided at R4; the admission cap stays at 15; the C6 window runs to programme close without blocking planned work; the Jev re-measure moves into E2; and E2's 24 h soak becomes a bounded run. **Next: the R3 follow-up wave and D0, orchestrated by the R3 session.** **Wave complete (2026-09-30):** G1–G5 and D0 accepted and merged; G2 and D0 in production since 23:09 UTC (D0 needed a same-night fix: a delegated anchor service, because systemd ignores `Delegate=` on slices); the independent Luna production live re-run returned ACCEPT WITH FIXES; its fixes and the closure round's one remaining correction are deployed (D0 §11). R4 is next. **Host OOM incident at 16:56 UTC:** a D0 proof escaped its memory limits, and the kernel killed production Pi Web UI and the orchestrator. The owner decided the host OOM policy and extra D0 scope; both are recorded in §3 and D0. Side work after Stage C (owner requests 2026-09-30, outside this plan): publishing `pi-orch` and a public skill pack; GitHub CI portability fix (`45831561`); the Agent OS contract-mirror guard. **R4 held 2026-10-01 (§3, §8):** wave 4 verified against production; D1 and Phase 8 are not started (reopened only on the trigger in §3); the admission cap stays at 15. An **R4 follow-up wave (H1–H3)** is added: the browser session-view cost that latched the admission lag gate in production, root causes of empty, cancelled and goal-idle child runs, and a small-items batch. **E2 waits for real orchestration use** (a population trigger, not a waiting window). Server-side fixes reach production only at an owner-approved restart. **Interim fixes I1–I5, the H wave and wave H-b shipped 2026-10-01/02** (production 1.58.5, build `10895fd5`, view-only opens on). **Post-H-b review held 2026-10-02 (§8):** the work is of good quality and on intent; a small **post-H-b follow-up (J1–J4)** is added. **The owner accepted every recommendation (§3, 2026-10-02):** E2 is split into E2a (engineering proofs and the missing independent live re-run, on the final build) and E2b (the Jev re-measure on a trigger that also counts Claude Code parents). E2 has not started in practice: since Stage C, `pi-orch` has been used only by the programme's own proof drivers. R5 stays after E2. **Wave J shipped 2026-10-02** (J1–J6, V3; production since the drain-restart at 16:47 UTC, build `dc9a32a6`, contract 1.58.5 unchanged). **Next: E2a + the E2b trigger; it needs the owner's go and a fresh restart grant.** **E2a and E2b are authorised (owner, 2026-10-02) under a host-safety protocol (§6 E2). Wave K (durable runs) is planned for after R5, which is also its entry review.**
 > **Created:** 2026-09-26 from the Pi Web UI / Internal API deep review (owner-requested).
 > **Owner review session:** the Claude Code session `fc35fbf1-7f12-4962-9243-da710409fb56` ("Internal API Review"). **Review moments** are held with the owner, in that session or, if its context is exhausted, by a fresh Opus agent that first follows §7 (handoff).
 > **Evidence:** [`docs/reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md`](../reviews/2026-09-26-INTERNAL-API-DEEP-REVIEW.md).
@@ -173,12 +173,25 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 - **The missing independent live re-run runs now as its own lane, V3**, rather than waiting for E2a (owner, 2026-10-02). It runs on the current master, which carries the **Pi SDK 1.0.0** that another agent deployed to production at 10:53 UTC (`1f828c5c`, from 0.87.1). Several shipped steps rely on SDK seams (B1.2b's extension factory, B3a's tool-argument budget, B5's `session_shutdown`, I3's settle events), so V3 also checks that they hold on 1.0.0.
 - **Routing for this wave (owner):** implementers on GLM 5.3 Flash (`pi` · `zai`), which has ample quota; Gemini 3.8 Flash on `antigravity` for at most two children, only where something is critical; **reviews and V3 on GPT-6 Luna** (`pi` · `openai-codex` · `max`, until 2026-10-09). Autonomous until the next review point; Telegram for milestones.
 - **Production restart authority for this wave** (owner, 2026-10-02): "yes, you have for this wave. You have a production restart grant." Protocol unchanged: activeTurns 0, board check, `production:lock`, drain-restart, verification.
-- **Wave K, durable runs, is added after R5, behind its own entry review K0** (owner, 2026-10-02, after Wave J closed). It follows from the owner's question about Pi Durable (`@earendil-works/pi-durable` 1.0.0, analysed in session `pi:01a0fd53`). The parent's assessment:
+- **Wave K, durable runs, is added after R5; R5 is also wave K's entry review** (owner, 2026-10-02, after Wave J closed). R5 decides two things: whether the programme closes, and whether wave K starts. It follows from the owner's question about Pi Durable (`@earendil-works/pi-durable` 1.0.0, analysed in session `pi:01a0fd53`). The parent's assessment:
   - Do not adopt the package, which is experimental and single-runtime.
   - Crash resume is a smaller gap than it looks. Only 2 of the last 1,000 Internal API runs (24 Sep–2 Oct) were cut off by a restart, because drain-restart waits for turns to finish.
   - The recurring cost is goal children that stop on a transient cause and wait for a parent to restart them. A provider `Request was aborted` failed J6's goal 2. A reload at server start pauses running goals. 44 of the same 1,000 runs failed with an unclassified `RUNTIME_ERROR`.
-  - Wave K therefore makes a goal child continue once by itself after a transient interruption. E2a gains a crash-recovery arm and a failure classification as K0's evidence.
+  - Wave K therefore makes a goal child continue once by itself after a transient interruption. E2a gains a crash-recovery arm and a failure classification as R5's evidence for K.
   - Step-level checkpoints, per-tool replay declarations and an abort-cascade ownership tree stay design references, not planned work.
+- **E2a and E2b are authorised** (owner, 2026-10-02, after Wave J closed): "they sound good … so I do authorize them". This covers:
+  - E2a's proofs, including the arms that observe production under real load;
+  - starting E2b now, at the owner's call, without waiting for the population trigger.
+
+  E2b's real-use population is still thin, so it reports the programme's own lanes separately and states n for every figure.
+- **Host stress is allowed, but monitored, contained and stopped on clear triggers** (owner, 2026-10-02): "stressing the host is not necessarily a bad thing, but we should monitor the host carefully … have clear triggers for exiting the entire thing" if the system comes under real strain or nears OOM.
+
+  This is binding for E2a as §6 E2's *Host-safety protocol*: a model-free host guard runs for the whole of E2a and stops every E2a unit on any hard trigger. It is built and its trips proven before the first stress arm.
+
+  No arm drives the host itself out of memory: host-level OOM victim selection is proven inside a contained cgroup, with the kernel's victim scores read directly.
+- **Still to confirm when E2 starts:**
+  - routing (proposed: as for wave J; Luna's rows expire 2026-10-09);
+  - a production restart grant, needed only if E2a finds a fix that must be deployed inside E2.
 
 ## 4. Execution contract (applies to every step)
 
@@ -272,9 +285,7 @@ Stage D  Structural         D0 agents' tool processes out of the control plane's
 Stage E  Prove and keep     E1 recurring-defect ledger (runs alongside from Stage B on)
                             E2 final re-measure (bounded soak + Jev re-run), once real use gives a population
             │
-         ── Review moment R5: programme close or next plan ──
-            │
-         ── Review moment K0: wave K entry review (may sit with R5): go or no-go on E2a's crash and failure numbers ──
+         ── Review moment R5: programme close + wave K entry review (go or no-go on E2a's crash and failure numbers) ──
             │
          Wave K  Durable runs (added 2026-10-02, owner; after R5)
                             K1 classify transient causes   K2 goal children continue once after one
@@ -296,7 +307,7 @@ Within a stage, steps without a dependency may run in parallel with separate own
 - R4 interim fixes: I1 (`pi-orch`), I2 (server follow-up correlation), I3 (goal engine in `pi-enhancement`) and I4 (canonical skills) touch different repositories and run in parallel; their integrated proof follows all three. The H wave starts after them.
 - R4 follow-up wave: H1 (Pi session subscribe and rehydrate path, WebSocket handling), H2 (run receipts, `pi-orch`, goal-engine in `pi-enhancement`) and H3's items touch largely disjoint paths and may run in parallel worktrees. H1 and H3's WebSocket backpressure both touch `server/src/websocket/`: give them one owner or a fixed seam. E2 follows the wave and its population trigger.
 - Post-H-b follow-up: J1 (`scripts/`, weekly refresh), J2 (`pi-orch`, orchestration skill) and J3 (admission and A2 telemetry) touch disjoint paths and may run in parallel. J2 lands before E2 (or E2a) is dispatched, so that dispatch uses `pi-orch`.
-- Wave K starts only after R5 and its own entry review K0, which reads E2a's crash-recovery arm and failure classification. K1 comes first: its cause list is K2's input. K2 (server goal paths and the goal engine in `pi-enhancement`) and K4 (`pi-orch`, skills) can run in parallel once K1's list and K2's contract shape are fixed. K3 lands with K2.
+- Wave K starts only after R5, which is also its entry review and reads E2a's crash-recovery arm and failure classification. K1 comes first: its cause list is K2's input. K2 (server goal paths and the goal engine in `pi-enhancement`) and K4 (`pi-orch`, skills) can run in parallel once K1's list and K2's contract shape are fixed. K3 lands with K2.
 
 ## 6. Steps
 
@@ -1048,7 +1059,7 @@ Each item has its own test or check; one lane may take several.
   - **The trigger cannot count the owner's main pattern.** It counts parent-linked Pi Web UI sessions; the owner orchestrates mostly from Claude Code sessions, whose children carry no parent lineage (J2). The only parent-linked population is 7 parents and 50 children from before D0.
   - **E2 is split.** *E2a, engineering proofs, needs no population; it runs on the final build after J1–J4 deploy:* the bounded soak with the browser burst, D0 under real load, the four unrun D0 proofs on production's topology, a parent fan-out of creates (below), and the telemetry comparison. It is also the independent live re-run that §4 asks for at wave closure, which the H wave and wave H-b did not have (their reviewers read code and re-ran focused tests). E2a's re-run arms cover what H and H-b proved only on executors' runs: a real goal child on the `antigravity` runtime meeting provider errors (hb5 was proven with a mock), admission under heavy page cache (hb4), the view-only switch burst alongside children (H1), and a browser check for doubled chunks and bubbles during that burst (hb2, hb6). *E2b, the Jev re-measure:* starts at 5 real parents orchestrating through `pi-orch` with 30 children, counting Claude Code parents by owner id as well as Pi parents by lineage (after J2), or at the owner's call; the programme's own lanes count and are reported separately.
   - **Session creates are now the main production stall source.** From 2026-10-01 17:00 to 2026-10-02 09:50 UTC, 21 of the 24 loop stalls of 300 ms or more were attributed to `pi.multi.create_session` with `pi.session.resource_loader` (one of 757 ms in a fresh worktree); during the orchestrator's 5-child fan-out at 01:37 UTC, A2 read lag p99 302 ms twice, which meets the gate's two-reading rule. No refusal was logged. E2a measures whether a parent's fan-out of 8–10 creates latches the gate and refuses its own children. If it does, the D1 reopen trigger in §3 (lag pressure that G2 assigns to in-process agents) is met, and G4's held upstream seam draft becomes the cheaper first lever.
-- **Added 2026-10-02 (owner; the evidence gate for wave K).**
+- **Added 2026-10-02 (owner; wave K's entry evidence, read at R5).**
   - **Crash-recovery arm.** Set up a disposable unit with production's topology and placement on, following §4's containment rule. Run at least 4 goal children on GLM 5.3 Flash doing real worktree work (a test suite, a build, commits), and `kill -9` the server mid-turn. After the restart, record per child:
     - turns of work lost;
     - time until the child is working again;
@@ -1056,17 +1067,78 @@ Each item has its own test or check; one lane may take several.
     - any side effect done twice (a duplicate commit, a re-run build that overwrote output);
     - orphaned tool processes.
     Repeat once with a drain-timeout restart instead of a kill.
-  - **Failure classification.** Classify every failed or interrupted run receipt and every failed or paused goal since the H wave by cause: provider transient (abort, overload, 429 after retries), runtime transient, restart, real child error, or parent action. Start with the 44 `RUNTIME_ERROR` runs among the 1,000 receipts held on 2026-10-02. Report counts per cause and route. This list is K1's input.
+  - **Failure classification.** Classify every failed or interrupted run receipt and every failed or paused goal since the H wave by cause: provider transient (abort, overload, 429 after retries), runtime transient, restart, real child error, or parent action. Start with the 44 `RUNTIME_ERROR` runs among the 1,000 receipts held on 2026-10-02. Report counts per cause and route. This list is K1's input and part of R5's evidence.
+- **Host-safety protocol (binding for E2a; owner, 2026-10-02).**
+
+  **Host facts (2026-10-02):**
+  - 16 cores, 30 GiB RAM, 8 GiB swap (3.8 GiB in use at rest);
+  - root disk 93% full (23 GiB free);
+  - `pi.slice` has no memory cap; production `pi-web-ui.service` has `MemoryMax` 8 GiB and no CPU quota; the tools slice has `MemoryHigh` 14 GiB and `MemoryMax` 18 GiB;
+  - `vm.oom_kill_allocating_task=0`.
+
+  §4's memory containment rule still applies to every arm. In addition:
+
+  - **A host guard runs for all of E2a.**
+    - It is a model-free watchdog in its own systemd unit, outside every E2a unit: small `MemoryMax`, `OOMScoreAdjust=-900`.
+    - It samples every 5 s, writes one JSON line per sample to the E2a evidence directory, and keeps its own last-known baseline.
+    - On any hard trigger it:
+      1. stops every unit and scope carrying the E2a prefix (`e2a-*`) with `systemctl stop`, then `kill` on the cgroup if a unit has not stopped within 10 s;
+      2. stops any E2a-owned children through `pi-orch cleanup`;
+      3. writes `HOST-GUARD-TRIPPED` (cause, readings, time) to the evidence directory;
+      4. sends a Telegram alert.
+
+      It never touches production's unit or anything it did not start.
+    - A tripped guard ends the arm. The parent reads the cause before anything is re-run.
+  - **Hard triggers (stop everything):**
+    - any new kernel OOM kill on the host (`/proc/vmstat` `oom_kill` rises);
+    - `MemAvailable` below 4 GiB;
+    - memory PSI `full avg10` above 10%;
+    - swap use more than 2 GiB above the guard's baseline;
+    - root disk free below 8 GiB;
+    - production `/health` failing twice in a row;
+    - production's A2 lag p99 above 1,000 ms on two consecutive readings;
+    - production's `MainPID` changing without a planned restart;
+    - the production tools slice's `oom_kill` count rising during an arm that is not meant to touch it.
+  - **Soft triggers (finish the current step, start no new arm, alert):**
+    - `MemAvailable` below 8 GiB;
+    - CPU PSI `some avg60` above 80% outside the CPU-burner arm's own window;
+    - 1-minute load above 32.
+  - **Every arm** has a hard `RuntimeMaxSec`, its own `MemoryMax` (12 GiB at most), and a pre-flight check: guard running, at least 12 GiB available, at least 15 GiB disk free.
+  - **No arm drives the host itself out of memory.** "Host-level OOM victim selection" is proven by:
+    - reading the kernel's victim ranking (`oom_score` and `oom_score_adj`) for production, the tools anchor, the claude-rc server and a proof process under load;
+    - plus a contained OOM inside a 12 GiB proof cgroup.
+  - **The CPU burner** runs every core at the lowest `CPUWeight`, for at most 10 minutes. It measures production's lag; it does not starve production.
+  - **The guard is built test-first and its trips proven** (fake readings for every trigger, plus one real soft trip from a capped allocation) before the first stress arm. Its evidence lands in the E2a report.
+- **E2 lanes (authorised 2026-10-02; runbook `/root/orch-ops/orchestration-scaling/STATE-e2.md`).**
+
+  | Lane | What | Where |
+  |---|---|---|
+  | E2a-0 | The host guard (above), proven first | `/root/orch-ops` script plus a unit, tests |
+  | E2a-1 | Bounded soak with H1's browser burst (A1 harness, B0.1 window) and the production telemetry comparison against §2's A2 baseline | Disposable server |
+  | E2a-2 | D0 under real load: at least 8 concurrent real turns on at least two routes, children running suites or builds, placement on. Report server-cgroup memory against the tools slice | Production, observed (real children doing real work) |
+  | E2a-3 | The four unrun D0 proofs: CPU burner, contained OOM victim selection, `MemoryLow` eviction contrast, orphans after a hard server crash | Disposable unit with production's topology |
+  | E2a-4 | Parent fan-out of 8–10 creates: does the lag gate latch and refuse the parent's own children? | Disposable server, then one 8-child fan-out of small GLM tasks on production |
+  | E2a-5 | Re-run arms: a real `antigravity` goal child meeting provider errors (hb5); admission under heavy page cache (hb4); view-only switch burst alongside children (H1), with a Playwright check for doubled chunks and bubbles (hb2, hb6) | Disposable server |
+  | E2a-6 | Crash-recovery arm and failure classification (above) | Disposable unit; receipts read-only |
+  | E2b | The five Jev specs (pinned `jev-1.13.0`) over the period since Stage C, with the programme's lanes reported separately and n stated | `/root/jev-session-eval`, read-only on session stores |
+
+  - **Order:** E2a-0 first; E2a-6's classification and E2b may start alongside it (no host load); stress arms one at a time under the guard.
+  - **Review:** each lane gets a fresh Luna reviewer, whose independent live re-run covers at least one arm.
+
 **Definition of victory.**
 - [ ] Soak verdict: no growth beyond the A1 threshold, or growth explained and bounded; lag under B2's threshold throughout.
 - [ ] Production telemetry: spike-minute count and heap floor compared with the §2 baseline over a stated window.
 - [ ] Jev comparison table against §2, with the same model pin and specs, and deltas stated with n.
 - [ ] (R4) The D0 real-load and contained proofs above, each stating peak concurrency, build and sample counts (§4).
-- [ ] (2026-10-02) The crash-recovery arm (kill and drain-timeout) and the failure classification, with per-child and per-cause counts. These are wave K's entry evidence (K0).
+- [ ] (2026-10-02) The crash-recovery arm (kill and drain-timeout) and the failure classification, with per-child and per-cause counts. These are wave K's entry evidence (R5).
 
-#### Review moment R5
+#### Review moment R5 — programme close and wave K entry review
 
-Decide: close the programme, or open the next plan.
+Decide two things:
+- **Close the programme** (or open the next plan), against §1's goal, with E2a's proofs and E2b's re-measure in hand.
+- **Wave K: go or no-go**, its scope (which causes, which runtimes), routing and the restart grant for its deploy, reading E2a's crash-recovery arm and failure classification.
+
+No-go on K is a valid outcome. If transient causes rarely end goals, or the crash arm shows almost nothing lost, record that in §8 and do not start K.
 
 ### Wave K — Durable runs (added 2026-10-02, owner; after R5)
 
@@ -1082,15 +1154,9 @@ That costs parent attention and, while the parent sleeps, wall-clock time. That 
 
 The numbers (2 restart cut-offs in 1,000 runs; repeated hand restarts of goals after provider aborts, H2 item 7) say continuing after a transient stop is what matters, not mid-step checkpoints.
 
-#### K0 — Entry review (owner; may be held together with R5)
+#### Entry review: R5
 
-Read E2a's crash-recovery arm and its failure classification, then decide:
-- go or no-go;
-- K's scope (which causes, which runtimes);
-- routing;
-- the restart grant for K's deploy.
-
-**No-go is a valid outcome.** If transient causes rarely end goals, or the crash arm shows almost nothing lost, record that in §8 and do not start K.
+Wave K's entry review is R5 (above): go or no-go, scope, routing and the restart grant.
 
 **Reopen the design references** (step-level checkpoints, per-tool replay declarations, an abort-cascade ownership tree that cancels children when a parent dies) only if E2a shows work lost beyond the cut-off turn, or children orphaned after a parent's death in numbers that matter.
 
@@ -1325,5 +1391,5 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | J1–J4 | **merged 2026-10-02**: J4 `e27e6747` + `pi-enhancement` `05084fb` (goal engine deployed); J3 `7e550a8c`; J1 `33b89909` (incl. the SDK 1.0.0 weekly-refresh load fix); J2 `pi-orch` `4498449`. CI green. J1/J3 server code in production since the wave's batched drain-restart (2026-10-02 16:47 UTC, build `dc9a32a6`: drain settled 48 ms, 0 cut off; tools root verified; J3 fields in the A2 file; weekly refresh loads; smoke child OK) | [`J1.md`](./execution-reports/orchestration-scaling/J1.md), [`J3.md`](./execution-reports/orchestration-scaling/J3.md); `/root/orch-ops/orchestration-scaling/j2/`, `j4/` | Every lane Luna-reviewed; final corrections parent-verified (2-round cap) |
 | D1–D2 | **not started; not authorised at R4** | — | Reopen trigger in §3 R4 block |
 | E1 | **running** since wave 3 ([`RECURRING-DEFECT-LEDGER.md`](../RECURRING-DEFECT-LEDGER.md)); classes added at R4 and in wave H-b | [`S1-E1.md`](./execution-reports/orchestration-scaling/S1-E1.md) | J3 adds a watch row |
-| E2 | not started (none of its population exists yet) | — | **Split 2026-10-02 (§3):** E2a after J1–J4 deploy, on the final build; E2b on the owner-id-aware population trigger or the owner's call |
-| K (K0–K4) | **planned** 2026-10-02 (owner): wave K after R5, behind entry review K0; evidence gate = E2a's crash-recovery arm and failure classification | §6 *Wave K*; §3 2026-10-02 | Origin: the owner's Pi Durable question (session `pi:01a0fd53`). Not started |
+| E2 | **authorised 2026-10-02 (owner), not started**: E2a and E2b both, E2b at the owner's call; binding host-safety protocol (a model-free host guard with hard and soft stop triggers, built and proven first) | §6 *E2*; runbook `/root/orch-ops/orchestration-scaling/STATE-e2.md` | **Split 2026-10-02 (§3).** Lanes E2a-0…6 and E2b. Routing and a restart grant (only if a fix must deploy inside E2) to confirm at start; Luna rows expire 2026-10-09 |
+| K (K1–K4) | **planned** 2026-10-02 (owner): wave K after R5, which is also its entry review; evidence = E2a's crash-recovery arm and failure classification | §6 *Wave K*; §3 2026-10-02 | Origin: the owner's Pi Durable question (session `pi:01a0fd53`). Not started |
