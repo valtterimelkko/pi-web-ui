@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { createLogger } from '../logging/logger.js';
+import { planSpawnOwn, placementForSpawn, appendDegradeLine } from '../placement/index.js';
 
 const logger = createLogger('TerminalManager');
 
@@ -37,6 +38,7 @@ interface TerminalSession {
   lastActivity: number;
   process: IPty;
   emitter: EventEmitter;
+  cleanup?: () => void;
 }
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
@@ -64,13 +66,53 @@ export class TerminalManager {
     const shell = process.env.SHELL || '/bin/bash';
     const emitter = new EventEmitter();
 
-    const process_ = pty.spawn(shell, [], {
-      name: 'xterm-color',
-      cols,
-      rows,
-      cwd,
+    const placementCfg = placementForSpawn();
+    let launch: { file: string; args: string[]; env: Record<string, string>; cleanup?: () => void } | null = null;
+
+    if (placementCfg) {
+      try {
+        launch = planSpawnOwn(placementCfg, [shell], process.env);
+      } catch (err) {
+        logger.warn('[TerminalManager] placement plan failed, falling back unplaced:', (err as Error).message);
+        appendDegradeLine(placementCfg, clientId, `terminal-spawn-plan-failed: ${(err as Error).message}`);
+      }
+    }
+
+    const defaultLaunch = {
+      file: shell,
+      args: [] as string[],
       env: { ...process.env } as Record<string, string>,
-    });
+      cleanup: undefined as (() => void) | undefined,
+    };
+
+    let activeLaunch = launch ?? defaultLaunch;
+    let process_: IPty;
+
+    try {
+      process_ = pty.spawn(activeLaunch.file, activeLaunch.args, {
+        name: 'xterm-color',
+        cols,
+        rows,
+        cwd,
+        env: activeLaunch.env,
+      });
+    } catch (err) {
+      if (launch && placementCfg) {
+        logger.warn('[TerminalManager] placed spawn failed, falling back to unplaced shell:', (err as Error).message);
+        appendDegradeLine(placementCfg, clientId, `terminal-spawn-failed: ${(err as Error).message}`);
+        activeLaunch.cleanup?.();
+        activeLaunch = defaultLaunch;
+        process_ = pty.spawn(defaultLaunch.file, defaultLaunch.args, {
+          name: 'xterm-color',
+          cols,
+          rows,
+          cwd,
+          env: defaultLaunch.env,
+        });
+      } else {
+        throw err;
+      }
+    }
 
     const now = Date.now();
     const session: TerminalSession = {
@@ -82,6 +124,7 @@ export class TerminalManager {
       lastActivity: now,
       process: process_,
       emitter,
+      cleanup: activeLaunch.cleanup,
     };
 
     this.terminals.set(clientId, session);
@@ -93,6 +136,11 @@ export class TerminalManager {
     });
 
     process_.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
+      try {
+        session.cleanup?.();
+      } catch {
+        // ignore
+      }
       emitter.emit('exit', { exitCode, signal });
       // Terminal is gone: remove websocket data/exit listeners so the closed
       // ws reference is released and no stale output is delivered.
@@ -150,6 +198,11 @@ export class TerminalManager {
     this.clearIdleTimer(clientId);
     try {
       session.process.kill();
+    } catch {
+      // ignore
+    }
+    try {
+      session.cleanup?.();
     } catch {
       // ignore
     }
