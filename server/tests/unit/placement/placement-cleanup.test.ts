@@ -126,4 +126,19 @@ describe('placement cleanup (cgroupfs-semantics fake — correction 06 finding 2
     expect(existsSync(slice) || r.removed > 0).toBe(true); // root survives
     expect((await sweepAllGroups(cgroupfsIo(tree), cfg)).removed).toBe(0);
   });
+
+  it('J6: sweepAllGroups never runs on a config whose placement is not enabled', async () => {
+    // The J6 invariant: the sweep is a placement mechanism — a config that was
+    // refused/unapplied must never sweep, whatever its toolsRoot carries.
+    makeGroup('pi-live');
+    const disabled = {
+      ...resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'off', PI_TOOLS_CGROUP_ROOT: dir, PI_TOOLS_SLICE: path.join(dir, 'tools.slice') }),
+      // An unapplied config would normally carry toolsRoot: undefined; pin a
+      // root anyway to prove the enabled check, not the missing root, stops it.
+      toolsRoot: slice,
+    };
+    const r = await sweepAllGroups(cgroupfsIo(tree), disabled);
+    expect(r).toEqual({ removed: 0, failures: 0 });
+    expect(tree.has(path.join(slice, 'pi-live', 'cgroup.procs'))).toBe(true);
+  });
 });

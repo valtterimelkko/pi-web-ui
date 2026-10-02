@@ -13,6 +13,39 @@ interface ValidationIsolationInput {
   commandCodeReal?: boolean;
 }
 
+/**
+ * J6: every environment key with this prefix is stripped from the disposable
+ * server's environment unless the caller explicitly requested that key for
+ * this run (the --env-file/--env-key channel). Prefix-based, because more than
+ * the server's own config keys leak through a placed shell: production's
+ * placement wrapper exports the whole family (PI_TOOLS_ROOT, PI_TOOLS_CG,
+ * PI_TOOLS_GROUP, PI_TOOLS_MEM_*, PI_TOOLS_DEGRADE_FILE, …), and an inherited
+ * PI_TOOLS_PLACEMENT + PI_TOOLS_SLICE makes a disposable server resolve
+ * PRODUCTION's tools root and sweep it at startup and shutdown (the Hb5 host
+ * hazard, reproduced in proof phaseA-run-20261002T130417Z).
+ */
+export const PLACEMENT_ENV_PREFIX = 'PI_TOOLS_';
+
+/**
+ * Delete every inherited `PI_TOOLS_*` key from `env` in place, except keys the
+ * caller explicitly requested for this run. Returns the dropped key names (for
+ * the launcher's console evidence). Must run BEFORE the env file is loaded, so
+ * an explicitly requested key — absent after the strip — is set from the file.
+ */
+export function stripInheritedPlacementEnv(
+  env: NodeJS.ProcessEnv,
+  explicitlyRequested: ReadonlySet<string>,
+): string[] {
+  const dropped: string[] = [];
+  for (const key of Object.keys(env)) {
+    if (!key.startsWith(PLACEMENT_ENV_PREFIX)) continue;
+    if (explicitlyRequested.has(key)) continue;
+    delete env[key];
+    dropped.push(key);
+  }
+  return dropped;
+}
+
 export function buildValidationIsolationEnv(
   input: ValidationIsolationInput,
 ): NodeJS.ProcessEnv {
@@ -28,6 +61,11 @@ export function buildValidationIsolationEnv(
   return {
     PI_WEB_UI_VALIDATION_MODE: 'true',
     PI_WEB_UI_VALIDATION_DEFAULT_CWD: join(input.validationDir, 'workspace'),
+    // J6: the placement runtime dir (wrapper script + degrade log) is per-run
+    // state, so it is ALWAYS pinned inside the disposable directory — even when
+    // the caller explicitly enables placement for a proof. A caller-supplied
+    // PI_TOOLS_RUNTIME_DIR is deliberately not honoured here.
+    PI_TOOLS_RUNTIME_DIR: join(input.validationDir, 'placement'),
     PORT: input.port,
     INTERNAL_API_ENABLED: 'true',
     // Never inherit a production static key; force the disposable server to

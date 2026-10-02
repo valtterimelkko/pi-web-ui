@@ -17,6 +17,7 @@ import {
   loadValidationEnvFile,
   resolveValidationEnvFile,
   resolveValidationEnvKeys,
+  stripInheritedPlacementEnv,
 } from '../server/src/live-validation/validation-server-env.js';
 import { createCommandCodeValidationFixture } from '../server/src/live-validation/command-code-fixture.js';
 import {
@@ -69,6 +70,14 @@ async function main(): Promise<void> {
   const validationArgs = process.argv.slice(2);
   const validationEnvFile = resolveValidationEnvFile(validationArgs);
   const validationEnvKeys = resolveValidationEnvKeys(validationArgs);
+  // J6: inherited placement env must never reach the disposable server unless
+  // the caller explicitly requested those keys for this run (--env-file plus
+  // --env-key PI_TOOLS_*). Runs BEFORE the env-file load so an explicitly
+  // requested key — absent after the strip — is set from the file.
+  const droppedPlacementKeys = stripInheritedPlacementEnv(process.env, new Set(validationEnvKeys));
+  if (droppedPlacementKeys.length > 0) {
+    console.error(`[validation-server] dropped inherited placement env: ${droppedPlacementKeys.join(', ')}`);
+  }
   if (validationEnvFile) loadValidationEnvFile(validationEnvFile, validationEnvKeys);
   if (!validationEnvFile && validationEnvKeys.length > 0) {
     throw new Error('--env-key requires --env-file (or PI_WEB_UI_VALIDATION_ENV_FILE).');

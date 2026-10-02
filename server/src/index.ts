@@ -12,6 +12,7 @@ import { config } from './config.js';
 import {
   resolvePlacementConfig,
   applyStartupPlacement,
+  resetAppliedPlacement,
   sweepAllGroups,
   realCgroupIo,
   appendDegradeLine,
@@ -19,8 +20,11 @@ import {
   readDegradeCount,
   placementDegradeFilePath,
   exportToolsPlacementBridge,
+  validationPlacementRefusal,
   type AppliedStartupPlacement,
+  type ValidationPlacementRefusal,
 } from './placement/index.js';
+import { readSelfCgroup } from './live-validation/validation-cgroup-guard.js';
 import { setHealthReadingSources } from './observability/health-readings.js';
 import { WebSocketConnectionManager, wireWebSocketDrainFence } from './websocket/index.js';
 import { handleWebSocketUpgrade } from './websocket/upgrade-handler.js';
@@ -76,9 +80,52 @@ async function initialize(): Promise<void> {
     // Correction-06 finding 1: resolve + verify ONCE; the applied config (with the
     // verified absolute root) feeds EVERY consumer below — sweep, sampler, bridge,
     // admission, session cleanup (which read the module state).
-    startupApplied = placementStartupCfg.enabled
-      ? applyStartupPlacement(placementStartupCfg)
-      : { active: false, config: placementStartupCfg, reason: 'placement off' };
+    // J6: in validation mode the gate refuses placement against a root the run
+    // does not own — production's tools slice / anchor (name or absolute-path
+    // form, or whatever the raw form resolves to) and the server's own cgroup.
+    // A refused run never resolves, never sweeps, at startup OR shutdown.
+    let placementRefusal: ValidationPlacementRefusal | null = null;
+    if (placementStartupCfg.enabled && config.validationMode) {
+      placementRefusal = validationPlacementRefusal({
+        validationMode: true,
+        cfg: placementStartupCfg,
+        selfCgroupPath: readSelfCgroup(),
+      });
+    }
+    if (placementRefusal) {
+      startupApplied = {
+        active: false,
+        config: { ...placementStartupCfg, enabled: false, toolsRoot: undefined },
+        reason: `validation-mode placement refused (${placementRefusal})`,
+      };
+      logger.error(`[Placement] DISABLED — validation mode refuses this tools root (${placementRefusal}): a disposable server never sweeps a root it does not own`);
+      appendDegradeLine(placementStartupCfg, 'validation-placement-refused', placementRefusal);
+    } else {
+      startupApplied = placementStartupCfg.enabled
+        ? applyStartupPlacement(placementStartupCfg)
+        : { active: false, config: placementStartupCfg, reason: 'placement off' };
+      // J6 post-resolution check: the VERIFIED root is re-judged, so a raw form
+      // that resolves into the production tools slice (or onto the server's own
+      // cgroup) is refused after verification and before anything consumes it.
+      if (startupApplied.active && config.validationMode) {
+        placementRefusal = validationPlacementRefusal({
+          validationMode: true,
+          cfg: startupApplied.config,
+          resolvedRoot: startupApplied.config.toolsRoot,
+          selfCgroupPath: readSelfCgroup(),
+        });
+        if (placementRefusal) {
+          startupApplied = {
+            active: false,
+            config: { ...startupApplied.config, enabled: false, toolsRoot: undefined },
+            reason: `validation-mode placement refused (${placementRefusal})`,
+          };
+          resetAppliedPlacement();
+          logger.error(`[Placement] DISABLED — validation mode refuses the resolved tools root (${placementRefusal}): a disposable server never sweeps a root it does not own`);
+          appendDegradeLine(startupApplied.config, 'validation-placement-refused', placementRefusal);
+        }
+      }
+    }
     const swept = await sweepAllGroups(realCgroupIo, startupApplied.config);
     if (swept.removed > 0 || swept.failures > 0) {
       logger.warn(`[Placement] Startup sweep: removed ${swept.removed} stale tools group(s), ${swept.failures} failure(s)`);
