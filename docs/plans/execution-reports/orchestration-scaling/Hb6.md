@@ -58,6 +58,29 @@ Non-regression notes: the steer-while-streaming flow is behaviourally unchanged 
 3. The steer chip can remain visible after delivery when the echoed content is an array (the chip-clearing effect matches string content) — a PRE-EXISTING cosmetic nit in the fenced-out chip flow, observed during the arms (chat bubble counts unaffected); flagged for the parent, not fixed here.
 4. The virtualised message list renders only on-screen rows, so DOM counting is per rendered view; fresh-session-per-arm keeps rendered set == transcript for the asserted prompts.
 
-## 7. Housekeeping
+## 7. Correction 02 — stale queued-streaming chips (brought into scope by the parent)
+
+The owner-visible nit this lane had fenced off: queued-streaming chips (steer/follow-up sent while a run streams) stayed visible after their prompt was delivered and answered — the delivered-check required `typeof content === 'string'` while the echoed user message carries a text-block array (captured in `hb6fix-off-mobile-p3tool.png`). Parent brought it into scope with a RED-first mandate and a steer-flow fence.
+
+**Fix (commit `e2104779`, client-only, no wire change):** the delivered-check is extracted into a pure exported helper `removeDeliveredQueuedChips(queue, transcript)` that matches user messages via the SAME `messageTextOf` extraction the optimistic-echo reconciliation uses (now exported from the store); the effect wires through it. Conservative: role user, exact trimmed equality, order preserved; drop-on-run-end and the rest of the steer/follow-up flow untouched.
+
+**TDD:** RED `client/src/components/Chat/queuedStreaming.test.ts` (new pure-function suite, 7 cases) → **7 failed, exit 1** (helper missing); GREEN → **7/7, exit 0**. Cases: array-echo clears, string-echo clears (old behaviour preserved), unmatched stays, trim-equivalence, containment does NOT match, order preserved, assistant/thinking content ignored.
+
+**Gates (at `e2104779`):** full monorepo suite exit 0 (shared 249; server 7254 passed | 3 skipped; client **1679 passed (1679)** — 150 files; mcp 71); lint 0 errors; lint:ratchet `violations: []`; typecheck 0; build 0; docs:check-links 0 (1339 links / 354 files); docs:check-agent-guides 0.
+
+**Live proof (disposable servers, this build; dedicated chip arm `hb6-chip-proof.py`):** type a long streaming prompt (count 1–12), then a second prompt while it streams → the second is delivered as a steer and the chip appears (positive control — chip seen during streaming in EVERY arm); settle → **zero chips**, both prompts single-bubbled (dom=1), transcript correct:
+
+| Arm | Flag | Viewport | Result |
+|---|---|---|---|
+| hb6c02-chip-desktop | on | desktop | PASS (chip seen; 0 at settle; dom 1/1) |
+| hb6c02-chip-mobile | on | **mobile, drawer closed (image checked: no chip under the composer, steer delivered as one bubble with its reply)** | PASS |
+| hb6c02-chip-off-desktop | off | desktop | PASS |
+| hb6c02-chip-off-mobile | off | mobile | PASS |
+
+Plus the standard four-prompt arms re-run on this build (`hb6c02-on-desktop`: all prompts dom=1/file=1, zero chips at settle). Build revision `e2104779`; n=1 per arm; peak concurrent active turns 1 (the steer rides the running turn).
+
+**Contract:** no wire change — no bump, no Agent OS mirror change.
+
+## 8. Housekeeping
 
 Servers `hb6-srv-on` (32821), `hb6-srv-off` (46189), `hb6b-srv-on` (40439), `hb6b-srv-off` (38403), vite (3457) stopped — ports verified dead (000). zai credential copies deleted from all four run dirs (`/root/hb6-runs/phaseA-01`, `phaseA-02`, `phaseB-01`, `phaseB-02`); no heap snapshots. Production checkout untouched (read-only re-check: `master`, empty status). Worktree tree clean at `70b2c2a4`; nothing pushed (lane branch, parent merges).
