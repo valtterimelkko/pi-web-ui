@@ -446,6 +446,37 @@ describe('runWeeklyRefresh', () => {
       expect(result.restarted).toBe(false);
     });
 
+    it('fails the run (not a capacity deferral) when the wrapper reports a guard refusal for a missing checkout', async () => {
+      resolveProcess = (command, args) => {
+        if (command === RESTART_SCRIPT) {
+          return {
+            exitCode: 3,
+            stderr: 'restart-pi-web-ui: refusing restart (production checkout guard): the production checkout directory does not exist (detail above); nothing was restarted.',
+          };
+        }
+        return defaultResolver(command, args);
+      };
+
+      await expect(runWeeklyRefresh([], options())).rejects.toThrow(/^pi-web-ui restart refused by the production checkout guard/);
+      expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(true);
+    });
+
+    it('(03-6) fails "pushed but NOT live" and attempts no restart when the post-push rebuild fails', async () => {
+      let builds = 0;
+      resolveProcess = (command, args) => {
+        if (command === 'npm' && args[0] === 'run' && args.includes('build')) {
+          builds += 1;
+          if (builds >= 2) return { exitCode: 1, stderr: 'error TS2307: cannot find module' };
+          return {};
+        }
+        return defaultResolver(command, args);
+      };
+
+      await expect(runWeeklyRefresh([], options())).rejects.toThrow(/pushed but NOT live/);
+      expect(builds).toBe(2);
+      expect(invocations.some(({ command }) => command === RESTART_SCRIPT)).toBe(false);
+    });
+
     it('pins the guard marker and exit status to the wrapper sources the job classifies', async () => {
       const wrapper = await readFile(path.join(REPO_ROOT, 'scripts', 'restart-pi-web-ui.sh'), 'utf8');
       expect(wrapper).toContain('refusing restart (production checkout guard)');

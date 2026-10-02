@@ -4,11 +4,13 @@
 #
 # WHY
 #
-# This is the restart entry point of scripts/command-code-weekly-refresh.ts,
+# This is the restart entry point of scripts/command-code-weekly-refresh.mts,
 # which runs it with a budget that covers the whole cycle — drain (20 s) +
 # HTTP slack (10 s) + the unit's stop timeout (30 s) + a 90 s start margin,
 # see RESTART_JOB_BUDGET_* in that script — and reads exit 1 + "refusing
-# restart" on stderr as "restart deferred" (not a failure). Until B4
+# restart" on stderr as "restart deferred" (not a failure), while a
+# checkout-guard refusal (exit 3, "refusing restart (production checkout
+# guard)") passes through as the hard failure it is. Until B4
 # correction 01 it had
 # its own pre-flight that looked only at `activeTurns`: a follow-up accepted but
 # not yet turning (zero active turns) was cut off silently, `--force` needed no

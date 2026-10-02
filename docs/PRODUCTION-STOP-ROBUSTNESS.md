@@ -288,7 +288,7 @@ stops systemd logged and the records the repository claims. That is
 
 | Path | Can it restart while turns are active? | Notes |
 |---|---|---|
-| `scripts/command-code-weekly-refresh.ts` (§8) | **Yes, by design** | Only when `--restart` is set *and* it committed. It polls `/capacity.activeTurns` for up to 30 min (30s poll) and restarts once it reads `0`. |
+| `scripts/command-code-weekly-refresh.mts` (§8) | **Yes, by design** | Only when it committed. It polls the live busy-session count (`GET /api/v1/sessions`, entries with `busy === true`) for up to 30 min, then restarts through `scripts/restart-pi-web-ui.sh` (drain-then-restart, production lock, requester recorded). A checkout-guard refusal (exit 3) fails the job loudly; a drain refusal defers. |
 | `scripts/restart-pi-web-ui.sh` | Yes, immediately | Names the requester via `record-restart-requester.sh`; takes the cooperative production lock by default. Use this for deliberate restarts. |
 | `scripts/restart-production.sh` | Yes, immediately | The canonical pre-flight path; since 2026-09-15 it names the requester too, and refuses unknown arguments rather than ignoring them. |
 | `server/tests/unit/restart-drainage.test.ts` and any suite that runs those scripts | **Yes, if a stub is missing** | This is the path that actually restarted production at 14:27:05Z. Three layers now protect it: the scripts' own pre-flight; the suite's own PATH stub (`d921ac7`); and the **test-workspace guard** (`server/tests/systemctl-guard.ts`, installed by `tests/setup-env.ts`) which refuses any state-changing `systemctl` verb in any test process, whatever revision of whatever script asks. |
@@ -339,19 +339,23 @@ narrower but does nothing against a reverted revision, because that check lives
 in the code under test; and `RefuseManualStop=yes` on the unit would refuse *all*
 restarts, including the repository's own audited path.
 
-### The idle check can be raced
+### The idle check race (closed by B4 correction 01, with a residual)
 
-`command-code-weekly-refresh.ts` reads `capacity.activeTurns`, then — in a
-separate step — calls `systemctl restart`. Between that read and the restart a
-new turn can start, so `activeTurns === 0` is a *sample*, not a reservation.
-Verified today that the sampler itself is not obviously broken:
-`/capacity.activeTurns` correctly reported `4` while four sessions were busy.
-The race is in the gap, not the gauge.
+~~`command-code-weekly-refresh.ts` reads `capacity.activeTurns`, then — in a
+separate step — calls `systemctl restart`.~~ That gap is closed: since B4
+correction 01 the job's idle decision reads the live busy-session count
+(`GET /api/v1/sessions`, entries with `busy === true` — not the
+`/capacity.activeTurns` gauge, which had been measured reading zero during a
+live turn), and the restart itself goes through
+`scripts/restart-pi-web-ui.sh`, which takes the production lock and drains
+before restarting. A drain that cannot settle cancels and refuses (exit 1);
+a checkout-guard refusal fails the job (exit 3).
 
-The fix belongs with that workstream (currently owner-gated) and is one line:
-route the restart through `scripts/restart-pi-web-ui.sh` and take the production
-lock, or have the Internal API expose a "reserve an idle window" primitive. Until
-then, treat the refresh's restart as best-effort idle-aware, not exclusive.
+What remains is sampling, not reservation: the busy-session probe answers a
+moment before the drain opens, so a turn starting in that window is caught by
+the drain's own wait (and, worst case, cut off and reported
+`drain_timeout`) — the drain, not the sample, is the reservation. A true
+"reserve an idle window" Internal API primitive remains an owner-gated idea.
 
 ---
 

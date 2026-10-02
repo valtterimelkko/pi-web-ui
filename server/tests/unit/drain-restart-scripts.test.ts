@@ -94,6 +94,8 @@ function createGitRepoFixture(
     brokenHeadRef?: boolean;
     /** J1: an extra commit AFTER the build — the manifest names the pre-commit revision. */
     postBuildCommit?: Record<string, string>;
+    /** J1 correction 03: untracked files under declared build inputs. */
+    untrackedInputs?: string[];
   } = {}
 ): { repoDir: string; headSha: string; buildSha: string } {
   const branch = options.branch ?? 'master';
@@ -158,6 +160,14 @@ function createGitRepoFixture(
     }
     spawnSync('git', ['add', '-A'], { cwd: repoDir, stdio: 'ignore' });
     spawnSync('git', ['commit', '-m', 'post-build commit (J1 fixture)'], { cwd: repoDir, stdio: 'ignore' });
+  }
+
+  if (options.untrackedInputs) {
+    for (const relPath of options.untrackedInputs) {
+      const abs = path.join(repoDir, relPath);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      writeFileSync(abs, 'untracked build input\n');
+    }
   }
 
   const headSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).stdout.trim();
@@ -671,6 +681,25 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         expect(audit).toMatch(/reason=emergency.*override/);
       });
 
+      it('refuses restart before draining when the checkout directory does not exist, with the guard contract (J1 correction 03)', () => {
+        const result = run(RESTART, ['--reason', 'missing checkout'], { PI_WEB_UI_CHECKOUT_DIR: path.join(dir, 'does-not-exist') });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+      });
+
+      it('refuses restart before draining when the checkout is not a git repository, with the guard contract (J1 correction 03)', () => {
+        const notARepo = path.join(dir, 'not-a-repo');
+        mkdirSync(notARepo, { recursive: true });
+        const result = run(RESTART, ['--reason', 'not git'], { PI_WEB_UI_CHECKOUT_DIR: notARepo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toContain('not a git repository');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+      });
+
       it('honours --checkout-dir and --expected-branch CLI options', () => {
         const repo = path.join(dir, 'custom-options-repo');
         createGitRepoFixture(repo, { branch: 'custom-feature' });
@@ -740,6 +769,52 @@ describe('drain-then-restart deploy scripts (B4)', () => {
           ...BUILD_INPUT_POLICY.configFiles,
           ...BUILD_INPUT_POLICY.scriptFiles,
           ...BUILD_INPUT_POLICY.lockfileNames,
+        ];
+        expect([...new Set(declared)].sort()).toEqual([...new Set(expected)].sort());
+      });
+
+      it('(03-1) refuses when an untracked file sits under a declared build input (source root), with the guard contract', () => {
+        const repo = path.join(dir, 'untracked-input-repo');
+        createGitRepoFixture(repo, { untrackedInputs: ['server/src/untracked-model.ts', 'client/public/untracked.txt'] });
+        const result = run(RESTART, ['--reason', 'untracked build input'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toContain('build inputs');
+        expect(result.stderr).toContain('server/src/untracked-model.ts');
+        expect(result.stderr).toContain('client/public/untracked.txt');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('(03-1) still proceeds when untracked files sit OUTSIDE the build inputs (repo root)', () => {
+        const repo = path.join(dir, 'untracked-root-repo');
+        createGitRepoFixture(repo, { untracked: true });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'root untracked ok'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      });
+
+      it('(03-3) a commit changing only a policy-excluded file (.map) is not stale', () => {
+        const repo = path.join(dir, 'map-only-repo');
+        createGitRepoFixture(repo, { postBuildCommit: { 'shared/src/protocol-types.js.map': '{"version":3,"file":"protocol-types.js"}\n' } });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'map-only change'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+        expect(readFileSync(auditFile, 'utf8')).toContain('drain=settled');
+      });
+
+      it('(03-3) the guard exclusions mirror the build policy (excludedFileNames, .env*, .map) as pathspec excludes', () => {
+        const script = readFileSync(RESTART, 'utf8');
+        const block = script.match(/BUILD_INPUT_EXCLUDES=\(\n([\s\S]*?)\n\)/);
+        expect(block, 'restart-production.sh must declare BUILD_INPUT_EXCLUDES').not.toBeNull();
+        const declared = (block?.[1] ?? '').replace(/["']/g, ' ').split(/\s+/).filter(Boolean);
+        const expected = [
+          ':(exclude)**/*.map',
+          ':(exclude)**/.env*',
+          ...BUILD_INPUT_POLICY.excludedFileNames.map((name) => `:(exclude)**/${name}`),
         ];
         expect([...new Set(declared)].sort()).toEqual([...new Set(expected)].sort());
       });
@@ -910,6 +985,14 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       const repo = path.join(dir, 'wrapper-guard-repo');
       createGitRepoFixture(repo, { postBuildCommit: { 'server/src/models.ts': 'export const v = 2;\n' } });
       const result = run(RESTART_PI_WEB_UI, ['--reason', 'weekly refresh'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+      expect(result.status).toBe(3);
+      expect(result.stderr).toMatch(/restart-pi-web-ui: refusing restart \(production checkout guard\)/);
+      expect(result.stderr).not.toMatch(/drain did not settle/);
+      expect(lines(systemctlLog)).toEqual([]);
+    });
+
+    it('(J1 03-2) reports a missing checkout directory as a guard refusal (exit 3), not a drain refusal', () => {
+      const result = run(RESTART_PI_WEB_UI, ['--reason', 'missing checkout'], { PI_WEB_UI_CHECKOUT_DIR: path.join(dir, 'absent-checkout') });
       expect(result.status).toBe(3);
       expect(result.stderr).toMatch(/restart-pi-web-ui: refusing restart \(production checkout guard\)/);
       expect(result.stderr).not.toMatch(/drain did not settle/);

@@ -250,17 +250,33 @@ BUILD_INPUT_PATHS=(
   "yarn.lock"
 )
 
+# J1 correction 03 (finding 3): the build digests a file under a declared
+# input only when isAllowedFile (server/src/build-identity/manifest.ts)
+# accepts it: excludedFileNames, names starting .env, and names ending .map
+# are never digested. The git comparison mirrors exactly those exclusions as
+# pathspec excludes (pinned by test), so a commit changing only e.g. a .map
+# is not "stale". The policy's excludedDirectoryNames are walk-level prunes;
+# tracked files inside such directories cannot occur in a clean checkout, and
+# an anomaly there fails towards refusal, never towards allow.
+BUILD_INPUT_EXCLUDES=(
+  ":(exclude)**/*.map"
+  ":(exclude)**/.env*"
+  ":(exclude)**/embedded-manifest.json"
+  ":(exclude)**/manifest.generated.ts"
+  ":(exclude)**/test-results.json"
+)
+
 check_production_checkout_safety() {
   if [ "$FORCE" -eq 1 ]; then
     return 0
   fi
 
   if [ ! -d "$CHECKOUT_DIR" ]; then
-    refuse "production checkout directory '$CHECKOUT_DIR' does not exist."
+    refuse_guard "production checkout directory '$CHECKOUT_DIR' does not exist."
   fi
 
   if ! git -C "$CHECKOUT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-    refuse "production checkout at '$CHECKOUT_DIR' is not a git repository."
+    refuse_guard "production checkout at '$CHECKOUT_DIR' is not a git repository."
   fi
 
   # Hb4 correction 02 (Luna review M1): a check that CANNOT RUN must read as
@@ -283,6 +299,25 @@ check_production_checkout_safety() {
   fi
   if [ -n "$dirty_tracked" ]; then
     refuse_guard "production checkout at '$CHECKOUT_DIR' has modified or staged tracked files:\n${dirty_tracked}"
+  fi
+
+  # J1 correction 03 (finding 1, fail closed by owner decision): untracked or
+  # modified files under the DECLARED BUILD INPUTS make "the built content
+  # corresponds to HEAD" false for any future rebuild — the build would digest
+  # content git cannot see. Refused whether or not the manifest revision equals
+  # HEAD. Ignored files stay invisible here (porcelain without --ignored); the
+  # build honours BUILD_INPUT_POLICY's own exclusions rather than .gitignore —
+  # the difference is recorded in the J1 evidence bundle.
+  local untracked_inputs status_untracked
+  set +e
+  untracked_inputs="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=all -- "${BUILD_INPUT_PATHS[@]}" "${BUILD_INPUT_EXCLUDES[@]}" 2>/dev/null)"
+  status_untracked=$?
+  set -e
+  if [ "$status_untracked" -ne 0 ]; then
+    refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git status --porcelain -- <build inputs>' failed (exit ${status_untracked})."
+  fi
+  if [ -n "$untracked_inputs" ]; then
+    refuse_guard "production checkout at '$CHECKOUT_DIR' has untracked or modified files under the declared build inputs (a rebuild would digest content git cannot see):\n${untracked_inputs}"
   fi
 
   local manifest_path
@@ -326,14 +361,14 @@ check_production_checkout_safety() {
     fi
     local diff_status changed_inputs
     set +e
-    git -C "$CHECKOUT_DIR" diff --quiet "$manifest_rev" "$head_rev" -- "${BUILD_INPUT_PATHS[@]}" 2>/dev/null
+    git -C "$CHECKOUT_DIR" diff --quiet "$manifest_rev" "$head_rev" -- "${BUILD_INPUT_PATHS[@]}" "${BUILD_INPUT_EXCLUDES[@]}" 2>/dev/null
     diff_status=$?
     set -e
     if [ "$diff_status" -gt 1 ]; then
       refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git diff ${manifest_rev}..HEAD -- <build inputs>' failed (exit ${diff_status}); whether server/dist is stale cannot be judged."
     fi
     if [ "$diff_status" -eq 1 ]; then
-      changed_inputs="$(git -C "$CHECKOUT_DIR" diff --name-only "$manifest_rev" "$head_rev" -- "${BUILD_INPUT_PATHS[@]}" 2>/dev/null | head -n 8 | tr '\n' ' ')"
+      changed_inputs="$(git -C "$CHECKOUT_DIR" diff --name-only "$manifest_rev" "$head_rev" -- "${BUILD_INPUT_PATHS[@]}" "${BUILD_INPUT_EXCLUDES[@]}" 2>/dev/null | head -n 8 | tr '\n' ' ')"
       refuse_guard "production checkout at '$CHECKOUT_DIR' server/dist was built from '${manifest_rev}' but build inputs changed by HEAD '${head_rev}' (${changed_inputs}); dist is stale; rebuild before restarting."
     fi
     echo "Checkout guard: server/dist was built from '${manifest_rev}', HEAD is '${head_rev}', and no build input changed in between: the compiled content is current (docs-only commits need no rebuild)."

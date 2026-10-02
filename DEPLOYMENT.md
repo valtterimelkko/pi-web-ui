@@ -635,14 +635,14 @@ disposable proofs every target is injectable (`PI_WEB_UI_SERVICE_UNIT`,
 `PI_WEB_UI_STOP_AUDIT_FILE`, `PI_WEB_UI_PRODUCTION_LOCK`). The drain API itself
 is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md#drain-then-restart).
 
-**Production checkout safety guard (Hb4; content-based since J1, 2026-10-02).**
+**Production checkout safety guard (Hb4; content-based since J1, tightened by J1 correction 03, 2026-10-02).**
 Before initiating drain or restart, `scripts/restart-production.sh` validates
 that the production checkout directory (`CHECKOUT_DIR`, default `/root/pi-web-ui`,
 overrideable via `--checkout-dir` or `PI_WEB_UI_CHECKOUT_DIR`):
 
-1. Is on the expected branch (default `master`, overrideable via `--expected-branch` or `PI_WEB_UI_EXPECTED_BRANCH`).
-2. Has no unstaged modifications or staged changes on tracked files (untracked files are ignored).
-3. Has a compiled build in `server/dist/build-identity/embedded-manifest.json` whose **built content is current for `HEAD`**: the manifest records the revision the build was made from; the guard refuses only when a *build input* — the paths in `BUILD_INPUT_POLICY` (`server/src/build-identity/manifest.ts`: server/client/shared/internal-api-mcp sources, workspace and TypeScript configs, the declared validation scripts, lockfiles; mirrored as `BUILD_INPUT_PATHS` in the script and pinned to the policy by test) — differs between that revision and `HEAD`. Commits that touch no build input (docs, plans) do **not** need a rebuild before restarting. An unknown manifest revision or a failing diff refuses (fails closed).
+1. Exists, is a git repository, and is on the expected branch (default `master`, overrideable via `--expected-branch` or `PI_WEB_UI_EXPECTED_BRANCH`).
+2. Has no unstaged modifications or staged changes on tracked files, and **no untracked or modified files under the declared build inputs** (`BUILD_INPUT_POLICY` paths — a rebuild would digest content git cannot see; fail closed by owner decision). Untracked files outside the build inputs remain ignored.
+3. Has a compiled build in `server/dist/build-identity/embedded-manifest.json` whose **built content is current for `HEAD`**: the manifest records the revision the build was made from; the guard refuses only when a *build input* differs between that revision and `HEAD` — excluding what the build itself never digests (files named `*.map` or `.env*`, and the policy's `excludedFileNames`, mirrored as git pathspec excludes and pinned by test). Commits that touch no digested input (docs, plans, sourcemaps) do **not** need a rebuild before restarting. An unknown manifest revision or a failing diff refuses (fails closed).
 
 Every refusal from these checks is a **checkout-guard refusal**: exit **3** with
 `ERROR: Refusing production restart (checkout guard): …` — distinct from a drain
