@@ -10,6 +10,7 @@ import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { getHeapStatistics } from 'node:v8';
 import { getLoopStallAttributor } from '../observability/loop-stall-attribution.js';
 import { emitSessionShutdown, SESSION_SHUTDOWN_TIMEOUT_MS, type SessionShutdownInit } from './session-shutdown.js';
+import { observeStreamingChunkDelivered } from '../observability/streaming-telemetry.js';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 const logger = createLogger('MultiSessionManager');
@@ -1841,6 +1842,11 @@ export class MultiSessionManager {
         }
       }
     }
+
+    // Hb3: delivery boundary of the streaming-path span — every transport this
+    // event feeds (browser envelope, Internal API observers) has been handed
+    // its frame. No-op unless a chunk receipt opened a span.
+    observeStreamingChunkDelivered();
   }
 
   /**

@@ -585,6 +585,62 @@ directory or alert sink disables telemetry and writes nothing. See
 [`plans/execution-reports/orchestration-scaling/A2.md`](./plans/execution-reports/orchestration-scaling/A2.md)
 for the exact commands and the recorded numbers.
 
+### Streaming-path telemetry (Hb3)
+
+Each metrics reading carries an additive `streaming` field (Hb3, plan H3 item 2;
+G2's R4 proposal) that summarises the Pi streaming path for that reading window,
+so an 11:43-type stall can be attributed from the metrics file alone:
+
+```json
+"streaming": {
+  "windowMs": 30000,
+  "spans": { "count": 412, "p50Ms": 1, "p99Ms": 4, "maxMs": 22 },
+  "providerGap": { "count": 398, "maxMs": 41000, "provider": "zai" },
+  "providers": { "zai": { "chunks": 412, "bytes": 8131, "chunksPerSec": 13.7 } },
+  "providersTruncated": false
+}
+```
+
+- **`spans`** — receipt→dispatch time per provider chunk: stamped when the pi
+  event funnel receives the chunk (`pi-service.ts`), closed where the pi path
+  has handed the projected frame to every transport (`handleAgentEvent`'s
+  browser + Internal-API-observer fan-out, or the single-client
+  `EventForwarder` send). Bounded nearest-rank p50/p99/max over a 512-sample
+  ring; `count` is exact. A span that grows with per-chunk delivery work
+  (projection, enrichment, subscriber fan-out) names the server's delivery
+  path — the path G2's LoopAttribution could not see.
+- **`providers`** — per provider: chunk count, delta bytes, and chunks/s over
+  the window, from the `text_delta` / `thinking_delta` / `toolcall_delta`
+  events the provider actually sent (partial message's `provider`; `unknown`
+  when absent). Capped at 8 providers per window (highest chunk counts win;
+  `providersTruncated` flags the fold).
+- **`providerGap`** — the largest interval between consecutive chunk receipts
+  inside one open message stream (reset by `message_start`/`message_end` /
+  `agent_start`, so tool gaps between messages never count), with the count of
+  observed intervals and the provider that closed the max gap.
+
+**Attribution reading guide.** A provider that pauses mid-stream shows a large
+`providerGap.maxMs` with flat spans and flat lag/CPU in the same reading. A
+server-side stall shows large spans (delivery work), or a large gap **plus**
+raised `lagP99Ms`/`mainThreadCpuPercentOfCore` — a blocked main thread delays
+receipts too, so a gap alone is provider evidence only while the loop is
+healthy. Read the three fields (plus lag/CPU) jointly.
+
+**Boundaries.** The span ends at transport dispatch, before the WebSocket
+outbound governor's backpressure queue (queued-frame delay is visible through
+the existing queued-frame counters and belongs to the WebSocket lane). Cost:
+per delta chunk O(1) map/counter work, no logging; percentiles are computed
+once per window at sample time; when disabled the hooks are one boolean check
+per event. The field is additive on the metrics FILE only (not the Internal API
+wire); `getHealthReadings()` (B2 admission) never sees or drains windows — the
+source is registered on the A2 sampler only. Disabled by
+`OBSERVABILITY_STREAMING_TELEMETRY=off` (also requires the sampler itself to
+be enabled). Unit coverage:
+`server/tests/unit/observability/streaming-telemetry.test.ts`; the Hb3 live
+attribution proof (real GLM turn, mock-provider pause arm, server-side stall
+arm, on/off overhead) is recorded in
+[`plans/execution-reports/orchestration-scaling/Hb3.md`](./plans/execution-reports/orchestration-scaling/Hb3.md).
+
 ## Manual browser diagnostic bundle
 
 The browser keeps a small in-memory ring of connection lifecycle, abnormal

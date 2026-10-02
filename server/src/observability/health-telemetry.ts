@@ -9,6 +9,11 @@ import {
   type HealthReadings,
 } from './health-readings.js';
 import {
+  configureStreamingTelemetry,
+  resolveStreamingTelemetryEnv,
+  takeStreamingWindow,
+} from './streaming-telemetry.js';
+import {
   createHealthTelemetryConfig,
   type HealthTelemetryConfig,
 } from './health-telemetry-config.js';
@@ -250,9 +255,20 @@ let globalTelemetry: HealthTelemetry | undefined;
 export function getHealthTelemetry(): HealthTelemetry {
   if (!globalTelemetry) {
     const config = createHealthTelemetryConfig(process.env);
+    // Hb3: streaming-path telemetry shares the A2 sampler's lifecycle (its
+    // fields reach the stream through this sampler only) and can be turned off
+    // independently with OBSERVABILITY_STREAMING_TELEMETRY=off (the on/off
+    // overhead proof uses that knob). The window-consuming source is passed
+    // ONLY here — sampler-scoped, so the reusable getHealthReadings() accessor
+    // never drains windows as a side effect.
+    const streamingEnabled = config.enabled && resolveStreamingTelemetryEnv(process.env).enabled;
+    configureStreamingTelemetry({ enabled: streamingEnabled });
     globalTelemetry = new HealthTelemetry({
       config: process.env.VITEST ? { ...config, enabled: false } : config,
-      sources: { registryEntries: defaultRegistryEntries },
+      sources: {
+        registryEntries: defaultRegistryEntries,
+        ...(streamingEnabled ? { streaming: () => takeStreamingWindow() ?? undefined } : {}),
+      },
     });
   }
   return globalTelemetry;
