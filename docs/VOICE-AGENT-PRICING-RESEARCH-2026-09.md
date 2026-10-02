@@ -1,5 +1,12 @@
 # Real Voice-Agent Pricing Research (September 2026)
 
+> **Superseded (2026-10-02) for the STT leg:** dictation no longer runs
+> gpt-4o-mini-transcribe. After Benchmark 6 (agent-benchmarks), the dictation
+> chain is OpenRouter whisper-large-v3-turbo (DeepInfra, $0.20/1k audio-min)
+> -> local Parakeet -> OpenAI gpt-transcribe. The TTS leg (tts-1 below) is
+> unchanged but itself retires 2027-01-06 pending an OpenAI successor.
+> The September numbers below are the historical baseline.
+
 > **Class:** research record (not a plan, not a proposal). **Status:** current as research; superseded in places by its own §8 Gemini-launch and §9 gap-analysis addenda. **Last verified:** 2026-09-17. **Corpus:** Voice Mode — see [`VOICE-MODE-INDEX.md`](./VOICE-MODE-INDEX.md).
 
 > **Question.** The Artificial Analysis Speech Agent Arena tweet

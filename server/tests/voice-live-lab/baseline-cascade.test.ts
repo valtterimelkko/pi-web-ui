@@ -42,6 +42,7 @@ import {
   BaselineCascade,
   createOpenAiStt,
   createOpenAiTts,
+  createOpenRouterStt,
   createWhisperFallbackStt,
   type BaselineStt,
   type BaselineTts,
@@ -462,7 +463,7 @@ describe('baseline cascade real adapters (stubbed fetch)', () => {
     expect(outcome.provider).toBe('openai');
     expect(calls[0].url).toBe('https://api.openai.com/v1/audio/transcriptions');
     const form = calls[0].init.body as FormData;
-    expect(form.get('model')).toBe('gpt-4o-mini-transcribe');
+    expect(form.get('model')).toBe('gpt-transcribe');
   });
 
   it('OpenAI STT falls back to the local Whisper service on failure', async () => {
@@ -513,5 +514,34 @@ describe('baseline cascade real adapters (stubbed fetch)', () => {
     // release turn synthesises must be the fixed string, not model text.
     expect(RELEASE_ACK).toBe('sending that now');
     expect(RECEIPT_ACK).toBe('Noted — still holding that.');
+  });
+});
+
+describe('OpenRouter STT tier (production primary since 2026-10-02)', () => {
+  it('posts base64 wav JSON with the DeepInfra pin and returns the text', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ text: 'routed via deepinfra' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    const stt = createOpenRouterStt({ apiKey: 'key-or', fetchImpl });
+    const outcome = await stt.transcribe(tonePcm(100));
+    expect(outcome.text).toBe('routed via deepinfra');
+    expect(outcome.provider).toBe('openrouter-deepinfra');
+    expect(calls[0].url).toBe('https://openrouter.ai/api/v1/audio/transcriptions');
+    const payload = JSON.parse(String(calls[0].init.body));
+    expect(payload.model).toBe('openai/whisper-large-v3-turbo');
+    expect(payload.provider).toEqual({ order: ['DeepInfra'], allow_fallbacks: false });
+    expect(payload.input_audio.format).toBe('wav');
+    const decoded = Buffer.from(payload.input_audio.data, 'base64');
+    expect(decoded.subarray(0, 4).toString('ascii')).toBe('RIFF'); // wav magic
+  });
+
+  it('throws honestly when no OPENROUTER_API_KEY is configured', async () => {
+    const stt = createOpenRouterStt({ apiKey: '', fetchImpl: (async () => new Response('{}')) as typeof fetch });
+    await expect(stt.transcribe(tonePcm(100))).rejects.toThrow(/no OPENROUTER_API_KEY/);
   });
 });

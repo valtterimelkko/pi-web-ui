@@ -567,9 +567,66 @@ function nowMs(): number {
  * out. Falls back to the local Whisper service when configured and OpenAI
  * fails; throws an honest combined error when both fail.
  */
+/**
+ * OpenRouter `openai/whisper-large-v3-turbo` (DeepInfra pin) — the production
+ * STT primary since 2026-10-02 (`server/src/dictation/stt.ts` tier 1).
+ * Benchmark 6: 1.47% WER at $0.20/1k audio-min on the operator's real
+ * dictation. Raw PCM in (converted to wav, the endpoint probed format),
+ * JSON out.
+ */
+export function createOpenRouterStt(options: OpenRouterSttOptions = {}): BaselineStt {
+  const apiKey = options.apiKey ?? process.env.OPENROUTER_API_KEY ?? '';
+  const model = options.model ?? 'openai/whisper-large-v3-turbo';
+  const baseUrl = (options.baseUrl ?? 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+  const fetchImpl = options.fetchImpl ?? fetch;
+  return {
+    async transcribe(pcm: Buffer): Promise<SttOutcome> {
+      const started = nowMs();
+      if (!apiKey) throw new Error('stt failed: no OPENROUTER_API_KEY configured');
+      const wav = pcmToWav(pcm, 16000);
+      const payload = {
+        model,
+        input_audio: {
+          data: Buffer.from(wav).toString('base64'),
+          format: 'wav',
+        },
+        provider: { order: ['DeepInfra'], allow_fallbacks: false },
+      };
+      const response = await fetchImpl(`${baseUrl}/audio/transcriptions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(`stt failed: openrouter ${model} responded ${response.status}`);
+      }
+      const data = (await response.json()) as { text?: string };
+      const text = (data.text ?? '').trim();
+      if (!text) throw new Error('stt failed: openrouter returned an empty transcript');
+      return { text, provider: 'openrouter-deepinfra', model, ms: nowMs() - started, usage: {} };
+    },
+  };
+}
+
+export interface OpenRouterSttOptions {
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * OpenAI `gpt-transcribe` — production's last-resort STT route
+ * (`server/src/dictation/stt.ts` tier 3). Raw PCM in, plain text out. Falls
+ * back to the local Whisper service when configured and OpenAI fails;
+ * throws an honest combined error when both fail.
+ */
 export function createOpenAiStt(options: OpenAiSttOptions = {}): BaselineStt {
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY ?? process.env.DICTATION_OPENAI_API_KEY ?? '';
-  const model = options.model ?? 'gpt-4o-mini-transcribe';
+  const model = options.model ?? 'gpt-transcribe';
   const baseUrl = (options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
