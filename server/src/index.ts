@@ -13,6 +13,7 @@ import {
   resolvePlacementConfig,
   applyStartupPlacement,
   resetAppliedPlacement,
+  startupSweepConfig,
   sweepAllGroups,
   realCgroupIo,
   appendDegradeLine,
@@ -20,7 +21,7 @@ import {
   readDegradeCount,
   placementDegradeFilePath,
   exportToolsPlacementBridge,
-  validationPlacementRefusal,
+  validationPlacementRefusalForConfig,
   type AppliedStartupPlacement,
   type ValidationPlacementRefusal,
 } from './placement/index.js';
@@ -81,14 +82,15 @@ async function initialize(): Promise<void> {
     // verified absolute root) feeds EVERY consumer below — sweep, sampler, bridge,
     // admission, session cleanup (which read the module state).
     // J6: in validation mode the gate refuses placement against a root the run
-    // does not own — production's tools slice / anchor (name or absolute-path
-    // form, or whatever the raw form resolves to) and the server's own cgroup.
-    // A refused run never resolves, never sweeps, at startup OR shutdown.
+    // does not own — production's tools slice / anchor (name, absolute-path or
+    // alias form: the candidate is CANONICALISED before this check, correction
+    // 02), anything not canonicalisable, and the server's own cgroup (compared
+    // in one coordinate system). A refusal skips resolve and sweep entirely —
+    // no write of any kind, at startup OR shutdown.
     let placementRefusal: ValidationPlacementRefusal | null = null;
     if (placementStartupCfg.enabled && config.validationMode) {
-      placementRefusal = validationPlacementRefusal({
-        validationMode: true,
-        cfg: placementStartupCfg,
+      placementRefusal = validationPlacementRefusalForConfig(placementStartupCfg, {
+        cgroupRoot: placementStartupCfg.cgroupRoot,
         selfCgroupPath: readSelfCgroup(),
       });
     }
@@ -104,29 +106,11 @@ async function initialize(): Promise<void> {
       startupApplied = placementStartupCfg.enabled
         ? applyStartupPlacement(placementStartupCfg)
         : { active: false, config: placementStartupCfg, reason: 'placement off' };
-      // J6 post-resolution check: the VERIFIED root is re-judged, so a raw form
-      // that resolves into the production tools slice (or onto the server's own
-      // cgroup) is refused after verification and before anything consumes it.
-      if (startupApplied.active && config.validationMode) {
-        placementRefusal = validationPlacementRefusal({
-          validationMode: true,
-          cfg: startupApplied.config,
-          resolvedRoot: startupApplied.config.toolsRoot,
-          selfCgroupPath: readSelfCgroup(),
-        });
-        if (placementRefusal) {
-          startupApplied = {
-            active: false,
-            config: { ...startupApplied.config, enabled: false, toolsRoot: undefined },
-            reason: `validation-mode placement refused (${placementRefusal})`,
-          };
-          resetAppliedPlacement();
-          logger.error(`[Placement] DISABLED — validation mode refuses the resolved tools root (${placementRefusal}): a disposable server never sweeps a root it does not own`);
-          appendDegradeLine(startupApplied.config, 'validation-placement-refused', placementRefusal);
-        }
-      }
     }
-    const swept = await sweepAllGroups(realCgroupIo, startupApplied.config);
+    // J6 correction 02: the sweeps (startup and shutdown) run only for an
+    // ACTIVE applied config using its verified canonical root — never a raw
+    // toolsRoot from an unapplied or failed resolution.
+    const swept = await sweepAllGroups(realCgroupIo, startupSweepConfig(startupApplied));
     if (swept.removed > 0 || swept.failures > 0) {
       logger.warn(`[Placement] Startup sweep: removed ${swept.removed} stale tools group(s), ${swept.failures} failure(s)`);
       if (placementStartupCfg.enabled && swept.failures > 0) appendDegradeLine(placementStartupCfg, 'startup-sweep', `removed=${swept.removed} failures=${swept.failures}`);
@@ -388,7 +372,9 @@ const shutdownCoordinator = new ShutdownCoordinator({
     // tools group on graceful shutdown (the drain stops sessions through the dispose
     // funnel; this step catches anything the funnel missed, e.g. own- probe groups).
     { name: 'placement-groups', run: async () => {
-        const r = await sweepAllGroups(realCgroupIo, startupApplied.config);
+        // J6 correction 02: only an ACTIVE applied config (verified canonical root)
+        // may sweep at shutdown; a failed resolution leaves nothing sweepable.
+        const r = await sweepAllGroups(realCgroupIo, startupSweepConfig(startupApplied));
         if (r.failures > 0) appendDegradeLine(startupApplied.config, 'shutdown-sweep', `failures=${r.failures}`);
       } },
     // Bounded close (2026-09-15). `server.close()` alone only calls back once

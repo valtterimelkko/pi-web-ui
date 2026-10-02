@@ -1,7 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { resolvePlacementConfig, resolveToolsRoot } from '../../../src/placement/config.js';
+import { candidateToolsRootPath, resolvePlacementConfig, resolveToolsRoot } from '../../../src/placement/config.js';
 
 describe('test-process isolation from production placement (Luna D0 live re-run)', () => {
   it('a config built without PI_TOOLS_RUNTIME_DIR never points at production\'s runtime dir', () => {
@@ -76,6 +77,7 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
     const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'pi-web-ui-tools.slice' });
     const root = '/sys/fs/cgroup/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice';
     const r = resolveToolsRoot(cfg, {
+      realpath: (p) => p,
       systemctlShowControlGroup: () => '/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice',
       exists: (p) => p === root,
       readFirstLine: (f) => (f.endsWith('pi-web-ui-tools.slice/cgroup.controllers') ? 'cpu memory pids\n' : f.endsWith('pi-web-ui-tools.slice/cgroup.subtree_control') ? 'cpu memory pids\n' : f.endsWith('pi-web-ui-tools.slice/memory.max') ? '12884901888\n' : undefined),
@@ -97,6 +99,7 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
       [`${slice}/memory.max`]: '19327352832\n', // ...its slice is the bound
     };
     const r = resolveToolsRoot(cfg, {
+      realpath: (p) => p,
       systemctlShowControlGroup: () => '/pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice/pi-web-ui-tools-anchor.service',
       exists: (p) => p === root,
       readFirstLine: (f) => files[f],
@@ -115,6 +118,7 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
   it('accepts an absolute cgroup path under the cgroup root', () => {
     const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools' });
     const r = resolveToolsRoot(cfg, {
+      realpath: (p) => p,
       exists: () => true,
       readFirstLine: (f) => (f.endsWith('tools/cgroup.controllers') ? 'cpu memory pids\n' : f.endsWith('tools/cgroup.subtree_control') ? 'cpu memory pids\n' : f.endsWith('scope/memory.max') ? '12884901888\n' : undefined),
     });
@@ -143,9 +147,10 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
       '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools/memory.max': 'max\n', // leaf unbounded...
       '/sys/fs/cgroup/system.slice/d0-proof-run.scope/memory.max': '12884901888\n', // ...but the parent scope is numeric
     };
-    const r = resolveToolsRoot(cfg, { exists: (p) => p === cfg.toolsRoot || p === '/sys/fs/cgroup/system.slice/d0-proof-run.scope', readFirstLine: (f) => files[f] });
+    const r = resolveToolsRoot(cfg, { realpath: (p) => p, exists: (p) => p === cfg.toolsRoot || p === '/sys/fs/cgroup/system.slice/d0-proof-run.scope', readFirstLine: (f) => files[f] });
     expect(r.available).toBe(true);
     const unbounded = resolveToolsRoot(cfg, {
+      realpath: (p) => p,
       exists: (p) => p === cfg.toolsRoot || p === '/sys/fs/cgroup/system.slice/d0-proof-run.scope',
       readFirstLine: (f) => (f.endsWith('scope/memory.max') ? 'max\n' : files[f]),
     });
@@ -156,10 +161,89 @@ describe('tools root resolution (correction 03: name/path confusion)', () => {
   it('rejects an existing root without the memory controller', () => {
     const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/d0-proof-run.scope/tools' });
     const r = resolveToolsRoot(cfg, {
+      realpath: (p) => p,
       exists: () => true,
       readFirstLine: (f) => (f.endsWith('tools/cgroup.controllers') ? 'pids\n' : 'max\n'),
     });
     expect(r.available).toBe(false);
     expect(r.reason).toMatch(/memory controller/i);
+  });
+});
+
+describe('tools root resolution (J6 correction 02: canonicalise before any write)', () => {
+  it('canonicalises the candidate via the realpath dep and keeps resolution on the canonical path', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/alias' });
+    const canonical = '/sys/fs/cgroup/system.slice/real-target';
+    const r = resolveToolsRoot(cfg, {
+      realpath: (p) => (p === '/sys/fs/cgroup/system.slice/alias' ? canonical : p),
+      exists: (p) => p === canonical,
+      readFirstLine: (f) =>
+        f.endsWith('real-target/cgroup.controllers')
+          ? 'cpu memory pids\n'
+          : f.endsWith('real-target/cgroup.subtree_control')
+            ? 'cpu memory pids\n'
+            : f.endsWith('real-target/memory.max')
+              ? 'max\n'
+              : f.endsWith('/memory.max')
+                ? '12884901888\n'
+                : undefined,
+    });
+    expect(r.available).toBe(true);
+    expect(r.toolsRoot).toBe(canonical); // NOT the raw alias path
+  });
+
+  it('refuses a canonicalisation that escapes the cgroup root (symlink out)', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/alias' });
+    const r = resolveToolsRoot(cfg, {
+      realpath: () => '/somewhere/else',
+      exists: () => true,
+      readFirstLine: () => 'cpu memory pids\n',
+    });
+    expect(r.available).toBe(false);
+    expect(r.reason).toMatch(/resolves outside the cgroup root/i);
+  });
+
+  it('refuses a root that cannot be canonicalised', () => {
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/dangling' });
+    const r = resolveToolsRoot(cfg, {
+      realpath: () => { throw new Error('ENOENT: dangling'); },
+    });
+    expect(r.available).toBe(false);
+    expect(r.reason).toMatch(/cannot be canonicalised/i);
+  });
+
+  it('canonicalises through a REAL temp-dir symlink to a target named like the production tools slice', () => {
+    const { mkdtempSync, mkdirSync, symlinkSync, rmSync } = fs;
+    const { tmpdir } = os;
+    const tmp = mkdtempSync(path.join(tmpdir(), 'j6-config-alias-'));
+    try {
+      const target = path.join(tmp, 'real', 'pi-web-ui-tools.slice', 'j6-unit');
+      mkdirSync(target, { recursive: true });
+      const alias = path.join(tmp, 'alias');
+      symlinkSync(target, alias);
+      const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: alias, PI_TOOLS_CGROUP_ROOT: tmp });
+      const r = resolveToolsRoot(cfg, {
+        realpath: (p) => fs.realpathSync(p),
+        exists: (p) => p === target,
+        readFirstLine: (f) =>
+          f.endsWith('j6-unit/cgroup.controllers')
+            ? 'cpu memory pids\n'
+            : f.endsWith('j6-unit/cgroup.subtree_control')
+              ? 'cpu memory pids\n'
+              : f.endsWith('j6-unit/memory.max')
+                ? 'max\n'
+                : f.endsWith('/memory.max')
+                  ? '12884901888\n'
+                  : undefined,
+      });
+      // Resolution itself does not judge the slice NAME — it resolves to the
+      // CANONICAL target; the validation gate refuses the production-slice
+      // segment on that canonical path (see validation-gate.test.ts).
+      expect(r.available).toBe(true);
+      expect(r.toolsRoot).toBe(fs.realpathSync(alias));
+      expect(r.toolsRoot).not.toBe(alias);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

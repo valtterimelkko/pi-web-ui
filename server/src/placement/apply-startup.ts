@@ -41,6 +41,18 @@ export function placementForSpawn(): PlacementConfig | null {
   return getActivePlacementConfig();
 }
 
+/**
+ * J6 correction 02: the startup and shutdown sweeps run ONLY for an applied
+ * config that is ACTIVE (resolved and verified, canonical root). A failed or
+ * refused resolution must leave no sweepable root: a raw `toolsRoot` from an
+ * unapplied config — the absolute-path form carries one before verification —
+ * must never reach `sweepAllGroups`.
+ */
+export function startupSweepConfig(applied: AppliedStartupPlacement): PlacementConfig {
+  if (applied.active && applied.config.toolsRoot) return applied.config;
+  return { ...applied.config, enabled: false, toolsRoot: undefined };
+}
+
 /** The applied config, or null before start-up applied it. */
 export function getAppliedPlacement(): AppliedStartupPlacement | null {
   return applied;

@@ -4,6 +4,7 @@ import {
   applyStartupPlacement,
   getAppliedPlacement,
   resetAppliedPlacement,
+  startupSweepConfig,
 } from '../../../src/placement/apply-startup.js';
 import { planSpawnForSession, buildPlacementEnv } from '../../../src/placement/spawn-wrap.js';
 import { readToolsSliceMemory } from '../../../src/placement/capacity.js';
@@ -28,6 +29,9 @@ function nameBasedConfig(): PlacementConfig {
 
 function fakeDeps() {
   return {
+    // J6 correction 02: the realpath dep defaults to the real fs; these fixtures
+    // model a synthetic tree, so they pin canonicalisation to identity.
+    realpath: (p: string) => p,
     systemctlShowControlGroup: () => '/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice',
     exists: (p: string) => p === RESOLVED || p.startsWith(RESOLVED + '/'),
     readFirstLine: (f: string) =>
@@ -122,6 +126,7 @@ describe('correction-06 finding 1: one resolved root reaches every consumer', ()
     const enableCalls: Array<{ root: string; controllers: string }> = [];
     const cfg = nameBasedConfig();
     const deps = {
+      realpath: (p: string) => p,
       systemctlShowControlGroup: () => '/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice',
       exists: (p: string) => p === root || p.startsWith(root + '/'),
       readFirstLine: (f: string) => files.get(f),
@@ -149,6 +154,7 @@ describe('correction-06 finding 1: one resolved root reaches every consumer', ()
     const root = RESOLVED;
     const cfg = nameBasedConfig();
     const deps = {
+      realpath: (p: string) => p,
       systemctlShowControlGroup: () => '/pi.slice/pi-web-ui.slice/pi-web-ui-tools.slice',
       exists: (p: string) => p === root || p.startsWith(root + '/'),
       readFirstLine: (f: string) =>
@@ -196,6 +202,80 @@ describe('correction-06 finding 1: one resolved root reaches every consumer', ()
     expect((await sweepAllGroups(realCgroupIo, applied.config)).removed).toBe(0);
     expect(() => exportToolsPlacementBridge(applied.config)).toThrow();
     clearToolsPlacementBridge();
+  });
+});
+
+describe('J6 correction 02: the sweep runs only for a validated, active applied root', () => {
+  beforeEach(() => {
+    resetAppliedPlacement();
+  });
+
+  it('a resolution failure leaves NO sweepable root at startup (raw toolsRoot must never sweep)', async () => {
+    // An absolute slicePath puts a RAW toolsRoot on the config before resolution.
+    // Verification must fail here (no memory controller), and the failed resolution
+    // must leave nothing for the startup or shutdown sweep to act on.
+    const rawRoot = '/sys/fs/cgroup/system.slice/d0-scope/tools';
+    const cfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: rawRoot });
+    expect(cfg.toolsRoot).toBe(rawRoot); // raw, pre-verification
+    const applied = applyStartupPlacement(cfg, {
+      realpath: (p) => p,
+      exists: () => true,
+      readFirstLine: (f) => (f.endsWith('tools/cgroup.controllers') ? 'pids\n' : undefined), // no memory controller
+    });
+    expect(applied.active).toBe(false);
+    const sc = startupSweepConfig(applied);
+    expect(sc.enabled).toBe(false);
+    expect(sc.toolsRoot).toBeUndefined();
+    // Even with a populated group sitting at the raw root, the sweep must no-op.
+    const stale = `${rawRoot}/pi-stale-1234-abcd1234`;
+    const existing = new Set<string>([rawRoot, stale, `${stale}/cgroup.procs`, `${stale}/cgroup.kill`, `${stale}/memory.max`]);
+    const swept = await sweepAllGroups(cgroupfsLikeIo(existing), sc);
+    expect(swept).toEqual({ removed: 0, failures: 0 });
+    expect(existing.has(stale)).toBe(true);
+  });
+
+  it('a production-shaped config (slice name) still resolves and the startup sweep still reaps a planted group', async () => {
+    const root = '/sys/fs/cgroup/system.slice/fake-anchor.service';
+    const applied = applyStartupPlacement(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'fake-anchor.service' }), {
+      realpath: (p) => p,
+      systemctlShowControlGroup: () => '/system.slice/fake-anchor.service',
+      exists: (p) => p === root,
+      readFirstLine: (f) =>
+        f.endsWith('fake-anchor.service/cgroup.controllers')
+          ? 'cpu memory pids\n'
+          : f.endsWith('fake-anchor.service/cgroup.subtree_control')
+            ? 'cpu memory pids\n'
+            : f.endsWith('fake-anchor.service/memory.max')
+              ? 'max\n' // the anchor itself is unlimited; its slice is the bound
+              : f.endsWith('/memory.max')
+                ? '12884901888\n'
+                : undefined,
+      enableSubtreeControllers: () => {},
+    });
+    expect(applied.active).toBe(true);
+    const sc = startupSweepConfig(applied);
+    expect(sc.enabled).toBe(true);
+    expect(sc.toolsRoot).toBe(root);
+    const stale = `${root}/pi-stale-1234-abcd1234`;
+    const existing = new Set<string>([root, stale, `${stale}/cgroup.procs`, `${stale}/cgroup.kill`, `${stale}/memory.max`]);
+    const swept = await sweepAllGroups(cgroupfsLikeIo(existing), sc);
+    expect(swept.removed).toBe(1);
+    expect(existing.has(stale)).toBe(false);
+  });
+
+  it('an inactive application never sweeps, even though the raw config still carries the absolute root', async () => {
+    const rawRoot = '/sys/fs/cgroup/system.slice/d0-scope/tools';
+    const applied = applyStartupPlacement(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: rawRoot }), {
+      realpath: (p) => p,
+      exists: () => false, // root missing: resolution fails
+    });
+    expect(applied.active).toBe(false);
+    const sc = startupSweepConfig(applied);
+    const stale = `${rawRoot}/pi-stale-1234-abcd1234`;
+    const existing = new Set<string>([rawRoot, stale, `${stale}/cgroup.procs`]);
+    const swept = await sweepAllGroups(cgroupfsLikeIo(existing), sc);
+    expect(swept).toEqual({ removed: 0, failures: 0 });
+    expect(existing.has(stale)).toBe(true);
   });
 });
 

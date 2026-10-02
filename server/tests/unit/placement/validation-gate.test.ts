@@ -14,11 +14,16 @@
  * byte-identical.
  */
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   PRODUCTION_TOOLS_ANCHOR_SLICE,
   PRODUCTION_TOOLS_SLICE_NAME,
   validationPlacementRefusal,
+  validationPlacementRefusalForConfig,
 } from '../../../src/placement/validation-gate.js';
+import { candidateToolsRootPath } from '../../../src/placement/config.js';
 import { resolvePlacementConfig } from '../../../src/placement/config.js';
 
 const ANCHOR_ABS = '/sys/fs/cgroup/pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice/pi-web-ui-tools-anchor.service';
@@ -94,5 +99,134 @@ describe('J6 validation-mode placement gate', () => {
     const off = input({ slicePath: PRODUCTION_TOOLS_ANCHOR_SLICE });
     (off.cfg as { enabled: boolean }).enabled = false;
     expect(validationPlacementRefusal(off)).toBeNull();
+  });
+});
+
+describe('J6 correction 02: own-cgroup comparison in one coordinate system', () => {
+  it('refuses a cgroup-relative self path against a filesystem-form resolved root (prefix the cgroup root)', () => {
+    expect(
+      validationPlacementRefusal({
+        validationMode: true,
+        cfg: resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'some-run.service' }),
+        cgroupRoot: '/sys/fs/cgroup',
+        resolvedRoot: '/sys/fs/cgroup/system.slice/pi-web-ui.service',
+        selfCgroupPath: '/system.slice/pi-web-ui.service',
+      }),
+    ).toBe('own-cgroup-root');
+  });
+
+  it('refuses an ancestor in the same coordinate system', () => {
+    expect(
+      validationPlacementRefusal({
+        validationMode: true,
+        cfg: resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'some-run.service' }),
+        cgroupRoot: '/sys/fs/cgroup',
+        resolvedRoot: '/sys/fs/cgroup/system.slice',
+        selfCgroupPath: '/system.slice/pi-web-ui.service',
+      }),
+    ).toBe('own-cgroup-root');
+  });
+
+  it('still allows a sibling root after conversion', () => {
+    expect(
+      validationPlacementRefusal({
+        validationMode: true,
+        cfg: resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'some-run.service' }),
+        cgroupRoot: '/sys/fs/cgroup',
+        resolvedRoot: '/sys/fs/cgroup/system.slice/j6b-031fe826.service',
+        selfCgroupPath: '/system.slice/pi-web-ui.service',
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('J6 correction 02: canonicalise the candidate before any write, then gate it', () => {
+  it('candidateToolsRootPath computes the raw candidate: name via systemctl, absolute verbatim, garbage rejected', () => {
+    const nameCfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'my-unit.service' });
+    expect(candidateToolsRootPath(nameCfg, { systemctlShowControlGroup: () => '/system.slice/my-unit.service' })).toEqual({ ok: true, path: '/sys/fs/cgroup/system.slice/my-unit.service' });
+    expect(candidateToolsRootPath(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'no-such-unit.service' }), { systemctlShowControlGroup: () => undefined }).ok).toBe(false);
+    const absCfg = resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: '/sys/fs/cgroup/system.slice/x.service' });
+    expect(candidateToolsRootPath(absCfg, {})).toEqual({ ok: true, path: '/sys/fs/cgroup/system.slice/x.service' });
+    expect(candidateToolsRootPath(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'not/a/name' }), {}).ok).toBe(false);
+  });
+
+  it('refuses an alias whose SYMLINK resolves under a directory named like the production tools slice (real fs, no write)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'j6-gate-alias-'));
+    try {
+      const target = join(tmp, 'real', PRODUCTION_TOOLS_SLICE_NAME, 'j6-throwaway-unit');
+      mkdirSync(target, { recursive: true });
+      const alias = join(tmp, 'alias');
+      symlinkSync(target, alias);
+      // Explicit fs realpath (the composed check must canonicalise, never
+      // compare the raw symlink path — the raw form carries no slice segment).
+      const refusal = validationPlacementRefusalForConfig(
+        resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: alias }),
+        { cgroupRoot: tmp, selfCgroupPath: '/system.slice/pi-web-ui.service', realpath: (p) => realpathSync(p) },
+      );
+      expect(refusal).toBe('production-tools-slice-root');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a candidate that cannot be canonicalised (dangling symlink)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'j6-gate-dangling-'));
+    try {
+      const dangling = join(tmp, 'dangling');
+      symlinkSync(join(tmp, 'missing-target'), dangling);
+      const refusal = validationPlacementRefusalForConfig(
+        resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: dangling }),
+        { cgroupRoot: tmp },
+      );
+      expect(refusal).toBe('not-canonicalisable');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the REAL filesystem realpath by default for the alias check (no identity shortcut)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'j6-gate-real-'));
+    try {
+      const target = join(tmp, 'real', PRODUCTION_TOOLS_SLICE_NAME, 'j6-throwaway-unit');
+      mkdirSync(target, { recursive: true });
+      const alias = join(tmp, 'alias');
+      symlinkSync(target, alias);
+      const refusal = validationPlacementRefusalForConfig(
+        resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: alias }),
+        { cgroupRoot: tmp, selfCgroupPath: null },
+      );
+      expect(refusal).toBe('production-tools-slice-root');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('still refuses the production NAME forms and allows the run-owned unit through the composed check', () => {
+    const deps = { cgroupRoot: '/sys/fs/cgroup', selfCgroupPath: '/system.slice/pi-web-ui.service' };
+    expect(
+      validationPlacementRefusalForConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: PRODUCTION_TOOLS_ANCHOR_SLICE }), deps),
+    ).toBe('production-name-form');
+    expect(
+      validationPlacementRefusalForConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'j6b-031fe826.service' }), {
+        ...deps,
+        systemctlShowControlGroup: () => '/system.slice/j6b-031fe826.service',
+        realpath: (p) => p, // synthetic target: the run-owned path is not on the real fs
+      }),
+    ).toBeNull();
+  });
+
+  it('is inert outside validation mode', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'j6-gate-inert-'));
+    try {
+      const target = join(tmp, 'real', PRODUCTION_TOOLS_SLICE_NAME, 'unit');
+      mkdirSync(target, { recursive: true });
+      const alias = join(tmp, 'alias');
+      symlinkSync(target, alias);
+      expect(
+        validationPlacementRefusalForConfig(resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'off', PI_TOOLS_SLICE: alias }), { cgroupRoot: tmp }),
+      ).toBeNull();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

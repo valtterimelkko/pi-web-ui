@@ -100,6 +100,10 @@ export interface ToolsRootDeps {
    * May throw (real cgroupfs returns EACCES/ENOENT); resolveToolsRoot falls back to
    * the read-back check. */
   enableSubtreeControllers?: (root: string, controllers: string) => void;
+  /** J6 correction 02: canonicalise the candidate root (default fs.realpathSync).
+   * Fixtures over synthetic trees pin this to identity; the real default follows
+   * symlinks so an alias can never hide what it points at. */
+  realpath?: (p: string) => string;
 }
 
 const defaultToolsRootDeps: ToolsRootDeps = {
@@ -128,32 +132,61 @@ const defaultToolsRootDeps: ToolsRootDeps = {
 };
 
 /**
+ * The candidate tools root PATH, computed WITHOUT touching the filesystem (a
+ * slice NAME is resolved read-only via `systemctl show`; an absolute path is
+ * taken verbatim). J6 correction 02: callers canonicalise this candidate and
+ * gate on the canonical path BEFORE `resolveToolsRoot` performs any write.
+ */
+export type CandidateToolsRoot = { ok: true; path: string } | { ok: false; reason: string };
+
+export function candidateToolsRootPath(cfg: PlacementConfig, deps: ToolsRootDeps = {}): CandidateToolsRoot {
+  const d = { ...defaultToolsRootDeps, ...deps };
+  const raw = cfg.slicePath;
+  if (raw.startsWith('/')) {
+    return { ok: true, path: raw.replace(/\/+$/, '') };
+  }
+  if (/^[A-Za-z0-9.@_-]+\.(slice|service)$/.test(raw)) {
+    const cg = d.systemctlShowControlGroup?.();
+    if (!cg || !cg.startsWith('/')) {
+      return { ok: false, reason: `unit ${raw} is not known to systemd — refusing to treat the name as a cgroup path` };
+    }
+    return { ok: true, path: path.posix.join(cfg.cgroupRoot, cg.replace(/\/+$/, '')) };
+  }
+  return { ok: false, reason: `PI_TOOLS_SLICE value ${JSON.stringify(raw)} is not a slice name and not an absolute path (nor a service name)` };
+}
+
+/**
  * Correction 03 item 2+4: resolve and VERIFY the tools root before use.
  * - a slice NAME is resolved with `systemctl show`; an unknown name is an error,
  *   never silently treated as a cgroup path (the 16:56 escape);
  * - an absolute path must sit under the cgroup root and exist;
+ * - J6 correction 02: the candidate is CANONICALISED (fs.realpathSync — symlinks
+ *   followed) BEFORE any write (the `cgroup.subtree_control` enable below
+ *   included), and a canonical path that escapes the cgroup root, or a root
+ *   that cannot be canonicalised at all, is refused — an alias can never hide
+ *   where it really points;
  * - the root must exist, expose the memory controller, and be BOUNDED: its own
  *   `memory.max`, or an ancestor's up to 4 levels, must read as a number (not `max`).
  */
 export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {}): ToolsRootResolution {
   const d = { ...defaultToolsRootDeps, ...deps };
-  const raw = cfg.slicePath;
-  let root: string;
-  if (raw.startsWith('/')) {
-    if (!raw.startsWith(cfg.cgroupRoot + '/')) {
-      return { available: false, reason: `tools root ${raw} is outside the cgroup root ${cfg.cgroupRoot}` };
-    }
-    root = raw.replace(/\/+$/, '');
-  } else if (/^[A-Za-z0-9.@_-]+\.(slice|service)$/.test(raw)) {
-    // A unit NAME: the slice itself, or (production since the 2026-09-30 rollout) a
-    // Delegate=yes anchor service inside it — systemd 255 ignores Delegate= on slices.
-    const cg = d.systemctlShowControlGroup?.();
-    if (!cg || !cg.startsWith('/')) {
-      return { available: false, reason: `unit ${raw} is not known to systemd — refusing to treat the name as a cgroup path` };
-    }
-    root = path.posix.join(cfg.cgroupRoot, cg.replace(/\/+$/, ''));
-  } else {
-    return { available: false, reason: `PI_TOOLS_SLICE value ${JSON.stringify(raw)} is not a slice name and not an absolute path (nor a service name)` };
+  const cand = candidateToolsRootPath(cfg, d);
+  if (!cand.ok) {
+    return { available: false, reason: cand.reason };
+  }
+  let root = cand.path;
+  if (root.startsWith('/') && !root.startsWith(cfg.cgroupRoot + '/')) {
+    return { available: false, reason: `tools root ${root} is outside the cgroup root ${cfg.cgroupRoot}` };
+  }
+  // J6 correction 02: canonicalise BEFORE any write, then re-check containment —
+  // a symlink inside the cgroup root may point anywhere.
+  try {
+    root = d.realpath ? d.realpath(root) : fs.realpathSync(root);
+  } catch {
+    return { available: false, reason: `tools root ${cand.path} cannot be canonicalised` };
+  }
+  if (!root.startsWith(cfg.cgroupRoot + '/')) {
+    return { available: false, reason: `tools root ${root} resolves outside the cgroup root ${cfg.cgroupRoot}` };
   }
   if (!d.exists?.(root)) {
     return { available: false, reason: `tools root ${root} does not exist (is the slice started?)` };
