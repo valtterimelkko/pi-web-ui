@@ -59,11 +59,29 @@ export function readToolsSliceMemory(cfg: PlacementConfig, read: CgroupFileRead 
   };
 }
 
-/** Count degrade lines appended by the wrapper / bash prefix line since server start. */
-export function readDegradeCount(degradeFile: string, read: CgroupFileRead = realCgroupRead): number | null {
+/** Count degrade lines appended by the wrapper / bash prefix line since server start (or sinceMs). */
+export function readDegradeCount(
+  degradeFile: string,
+  readOrOptions?: CgroupFileRead | { sinceMs?: number; read?: CgroupFileRead },
+  sinceMsArg?: number,
+): number | null {
+  const read = typeof readOrOptions === 'function' ? readOrOptions : readOrOptions?.read ?? realCgroupRead;
+  const sinceMs = typeof readOrOptions === 'object' && readOrOptions !== null
+    ? readOrOptions.sinceMs ?? (Date.now() - Math.floor(process.uptime() * 1000))
+    : sinceMsArg ?? (Date.now() - Math.floor(process.uptime() * 1000));
+
   const raw = read(degradeFile);
   if (raw === undefined) return 0;
-  return raw.split('\n').filter((l) => l.trim().length > 0).length;
+  const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+  let count = 0;
+  for (const line of lines) {
+    const firstToken = line.trim().split(/\s+/)[0];
+    const ts = Date.parse(firstToken);
+    if (Number.isNaN(ts) || ts >= sinceMs) {
+      count++;
+    }
+  }
+  return count;
 }
 
 /** Append one degrade line (the "alarm loudly" signal); never throws. */

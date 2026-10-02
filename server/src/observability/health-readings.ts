@@ -225,8 +225,8 @@ export interface HealthReadingSources {
   registryEntries?: () => number | undefined | Promise<number | undefined>;
   /** D0: tools-slice reading; registered by the server when placement is enabled. */
   toolsSlice?: () => { currentBytes?: number; oomKill?: number } | undefined;
-  /** D0: degrade count (wrapper fell open, replacement bash tool not active). */
-  placementDegrades?: () => number | undefined;
+  /** D0: degrade count (wrapper fell open, replacement bash tool not active). Accepts bootMs to filter per-boot. */
+  placementDegrades?: (sinceMs?: number) => number | undefined;
   /** Default active-turn classes: terminal turn counters from the operational metrics. */
   activeTurnsFromOperationalMetrics?: () => Record<string, number>;
   /**
@@ -349,7 +349,11 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
     registryEntries: positiveOrNull(registryEntries),
     toolsSliceMemoryBytes: positiveOrNull(safe<{ currentBytes?: number } | undefined>(sources.toolsSlice, undefined)?.currentBytes),
     toolsSliceOomKills: positiveOrNull(safe<{ oomKill?: number } | undefined>(sources.toolsSlice, undefined)?.oomKill),
-    placementDegrades: positiveOrNull(safe<number | undefined>(sources.placementDegrades, undefined)),
+    placementDegrades: positiveOrNull(
+      sources.placementDegrades
+        ? safe<number | undefined>(() => sources.placementDegrades!(Math.max(0, now - (uptimeSec * 1000))), undefined)
+        : undefined,
+    ),
   };
 }
 

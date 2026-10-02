@@ -178,4 +178,18 @@ describe('collectHealthReadings', () => {
     expect(readings.heapLimitBytes).toBe(getHeapStatistics().heap_size_limit);
     expect(readings.heapUsedBytes).toBeGreaterThan(0);
   });
+
+  it('collects placementDegrades and passes bootMs calculated from now and uptimeSec', () => {
+    let receivedSinceMs: number | undefined;
+    const readings = collectHealthReadings({
+      now: () => 1_700_000_050_000,
+      uptimeSec: () => 50,
+      placementDegrades: (sinceMs) => {
+        receivedSinceMs = sinceMs;
+        return 3;
+      },
+    });
+    expect(readings.placementDegrades).toBe(3);
+    expect(receivedSinceMs).toBe(1_700_000_000_000);
+  });
 });
