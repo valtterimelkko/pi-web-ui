@@ -170,6 +170,9 @@ Jev specs live in `/root/jev-session-eval/specs/piwebui-*.toml` (commit `38e8277
 - **H3a's server reorder** waits until the C6 window closes at R5, and is done only if `pi-orch`'s counting proves insufficient.
 - **The `agent-os-child` "stay out of the main checkout" rule is ported to the public skill pack** (the owner's go for that public push), and **the rescue branch `rescue/h1-main-checkout-20261002` is deleted** (J4).
 - **Process:** the reviewer's independent live re-run becomes a named lane in the wave template (the orchestration programme kit), so wave closure stops depending on someone remembering it.
+- **The missing independent live re-run runs now as its own lane, V3**, rather than waiting for E2a (owner, 2026-10-02). It runs on the current master, which carries the **Pi SDK 1.0.0** that another agent deployed to production at 10:53 UTC (`1f828c5c`, from 0.87.1). Several shipped steps rely on SDK seams (B1.2b's extension factory, B3a's tool-argument budget, B5's `session_shutdown`, I3's settle events), so V3 also checks that they hold on 1.0.0.
+- **Routing for this wave (owner):** implementers on GLM 5.3 Flash (`pi` · `zai`), which has ample quota; Gemini 3.8 Flash on `antigravity` for at most two children, only where something is critical; **reviews and V3 on GPT-6 Luna** (`pi` · `openai-codex` · `max`, until 2026-10-09). Autonomous until the next review point; Telegram for milestones.
+- **Production restart authority for this wave** (owner, 2026-10-02): "yes, you have for this wave. You have a production restart grant." Protocol unchanged: activeTurns 0, board check, `production:lock`, drain-restart, verification.
 
 ## 4. Execution contract (applies to every step)
 
@@ -256,7 +259,8 @@ Stage D  Structural         D0 agents' tool processes out of the control plane's
                              J2 the programme's own parent dispatches through pi-orch (dogfooding gaps)
                              J3 admission's turn count checked against the runtime's (stale permit detector)
                              J4 housekeeping: C6 exception row, rescue branch, dead resume-last, public pack, re-run lane
-         E2a engineering proofs + independent live re-run (final build)  ‖  E2b Jev re-measure (population trigger)
+                             V3 independent live re-run of the H wave and H-b on SDK 1.0.0 (reviewer lane)
+         E2a engineering proofs (final build)  ‖  E2b Jev re-measure (population trigger)
             │
 Stage E  Prove and keep     E1 recurring-defect ledger (runs alongside from Stage B on)
                             E2 final re-measure (bounded soak + Jev re-run), once real use gives a population
@@ -965,6 +969,19 @@ Each item has its own test or check; one lane may take several.
 **Approach.** A detector, not a fix: A2 records admission's per-class count next to the runtime's busy count, and an alert fires when they disagree for several consecutive readings; the alert names the classes and the oldest permit's age, so the next instance can be attributed. E1 gets a watch row. Fix only once an instance is attributed.
 **Victory.** A test with a planted leaked permit (the alert fires once, with hysteresis) and a disposable proof; the E1 watch row links them.
 
+#### V3 — Independent live re-run of the H wave and H-b (added 2026-10-02, owner)
+
+**Intent.** §4 requires a reviewer's live re-run before a wave counts as shipped; the H wave and H-b closed on code reviews and focused tests. Run it now, on the current master with Pi SDK 1.0.0, so a regression from either shows up before E2a.
+**Approach.** A reviewer (not an executor of the steps) on a disposable server built from master, real extension copies, `zai/glm-5.3-flash` children, §4 containment. Arms, each with a pass rule fixed before running:
+- **H1:** a burst of switches to non-resident sessions alongside two working children: lag p99 under 300 ms, no gate latch, no refusals; positive control with the flag off.
+- **H2s:** a goal start on a busy Pi session answers promptly and the goal achieves after the turn.
+- **I1–I5 and H2g on SDK 1.0.0:** a goal child spawned by `pi-orch` with the template ends `achieved`, the template arrives once, every receipt is terminal; a mock provider's 429-then-success leaves a goal running (I3's settle events still fire on 1.0.0).
+- **hb2 and hb6:** a browser watching a session the API prompts renders the first chunk once, one bubble per typed prompt, and queued chips clear (Playwright, desktop and mobile).
+- **hb4:** admission admits under heavy reclaimable page cache and refuses under real anonymous memory, on the deployed build's code.
+- **hb3:** `DELETE` of a Pi session stays near the 5 ms measured, and A2's streaming fields are written.
+- **SDK seams:** B5's `session_shutdown` reaches a background shell on `DELETE`; no extension-factory degrade or importer fallback is logged.
+**Victory.** Each arm passes, or fails with a reproduction that becomes a correction lane; the report states build, concurrency and sample counts (§4).
+
 #### J4 — Housekeeping decided at the post-H-b review
 
 - **C6 exception row for 1.58.5** in `docs/INTERNAL-API-CONTRACT.md`. `contract-stability-window.test.ts` asserts that the live exception table is empty, so update that test to expect the one row (and keep its parsing check). Victory: the guard suite green with the row.
@@ -1154,6 +1171,7 @@ Record each review moment here: date, who held it (session id), inputs checked, 
 | H1 | **shipped, flag off** 2026-10-02 (merged `a288cb66` + lint fix `da0a0bd7`; production drain-restart 01:22 UTC) | [`H1.md`](./execution-reports/orchestration-scaling/H1.md); reviews `h1-luna` (REJECT), `-r2` (REJECT), `-r3` (ACCEPT) | View-only session opens behind `PI_WEB_UI_VIEW_ONLY_SUBSCRIBE` (default off): cold switch wall p50 1,745 ms → 4.8 ms; burst with two children at `activeTurns` 2 (six readings) lag p99 147–261 ms, no latch, no refusals. Pending viewers attach when anything materialises the agent and are re-registered after a dispose; flag off is master-identical. Option 3 (sessions-list cache) removed: incomplete invalidation for ~20 ms saving. Enabling the flag is an owner decision. Residuals: first prompt on a viewed session pays the rehydrate; concurrent API creates still latch (G4 create cost) |
 | H2 | **shipped** 2026-10-02 (I1–I5 fixed the main causes; leftovers: H2g goal engine `pi-enhancement` `8d25a72`, deployed 2026-10-01 19:43 UTC; H2s server merged `827b6d79`, contract 1.58.2, production 2026-10-02 01:22 UTC) | `/root/orch-ops/orchestration-scaling/r4/rootcause-*.md`; [`H2s.md`](./execution-reports/orchestration-scaling/H2s.md); `/root/orch-ops/orchestration-scaling/h2g/H2g.md`; reviews `h2g-luna` + `-r2`, `h2s-luna` (REJECT), `h2s-deepseek` (ACCEPT WITH FIXES) | Budget pauses record `pauseReason: "budget"`; a hidden goal marker gets a restatement turn, not completion (Option C); a busy-session Pi goal start answers promptly with one acceptance boundary (production smoke: 0.10 s against a 54 s turn, goal achieved after it); I2's chain-depth residual fixed. Agent OS mirror and `pi-orch` snapshot at 1.58.2 |
 | H3 | **partly shipped** 2026-10-02: receipt inflation (H3a, `pi-orch` `aea9f40`) and the claude-rc memory cap (`/root/rc` `571e79e`). **Wave H-b shipped 2026-10-02 (merge `ecedef86`, production 06:54 UTC, contract 1.58.5):** streaming telemetry (hb3), restart guard, terminal placement, degrades per boot and working-set admission (hb4, 1.58.5), goal error strikes (hb5, 1.58.3), doubled first chunk (hb2, 1.58.4), duplicate user bubble and queued chips (hb6); WebSocket backpressure closed, not reproduced (hb1); `DELETE` cost fixed in `pi-enhancement` `bc28b9a` (deployed) | `/root/orch-ops/orchestration-scaling/h3a/H3a.md`; `/root/orch-ops/orchestration-scaling/hb*/`; `/root/orch-ops/orchestration-scaling/R5-HANDOFF.md` | H-wave findings for H-b: (1) the browser renders the first streamed chunk twice when it watches a session the API prompts (pre-existing, flag off and on; ledger); (2) a child checked out its branch in the production checkout and rebuilt `dist` (parent restored master; guard needed; ledger); (3) the antigravity goal manager keeps continuing into repeated provider errors (27 of 40 turns burned) |
+| V3 | **added 2026-10-02** (owner): the missing independent live re-run, on SDK 1.0.0 | §6 *V3* | Reviewer lane (GPT-6 Luna) |
 | J1–J4 | **added 2026-10-02** at the post-H-b review; owner-accepted the same day | §6 *Post-H-b follow-up* | J1 should land before the next restart that follows a docs commit; J2 before E2a is dispatched; deploys need a new restart grant |
 | D1–D2 | **not started; not authorised at R4** | — | Reopen trigger in §3 R4 block |
 | E1 | **running** since wave 3 ([`RECURRING-DEFECT-LEDGER.md`](../RECURRING-DEFECT-LEDGER.md)); classes added at R4 and in wave H-b | [`S1-E1.md`](./execution-reports/orchestration-scaling/S1-E1.md) | J3 adds a watch row |
