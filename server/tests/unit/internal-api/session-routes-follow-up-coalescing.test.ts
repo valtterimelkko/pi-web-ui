@@ -337,7 +337,13 @@ describe('I2: coalesced Pi follow-ups drained in one agent loop', () => {
     sdk.assistantSay('ANSWER-TWO');
     setManagerStatus('idle');
     sdk.agentEnd();
-    await vi.waitFor(() => expect(manager.get(runOne)?.status).toBe('completed'));
+    // Both receipts finish at the loop's end, but on separate ticks (their
+    // writes are asynchronous): wait for both, or a loaded runner (CI coverage)
+    // can read the second one still `started`.
+    await vi.waitFor(() => {
+      expect(manager.get(runOne)?.status).toBe('completed');
+      expect(manager.get(runTwo)?.status).toBe('completed');
+    });
 
     const one = manager.get(runOne);
     const two = manager.get(runTwo);
