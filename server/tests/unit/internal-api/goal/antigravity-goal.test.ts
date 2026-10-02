@@ -214,11 +214,11 @@ function record(overrides: Partial<AntigravityGoalRecord> = {}): AntigravityGoal
 }
 
 interface SweeperHarness {
-  events: Array<{ sessionId: string; event: { type: string } }>;
+  events: Array<{ sessionId: string; event: { type: string; data?: Record<string, unknown> } }>;
   dispatched: Array<{ sessionId: string; message: string }>;
   store: AntigravityGoalControlStore;
   dir: string;
-  turns: Map<string, { completedAt: number; response: string } | null>;
+  turns: Map<string, { completedAt: number; response: string; status?: 'done' | 'error'; error?: string } | null>;
   running: Set<string>;
   deps: AgyGoalSweeperDeps;
 }
@@ -331,6 +331,116 @@ describe('createAgyGoalSweeper', () => {
     expect(h.events).toEqual([]);
     expect(h.dispatched).toEqual([]);
     expect(await h.store.get('s1')).toMatchObject({ status: 'running', runs: 0 });
+  });
+});
+
+// ─── provider-error strikes (contract 1.58.3) ────────────────────────────────
+
+/** Real error strings from the H2s Gemini session `cefdf34a-abf7-441f-b075-5af3d980c1b1`
+ *  (2026-10-01): every one of its 27 turns was finalized `status: "error"` and the
+ *  old sweeper continued into each one as if it were an ordinary unmet turn. */
+const AGY_H2S_ERROR_500 = 'INTERNAL (code 500): Internal error encountered.';
+const AGY_H2S_ERROR_503 =
+  'Our servers are experiencing high traffic right now, please try again in a minute. (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server)';
+
+describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', () => {
+  it('counts a provider-error turn as a strike instead of consuming a run, and retries', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(after?.lastReason).toContain(AGY_H2S_ERROR_500);
+    // One retry continuation (Pi's three-strike rule retries between strikes),
+    // not an ordinary unmet-turn advance.
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.events.map((e) => e.event.type)).toEqual(['goal_state']);
+    expect(h.events[0].event.data).toMatchObject({ status: 'running', runs: 0, pausedReason: null });
+  });
+
+  it('pauses after three consecutive strikes with pausedReason error, naming the last error, and dispatches nothing further', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 300, response: 'timeout', status: 'error', error: 'timeout' });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'paused', pausedReason: 'error', runs: 0, lastVerifiedTurnAt: 300 });
+    expect(after?.lastReason).toContain('timeout');
+    expect(after?.lastReason).toMatch(/3 consecutive provider errors/);
+    // Only the two retries; the pausing strike dispatches nothing.
+    expect(h.dispatched).toHaveLength(2);
+
+    const pausedEvent = h.events.map((e) => e.event).find((e) => e.data?.status === 'paused');
+    expect(pausedEvent).toMatchObject({
+      type: 'goal_state',
+      data: { status: 'paused', pausedReason: 'error', lastReason: expect.stringContaining('timeout') },
+    });
+    expect(h.events.some((e) => e.event.type === 'goal_end')).toBe(false);
+
+    // A re-sweep of the same turn neither re-pauses nor dispatches again.
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(2);
+  });
+
+  it('a successful turn resets the strike count and clears the stale error note', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 300, response: 'still working on the goal' });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0, lastVerifiedTurnAt: 300 });
+    expect(after?.lastReason ?? null).toBeNull();
+    expect(h.dispatched).toHaveLength(3); // 2 retries + the ordinary unmet continuation
+  });
+
+  it('resume re-arms: a resumed goal starts a fresh strike cycle', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    for (const at of [100, 200, 300]) {
+      h.turns.set('s1', { completedAt: at, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+      await sweeper.sweepOnce();
+    }
+    expect((await h.store.get('s1'))?.status).toBe('paused');
+
+    // Exactly what the route's resume action patches (sessions.ts): status running,
+    // pause reason cleared, auto-continue armed again.
+    await h.store.patch('s1', { status: 'running', pausedReason: undefined, autoContinue: true });
+    h.turns.set('s1', { completedAt: 400, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', consecutiveErrors: 1 });
+    expect(h.dispatched).toHaveLength(3); // the resumed cycle's strike 1 retries rather than re-pausing
+  });
+
+  it('classifies by the reader truth, not response text: a done turn mentioning an error is an ordinary turn', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: `Not yet done. Note: earlier we saw ${AGY_H2S_ERROR_500}`, status: 'done' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0 });
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('treats legacy turns (no status field) as successful turns, exactly as before', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: 'legacy response' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0 });
   });
 });
 
