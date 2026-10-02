@@ -285,10 +285,11 @@ function optionalPositiveReadings(raw: string | undefined, name: string, warning
 
 /** J3 (correction 02): optional reading count bounded to [min, max]; outside the bound warns and stays unset. */
 function boundedMismatchReadings(raw: string | undefined, name: string, warnings: string[], min: number, max: number): number | undefined {
+  const trimmed = (raw ?? '').trim();
   const parsed = optionalPositiveReadings(raw, name, warnings);
   if (parsed === undefined) return undefined;
   if (parsed < min || parsed > max) {
-    warnings.push(`${name}=${raw!.trim()} is outside [${min}, ${max}]; using the default.`);
+    warnings.push(`${name}=${trimmed} is outside [${min}, ${max}]; using the default.`);
     return undefined;
   }
   return parsed;
