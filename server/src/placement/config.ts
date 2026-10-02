@@ -91,8 +91,8 @@ export interface ToolsRootResolution {
 }
 
 export interface ToolsRootDeps {
-  /** `systemctl show <unit> -p ControlGroup --value` output (undefined = unit unknown). */
-  systemctlShowControlGroup?: () => string | undefined;
+  /** `systemctl show <unit> -p ControlGroup --value` output for THE CONFIG'S unit (undefined = unit unknown). */
+  systemctlShowControlGroup?: (unit: string) => string | undefined;
   exists?: (p: string) => boolean;
   readFirstLine?: (p: string) => string | undefined;
   /** Correction 09: write e.g. `+memory +pids` into `<root>/cgroup.subtree_control`.
@@ -106,10 +106,19 @@ export interface ToolsRootDeps {
   realpath?: (p: string) => string;
 }
 
+/** Defaults, with explicitly-undefined dep keys filtered so they cannot clobber them. */
+function mergeDeps(deps: ToolsRootDeps): ToolsRootDeps {
+  const supplied = Object.fromEntries(Object.entries(deps).filter(([, v]) => v !== undefined));
+  return { ...defaultToolsRootDeps, ...supplied };
+}
+
 const defaultToolsRootDeps: ToolsRootDeps = {
-  systemctlShowControlGroup: () => {
+  // J6 correction 02: the unit comes from the ARGUMENT (the config's own
+  // slicePath), never from a re-read of process.env — a caller whose config
+  // differs from the environment would otherwise resolve the WRONG unit.
+  systemctlShowControlGroup: (unit) => {
     try {
-      const out = child.execFileSync('systemctl', ['show', resolvePlacementConfig().slicePath, '-p', 'ControlGroup', '--value'], { encoding: 'utf8' });
+      const out = child.execFileSync('systemctl', ['show', unit, '-p', 'ControlGroup', '--value'], { encoding: 'utf8' });
       const v = out.trim();
       return v && v !== '' ? v : undefined;
     } catch {
@@ -140,13 +149,16 @@ const defaultToolsRootDeps: ToolsRootDeps = {
 export type CandidateToolsRoot = { ok: true; path: string } | { ok: false; reason: string };
 
 export function candidateToolsRootPath(cfg: Pick<PlacementConfig, 'cgroupRoot' | 'slicePath'>, deps: ToolsRootDeps = {}): CandidateToolsRoot {
-  const d = { ...defaultToolsRootDeps, ...deps };
+  // J6 correction 02: an explicitly-undefined key must not clobber the default
+  // ({ ...defaults, ...{ k: undefined } } sets k to undefined); callers that
+  // forward optional deps verbatim would otherwise disable resolution.
+  const d = mergeDeps(deps);
   const raw = cfg.slicePath;
   if (raw.startsWith('/')) {
     return { ok: true, path: raw.replace(/\/+$/, '') };
   }
   if (/^[A-Za-z0-9.@_-]+\.(slice|service)$/.test(raw)) {
-    const cg = d.systemctlShowControlGroup?.();
+    const cg = d.systemctlShowControlGroup?.(raw);
     if (!cg || !cg.startsWith('/')) {
       return { ok: false, reason: `unit ${raw} is not known to systemd — refusing to treat the name as a cgroup path` };
     }
@@ -169,7 +181,7 @@ export function candidateToolsRootPath(cfg: Pick<PlacementConfig, 'cgroupRoot' |
  *   `memory.max`, or an ancestor's up to 4 levels, must read as a number (not `max`).
  */
 export function resolveToolsRoot(cfg: PlacementConfig, deps: ToolsRootDeps = {}): ToolsRootResolution {
-  const d = { ...defaultToolsRootDeps, ...deps };
+  const d = mergeDeps(deps);
   const cand = candidateToolsRootPath(cfg, d);
   if (!cand.ok) {
     return { available: false, reason: cand.reason };

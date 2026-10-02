@@ -201,6 +201,30 @@ describe('J6 correction 02: canonicalise the candidate before any write, then ga
     }
   });
 
+  it('passes the CONFIG slice name to the systemctl dep, not the ambient environment (arm2 regression)', () => {
+    // Pre-fix, forConfig forwarded { systemctlShowControlGroup: undefined }, the
+    // merge clobbered the default with undefined, and the default itself read
+    // the slice from process.env instead of the config — every explicit
+    // slice-NAME placement run was refused as not-canonicalisable (live:
+    // phaseB-run-20261002T150126Z arm2). The dep must be called with the
+    // config's own slicePath.
+    const asked: string[] = [];
+    const refusal = validationPlacementRefusalForConfig(
+      resolvePlacementConfig({ PI_TOOLS_PLACEMENT: 'on', PI_TOOLS_SLICE: 'j6-run.service' }),
+      {
+        cgroupRoot: '/sys/fs/cgroup',
+        selfCgroupPath: '/system.slice/pi-web-ui.service',
+        systemctlShowControlGroup: (unit) => {
+          asked.push(unit);
+          return unit === 'j6-run.service' ? '/system.slice/j6-run.service' : undefined;
+        },
+        realpath: (p) => p,
+      },
+    );
+    expect(asked).toContain('j6-run.service');
+    expect(refusal).toBeNull();
+  });
+
   it('still refuses the production NAME forms and allows the run-owned unit through the composed check', () => {
     const deps = { cgroupRoot: '/sys/fs/cgroup', selfCgroupPath: '/system.slice/pi-web-ui.service' };
     expect(

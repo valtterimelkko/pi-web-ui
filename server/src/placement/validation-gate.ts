@@ -102,8 +102,8 @@ export interface ValidationPlacementCheckDeps {
   selfCgroupPath?: string | null;
   /** Canonicalise the candidate (default `fs.realpathSync`). */
   realpath?: (p: string) => string;
-  /** `systemctl show <unit> -p ControlGroup --value` for slice-NAME forms. */
-  systemctlShowControlGroup?: () => string | undefined;
+  /** `systemctl show <unit> -p ControlGroup --value` for slice-NAME forms (the config's own unit is passed in). */
+  systemctlShowControlGroup?: (unit: string) => string | undefined;
 }
 
 /**
