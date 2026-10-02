@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // The TerminalManager uses require() in a try-catch, so we mock it via unstable_mockModule
 const mockPtyProcess = {
   pid: 1234,
-  onData: vi.fn((cb: (data: string) => void) => { /* store callback */ }),
+  onData: vi.fn((_cb: (data: string) => void) => { /* store callback */ }),
   onExit: vi.fn(),
   write: vi.fn(),
   resize: vi.fn(),

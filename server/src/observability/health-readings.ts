@@ -351,7 +351,10 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
     toolsSliceOomKills: positiveOrNull(safe<{ oomKill?: number } | undefined>(sources.toolsSlice, undefined)?.oomKill),
     placementDegrades: positiveOrNull(
       sources.placementDegrades
-        ? safe<number | undefined>(() => sources.placementDegrades!(Math.max(0, now - (uptimeSec * 1000))), undefined)
+        ? safe<number | undefined>(() => {
+            const fn = sources.placementDegrades;
+            return fn ? fn(Math.max(0, now - (uptimeSec * 1000))) : undefined;
+          }, undefined)
         : undefined,
     ),
   };
