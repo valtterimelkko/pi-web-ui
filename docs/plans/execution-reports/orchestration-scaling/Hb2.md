@@ -93,6 +93,24 @@ Corrected wire captured (`fixoff-api-desktop` frames): `message_start content [{
 4. The fill targets the tracked current message (the terminal `message_end` frame carries **no id** — the raw pi message has none); concurrent multi-view scenarios rely on the same per-session tracking the delta path uses.
 5. The 1.58.2→1.58.4 jump leaves 1.58.3 to Hb5; the parent resolves the version-constant conflict at merge (changelog entry written as 1.58.4 per the answer).
 
-## 7. Housekeeping
+## 7. Correction 02 — interactive regression arms (parent follow-up after the Luna review ACCEPT WITH FIXES)
+
+The reviewer could not verify the interactive flows; production runs `PI_WEB_UI_VIEW_ONLY_SUBSCRIBE=on`. All arms re-run on disposable servers from this worktree (build at HEAD `e074202a`; `npm run build` exit 0 — the code delta vs `60fe690f` is docs-only), real Chromium via the vite dev client, real `zai/glm-5.3-flash` turns, typed prompts, DOM asserted against the session transcript on disk with the doubled-prefix sweep. Boot `phaseC-01` flag ON (arms 1–6), boot `phaseC-02` flag OFF (arm 7). Each arm is one run (n=1), one active turn at a time. No code change was needed; every arm passed.
+
+| # | Arm | Flag | Viewport | Assertions (all OK) | Receipt |
+|---|---|---|---|---|---|
+| 1 | typed prompt → text → **bash tool call** → text | on | desktop | tool card renders (`echo 6114`); all 2 assistant text segments render; no doubled prefix; final text exact | `c03-tool-desktop` |
+| 2 | same arm | on | **mobile, drawer closed** (image checked: transcript fully visible, tool card + replies on screen) | tool card renders (`echo 6339`); all 4 assistant segments render; no doubled prefix | `c03-tool-mobile` |
+| 3 | **thinking block** (session `thinkingLevel: high`) | on | desktop | thinking text in transcript AND rendered (accordion-expanded fragment `The user wants exactly one line: HB2THIN…`); final answer text exact; no doubled prefix | `c03-think-desktop` |
+| 4 | **/compact** (typed → confirmation modal → Compact) then one more prompt | on | desktop | compaction entry in transcript; post-compaction reply exact (`HB2COMPACT-F1`); no doubled prefix | `c03-compact-desktop` |
+| 5 | **skill-content invocation** (model asked to emit `<skill name="hb2-demo">…</skill>` — the real detection path through `getSkillContentInfo`) | on | desktop | placeholder renders (`📚 Skill loaded: hb2-demo`); the marked start frame preserved on the wire (`customType: 'skill-content'`, content intact — the marker mechanism this lane added, proven live); raw skill text absent from DOM (replaced by placeholder, transcript keeps raw text) | `c03-skill3-desktop` (plus `c03-skill-desktop`/`skill2` runs that pinned down the assertions) |
+| 6 | **goal-armed session** (`/goal <trivial objective>` typed; engine continuation turn streams) | on | desktop | continuation marker renders exactly (`HB2GOAL-3377`/`4482`); no doubled prefix (goal2 receipt); engine completion line renders (`Status: GOAL_ACHIEVED`, markdown-bold rendered); goal widget shows `Last goal achieved · 1 run`; engine cleared (`/goal clear`) | `c03-goal2-desktop`, `c03-goal3-desktop` |
+| 7 | tool arm, flag OFF | off | desktop | tool card renders (`echo 8845`); both text segments exact; no doubled prefix | `c03-tool-flagoff-desktop` |
+
+Findings recorded along the way (no defects): (a) skill-shaped content transforms on BOTH user and assistant `message_start` when the markers are present at projection time (short one-chunk replies make detection deterministic) — the placeholder replacing the whole message is the designed mechanism (H1's documented behaviour), and the wire carries the raw text only in the transcript; (b) the goal engine appends its completion marker (`**Status: GOAL_ACHIEVED**`) to the final continuation turn — markdown bold renders with the asterisks consumed, so verbatim transcript-to-DOM matching is not the right assertion there (marker + completion-line + widget checks used instead); (c) the goal-continuation reply itself streams and renders exactly like any other live turn — no doubled first chunk anywhere.
+
+Housekeeping: servers `hb2c-srv-on` (42945), `hb2c-srv-off` (42889), vite (3457) stopped, ports verified dead; zai credential copies deleted from both run dirs; production checkout re-verified read-only (`master`, empty status); worktree tree clean.
+
+## 8. Housekeeping
 
 All disposable servers, the vite dev client and the error mock were stopped before hand-back (ports 33227 / 40703 / 3457 / 46081 all dead). zai credential copies (`auth.json`, `models.json`) deleted from all four run dirs; no heap snapshots were created. The production checkout was untouched throughout (re-verified read-only at hand-back: `git -C /root/pi-web-ui status --porcelain` → empty, branch `master`). Worktree tree clean at `60fe690f`; nothing pushed (lane branch, parent merges).
