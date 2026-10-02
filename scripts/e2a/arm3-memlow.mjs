@@ -72,13 +72,13 @@ async function main() {
     const scale = SCALES[scaleName];
     if (!scale) throw new Error(`unknown scale ${scaleName}`);
     fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
-    // Working-set files (real data, not sparse: hole reads may bypass page-cache charging).
-    for (const name of ['sib-low.bin', 'sib-free.bin']) {
-      const file = path.join(outDir, name);
-      if (!fs.existsSync(file)) {
-        await runOk('dd', ['if=/dev/zero', `of=${file}`, 'bs=1M', `count=${Math.round(scale.fileBytes / MiB)}`], { timeoutMs: 120_000 });
-      }
+    // Stale artefacts from a previous pass would be picked up instantly (results wait)
+    // or pollute the pass analysis (timings append) — clear them all first.
+    for (const f of ['results.json', 'hog.json', 'psi.jsonl', 'timings-low.jsonl', 'timings-free.jsonl']) {
+      fs.rmSync(path.join(outDir, f), { force: true });
     }
+    // Working-set files are written INSIDE the unit by the workers (page-cache
+    // charging), so no driver-side dd here.
     const argv = buildMemlowUnitArgv({ payloadPath: self, outDir, scaleName });
     await runOk(argv[0], argv.slice(1));
     // Driver-side path assertion: the unit's real cgroup must be under e2a-oom.slice.
@@ -120,8 +120,16 @@ async function main() {
 
     const timingsLow = path.join(outDir, 'timings-low.jsonl');
     const timingsFree = path.join(outDir, 'timings-free.jsonl');
-    const workerLow = spawnTracked(process.execPath, [self, 'worker', '--file', path.join(outDir, 'sib-low.bin'), '--timings', timingsLow, '--passes', String(scale.passes)]);
-    const workerFree = spawnTracked(process.execPath, [self, 'worker', '--file', path.join(outDir, 'sib-free.bin'), '--timings', timingsFree, '--passes', String(scale.passes)]);
+    // Workers WRITE their own working set first: pages written by a process are
+    // charged to that process's cgroup — a driver-written file would stay charged
+    // to the driver (measured 22:08 run: unit memory peak 4.0M, no contrast possible).
+    const workerArgs = (file, timings) => [
+      self, 'worker', '--file', file, '--timings', timings,
+      '--write-bytes', String(scale.fileBytes),
+      '--passes', scaleName === 'full' ? '0' : String(scale.passes), // 0 = loop until killed
+    ];
+    const workerLow = spawnTracked(process.execPath, workerArgs(path.join(outDir, 'sib-low.bin'), timingsLow));
+    const workerFree = spawnTracked(process.execPath, workerArgs(path.join(outDir, 'sib-free.bin'), timingsFree));
     movePid(`${fsRoot}/sib-low/cgroup.procs`, workerLow.pid);
     movePid(`${fsRoot}/sib-free/cgroup.procs`, workerFree.pid);
 
@@ -133,19 +141,40 @@ async function main() {
 
     let hog = null;
     let hogNote = 'smoke: no hog (no eviction pressure by design)';
+    let stopMonitor = null;
     if (scaleName === 'full') {
+      // PSI monitor: /proc/pressure/memory every second for the whole arm (05-answer).
+      stopMonitor = startPsiMonitor(path.join(outDir, 'psi.jsonl'));
       fs.mkdirSync(`${fsRoot}/sib-hog`, { recursive: true });
-      hog = spawnTracked(process.execPath, [self, 'hog', '--target-bytes', String(scale.hogTargetBytes), '--step-bytes', String(256 * MiB), '--step-ms', '1500']);
+      // Hog target 6.5G: with ~3 GiB of sibling cache in the unit (max 8G), this forces
+      // ~1.5 GiB of clean-cache eviction — the contrast measurement — while the PSI cap
+      // (stop at full avg10 ≥ 5 / some avg10 ≥ 20, hold, record) keeps it inside the
+      // 05-answer envelope. Clean-cache reclaim is cheap; the 22:25 trip came from the
+      // unpaced WRITE phase, now fsync-paced.
+      hog = spawnTracked(process.execPath, [self, 'hog', '--target-bytes', String(Math.min(scale.hogTargetBytes, 6.5 * GiB)), '--step-bytes', String(256 * MiB), '--step-ms', '1200', '--psi-cap-full', '5', '--psi-cap-some', '20', '--status-file', path.join(outDir, 'hog.json')]);
       movePid(`${fsRoot}/sib-hog/cgroup.procs`, hog.pid);
       const hogExit = await onceExit(hog);
-      hogNote = `hog exit code ${hogExit} (137 = killed by the kernel at the unit limit)`;
+      const hogStatus = readJsonIfExists(path.join(outDir, 'hog.json'));
+      hogNote = `hog exit code ${hogExit} (137 = killed by the kernel at the unit limit); status: ${JSON.stringify(hogStatus)}`;
     }
 
     // First pass completed after the hog phase shows the eviction effect. With no hog
     // (smoke), the after pass is simply pass 2, anchored at the baseline pass's completion.
     const phaseEndMs = hog ? hog.exitAtMs : (lowTimings.pass(1).startMs + lowTimings.pass(1).ms);
-    const lowAfter = await lowTimings.waitForPassAfter(phaseEndMs, 300_000);
-    const freeAfter = await freeTimings.waitForPassAfter(phaseEndMs, 300_000);
+    let lowAfter;
+    let freeAfter;
+    try {
+      lowAfter = await lowTimings.waitForPassAfter(phaseEndMs, 300_000);
+      freeAfter = await freeTimings.waitForPassAfter(phaseEndMs, 300_000);
+    } catch (err) {
+      // Pressure-capped pass: record what we have and the PSI that capped it, then stop cleanly.
+      workerLow.kill('SIGKILL');
+      workerFree.kill('SIGKILL');
+      cleanupSiblings(fsRoot);
+      fs.writeFileSync(path.join(outDir, 'results.json'), `${JSON.stringify({ at: new Date().toISOString(), scale: scaleName, error: 'pressure-capped before any post-phase pass', detail: String(err.message), psiPeak: psiPeakFrom(path.join(outDir, 'psi.jsonl')) }, null, 2)}\n`);
+      for (const f of ['sib-low.bin', 'sib-free.bin']) fs.rmSync(path.join(outDir, f), { force: true });
+      throw err;
+    }
 
     const sample = (dir) => {
       const read = (f) => { try { return fs.readFileSync(path.join(dir, f), 'utf8'); } catch { return ''; } };
@@ -194,11 +223,13 @@ async function main() {
       rereadMs: results.passes.free.afterMs,
       rereadBaselineMs: results.passes.free.baselineMs,
     };
-    fs.writeFileSync(path.join(outDir, 'results.json'), `${JSON.stringify(results, null, 2)}\n`);
+    fs.writeFileSync(path.join(outDir, 'results.json'), `${JSON.stringify({ ...results, psiPeak: psiPeakFrom(path.join(outDir, 'psi.jsonl')), hog: results.hog }, null, 2)}\n`);
 
+    if (stopMonitor) stopMonitor();
     workerLow.kill('SIGKILL');
     workerFree.kill('SIGKILL');
     cleanupSiblings(fsRoot);
+    for (const f of ['sib-low.bin', 'sib-free.bin']) fs.rmSync(path.join(outDir, f), { force: true }); // 05-answer: delete the 3 GiB sets after the pass
     process.exit(0);
   }
 
@@ -206,9 +237,25 @@ async function main() {
     const file = arg('--file');
     const timings = arg('--timings');
     const passes = Number(arg('--passes', 4));
+    const writeBytes = Number(arg('--write-bytes', 0));
+    // Working-set write phase: buffered writes charge the page cache to THIS cgroup.
+    // Paced (32 MiB + fsync + 400 ms) to keep host writeback/reclaim PSI low
+    // (05-answer: guard HARD-tripped at PSI full avg10 12.01 during the unpaced write).
+    if (writeBytes > 0) {
+      const chunk = Buffer.alloc(32 * 1024 * 1024, 7);
+      const fdw = fs.openSync(file, 'w');
+      let written = 0;
+      while (written < writeBytes) {
+        fs.writeSync(fdw, chunk);
+        fs.fsyncSync(fdw);
+        written += chunk.length;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      fs.closeSync(fdw);
+    }
     const fd = fs.openSync(file, 'r');
     const buf = Buffer.alloc(1024 * 1024);
-    for (let pass = 1; pass <= passes; pass++) {
+    for (let pass = 1; passes === 0 || pass <= passes; pass++) {
       const t0 = Date.now();
       let off = 0;
       for (;;) {
@@ -225,17 +272,29 @@ async function main() {
   if (cmd === 'hog') {
     const target = Number(arg('--target-bytes'));
     const step = Number(arg('--step-bytes', 256 * MiB));
-    const stepMs = Number(arg('--step-ms', 1500));
+    const stepMs = Number(arg('--step-ms', 1200));
+    const capFull = Number(arg('--psi-cap-full', 5)); // 05-answer: stay under host PSI full avg10 5
+    const capSome = Number(arg('--psi-cap-some', 20));
+    const statusFile = arg('--status-file');
     const keep = [];
     let allocated = 0;
+    let capped = null;
     while (allocated < target && allocated < 10 * GiB) {
+      const psi = readMemoryPsi();
+      if (psi.fullAvg10 >= capFull || psi.someAvg10 >= capSome) {
+        capped = { at: new Date().toISOString(), psi, allocated };
+        break;
+      }
       const buf = Buffer.alloc(step, 1);
       keep.push(buf);
       allocated += step;
       await sleep(stepMs);
     }
-    console.log(JSON.stringify({ hogDone: allocated }));
-    await sleep(5000);
+    if (statusFile) {
+      fs.writeFileSync(statusFile, `${JSON.stringify({ capped, allocatedBytes: allocated, targetBytes: target, at: new Date().toISOString() })}\n`);
+    }
+    console.log(JSON.stringify({ hogDone: allocated, capped: capped != null }));
+    await sleep(20_000); // hold the working set so the after-passes see steady-state eviction
     return;
   }
 
@@ -248,6 +307,46 @@ function cleanupSiblings(fsRoot) {
   }
   try { fs.writeFileSync(`${fsRoot}/cgroup.subtree_control`, '-memory'); } catch { /* fine */ }
   try { fs.rmdirSync(`${fsRoot}/control`); } catch { /* busy */ }
+}
+
+function readMemoryPsi() {
+  const text = fs.readFileSync('/proc/pressure/memory', 'utf8');
+  const some = /some avg10=([\d.]+)/.exec(text)?.[1];
+  const full = /full avg10=([\d.]+)/.exec(text)?.[1];
+  return { someAvg10: Number(some ?? 0), fullAvg10: Number(full ?? 0), at: new Date().toISOString() };
+}
+
+function startPsiMonitor(outFile) {
+  const rows = [];
+  const timer = setInterval(() => {
+    try {
+      const row = readMemoryPsi();
+      rows.push(row);
+      fs.writeFileSync(outFile, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    } catch { /* transient */ }
+  }, 1000);
+  return () => clearInterval(timer);
+}
+
+function psiPeakFrom(psiFile) {
+  try {
+    const rows = fs.readFileSync(psiFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    return {
+      samples: rows.length,
+      peakFullAvg10: Math.max(...rows.map((r) => r.fullAvg10 ?? 0)),
+      peakSomeAvg10: Math.max(...rows.map((r) => r.someAvg10 ?? 0)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readJsonIfExists(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function readOwnCgroup() {
