@@ -1,4 +1,4 @@
-export { useSessionStore, type Session, type Message, type SessionStats, type WorkerStatus } from './sessionStore';
+export { useSessionStore, OPTIMISTIC_USER_ID_PREFIX, type Session, type Message, type SessionStats, type WorkerStatus } from './sessionStore';
 export { useChatStore } from './chatStore';
 export { useUIStore } from './uiStore';
 export { useDraftStore, type DraftStore } from './draftStore';

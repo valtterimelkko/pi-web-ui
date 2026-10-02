@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect, memo } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles, Map, Wrench, CornerUpRight, Clock } from 'lucide-react';
 import { DictationButton, type DictationButtonState } from './DictationButton';
-import { useChatStore, useSessionStore, useDraftStore } from '../../store';
+import { useChatStore, useSessionStore, useDraftStore, OPTIMISTIC_USER_ID_PREFIX } from '../../store';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
@@ -123,7 +123,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
       const store = useSessionStore.getState();
       if (store.currentSessionId) {
         store.addMessage({
-          id: `optimistic_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          id: `${OPTIMISTIC_USER_ID_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
           role: 'user',
           content: promptMessage,
           timestamp: Date.now(),
