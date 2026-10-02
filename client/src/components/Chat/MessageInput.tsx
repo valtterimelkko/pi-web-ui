@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect, memo } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles, Map, Wrench, CornerUpRight, Clock } from 'lucide-react';
 import { DictationButton, type DictationButtonState } from './DictationButton';
-import { useChatStore, useSessionStore, useDraftStore } from '../../store';
+import { useChatStore, useSessionStore, useDraftStore, OPTIMISTIC_USER_ID_PREFIX, messageTextOf } from '../../store';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
@@ -19,10 +19,55 @@ import {
   streamingComposeIsQueueOnly,
 } from '../../lib/piExtensionControls';
 
-interface QueuedStreamingMessage {
+export interface QueuedStreamingMessage {
   id: string;
   mode: 'steer' | 'followUp';
   text: string;
+  /** How many user messages with this (trimmed) text must already exist before
+   * this chip's own echo: prior identical history plus identical chips still
+   * pending at enqueue time. Absent means 0 (the first matching echo). */
+  expectedEchoIndex?: number;
+}
+
+type TranscriptMessage = { role: string; content: unknown };
+
+// `Map` is shadowed by the lucide-react icon import, hence globalThis.Map.
+function userTextCounts(transcript: TranscriptMessage[]): globalThis.Map<string, number> {
+  const counts = new globalThis.Map<string, number>();
+  for (const m of transcript) {
+    if (m.role !== 'user') continue;
+    const text = messageTextOf(m.content as Parameters<typeof messageTextOf>[0]).trim();
+    counts.set(text, (counts.get(text) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Baseline for a chip queued now: identical user messages already in the
+ * transcript plus identical chips still waiting for their echo. */
+export function expectedEchoIndexFor(
+  text: string,
+  transcript: TranscriptMessage[],
+  pending: QueuedStreamingMessage[],
+): number {
+  const key = text.trim();
+  const pendingSame = pending.filter((item) => item.text.trim() === key).length;
+  return (userTextCounts(transcript).get(key) ?? 0) + pendingSame;
+}
+
+/** Hb6 correction 02: drop queued-streaming chips whose prompt has been
+ * delivered. The match uses the SAME text extraction as the optimistic-echo
+ * reconciliation (`messageTextOf`): the echoed user message carries a
+ * text-block array, so a string-only comparison left chips visible forever.
+ * Matching is one-to-one: a chip counts as delivered only once the transcript
+ * holds more identical (trimmed) user messages than its `expectedEchoIndex`,
+ * so an earlier identical prompt cannot clear a new chip and one echo clears
+ * only one of two identical chips. Queue order preserved. */
+export function removeDeliveredQueuedChips(
+  queue: QueuedStreamingMessage[],
+  transcript: TranscriptMessage[],
+): QueuedStreamingMessage[] {
+  const counts = userTextCounts(transcript);
+  return queue.filter((item) => (counts.get(item.text.trim()) ?? 0) <= (item.expectedEchoIndex ?? 0));
 }
 
 interface MessageInputProps {
@@ -123,7 +168,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
       const store = useSessionStore.getState();
       if (store.currentSessionId) {
         store.addMessage({
-          id: `optimistic_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          id: `${OPTIMISTIC_USER_ID_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
           role: 'user',
           content: promptMessage,
           timestamp: Date.now(),
@@ -155,15 +200,11 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
   // A queued message is delivered once the matching user message reaches the
   // transcript (the server replays it into the session when the runtime
-  // accepts the steer/follow-up).
+  // accepts the steer/follow-up). Matching uses the shared text extraction so
+  // text-block-array echoes count as delivered too (Hb6 correction 02).
   useEffect(() => {
     if (queuedStreaming.length === 0) return;
-    const delivered = new Set(
-      transcript
-        .filter((m) => m.role === 'user' && typeof m.content === 'string')
-        .map((m) => (m.content as string).trim()),
-    );
-    setQueuedStreaming((q) => q.filter((item) => !delivered.has(item.text)));
+    setQueuedStreaming((q) => removeDeliveredQueuedChips(q, transcript));
   }, [transcript, queuedStreaming.length]);
 
   // If the run ends without the message appearing (e.g. aborted), drop the
@@ -253,6 +294,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
         id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         mode,
         text: message,
+        expectedEchoIndex: expectedEchoIndexFor(message, transcript, q),
       }]);
       if (currentSessionId) setDraft(currentSessionId, '');
       setInputValue('');

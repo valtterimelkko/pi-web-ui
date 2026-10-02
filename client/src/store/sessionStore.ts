@@ -172,6 +172,38 @@ async function syncPreferenceDelta(
 // Holds current session + one recently-accessed session for fast switching.
 const MAX_CACHED_SESSIONS = 2;
 
+/** Hb6: the composer's optimistic user bubble id prefix (MessageInput inserts
+ * a local copy on send so the prompt shows instantly; the server's echo carries
+ * no id on the pi wire). The message_start handlers reconcile the echo with the
+ * oldest unreconciled optimistic copy of the same text instead of appending a
+ * second bubble. */
+export const OPTIMISTIC_USER_ID_PREFIX = 'optimistic_';
+
+/** Rendered text of a Message content (string or text-block array). */
+/** Rendered text of a Message content (string or text-block array). Shared with
+ * the composer's queued-streaming chip clearing (Hb6 correction 02). */
+export function messageTextOf(content: Message['content']): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => (part && part.type === 'text' ? part.text ?? '' : '')).join('');
+  }
+  return '';
+}
+
+/** Hb6: the OLDEST unreconciled optimistic user copy with exactly this text
+ * (conservative match: same session implied by the caller, prefix + role +
+ * exact text; the optimistic copy keeps its extra fields — the id is adopted
+ * from the echo, so a reconciled copy can never match again). */
+function findOptimisticUserMatch(messages: Message[], text: string): Message | undefined {
+  let best: Message | undefined;
+  for (const m of messages) {
+    if (m.role !== 'user' || !m.id.startsWith(OPTIMISTIC_USER_ID_PREFIX)) continue;
+    if (messageTextOf(m.content) !== text) continue;
+    if (!best || m.timestamp < best.timestamp) best = m;
+  }
+  return best;
+}
+
 // Fallback shown if a Claude auth-expiry error reaches the client without a
 // server-provided remediation message. The server (see `claude-auth-errors.ts`)
 // normally sends a backend- and profile-aware message, which we display as-is.
@@ -2225,6 +2257,15 @@ export const useSessionStore = create<SessionState>()(
               content: (messageData.content as Message['content']) ?? [],
               timestamp: Date.now(),
             };
+            // Hb6: reconcile an echoed user message with the composer's
+            // optimistic bubble instead of rendering a second bubble.
+            if ((messageData.role as Message['role']) === 'user') {
+              const match = findOptimisticUserMatch(get().messages, messageTextOf(newMessage.content));
+              if (match) {
+                get().updateMessage(match.id, { id: newMessage.id });
+                break;
+              }
+            }
             get().addMessage(newMessage);
             break;
           }
@@ -2971,6 +3012,20 @@ export const useSessionStore = create<SessionState>()(
                 const storedId = allocateStoredMessageId(sessionId, wireId);
                 currentWireMessageIdBySession.set(sessionId, wireId);
                 currentStoredMessageIdBySession.set(sessionId, storedId);
+                // Hb6: reconcile an echoed user message with the composer's
+                // optimistic bubble instead of rendering a second bubble.
+                if ((messageData.role as Message['role']) === 'user') {
+                  const base = get().sessionData[sessionId]?.messages;
+                  const incomingText = messageTextOf((messageData.content as Message['content']) ?? '');
+                  const match = base ? findOptimisticUserMatch(base, incomingText) : undefined;
+                  if (match) {
+                    // Adopt the stored id; the optimistic copy's other fields
+                    // (attachments, timestamp) are the richer local ones.
+                    get().updateMessageInSession(sessionId, match.id, { id: storedId });
+                    currentMessageIdBySession.set(sessionId, storedId);
+                    break;
+                  }
+                }
                 const newMessage: Message = {
                   id: storedId,
                   role: messageData.role as Message['role'],
