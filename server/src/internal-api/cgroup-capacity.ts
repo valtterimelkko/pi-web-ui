@@ -115,18 +115,24 @@ export function readServiceMemoryCapacity(options: CgroupResolverOptions = {}): 
 
   const serviceFsPath = selfPath ? resolveCgroupFsPath(root, selfPath) : undefined;
   if (serviceFsPath) {
-    const current = readMetric(read(`${serviceFsPath}/memory.current`));
+    const rawCurrent = readMetric(read(`${serviceFsPath}/memory.current`));
     const limit = readMetric(read(`${serviceFsPath}/memory.max`));
-    if (current !== undefined && limit !== undefined) {
+    if (rawCurrent !== undefined && limit !== undefined) {
+      const stat = read(`${serviceFsPath}/memory.stat`);
+      const inactiveFile = stat ? readEventCounter(stat, 'inactive_file') ?? 0 : 0;
+      const current = Math.max(0, rawCurrent - inactiveFile);
       const high = readMetric(read(`${serviceFsPath}/memory.high`));
       return { currentBytes: current, limitBytes: limit, highBytes: high, source: 'service' };
     }
   }
 
-  const rootCurrent = readMetric(read(`${root}/memory.current`));
+  const rootRawCurrent = readMetric(read(`${root}/memory.current`));
   const rootLimit = readMetric(read(`${root}/memory.max`));
-  if (rootCurrent !== undefined && rootLimit !== undefined) {
-    return { currentBytes: rootCurrent, limitBytes: rootLimit, highBytes: readMetric(read(`${root}/memory.high`)), source: 'root' };
+  if (rootRawCurrent !== undefined && rootLimit !== undefined) {
+    const stat = read(`${root}/memory.stat`);
+    const inactiveFile = stat ? readEventCounter(stat, 'inactive_file') ?? 0 : 0;
+    const current = Math.max(0, rootRawCurrent - inactiveFile);
+    return { currentBytes: current, limitBytes: rootLimit, highBytes: readMetric(read(`${root}/memory.high`)), source: 'root' };
   }
 
   return { currentBytes: process.memoryUsage().rss, limitBytes: totalmem(), source: 'process-rss' };
@@ -163,9 +169,12 @@ export function readSplitMemoryCapacity(
   const toolsPath = options.toolsCgroupPath;
   if (!toolsPath) return base;
   const read = options.read ?? readRealFile;
-  const toolsCurrent = readMetric(read(`${toolsPath}/memory.current`));
+  const toolsRawCurrent = readMetric(read(`${toolsPath}/memory.current`));
   const toolsMax = readMetric(read(`${toolsPath}/memory.max`));
-  if (toolsCurrent === undefined && toolsMax === undefined) return base;
+  if (toolsRawCurrent === undefined && toolsMax === undefined) return base;
+  const toolsStat = read(`${toolsPath}/memory.stat`);
+  const toolsInactiveFile = toolsStat ? readEventCounter(toolsStat, 'inactive_file') ?? 0 : 0;
+  const toolsCurrent = toolsRawCurrent !== undefined ? Math.max(0, toolsRawCurrent - toolsInactiveFile) : undefined;
   const toolsHigh = readMetric(read(`${toolsPath}/memory.high`));
   return {
     currentBytes: base.currentBytes + (toolsCurrent ?? 0),

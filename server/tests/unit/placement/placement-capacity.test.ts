@@ -34,6 +34,18 @@ describe('tools slice memory reader', () => {
     expect(r.source).toBe('tools-slice');
     expect(r.oomKill).toBeUndefined();
   });
+
+  it('deducts inactive_file from memory.current to report working set', () => {
+    const files: Record<string, string> = {
+      '/cg/t.slice/memory.current': String(6.6 * 1024 * 1024 * 1024),
+      '/cg/t.slice/memory.max': String(8 * 1024 * 1024 * 1024),
+      '/cg/t.slice/memory.stat': 'anon 103000000\nfile 5900000000\ninactive_file 5680000000\n',
+    };
+    const r = readToolsSliceMemory(cfg, (f) => files[f]);
+    expect(r.source).toBe('tools-slice');
+    const expected = 6.6 * 1024 * 1024 * 1024 - 5680000000;
+    expect(r.currentBytes).toBe(expected);
+  });
 });
 
 describe('readDegradeCount (per boot)', () => {

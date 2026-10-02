@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -88,12 +88,30 @@ async function startFixture(dir: string): Promise<Fixture> {
   writeFileSync(notifyStub, '#!/usr/bin/env bash\nexit 0\n');
   chmodSync(notifyStub, 0o755);
 
+  const checkoutDir = path.join(dir, 'checkout');
+  mkdirSync(checkoutDir, { recursive: true });
+  spawnSync('git', ['init', '-b', 'master'], { cwd: checkoutDir, stdio: 'ignore' });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: checkoutDir, stdio: 'ignore' });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: checkoutDir, stdio: 'ignore' });
+  writeFileSync(path.join(checkoutDir, '.gitignore'), 'server/dist/\n');
+  writeFileSync(path.join(checkoutDir, 'tracked.txt'), 'clean\n');
+  spawnSync('git', ['add', '.gitignore', 'tracked.txt'], { cwd: checkoutDir, stdio: 'ignore' });
+  spawnSync('git', ['commit', '-m', 'init'], { cwd: checkoutDir, stdio: 'ignore' });
+  const headSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: checkoutDir, encoding: 'utf8' }).stdout.trim();
+  const manifestDir = path.join(checkoutDir, 'server', 'dist', 'build-identity');
+  mkdirSync(manifestDir, { recursive: true });
+  writeFileSync(
+    path.join(manifestDir, 'embedded-manifest.json'),
+    JSON.stringify({ manifestSchemaVersion: 1, identityStatus: 'known', buildMode: 'compiled', revision: headSha }, null, 2) + '\n'
+  );
+
   return {
     auditFile,
     socketPath,
     setActiveTurns: writeResponse,
     env: () => ({
       ...process.env,
+      PI_WEB_UI_CHECKOUT_DIR: checkoutDir,
       PI_WEB_UI_INTERNAL_API_SOCKET: socketPath,
       PI_WEB_UI_INTERNAL_API_TOKEN_FILE: path.join(dir, 'internal-api-token'),
       PI_WEB_UI_RESTART_SYSTEMCTL: systemctlStub,

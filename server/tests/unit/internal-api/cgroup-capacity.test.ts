@@ -5,6 +5,7 @@ import {
   readServiceMemoryCapacity,
   readServicePidsCapacity,
   readServiceMemoryEvents,
+  readSplitMemoryCapacity,
 } from '../../../src/internal-api/cgroup-capacity.js';
 
 const G = 1024 * 1024 * 1024;
@@ -180,5 +181,89 @@ describe('readServiceMemoryEvents', () => {
       read: () => undefined,
     });
     expect(r).toBeUndefined();
+  });
+});
+
+describe('working-set memory capacity (Criterion 5)', () => {
+  it('deducts inactive_file cache from currentBytes so admission headroom is not consumed by reclaimable cache', () => {
+    // 7 GiB current, 8 GiB max. Of the 7 GiB, 5.68 GiB is inactive_file cache (reclaimable).
+    // Working set is 7 GiB - 5.68 GiB = 1.839... GiB.
+    // Headroom against 8 GiB limit should be > 6 GiB, NOT ~1 GiB.
+    const r = readServiceMemoryCapacity({
+      selfCgroup: '0::/system.slice/pi-web-ui.service',
+      cgroupRoot: ROOT,
+      read: fakeRead({
+        [`${SVC}/memory.current`]: String(7 * G),
+        [`${SVC}/memory.max`]: String(8 * G),
+        [`${SVC}/memory.stat`]: [
+          'anon 103000000',
+          'file 5900000000',
+          'inactive_file 5680000000',
+          'active_file 220000000',
+        ].join('\n'),
+      }),
+    });
+    expect(r.limitBytes).toBe(8 * G);
+    const expectedWorkingSet = 7 * G - 5680000000;
+    expect(r.currentBytes).toBe(expectedWorkingSet);
+    const headroom = r.limitBytes - r.currentBytes;
+    expect(headroom).toBeGreaterThan(6 * G);
+  });
+
+  it('reports high working set when anon memory is genuinely high (small inactive_file)', () => {
+    // 7.5 GiB current, 8 GiB max. Anon is 7.2 GiB, inactive_file is only 100 MiB.
+    // Working set is 7.5 GiB - 100 MiB = 7.4 GiB. Headroom is only ~0.6 GiB (under pressure).
+    const r = readServiceMemoryCapacity({
+      selfCgroup: '0::/system.slice/pi-web-ui.service',
+      cgroupRoot: ROOT,
+      read: fakeRead({
+        [`${SVC}/memory.current`]: String(7.5 * G),
+        [`${SVC}/memory.max`]: String(8 * G),
+        [`${SVC}/memory.stat`]: [
+          'anon 7200000000',
+          'file 300000000',
+          'inactive_file 100000000',
+          'active_file 200000000',
+        ].join('\n'),
+      }),
+    });
+    const expectedWorkingSet = 7.5 * G - 100000000;
+    expect(r.currentBytes).toBe(expectedWorkingSet);
+    const headroom = r.limitBytes - r.currentBytes;
+    expect(headroom).toBeLessThan(1 * G);
+  });
+
+  it('floors working set at 0 if inactive_file ever exceeds memory.current', () => {
+    const r = readServiceMemoryCapacity({
+      selfCgroup: '0::/system.slice/pi-web-ui.service',
+      cgroupRoot: ROOT,
+      read: fakeRead({
+        [`${SVC}/memory.current`]: '1000',
+        [`${SVC}/memory.max`]: String(8 * G),
+        [`${SVC}/memory.stat`]: 'inactive_file 2000\n',
+      }),
+    });
+    expect(r.currentBytes).toBe(0);
+  });
+
+  it('readSplitMemoryCapacity computes working set for both service and tools slice', () => {
+    const TOOLS = `${ROOT}/pi-web-ui-tools.slice`;
+    const r = readSplitMemoryCapacity({
+      selfCgroup: '0::/system.slice/pi-web-ui.service',
+      cgroupRoot: ROOT,
+      toolsCgroupPath: TOOLS,
+      read: fakeRead({
+        [`${SVC}/memory.current`]: String(1 * G),
+        [`${SVC}/memory.max`]: String(4 * G),
+        [`${SVC}/memory.stat`]: 'inactive_file 200000000\n',
+        [`${TOOLS}/memory.current`]: String(6.6 * G),
+        [`${TOOLS}/memory.max`]: String(8 * G),
+        [`${TOOLS}/memory.stat`]: 'inactive_file 5680000000\n',
+      }),
+    });
+    const serviceWs = 1 * G - 200000000;
+    const toolsWs = 6.6 * G - 5680000000;
+    expect(r.tools?.currentBytes).toBe(toolsWs);
+    expect(r.currentBytes).toBe(serviceWs + toolsWs);
   });
 });

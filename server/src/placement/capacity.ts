@@ -45,9 +45,12 @@ function parseEventCounter(events: string, key: string): number | undefined {
 export function readToolsSliceMemory(cfg: PlacementConfig, read: CgroupFileRead = realCgroupRead): ToolsSliceMemory {
   const base = cfg.toolsRoot;
   if (!base) return { source: 'unavailable' };
-  const current = parseMetric(read(path.join(base, 'memory.current')));
+  const rawCurrent = parseMetric(read(path.join(base, 'memory.current')));
   const max = parseMetric(read(path.join(base, 'memory.max')));
-  if (current === undefined && max === undefined) return { source: 'unavailable' };
+  if (rawCurrent === undefined && max === undefined) return { source: 'unavailable' };
+  const stat = read(path.join(base, 'memory.stat'));
+  const inactiveFile = stat !== undefined ? parseEventCounter(stat, 'inactive_file') ?? 0 : 0;
+  const current = rawCurrent !== undefined ? Math.max(0, rawCurrent - inactiveFile) : undefined;
   const events = read(path.join(base, 'memory.events'));
   return {
     source: 'tools-slice',

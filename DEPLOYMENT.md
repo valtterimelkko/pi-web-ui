@@ -632,6 +632,27 @@ disposable proofs every target is injectable (`PI_WEB_UI_SERVICE_UNIT`,
 `PI_WEB_UI_STOP_AUDIT_FILE`, `PI_WEB_UI_PRODUCTION_LOCK`). The drain API itself
 is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md#drain-then-restart).
 
+**Production checkout safety guard (Hb4).** Before initiating drain or restart,
+`scripts/restart-production.sh` validates that the production checkout directory
+(`CHECKOUT_DIR`, default `/root/pi-web-ui`, overrideable via `--checkout-dir` or
+`PI_WEB_UI_CHECKOUT_DIR`):
+1. Is on the expected branch (default `master`, overrideable via `--expected-branch` or `PI_WEB_UI_EXPECTED_BRANCH`).
+2. Has no unstaged modifications or staged changes on tracked files (untracked files are ignored).
+3. Has an up-to-date compiled build in `server/dist/build-identity/embedded-manifest.json` whose revision matches current `HEAD`.
+
+If any check fails, the restart is refused before draining. Passing `--force --reason "<why>"` skips these safety checks and records `drain=forced`.
+
+### Process isolation, slice placement, and working-set memory capacity (Hb4)
+
+Pi Web UI uses cgroup v2 slicing to contain child workloads and prevent noisy-neighbour starvation:
+
+- **Terminal shells in `tools.slice`:** Web UI interactive terminal shells managed by `TerminalManager` (`server/src/terminal/terminal-manager.ts`) are placed into `tools.slice` via `planSpawnOwn`. On terminal session exit, cgroup cleanup is automatically performed. If placement fails (e.g. systemd-run or slice unavailable), it logs a placement degrade and falls back to unplaced spawn so user terminal access is preserved.
+- **Placement degrades per boot:** Degrades recorded by placement (`placementDegrades`) are tracked per-boot; stale degrades from previous host boots are pruned at reading time.
+- **Working-set memory capacity (contract 1.58.5):** Admission control and `/api/v1/capacity` compute memory usage for the service cgroup and `tools.slice` using the working-set formula:
+  `working_set = Math.max(0, memory.current - inactive_file)`
+  Inactive file page cache is reclaimable under memory pressure by the Linux kernel; deducting `inactive_file` (floored at 0, adhering to the kubelet/cAdvisor container metric convention) prevents false-positive `ADMISSION_CAPACITY_EXHAUSTED` (code `memory_pressure`) when child tasks generate heavy disk I/O.
+
+
 `internal-api:wait` verifies the expected `pi-web-ui-internal-api` identity on
 the Unix socket, not merely the public HTTP listener. Its default deadline is
 60 seconds. Override `PI_WEB_UI_WAIT_SOCKET`, `PI_WEB_UI_WAIT_TIMEOUT_MS`,
