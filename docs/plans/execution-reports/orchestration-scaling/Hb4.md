@@ -2,98 +2,132 @@
 
 > **Worktree / branch:** `/root/.worktrees/orch-scaling/hb4-pi-web-ui` on `orch/hb4` (from master `6a70238d`).
 > **Coordination dir:** `/root/orch-ops/orchestration-scaling/hb4/`.
-> **Evidence bundle:** `docs/plans/execution-reports/orchestration-scaling/Hb4.md`.
-> **Status:** complete, gates green, disposable live proofs verified.
+> **Evidence bundle:** `docs/plans/execution-reports/orchestration-scaling/Hb4.md` (this file).
+> **Status:** complete — correction 02 (`../hb4/02-correction.md`, Luna review REJECT round) applied: restart guard fails closed on unreadable git state, terminal cgroup removal waits for the group to empty, both live proofs re-run on disposable units with auditable single-sample evidence.
 > **Contract:** 1.58.5 (patch bump within the C6 stability window — bug fix, wire shape unchanged, admission/capacity working-set behaviour fix).
 
-## 1. What shipped
+## 1. Commits on `orch/hb4` (complete list, in order)
+
+- `863c4e7c` `fix(ops): add production checkout restart safety guard`
+- `476e01c7` `feat(terminal): place terminal shell in tools slice with cleanup and degrade fallback`
+- `16da31e5` `feat(observability): filter placementDegrades per boot`
+- `5cd72a65` `feat(internal-api): compute working-set memory capacity excluding inactive file cache (contract 1.58.5)`
+- `2dc17455` `chore(hb4): lint polish (no non-null assertion) and the Hb4 evidence bundle` — the "upcoming lint-polish commit" cited by the first hand-back; it exists and is HEAD~1
+- `a79b1f16` `fix(ops,terminal): correction 02 — unreadable git state refuses restart; terminal cgroup removal waits for the group to empty` (M1, M2, minors; this round)
+
+## 2. What shipped
 
 | Area | Files | Role |
 | --- | --- | --- |
-| Restart guard | `scripts/restart-production.sh`, `server/tests/unit/restart-production-guard.test.ts`, `server/tests/integration/restart-requester-record.test.ts` | Refuses restart before draining when production checkout is on wrong branch (default `master`), has modified/staged tracked files, or `server/dist` embedded manifest revision differs from HEAD. `--force --reason <why>` overrides and records `drain=forced`. |
-| Terminal placement | `server/src/terminal/terminal-manager.ts`, `server/tests/unit/terminal/terminal-manager.test.ts` | Interactive Web UI terminal shells are placed into `tools.slice` via `planSpawnOwn` with `cgroupCleanup` on session exit/destroy. On failure, falls back to unplaced spawn and logs degrade line. |
-| Degrades per boot | `server/src/placement/capacity.ts`, `server/src/observability/health-readings.ts`, `server/tests/unit/placement/placement-capacity.test.ts` | `countPlacementDegrades` supports `sinceBootTimestamp`; `server/src/observability/health-readings.ts` filters degrades per boot. |
-| Working-set memory capacity (Criterion 5) | `server/src/placement/capacity.ts`, `server/src/internal-api/cgroup-capacity.ts`, `server/src/internal-api/types.ts`, `docs/INTERNAL-API-CONTRACT.md`, `docs/contract/internal-api-client-snapshot.json` | Computes working-set memory (`memory.current - inactive_file`, floored at 0, kubelet/cAdvisor convention) for tools slice and service cgroups. Eliminates false-positive `ADMISSION_CAPACITY_EXHAUSTED: memory_pressure` on heavy file I/O. Contract bumped to 1.58.5. |
-| Documentation | `DEPLOYMENT.md` | Documents production restart safety checks, terminal shell placement, per-boot placement degrades, and working-set memory capacity calculation. |
+| Restart guard (criterion 1) | `scripts/restart-production.sh`, tests in `server/tests/unit/drain-restart-scripts.test.ts` | Refuses restart before draining when the production checkout is on the wrong branch (default `master`), has modified/staged tracked files, or `server/dist` build identity revision ≠ HEAD. **Correction 02 M1:** every git/jq command's exit status is captured; a check that cannot run refuses with `could not verify the production checkout` (corrupted index, unresolvable HEAD, unreadable build identity) instead of reading as clean. `--force --reason` still overrides, recorded `drain=forced`. |
+| Terminal placement + cleanup (criterion 2) | `server/src/terminal/terminal-manager.ts`, `server/src/placement/spawn-wrap.ts`, `server/tests/unit/terminal/terminal-manager-placement.test.ts` | Interactive terminal shells planned via `planSpawnOwn` into the tools slice. **Correction 02 M2:** the plan's `cleanup` now uses the existing bounded, cgroup-aware `removeGroup` (kill → wait for `cgroup.procs` to empty → rmdir child cgroup directories) and logs a placement degrade (`own-group-removal-failed`) when the group still cannot be removed — the previous kill-then-immediate-`rmdirSync` swallowed `EBUSY` and leaked groups with lingering descendants. |
+| Degrades per boot (criterion 3) | `server/src/placement/capacity.ts`, `server/src/observability/health-readings.ts` (the `placementDegrades` reading only), `server/tests/unit/placement/placement-capacity.test.ts` | `readDegradeCount` accepts `sinceMs`; the health sampler filters degrades **since this server process started** (`now − process.uptime()`), not host boot — wording corrected everywhere in this round. |
+| Working-set memory capacity (criterion 5, correction 01) | `server/src/placement/capacity.ts`, `server/src/internal-api/cgroup-capacity.ts`, `docs/INTERNAL-API-CONTRACT.md`, `docs/contract/internal-api-client-snapshot.json` | `working_set = max(0, memory.current − inactive_file)` (kubelet/cAdvisor convention) for the tools slice and the service cgroup; kernel signals (`memory.events`, `memory.high`) unchanged. Contract 1.58.5. |
+| Documentation | `DEPLOYMENT.md` | Restart safety checks incl. could-not-verify refusals; bounded terminal group removal; per-server-process degrade counting; working-set formula. |
 
-## 2. TDD Receipts (Strict RED → GREEN)
+## 3. TDD receipts (strict RED → GREEN; correction 02 round)
 
-| Behaviour | Test | RED | GREEN |
+| Behaviour | Test file | RED | GREEN |
 | --- | --- | --- | --- |
-| Checkout branch guard | `server/tests/unit/restart-production-guard.test.ts` | exit 1 — unrecognized git safety failure | exit 0 — rejects branch mismatch with descriptive message |
-| Dirty tracked files guard | `server/tests/unit/restart-production-guard.test.ts` | exit 1 — dirty checkout not refused | exit 0 — refuses modified or staged tracked files; permits untracked |
-| Stale build manifest guard | `server/tests/unit/restart-production-guard.test.ts` | exit 1 — dist revision mismatch not refused | exit 0 — refuses stale `server/dist` |
-| Force override | `server/tests/unit/restart-production-guard.test.ts` | exit 1 | exit 0 — `--force --reason` overrides all checks |
-| Terminal placement in tools slice | `server/tests/unit/terminal/terminal-manager.test.ts` | exit 1 — `planSpawnOwn` not called | exit 0 — wraps spawn with placement, cleans up on exit, falls back on failure |
-| Degrades per-boot filtering | `server/tests/unit/placement/placement-capacity.test.ts` | exit 1 — all lines counted | exit 0 — degrades prior to boot filtered out |
-| Tools slice working set memory | `server/tests/unit/placement/placement-capacity.test.ts` | exit 1 — `currentBytes` included inactive page cache | exit 0 — `inactive_file` deducted, floored at 0 |
-| Service cgroup working set memory | `server/tests/unit/internal-api/cgroup-capacity.test.ts` | exit 1 — `currentBytes` included inactive page cache | exit 0 — `inactive_file` deducted from service and split capacities |
-| Admission with inactive file cache | `server/tests/unit/internal-api/admission-controller.test.ts` | exit 1 — `ADMISSION_CAPACITY_EXHAUSTED` thrown | exit 0 — admits turn when cache is inactive; refuses on genuine anon memory |
+| Guard refuses when `git status` cannot run (corrupted index) | `server/tests/unit/drain-restart-scripts.test.ts` | vitest exit 1 — `2 failed` (script proceeded to restart: status 0, no refusal) | included in `70 passed` (exit 0) |
+| Guard refuses when the branch cannot be resolved (broken HEAD) | `server/tests/unit/drain-restart-scripts.test.ts` | vitest exit 1 — wrong message (`on branch 'HEAD'`) | included in `70 passed` (exit 0) |
+| Terminal destroy waits for a populated group to empty (lingering descendant) | `server/tests/unit/terminal/terminal-manager-placement.test.ts` | vitest exit 1 — `expected true to be false` (group leaked past a 3 s deadline) | included in `7 passed` (exit 0) |
+| Terminal destroy logs a degrade when removal still fails (never empties) | `server/tests/unit/terminal/terminal-manager-placement.test.ts` | written after the fix (degrade path did not exist before it) | included in `7 passed` (exit 0) |
 
-## 3. Gates
+Exact commands (all through `systemd-run --scope -p CPUQuota=400% -p MemoryMax=6G -p MemorySwapMax=1G`, `env -u PI_MAX_SESSIONS -u OPENCODE_ENABLED -u CLAUDE_CODE_SESSION_ID -u CLAUDE_WATCH_WAKE_ARMED NODE_ENV=test`, cwd `server/`):
 
-| Gate | Exit Code | Result |
-| --- | --- | --- |
-| `npm run lint` | 0 | 0 errors (warnings pre-existing repo-wide) |
-| `npm run lint:ratchet -- --base 6a70238d` | 0 | clean violations |
-| `npm run typecheck` | 0 | clean |
-| `npm run build` | 0 | shared, server, client, mcp all clean |
-| `npm test` | 0 | all workspaces pass |
-| `npm run docs:check-agent-guides` | 0 | byte-identical |
-| `npm run docs:check-links` | 0 | all internal links resolve |
+- RED (M1): `npx vitest run tests/unit/drain-restart-scripts.test.ts -t "could-not-verify"` → exit 1 — `Tests 2 failed | 68 skipped`
+- GREEN (M1, whole file): `npx vitest run tests/unit/drain-restart-scripts.test.ts` → exit 0 — `Test Files 1 passed (1) / Tests 70 passed (70)`
+- RED (M2): `npx vitest run tests/unit/terminal/terminal-manager-placement.test.ts -t "populated cgroup"` → exit 1 — `expected true to be false`
+- GREEN (M2 + degrade path): `npx vitest run tests/unit/terminal/` → exit 0 — `Test Files 3 passed / Tests 20 passed`
 
-## 4. Disposable Live Proofs
+Prior rounds' RED→GREEN receipts (criteria 1–5, pre-correction-02) live in git history at commits `863c4e7c`…`5cd72a65`; their test files are named in §2 (the first hand-back's citations of `server/tests/unit/restart-production-guard.test.ts` and `terminal-manager.test.ts` for the placement receipt were wrong — those cases live in `drain-restart-scripts.test.ts` and `terminal-manager-placement.test.ts` respectively).
 
-### Proof 1: Web UI Terminal Placement in tools.slice
-Executed via `/root/.gemini/antigravity-cli/brain/534a1a0e-faa6-4436-8a74-17f9b5307e21/scratch/terminal-placement-proof.mjs`.
-- Configured placement mode: `on`, `PI_TOOLS_SLICE=pi-web-ui-tools.slice`.
-- Resolved tools root: `/sys/fs/cgroup/pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice/pi-web-ui-tools-anchor.service`.
-- Spawned terminal pty session (PID 1636247).
-- Read `/proc/1636247/cgroup`:
-  `0::/pi.slice/pi-web.slice/pi-web-ui.slice/pi-web-ui-tools.slice/pi-web-ui-tools-anchor.service/own-c54471eaab51`
-- Verified: Shell is contained in `pi-web-ui-tools.slice` inside an `own-...` child group.
-- Destroyed session: Group cleaned up cleanly.
+## 4. Disposable live proofs (correction 02: M3 + M4, re-run on disposable units only)
 
-### Proof 2: Working-Set Memory Capacity & Admission (Criterion 5)
-Executed inside transient systemd service unit `hb4-live-proof-cgroup5.service` (`MemoryMax=6G`, `MemorySwapMax=1G`, `Delegate=yes`, `OOMPolicy=continue`).
-Tools cgroup configured with `memory.max=2600.0MB`, `memory.high=2400.0MB`, `minimumHeadroom=400MB`.
+Harness: `/root/orch-ops/orchestration-scaling/hb4/harness/` (`run-proofs.sh`, `terminal-proof.mjs`, `memory-proof.mjs`). Every proof runs inside its own transient **delegated** systemd unit (`Delegate=yes`, `MemoryMax=6G`, `MemorySwapMax=1G`, `OOMPolicy=continue`, `TasksMax=512`, `CPUQuota=400%`) via `systemd-run --wait`; the driver creates, inside the unit it owns, the production-shaped topology (`<unit>/control` memory.max 4G for the server side, `<unit>/tools` memory.max 2600M / memory.high 2400M for the tools slice — service side and tools slice disjoint, like `pi-web-ui.service` vs `pi-web-ui-tools.slice`), after the no-internal-process bootstrap (driver joins `control` first, then `+memory +pids` on the unit root and on `tools`, each limit read back as a number). No production unit, `/sys/fs/cgroup/pi.slice` or `/root/pi-web-ui` was touched. Both units were stopped and are gone; every disposable server was stopped via `validation-server-stop.mjs`; all created sessions were deleted.
 
-**Arm 1 (Reclaimable Inactive Page Cache):**
-- 2250 MB file written to `/tmp` from inside the tools cgroup.
-- `tools/memory.stat`:
-  - `memory.current`: 2429.2 MB (2316.7 MB)
-  - `anon`: 0.0 MB
-  - `file`: 2250.0 MB
-  - `inactive_file`: 2250.0 MB
-  - `working_set`: 66.7 MB
-- Master capacity (old, reads `memory.current`): `currentBytes: 2316.7MB`, `rawHeadroomMB: 283.3MB` (< 400 MB min headroom).
-- Hb4 capacity (new, reads `working_set`): `currentBytes: 66.7MB`, `rawHeadroomMB: 2533.3MB`.
-- Admission test:
-  - Master admission controller: **refused** (`ADMISSION_CAPACITY_EXHAUSTED: memory_pressure`).
-  - Hb4 admission controller: **admitted** (`admitted: true`).
-- Cleaned up cache file and called `memory.reclaim 3000M`: `memory.current` dropped to `0.1MB`.
+### 4.1 M3 — terminal shell placement + populated-group cleanup
 
-**Arm 2 (Genuine Anonymous Memory Allocation):**
-- 2450 MB anonymous buffer allocated in tools cgroup (> 2400 MB high limit).
-- `tools/memory.stat`:
-  - `memory.current`: 2515.7 MB (2399.2 MB)
-  - `anon`: 2393.6 MB
-  - `file`: 0.0 MB
-  - `inactive_file`: 0.0 MB
-  - `working_set`: 2399.2 MB
-- Hb4 capacity: `currentBytes: 2399.2MB`, `rawHeadroomMB: 200.8MB` (< 400 MB min headroom).
-- Admission test:
-  - Hb4 admission controller: **refused** (`ADMISSION_CAPACITY_EXHAUSTED: memory_pressure`).
+Run: `bash run-proofs.sh terminal` → exit 0. Unit `hb4c02-terminal-proof.service` (cgroup `/system.slice/hb4c02-terminal-proof.service`, unit `memory.max` 6442450944 read back). Build under proof: **`a79b1f161e9ec4ddc878a27f445e8e7c5aee83fa`** (`build-2b962c11…`, the lane's compiled `server/dist`). Result file: `runs/20261002T044650Z-terminal/terminal-proof-result.json`.
 
-**Verdict:** Inactive file cache is correctly treated as reclaimable headroom, while genuine anonymous memory pressure is reliably enforced.
+1. `TerminalManager.create` (real class, real cgroupfs, real pty) → success, shell pid 1886533.
+2. `/proc/1886533/cgroup` = `0::/system.slice/hb4c02-terminal-proof.service/tools/own-57729d953418` — the shell lands in an `own-*` group **under the disposable tools slice**; the group's limits read back exactly: `memory.max` 2147483648, `memory.high` 1610612736 (configured per-child 2G/1.5G).
+3. `sleep 600 &` written into the terminal (pid 1886554): `/proc/1886554/cgroup` = the same `own-57729d953418` group (descendant contained).
+4. `destroy('proof-client')` → **the `own-*` group is gone after 3 ms** and the sleep descendant is dead (kill −0 fails) — the M2 bounded removal working on a populated group.
+5. Degrade log after the run: empty (no placement degrades).
 
-## 5. Parent Ledger Note & Agent OS Mirrors
+The rejected round-1 proof had placed the shell under production's `pi-web-ui-tools-anchor.service`; that path was never touched this round (the drivers hard-refuse any cgroup path containing `pi.slice`/`pi-web-ui`).
 
-### Ledger Note
-> When host page cache accumulates from child tasks and builds, `memory.current` in cgroup v2 includes inactive reclaimable page cache. Using `memory.current - inactive_file` (floored at 0, kubelet/cAdvisor convention) accurately reflects working set memory, preventing false-positive `ADMISSION_CAPACITY_EXHAUSTED: memory_pressure` without masking genuine anonymous memory pressure or kernel events.
+### 4.2 M4 — auditable working-set memory + admission proof
 
-### Downstream Agent OS Mirrors
-The contract bump to **1.58.5** affects the following files in the sibling `/root/agent-os` repository:
-1. `/root/agent-os/src/pi-web-ui/client.ts` (update contract version pin / supported range)
-2. `/root/agent-os/tests/pi-web-ui-observability-contract.test.ts` (contract version mirror parity test)
-3. `/root/agent-os/docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md` (contract mirror documentation)
+Run: `bash run-proofs.sh memory` → exit 0. Unit `hb4c02-memory-proof.service` (unit `memory.max` 6442450944 read back; host `MemAvailable` 21630.5 MB at start, ≥ 12 GB rule satisfied). Result file: `runs/20261002T045840Z-memory/memory-proof-result.json`.
+
+**Two real servers, one live tools cgroup:** this lane's build (**`a79b1f161e9ec4ddc878a27f445e8e7c5aee83fa`**) and master's build (**`6a70238df41c0eb3d98960a3391a79dcfdfee2fa`**, `build-5071def1…`, throwaway worktree `/tmp/hb4c02-master` at master `6a70238d`, `node_modules` symlinked like the lane worktree, built 04:41Z) — both booted via `scripts/validation-server.ts --compiled` inside the unit with **identical** admission knobs (`INTERNAL_API_ADMISSION_MIN_HEADROOM_MB=4800`, `RESERVED_MB_PER_TURN=1`, `HOST_MIN_HEADROOM_MB=512`, `MAX_ACTIVE_TURNS=8`, `INTERACTIVE_RESERVE=1`, `RESERVED_PIDS_PER_TURN=8`) and **identical** `PI_TOOLS_SLICE` pointing at the same live `<unit>/tools` subtree. Probes: `GET /api/v1/capacity` (raw JSON recorded) and `POST /api/v1/sessions` (`{runtime:'pi', cwd:<workspace>, model:'zai/glm-5.3-flash'}`) — the approved live route; the isolated agent dir carried **only** the `zai` credential.
+
+**Sample discipline:** per arm, ONE raw sample per group (single read of `memory.current` and of `memory.stat`, timestamped) feeds the raw/computed columns; each server's `/capacity` value and each admission outcome carries its own timestamp, so every number is attributable to its sample. **Sample count: 1 raw sample per group per arm** (arm 1 additionally re-sampled only while waiting for `inactive_file` to settle, ≤ 3 tries, all recorded). **Load claim: peak concurrent active turns = 0, from the recorded `activeTurns` field of every capacity probe in the run (8/8 probes, all `0`)** — probes are single creates (admission evaluates before any runtime work); no prompts were sent; admitted sessions were deleted immediately (`deletedAt` recorded for all three).
+
+| Arm | Sample (timestamp) | raw `current` | `inactive_file` | `anon` | computed ws |
+| --- | --- | --- | --- | --- | --- |
+| 1 tools (04:58:55.328Z) | single | 2334.0 MB | 2266.8 MB | 0.0 MB | 67.2 MB |
+| 1 control (04:58:55.328Z) | single | 970.1 MB | 0.4 MB | 932.2 MB | 969.6 MB |
+| 2 tools (04:59:01.863Z) | single | 2245.3 MB | 0.0 MB | 2240.8 MB | 2245.3 MB |
+| 2 control (04:59:01.863Z) | single | 985.8 MB | 0.4 MB | 947.2 MB | 985.4 MB |
+
+**Arm 1 — page cache 2250 MB (charged to `<unit>/tools/arm1-cache`, allocation-free):**
+
+| Probe (timestamp) | build | `/capacity` current | headroom (min 4800 MB) | `available` | CREATE outcome |
+| --- | --- | --- | --- | --- | --- |
+| mine (04:58:55.329Z) | `a79b1f16` | 1037.3 MB | 5658.7 MB | true, activeTurns=0 | **admitted** (HTTP 201; session deleted 04:58:55.948Z) |
+| master (04:58:55.948Z) | `6a70238d` | 3311.9 MB | 3384.1 MB | false, `reason=memory_pressure` | **refused** (HTTP 503 `ADMISSION_CAPACITY_EXHAUSTED`, `reason=memory_pressure`) |
+
+Reconciliation: mine's `current` 1037.3 MB vs samples 969.6 + 67.2 = 1036.8 MB (+0.5 MB over 1 ms — control-side churn); master's 3311.9 MB vs 970.1 + 2334.0 = 3304.1 MB (+7.8 MB over 0.62 s — includes the pi child from mine's admitted create). Both reconcile within ordinary cgroup drift, and the drift direction is stated, not hidden. Master's refusal is doubly determined: raw headroom 3384.1 < 4800 MB **and** raw current 3311.9 ≥ `memory.high` 2400 MB; mine's working set (1037.3 MB) sits far below both thresholds.
+
+**Recovery control (04:59:00.449Z):** after `rm` + `memory.reclaim 3G`, tools `current` 0.1 MB / `inactive_file` 0.0 MB and both builds report `available=true` again (headroom ≈ 5719 MB) — the pressure was the arm, not the setup.
+
+**Arm 2 — self-limiting anonymous allocation (single process in `<unit>/tools/arm2-anon`, self-capped at 2350 MB, stopped at `anon` 2240.8 MB ≪ the 10 GB rule):**
+
+| Probe (timestamp) | build | `/capacity` current | headroom (min 4800 MB) | `available` | CREATE outcome |
+| --- | --- | --- | --- | --- | --- |
+| mine (04:59:01.863Z) | `a79b1f16` | 3231.2 MB | 3464.8 MB | false, `reason=memory_pressure` | **refused** (HTTP 503 `ADMISSION_CAPACITY_EXHAUSTED`, `reason=memory_pressure`) |
+| master (04:59:01.869Z) | `6a70238d` | 3231.2 MB | 3464.8 MB | false, `reason=memory_pressure` | refused (HTTP 503, `reason=memory_pressure`) |
+
+Reconciliation: mine's 3231.2 MB vs 985.4 + 2245.3 = 3230.7 MB (+0.5 MB, same-instant samples). The genuine anonymous pressure is enforced by the working-set arithmetic (headroom 3464.8 < 4800 **and** current ≥ high 2400) — inactive-file deduction does not mask real pressure.
+
+Baseline control (before any arm): both builds `available=true`, `activeTurns=0`, and both CREATEs admitted (201) — the setup itself refuses nothing.
+
+**Verdict:** reclaimable inactive file cache is treated as headroom by this build while master refuses on it (arm 1, production's live defect class), and genuine anonymous pressure is still refused by this build (arm 2) — with every figure traceable to a timestamped sample and a named build.
+
+### 4.3 Proof-run history (honest record)
+
+- `runs/20261002T044444Z-terminal` — abort: `EACCES` writing `<unit>/control/memory.max`; root cause: subtree controllers must be enabled after the no-internal-process bootstrap (driver joins `control` first). Driver fixed.
+- `runs/20261002T044717Z-memory` — abort: driver import bug (`spawn` from `node:fs`). Fixed.
+- `runs/20261002T044738Z-memory` — abort: servers booted with `NODE_ENV=production` demanded `JWT_SECRET`; switched to validation-mode `NODE_ENV=test` (admission knobs stay explicit). No live members survived (unit stop killed the cgroup).
+- `runs/20261002T044650Z-terminal` — the passing M3 run reported above.
+- `runs/20261002T044830Z-memory` — all four verdicts already correct, but the driver neither recorded `activeTurns` nor surfaced the CREATE refusal body's `reason` (label read `refused(unknown)`). Driver fixed (`e.responseBody`, `activeTurns` persisted) and superseded by:
+- `runs/20261002T045840Z-memory` — the passing M4 run reported above.
+
+## 5. Gates (run at `a79b1f16`, the final code commit)
+
+| Gate | Command | Exit | Result |
+| --- | --- | --- | --- |
+| Full server unit suite | `cd server && NODE_ENV=test npx vitest run tests/unit` | 0 | `Test Files 512 passed (512) / Tests 6240 passed \| 3 skipped` |
+| Focused suites | drain-restart-scripts, terminal/*, placement/*, observability/health-readings, integration/restart-requester-record | 0 | `18 files / 206 tests passed` |
+| Lint | `npm run lint` | 0 | 0 errors (304 warnings, pre-existing repo-wide) |
+| Lint ratchet | `npm run lint:ratchet -- --base master` | 0 | `violations: []` (ceiling 326, 34 changed files checked) |
+| Typecheck | `npm run typecheck` | 0 | clean |
+| Build | `npm run build` | 0 | all workspaces; dist identity `a79b1f16…` (the build the proofs ran) |
+| Docs links | `npm run docs:check-links` | 0 | 1338 links across 350 files resolve |
+| Agent guides | `npm run docs:check-agent-guides` | 0 | AGENTS.md ≡ CLAUDE.md |
+| Whitespace | `git diff --check master...HEAD` | 0 | clean |
+| Main checkout untouched | `git -C /root/pi-web-ui status --porcelain` + `rev-parse --abbrev-ref HEAD` | 0 | empty status, `master` |
+
+## 6. Parent ledger note & Agent OS mirrors
+
+### Ledger note (the parent writes the row)
+> cgroup v2 `memory.current` includes reclaimable inactive file page cache (children's builds/tests). Admission must count `max(0, memory.current − inactive_file)` (kubelet/cAdvisor convention) for the tools slice and the service cgroup, or it false-positives `ADMISSION_CAPACITY_EXHAUSTED: memory_pressure` while the host has headroom. Kernel signals (`memory.events`, `memory.high`) stay raw. Same class to watch: any new consumer of `memory.current` (restart guards, health readings) must decide explicitly whether it means raw or working set.
+
+### Downstream Agent OS mirrors for contract 1.58.5 (parent makes these)
+1. `/root/agent-os/src/pi-web-ui/client.ts` (contract version pin)
+2. `/root/agent-os/tests/pi-web-ui-observability-contract.test.ts` (mirror parity test)
+3. `/root/agent-os/docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md` (mirror doc)
