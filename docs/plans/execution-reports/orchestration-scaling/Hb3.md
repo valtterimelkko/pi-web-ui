@@ -76,7 +76,7 @@ Blind spots (per the plan §4 rule):
    window still shows via `chunks` dropping in its window; a pause spanning windows lands in the resumption
    window's `providerGap`.
 
-## 2. `DELETE /api/v1/sessions/:id` cost (H3 item 5) — reproduced and attributed; fix proposed upstream
+## 2. `DELETE /api/v1/sessions/:id` cost (H3 item 5) — reproduced, attributed, fixed (parent-approved upstream fix built in the pi-enhancement worktree)
 
 Instrument: `run-delete-boot.sh` + `hb3-delete-driver.mjs` (G4's sequential create+delete over the disposable
 unix socket, real extension set as byte-identical copies). Temporary per-step instrumentation of
@@ -105,10 +105,80 @@ Attribution chain (every step timed, per delete, n=16 across two runs):
 - Both files are byte-identical between the production agent dir and the run copies (`cmp`), so the
   attribution transfers.
 
-The fix (conditional wait — skip only when there is nothing to settle) sits **outside this lane's owned
-paths** (`~/.pi/agent` extensions / pi-enhancement), so per the brief it is proposed in
-[`01-question.md`](/root/orch-ops/orchestration-scaling/hb3/01-question.md) with the disposable proof above
-(fix preview: 1006 ms → 5 ms, n=8, full extension set).
+The fix (conditional wait — skip only when there is nothing to settle) was **approved by the parent
+(`01-answer.md`, option 1, "built by you")** and built in the second lane worktree
+`/root/.worktrees/orch-scaling/hb3-pi-enhancement` (branch `orch/hb3`, from pi-enhancement master `8d25a72`;
+the main checkout and the deployed `~/.pi/agent/extensions` copies untouched — the parent deploys after
+review, with a backup).
+
+### The fix (commit `4dd81d5`, 2 lines + tests)
+
+In both `shutdownAll`s, right after the abort/kill loop:
+`if (owned.length === 0) return;` — background-shell/core.ts and subagent/background.ts. The 500 ms grace
+is unchanged whenever at least one owned non-terminal task exists.
+
+### Strict TDD (parent answer 01 requirement 1)
+
+`tests/hb3-shutdown-idle-wait.test.mjs` — 10 tests: F1a/F1b empty manager < 50 ms (no 500 ms timer);
+F2a/F2b all-terminal < 50 ms; F3a/F3b owned live task still killed + settle grace still awaited (real
+timers, wall ≥ grace − slack) + settled `aborted`; integration pin F4a–F4c (index.ts-shaped zero-task
+`session_shutdown` quit closures < 50 ms for BOTH extensions; switch path still persists; wiring pinned
+statically per the repo's convention — index.ts loads only inside the pi harness).
+
+- RED at baseline `8d25a72` (throwaway detached worktree used only for the pre-existing-failure check): the
+  six fast-path tests fail with the defect measured — empty `shutdownAll` **501–504 ms**; quit closures
+  **500–502 ms**. Guard tests (F3a/F3b, wiring, F4c) pass before and after.
+- GREEN at `4dd81d5`: **10/10 pass**; empty `shutdownAll` 0.4–1.4 ms.
+
+### pi-enhancement gates (requirement 5)
+
+| Command | Exit | Evidence |
+|---|---|---|
+| `node --experimental-strip-types --test tests/*.test.mjs` (97 files) | 1 | **636 tests, 631 pass, 1 fail** — the one failure is `bg-run-sync-tool.test.mjs`, which imports `background-shell/index.ts` and cannot resolve outside the pi harness (`ERR_MODULE_NOT_FOUND core.js`); verified pre-existing at `8d25a72` in a throwaway detached worktree (same class of failure there) |
+| scoped `tsc --noEmit --strict` over the two touched modules | n/a | exactly 2 errors, both pre-existing at baseline (`entry.model` in `formatBackgroundTaskWidgetLines`, baseline line 803); the diff adds 2 lines inside `shutdownAll` only (`git diff --stat`: 2 files, +2) |
+| commit | — | `4dd81d5` on `orch/hb3`, tree clean, **not pushed** (lane branch) |
+
+### Interactive non-regression (owner rule; requirement 3)
+
+Real interactive-shaped runs: `pi --print --mode json` on the approved `zai/glm-5.3-flash` route, isolated
+agent dirs whose extensions are the deployed set with ONLY the two `shutdownAll` files swapped
+(baseline = deployed copies; patched = the worktree's files). Shutdown tail = last stdout event → process
+exit, where the extension `session_shutdown` emission lives (model-turn noise stays out). Run dir
+`/root/hb3-runs/interactive-06/`, harness `run-interactive.sh` + `pi-tail-probe.mjs`:
+
+| arm | shutdown tail | reading |
+|---|---|---|
+| baseline-empty | **1044 ms** | the two idle waits |
+| patched-empty | **74 ms** | idle waits gone (−93 %) |
+| patched-tasks (1 bg_run + 1 background subagent, tool calls verified in the transcript) | **525 ms** | grace still paid with a live task |
+| baseline-tasks (same load) | **1033 ms** | baseline pays both graces |
+
+No stray `sleep 30` processes after any arm (tasks really killed at quit). An earlier run
+(`interactive-02`, whole-process walls) agrees directionally; the tail instrument supersedes it.
+
+### Disposable DELETE proof with the real patch (requirement 4)
+
+Same harness as §2's reproduction, extensions deployed from the worktree (`HB3_PATCHED_WORKTREE`, the
+repo's own cp-deploy flow; byte-identity asserted with `cmp`):
+
+| boot | tree | delete wall |
+|---|---|---|
+| `del-07-masterctl` (positive control, same session) | master-identical copies | **median 1007 ms** (n=10) |
+| `del-06-patched` | worktree patch | **median 5 ms** (min 3.7, max 13.3; n=10) — under the 100 ms victory threshold |
+| teardown safety on `del-06-patched` | — | 0 leftover `pi-sessions/` files, 0 registry entries after 10 create+delete cycles |
+
+### Blind spots added by this item
+
+1. The patched code is NOT deployed (`~/.pi/agent/extensions` untouched) — production keeps paying the ~1 s
+   until the parent deploys with its backup.
+2. The pi-enhancement suite's one failing file is environment-dependent (pre-existing at baseline); the
+   repo has no typecheck gate — the scoped tsc evidence is supplementary, not a repo gate.
+3. The interactive arms measure the two changed extensions in isolation (agent dir holds only
+   background-shell + subagent + the worker agent); other extensions' shutdown contributions are out of
+   scope there (the disposable DELETE boots use the full real extension set, covering the aggregate).
+
+The original attribution evidence follows (the question file `01-question.md` this answer responds to is in
+the coordination directory).
 
 Teardown safety asserted on the fix-preview boot: after 8 create+delete cycles, `server/pi-sessions/` has
 **0** leftover files and `session-registry.json` has **0** entries (same for the baseline boot) — agents
@@ -132,6 +202,7 @@ upstream RED test that pins this.
 
 ## 4. Not done / open
 
-- The `DELETE` fix itself: upstream, pending the parent's decision (`01-question.md`).
-- `complete.md` is written only after the parent answers and the lane closes.
+- **Deployment of the fix**: `~/.pi/agent/extensions` and `/root/pi-enhancement` (main checkout) are
+  untouched — the parent deploys the reviewed `orch/hb3` pi-enhancement commit (`4dd81d5`) with its backup.
+  Until then, production keeps paying the ~1 s teardown.
 - Production checks (terminal shell placement etc.) are other lanes' items; nothing here touched production.
