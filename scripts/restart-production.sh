@@ -213,14 +213,24 @@ check_production_checkout_safety() {
     refuse "production checkout at '$CHECKOUT_DIR' is not a git repository."
   fi
 
-  local current_branch
-  current_branch="$(git -C "$CHECKOUT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  # Hb4 correction 02 (Luna review M1): a check that CANNOT RUN must read as
+  # "could not verify", never as clean. Each git command's exit status is
+  # captured explicitly; `|| true` used to collapse a failing `git status` to
+  # empty output, which the guard then treated as a clean tracked tree.
+  local current_branch branch_status
+  current_branch="$(git -C "$CHECKOUT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)" && branch_status=0 || branch_status=$?
+  if [ "$branch_status" -ne 0 ]; then
+    refuse "could not verify the production checkout at '$CHECKOUT_DIR': 'git rev-parse --abbrev-ref HEAD' failed (exit ${branch_status})."
+  fi
   if [ "$current_branch" != "$EXPECTED_BRANCH" ]; then
     refuse "production checkout at '$CHECKOUT_DIR' is on branch '${current_branch}', expected '${EXPECTED_BRANCH}'."
   fi
 
-  local dirty_tracked
-  dirty_tracked="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  local dirty_tracked status_status
+  dirty_tracked="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" && status_status=0 || status_status=$?
+  if [ "$status_status" -ne 0 ]; then
+    refuse "could not verify the production checkout at '$CHECKOUT_DIR': 'git status --porcelain' failed (exit ${status_status})."
+  fi
   if [ -n "$dirty_tracked" ]; then
     refuse "production checkout at '$CHECKOUT_DIR' has modified or staged tracked files:\n${dirty_tracked}"
   fi
@@ -231,13 +241,20 @@ check_production_checkout_safety() {
     refuse "production checkout at '$CHECKOUT_DIR' has no built server/dist build identity at '${manifest_path}' (run 'npm run build' before restarting)."
   fi
 
-  local manifest_rev head_rev
-  manifest_rev="$(jq -r '.revision // empty' "$manifest_path" 2>/dev/null || true)"
+  local manifest_rev manifest_status
+  manifest_rev="$(jq -r '.revision // empty' "$manifest_path" 2>/dev/null)" && manifest_status=0 || manifest_status=$?
+  if [ "$manifest_status" -ne 0 ]; then
+    refuse "could not verify the production checkout at '$CHECKOUT_DIR': the build identity at '${manifest_path}' could not be read (jq exit ${manifest_status})."
+  fi
   if [ -z "$manifest_rev" ] || [ "$manifest_rev" = "unknown" ]; then
     refuse "production checkout at '$CHECKOUT_DIR' has an invalid or unknown build revision in '${manifest_path}'."
   fi
 
-  head_rev="$(git -C "$CHECKOUT_DIR" rev-parse HEAD 2>/dev/null || true)"
+  local head_rev head_status
+  head_rev="$(git -C "$CHECKOUT_DIR" rev-parse HEAD 2>/dev/null)" && head_status=0 || head_status=$?
+  if [ "$head_status" -ne 0 ]; then
+    refuse "could not verify the production checkout at '$CHECKOUT_DIR': 'git rev-parse HEAD' failed (exit ${head_status})."
+  fi
   if [ "$manifest_rev" != "$head_rev" ]; then
     refuse "production checkout at '$CHECKOUT_DIR' server/dist build revision '${manifest_rev}' does not match HEAD '${head_rev}' (dist is stale; rebuild before restarting)."
   fi

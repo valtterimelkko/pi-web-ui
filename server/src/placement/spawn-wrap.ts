@@ -5,11 +5,14 @@
  * (01-answer.md amendment E).
  */
 import { randomBytes } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import type { PlacementConfig } from './config.js';
 import { placementDegradeFilePath } from './config.js';
 import { groupPath, ownGroupName, sessionGroupName } from './keys.js';
+import { appendDegradeLine } from './capacity.js';
+// Runtime-only import (Hb4 correction 02): removeGroup is called inside the
+// cleanup closure, never at module evaluation, so the spawn-wrap → cleanup →
+// apply-startup → spawn-wrap module cycle stays safe under ESM live bindings.
+import { realCgroupIo, removeGroup } from './cleanup.js';
 import { materialiseWrapper } from './wrapper.js';
 
 /**
@@ -41,7 +44,12 @@ export interface PlacementSpawnPlan {
   env: Record<string, string>;
   /** Group directory name (diagnostics, cleanup keying for own- groups). */
   group: string;
-  /** Best-effort removal of the group; call from the child's exit path (own- groups). */
+  /** Best-effort bounded removal of the group; call from the child's exit path
+   * (own- groups). Fire-and-forget: `removeGroup` kills, waits (bounded) for
+   * cgroup.procs to empty, then rmdirs child cgroup directories; a group it
+   * still cannot remove is reported as a logged placement degrade (Hb4
+   * correction 02, Luna review M2 — the previous kill-then-immediate-rmdir
+   * swallowed EBUSY and leaked groups with lingering descendants). */
   cleanup: () => void;
 }
 
@@ -93,18 +101,13 @@ function plan(cfg: PlacementConfig, group: string, argv: readonly [string, ...st
     env: Object.assign(merged, env),
     group,
     cleanup: () => {
-      try {
-        const cg = groupPath(cfg, group);
-        if (!cg) return;
-        try {
-          fs.writeFileSync(path.join(cg, 'cgroup.kill'), '1');
-        } catch {
-          /* group may be gone */
+      const cg = groupPath(cfg, group);
+      if (!cg) return;
+      void removeGroup(realCgroupIo, cg).then((result) => {
+        if (!result.removed) {
+          appendDegradeLine(cfg, group, `own-group-removal-failed: failures=${result.failures}`);
         }
-        fs.rmdirSync(cg);
-      } catch {
-        /* best effort: rmdir fails while populated; the sweep reaps later */
-      }
+      });
     },
   };
 }

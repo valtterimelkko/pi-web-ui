@@ -87,6 +87,10 @@ function createGitRepoFixture(
     untracked?: boolean;
     manifestMissing?: boolean;
     manifestRevision?: string;
+    /** Corrupt .git/index so `git status` cannot run (Luna 02 correction M1). */
+    corruptIndex?: boolean;
+    /** Point HEAD at a ref that does not resolve (Luna 02 correction M1). */
+    brokenHeadRef?: boolean;
   } = {}
 ): { repoDir: string; headSha: string } {
   const branch = options.branch ?? 'master';
@@ -130,6 +134,15 @@ function createGitRepoFixture(
 
   if (options.untracked) {
     writeFileSync(path.join(repoDir, 'untracked-file.txt'), 'untracked content\n');
+  }
+
+  // Hb4 correction 02 (M1): make individual git checks UNREADABLE while the
+  // others still resolve, so the guard is proven on "cannot verify" inputs.
+  if (options.corruptIndex) {
+    writeFileSync(path.join(repoDir, '.git', 'index'), Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]));
+  }
+  if (options.brokenHeadRef) {
+    writeFileSync(path.join(repoDir, '.git', 'HEAD'), 'ref: refs/heads/no-such-branch\n');
   }
 
   return { repoDir, headSha };
@@ -557,6 +570,38 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         expect(result.stderr).toContain('Refusing production restart');
         expect(result.stderr).toContain('modified or staged tracked files');
         expect(result.stderr).toContain('tracked-file.txt');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      // Hb4 correction 02 (Luna review M1): a git check that CANNOT RUN must read as
+      // "could not verify", never as clean. A corrupted index makes `git status` fail
+      // while branch and HEAD still resolve — the exact shape the old `|| true`
+      // collapsed to an empty ("clean") status.
+      it('refuses restart with a could-not-verify message when git status cannot run (corrupted index)', () => {
+        const repo = path.join(dir, 'corrupt-index-repo');
+        createGitRepoFixture(repo, { corruptIndex: true });
+        const result = run(RESTART, ['--reason', 'corrupt index'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.stderr).toContain('could not verify the production checkout');
+        expect(result.stderr).toMatch(/git status .*failed/);
+        expect(result.stderr).toContain('--force');
+        // Refused BEFORE draining: no drain request, no systemctl call, no audit.
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('refuses restart with a could-not-verify message when the branch cannot be resolved (broken HEAD)', () => {
+        const repo = path.join(dir, 'broken-head-repo');
+        createGitRepoFixture(repo, { brokenHeadRef: true });
+        const result = run(RESTART, ['--reason', 'broken head'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.stderr).toContain('could not verify the production checkout');
+        expect(result.stderr).toMatch(/rev-parse --abbrev-ref HEAD.*failed/);
         expect(curl.requests()).toEqual([]);
         expect(lines(systemctlLog)).toEqual([]);
         expect(existsSync(auditFile)).toBe(false);

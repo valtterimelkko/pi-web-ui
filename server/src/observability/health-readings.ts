@@ -225,7 +225,7 @@ export interface HealthReadingSources {
   registryEntries?: () => number | undefined | Promise<number | undefined>;
   /** D0: tools-slice reading; registered by the server when placement is enabled. */
   toolsSlice?: () => { currentBytes?: number; oomKill?: number } | undefined;
-  /** D0: degrade count (wrapper fell open, replacement bash tool not active). Accepts bootMs to filter per-boot. */
+  /** D0: degrade count (wrapper fell open, replacement bash tool not active). Accepts sinceMs to filter since this server process started. */
   placementDegrades?: (sinceMs?: number) => number | undefined;
   /** Default active-turn classes: terminal turn counters from the operational metrics. */
   activeTurnsFromOperationalMetrics?: () => Record<string, number>;
