@@ -49,7 +49,7 @@ and `timeout`; the same strings are used in the live stub.
 | goal test files | 0 | `Tests 38 passed (38)` |
 | contract guards (`contract-version-drift`, `client-snapshot-drift`, `contract-stability-window`, `capabilities`, `command-code-contract`, whole `goal/` dir) | 0 | `Test Files 16 passed (16)`, `Tests 206 passed (206)` |
 | full server unit suite (`cd server && npx vitest run tests/unit`) | 0 | `Test Files 512 passed (512)`, `Tests 6224 passed \| 3 skipped (6227)` — no load-sensitive failures |
-| `npm run docs:check-links` | 0 | `OK: 1338 internal link(s) resolve across 349 Markdown files` |
+| `npm run docs:check-links` | 0 | `OK: 1338 internal link(s) resolve across 350 Markdown files` |
 | `npm run docs:check-agent-guides` | 0 | `AGENTS.md and CLAUDE.md are byte-identical` |
 
 ## Live validation (disposable server, mock agy — zero real model calls)
@@ -109,3 +109,11 @@ isolated session JSONL (not aggregate counts). The unit cgroup
 
 - `resume` re-arm semantics rely on the pause recording `consecutiveErrors: 0`; if a future route change starts persisting a non-zero counter across pauses, the window would shrink silently. Pinned by the "resume re-arms" unit test.
 - The strike classification is keyed on `status === 'error'`; a future antigravity turn kind that finalizes as `error` without being a provider failure (e.g. a new abort class) will count as a strike. The blind-spot entry above names the known case.
+
+## Parent closure (after the Luna review, ACCEPT WITH FIXES)
+
+The review's two majors were fixed by the parent, test-first:
+- **Owed resume continuation.** A resume whose continuation was refused with `409 SESSION_BUSY` while the session settled left the goal `running` with nothing dispatched; the sweeper skipped the already-verified turn and nothing woke it. The record now carries `pendingContinuation`; the sweeper dispatches the owed continuation once the session settles (a refused dispatch is retried on the next sweep) and a newer completed turn supersedes it. RED: two sweeper tests and one route test failed; GREEN after the fix.
+- **Fresh strike window.** `resume` and both `start` paths reset `consecutiveErrors` (a strike, then user pause, then resume no longer pauses after two errors). Covered by the same route test.
+- Minor: the 1.58.3 changelog now says error turns are not treated as ordinary unmet turns (strikes 1–2 do retry); the link-check count is 350 files.
+- Gates after the fix: goal and antigravity suites 381/381, typecheck 0, `lint:ratchet --base master` no violations.

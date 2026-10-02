@@ -5298,6 +5298,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         verification: undefined,
         completedAt: null,
         clearedAt: undefined,
+        consecutiveErrors: 0,
+        pendingContinuation: false,
         lastVerifiedTurnAt: undefined,
         autoContinue: raw.autoContinue !== false,
         createdAt: previous?.createdAt ?? Date.now(),
@@ -5338,7 +5340,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 409, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'no goal is armed for this session'));
         return;
       }
-      await agyGoalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true });
+      // A resume opens a fresh provider-error strike window (contract 1.58.3).
+      await agyGoalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true, consecutiveErrors: 0 });
       let continuationDispatched = false;
       if (!antigravityService.isRunning(sessionId)) {
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalContinuationPrompt(existing.objective, existing.verifyCommand !== undefined));
@@ -5349,6 +5352,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         continuationDispatched = accepted;
       }
+      // When the continuation could not be dispatched now (the session is still
+      // finishing or settling a turn), the sweeper owes it: it dispatches once the
+      // session settles, unless a newer completed turn supersedes it.
+      await agyGoalStore.patch(sessionId, { pendingContinuation: !continuationDispatched });
       await respond({
         note: continuationDispatched
           ? 'auto-continue re-armed; continuation prompt dispatched'
@@ -5418,6 +5425,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           verification: undefined,
           completedAt: null,
           clearedAt: undefined,
+          consecutiveErrors: 0,
+          pendingContinuation: false,
           lastVerifiedTurnAt: undefined,
           autoContinue: true,
           createdAt: previous?.createdAt ?? Date.now(),

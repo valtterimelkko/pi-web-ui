@@ -113,6 +113,10 @@ export interface AntigravityGoalRecord {
    *  successful turn; the pause ends the cycle and resets it (the count that
    *  caused a pause is stated in `lastReason`). */
   consecutiveErrors?: number;
+  /** A resume re-armed the goal but its continuation could not be dispatched
+   *  (the session was still settling). The sweeper owes that continuation until
+   *  a dispatch is accepted or a newer completed turn supersedes it. */
+  pendingContinuation?: boolean;
   /** Last verifier message / governor note. */
   lastReason?: string;
   verification?: GoalVerificationInfo;
@@ -367,9 +371,22 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
           if (deps.isRunning(sessionId)) continue;
 
           const turn = await deps.readLastCompletedTurn(sessionId);
-          if (!turn) continue;
+          const turnIsNew = turn !== null
+            && (record.lastVerifiedTurnAt === undefined || turn.completedAt > record.lastVerifiedTurnAt);
+          if (!turnIsNew) {
+            // A resume whose continuation was refused (the session was still
+            // settling) left no new turn to advance from: dispatch the owed
+            // continuation now. A refused dispatch throws and is retried on the
+            // next sweep; the flag clears only once a dispatch is accepted.
+            if (record.pendingContinuation) {
+              await deps.dispatch(sessionId, buildAgyGoalContinuationPrompt(record.objective, record.verifyCommand !== undefined));
+              await deps.getStore().patch(sessionId, { pendingContinuation: false });
+            }
+            continue;
+          }
           // Turn-driven advance: each completed turn is processed exactly once.
-          if (record.lastVerifiedTurnAt !== undefined && turn.completedAt <= record.lastVerifiedTurnAt) continue;
+          // A newer turn supersedes any owed resume continuation.
+          if (record.pendingContinuation) await deps.getStore().patch(sessionId, { pendingContinuation: false });
 
           // Provider-error strike (contract 1.58.3). A finalized error turn has no
           // assistant answer to verify, so it must never advance the goal as an

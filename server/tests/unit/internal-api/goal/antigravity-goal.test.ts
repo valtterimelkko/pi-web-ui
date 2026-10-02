@@ -476,6 +476,56 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
 
 // ─── config ──────────────────────────────────────────────────────────────────
 
+describe('createAgyGoalSweeper — resume continuation that could not dispatch (contract 1.58.3 review)', () => {
+  it('dispatches a pending continuation for an already-verified turn and clears the flag only once accepted', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    h.turns.set('s1', { completedAt: 300, response: 'provider error', status: 'error', error: 'provider error' });
+    let refuse = true;
+    h.deps.dispatch = async (id, message) => {
+      if (refuse) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(await h.store.get('s1')).toMatchObject({ status: 'running', pendingContinuation: true, lastVerifiedTurnAt: 300 });
+    expect(h.dispatched).toHaveLength(0);
+
+    refuse = false;
+    await sweeper.sweepOnce();
+    const after = await h.store.get('s1');
+    expect(after?.pendingContinuation).toBeFalsy();
+    expect(after).toMatchObject({ status: 'running', lastVerifiedTurnAt: 300 });
+    expect(after?.consecutiveErrors ?? 0).toBe(0);
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.dispatched[0].message).toContain('Ship it');
+
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('a newer completed turn supersedes a pending continuation (processed once, no extra dispatch)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    h.turns.set('s1', { completedAt: 400, response: 'still working' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    const after = await h.store.get('s1');
+    expect(after?.pendingContinuation).toBeFalsy();
+    expect(after).toMatchObject({ status: 'running', runs: 1, lastVerifiedTurnAt: 400 });
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('does not dispatch a pending continuation for a paused goal or a busy session', async () => {
+    const h = await harness({
+      paused: record({ status: 'paused', pausedReason: 'user', autoContinue: false, lastVerifiedTurnAt: 300, pendingContinuation: true }),
+      busy: record({ lastVerifiedTurnAt: 300, pendingContinuation: true }),
+    });
+    h.turns.set('paused', { completedAt: 300, response: 'x' });
+    h.turns.set('busy', { completedAt: 300, response: 'x' });
+    h.running.add('busy');
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+});
+
 describe('loadAgyGoalAutoContinueConfig', () => {
   it('defaults are sane and env overrides apply', () => {
     const defaults = loadAgyGoalAutoContinueConfig({});
