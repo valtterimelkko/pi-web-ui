@@ -548,7 +548,7 @@ reproduction harness is `scripts/lag-repro/run.ts` (see
 
 The extension factory cache (see `docs/ARCHITECTURE.md`, "Global extension
 loading") degrades **per session** to the plain uncached SDK loader when its
-pipeline fails — an SDK version other than the validated `0.87.1`, an
+pipeline fails — an SDK version other than the validated `1.0.0`, an
 unresolvable alias target, a jiti import failure, the override hitting frozen
 or changed result objects, or a parity self-check mismatch. Sessions keep
 working; session opens stay slow. Each degradation is observable two ways:

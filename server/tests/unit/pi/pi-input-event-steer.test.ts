@@ -25,6 +25,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   AgentSession,
+  createExtensionRuntime,
   SessionManager,
   SettingsManager,
   type Extension,
@@ -158,12 +159,9 @@ function createHarness(): Harness {
     shortcuts: new Map(),
   };
 
-  const extensionRuntime = {
-    flagValues: new Map(),
-    pendingProviderRegistrations: [],
-    pendingNativeProviderRegistrations: [],
-    invalidate: () => {},
-  };
+  // The SDK's own runtime factory: a hand-rolled field list broke when 1.0.0
+  // added mcpServers, which ExtensionRunner.bindCore dereferences.
+  const extensionRuntime = createExtensionRuntime();
   const resourceLoader = {
     getExtensions: () => ({ extensions: [observerExtension], errors: [], runtime: extensionRuntime }),
     getSkills: () => ({ skills: [], diagnostics: [] }),

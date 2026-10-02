@@ -3,7 +3,7 @@ import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('SessionShutdown');
 
-/** Reasons the SDK's `SessionShutdownEvent` supports (pi-coding-agent 0.87.1). */
+/** Reasons the SDK's `SessionShutdownEvent` supports (pi-coding-agent 1.0.0). */
 export type SessionShutdownReason = 'quit' | 'reload' | 'new' | 'resume' | 'fork';
 
 export interface SessionShutdownInit {

@@ -24,6 +24,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   AgentSession,
+  createExtensionRuntime,
   SessionManager,
   SettingsManager,
 } from '@earendil-works/pi-coding-agent';
@@ -97,12 +98,9 @@ function createHarness(overrides: { authConfigured?: boolean } = {}): Harness {
     getExtensions: () => ({
       extensions: [],
       errors: [],
-      runtime: {
-        flagValues: new Map(),
-        pendingProviderRegistrations: [],
-        pendingNativeProviderRegistrations: [],
-        invalidate: () => {},
-      },
+      // The SDK's own runtime factory: a hand-rolled field list broke when 1.0.0
+      // added mcpServers, which ExtensionRunner.bindCore dereferences.
+      runtime: createExtensionRuntime(),
     }),
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),

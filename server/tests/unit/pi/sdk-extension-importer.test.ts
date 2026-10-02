@@ -121,11 +121,11 @@ describe('B1.2b SDK alias map', () => {
     expect(after).toEqual(before);
   });
 
-  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 0.87.2 included)', () => {
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.99.0' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.88.0' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.87.2' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.87.1' })).not.toThrow();
+  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 1.0.1 included)', () => {
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.87.1' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.99.2' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.0.1' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.0.0' })).not.toThrow();
   });
 
   it('degrades as a typed error when an alias target cannot be resolved', () => {

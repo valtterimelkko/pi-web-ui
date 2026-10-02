@@ -132,7 +132,7 @@ patch, no files inside `node_modules` are ever modified, and the package
 `exports` map is the only boundary used.
 
 **Graceful degradation.** Any failure in the factory pipeline (SDK version
-not exactly the validated `0.87.1`, an unresolvable alias target, a jiti
+not exactly the validated `1.0.0`, an unresolvable alias target, a jiti
 import failure, the override hitting frozen or changed result objects, a parity
 self-check mismatch) degrades that session to the plain uncached SDK loader —
 sessions keep working, they just open slowly. Each degradation is counted in

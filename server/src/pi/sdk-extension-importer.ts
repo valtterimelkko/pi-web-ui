@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
  * patches, no deep private imports; the package `exports` map is the boundary).
  *
  * `resolveSdkAliasMap()` replicates the SDK's private `getAliases()`
- * (`dist/core/extensions/loader.js`, 0.87.1): every alias target is resolved
+ * (`dist/core/extensions/loader.js`, validated 1.0.0; getAliases() byte-identical to 0.87.1): every alias target is resolved
  * to the SAME absolute file the SDK itself uses, so an extension imported here
  * shares module instances with SDK-loaded extensions (measured: aliased ESM
  * entries load through Node's native ESM registry, so exported bindings like
@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
  */
 
 /** The only SDK minor this module's alias map and override were validated against. */
-export const VALIDATED_SDK_VERSION = '0.87.1';
+export const VALIDATED_SDK_VERSION = '1.0.0';
 
 export class ExtensionImporterError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {

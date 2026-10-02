@@ -658,7 +658,7 @@ describe('createExtensionFactoryResourceLoader (B1.2b)', () => {
           importFactory: (path) =>
             importFactoryViaJiti(path, {
               aliasMap: () => {
-                throw new ExtensionImporterError('SDK 0.99.0 is outside the validated range (0.87.1)');
+                throw new ExtensionImporterError('SDK 1.0.1 is outside the validated range (1.0.0)');
               },
             }),
         }),
