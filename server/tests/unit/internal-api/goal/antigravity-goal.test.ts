@@ -542,6 +542,40 @@ describe('createAgyGoalSweeper — resume continuation that could not dispatch (
     expect(h.dispatched).toHaveLength(0);
   });
 
+  it('a turn that completes between the snapshot and the dispatch wins: no stale continuation now, one for the newer turn next sweep (review r3)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    let reads = 0;
+    h.deps.readLastCompletedTurn = async () => {
+      reads += 1;
+      return reads === 1 ? { completedAt: 300, response: 'x' } : { completedAt: 400, response: 'still working' };
+    };
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    expect(await h.store.get('s1')).toMatchObject({ lastVerifiedTurnAt: 400, runs: 1 });
+  });
+
+  it('an unmet-turn continuation refused at dispatch stays owed and is retried (review r3)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: 'still working' });
+    let refuse = true;
+    h.deps.dispatch = async (id, message) => {
+      if (refuse) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(await h.store.get('s1')).toMatchObject({ runs: 1, lastVerifiedTurnAt: 500, pendingContinuation: true });
+    expect(h.dispatched).toHaveLength(0);
+    refuse = false;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    expect((await h.store.get('s1'))?.pendingContinuation).toBeFalsy();
+    expect((await h.store.get('s1'))?.runs).toBe(1);
+  });
+
   it('does not dispatch a pending continuation for a paused goal or a busy session', async () => {
     const h = await harness({
       paused: record({ status: 'paused', pausedReason: 'user', autoContinue: false, lastVerifiedTurnAt: 300, pendingContinuation: true }),

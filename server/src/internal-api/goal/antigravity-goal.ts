@@ -365,12 +365,23 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
       // asynchronous, so a pause, clear or restart can land after the record
       // above was read. A continuation is sent only if the goal is still armed
       // and still at the cursor this sweep advanced from (review r2, 1.58.3).
-      const stillArmed = async (sessionId: string, cursor: number | undefined, requirePending = false): Promise<AntigravityGoalRecord | null> => {
+      // The latest completed turn is re-read too: a turn that finished after
+      // this sweep's snapshot must be processed first, not answered with a
+      // continuation built on stale turn state (review r3).
+      const stillArmed = async (
+        sessionId: string,
+        cursor: number | undefined,
+        expectedTurnAt: number | undefined,
+        requirePending = false,
+      ): Promise<AntigravityGoalRecord | null> => {
         const fresh = await deps.getStore().get(sessionId);
         if (!fresh || fresh.status !== 'running' || fresh.autoContinue === false) return null;
         if (fresh.lastVerifiedTurnAt !== cursor) return null;
         if (requirePending && !fresh.pendingContinuation) return null;
-        return deps.isRunning(sessionId) ? null : fresh;
+        if (deps.isRunning(sessionId)) return null;
+        const latest = await deps.readLastCompletedTurn(sessionId);
+        if ((latest?.completedAt ?? undefined) !== expectedTurnAt) return null;
+        return fresh;
       };
       const continuationFor = (rec: AntigravityGoalRecord) => buildAgyGoalContinuationPrompt(rec.objective, rec.verifyCommand !== undefined);
       for (const sessionId of sessionIds) {
@@ -390,7 +401,7 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             // settling) left no new turn to advance from: dispatch the owed
             // continuation now. A refused dispatch throws and is retried on the
             // next sweep; the flag clears only once a dispatch is accepted.
-            const owed = record.pendingContinuation ? await stillArmed(sessionId, record.lastVerifiedTurnAt, true) : null;
+            const owed = record.pendingContinuation ? await stillArmed(sessionId, record.lastVerifiedTurnAt, turn?.completedAt, true) : null;
             if (owed) {
               await deps.dispatch(sessionId, continuationFor(owed));
               await deps.getStore().patch(sessionId, { pendingContinuation: false });
@@ -428,7 +439,7 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             // the session is still settling (the route's admission lease can
             // outlive the turn's finalisation), the strike must not be consumed —
             // the next sweep re-processes the same turn and retries the dispatch.
-            const armedForRetry = await stillArmed(sessionId, record.lastVerifiedTurnAt);
+            const armedForRetry = await stillArmed(sessionId, record.lastVerifiedTurnAt, turn.completedAt);
             if (!armedForRetry) continue;
             await deps.dispatch(sessionId, continuationFor(armedForRetry));
             const patched = await deps.getStore().patch(sessionId, {
@@ -485,8 +496,17 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             lastVerifiedTurnAt: turn.completedAt,
           });
           publishIfChanged(sessionId, patched);
-          const armedForNext = await stillArmed(sessionId, turn.completedAt);
-          if (armedForNext) await deps.dispatch(sessionId, continuationFor(armedForNext));
+          const armedForNext = await stillArmed(sessionId, turn.completedAt, turn.completedAt);
+          if (armedForNext) {
+            try {
+              await deps.dispatch(sessionId, continuationFor(armedForNext));
+            } catch {
+              // Refused (the session is still settling): the cursor already moved
+              // past this turn, so mark the continuation owed; the sweeper retries
+              // it until accepted or a newer turn supersedes it (review r3).
+              await deps.getStore().patch(sessionId, { pendingContinuation: true });
+            }
+          }
         } catch {
           /* per-session isolation: one bad session cannot stop the sweep */
         }
