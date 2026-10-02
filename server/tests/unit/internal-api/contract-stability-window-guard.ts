@@ -242,7 +242,9 @@ function sortKeysDeep(value: unknown): unknown {
 
 /**
  * Snapshot guard: inside the window the snapshot's shape must stay at the
- * 1.58.0 baseline unless an exception row names the current major.minor. The
+ * 1.58.0 baseline unless an exception row names the current major.minor
+ * exactly (a patch-version row such as the retroactive 1.58.5 record is a
+ * bug-fix record and never admits shape changes). The
  * fingerprint is the wide net (any body change: routes, types, fields, error
  * codes, zod schemas, source files); route/type-set diffs are enumerated
  * explicitly so the failure message names what moved.
@@ -273,7 +275,15 @@ export function guardSnapshotShape(
   }
 
   const mm = majorMinor(currentVersion);
-  if (tableNamesVersion(rows, mm)) return { ok: true, problems: [] };
+  // Exact match, deliberately NOT tableNamesVersion's prefix rule: a
+  // patch-version row (e.g. the retroactive 1.58.5 record from J4) documents
+  // a bug fix and must never admit a shape change — otherwise one patch row
+  // would silently admit any unauthorised shape drift for the rest of the
+  // window. Inside the window shape changes ride minor bumps, whose exception
+  // rows name the major.minor ("1.59"); the version guard below keeps the
+  // prefix rule so a minor exception still covers its own patch releases
+  // (a 1.59 row admits 1.59.x).
+  if (rows.some((row) => row.version === mm)) return { ok: true, problems: [] };
   problems.push(
     `no exception row in docs/INTERNAL-API-CONTRACT.md ("Stability window") names contract ${mm} — ` +
       'a client-observable snapshot change needs a recorded owner exception',
