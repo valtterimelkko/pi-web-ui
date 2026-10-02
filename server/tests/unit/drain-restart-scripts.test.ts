@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,6 +78,63 @@ const timedOut = {
   cutOffSessionIds: ['sess-b'],
 };
 
+function createGitRepoFixture(
+  repoDir: string,
+  options: {
+    branch?: string;
+    dirtyTracked?: boolean;
+    stagedTracked?: boolean;
+    untracked?: boolean;
+    manifestMissing?: boolean;
+    manifestRevision?: string;
+  } = {}
+): { repoDir: string; headSha: string } {
+  const branch = options.branch ?? 'master';
+  mkdirSync(repoDir, { recursive: true });
+  spawnSync('git', ['init', '-b', branch], { cwd: repoDir, stdio: 'ignore' });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoDir, stdio: 'ignore' });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: repoDir, stdio: 'ignore' });
+  writeFileSync(path.join(repoDir, '.gitignore'), 'server/dist/\n');
+  writeFileSync(path.join(repoDir, 'tracked-file.txt'), 'version 1\n');
+  spawnSync('git', ['add', '.gitignore', 'tracked-file.txt'], { cwd: repoDir, stdio: 'ignore' });
+  spawnSync('git', ['commit', '-m', 'initial commit'], { cwd: repoDir, stdio: 'ignore' });
+
+  const headSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).stdout.trim();
+
+  if (!options.manifestMissing) {
+    const manifestDir = path.join(repoDir, 'server', 'dist', 'build-identity');
+    mkdirSync(manifestDir, { recursive: true });
+    const manifestPath = path.join(manifestDir, 'embedded-manifest.json');
+    const revision = options.manifestRevision ?? headSha;
+    writeFileSync(
+      manifestPath,
+      JSON.stringify(
+        {
+          manifestSchemaVersion: 1,
+          identityStatus: 'known',
+          buildMode: 'compiled',
+          revision,
+        },
+        null,
+        2
+      ) + '\n'
+    );
+  }
+
+  if (options.dirtyTracked) {
+    writeFileSync(path.join(repoDir, 'tracked-file.txt'), 'version 2 unstaged dirty\n');
+  } else if (options.stagedTracked) {
+    writeFileSync(path.join(repoDir, 'tracked-file.txt'), 'version 2 staged\n');
+    spawnSync('git', ['add', 'tracked-file.txt'], { cwd: repoDir, stdio: 'ignore' });
+  }
+
+  if (options.untracked) {
+    writeFileSync(path.join(repoDir, 'untracked-file.txt'), 'untracked content\n');
+  }
+
+  return { repoDir, headSha };
+}
+
 describe('drain-then-restart deploy scripts (B4)', () => {
   let dir: string;
   let holder: net.Server;
@@ -91,10 +148,13 @@ describe('drain-then-restart deploy scripts (B4)', () => {
   let auditFile: string;
   let lockPath: string;
   let unitStateFile: string;
+  let defaultCheckoutDir: string;
   const setUnitState = (state: string): void => writeFileSync(unitStateFile, `${state}\n`);
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'pi-b4-scripts-'));
+    defaultCheckoutDir = path.join(dir, 'default-checkout');
+    createGitRepoFixture(defaultCheckoutDir);
     socketPath = path.join(dir, 'internal-api.sock');
     tokenPath = path.join(dir, 'internal-api-token');
     writeFileSync(tokenPath, TOKEN);
@@ -139,6 +199,8 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       PI_WEB_UI_STOP_AUDIT_FILE: auditFile,
       PI_WEB_UI_SYSTEMD_CAT: path.join(dir, 'no-such-systemd-cat'),
       PI_WEB_UI_PRODUCTION_LOCK: lockPath,
+      PI_WEB_UI_CHECKOUT_DIR: defaultCheckoutDir,
+      PI_WEB_UI_EXPECTED_BRANCH: 'master',
       ...extra,
     };
   };
@@ -458,6 +520,106 @@ describe('drain-then-restart deploy scripts (B4)', () => {
       expect(result.stdout).toContain('drain_http_slack_seconds=60');
       expect(curl.requests()).toEqual([]);
       expect(lines(systemctlLog)).toEqual([]);
+    });
+
+    describe('production checkout safety guard (H-wave incident)', () => {
+      it('refuses restart before draining when checkout is on an unexpected branch (e.g. orch/h1 instead of master)', () => {
+        const repo = path.join(dir, 'wrong-branch-repo');
+        createGitRepoFixture(repo, { branch: 'orch/h1' });
+        const result = run(RESTART, ['--reason', 'branch test'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.stderr).toContain("branch 'orch/h1'");
+        expect(result.stderr).toContain("expected 'master'");
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('refuses restart before draining when tracked files have unstaged modifications', () => {
+        const repo = path.join(dir, 'dirty-unstaged-repo');
+        createGitRepoFixture(repo, { dirtyTracked: true });
+        const result = run(RESTART, ['--reason', 'dirty unstaged'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.stderr).toContain('modified or staged tracked files');
+        expect(result.stderr).toContain('tracked-file.txt');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('refuses restart before draining when tracked files are staged', () => {
+        const repo = path.join(dir, 'dirty-staged-repo');
+        createGitRepoFixture(repo, { stagedTracked: true });
+        const result = run(RESTART, ['--reason', 'dirty staged'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.stderr).toContain('modified or staged tracked files');
+        expect(result.stderr).toContain('tracked-file.txt');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('proceeds when untracked files are present (untracked files ignored)', () => {
+        const repo = path.join(dir, 'untracked-repo');
+        createGitRepoFixture(repo, { untracked: true });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'untracked ok'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+        expect(readFileSync(auditFile, 'utf8')).toContain('drain=settled');
+      });
+
+      it('refuses restart before draining when server/dist build identity is missing', () => {
+        const repo = path.join(dir, 'missing-manifest-repo');
+        createGitRepoFixture(repo, { manifestMissing: true });
+        const result = run(RESTART, ['--reason', 'missing manifest'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.stderr).toContain('server/dist build identity');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('refuses restart before draining when server/dist build identity revision does not match HEAD', () => {
+        const repo = path.join(dir, 'stale-manifest-repo');
+        createGitRepoFixture(repo, { manifestRevision: '0123456789abcdef0123456789abcdef01234567' });
+        const result = run(RESTART, ['--reason', 'stale manifest'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Refusing production restart');
+        expect(result.stderr).toMatch(/revision .* does not match HEAD/);
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('--force --reason overrides the checkout safety guard and records drain=forced', () => {
+        const repo = path.join(dir, 'forced-dirty-repo');
+        createGitRepoFixture(repo, { branch: 'orch/h1', dirtyTracked: true, manifestMissing: true });
+        const result = run(RESTART, ['--force', '--reason', 'emergency override despite dirty tree'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+        const audit = readFileSync(auditFile, 'utf8');
+        expect(audit).toContain('drain=forced');
+        expect(audit).toMatch(/reason=emergency.*override/);
+      });
+
+      it('honours --checkout-dir and --expected-branch CLI options', () => {
+        const repo = path.join(dir, 'custom-options-repo');
+        createGitRepoFixture(repo, { branch: 'custom-feature' });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, [
+          '--reason', 'custom branch ok',
+          '--checkout-dir', repo,
+          '--expected-branch', 'custom-feature',
+        ]);
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+        expect(readFileSync(auditFile, 'utf8')).toContain('drain=settled');
+      });
     });
   });
 

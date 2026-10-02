@@ -74,6 +74,9 @@
 #   PI_WEB_UI_DRAIN_TIMEOUT_SECONDS    default drain timeout (600)
 #   PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS HTTP wait beyond the drain timeout (60);
 #                                      budgeted callers (restart-pi-web-ui.sh) lower it
+#   PI_WEB_UI_CHECKOUT_DIR             production checkout dir
+#                                      (default /root/pi-web-ui)
+#   PI_WEB_UI_EXPECTED_BRANCH          expected git branch (default master)
 #
 # This script never runs on its own authority: production restart remains
 # owner-gated.
@@ -92,6 +95,8 @@ DRAIN_TIMEOUT="${PI_WEB_UI_DRAIN_TIMEOUT_SECONDS:-600}"
 ON_TIMEOUT="restart"
 VERB="restart"
 SHOW_TARGETS=0
+CHECKOUT_DIR_ARG=""
+EXPECTED_BRANCH_ARG=""
 while [ $# -gt 0 ]; do
   case "${1:-}" in
     --force) FORCE=1; shift ;;
@@ -99,6 +104,8 @@ while [ $# -gt 0 ]; do
     --drain-timeout) DRAIN_TIMEOUT="${2:-}"; shift 2 ;;
     --on-timeout) ON_TIMEOUT="${2:-}"; shift 2 ;;
     --verb) VERB="${2:-}"; shift 2 ;;
+    --checkout-dir) CHECKOUT_DIR_ARG="${2:-}"; shift 2 ;;
+    --expected-branch) EXPECTED_BRANCH_ARG="${2:-}"; shift 2 ;;
     --show-targets) SHOW_TARGETS=1; shift ;;
     *)
       echo "restart-production.sh: unknown argument: ${1}" >&2
@@ -132,11 +139,14 @@ if ! [[ "$HTTP_SLACK" =~ ^[0-9]+$ ]] || [ "$HTTP_SLACK" -gt 600 ]; then
   echo "restart-production.sh: PI_WEB_UI_DRAIN_HTTP_SLACK_SECONDS must be an integer in 0..600 (got '${HTTP_SLACK}')" >&2
   exit 64
 fi
+CHECKOUT_DIR="${CHECKOUT_DIR_ARG:-${PI_WEB_UI_CHECKOUT_DIR:-/root/pi-web-ui}}"
+EXPECTED_BRANCH="${EXPECTED_BRANCH_ARG:-${PI_WEB_UI_EXPECTED_BRANCH:-master}}"
 
 if [ "$SHOW_TARGETS" -eq 1 ]; then
-  printf 'unit=%s\nverb=%s\nsocket=%s\ntoken_file=%s\nsystemctl=%s\nnotify=%s\nstop_audit=%s\nlock=%s\ndrain=%s\ndrain_timeout_seconds=%s\ndrain_http_slack_seconds=%s\non_timeout=%s\n' \
+  printf 'unit=%s\nverb=%s\nsocket=%s\ntoken_file=%s\nsystemctl=%s\nnotify=%s\nstop_audit=%s\nlock=%s\ndrain=%s\ndrain_timeout_seconds=%s\ndrain_http_slack_seconds=%s\non_timeout=%s\ncheckout_dir=%s\nexpected_branch=%s\n' \
     "$UNIT" "$VERB" "$SOCKET" "$TOKEN_FILE" "$SYSTEMCTL_BIN" "$NOTIFY_SCRIPT" "$AUDIT_FILE" "$LOCK_PATH" \
-    "$([ "$FORCE" -eq 1 ] && echo forced || echo default)" "$DRAIN_TIMEOUT" "$HTTP_SLACK" "$ON_TIMEOUT"
+    "$([ "$FORCE" -eq 1 ] && echo forced || echo default)" "$DRAIN_TIMEOUT" "$HTTP_SLACK" "$ON_TIMEOUT" \
+    "$CHECKOUT_DIR" "$EXPECTED_BRANCH"
   exit 0
 fi
 
@@ -189,6 +199,52 @@ legacy_preflight() {
   fi
   DRAIN_SUMMARY="legacy_preflight,active_turns=${active}"
 }
+
+check_production_checkout_safety() {
+  if [ "$FORCE" -eq 1 ]; then
+    return 0
+  fi
+
+  if [ ! -d "$CHECKOUT_DIR" ]; then
+    refuse "production checkout directory '$CHECKOUT_DIR' does not exist."
+  fi
+
+  if ! git -C "$CHECKOUT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    refuse "production checkout at '$CHECKOUT_DIR' is not a git repository."
+  fi
+
+  local current_branch
+  current_branch="$(git -C "$CHECKOUT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ "$current_branch" != "$EXPECTED_BRANCH" ]; then
+    refuse "production checkout at '$CHECKOUT_DIR' is on branch '${current_branch}', expected '${EXPECTED_BRANCH}'."
+  fi
+
+  local dirty_tracked
+  dirty_tracked="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  if [ -n "$dirty_tracked" ]; then
+    refuse "production checkout at '$CHECKOUT_DIR' has modified or staged tracked files:\n${dirty_tracked}"
+  fi
+
+  local manifest_path
+  manifest_path="$CHECKOUT_DIR/server/dist/build-identity/embedded-manifest.json"
+  if [ ! -f "$manifest_path" ]; then
+    refuse "production checkout at '$CHECKOUT_DIR' has no built server/dist build identity at '${manifest_path}' (run 'npm run build' before restarting)."
+  fi
+
+  local manifest_rev head_rev
+  manifest_rev="$(jq -r '.revision // empty' "$manifest_path" 2>/dev/null || true)"
+  if [ -z "$manifest_rev" ] || [ "$manifest_rev" = "unknown" ]; then
+    refuse "production checkout at '$CHECKOUT_DIR' has an invalid or unknown build revision in '${manifest_path}'."
+  fi
+
+  head_rev="$(git -C "$CHECKOUT_DIR" rev-parse HEAD 2>/dev/null || true)"
+  if [ "$manifest_rev" != "$head_rev" ]; then
+    refuse "production checkout at '$CHECKOUT_DIR' server/dist build revision '${manifest_rev}' does not match HEAD '${head_rev}' (dist is stale; rebuild before restarting)."
+  fi
+}
+
+# 0b. Production checkout safety guard (H-wave incident: refuse if wrong branch, dirty/staged tracked files, or stale dist).
+check_production_checkout_safety
 
 # 1. Is the unit running? Only inactive/failed count as confirmed not running.
 UNIT_STATE="$("$SYSTEMCTL_BIN" is-active "$UNIT" 2>/dev/null | head -n 1 || true)"
