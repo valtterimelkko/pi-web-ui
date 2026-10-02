@@ -1331,10 +1331,12 @@ export class MultiSessionManager {
   private attachClientToSession(clientId: string, sessionPath: string, activeSession: ActiveSession): void {
     activeSession.subscribers.add(clientId);
     activeSession.lastActivity = new Date();
-    if (!this.clientSubscriptions.has(clientId)) {
-      this.clientSubscriptions.set(clientId, new Set());
+    let clientSubs = this.clientSubscriptions.get(clientId);
+    if (!clientSubs) {
+      clientSubs = new Set();
+      this.clientSubscriptions.set(clientId, clientSubs);
     }
-    this.clientSubscriptions.get(clientId)!.add(sessionPath);
+    clientSubs.add(sessionPath);
   }
 
   /**
