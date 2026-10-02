@@ -428,4 +428,37 @@ describe('admissionStartupStatus', () => {
     expect(resolved.minimumHeadroomBytes).toBe(snap.memory.minimumHeadroomBytes);
     expect(resolved.reservedBytesPerTurn).toBe(snap.memory.reservedBytesPerTurn);
   });
+
+  it('preserves admission headroom when current memory includes large reclaimable cache (Criterion 5)', async () => {
+    const GiB = 1024 * 1024 * 1024;
+    // Total cgroup usage 7.17 GiB of 8 GiB limit, but 5.68 GiB is reclaimable cache.
+    // Working set is 7.17 - 5.68 = 1.49 GiB.
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      minimumHeadroomBytes: 1536 * 1024 * 1024, // 1.5 GiB
+      reservedBytesPerTurn: 512 * 1024 * 1024, // 512 MiB
+      memory: () => ({ currentBytes: Math.round(1.49 * GiB), limitBytes: 8 * GiB }),
+    });
+    // With working set, headroom is ~6.51 GiB, so turn is admitted
+    const permit = await controller.acquire('pi');
+    expect(permit).toBeDefined();
+    expect(controller.snapshot().available).toBe(true);
+    permit.release();
+  });
+
+  it('refuses admission when anonymous memory is genuinely exhausted (Criterion 5)', async () => {
+    const GiB = 1024 * 1024 * 1024;
+    // Genuinely high anon: 7.2 GiB anon working set out of 8 GiB limit.
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      minimumHeadroomBytes: 1536 * 1024 * 1024, // 1.5 GiB
+      reservedBytesPerTurn: 512 * 1024 * 1024,
+      memory: () => ({ currentBytes: Math.round(7.2 * GiB), limitBytes: 8 * GiB }),
+    });
+    // Headroom is only 0.8 GiB < 1.5 GiB minimumHeadroomBytes
+    await expect(controller.acquire('pi')).rejects.toMatchObject({ reason: 'memory_pressure' });
+    expect(controller.snapshot().reason).toBe('memory_pressure');
+  });
 });

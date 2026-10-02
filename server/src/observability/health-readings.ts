@@ -234,8 +234,8 @@ export interface HealthReadingSources {
   registryEntries?: () => number | undefined | Promise<number | undefined>;
   /** D0: tools-slice reading; registered by the server when placement is enabled. */
   toolsSlice?: () => { currentBytes?: number; oomKill?: number } | undefined;
-  /** D0: degrade count (wrapper fell open, replacement bash tool not active). */
-  placementDegrades?: () => number | undefined;
+  /** D0: degrade count (wrapper fell open, replacement bash tool not active). Accepts sinceMs to filter since this server process started. */
+  placementDegrades?: (sinceMs?: number) => number | undefined;
   /** Hb3: streaming-path window summary (sampler-only; consumes the window). */
   streaming?: () => StreamingWindowSummary | undefined;
   /** Default active-turn classes: terminal turn counters from the operational metrics. */
@@ -360,7 +360,14 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
     registryEntries: positiveOrNull(registryEntries),
     toolsSliceMemoryBytes: positiveOrNull(safe<{ currentBytes?: number } | undefined>(sources.toolsSlice, undefined)?.currentBytes),
     toolsSliceOomKills: positiveOrNull(safe<{ oomKill?: number } | undefined>(sources.toolsSlice, undefined)?.oomKill),
-    placementDegrades: positiveOrNull(safe<number | undefined>(sources.placementDegrades, undefined)),
+    placementDegrades: positiveOrNull(
+      sources.placementDegrades
+        ? safe<number | undefined>(() => {
+            const fn = sources.placementDegrades;
+            return fn ? fn(Math.max(0, now - (uptimeSec * 1000))) : undefined;
+          }, undefined)
+        : undefined,
+    ),
     streaming: safe<StreamingWindowSummary | undefined>(sources.streaming, undefined) ?? null,
   };
 }
