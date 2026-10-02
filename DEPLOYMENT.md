@@ -641,7 +641,7 @@ that the production checkout directory (`CHECKOUT_DIR`, default `/root/pi-web-ui
 overrideable via `--checkout-dir` or `PI_WEB_UI_CHECKOUT_DIR`):
 
 1. Exists, is a git repository, and is on the expected branch (default `master`, overrideable via `--expected-branch` or `PI_WEB_UI_EXPECTED_BRANCH`).
-2. Has no unstaged modifications or staged changes on tracked files, and **no untracked or modified files under the declared build inputs** (`BUILD_INPUT_POLICY` paths — a rebuild would digest content git cannot see; fail closed by owner decision). Untracked files outside the build inputs remain ignored.
+2. Has no unstaged modifications or staged changes on tracked files, and **no untracked, ignored, or modified files under the declared build inputs** (`BUILD_INPUT_POLICY` paths — the build digests the working tree without consulting `.gitignore`, so even an ignored file under an input root would feed a future rebuild; fail closed by owner decision). Untracked or ignored files outside the build inputs remain ignored.
 3. Has a compiled build in `server/dist/build-identity/embedded-manifest.json` whose **built content is current for `HEAD`**: the manifest records the revision the build was made from; the guard refuses only when a *build input* differs between that revision and `HEAD` — excluding what the build itself never digests (files named `*.map` or `.env*`, and the policy's `excludedFileNames`, mirrored as git pathspec excludes and pinned by test). Commits that touch no digested input (docs, plans, sourcemaps) do **not** need a rebuild before restarting. An unknown manifest revision or a failing diff refuses (fails closed).
 
 Every refusal from these checks is a **checkout-guard refusal**: exit **3** with

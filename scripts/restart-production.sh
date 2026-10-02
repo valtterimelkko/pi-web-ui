@@ -301,23 +301,46 @@ check_production_checkout_safety() {
     refuse_guard "production checkout at '$CHECKOUT_DIR' has modified or staged tracked files:\n${dirty_tracked}"
   fi
 
-  # J1 correction 03 (finding 1, fail closed by owner decision): untracked or
-  # modified files under the DECLARED BUILD INPUTS make "the built content
-  # corresponds to HEAD" false for any future rebuild — the build would digest
-  # content git cannot see. Refused whether or not the manifest revision equals
-  # HEAD. Ignored files stay invisible here (porcelain without --ignored); the
-  # build honours BUILD_INPUT_POLICY's own exclusions rather than .gitignore —
-  # the difference is recorded in the J1 evidence bundle.
+  # J1 correction 03 (finding 1, fail closed by owner decision) + correction 05
+  # (FINAL): untracked, ignored, or modified files under the DECLARED BUILD
+  # INPUTS make "the built content corresponds to HEAD" false for any future
+  # rebuild — the build digests the working tree without consulting .gitignore
+  # (only BUILD_INPUT_POLICY's own exclusions), so an ignored file under an
+  # input root would be built while invisible to a plain status. Refused
+  # whether or not the manifest revision equals HEAD.
   local untracked_inputs status_untracked
   set +e
-  untracked_inputs="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=all -- "${BUILD_INPUT_PATHS[@]}" "${BUILD_INPUT_EXCLUDES[@]}" 2>/dev/null)"
+  untracked_inputs="$(git -C "$CHECKOUT_DIR" status --porcelain --untracked-files=all --ignored=matching -- "${BUILD_INPUT_PATHS[@]}" 2>/dev/null)"
   status_untracked=$?
   set -e
   if [ "$status_untracked" -ne 0 ]; then
     refuse_guard "could not verify the production checkout at '$CHECKOUT_DIR': 'git status --porcelain -- <build inputs>' failed (exit ${status_untracked})."
   fi
-  if [ -n "$untracked_inputs" ]; then
-    refuse_guard "production checkout at '$CHECKOUT_DIR' has untracked or modified files under the declared build inputs (a rebuild would digest content git cannot see):\n${untracked_inputs}"
+  # Post-filter (correction 05): keep only entries under the declared inputs —
+  # with --ignored=matching, git can report ignored SIBLING directories outside
+  # the pathspecs (e.g. server/dist/) when exclude pathspecs are also given, so
+  # the policy exclusions are applied here instead of as pathspecs: drop what
+  # the build never digests (isAllowedFile: *.map, .env*, excludedFileNames),
+  # mirroring the diff's pathspec excludes.
+  local input_state="" line entry_path entry_base in_inputs
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    entry_path="${line:3}"
+    in_inputs=0
+    for root in "${BUILD_INPUT_PATHS[@]}"; do
+      case "$entry_path" in
+        "$root"/*|"$root") in_inputs=1; break ;;
+      esac
+    done
+    [ "$in_inputs" -eq 1 ] || continue
+    entry_base="${entry_path##*/}"
+    case "$entry_base" in
+      *.map|.env*|embedded-manifest.json|manifest.generated.ts|test-results.json) continue ;;
+    esac
+    input_state="${input_state}${line}"
+  done <<< "$untracked_inputs"
+  if [ -n "$input_state" ]; then
+    refuse_guard "production checkout at '$CHECKOUT_DIR' has untracked, ignored, or modified files under the declared build inputs (a rebuild would digest content git cannot see):\n${input_state}"
   fi
 
   local manifest_path

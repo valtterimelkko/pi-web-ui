@@ -96,6 +96,8 @@ function createGitRepoFixture(
     postBuildCommit?: Record<string, string>;
     /** J1 correction 03: untracked files under declared build inputs. */
     untrackedInputs?: string[];
+    /** J1 correction 05: gitignored files under declared build inputs (the build digests them; it does not consult .gitignore). */
+    ignoredInputs?: string[];
   } = {}
 ): { repoDir: string; headSha: string; buildSha: string } {
   const branch = options.branch ?? 'master';
@@ -103,7 +105,7 @@ function createGitRepoFixture(
   spawnSync('git', ['init', '-b', branch], { cwd: repoDir, stdio: 'ignore' });
   spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoDir, stdio: 'ignore' });
   spawnSync('git', ['config', 'user.name', 'Test'], { cwd: repoDir, stdio: 'ignore' });
-  writeFileSync(path.join(repoDir, '.gitignore'), 'server/dist/\n');
+  writeFileSync(path.join(repoDir, '.gitignore'), `server/dist/\n${(options.ignoredInputs ?? []).map((p) => `${p}\n`).join('')}`);
   writeFileSync(path.join(repoDir, 'tracked-file.txt'), 'version 1\n');
   spawnSync('git', ['add', '.gitignore', 'tracked-file.txt'], { cwd: repoDir, stdio: 'ignore' });
   spawnSync('git', ['commit', '-m', 'initial commit'], { cwd: repoDir, stdio: 'ignore' });
@@ -167,6 +169,13 @@ function createGitRepoFixture(
       const abs = path.join(repoDir, relPath);
       mkdirSync(path.dirname(abs), { recursive: true });
       writeFileSync(abs, 'untracked build input\n');
+    }
+  }
+  if (options.ignoredInputs) {
+    for (const relPath of options.ignoredInputs) {
+      const abs = path.join(repoDir, relPath);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      writeFileSync(abs, 'ignored build input\n');
     }
   }
 
@@ -792,6 +801,28 @@ describe('drain-then-restart deploy scripts (B4)', () => {
         createGitRepoFixture(repo, { untracked: true });
         curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
         const result = run(RESTART, ['--reason', 'root untracked ok'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status, result.stderr).toBe(0);
+        expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
+      });
+
+      it('(05) refuses when an IGNORED file sits under a declared build input: the build digests it without consulting .gitignore', () => {
+        const repo = path.join(dir, 'ignored-input-repo');
+        createGitRepoFixture(repo, { ignoredInputs: ['client/public/ignored-asset.txt'] });
+        const result = run(RESTART, ['--reason', 'ignored build input'], { PI_WEB_UI_CHECKOUT_DIR: repo });
+        expect(result.status).toBe(3);
+        expect(result.stderr).toContain('Refusing production restart (checkout guard)');
+        expect(result.stderr).toContain('build inputs');
+        expect(result.stderr).toContain('client/public/ignored-asset.txt');
+        expect(curl.requests()).toEqual([]);
+        expect(lines(systemctlLog)).toEqual([]);
+        expect(existsSync(auditFile)).toBe(false);
+      });
+
+      it('(05) still proceeds when an ignored file under an input root is policy-excluded (*.map is never digested)', () => {
+        const repo = path.join(dir, 'ignored-map-repo');
+        createGitRepoFixture(repo, { ignoredInputs: ['client/public/ignored-sourcemap.js.map'] });
+        curl.setRoute('POST /api/v1/drain', { status: 200, body: settled });
+        const result = run(RESTART, ['--reason', 'ignored map ok'], { PI_WEB_UI_CHECKOUT_DIR: repo });
         expect(result.status, result.stderr).toBe(0);
         expect(lines(systemctlLog)).toEqual([`restart ${UNIT}`]);
       });
