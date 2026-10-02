@@ -64,25 +64,28 @@ validation wrapper's stub opt-in flips antigravity on with no credentials, so
 `runtimes.antigravity: "available"`. Server stopped via the sanctioned stopper;
 `ss`/`pgrep` show no socket and no stub processes remain.
 
-**Final run** `/root/orch-ops/orchestration-scaling/hb5/live-20261002T021050Z`
+**Final run** `/root/orch-ops/orchestration-scaling/hb5/live-20261002T021946Z`
 (build `d51b0ad0`, `AGY_GOAL_SWEEP_MS=400`): all assertions passed.
 
 | Arm | Pattern | Result |
 |---|---|---|
-| A (provider errors) | antigravity goal, `verifyCommand` that never passes, mock agy ends every turn in an error; watch registered for `event_type goal_state` with `dataMatch {status: paused, pausedReason: error}` before the start | 3 turns (`error` × 3: 500, 503, timeout; timestamps 1790907058988/060220/061419 — strictly sequential), then `GET /goal` = `status: paused, pausedReason: "error", runs: 0, lastReason: "goal paused after 3 consecutive provider errors; last error: timeout"`. A fourth turn never appears (settle re-read 3 s later identical). Watch `firingCount: 1`, condition `paused-error`, `eventType goal_state`, fired at 1790907061820 (~400 ms after the third turn). |
+| A (provider errors) | antigravity goal, `verifyCommand` that never passes, mock agy ends every turn in an error; watch registered for `event_type goal_state` with `dataMatch {status: paused, pausedReason: error}` before the start | 3 turns (`error` × 3: 500, 503, timeout; strictly sequential), then `GET /goal` = `status: paused, pausedReason: "error", runs: 0, lastReason: "goal paused after 3 consecutive provider errors; last error: timeout"`. A fourth turn never appears (settle re-read 3 s later identical). Watch `firingCount: 1`, condition `paused-error`, `eventType goal_state`. |
 | B (positive control) | same stub, goal with no verify command, objective matching the stub's healthy path | turn 1 `done` (unmet) → continuation; turn 2 `done` with `GOAL_STATUS: ACHIEVED` → `status: "achieved", runs: 2, verification.status: "self_reported"`. |
+| C (resume re-arms) | after arm A's error pause, `POST /goal {action:"resume"}` | response `accepted: true` with `goal.status: "running"`; the transcript grows to 4 turns (the re-armed continuation is dispatched); `clear` → `status: "cleared"`. |
 
 Two earlier runs of the same script with `AGY_GOAL_SWEEP_MS=2000`
-(`live-20261002T020852Z`) and 400 ms (`live-20261002T020925Z`) produced the same
-result. The pre-fix build is the negative control at transcript level: the H2s
-session fixture (27 error turns, all continued) is the defect; the diagnostic
-run `live-20261002T020556Z` shows the same code stalling at strike 1 on the 409
+(`live-20261002T020852Z`) and 400 ms (`live-20261002T020925Z`) produced the
+same arm A/B result; the final three-arm run supersedes the two-arm run
+`live-20261002T021050Z` (identical arm A/B numbers). The pre-fix build is the
+negative control at transcript level: the H2s session fixture (27 error turns,
+all continued) is the defect; the diagnostic run
+`live-20261002T020556Z` shows the same code stalling at strike 1 on the 409
 race before the retry-first fix.
 
 Load claims: build revision `d51b0ad0` (contains the change under test); peak
-concurrent active turns **1** in both arms (each arm's transcript is strictly
-sequential; arm A turn starts 61.2 s/1.2 s apart with 57/1/1 ms durations);
-sample count: 3 turns arm A, 2 turns arm B enumerated item-by-item from the
+concurrent active turns **1** in every arm (each arm's transcript is strictly
+sequential; e.g. arm A's three turns complete in 57/1/1 ms with no overlap);
+sample count: 3 turns arm A + 2 turns arm B enumerated item-by-item from the
 isolated session JSONL (not aggregate counts). The unit cgroup
 (`/system.slice/hb5-live-…`) is a transient service, not nested, capped at
 12G/1G swap.
