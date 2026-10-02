@@ -692,3 +692,21 @@ describe('J3 alert knob resolution', () => {
     expect(warnings.some((line) => line.includes('OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS'))).toBe(true);
   });
 });
+
+describe('J3 alert knob bounds (correction 02)', () => {
+  it('accepts the 2..100 range for the run-length knob', () => {
+    const low = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '2' } as NodeJS.ProcessEnv);
+    expect(low.turnCountMismatchAlertReadings).toBe(2);
+    const high = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '100' } as NodeJS.ProcessEnv);
+    expect(high.turnCountMismatchAlertReadings).toBe(100);
+  });
+
+  it('falls back with a warning outside 2..100', () => {
+    const warnings: string[] = [];
+    const one = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '1' } as NodeJS.ProcessEnv, warnings);
+    expect(one.turnCountMismatchAlertReadings).toBeUndefined();
+    const hundredOne = resolveHealthAlertThresholds({ OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS: '101' } as NodeJS.ProcessEnv, warnings);
+    expect(hundredOne.turnCountMismatchAlertReadings).toBeUndefined();
+    expect(warnings.filter((line) => line.includes('OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS'))).toHaveLength(2);
+  });
+});

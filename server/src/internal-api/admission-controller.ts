@@ -790,6 +790,25 @@ export class AdmissionController {
     };
   }
 
+  /**
+   * J3 (correction 02 — parent-approved scope extension, this method only):
+   * read-only copies of the in-memory active-turn counters for the A2
+   * sampler's turn-count-mismatch detector. Unlike snapshot() it evaluates no
+   * pressure, calls no reader (no cgroup/PID/host/heap I/O) and touches no
+   * latch — sampling must never change admission's hysteresis state.
+   */
+  activeCounts(): {
+    activeTurns: number;
+    classes: Record<AdmissionClass, { active: number }>;
+    runtimes: Record<SessionRuntime, { activeTurns: number }>;
+  } {
+    return {
+      activeTurns: this.activeTurns,
+      classes: Object.fromEntries(ADMISSION_CLASSES.map((cls) => [cls, { active: this.activeByClass[cls] }])) as Record<AdmissionClass, { active: number }>,
+      runtimes: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, { activeTurns: this.activeByRuntime[runtime] }])) as Record<SessionRuntime, { activeTurns: number }>,
+    };
+  }
+
   snapshot(): AdmissionSnapshot {
     const pressure = this.evaluatePressure();
     const { memory, headroomBytes, projectedHeadroomBytes, memoryPressure, memoryCritical, pids, pidPressure, host, hostPressure, heap } = pressure;

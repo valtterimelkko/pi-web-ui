@@ -397,8 +397,11 @@ export class InternalApiServer {
 
     // J3: admission's counts feed the A2 sampler's turn-count-mismatch detector
     // (plan §6 J3 — a detector, not a fix; admission behaviour is unchanged).
-    // Fail-open: a throwing snapshot omits the fields instead of breaking the
-    // sample. The leak decoration is validation-only (identity-gated; see
+    // Correction 02: the source is the read-only activeCounts() — NOT
+    // snapshot(), whose pressure evaluation latches admission's heap gate and
+    // re-reads cgroup/PID/host sources synchronously. Fail-open: a throwing
+    // source omits the fields instead of breaking the sample. The leak
+    // decoration is validation-only (identity-gated; see
     // createValidationLeakOverride) so a disposable server can plant the
     // 2026-10-02-style stuck permit for the live proof; production never
     // constructs it.
@@ -408,7 +411,7 @@ export class InternalApiServer {
     if (validationLeak) logger.warn(`[InternalAPI] admission: VALIDATION leak injection active (${validationLeak.describe()})`);
     getHealthTelemetry().registerSources({
       admissionCounts: () => {
-        const counts = admissionController.snapshot();
+        const counts = admissionController.activeCounts();
         return validationLeak ? validationLeak.apply(counts) : counts;
       },
     });

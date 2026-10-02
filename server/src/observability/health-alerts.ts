@@ -32,6 +32,12 @@ export interface HealthAlertThresholds {
 
 export const DEFAULT_TURN_MISMATCH_ALERT_READINGS = 3;
 export const DEFAULT_TURN_MISMATCH_RECOVERY_READINGS = 2;
+/**
+ * J3 (correction 02): the grouper value a reverse reading maps to — strictly
+ * inside the dead band `(0, 1)` so it neither opens an incident (≥ high 1)
+ * nor starts the close quiet clock (≤ low 0).
+ */
+export const J3_MISMATCH_REVERSE_BAND = 0.5;
 
 export interface HealthAlert {
   kind: HealthAlertKind;
@@ -200,17 +206,17 @@ export class HysteresisLatch {
 }
 
 /**
- * J3: a run-length latch for the turn-count mismatch — the count analogue of
- * the hysteresis latch. A single disagreeing reading is a turn-boundary race
- * and must never fire, so the alert arms only after `alertReadings`
- * consecutive readings with a positive excess, and recovers only after
- * `recoveryReadings` consecutive agreeing readings (one agreeing reading does
- * not recover — the mirror-image anti-flap rule).
+ * J3: a run-length latch for the turn-count mismatch over the tri-state delta
+ * (correction 02). A single disagreeing reading is a turn-boundary race and
+ * must never fire, so the alert arms only after `alertReadings` consecutive
+ * leak readings (delta > 0), and recovers only after `recoveryReadings`
+ * consecutive equal readings (delta === 0). A reverse reading (delta < 0) is
+ * neither: it breaks both runs and never opens or closes anything.
  */
 export class ConsecutiveReadingsLatch {
   private armedState = false;
-  private disagreeRun = 0;
-  private agreeRun = 0;
+  private leakRun = 0;
+  private equalRun = 0;
 
   constructor(
     private readonly name: string,
@@ -223,30 +229,36 @@ export class ConsecutiveReadingsLatch {
   }
 
   evaluate(value: number): HealthAlertTransition | undefined {
+    if (value < 0) {
+      // Reverse: non-alerting, non-recovering — reset both runs.
+      this.leakRun = 0;
+      this.equalRun = 0;
+      return undefined;
+    }
     if (this.armedState) {
-      if (value <= 0) {
-        this.agreeRun += 1;
-        if (this.agreeRun >= this.recoveryReadings) {
+      if (value === 0) {
+        this.equalRun += 1;
+        if (this.equalRun >= this.recoveryReadings) {
           this.armedState = false;
-          this.agreeRun = 0;
-          this.disagreeRun = 0;
+          this.equalRun = 0;
+          this.leakRun = 0;
           return 'recovery';
         }
         return undefined;
       }
-      this.agreeRun = 0;
+      this.equalRun = 0;
       return undefined;
     }
     if (value > 0) {
-      this.disagreeRun += 1;
-      if (this.disagreeRun >= this.alertReadings) {
+      this.leakRun += 1;
+      if (this.leakRun >= this.alertReadings) {
         this.armedState = true;
-        this.agreeRun = 0;
+        this.equalRun = 0;
         return 'alert';
       }
       return undefined;
     }
-    this.disagreeRun = 0;
+    this.leakRun = 0;
     return undefined;
   }
 
@@ -256,25 +268,28 @@ export class ConsecutiveReadingsLatch {
 }
 
 /**
- * J3: how many more active turns admission holds than the runtime telemetry
- * reports — the leak direction only. `undefined` when admission is unwired
+ * J3: the signed admission-vs-telemetry delta in three states (correction 02):
+ * `> 0` — leak (admission holds more active turns than the runtime telemetry;
+ * the value is the worst positive excess across the total and any per-runtime
+ * mismatch), `=== 0` — equal, `< 0` — reverse (telemetry above admission
+ * somewhere and no leak anywhere; e.g. receipts joined to another turn's
+ * permit — legitimate, never alerting). `undefined` when admission is unwired
  * (the fields are absent), so an unwired sampler never evaluates this alert.
- * The excess is the worst of the total mismatch and any per-runtime mismatch,
- * so a totals-agree/per-runtime-disagree state is still caught; the reverse
- * direction (telemetry above admission, e.g. receipts joined to another
- * turn's permit) is legitimate and never counts as excess.
  */
-export function turnCountMismatchExcess(readings: HealthReadings): number | undefined {
+export function turnCountMismatchDelta(readings: HealthReadings): number | undefined {
   const admission = readings.admissionActiveTurns;
   if (admission === undefined || !Number.isFinite(admission)) return undefined;
   const telemetry = readings.activeTurnsByClass ?? {};
   const runtimeTotal = Object.values(telemetry).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
-  let excess = admission - runtimeTotal;
+  const diffs: number[] = [admission - runtimeTotal];
   for (const [runtime, count] of Object.entries(readings.admissionTurnsByRuntime ?? {})) {
     if (!Number.isFinite(count)) continue;
-    excess = Math.max(excess, count - (telemetry[runtime] ?? 0));
+    diffs.push(count - (telemetry[runtime] ?? 0));
   }
-  return Math.max(0, excess);
+  const worstLeak = Math.max(...diffs);
+  if (worstLeak > 0) return worstLeak;
+  const worstReverse = Math.min(...diffs);
+  return worstReverse < 0 ? worstReverse : 0;
 }
 
 export interface HealthIncidentGrouperOptions {
@@ -366,13 +381,18 @@ export class HealthIncidentGrouper {
     if (heap) notifications.push(heap);
     const lag = this.observeKind('event_loop_lag', this.lag, readings.lagP99Ms, this.thresholds.lagP99HighMs, this.thresholds.lagP99LowMs, 0, atMs, rawAlert('event_loop_lag'), this.debounceFor('event_loop_lag'));
     if (lag) notifications.push(lag);
-    // J3: the mismatch excess (undefined when admission is unwired) latches at
-    // excess >= 1 and clears at 0; the grouper's mismatch debounce matches the
-    // evaluator's N, so the incident opens exactly at the Nth disagreeing
-    // reading and a single boundary-race reading never opens one after a close.
-    const mismatchExcess = turnCountMismatchExcess(readings);
-    if (mismatchExcess !== undefined) {
-      const mismatch = this.observeKind('turn_count_mismatch', this.mismatch, mismatchExcess, 1, 0, 0, atMs, rawAlert('turn_count_mismatch'), this.debounceFor('turn_count_mismatch'), readings);
+    // J3: the mismatch tri-state delta (undefined when admission is unwired).
+    // The grouper sees a mapped value: leak → excess (≥1, the high water mark),
+    // equal → 0 (the recovery mark), reverse → a dead-band value strictly
+    // between, so a reverse reading neither opens an incident nor starts the
+    // close quiet clock (correction 02, finding 2). The grouper's mismatch
+    // debounce matches the evaluator's N, so the incident opens exactly at the
+    // Nth consecutive leak reading and a single boundary-race reading never
+    // opens one after a close.
+    const mismatchDelta = turnCountMismatchDelta(readings);
+    if (mismatchDelta !== undefined) {
+      const grouperValue = mismatchDelta > 0 ? mismatchDelta : mismatchDelta === 0 ? 0 : J3_MISMATCH_REVERSE_BAND;
+      const mismatch = this.observeKind('turn_count_mismatch', this.mismatch, grouperValue, 1, 0, 0, atMs, rawAlert('turn_count_mismatch'), this.debounceFor('turn_count_mismatch'), readings);
       if (mismatch) notifications.push(mismatch);
     }
     return notifications;
@@ -630,18 +650,18 @@ export class HealthAlertEvaluator {
     // J3: admission holding more active turns than the runtime telemetry, for
     // N consecutive readings, is a stuck permit. Unwired (no admission
     // fields) never evaluates — a missing source is not a zero mismatch.
-    const mismatchExcess = turnCountMismatchExcess(readings);
-    if (mismatchExcess !== undefined) {
-      const mismatchTransition = this.mismatchLatch.evaluate(mismatchExcess);
+    const mismatchDelta = turnCountMismatchDelta(readings);
+    if (mismatchDelta !== undefined) {
+      const mismatchTransition = this.mismatchLatch.evaluate(mismatchDelta);
       if (mismatchTransition) {
         alerts.push({
           kind: 'turn_count_mismatch',
           transition: mismatchTransition,
           at,
-          value: mismatchExcess,
+          value: Math.max(0, mismatchDelta),
           threshold: mismatchTransition === 'alert' ? this.turnAlertReadings : this.turnRecoveryReadings,
           message: mismatchTransition === 'alert'
-            ? this.mismatchAlertMessage(readings, mismatchExcess)
+            ? this.mismatchAlertMessage(readings, Math.max(0, mismatchDelta))
             : this.mismatchRecoveryMessage(readings),
         });
       }

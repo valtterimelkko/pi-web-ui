@@ -261,7 +261,10 @@ export function resolveHealthAlertThresholds(env: NodeJS.ProcessEnv = process.en
     lagP99HighMs: parseNonNegativeNumber(env.OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS, DEFAULT_LAG_ALERT_MS, 'OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS'),
     lagP99LowMs: parseNonNegativeNumber(env.OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS, DEFAULT_LAG_RECOVER_MS, 'OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS'),
     // J3: optional — unset means the evaluator's defaults (3 / 2 consecutive readings).
-    turnCountMismatchAlertReadings: optionalPositiveReadings(env.OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS, 'OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS', warnings),
+    // Correction 02, finding 3: the run-length knob is bounded to 2–100 — 1 would
+    // page on a single boundary-race reading, and an unbounded ceiling invites
+    // silently-never-arming configs; out-of-range values fall back with a warning.
+    turnCountMismatchAlertReadings: boundedMismatchReadings(env.OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS, 'OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS', warnings, 2, 100),
     turnCountMismatchRecoveryReadings: optionalPositiveReadings(env.OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS, 'OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS', warnings),
   };
   validateHealthAlertThresholds(thresholds);
@@ -278,6 +281,17 @@ function optionalPositiveReadings(raw: string | undefined, name: string, warning
     return undefined;
   }
   return value;
+}
+
+/** J3 (correction 02): optional reading count bounded to [min, max]; outside the bound warns and stays unset. */
+function boundedMismatchReadings(raw: string | undefined, name: string, warnings: string[], min: number, max: number): number | undefined {
+  const parsed = optionalPositiveReadings(raw, name, warnings);
+  if (parsed === undefined) return undefined;
+  if (parsed < min || parsed > max) {
+    warnings.push(`${name}=${raw!.trim()} is outside [${min}, ${max}]; using the default.`);
+    return undefined;
+  }
+  return parsed;
 }
 
 function resolveNotificationsDir(env: NodeJS.ProcessEnv): string {

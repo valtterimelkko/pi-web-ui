@@ -445,3 +445,94 @@ describe('turn-count mismatch (J3)', () => {
     expect(drive(leak({ atMs: 181_000 }))).toEqual([]);
   });
 });
+
+/**
+ * Correction 02, finding 2: three states — leak (admission > telemetry),
+ * equal, reverse (telemetry > admission). Reverse stays non-alerting but must
+ * neither open nor close an incident; only equal readings count towards
+ * recovery.
+ */
+describe('turn-count mismatch tri-state (correction 02)', () => {
+  const leak = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 0 },
+    admissionActiveTurns: 1,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 1, P3: 0 },
+    admissionTurnsByRuntime: { pi: 1, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+  const equal = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 0 },
+    admissionActiveTurns: 0,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 0, P3: 0 },
+    admissionTurnsByRuntime: { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+  const reverse = (overrides: Partial<HealthReadings> = {}): HealthReadings => readings({
+    activeTurnsByClass: { pi: 1, claude: 1 },
+    admissionActiveTurns: 0,
+    admissionTurnsByClass: { P0: 0, P1: 0, P2: 0, P3: 0 },
+    admissionTurnsByRuntime: { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 },
+    ...overrides,
+  });
+
+  it('does not recover on reverse readings — only equal readings count (evaluator)', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    evaluator.evaluate(leak({ atMs: 1000 }));
+    evaluator.evaluate(leak({ atMs: 31_000 }));
+    expect(evaluator.evaluate(leak({ atMs: 61_000 }))).toHaveLength(1); // armed
+    // Two reverse readings: still armed, no recovery, no new alert.
+    expect(evaluator.evaluate(reverse({ atMs: 91_000 }))).toEqual([]);
+    expect(evaluator.evaluate(reverse({ atMs: 121_000 }))).toEqual([]);
+    // Two equal readings recover exactly once.
+    expect(evaluator.evaluate(equal({ atMs: 151_000 }))).toEqual([]);
+    const recovery = evaluator.evaluate(equal({ atMs: 181_000 }));
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery' });
+  });
+
+  it('a reverse reading breaks the arm run without recovering (latch tri-state)', () => {
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    expect(evaluator.evaluate(leak({ atMs: 1000 }))).toEqual([]);
+    expect(evaluator.evaluate(leak({ atMs: 31_000 }))).toEqual([]);
+    // A reverse reading between leaks breaks the consecutive-leak run...
+    expect(evaluator.evaluate(reverse({ atMs: 61_000 }))).toEqual([]);
+    expect(evaluator.evaluate(leak({ atMs: 91_000 }))).toEqual([]);
+    expect(evaluator.evaluate(leak({ atMs: 121_000 }))).toEqual([]);
+    // ...so the alert arms on the third CONSECUTIVE leak reading.
+    const alert = evaluator.evaluate(leak({ atMs: 151_000 }));
+    expect(alert).toHaveLength(1);
+    expect(alert[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'alert', value: 1 });
+  });
+
+  it('keeps the incident open through a reverse interval longer than the quiet period (grouper)', () => {
+    const grouper = new HealthIncidentGrouper({
+      thresholds: THRESHOLDS,
+      config: { quietPeriodMs: 1000, cooldownMs: 0, debounceReadings: 1 },
+    });
+    const evaluator = new HealthAlertEvaluator({ thresholds: THRESHOLDS, now: () => 1000 });
+    const drive = (r: HealthReadings): HealthAlert[] => grouper.observe(r, evaluator.evaluate(r));
+    expect(drive(leak({ atMs: 1000 }))).toEqual([]);
+    expect(drive(leak({ atMs: 31_000 }))).toEqual([]);
+    expect(drive(leak({ atMs: 61_000 }))).toHaveLength(1); // incident opens
+
+    // A reverse interval far longer than the quiet period: the incident must
+    // neither close nor page.
+    let at = 61_000;
+    for (let i = 0; i < 5; i += 1) {
+      at += 60_000; // 5 minutes of reverse readings, quiet period is 1s
+      expect(drive(reverse({ atMs: at }))).toEqual([]);
+    }
+
+    // The leak returns: still the same single open incident, no new alert.
+    expect(drive(leak({ atMs: at + 60_000 }))).toEqual([]);
+
+    // Equal readings past the quiet period close it exactly once.
+    at += 60_000;
+    expect(drive(equal({ atMs: at }))).toEqual([]);
+    const closed = drive(equal({ atMs: at + 2_000 }));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery' });
+    expect(closed[0].incident).toMatchObject({ reopenedDuringCooldown: false });
+    expect(drive(equal({ atMs: at + 4_000 }))).toEqual([]);
+  });
+});
