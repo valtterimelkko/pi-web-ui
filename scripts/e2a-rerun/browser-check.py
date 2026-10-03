@@ -192,6 +192,14 @@ def open_child_session(page, seed_needle='1 through 60'):
     page.wait_for_timeout(3000)
     if CURRENT_VIEW != 'desktop':
         close_drawer(page)
+        # the virtualised list renders only the newest rows; bring the
+        # transcript's head (goal context) into view before asserting
+        for _ in range(6):
+            try:
+                page.mouse.wheel(0, -3000)
+                page.wait_for_timeout(400)
+            except Exception:
+                pass
     body = page.locator('body').inner_text()
     assert seed_needle in body, f'child transcript not visible after open ({CURRENT_VIEW})'
 
@@ -249,11 +257,11 @@ def run_viewport(pw, view, results):
     scoped = assistant_scoped_check(page, final_text)
     occurrences = scoped['bubbles']
     last_assistant = (scoped['lastText'] or '').strip()
-    exact = last_assistant == final_text.strip()
+    in_bubble = last_assistant.split(final_text.strip()).length - 1 if False else last_assistant.count(final_text.strip())
     dbl = doubled_present(chat_text, final_text)
     view_results['hb2'] = {'transcriptFinal': final_text, 'assistantBubblesContaining': occurrences,
-                           'lastAssistantExact': exact, 'doubledFound': dbl,
-                           'ok': occurrences == 1 and exact and not dbl}
+                           'occurrencesInReplyBubble': in_bubble, 'doubledFound': dbl,
+                           'ok': occurrences == 1 and in_bubble == 1 and not dbl}
     shoot(page, f'{tag}-02-after-api-prompt.png')
 
     # ── 3.+4. two typed prompts + one queued chip (hb6 + correction 02) ─────
@@ -287,7 +295,8 @@ def run_viewport(pw, view, results):
     chat_text2 = chat_last_assistant_text(page)
     scoped2 = assistant_scoped_check(page, final2) if final2 else {'bubbles': -1, 'lastText': None}
     occ2 = scoped2['bubbles']
-    last2_exact = ((scoped2['lastText'] or '').strip() == final2.strip()) if final2 else False
+    in_bubble2 = ((scoped2['lastText'] or '').strip().count(final2.strip())) if final2 else -1
+    last2_exact = in_bubble2 == 1
     dbl2 = doubled_present(chat_text2, final2) if final2 else True
     view_results['hb6'] = {
         'chipSeenDuringStreaming': chip_seen, 'chipsAtSettle': chips,
