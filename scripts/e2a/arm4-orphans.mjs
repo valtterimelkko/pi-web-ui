@@ -79,6 +79,22 @@ async function main() {
     return;
   }
 
+  if (cmd === 'prompt-existing') {
+    const runDir = requireArg(arg, '--run-dir');
+    const sessionId = requireArg(arg, '--session');
+    const messageFile = requireArg(arg, '--message-file');
+    const state = readRunState(runDir);
+    const message = fs.readFileSync(messageFile, 'utf8');
+    const promptOut = await runOk(PI_ORCH, [
+      'prompt', sessionId, '--socket', state.server.socketPath, '--token-path', state.server.tokenPath,
+      '--message', message, '--no-completion-template', '--id-only',
+    ]);
+    const runId = promptOut.stdout.trim();
+    writeJson(path.join(runDir, `prompt-${sessionId}-${Date.now()}.json`), { sessionId, runId, at: new Date().toISOString() });
+    console.log(JSON.stringify({ sessionId, runId }));
+    return;
+  }
+
   if (cmd === 'snapshot') {
     const _runDir = requireArg(arg, '--run-dir');
     const snap = await placedGroupsSnapshot({});

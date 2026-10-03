@@ -21,6 +21,28 @@ export function filterModelsJson(models) {
   return out;
 }
 
+/**
+ * auth.json is the CREDENTIAL store and can hold many providers (11-note deviation:
+ * a wholesale copy gave the disposable server 9 providers' credentials). Keep only
+ * `zai`: at every object level that HAS a `zai` key, drop the sibling keys. apiKeys
+ * inside the kept subtree are preserved verbatim — auth.json is the credential itself.
+ */
+export function filterAuthJson(auth) {
+  const walk = (value) => {
+    if (Array.isArray(value)) return value.map(walk);
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (Object.prototype.hasOwnProperty.call(value, 'zai') && k !== 'zai') continue;
+        out[k] = walk(v);
+      }
+      return out;
+    }
+    return value;
+  };
+  return walk(auth);
+}
+
 function stripApiKeys(value) {
   if (Array.isArray(value)) return value.map(stripApiKeys);
   if (value && typeof value === 'object') {
@@ -65,6 +87,9 @@ export function buildAgentDir({ destDir, sourceDir }) {
     if (entry === 'models.json') {
       const filtered = filterModelsJson(JSON.parse(fs.readFileSync(src, 'utf8')));
       fs.writeFileSync(dst, `${JSON.stringify(filtered, null, 2)}\n`, { mode: 0o600 });
+    } else if (entry === 'auth.json') {
+      const filtered = filterAuthJson(JSON.parse(fs.readFileSync(src, 'utf8')));
+      fs.writeFileSync(dst, `${JSON.stringify(filtered)}\n`, { mode: 0o600 });
     } else {
       fs.cpSync(src, dst, { recursive: true, dereference: true });
     }

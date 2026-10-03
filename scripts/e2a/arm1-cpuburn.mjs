@@ -13,8 +13,11 @@ import path from 'node:path';
 import { runOk, tryRun, sleep, waitFor } from './lib/exec.mjs';
 import { setGuardFlag, clearGuardFlag } from './lib/gate.mjs';
 
+// 10-parent-note: `kill $$` kills only the parent shell — the 16 background subshell
+// loops LEAK (they have no RuntimeMaxSec inside a placed child group). The payload now
+// runs the burn loop in its own setsid process group and kills THAT group at the end.
 const BURN_SHELL = (seconds) =>
-  `for i in $(seq 16); do (while :; do :; done) & done; sleep ${seconds}; kill $$ 2>/dev/null; wait 2>/dev/null; exit 0`;
+  `setsid sh -c 'for i in $(seq 16); do (while :; do :; done) & done; sleep ${seconds}' & outer=$!; sleep ${seconds}; kill -- -$outer 2>/dev/null; wait $outer 2>/dev/null; exit 0`;
 const SLEEP_SHELL = (seconds) => `sleep ${seconds}`;
 
 async function main() {
@@ -26,7 +29,7 @@ async function main() {
   const stateDir = arg('--state-dir');
 
   if (cmd === 'flag') {
-    const on = rest[1] === 'on';
+    const on = rest[0] === 'on';
     if (on) setGuardFlag('cpu-burner-window', new Date().toISOString(), stateDir);
     else clearGuardFlag('cpu-burner-window', stateDir);
     console.log(`cpu-burner-window ${on ? 'set' : 'cleared'} in ${stateDir ?? '(canonical guard state dir)'}`);
@@ -69,6 +72,14 @@ async function main() {
       await sleep(5000);
     }
     console.log(JSON.stringify({ samples: rows.length, out }));
+    return;
+  }
+
+  if (cmd === 'verify-workers') {
+    const out = await tryRun('pgrep', ['-f', 'while :; do :; done']);
+    const n = (out ?? '').split('\n').filter((l) => /^\d+$/.test(l.trim())).length;
+    console.log(JSON.stringify({ burnerWorkers: n }));
+    process.exitCode = n === 0 ? 0 : 1;
     return;
   }
 
