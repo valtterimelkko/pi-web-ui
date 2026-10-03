@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { soakRuntimeMaxSec, viewOnlySubscribeServerEnv } from '../../../src/live-validation/heap-soak/launch-env.js';
+import { soakRuntimeMaxSec, supervisorEnvPassthrough, viewOnlySubscribeServerEnv } from '../../../src/live-validation/heap-soak/launch-env.js';
 
 /**
  * E2a-1: two launcher switches the brief needs, both env-driven so the
@@ -46,5 +46,32 @@ describe('viewOnlySubscribeServerEnv (HEAP_SOAK_VIEW_ONLY_SUBSCRIBE)', () => {
   it('refuses any other value (a typo must not silently boot with the flag off)', () => {
     expect(() => viewOnlySubscribeServerEnv({ HEAP_SOAK_VIEW_ONLY_SUBSCRIBE: 'off' })).toThrow(/HEAP_SOAK_VIEW_ONLY_SUBSCRIBE/);
     expect(() => viewOnlySubscribeServerEnv({ HEAP_SOAK_VIEW_ONLY_SUBSCRIBE: 'yes' })).toThrow(/HEAP_SOAK_VIEW_ONLY_SUBSCRIBE/);
+  });
+});
+
+describe('supervisorEnvPassthrough (runtime env the supervisor unit must inherit)', () => {
+  it('copies exactly the keys the supervisor/driver read at runtime, when set', () => {
+    const passthrough = supervisorEnvPassthrough({
+      HEAP_SOAK_LANES: 'A',
+      HEAP_SOAK_MAX_CONCURRENT: '4',
+      HEAP_SOAK_FORCE_BAD_LANE: 'B',
+      HEAP_SOAK_INJECT_QUOTA_SEQUENCE: '[{"percentLeft":10}]',
+      HEAP_SOAK_KEEP_SERVER: '1',
+      HEAP_SOAK_UNIT_PREFIX: 'e2a-1', // launcher-only: must NOT propagate
+      HEAP_SOAK_CREDENTIAL_PROVIDERS: 'zai', // launcher-only: must NOT propagate
+      PATH: '/usr/bin',
+    });
+    expect(passthrough).toEqual({
+      HEAP_SOAK_LANES: 'A',
+      HEAP_SOAK_MAX_CONCURRENT: '4',
+      HEAP_SOAK_FORCE_BAD_LANE: 'B',
+      HEAP_SOAK_INJECT_QUOTA_SEQUENCE: '[{"percentLeft":10}]',
+      HEAP_SOAK_KEEP_SERVER: '1',
+    });
+  });
+
+  it('returns empty when none are set', () => {
+    expect(supervisorEnvPassthrough({})).toEqual({});
+    expect(supervisorEnvPassthrough({ HEAP_SOAK_UNIT_PREFIX: 'e2a-1' })).toEqual({});
   });
 });

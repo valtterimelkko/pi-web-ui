@@ -13,7 +13,7 @@ import { parseAllowedProviders } from '../../server/src/live-validation/heap-soa
 import { applyExtensionsOverlays, type AppliedExtensionOverlay } from '../../server/src/live-validation/heap-soak/extensions-overlay.js';
 import { resolveRunPaths, serverUnitName, supervisorUnitName, type RunPaths } from './paths.js';
 import { soakSliceName } from '../../server/src/live-validation/heap-soak/unit-names.js';
-import { soakRuntimeMaxSec, viewOnlySubscribeServerEnv } from '../../server/src/live-validation/heap-soak/launch-env.js';
+import { soakRuntimeMaxSec, supervisorEnvPassthrough, viewOnlySubscribeServerEnv } from '../../server/src/live-validation/heap-soak/launch-env.js';
 import { startTransientUnit, waitForMainPid } from './systemd-units.js';
 import { InspectorClient } from './inspector.js';
 import { saveRunState } from './run-state-io.js';
@@ -328,7 +328,14 @@ export async function startSupervisorUnit(runId: string, paths: RunPaths, superv
       ...(runtimeMaxSec === undefined ? {} : { RuntimeMaxSec: String(runtimeMaxSec) }),
       TasksMax: '128',
     },
-    env: { HOME: homedir(), PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    env: {
+      HOME: homedir(),
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      // E2a-1 (found live): the supervisor reads the lane selection at runtime —
+      // a transient unit starts from the MANAGER env, not the launcher's, so
+      // the selection must be explicitly passed or it silently reverts.
+      ...supervisorEnvPassthrough(),
+    },
     executable: 'npx',
     args: ['tsx', 'scripts/heap-soak/supervisor.ts', '--run-state', paths.runStatePath],
   });

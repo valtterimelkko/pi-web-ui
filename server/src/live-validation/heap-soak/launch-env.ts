@@ -34,6 +34,33 @@ export const VIEW_ONLY_SUBSCRIBE_ENV_KEY = 'HEAP_SOAK_VIEW_ONLY_SUBSCRIBE';
 const VIEW_ONLY_ON_VALUES = new Set(['on', 'true', '1']);
 
 /**
+ * Runtime env keys the SUPERVISOR unit's processes read while the run is in
+ * flight (lanes.ts's selection + Gate 1's quota seam + keep-server). The
+ * transient supervisor unit starts from systemd's MANAGER environment plus an
+ * explicit allowlist — anything not passed here silently reverts to its
+ * default inside the supervisor (found live in E2a-1: HEAP_SOAK_LANES=A was
+ * set on the launcher process but never propagated, so the run's supervisor
+ * still dispatched the disabled lane B).
+ */
+const SUPERVISOR_PASSTHROUGH_KEYS = [
+  'HEAP_SOAK_LANES',
+  'HEAP_SOAK_MAX_CONCURRENT',
+  'HEAP_SOAK_FORCE_BAD_LANE',
+  'HEAP_SOAK_INJECT_QUOTA_SEQUENCE',
+  'HEAP_SOAK_KEEP_SERVER',
+] as const;
+
+/** The subset of `env` the supervisor unit must receive (only keys that are set). */
+export function supervisorEnvPassthrough(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of SUPERVISOR_PASSTHROUGH_KEYS) {
+    const value = env[key];
+    if (value !== undefined && value !== '') out[key] = value;
+  }
+  return out;
+}
+
+/**
  * `HEAP_SOAK_VIEW_ONLY_SUBSCRIBE`: when on/true/1, the disposable server is
  * booted with `PI_WEB_UI_VIEW_ONLY_SUBSCRIBE=on` — the production setting
  * since wave J — so the soak exercises the view-only subscribe path exactly
