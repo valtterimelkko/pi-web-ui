@@ -742,13 +742,13 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
     };
     if (armState.pausedNegative) {
       const evidence = await negativeEvidence(armState.pausedNegative);
-      armState.pausedNegativeEvidence = evidence;
-      logLine(paths, 'kill', 'negative-child-evidence', { label: 'kill-paused', ...evidence });
+      armState.pausedNegativeEvidence = { ...armState.pausedNegativeEvidence, ...evidence };
+      logLine(paths, 'kill', 'negative-child-evidence', { label: 'kill-paused', ...evidence, stuck: armState.pausedNegativeEvidence.stuck, pauseVerifiedProjection: armState.pausedNegativeEvidence.projection });
     }
     if (armState.wrappingNegative) {
       const evidence = await negativeEvidence(armState.wrappingNegative);
-      armState.wrappingNegativeEvidence = evidence;
-      logLine(paths, 'kill', 'wrapping-negative-child-evidence', { label: 'kill-wrapping', ...evidence });
+      armState.wrappingNegativeEvidence = { ...armState.wrappingNegativeEvidence, ...evidence };
+      logLine(paths, 'kill', 'wrapping-negative-child-evidence', { label: 'kill-wrapping', ...evidence, stuck: armState.wrappingNegativeEvidence.stuck, pauseVerifiedProjection: armState.wrappingNegativeEvidence.projection });
     }
 
     // Parent action for children still not working (the skills' prescribed action).
