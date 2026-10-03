@@ -21,7 +21,7 @@
 # - ExecStart re-enables +cpu +memory +pids in the anchor's own subtree_control, so a
 #   restarted anchor (fresh cgroup) is usable at once. `$$` and `%%` are systemd
 #   escapes; an unescaped `${...}` is expanded by systemd itself, to an empty string.
-# - No memory limits here: pi-web-ui-tools.slice is the bound (18G max, 14G high).
+# - No memory limits here: pi-web-ui-tools.slice is the bound (14G max, 12G high).
 # - A deliberate `systemctl stop`/`restart` still kills every placed command. Do it
 #   only when no child is running, then drain-restart pi-web-ui.
 #

@@ -12,7 +12,7 @@
  * - Three verbosity levels: answers, tasks, full
  */
 
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
+import { createServer, request as httpRequest, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import type { Socket } from 'net';
 import { randomBytes } from 'crypto';
 import { writeFile, readFile, mkdir } from 'fs/promises';
@@ -32,7 +32,8 @@ import { createNotificationsRoutes } from './routes/notifications.js';
 import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
 import { buildStallNotification } from './run-receipts/stall-notification.js';
-import { readPiRuntimeQuiescence } from './runtime-quiescence.js';
+import { readPiRuntimeQuiescence, type PiSessionStatusInfo } from './runtime-quiescence.js';
+import { DeletedSessionCessation } from './run-receipts/deletion-cessation.js';
 import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
 import { NotificationIngressSpool } from '../notifications/notification-ingress-spool.js';
@@ -42,6 +43,8 @@ import { readPreferences, deriveLegacyArrays } from '../routes/preferences.js';
 import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
 import { setLogTap } from '../logging/logger.js';
+import { wireGoalInterruptions, type GoalInterruptionWiring, type AnnouncedInterruption } from './goal/interruption-wiring.js';
+import { setGoalContinueProbe } from './watch/watch-manager.js';
 import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
 import type { AntigravityService } from '../antigravity/antigravity-service.js';
@@ -171,6 +174,51 @@ export function resolveInternalApiAdmissionOptions(input: Pick<InternalApiConfig
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
+/**
+ * Correction 02 (Luna r2, finding 2 remainder): the server's runtime-quiescence
+ * callback as a testable factory — the tests drive THIS ordering, not a copy.
+ *
+ * Ordering: a recorded deletion gates FIRST (a DELETE's abort-only runtimes —
+ * OpenCode among them — flip `isRunning()` to false before remote cessation is
+ * acknowledged, so a mid-delete poll must not read the flipped truth as
+ * quiescent); then the Command Code / registry branches as before; a missing
+ * entry consults the deletion tracker (fail-closed when never recorded).
+ */
+export interface RuntimeQuiescencePredicateDeps {
+  deletedSessionCessation: DeletedSessionCessation;
+  commandCodeService: { getSession: (sessionId: string) => Promise<unknown>; isRunning: (sessionId: string) => boolean } | undefined;
+  sessionRegistry: { get: (sessionId: string) => Promise<{ sdkType: string; path: string } | undefined> };
+  claudeService: { isRunning: (sessionId: string) => boolean };
+  opencodeService: { isRunning: (sessionId: string) => boolean };
+  antigravityService: { isRunning: (sessionId: string) => boolean };
+  readPiStatus: (sessionPath: string) => PiSessionStatusInfo | undefined;
+}
+
+export function createRuntimeQuiescencePredicate(deps: RuntimeQuiescencePredicateDeps): (sessionId: string) => Promise<boolean> {
+  return async (sessionId) => {
+    try {
+      // Correction 02: a recorded deletion decides before any isRunning() truth.
+      if (deps.deletedSessionCessation.has(sessionId)) {
+        return deps.deletedSessionCessation.isQuiescent(sessionId);
+      }
+      const commandCode = deps.commandCodeService;
+      if (commandCode) {
+        const commandCodeEntry = await commandCode.getSession(sessionId);
+        if (commandCodeEntry) return !commandCode.isRunning(sessionId);
+      }
+      const entry = await deps.sessionRegistry.get(sessionId);
+      if (!entry) return deps.deletedSessionCessation.isQuiescent(sessionId); // never recorded: fail closed
+      if (entry.sdkType === 'commandcode') return commandCode ? !commandCode.isRunning(sessionId) : true;
+      if (entry.sdkType === 'claude') return !deps.claudeService.isRunning(sessionId);
+      if (entry.sdkType === 'opencode') return !deps.opencodeService.isRunning(sessionId);
+      if (entry.sdkType === 'antigravity') return !deps.antigravityService.isRunning(sessionId);
+      return readPiRuntimeQuiescence(() => deps.readPiStatus(entry.path));
+    } catch {
+      return false; // status lookup failure is not positive cessation evidence
+    }
+  };
+}
+
 export class InternalApiServer {
   private server: Server | null = null;
   private config: InternalApiConfig;
@@ -196,6 +244,11 @@ export class InternalApiServer {
   private eventBroker: import('../internal-api/event-broker.js').InternalApiEventBroker | null = null;
   private onBrowserMessage?: (message: Record<string, unknown>) => void;
   private goalControlHandler: ((sessionId: string, body: Record<string, unknown>) => Promise<{ statusCode: number; body: Record<string, unknown> }>) | null = null;
+  /** Wave K (contract 1.60.0): interruption sweep wiring; null before start. */
+  private goalInterruptions: GoalInterruptionWiring | null = null;
+  private goalInterruptionStop: (() => void) | null = null;
+  /** Unix socket path this server is listening on (loopback dispatch). */
+  private listeningSocketPath: string | null = null;
   private stopPromise: Promise<void> | null = null;
   private readonly connections = new Set<Socket>();
 
@@ -266,7 +319,19 @@ export class InternalApiServer {
     const drainRecordPath = this.config.drainRecordPath || path.join(path.dirname(runReceiptDir), 'internal-api-drain.json');
     const priorDrain = consumeDrainRecord(drainRecordPath);
     const drainCutOff = new Set(priorDrain?.state === 'timed_out' ? priorDrain.cutOffRunIds : []);
-    const runReceiptManager = new RunReceiptManager({
+    // Correction 01/02 (Luna r1 finding 2, r2 new finding 1): gates the
+    // quiescence predicate's missing-entry branch and the deletion window —
+    // awaited-dispose runtimes release immediately, abort-only runtimes hold
+    // for the bounded deletion grace (grace-release). Records RETIRE once no
+    // receipt (non-terminal run or draining/quarantined entry) can consult
+    // them, so routine child cleanup cannot grow the map over the server's
+    // lifetime. Declared before the receipt manager, whose predicate wiring
+    // closes over it; the consultant lambda itself runs lazily.
+    const deletedSessionCessation = new DeletedSessionCessation({
+      hasConsultant: (sessionId) => runReceiptManager.hasDrainingForSession(sessionId)
+        || runReceiptManager.listNonterminal().some((run) => run.sessionId === sessionId),
+    });
+    const runReceiptManager: RunReceiptManager = new RunReceiptManager({
       store: new RunReceiptStore(runReceiptDir, {
         classifyRecovery: (record) => (drainCutOff.has(record.runId) ? 'drain_timeout' : 'server_restart'),
       }),
@@ -299,21 +364,21 @@ export class InternalApiServer {
       },
       // §11 fence: on cancel/stall the admission slot is held (not reusable) until
       // the runtime confirms it has stopped, or a 30s drain timeout (quarantine).
-      isRuntimeQuiescent: async (sessionId) => {
-        try {
-          const commandCodeEntry = await this.commandCodeService.getSession(sessionId);
-          if (commandCodeEntry) return !this.commandCodeService.isRunning(sessionId);
-          const entry = await this.sessionRegistry.get(sessionId);
-          if (!entry) return true; // session gone -> quiescent
-          if (entry.sdkType === 'commandcode') return !this.commandCodeService.isRunning(sessionId);
-          if (entry.sdkType === 'claude') return !this.claudeService.isRunning(sessionId);
-          if (entry.sdkType === 'opencode') return !this.opencodeService.isRunning(sessionId);
-          if (entry.sdkType === 'antigravity') return !this.antigravityService.isRunning(sessionId);
-          return readPiRuntimeQuiescence(() => this.multiSessionManager.getSessionStatus(entry.path));
-        } catch {
-          return false; // status lookup failure is not positive cessation evidence
-        }
-      },
+      // Correction 01 (Luna r1 finding 2): a missing registry entry is NOT proof
+      // of cessation — DELETE aborts Claude/OpenCode/Antigravity without
+      // awaiting termination. Correction 02 (Luna r2): the shared predicate
+      // factory consults the deletion tracker FIRST — a recorded deletion gates
+      // the answer before any isRunning() truth, because abort-only runtimes
+      // flip isRunning() false before remote cessation is acknowledged.
+      isRuntimeQuiescent: createRuntimeQuiescencePredicate({
+        deletedSessionCessation,
+        commandCodeService: this.commandCodeService,
+        sessionRegistry: this.sessionRegistry,
+        claudeService: this.claudeService,
+        opencodeService: this.opencodeService,
+        antigravityService: this.antigravityService,
+        readPiStatus: (sessionPath) => this.multiSessionManager.getSessionStatus(sessionPath),
+      }),
       // C2 (contract 1.57.0): the operator learns a dispatched run never
       // started without polling. The parent-watch firing sink is registered
       // separately by the route layer (it owns the watch manager).
@@ -453,6 +518,18 @@ export class InternalApiServer {
       refreshBusySessions: () => busySource.refresh(),
       quarantinedTurns: () => runReceiptManager.getQuarantinedCount(),
       recordPath: drainRecordPath,
+      // Wave K: a timed-out drain re-runs the interruption sweep shortly after
+      // the verdict (the cut-off sessions are still busy at that instant; the
+      // re-runs catch them once they go idle when no restart follows).
+      onTimedOut: (cutOff) => {
+        const announced = new Map(cutOff.sessionIds.map((sessionId) => [sessionId, { source: 'drain' as const, interruptionReason: 'drain_timeout' as const }]));
+        for (const delayMs of [120_000, 300_000]) {
+          const timer = setTimeout(() => {
+            void this.goalInterruptions?.runSweep(announced).catch(() => undefined);
+          }, delayMs);
+          timer.unref?.();
+        }
+      },
     });
     this.drainController = drainController;
     const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: () => busySource.refresh() });
@@ -468,6 +545,7 @@ export class InternalApiServer {
       internalClientId: this.internalClientId,
       watchDir: this.config.watchDir || DEFAULT_WATCH_DIR,
       runReceiptManager,
+      deletedSessionCessation,
       pinDir: this.config.pinDir || DEFAULT_PIN_DIR,
       pinDefaultTtlMs: this.config.pinDefaultTtlMs,
       pinMaxTtlMs: this.config.pinMaxTtlMs,
@@ -486,6 +564,35 @@ export class InternalApiServer {
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
     this.eventBroker = sessionRoutes.broker;
+
+    // Wave K (contract 1.60.0): interruption sweep wiring — durable stores,
+    // sweep, R6 live observers, R5 probe for the watch reconciliation.
+    const goalContinueRoot = path.join(path.dirname(runReceiptDir), 'goal-continue');
+    const goalInterruptions = wireGoalInterruptions({
+      listRegistryEntries: async () => {
+        const all = await this.sessionRegistry.listAll();
+        return all.map((entry) => ({ id: entry.id, path: entry.path, sdkType: entry.sdkType, origin: entry.origin, parentSource: entry.parentSource }));
+      },
+      isSessionBusy: (sessionId) => {
+        const busy = this.multiSessionManager.listBusySessions();
+        return busy.some((b) => b.sessionId === sessionId || b.sessionPath === sessionId);
+      },
+      dispatchPrompt: (sessionId, message, idempotencyKey) => this.dispatchGoalContinuePrompt(sessionId, message, idempotencyKey),
+      brokerPublish: (brokerKey, event) => {
+        try {
+          this.eventBroker?.publish(brokerKey, event as Parameters<NonNullable<typeof this.eventBroker>['publish']>[1]);
+        } catch { /* best-effort visibility */ }
+      },
+      markerDir: path.join(goalContinueRoot, 'markers'),
+      overlayDir: path.join(goalContinueRoot, 'overlay'),
+      logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message) },
+    });
+    this.goalInterruptions = goalInterruptions;
+    setGoalContinueProbe((sessionId) => goalInterruptions.hasGoalContinueMarker(sessionId));
+    this.goalInterruptionStop = () => {
+      goalInterruptions.shutdown();
+      setGoalContinueProbe(undefined);
+    };
     this.goalControlHandler = async (sessionId, body) => {
       // Re-enter the HTTP handler through a synthetic exchange so the browser
       // control path uses the exact same logic as the Internal API route.
@@ -708,6 +815,24 @@ export class InternalApiServer {
 
     logger.info(`[InternalAPI] Listening on Unix socket: ${socketPath}`);
     logger.info(`[InternalAPI] API token ready at: ${tokenPath}`);
+
+    // Wave K: the boot sweep runs once the API is reachable (continue dispatch
+    // goes through the loopback prompt path so admission applies). R5 ordering:
+    // the watch reconciliation's continue probe awaits this classification.
+    this.listeningSocketPath = socketPath;
+    {
+      const announced = new Map<string, AnnouncedInterruption>();
+      for (const run of runReceiptManager.getRestartRecoveredRuns()) {
+        announced.set(run.sessionId, { source: 'receipt', interruptionReason: run.interruptionReason });
+      }
+      for (const busy of interruptedBusySessions) {
+        if (!announced.has(busy.sessionId)) {
+          announced.set(busy.sessionId, { source: 'drain', interruptionReason: busy.interruptionReason });
+        }
+      }
+      void goalInterruptions.runSweep(announced, { boot: true })
+        .catch((error) => logger.warn(`[InternalAPI] wave K boot sweep failed: ${error instanceof Error ? error.message : String(error)}`));
+    }
     } catch (error) {
       this.drainController?.shutdown();
       this.drainController = null;
@@ -718,6 +843,9 @@ export class InternalApiServer {
       this.multiSessionManager.setSessionMaterializedHandler(undefined);
       this.admissionLagUnsubscribe?.();
       this.admissionLagUnsubscribe = null;
+      this.goalInterruptionStop?.();
+      this.goalInterruptionStop = null;
+      this.goalInterruptions = null;
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch(() => { /* preserve startup error */ });
         this.sessionRoutesShutdown = null;
@@ -793,6 +921,9 @@ export class InternalApiServer {
       this.multiSessionManager.setSessionMaterializedHandler(undefined);
       this.admissionLagUnsubscribe?.();
       this.admissionLagUnsubscribe = null;
+      this.goalInterruptionStop?.();
+      this.goalInterruptionStop = null;
+      this.goalInterruptions = null;
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch((error) => failures.push(error));
         this.sessionRoutesShutdown = null;
@@ -1245,6 +1376,70 @@ export class InternalApiServer {
   }
 
   // ── API key management ───────────────────────────────────────────────────
+
+  /**
+   * Wave K (correction 03 C1): dispatch a goal continue through the server's
+   * OWN prompt endpoint over loopback — the full prompt pipeline (injection
+   * checks, admission with shared parents' capacity, receipts, broker fan-out)
+   * applies, exactly as for an external caller. The body carries
+   * `detach: true` (202 right after kickoff) and the marker-derived
+   * `idempotencyKey` (the receipt layer's own idempotency). Response
+   * classification: 200/202 accepted; 400/404/409 and 429/503-with-Retry-After
+   * refused; anything else (other 5xx, timeout, socket error) unknown.
+   */
+  private dispatchGoalContinuePrompt(sessionId: string, message: string, idempotencyKey?: string): Promise<{ outcome: 'accepted' | 'refused' | 'unknown'; retryAfterSeconds?: number; reason?: string }> {
+    const socketPath = this.listeningSocketPath;
+    if (!socketPath || !this.apiKey) {
+      return Promise.resolve({ outcome: 'refused', reason: 'server not listening' });
+    }
+    return new Promise((resolve) => {
+      const body = Buffer.from(JSON.stringify({
+        message,
+        mode: 'prompt',
+        verbosity: 'answers',
+        detach: true,
+        idempotencyKey,
+      }));
+      const request = httpRequest({
+        host: 'localhost',
+        socketPath,
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': body.length,
+          authorization: `Bearer ${this.apiKey}`,
+        },
+        timeout: 15_000,
+      }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          const status = response.statusCode ?? 0;
+          if (status === 200 || status === 202) {
+            resolve({ outcome: 'accepted' });
+            return;
+          }
+          const retryAfterHeader = response.headers['retry-after'];
+          const retryAfterSeconds = typeof retryAfterHeader === 'string' ? Number.parseInt(retryAfterHeader, 10) : undefined;
+          const definiteRefusal = status === 400 || status === 404 || status === 409 || ((status === 429 || status === 503) && Number.isFinite(retryAfterSeconds));
+          resolve({
+            outcome: definiteRefusal ? 'refused' : 'unknown',
+            ...(definiteRefusal && Number.isFinite(retryAfterSeconds) && (status === 429 || status === 503) ? { retryAfterSeconds } : {}),
+            reason: `prompt endpoint answered ${status}: ${Buffer.concat(chunks).toString('utf8').slice(0, 200)}`,
+          });
+        });
+      });
+      request.on('timeout', () => {
+        request.destroy();
+        resolve({ outcome: 'unknown', reason: 'loopback prompt timed out' });
+      });
+      request.on('error', (error) => {
+        resolve({ outcome: 'unknown', reason: `loopback prompt failed: ${error.message}` });
+      });
+      request.end(body);
+    });
+  }
 
   private async resolveApiKey(tokenPath: string): Promise<string> {
     // Check env var first

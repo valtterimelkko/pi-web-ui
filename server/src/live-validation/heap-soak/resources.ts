@@ -56,11 +56,49 @@ export interface SoakMemoryLimits {
   assumedActiveTurns: number;
 }
 
-/** The chosen soak-unit cgroup limits plus the inputs to the throttle arithmetic. */
-export function resolveSoakMemoryLimits(): SoakMemoryLimits {
+export const MEMORY_MAX_ENV_KEY = 'HEAP_SOAK_MEMORY_MAX_MIB';
+export const MEMORY_HIGH_ENV_KEY = 'HEAP_SOAK_MEMORY_HIGH_MIB';
+
+const DEFAULT_MEMORY_MAX_MIB = 12 * 1024;
+const DEFAULT_MEMORY_HIGH_MIB = 10 * 1024;
+/** Below 1 GiB the server cannot boot its seeded registry; the floor only exists so a typo cannot wedge the run. */
+const MIN_MEMORY_MAX_MIB = 1024;
+const MIN_MEMORY_HIGH_MIB = 512;
+
+function readEnvMiB(env: NodeJS.ProcessEnv, key: string, fallback: number, min: number): number {
+  const raw = (env[key] ?? '').trim();
+  if (raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${key} must be a whole number of MiB (got ${JSON.stringify(raw)})`);
+  }
+  if (value < min) {
+    throw new Error(`${key} must be at least ${min} MiB (got ${value})`);
+  }
+  if (value > SOAK_MEMORY_SAFETY_CAP_MIB) {
+    throw new Error(`${key} must not exceed the host-safety cap SOAK_MEMORY_SAFETY_CAP_MIB=${SOAK_MEMORY_SAFETY_CAP_MIB} (got ${value})`);
+  }
+  return value;
+}
+
+/**
+ * The chosen soak-unit cgroup limits plus the inputs to the throttle arithmetic.
+ *
+ * E2a-1: `HEAP_SOAK_MEMORY_MAX_MIB` / `HEAP_SOAK_MEMORY_HIGH_MIB` override the
+ * B0 defaults (12G/10G) — the bounded soak's brief binds MemoryMax ≤ 8G and
+ * MemoryHigh ≤ 6G because the host guard soft-alerts below 8 GiB MemAvailable.
+ * Both overrides are validated fail-closed (integer, floor, ≤ the host-safety
+ * cap, high strictly below max); unset ⇒ the historic B0 limits.
+ */
+export function resolveSoakMemoryLimits(env: NodeJS.ProcessEnv = process.env): SoakMemoryLimits {
+  const memoryMaxMiB = readEnvMiB(env, MEMORY_MAX_ENV_KEY, DEFAULT_MEMORY_MAX_MIB, MIN_MEMORY_MAX_MIB);
+  const memoryHighMiB = readEnvMiB(env, MEMORY_HIGH_ENV_KEY, DEFAULT_MEMORY_HIGH_MIB, MIN_MEMORY_HIGH_MIB);
+  if (memoryHighMiB >= memoryMaxMiB) {
+    throw new Error(`${MEMORY_HIGH_ENV_KEY} (${memoryHighMiB}) must be below ${MEMORY_MAX_ENV_KEY} (${memoryMaxMiB})`);
+  }
   return {
-    memoryMaxMiB: 12 * 1024,
-    memoryHighMiB: 10 * 1024,
+    memoryMaxMiB,
+    memoryHighMiB,
     rssAtHeapCapMiB: A1_RSS_AT_HEAP_CAP_MIB,
     minimumHeadroomMiB: ADMISSION_MINIMUM_HEADROOM_MIB,
     reservedPerTurnMiB: ADMISSION_RESERVED_MIB_PER_TURN,

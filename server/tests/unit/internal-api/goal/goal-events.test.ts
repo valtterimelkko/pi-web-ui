@@ -93,3 +93,17 @@ describe('createPiGoalEventBridge', () => {
     expect(published).toHaveLength(1);
   });
 });
+
+describe('createPiGoalEventBridge — correction 03 scope cut', () => {
+  it('a terminal failed goal (provider stop) emits goal_end exactly as before wave K', async () => {
+    const published: Array<{ type: string }> = [];
+    const bridge = createPiGoalEventBridge({
+      readProjection: async () => ({ supported: true, status: 'failed', pausedReason: 'error', runtimeState: { lastErrorMessage: 'Provider overloaded (HTTP 429)' } }),
+      publish: (e) => published.push({ type: e.type }),
+    });
+    await bridge(goalStatusMessage('⚠ failed'));
+    const types = published.map((e) => e.type);
+    expect(types).toContain('goal_state');
+    expect(types).toContain('goal_end');
+  });
+});

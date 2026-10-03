@@ -1549,10 +1549,17 @@ interactive Web UI work, separate control/execution capacity, measured
 cgroup-v2 memory usage (or process RSS/host RAM fallback), optional PID/task and
 host-pressure/event evidence, conservative-knob provenance, and
 `retryAfterSeconds`. Additive fields such as `classes`, `control`,
-`stalledRuns`, `quarantinedRuns`, `oldestActiveRunStartedAt`, `disposalLane`
-and `disposalOwners` are process-local diagnostics. Contract `1.49.0` adds the
-V8 heap gate (`heap`), the sustained event-loop lag gate (`eventLoopLag`) and
-the drain state (`draining`).
+`stalledRuns`, `quarantinedRuns`, `quarantinedOldestAgeMs`,
+`oldestActiveRunStartedAt`, `disposalLane` and `disposalOwners` are
+process-local diagnostics. Contract `1.49.0` adds the V8 heap gate (`heap`),
+the sustained event-loop lag gate (`eventLoopLag`) and the drain state
+(`draining`). Contract `1.59.0` adds `quarantinedOldestAgeMs` — the age in
+milliseconds of the oldest quarantined admission lease (a terminal
+`cancelled`/`failed` run whose runtime cessation was never confirmed, so its
+slot is held as capacity debt; absent when nothing is quarantined). The L1
+reconciliation guard releases a quarantined slot once the run's whole session
+is confirmed quiescent, so a non-zero age that keeps growing across a settled
+session is the incident signal, not steady state.
 
 ```json
 {
@@ -3273,6 +3280,72 @@ is bounded and env-tunable: `CLAUDE_GOAL_AUTO_CONTINUE=false` disables it;
 `..._BASE_BACKOFF_MS` (30s), `..._MAX_BACKOFF_MS` (10m), `..._SWEEP_MS`
 (30s) tune it. Budget exhaustion marks the goal `failed` with
 `pausedReason: "budget"` and emits `goal_end`.
+
+#### Wave K: one automatic continue after a restart interruption (contract 1.60.0)
+
+A Pi goal child whose run was cut off by a **restart** continues ONCE without
+any parent action. Continueable states are exactly two: a goal `running` on
+disk with no live turn (an orphan), and a `paused` goal whose
+`pausedReason` is `restored_on_session_start`, each inside the scope below.
+`wrapping-up` is never continued (`/goal pause` writes it while a run is busy —
+explicit intent).
+
+Everything else ends as before wave K: **provider aborts are not continued**
+(the K1 classifier documents `provider_abort` as a cause, but nothing
+auto-continues on it); an explicit `pause`/`pause-now`, a question, a budget or
+turn limit, a governor or environment-fault pause, a verification failure, a
+real tool error, and a parent `clear` all keep their pre-wave behaviour.
+
+**Scope (R1).** Only Internal API goal children: registry origin
+`internal-api` (or a `parentSource`), last activity inside the previous server
+lifetime (bounded at 6 h before the restart) or announced by the prior
+drain/receipts, runtime Pi, and not busy. Browser- and CLI-origin sessions keep
+their existing behaviour.
+
+**Visibility.** A non-continued in-scope stop surfaces at once as a
+`goal_state` event with `status: "paused"`, `pausedReason: "interrupted"` and
+the additive `interruption` object (`{ cause, source, detectedAt,
+continueCount, autoContinued?, continueNote?, inFlightToolCall? }`). Causes:
+`restart_interruption`, `rehydrate_pause`, `second_transient`,
+`continue_failed`, `unsupported_runtime` (non-Pi, boot sweep only). No new
+top-level canonical status exists; the projection overlay is bound to the
+goal's fingerprint, persists across restarts, and clears when the goal file
+changes, so an ordinary `POST /goal {"action":"resume"}` keeps working.
+
+**Delivery (C1).** The continue dispatches as a detached prompt
+(`{"message": …, "mode": "prompt", "verbosity": "answers", "detach": true,
+"idempotencyKey": …}`) through the normal prompt pipeline with a marker-derived
+idempotency key. 200/202 is accepted; a definite pre-acceptance refusal
+(400/404/409, or 429/503 with `Retry-After`) releases the claim and retries
+inside a 10-minute window; anything else (other 5xx, timeout) is ambiguous and
+CONSUMED — the continue is never replayed, and the stop becomes visible
+(`continue_failed`). A claim or corrupt marker found at a later boot is
+likewise consumed, never replayed.
+
+**Truthful events (C5/C6).** The auto-continue `goal_state` is published only
+after verification — the same goal fingerprint reading `running` (or already
+terminal on the same fingerprint: a completed continue) — and its data carries
+TOP-LEVEL `autoContinued: true` plus the nested `interruption` object.
+Watch with:
+
+```json
+{"conditions":[{"type":"event_type","eventType":"goal_state",
+                "dataMatch":{"autoContinued":true}}]}
+```
+
+(`dataMatch` is a shallow top-level match; the dotted
+`interruption.autoContinued` form cannot fire.) A visible stop is matched by
+`dataMatch {"status":"paused","pausedReason":"interrupted"}`.
+
+**Suppression (R5/C4).** A session with a CONFIRMED auto-continue (verification
+succeeded, current goal fingerprint, this boot) gets no synthetic `goal_end`
+from the restart reconciliation; delivered-but-unverified continues never
+suppress. The parent is woken once, at the real end.
+
+**Runtimes.** Pi only. Claude, Antigravity and Command Code are unsupported:
+the boot sweep emits the visible `interrupted` state (cause
+`unsupported_runtime`) for a silently active non-Pi goal; terminal and
+explicitly paused non-Pi goals are untouched.
 
 ### Create-with-goal
 

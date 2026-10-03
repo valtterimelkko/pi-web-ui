@@ -75,6 +75,33 @@ const RETROACTIVE_1_58_5_ROW: StabilityExceptionRow = {
   version: '1.58.5',
 };
 
+/**
+ * The live table's second row (L1, R5 follow-up wave 2026-10-03): the owner
+ * accepted R5's recommendations, the C6 window closed at R5, and the follow-up
+ * wave's additive minor bump (1.59.0 — /capacity `quarantinedOldestAgeMs` and
+ * the quarantine reconciliation guard) is authorised under it. This is the
+ * row that admits the lane's minor bump and its re-based snapshot baseline.
+ */
+const L1_1_59_0_ROW: StabilityExceptionRow = {
+  date: '2026-10-03',
+  decision: 'R5 (owner accepted every recommendation; the C6 window closed at R5)',
+  what: '1.59.0 (L1): /capacity gains `quarantinedOldestAgeMs` — age of the oldest quarantined admission lease; quarantined entries gained a reconciliation guard (release on confirmed session quiescence). Additive only.',
+  version: '1.59.0',
+};
+
+/**
+ * The live table's third row (wave K, R5 2026-10-03): the owner's R5 decision
+ * "wave K GO, slimmed: continue once after a restart interruption, plus parent
+ * visibility". Its additive minor bump (1.60.0) re-based the snapshot baseline
+ * again (see BASELINE_SHAPE_SHA256).
+ */
+const K_1_60_0_ROW: StabilityExceptionRow = {
+  date: '2026-10-03',
+  decision: 'R5 (wave K GO, slimmed: continue once after a restart interruption, plus parent visibility)',
+  what: '1.60.0 (wave K): `SessionGoalProjection` gains the optional `interruption` object and top-level `autoContinued`; a non-continued stop projects as `status: "paused"`, `pausedReason: "interrupted"`; a verified auto-continue emits `goal_state` (never `goal_end`). Additive only.',
+  version: '1.60.0',
+};
+
 describe('contract stability window (C6)', () => {
   const doc = readFileSync(contractDocPath, 'utf8');
   const committed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as ClientContractSnapshot;
@@ -103,8 +130,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: exactly the retroactive 1.58.5 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row and the wave K 1.60.0 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -123,12 +150,16 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version while it stays inside 1.58', () => {
+    it('accepts the live contract version now that the 1.60.0 exception row names it', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
       expect(verdict.ok).toBe(true);
-      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.58');
+      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.60');
+    });
+
+    it('refuses the live contract version when the exception row is absent (the window rule still bites)', () => {
+      expect(guardContractVersion(INTERNAL_API_CONTRACT_VERSION, []).ok).toBe(false);
     });
 
     it('passes a simulated patch bump (1.58.x) with no exception row', () => {

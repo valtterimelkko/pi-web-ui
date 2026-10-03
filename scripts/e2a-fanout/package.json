@@ -1,0 +1,6 @@
+{
+  "name": "pi-web-ui-e2a-fanout-harness",
+  "private": true,
+  "type": "module",
+  "description": "Lane E2a-4 fan-out harness (scripts only; never shipped). Marks this directory ESM for tsc/tsx without touching the repository root package.json."
+}

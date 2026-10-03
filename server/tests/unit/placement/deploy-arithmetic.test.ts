@@ -6,11 +6,14 @@ import { DEFAULT_PER_CHILD, MEASURED_SIZING, GiB } from '../../../src/placement/
 const repoRoot = path.resolve(__dirname, '../../../..');
 
 describe('D0 deploy unit arithmetic (amendment A)', () => {
-  it('tools slice: high 14G, max 18G, swap 4G, CPUWeight 100, and no (ignored) Delegate', () => {
+  // L3 (2026-10-03, owner decision): the control plane went 8G -> 12G for the
+  // admission arithmetic, so the tools slice went 18G/14G -> 14G/12G to keep
+  // the joint budget at 26G on the 30G host (observed tools peak 8.3 GiB).
+  it('tools slice: high 12G, max 14G, swap 4G, CPUWeight 100, and no (ignored) Delegate', () => {
     const slice = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-tools.slice'), 'utf8');
-    expect(slice).toMatch(/^MemoryHigh=14G$/m); // 14 GiB = 15032385536 bytes
+    expect(slice).toMatch(/^MemoryHigh=12G$/m); // 12 GiB = 12884901888 bytes
     expect(slice).not.toMatch(/^MemoryHigh=256M/m); // no stale 256 MiB expectations
-    expect(slice).toMatch(/^MemoryMax=18G$/m);
+    expect(slice).toMatch(/^MemoryMax=14G$/m);
     expect(slice).toMatch(/^MemorySwapMax=4G$/m);
     expect(slice).toMatch(/^CPUWeight=100$/m);
     // Rollout finding 2026-09-30: systemd 255 ignores Delegate= on slice units ("not
@@ -44,9 +47,9 @@ describe('D0 deploy unit arithmetic (amendment A)', () => {
     expect(exec).not.toMatch(/(^|[^$])\$[a-z(]/);
   });
 
-  it('control plane drop-in: max 8G, low 2G, and NO effective MemoryHigh (throttling the server stalls the loop)', () => {
+  it('control plane drop-in: max 12G, low 2G, and NO effective MemoryHigh (throttling the server stalls the loop)', () => {
     const dropin = readFileSync(path.join(repoRoot, 'deploy/pi-web-ui-control-plane.conf'), 'utf8');
-    expect(dropin).toMatch(/^MemoryMax=8G$/m);
+    expect(dropin).toMatch(/^MemoryMax=12G$/m);
     expect(dropin).toMatch(/^MemoryLow=2G$/m);
     // Omitting the key is not enough: the base unit sets MemoryHigh=3G, which a drop-in
     // that stays silent inherits (rollout finding, 2026-09-30). Clear it explicitly.

@@ -21,14 +21,23 @@ export const WINDOW_OPEN_VERSION = '1.58.0';
 export const WINDOW_OPEN_DATE = '2026-09-30';
 
 /**
- * Baseline fingerprint of the client contract snapshot at the window's opening
- * version (git 29bbe327, contract 1.58.0). The ENFORCED fingerprint is the
- * SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
+ * Baseline fingerprint of the client contract snapshot. Originally the
+ * window's opening version (git 29bbe327, contract 1.58.0, shape
+ * `851a1545ab6f15cf2d2f1d26c3a59567b5bc17e95e8d8c6e867a3ce40dd4c7e9`);
+ * re-based at **1.59.0** (2026-10-03, L1) under the owner exception recorded
+ * in the window's table — the C6 window closed at R5, and /capacity gained
+ * the additive `quarantinedOldestAgeMs` field (shape
+ * `c3a0e21a4b2c939a5edf16653f54b4d92194e259a6c842890473e68439866a44`); re-based
+ * again at **1.60.0** (2026-10-03, wave K) under its own R5 exception row —
+ * the additive `GoalInterruptionInfo` type and `SessionGoalProjection`
+ * `interruption` / `autoContinued` fields. The ENFORCED fingerprint is
+ * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
  * sorted keys (so patch-bump regenerations that only move the version string
- * still match). The full-file hash is informational.
+ * still match). The full-file hash is informational (kept at the 1.58.0
+ * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '851a1545ab6f15cf2d2f1d26c3a59567b5bc17e95e8d8c6e867a3ce40dd4c7e9';
+export const BASELINE_SHAPE_SHA256 = 'caec179f414feb95103b50143db8b84791dd77411ac4eecaadd2dac698da19f1';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */
@@ -65,6 +74,7 @@ export const BASELINE_TYPES: readonly string[] = [
   'DeleteWatchResponse',
   'DetachedPromptResponse',
   'DuplicatePromptResponse',
+  'GoalInterruptionInfo',
   'GoalVerificationInfo',
   'InternalApiContractInfo',
   'ListSessionsResponse',

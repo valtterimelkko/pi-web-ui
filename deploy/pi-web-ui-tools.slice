@@ -25,7 +25,10 @@ Before=slices.target
 
 [Slice]
 # Degrade before kill (owner requirement): the soft high throttles first.
-MemoryHigh=14G
-MemoryMax=18G
+# L3 (2026-10-03, owner decision): 18G/14G -> 14G/12G, so that this slice plus the
+# control plane's MemoryMax (raised 8G -> 12G for the admission arithmetic) stays at
+# 26G on the 30G host. Observed tools peak 8.3 GiB.
+MemoryHigh=12G
+MemoryMax=14G
 MemorySwapMax=4G
 CPUWeight=100

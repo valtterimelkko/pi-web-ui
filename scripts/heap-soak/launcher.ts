@@ -9,8 +9,11 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
 import { buildIsolatedAgentDir } from './agent-dir.js';
+import { parseAllowedProviders } from '../../server/src/live-validation/heap-soak/credential-scope.js';
 import { applyExtensionsOverlays, type AppliedExtensionOverlay } from '../../server/src/live-validation/heap-soak/extensions-overlay.js';
 import { resolveRunPaths, serverUnitName, supervisorUnitName, type RunPaths } from './paths.js';
+import { soakSliceName } from '../../server/src/live-validation/heap-soak/unit-names.js';
+import { soakRuntimeMaxSec, supervisorEnvPassthrough, viewOnlySubscribeServerEnv, redactEnvironmentForEvidence } from '../../server/src/live-validation/heap-soak/launch-env.js';
 import { startTransientUnit, waitForMainPid } from './systemd-units.js';
 import { InspectorClient } from './inspector.js';
 import { saveRunState } from './run-state-io.js';
@@ -40,6 +43,10 @@ export interface LaunchResult {
   httpPort: number;
   /** B0 defect 6: extensions overlaid into the isolated agent dir (empty when none were given). */
   extensionsOverlaysApplied: AppliedExtensionOverlay[];
+  /** E2a-1: providers the agent-dir credential scope kept (undefined = unscoped full copy). */
+  credentialScope?: string[];
+  /** E2a-1: models.json provider entries dropped because they carried an apiKey outside the scope. */
+  droppedCredentialProviders?: string[];
   /** B0.1 defect 1: the checkout HEAD + build-freshness record the run started on. */
   build: BuildRecord;
 }
@@ -112,7 +119,12 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   // Isolation: run dir must never alias a production path.
   assertOutsideProductionPaths(path.resolve(paths.runDir), productionGuardedPaths(homedir()));
 
-  const { agentDir } = buildIsolatedAgentDir(paths.agentDir);
+  // E2a-1 parent condition (01-answer.md): when HEAP_SOAK_CREDENTIAL_PROVIDERS
+  // is set, the isolated agent dir carries ONLY those providers' credentials
+  // (auth.json entries + models.json apiKey entries) and the build refuses
+  // unless the scoped run's providers all have one. Unset ⇒ historic full copy.
+  const allowedCredentialProviders = parseAllowedProviders();
+  const { agentDir, credentialScope, droppedCredentialProviders } = buildIsolatedAgentDir(paths.agentDir, undefined, allowedCredentialProviders === undefined ? {} : { allowedCredentialProviders });
   assertOutsideProductionPaths(path.resolve(agentDir), productionGuardedPaths(homedir()));
 
   // B0 defect 6: overlay any extension fix directories on top of the copied
@@ -168,19 +180,28 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   const httpPort = await findFreeTcpPort();
   const serverUnit = serverUnitName(runId);
   const supervisorUnit = supervisorUnitName(runId);
+  // E2 containment: a RuntimeMaxSec backstop (when HEAP_SOAK_RUNTIME_MAX_SEC is
+  // set) so the arm cannot outlive its window even if its own teardown dies.
+  const runtimeMaxSec = soakRuntimeMaxSec();
+  const runtimeMaxProps = runtimeMaxSec === undefined ? {} : { RuntimeMaxSec: String(runtimeMaxSec) };
   // B0 defect 4: pick a cgroup cap large enough that admission's memory_pressure
   // does not throttle the load profile before the 4 GiB V8 heap cap binds.
   // See resources.ts for the measured A1 grounding and the arithmetic.
+  // E2a-1: HEAP_SOAK_MEMORY_MAX_MIB / _HIGH_MIB override the B0 12G/10G (the
+  // bounded soak's brief binds 8G/6G); invalid values refuse the launch.
   const memoryLimits = resolveSoakMemoryLimits();
 
   await startTransientUnit({
     unitName: serverUnit,
-    sliceName: 'pi-web-ui-soak.slice',
+    sliceName: soakSliceName(),
     restart: 'no', // the server must NEVER be auto-restarted — that would reset the heap under test
     workingDirectory: root,
     properties: {
       MemoryMax: `${memoryLimits.memoryMaxMiB}M`,
       MemoryHigh: `${memoryLimits.memoryHighMiB}M`,
+      // E2 containment rule: every long-lived unit carries MemorySwapMax ≤ 1G.
+      MemorySwapMax: '1G',
+      ...runtimeMaxProps,
       // Matches production (parent amendment 2026-09-26): production reserves
       // 96 PIDs/turn and allows 14 API turns (~1344 projected pids at full
       // admission), well within an 8192 cgroup pids limit — 512 here was an
@@ -226,6 +247,9 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
       PI_WEB_UI_GOAL_HOME: paths.goalHomeDir,
       PI_COMPACTION_LOG: paths.compactionLogPath,
       PI_BG_TASKS_DIR: paths.bgTasksDir,
+      // E2a-1: boot the soak server exactly as production runs (PI_WEB_UI_VIEW_
+      // ONLY_SUBSCRIBE=on since wave J) when HEAP_SOAK_VIEW_ONLY_SUBSCRIBE is set.
+      ...viewOnlySubscribeServerEnv(),
     },
     executable: 'npx',
     args: [
@@ -286,20 +310,54 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   };
   saveRunState(paths.runStatePath, runState);
 
-  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort, extensionsOverlaysApplied, build };
+  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort, extensionsOverlaysApplied, build, ...(credentialScope !== undefined ? { credentialScope, droppedCredentialProviders } : {}) };
 }
 
 export async function startSupervisorUnit(runId: string, paths: RunPaths, supervisorUnit: string): Promise<void> {
   const root = repoRoot();
+  const runtimeMaxSec = soakRuntimeMaxSec();
   await startTransientUnit({
     unitName: supervisorUnit,
-    sliceName: 'pi-web-ui-soak.slice',
+    sliceName: soakSliceName(),
     restart: 'on-failure',
     workingDirectory: root,
-    properties: { MemoryMax: '1G', TasksMax: '128' },
-    env: { HOME: homedir(), PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    properties: {
+      MemoryMax: '1G',
+      // E2 containment rule: MemorySwapMax ≤ 1G and a RuntimeMaxSec backstop here too.
+      MemorySwapMax: '1G',
+      ...(runtimeMaxSec === undefined ? {} : { RuntimeMaxSec: String(runtimeMaxSec) }),
+      TasksMax: '128',
+    },
+    env: {
+      HOME: homedir(),
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      // E2a-1 (found live): the supervisor reads the lane selection at runtime —
+      // a transient unit starts from the MANAGER env, not the launcher's, so
+      // the selection must be explicitly passed or it silently reverts.
+      ...supervisorEnvPassthrough(),
+    },
     executable: 'npx',
     args: ['tsx', 'scripts/heap-soak/supervisor.ts', '--run-state', paths.runStatePath],
   });
   await waitForMainPid(supervisorUnit, 20_000);
+  await captureUnitEvidence(runId, [serverUnitName(runId), supervisorUnit], path.join(paths.runDir, 'unit-properties.txt'));
+}
+
+/** Correction 02: record BOTH units' containment properties + redacted env into the run dir (the E2a-1 run captured only the server, by hand). */
+async function captureUnitEvidence(runId: string, unitNames: string[], outFile: string): Promise<void> {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const exec = promisify(execFile);
+  const lines: string[] = [`# unit evidence for run ${runId} (captured ${new Date().toISOString()}); credential-ish env values redacted`];
+  for (const unit of unitNames) {
+    const props = ['MemoryMax', 'MemoryHigh', 'MemorySwapMax', 'TasksMax', 'RuntimeMaxUSec', 'MainPID', 'ActiveState', 'Environment'];
+    try {
+      const { stdout } = await exec('systemctl', ['show', unit, ...props.map((p) => `-p${p}`), '--no-pager']);
+      lines.push(`== ${unit} ==`, redactEnvironmentForEvidence(stdout.trim()));
+    } catch (error) {
+      lines.push(`== ${unit} == ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(outFile, `${lines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
 }

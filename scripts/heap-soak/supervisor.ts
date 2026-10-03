@@ -30,7 +30,7 @@ import { endDrainTimeoutMs, evaluateDrain, type DrainStatus } from '../../server
 import { decideServerDeath, nextSocketUnreachableCount, recordServerDeath, shouldSendFinalNotice, shouldTerminaliseOnStartupRecovery } from '../../server/src/live-validation/heap-soak/server-death.js';
 import { getUnitExitStatus, getUnitJournalTail, isSocketReachable } from './liveness-io.js';
 import { HEAP_SAMPLE_CSV_HEADER, DEFAULT_WAVE_TARGET_CONFIG, type LaneEvent } from '../../server/src/live-validation/heap-soak/types.js';
-import { LANE_DEFINITIONS, applyForcedBadLanes, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
+import { LANE_DEFINITIONS, resolveDriverLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { leastSquaresSlope, type SlopePoint } from '../../server/src/live-validation/heap-soak/slope.js';
 import { DEFAULT_QUOTA_THRESHOLDS, effectiveBackboneTarget, nextQuotaState, nextStateOnPollFailure, type QuotaState, type ZaiQuotaReading } from '../../server/src/live-validation/heap-soak/zai-quota.js';
 import { DEFAULT_FULL_RUN_HOURS, MICRO_SCHEDULE, checkpointOffsetsMs, endSnapshotOffsetMs, fullScheduleForHours, interimSnapshotOffsetsMs, isRunComplete, nextDueOffset, phaseAt, type ScheduleConfig } from '../../server/src/live-validation/heap-soak/phases.js';
@@ -221,7 +221,10 @@ async function main(): Promise<void> {
   mkdirSync(path.dirname(state.csvPath), { recursive: true });
   mkdirSync(path.join(state.runDir, 'children'), { recursive: true });
 
-  const lanes = applyForcedBadLanes(enabledLanes(LANE_DEFINITIONS));
+  // E2a-1: the composed selection (HEAP_SOAK_LANES / HEAP_SOAK_MAX_CONCURRENT /
+  // HEAP_SOAK_FORCE_BAD_LANE). With none set this is the historic behaviour
+  // (applyForcedBadLanes(enabledLanes(LANE_DEFINITIONS))).
+  const lanes = resolveDriverLanes();
   const driverState: DriverState = {
     breakers: new Map(Object.entries(state.laneBreakers) as [import('../../server/src/live-validation/heap-soak/types.js').LaneName, import('../../server/src/live-validation/heap-soak/types.js').CircuitBreakerState][]),
     // B0.1 defect 4 / correction 03 item 1: shared with the orphan sweep and the end drain so neither deletes nor ignores a child a wave's straggler still owns (including an unresolved create).

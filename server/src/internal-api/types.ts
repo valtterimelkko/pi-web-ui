@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.58.5' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.60.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
@@ -956,6 +956,8 @@ export interface CapacityResponse {
   admissionConfig?: { explicitKnobs: string[]; prodFallbackKnobs: string[] };
   stalledRuns?: number;
   quarantinedRuns?: number;
+  /** Contract 1.59.0 (L1): age in ms of the oldest quarantined admission lease (cessation never confirmed; slot held). Absent when nothing is quarantined. */
+  quarantinedOldestAgeMs?: number;
   oldestActiveRunStartedAt?: string;
   control?: { inFlight: number; queued: number };
   /** Contract 1.49.0 (B2): session disposal (DELETE, abort) has its own lane, exempt from the critical floor. */
