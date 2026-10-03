@@ -136,12 +136,13 @@ export function spawnArgv(spec: ChildSpec, conn: Connection): string[] {
     `--thinking=${spec.thinking}`,
     `--owner=${spec.owner}`,
     // Space form: pi-orch's parser truncates equals-form values that
-    // themselves contain '=' (smoke-found: --route-limit=X=10 became X).
+    // itself contain '=' (smoke-found: --route-limit=X=10 became X).
     '--route-limit',
     spec.routeLimit,
     `--label=${spec.label}`,
     '--no-completion-template',
-    '--json',
+    // --id-only WITHOUT --json: output() prefers --json, so --json would
+    // suppress the bare-id rendering (smoke-found).
     '--id-only',
   ];
   if (spec.goalObjective !== undefined) {
@@ -161,7 +162,6 @@ export function promptArgv(sessionId: string, message: string, idempotencyKey: s
     '--message',
     message,
     `--idempotency-key=${idempotencyKey}`,
-    '--json',
     '--id-only',
   ];
 }

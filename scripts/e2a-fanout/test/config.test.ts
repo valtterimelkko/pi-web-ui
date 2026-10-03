@@ -163,8 +163,8 @@ describe('arm-A spawn plan', () => {
     expect(text).toMatch(/--route-limit zai\/glm-5\.3-flash=10( |$)/);
     expect(text).toContain('--owner=orch-e2-0798cc10-E2a-4-fan');
     expect(text).toContain('--no-completion-template');
-    expect(text).toContain('--json');
     expect(text).toContain('--id-only');
+    expect(text).not.toContain(' --json');
   });
 
   it('prompt/cleanup/wait argv target the right session and dispatch detached with idempotency keys', () => {
