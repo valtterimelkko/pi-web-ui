@@ -1,13 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import http from 'node:http';
+
+const { configState } = vi.hoisted(() => ({
+  configState: { openrouterApiKey: 'test-or-key' as string | undefined },
+}));
+
+vi.mock('../../../src/config.js', () => ({
+  config: new Proxy(configState, {
+    get: (target, prop) => (prop in target ? target[prop as keyof typeof target] : undefined),
+  }),
+}));
 
 vi.mock('../../../src/dictation/connectionPool.js', () => ({
   getSharedOpenAIClient: vi.fn(),
 }));
 
 import { getSharedOpenAIClient } from '../../../src/dictation/connectionPool.js';
-import { streamTranscribe, batchTranscribe, transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative } from '../../../src/dictation/stt.js';
+import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative } from '../../../src/dictation/stt.js';
 
-function mockClient(transcriptionResult: string) {
+function mockOpenAIClient(transcriptionResult: string) {
   return {
     audio: {
       transcriptions: {
@@ -17,150 +28,156 @@ function mockClient(transcriptionResult: string) {
   };
 }
 
-describe('STT Service', () => {
+interface CapturedRequest {
+  auth: string;
+  body: Buffer;
+  contentType: string;
+}
+
+function fakeSttServer(status: number, responseBody: object) {
+  const requests: CapturedRequest[] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      requests.push({
+        auth: req.headers.authorization ?? '',
+        body: Buffer.concat(chunks),
+        contentType: String(req.headers['content-type'] ?? ''),
+      });
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(responseBody));
+    });
+  });
+  return new Promise<{ url: string; requests: CapturedRequest[]; close: () => void }>(
+    (resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        const port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve({
+          url: `http://127.0.0.1:${port}/x`,
+          requests,
+          close: () => server.close(),
+        });
+      });
+    },
+  );
+}
+
+const savedEnv: Record<string, string | undefined> = {};
+function setEnv(name: string, value: string | undefined) {
+  savedEnv[name] = process.env[name];
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+afterAll(() => {
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
+describe('STT Service (three-tier, Benchmark 6 selection)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    configState.openrouterApiKey = 'test-or-key';
+    setEnv('OPENROUTER_STT_URL', undefined);
+    setEnv('LOCAL_ASR_URL', undefined);
   });
 
-  describe('streamTranscribe', () => {
-    it('should call OpenAI with correct model and return text', async () => {
-      const client = mockClient('Hello world');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
-      const result = await streamTranscribe([Buffer.from('audio')]);
-
+  it('uses the OpenRouter whisper-turbo tier first (DeepInfra pin, webm body)', async () => {
+    const fake = await fakeSttServer(200, { text: 'Hello world' });
+    setEnv('OPENROUTER_STT_URL', fake.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')], 'Claude, Anthropic');
       expect(result.text).toBe('Hello world');
-      expect(result.model).toBe('gpt-4o-mini-transcribe');
+      expect(result.model).toBe('openai/whisper-large-v3-turbo');
       expect(result.usedFallback).toBe(false);
-      expect(client.audio.transcriptions.create).toHaveBeenCalledWith({
-        model: 'gpt-4o-mini-transcribe',
-        file: expect.any(File),
-        response_format: 'text',
-      });
-    });
+      expect(fake.requests).toHaveLength(1);
+      expect(fake.requests[0].auth).toBe('Bearer test-or-key');
+      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
+      expect(payload.model).toBe('openai/whisper-large-v3-turbo');
+      expect(payload.provider).toEqual({ order: ['DeepInfra'], allow_fallbacks: false });
+      expect(payload.input_audio.format).toBe('webm');
+      expect(Buffer.from(payload.input_audio.data, 'base64').toString()).toBe('audio');
+      expect(payload.prompt).toBe('Claude, Anthropic');
+      expect(getSharedOpenAIClient).not.toHaveBeenCalled();
+    } finally {
+      fake.close();
+    }
+  });
 
-    it('should pass prompt when provided', async () => {
-      const client = mockClient('Hello Claude');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
+  it('falls back to the local Parakeet service when OpenRouter fails', async () => {
+    const orFail = await fakeSttServer(500, { error: 'down' });
+    const local = await fakeSttServer(200, { text: 'local text' });
+    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.text).toBe('local text');
+      expect(result.usedFallback).toBe(true);
+      expect(result.model).toContain('parakeet');
+      expect(local.requests[0].contentType).toContain('multipart/form-data');
+      expect(local.requests[0].body.toString('utf8')).toContain('name="audio_file"');
+      expect(getSharedOpenAIClient).not.toHaveBeenCalled();
+    } finally {
+      orFail.close(); local.close();
+    }
+  });
 
-      await streamTranscribe([Buffer.from('audio')], 'Claude, Anthropic');
-
+  it('uses OpenAI gpt-transcribe as the last resort when both tiers fail', async () => {
+    const orFail = await fakeSttServer(500, { error: 'down' });
+    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr');
+    const client = mockOpenAIClient('openai last resort');
+    vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')], 'vocab');
+      expect(result.text).toBe('openai last resort');
+      expect(result.usedFallback).toBe(true);
+      expect(result.model).toBe('gpt-transcribe');
       expect(client.audio.transcriptions.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: 'gpt-4o-mini-transcribe',
-          prompt: 'Claude, Anthropic',
-        })
+        expect.objectContaining({ model: 'gpt-transcribe', prompt: 'vocab' }),
       );
-    });
-
-    it('should not include prompt key when undefined', async () => {
-      const client = mockClient('Hello world');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
-      await streamTranscribe([Buffer.from('audio')]);
-
-      const callArgs = client.audio.transcriptions.create.mock.calls[0][0] as Record<string, unknown>;
-      expect(callArgs).not.toHaveProperty('prompt');
-    });
-
-    it('should concatenate multiple chunks', async () => {
-      const client = mockClient('full transcript');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
-      await streamTranscribe([Buffer.from('a'), Buffer.from('b'), Buffer.from('c')]);
-
-      const call = client.audio.transcriptions.create.mock.calls[0][0] as { file: File };
-      expect(call.file).toBeInstanceOf(File);
-      expect(call.file.name).toBe('audio.webm');
-    });
+    } finally {
+      orFail.close();
+    }
   });
 
-  describe('batchTranscribe', () => {
-    it('should mark as fallback', async () => {
-      const client = mockClient('batch result');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
-      const result = await batchTranscribe(Buffer.from('audio'));
-
-      expect(result.text).toBe('batch result');
-      expect(result.usedFallback).toBe(true);
-    });
-  });
-
-  describe('transcribeWithFallback', () => {
-    it('should use stream first', async () => {
-      const client = mockClient('primary');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
+  it('skips the OpenRouter tier entirely when no key is configured', async () => {
+    configState.openrouterApiKey = undefined;
+    const orFail = await fakeSttServer(200, { text: 'should not be reached' });
+    const local = await fakeSttServer(200, { text: 'local text' });
+    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    try {
       const result = await transcribeWithFallback([Buffer.from('audio')]);
-
-      expect(result.text).toBe('primary');
-      expect(result.usedFallback).toBe(false);
-    });
-
-    it('should fall back to batch on stream failure', async () => {
-      const client = {
-        audio: {
-          transcriptions: {
-            create: vi.fn()
-              .mockRejectedValueOnce(new Error('stream failed'))
-              .mockResolvedValueOnce('fallback result'),
-          },
-        },
-      };
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
-      const result = await transcribeWithFallback([Buffer.from('audio')]);
-
-      expect(result.text).toBe('fallback result');
-      expect(result.usedFallback).toBe(true);
-      expect(client.audio.transcriptions.create).toHaveBeenCalledTimes(2);
-    });
+      expect(result.text).toBe('local text');
+      expect(orFail.requests).toHaveLength(0);
+    } finally {
+      orFail.close(); local.close();
+    }
   });
 
-  describe('startSpeculativeTranscription', () => {
-    it('should return a promise with metadata', () => {
-      const client = mockClient('speculative');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
-      const chunks = [Buffer.from('a'), Buffer.from('b'), Buffer.from('c')];
-      const result = startSpeculativeTranscription(chunks);
-
-      expect(result.chunkCount).toBe(3);
-      expect(result.startedAt).toBeLessThanOrEqual(Date.now());
-      expect(result.promise).toBeInstanceOf(Promise);
-    });
-
-    it('should copy chunks to avoid mutation', async () => {
-      const client = mockClient('ok');
-      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
-
-      const original = [Buffer.from('hello')];
-      const result = startSpeculativeTranscription(original);
-
-      // The speculative transcription should work on copies, not the originals
-      // Verify it completes successfully
-      const sttResult = await result.promise;
-      expect(sttResult.text).toBe('ok');
-      expect(result.chunkCount).toBe(1);
-    });
+  it('startSpeculativeTranscription snapshots chunks and resolves via the tiers', async () => {
+    const fake = await fakeSttServer(200, { text: 'speculative text' });
+    setEnv('OPENROUTER_STT_URL', fake.url);
+    try {
+      const spec = startSpeculativeTranscription([Buffer.from('a'), Buffer.from('b')]);
+      expect(spec.chunkCount).toBe(2);
+      const result = await spec.promise;
+      expect(result.text).toBe('speculative text');
+    } finally {
+      fake.close();
+    }
   });
 
-  describe('shouldUseSpeculative', () => {
-    it('should use speculative if no new chunks', () => {
-      const spec = { promise: Promise.resolve({ text: '', model: '', usedFallback: false }), chunkCount: 5, startedAt: 0 };
-      expect(shouldUseSpeculative(spec, 5)).toBe(true);
-      expect(shouldUseSpeculative(spec, 4)).toBe(true);
-    });
-
-    it('should use speculative if new chunks are less than 30%', () => {
-      const spec = { promise: Promise.resolve({ text: '', model: '', usedFallback: false }), chunkCount: 8, startedAt: 0 };
-      expect(shouldUseSpeculative(spec, 10)).toBe(true); // 2/10 = 20% < 30%
-    });
-
-    it('should not use speculative if new chunks are 30% or more', () => {
-      const spec = { promise: Promise.resolve({ text: '', model: '', usedFallback: false }), chunkCount: 5, startedAt: 0 };
-      expect(shouldUseSpeculative(spec, 10)).toBe(false); // 5/10 = 50% >= 30%
-    });
+  it('shouldUseSpeculative keeps the reuse-ratio rule', () => {
+    const spec = { promise: Promise.resolve({ text: '', model: '', usedFallback: false }), chunkCount: 10, startedAt: 0 };
+    expect(shouldUseSpeculative(spec, 8)).toBe(true);
+    expect(shouldUseSpeculative(spec, 10)).toBe(true);
+    expect(shouldUseSpeculative(spec, 11)).toBe(true);   // 1/11 new < 0.3
+    expect(shouldUseSpeculative(spec, 20)).toBe(false);  // 10/20 new >= 0.3
   });
 });

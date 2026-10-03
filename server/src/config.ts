@@ -536,6 +536,7 @@ export interface ServerConfig {
   dictationVocabularyDbPath: string;
   ttsOpenaiApiKey: string;
   ttsModel: string;
+  openrouterApiKey: string;
   claudeChannelEnabled: boolean;
   claudeChannelPluginDir: string;
   claudeChannelWsPort: number;
@@ -768,6 +769,7 @@ export const config: ServerConfig = {
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
   dictationVocabularyDbPath: process.env.DICTATION_VOCABULARY_DB_PATH || '/root/voicenotebot/streaming-dictation/backend/data/transcripts.db',
   ttsOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.TTS_OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   ttsModel: process.env.TTS_MODEL || 'tts-1',
   claudeChannelEnabled: process.env.CLAUDE_CHANNEL_ENABLED === 'true',
   claudeChannelPluginDir: process.env.CLAUDE_CHANNEL_PLUGIN_DIR ?? path.resolve(process.cwd(), 'pi-claude-channel'),
