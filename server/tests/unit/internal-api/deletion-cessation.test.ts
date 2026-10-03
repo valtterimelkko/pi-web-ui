@@ -133,7 +133,10 @@ describe('DeletedSessionCessation (correction 01)', () => {
       expect(logLines.filter((l) => l.includes('grace-release')).length).toBe(1); // logged exactly once
     });
 
-    it('retires an unacked record once the grace has elapsed and no receipt can consult it (answer stays a release, logged once)', () => {
+    it('does not retain unacked deletes that no receipt can consult (100 idle Claude deletes → 0 records)', () => {
+      // Parent verification of correction 02: the common case — deleting an idle
+      // Claude/Antigravity child with no quarantined or running receipt — must
+      // not grow the map either; nothing would ever consult such a record.
       make();
       const unowned = new DeletedSessionCessation({
         now: () => now,
@@ -141,14 +144,26 @@ describe('DeletedSessionCessation (correction 01)', () => {
         log: (l) => logLines.push(l),
         hasConsultant: () => false,
       });
-      unowned.record('claude-x', 'claude', false);
-      now += 30_000;
-      expect(unowned.isQuiescent('claude-x')).toBe(false); // inside the grace: held, record kept
-      now += 31_000;
-      expect(unowned.isQuiescent('claude-x')).toBe(true); // past the grace: a release decision
-      expect(unowned.has('claude-x')).toBe(false); // retired: no receipt can consult it any more
-      expect(unowned.isQuiescent('claude-x')).toBe(false); // retired records fail closed (never re-release)
-      expect(logLines.filter((l) => l.includes('grace-release')).length).toBe(1);
+      for (let i = 0; i < 100; i += 1) unowned.record(`claude-idle-${i}`, 'claude', false);
+      expect(unowned.retainedCount()).toBe(0);
+      expect(unowned.isQuiescent('claude-idle-0')).toBe(false); // never observed as held → fail closed
+      expect(logLines.filter((l) => l.includes('grace-release')).length).toBe(0);
+    });
+
+    it('prunes a record whose consultant cleared without ever consulting it, on the next record()', () => {
+      make();
+      const consultants = new Set<string>(['claude-q']);
+      const t = new DeletedSessionCessation({
+        now: () => now,
+        graceMs: 60_000,
+        log: (l) => logLines.push(l),
+        hasConsultant: (id) => consultants.has(id),
+      });
+      t.record('claude-q', 'claude', false);
+      expect(t.has('claude-q')).toBe(true); // a quarantined run may consult it
+      consultants.delete('claude-q'); // that run settled through another path
+      t.record('other', 'pi', true);
+      expect(t.retainedCount()).toBe(0);
     });
   });
 });

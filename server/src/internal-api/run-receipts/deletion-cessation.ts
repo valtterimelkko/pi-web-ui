@@ -69,15 +69,29 @@ export class DeletedSessionCessation {
 
   /** Record a deletion observed by the delete/dispose path. */
   record(sessionId: string, runtime: SessionRuntime, terminationAcked: boolean): void {
-    // Correction 02: an acked delete that no receipt can consult is retired at
-    // once — recording it would only grow the map for the server's lifetime.
-    if (terminationAcked && !this.hasConsultant(sessionId)) return;
+    // Correction 02 (+ parent verification): a delete that no receipt can
+    // consult — acked or not — is never recorded: nothing would ever read it,
+    // so it would only grow the map for the server's lifetime (the common case
+    // is deleting an idle Claude/Antigravity child). Records whose consultant
+    // settled through another path are pruned here too.
+    this.pruneUnconsulted();
+    if (!this.hasConsultant(sessionId)) {
+      this.records.delete(sessionId);
+      return;
+    }
     this.records.set(sessionId, {
       runtime,
       deletedAtMs: this.now(),
       terminationAcked,
       graceReleaseLogged: false,
     });
+  }
+
+  /** Drop every record that no receipt can consult any more. */
+  private pruneUnconsulted(): void {
+    for (const id of Array.from(this.records.keys())) {
+      if (!this.hasConsultant(id)) this.records.delete(id);
+    }
   }
 
   /** Correction 02: whether a deletion record is currently held for a session. */
