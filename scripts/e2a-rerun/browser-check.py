@@ -314,11 +314,12 @@ def run_viewport(pw, view, results):
     scoped = assistant_scoped_check(page, final_text)
     occurrences = scoped['bubbles']
     last_assistant = (scoped['lastText'] or '').strip()
-    in_bubble = last_assistant.split(final_text.strip()).length - 1 if False else last_assistant.count(final_text.strip())
+    in_bubble = last_assistant.count(final_text.strip())
     dbl = doubled_present(chat_text, final_text)
-    view_results['hb2'] = {'transcriptFinal': final_text, 'assistantBubblesContaining': occurrences,
-                           'occurrencesInReplyBubble': in_bubble, 'doubledFound': dbl,
-                           'ok': occurrences == 1 and in_bubble == 1 and not dbl}
+    stream_v = oracle_lib.hb2_stream_verdict(stream_samples, final_text)
+    view_results['hb2'] = {'transcriptFinal': final_text,
+                           **oracle_lib.hb2_combined_verdict(True, occurrences, in_bubble, dbl, stream_v),
+                           'streamSamples': len(stream_samples)}
     shoot(page, f'{tag}-02-after-api-prompt.png')
 
     # ── 3.+4. two typed prompts + one queued chip (hb6 + correction 02) ─────

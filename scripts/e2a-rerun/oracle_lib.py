@@ -83,6 +83,25 @@ def hb2_stream_verdict(samples, final_text):
     return {'ok': True, 'reason': 'clean', 'samples': len(samples)}
 
 
+def hb2_combined_verdict(settled_ok, occurrences, in_bubble, doubled_found, stream_v):
+    """hb2's final verdict: the settled single-render checks AND the streaming
+    observation must both pass. Returns the hb2 result dict (includes the
+    streaming verdict — a run whose samples were collected but not evaluated
+    cannot pass)."""
+    settled = bool(settled_ok) and occurrences == 1 and in_bubble == 1 and not doubled_found
+    if not settled:
+        return {'ok': False, 'reason': 'settled-check-failed',
+                'settled': {'occurrences': occurrences, 'inBubble': in_bubble, 'doubledFound': doubled_found},
+                'streamVerdict': stream_v}
+    if not stream_v.get('ok'):
+        return {'ok': False, **{'reason': stream_v.get('reason', 'streaming-check-failed')},
+                'settled': {'occurrences': occurrences, 'inBubble': in_bubble, 'doubledFound': doubled_found},
+                'streamVerdict': stream_v}
+    return {'ok': True, 'reason': 'clean-settled-and-streaming',
+            'settled': {'occurrences': occurrences, 'inBubble': in_bubble, 'doubledFound': doubled_found},
+            'streamVerdict': stream_v}
+
+
 def hb6_user_counts(bubbles, prompts):
     """hb6: one USER-role bubble per typed prompt.
 

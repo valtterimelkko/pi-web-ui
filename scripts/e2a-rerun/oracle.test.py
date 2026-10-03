@@ -65,6 +65,21 @@ class TestHb2StreamVerdict(unittest.TestCase):
         self.assertFalse(v['ok'], v)
 
 
+class TestHb2CombinedVerdict(unittest.TestCase):
+    def test_combined_requires_settled_and_streaming(self):
+        stream_ok = {'ok': True, 'reason': 'clean'}
+        v = oracle_lib.hb2_combined_verdict(True, 1, 1, False, stream_ok)
+        self.assertTrue(v['ok'])
+        v = oracle_lib.hb2_combined_verdict(True, 1, 1, False, {'ok': False, 'reason': 'doubled-prefix-in-sample'})
+        self.assertFalse(v['ok'])
+        self.assertEqual(v['reason'], 'doubled-prefix-in-sample')
+        v = oracle_lib.hb2_combined_verdict(False, 2, 1, False, stream_ok)
+        self.assertFalse(v['ok'])
+        self.assertEqual(v['reason'], 'settled-check-failed')
+        v = oracle_lib.hb2_combined_verdict(True, 1, 1, True, stream_ok)
+        self.assertFalse(v['ok'])
+
+
 class TestHb6UserCounts(unittest.TestCase):
     BUBBLES_TYPED = [
         {'role': 'user', 'text': 'Say exactly: M-T1'},
