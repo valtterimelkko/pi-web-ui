@@ -2,6 +2,31 @@
 
 **Outcome: MET.** A Pi goal child cut off by a server restart or a drain timeout now continues **once**, without any parent action, with a continue note that names the cut-off tool call; every stop that does not continue is visible at once as `goal_state` `paused`/`interrupted`; a second transient stop does not continue. Proven live on a disposable server with real GLM children: kill arm 4/4 recovered-and-achieved, drain arm 4/4, second-fault arm visible-interrupted-without-second-continue.
 
+> **Correction 02 (2026-10-03, after the Luna r1 REJECT):** all 2 blockers + 5 majors fixed (commits `1a0e94c1`, `fe8926cc`, `6b0a54a7`, `57eb915a` on `orch/k-durable`); the live re-run on the final build re-proved every arm (kill n=4 + an explicitly-paused negative child, drain n=4 with `drainVerdict: "timed_out"` recorded, second fault n=1 PASS) and the evidence set was rebuilt with a marker manifest accounting for all 17 marker files. Details in **§ Correction 02** below; § First round records the r1 state as reviewed.
+
+## Correction 02
+
+**F1 — exactly-once is atomic.** `continue-marker.ts` replaced reserve/rollback with an exclusive `claim()` (`fs.open … 'wx'`), `commit()` (ambiguous delivery = consumed) and `release()` (definite refusal only; a committed once is never undone). A stale count-0 claim older than 15 min is taken over atomically (`rename`). The sweep holds an in-process single-flight per session; the loopback prompt carries an `idempotency-key` header derived from sessionId + fingerprint. RED→GREEN: `continue-marker-claim.test.ts` (6), reworked `continue-marker.test.ts` (6, incl. release-after-commit no-op), sweep rows: overlapping sweeps dispatch once; crash-after-acceptance (fresh claim) blocks; unknown outcome consumes + visible interruption.
+
+**F2 — explicit intent.** `classifyCandidate` now continues ONLY an orphan (`running`/`wrapping_up`), a restore pause, or (live path) a typed fresh provider stop. The sweep never reads stale `lastErrorMessage`; announced explicitly-paused/question/governor/budget/turn-limit children are skipped with no events and no marker — **live-proven**: the kill arm's `kill-paused` child stayed `paused`, zero markers, sweep log `goal state 'paused' is not a continueable stop (explicit intent or terminal — nothing silent)`.
+
+**F3 — live path gated.** Observers attach only to Internal API children (and Pi); `handleLiveStop` takes an explicit scope and refuses the rest. Tests: browser-origin provider stop not continued; non-Pi observer attachment excluded (wiring test).
+
+**F4 — provider aborts reach the handler.** `goal-events.ts` invokes the interception hook BEFORE emitting `goal_end`; an interception (dispatched + verified) suppresses that stop's `goal_end`; otherwise events are exactly as today. Tests use the real projected shape (`lastErrorMessage` → status `failed`).
+
+**F5 — non-Pi consistency.** Non-Pi candidates read the runtime's real projection via the loopback goal endpoint; a silently active goal gets the visible interruption with the runtime's own `supported` flag; terminal or explicitly paused goals get nothing (tests: active/terminal/paused).
+
+**F6 — suppression keyed to this continue.** The R5 probe resolves the session's CURRENT goal fingerprint and requires a continue CONFIRMED in this boot; other-goal markers are pruned; the sweep's second-transient detection reads only the current goal's marker. Tests: older-goal marker pruned + fresh once; reserved marker no suppression; pre-boot continue no suppression (wiring test); goal-A-continue/goal-B-end delivered (watch test).
+
+**F7 — truthful events.** The auto-continue `goal_state` is published only with a VERIFIED post-dispatch projection (`status: "running"`, poll bounded by `verifyMs`); accepted-but-unverified dispatches are consumed and surface as `continue_failed` (never a claimed auto-continue). Live note: the overlay record self-clears when the engine writes, so the durable `autoContinued` trace is the marker + sweep journal + the child transcript note; result rows carry the verified working-moment projection (`projectionStatus: "running"`) and the window-end/collection payloads.
+
+**Evidence corrections.** `summariseWatchLedger` now derives `sawInterruptedByRestart` from the ledger's evidence text — the re-run rows carry it `true` for every work child. The drain verdict is recorded in the results (`drainVerdict: "timed_out"`). The empty r1 note file was replaced by transcript extracts that hold the actual continue note (kill arm + second fault). Every marker file in the evidence set is explained by `marker-manifest.json` (4 kill + 4 drain + 1 second-fault + 8 from two aborted arm attempts whose sessions were deleted during cleanup — markers survive session deletion by design). Rows carry `goalStatePayload` (window-end/collection) and `workingMomentPayload` (verified post-dispatch projection).
+
+**Correction live re-run (run k-r2, final build 57eb915a):** kill arm n=4 + negative child — 4/4 continued once (single dispatch each), achieved, 0 parent actions, 0 silent stalls, 0 duplicate commits, negative child stayed paused with no marker; drain arm n=4 — `drainVerdict: "timed_out"`, 4/4 continued once, achieved, 0/0/0; second fault n=1 — `SECOND-FAULT PASS: workedAgain=false status=paused pausedReason=interrupted cause=second_transient continueCount=1`. Peak concurrency 4 busy children; same disposable topology (k-K-arm units, placement asserted, `Available providers (with auth): zai`).
+
+## First round (r1 state, as reviewed)
+ A Pi goal child cut off by a server restart or a drain timeout now continues **once**, without any parent action, with a continue note that names the cut-off tool call; every stop that does not continue is visible at once as `goal_state` `paused`/`interrupted`; a second transient stop does not continue. Proven live on a disposable server with real GLM children: kill arm 4/4 recovered-and-achieved, drain arm 4/4, second-fault arm visible-interrupted-without-second-continue.
+
 ## The mechanism (confirmed, with the two corrections)
 
 1. After a restart a Pi session is rehydrated lazily; pi-enhancement's goal engine only force-pauses an active goal inside `session_start` (`goal-engine/index.ts:192-231`), so the goal file on disk keeps saying `running` while the session is idle — the E2 8/8 silent stall.
