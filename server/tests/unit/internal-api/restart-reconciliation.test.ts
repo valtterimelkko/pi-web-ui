@@ -317,6 +317,22 @@ describe('WatchManager fires parents\' watches for restart-interrupted runs (B4)
     expect(w?.firings[0].evidence).toContain('interrupted by restart');
   });
 
+  it('F6: goal A auto-continues, then a new goal B is interrupted and not continued → B\u2019s goal_end is delivered', async () => {
+    await arm('goal-k4', { conditions: [{ type: 'event_type', eventType: 'goal_end' }] });
+    // A fingerprint-aware probe: the current goal (B) holds no confirmed
+    // continue, so the historical goal-A marker must not suppress B's end.
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [interrupted('goal-k4', 'run-k4')],
+      hasGoalContinueMarker: async (sessionId) => sessionId === 'goal-k4-A-OLD' && sessionId !== 'goal-k4',
+    });
+    await manager.init();
+    await flush();
+    const w = manager.get('goal-k4');
+    expect(w?.firingCount).toBe(1);
+    expect(w?.firings[0].eventType).toBe('goal_end');
+  });
+
   it('fires the synthetic goal_end as today when no continue marker exists (control)', async () => {
     await arm('goal-k3', { conditions: [{ type: 'event_type', eventType: 'goal_end' }] });
     manager = new WatchManager({

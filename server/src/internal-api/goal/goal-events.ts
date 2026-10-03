@@ -37,7 +37,17 @@ export interface CreatePiGoalEventBridgeDeps {
    * bridging, byte-identical to pre-wave behaviour). Must never throw into
    * the bridge's caller.
    */
-  onPausedOrFailed?: (projection: SessionGoalProjection) => Promise<void>;
+  /**
+   * Wave K (contract 1.59.0, R6; correction 02 F4): live interception hook,
+   * invoked BEFORE any terminal event is emitted whenever the projection is
+   * paused or failed. Return true when this stop was INTERCEPTED (a typed,
+   * positively auto-continuable provider stop whose continue was dispatched
+   * and verified): the bridge then publishes only `goal_state` and suppresses
+   * this stop's `goal_end`. Return false/undefined (or throw) for everything
+   * else — the bridge emits exactly the pre-wave events. Must never break the
+   * bridge's caller.
+   */
+  onPausedOrFailed?: (projection: SessionGoalProjection) => Promise<boolean | void>;
 }
 
 /** Extension UI keys owned by the goal engine. */
@@ -70,6 +80,17 @@ export function createPiGoalEventBridge(deps: CreatePiGoalEventBridgeDeps): PiGo
       deps.publish({ type: 'goal_state', timestamp, data: projection });
 
       if (isTerminalGoalStatus(projection.status) && lastEmittedTerminal !== projection.status) {
+        // F4: classify BEFORE the terminal event. An intercepted provider stop
+        // (typed, fresh evidence; continue dispatched and verified) is not an
+        // end — the sweep published the truthful auto_continued goal_state; the
+        // goal_end for this stop is suppressed. Anything else ends as today.
+        if (deps.onPausedOrFailed && (projection.status === 'paused' || projection.status === 'failed')) {
+          let intercepted = false;
+          try {
+            intercepted = (await deps.onPausedOrFailed(projection)) === true;
+          } catch { /* interception is best-effort */ }
+          if (intercepted) return;
+        }
         lastEmittedTerminal = projection.status;
         deps.publish({ type: 'goal_end', timestamp, data: projection });
       } else if (!isTerminalGoalStatus(projection.status)) {

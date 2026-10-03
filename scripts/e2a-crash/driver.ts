@@ -14,7 +14,7 @@ import { buildCrashAgentDir } from './agent-dir.ts';
 import { prepareServerEnv, startServerUnit, killServerUnit, stopServerUnits, assertPlacementRootIsolated, assertPlacementEnabledInJournal, waitForSystemdAutoRestart, waitForServerReadyViaApi, journalRestartEvidence, SMOKE_MODE, ARM_MODE, getUnitStatus, type StartedServer, type ServerMode } from './server.ts';
 import {
   spawnGoalChild, registerObserverWatch, getChildStatus, startDrain, getDrainStatus,
-  assertServedModel, snapshotChildToolProcesses, getGoalProjection, type OrchTarget, type ProcRecord,
+  assertServedModel, snapshotChildToolProcesses, getGoalProjection, pauseGoalChild, type OrchTarget, type ProcRecord,
 } from './dispatch.ts';
 import { unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -60,6 +60,11 @@ interface ArmState {
   serverRestart?: { at: string; readyAt: string; durationMs: number; method?: string };
   parentActions?: Array<{ at: string; childId: string; action: string; reason: string }>;
   finishedAt?: string;
+  /** Correction 02: the drain verdict, recorded from the drain status poll. */
+  drainVerdict?: 'timed_out' | 'settled' | 'unknown';
+  /** Correction 02: an API child explicitly paused by its parent before the kill (must stay paused). */
+  pausedNegative?: { sessionId: string; watchId: string; repoDir: string; label: string; baselineCommit: string };
+  pausedNegativeEvidence?: { projection: Record<string, unknown>; markerFiles: string[]; workSeconds?: number | null };
 }
 
 function statePath(paths: RunPaths, name: string): string {
@@ -417,7 +422,7 @@ async function collectChildEvidence(
     if (pr.firstEventAtMs !== null) promptToWorkSeconds = Math.round((pr.firstEventAtMs - promptAtMs) / 100) / 10;
   }
 
-  return buildChildRow({
+  const row = buildChildRow({
     childId: child.label,
     arm: armState.arm === 'smoke' ? 'smoke' : armState.arm === 'kill' ? 'kill' : 'drain-timeout',
     transcriptDiff: diff,
@@ -432,6 +437,17 @@ async function collectChildEvidence(
     receiptState: status.lastRunState ?? 'none',
     watch,
   });
+  // Correction 02: record the goal_state payload the evidence actually holds
+  // (status, pausedReason, interruption.autoContinued/cause/continueCount).
+  const boundaryRow = (armState as ArmState & { windowEnd?: Array<{ childId: string; projection?: Record<string, unknown> }> }).windowEnd?.find((w2) => w2.childId === child.sessionId);
+  const payload = boundaryRow?.projection as Record<string, unknown> | undefined;
+  (row as Record<string, unknown>).goalStatePayload = payload ? {
+    status: payload.status ?? null,
+    pausedReason: payload.pausedReason ?? null,
+    interruption: payload.interruption ?? null,
+    supported: payload.supported ?? null,
+  } : null;
+  return row;
 }
 
 async function finishArm(
@@ -542,6 +558,30 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
       logLine(paths, 'kill', 'child-spawned', { label, sessionId, watchId });
     }
 
+    // Correction 02: negative child — its parent explicitly pauses it BEFORE
+    // the kill. After the restart it must stay paused with no continue and no
+    // marker (F2: explicit intent wins over restart evidence).
+    {
+      const fixture = freshFixtures(paths, ['fixture-9'])[0];
+      const label = 'kill-paused';
+      const sessionId = await spawnGoalChild(target, {
+        repoDir: fixture.repoDir, objective: armObjective(fixture.repoDir, label), label, owner: OWNER,
+        maxTurns: 25, budgetTokens: 20_000_000,
+      });
+      const watchId = await registerObserverWatch(target, sessionId, `k-K-${label}`);
+      logLine(paths, 'kill', 'negative-child-spawned', { label, sessionId, watchId });
+      const runningDeadline = Date.now() + 5 * 60_000;
+      while (Date.now() < runningDeadline) {
+        const st = await getChildStatus(target, sessionId).catch(() => ({ busy: false }));
+        if (st.busy === true) break;
+        await new Promise((r) => setTimeout(r, 5_000));
+      }
+      await pauseGoalChild(target, sessionId);
+      const st = await getChildStatus(target, sessionId).catch(() => ({ goalState: 'unknown' }));
+      armState.pausedNegative = { sessionId, watchId, repoDir: fixture.repoDir, label, baselineCommit: gitHead(fixture.repoDir) };
+      logLine(paths, 'kill', 'negative-child-paused', { label, sessionId, goalState: st.goalState });
+    }
+
     // Work phase: wait until every child is mid-turn with tool commands running.
     const anchorCgPre = (await getUnitStatus('k-K-arm-tools-anchor.service')).controlGroup ?? '';
     const { transcripts, condition, inFlightAtKill, partial } = await waitForChildrenReadyToInterrupt(target, paths, armState, anchorCgPre);
@@ -613,6 +653,20 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
       const projection = await getGoalProjection(target, child.sessionId).catch(() => ({}));
       armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall });
       logLine(paths, 'kill', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall, projection });
+    }
+
+    // Correction 02: negative-child evidence — projection must still read its
+    // explicit pause (never 'interrupted'), and no continue marker may exist.
+    if (armState.pausedNegative) {
+      const pn = armState.pausedNegative;
+      const projection = await getGoalProjection(target, pn.sessionId).catch(() => ({}));
+      const markersDir = path.join(paths.validationDir, 'goal-continue', 'markers');
+      let markerFiles: string[] = [];
+      try {
+        markerFiles = readdirSync(markersDir).filter((f) => f.startsWith(pn.sessionId)).map((f) => path.join(markersDir, f));
+      } catch { /* no markers dir */ }
+      armState.pausedNegativeEvidence = { projection, markerFiles };
+      logLine(paths, 'kill', 'negative-child-evidence', { projection, markerFiles });
     }
 
     // Parent action for children still not working (the skills' prescribed action).
@@ -721,15 +775,18 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
       logLine(paths, 'drain-timeout', 'drain-status', { state: String(state) });
       if (state === 'timed_out') {
         drainTimedOut = true;
+        armState.drainVerdict = 'timed_out';
         break;
       }
       if (state === 'settled') {
+        armState.drainVerdict = 'settled';
         logLine(paths, 'drain-timeout', 'drain-settled-early', {});
         break;
       }
       await new Promise((r) => setTimeout(r, 5_000));
     }
-    logLine(paths, 'drain-timeout', 'drain-phase-done', { drainTimedOut });
+    if (!armState.drainVerdict) armState.drainVerdict = 'unknown';
+    logLine(paths, 'drain-timeout', 'drain-phase-done', { drainTimedOut, verdict: armState.drainVerdict });
 
     // Proceed: graceful stop (SIGTERM → the server's own teardown), then start.
     await stopServerUnits();

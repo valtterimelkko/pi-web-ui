@@ -518,7 +518,8 @@ export class InternalApiServer {
         const busy = this.multiSessionManager.listBusySessions();
         return busy.some((b) => b.sessionId === sessionId || b.sessionPath === sessionId);
       },
-      dispatchPrompt: (sessionId, message) => this.dispatchGoalContinuePrompt(sessionId, message),
+      dispatchPrompt: (sessionId, message, idempotencyKey) => this.dispatchGoalContinuePrompt(sessionId, message, idempotencyKey),
+      readGoalProjectionViaApi: (sessionId) => this.fetchGoalProjectionViaApi(sessionId),
       brokerPublish: (brokerKey, event) => {
         try {
           this.eventBroker?.publish(brokerKey, event as Parameters<NonNullable<typeof this.eventBroker>['publish']>[1]);
@@ -1325,6 +1326,38 @@ export class InternalApiServer {
 
   // ── API key management ───────────────────────────────────────────────────
 
+  /** F5: a non-Pi runtime's real goal projection via the loopback goal endpoint. */
+  private async fetchGoalProjectionViaApi(sessionId: string): Promise<Record<string, unknown> | null> {
+    const socketPath = this.listeningSocketPath;
+    if (!socketPath || !this.apiKey) return null;
+    return new Promise((resolve) => {
+      const request = httpRequest({
+        host: 'localhost',
+        socketPath,
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`,
+        method: 'GET',
+        headers: { authorization: `Bearer ${this.apiKey}` },
+        timeout: 10_000,
+      }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>);
+          } catch {
+            resolve(null);
+          }
+        });
+      });
+      request.on('timeout', () => {
+        request.destroy();
+        resolve(null);
+      });
+      request.on('error', () => resolve(null));
+      request.end();
+    });
+  }
+
   /**
    * Wave K (contract 1.59.0): dispatch a goal continue through the server's
    * OWN prompt endpoint over loopback — the full prompt pipeline (injection
@@ -1332,10 +1365,10 @@ export class InternalApiServer {
    * applies, exactly as for an external caller. Maps admission/draining
    * refusals to a Retry-After for the sweep's bounded retry window.
    */
-  private dispatchGoalContinuePrompt(sessionId: string, message: string): Promise<{ ok: boolean; retryAfterSeconds?: number; reason?: string }> {
+  private dispatchGoalContinuePrompt(sessionId: string, message: string, idempotencyKey?: string): Promise<{ outcome: 'accepted' | 'refused' | 'unknown'; retryAfterSeconds?: number; reason?: string }> {
     const socketPath = this.listeningSocketPath;
     if (!socketPath || !this.apiKey) {
-      return Promise.resolve({ ok: false, reason: 'server not listening' });
+      return Promise.resolve({ outcome: 'refused', reason: 'server not listening' });
     }
     return new Promise((resolve) => {
       const body = Buffer.from(JSON.stringify({ message, mode: 'prompt' }));
@@ -1348,6 +1381,9 @@ export class InternalApiServer {
           'content-type': 'application/json',
           'content-length': body.length,
           authorization: `Bearer ${this.apiKey}`,
+          // F1: derived from the marker claim (sessionId + fingerprint + once);
+          // carried so the receipt/pipeline layer can dedupe where supported.
+          ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
         },
         timeout: 15_000,
       }, (response) => {
@@ -1356,13 +1392,13 @@ export class InternalApiServer {
         response.on('end', () => {
           const status = response.statusCode ?? 0;
           if (status === 200 || status === 202) {
-            resolve({ ok: true });
+            resolve({ outcome: 'accepted' });
             return;
           }
           const retryAfterHeader = response.headers['retry-after'];
           const retryAfterSeconds = typeof retryAfterHeader === 'string' ? Number.parseInt(retryAfterHeader, 10) : undefined;
           resolve({
-            ok: false,
+            outcome: 'refused',
             ...(Number.isFinite(retryAfterSeconds) && (status === 429 || status === 503) ? { retryAfterSeconds } : {}),
             reason: `prompt endpoint answered ${status}: ${Buffer.concat(chunks).toString('utf8').slice(0, 200)}`,
           });
@@ -1370,10 +1406,11 @@ export class InternalApiServer {
       });
       request.on('timeout', () => {
         request.destroy();
-        resolve({ ok: false, reason: 'loopback prompt timed out' });
+        // No verdict: ambiguous — the sweep treats this as consumed.
+        resolve({ outcome: 'unknown', reason: 'loopback prompt timed out' });
       });
       request.on('error', (error) => {
-        resolve({ ok: false, reason: `loopback prompt failed: ${error.message}` });
+        resolve({ outcome: 'unknown', reason: `loopback prompt failed: ${error.message}` });
       });
       request.end(body);
     });

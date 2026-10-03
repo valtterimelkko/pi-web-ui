@@ -12,9 +12,9 @@
  *    `goal_end` (a session with a continue marker is being auto-continued).
  */
 import fs from 'node:fs/promises';
-import { createContinueMarkerStore, type ContinueMarkerStore } from './continue-marker.js';
+import { createContinueMarkerStore, goalFingerprint as goalFingerprintFor, type ContinueMarkerStore } from './continue-marker.js';
 import { configureInterruptionOverlay, createInterruptionOverlayStore, readGoalFileIdentity, type InterruptionOverlayStore } from './interruption-overlay.js';
-import { createInterruptionSweep, type SweepCandidate, type SweepDispatchResult, type SweepReport } from './interruption-sweep.js';
+import { createInterruptionSweep, isApiOriginChild, type SweepCandidate, type SweepDispatchResult, type SweepReport } from './interruption-sweep.js';
 import { createPiGoalEventBridge } from './goal-events.js';
 import { piGoalStatePath, projectPiGoalState, readPiGoalStateFile } from './pi-goal.js';
 import type { SessionGoalProjection } from './types.js';
@@ -35,7 +35,9 @@ export interface AnnouncedInterruption {
 export interface GoalInterruptionWiringDeps {
   listRegistryEntries(): Promise<WiringRegistryEntry[]>;
   isSessionBusy(sessionId: string): boolean;
-  dispatchPrompt(sessionId: string, message: string): Promise<SweepDispatchResult>;
+  dispatchPrompt(sessionId: string, message: string, idempotencyKey?: string): Promise<SweepDispatchResult>;
+  /** F5: a non-Pi runtime's real goal projection (loopback GET /goal); null when unreadable. */
+  readGoalProjectionViaApi(sessionId: string): Promise<Record<string, unknown> | null>;
   brokerPublish(brokerKey: string, event: { type: string; timestamp: number; data: unknown }): void;
   addExtensionUiObserver(sessionPath: string, observer: (message: unknown) => Promise<void>): void;
   removeExtensionUiObserver(sessionPath: string, observer: (message: unknown) => Promise<void>): void;
@@ -79,6 +81,7 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
   const observers = new Map<string, (message: unknown) => Promise<void>>();
   let observeTimer: ReturnType<typeof setInterval> | undefined;
   let classifiedOnce = false;
+  const bootTimeMs = Date.now();
 
   let classificationSettledResolve: () => void = () => undefined;
   const classificationSettled = new Promise<void>((resolve) => { classificationSettledResolve = resolve; });
@@ -96,7 +99,12 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
         return [];
       }
     },
-    dispatchContinue: (sessionId, message) => deps.dispatchPrompt(sessionId, message),
+    dispatchContinue: (sessionId, message, idempotencyKey) => deps.dispatchPrompt(sessionId, message, idempotencyKey),
+    readRuntimeProjection: async (sessionId) => {
+      const raw = await deps.readGoalProjectionViaApi(sessionId).catch(() => null);
+      if (!raw || typeof raw !== 'object') return null;
+      return raw as unknown as SessionGoalProjection;
+    },
     publishGoalState: (sessionId, projection) => {
       // Pi broker key = sessionPath; the registry id is the fallback.
       deps.brokerPublish(idToPath.get(sessionId) ?? sessionId, { type: 'goal_state', timestamp: Date.now(), data: projection });
@@ -114,7 +122,20 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
     hasGoalContinueMarker: async (sessionId) => {
       await classificationSettled;
       try {
-        return await markerStore.hasMarker(sessionId);
+        // F6: suppression is keyed to THIS continue only — the CURRENT goal
+        // fingerprint and a continue CONFIRMED in this boot. A historical or
+        // reserved marker (other goal, count 0, earlier boot) suppresses nothing.
+        const path = idToPath.get(sessionId);
+        if (!path) return false;
+        const raw = await readRawProjection(path);
+        if (raw.status === 'idle' || raw.status === 'unknown' || !raw.objective) return false;
+        const fingerprint = goalFingerprintFor(raw.objective, raw.startedAt);
+        const marker = await markerStore.get(sessionId, fingerprint);
+        if (!marker || marker.count < 1) {
+          await markerStore.pruneOtherFingerprints(sessionId, fingerprint);
+          return false;
+        }
+        return typeof marker.continuedAt === 'number' && marker.continuedAt >= bootTimeMs;
       } catch {
         return false;
       }
@@ -155,15 +176,17 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
       const entries = await deps.listRegistryEntries();
       for (const entry of entries) {
         if (entry.sdkType !== 'pi') continue;
+        // F3: the live path is gated like the boot sweep — only Internal API
+        // children get observers (and only Pi; the filter below).
+        if (!isApiOriginChild({ origin: entry.origin, parentSource: entry.parentSource })) continue;
         if (observers.has(entry.path)) continue;
         const bridge = createPiGoalEventBridge({
           // Disk truth for classification (the overlay must not re-trigger).
           readProjection: () => readRawProjection(entry.path),
           publish: () => undefined, // sessions.ts's own bridge publishes; this one only classifies
-          onPausedOrFailed: (projection) => {
-            idToPath.set(entry.id, entry.path);
-            return sweep.handleLiveStop(entry.id, entry.path, projection);
-          },
+          onPausedOrFailed: (projection) =>
+            sweep.handleLiveStop(entry.id, entry.path, projection, { apiChild: true, runtime: 'pi' })
+              .then((r) => r.intercepted),
         });
         observers.set(entry.path, bridge);
         try {

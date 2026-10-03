@@ -268,3 +268,8 @@ export function snapshotChildToolProcesses(anchorCgroup: string): ProcRecord[] {
 export async function getGoalProjection(target: OrchTarget, sessionId: string): Promise<Record<string, unknown>> {
   return internalApiRequest<Record<string, unknown>>(target.socketPath, target.tokenPath, 'GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`);
 }
+
+/** Explicitly pause a child's goal through the raw goal endpoint (correction 02 negative child). */
+export async function pauseGoalChild(target: OrchTarget, sessionId: string): Promise<unknown> {
+  return internalApiRequest<unknown>(target.socketPath, target.tokenPath, 'POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`, { action: 'pause' });
+}
