@@ -131,6 +131,21 @@ describe('pi-orch retry derivation', () => {
     expect(deriveRetry({ exitCode: 0, ok: true, wallMs: RETRY_WAIT_FLOOR_MS - 1 })).toBe('no');
   });
 
+  it('flags success-after-long-wall with zero refusals as ambiguous, not a proven retry', () => {
+    const a2 = [
+      { atMs: 1000, lagP50Ms: 1, lagP99Ms: 320, lagMaxMs: 400, activeTurns: 0, heapUsedBytes: 1, heapLimitBytes: 100, mainThreadCpuPercentOfCore: 40, toolsSliceMemoryBytes: null },
+      { atMs: 2000, lagP50Ms: 1, lagP99Ms: 350, lagMaxMs: 500, activeTurns: 0, heapUsedBytes: 1, heapLimitBytes: 100, mainThreadCpuPercentOfCore: 50, toolsSliceMemoryBytes: null },
+      { atMs: 3000, lagP50Ms: 1, lagP99Ms: 100, lagMaxMs: 120, activeTurns: 0, heapUsedBytes: 1, heapLimitBytes: 100, mainThreadCpuPercentOfCore: 3, toolsSliceMemoryBytes: null },
+    ];
+    const creates = [
+      mkCreate({ step: 'pass1', index: 2, startedAtMs: 1500, endedAtMs: 61_500, exitCode: 0, ok: true, retried: 'derived-yes' }),
+    ];
+    const out = analyseArmA({ creates, a2, capacity: [], window: { fromMs: 0, toMs: 70_000 }, cfg: CFG });
+    expect(out.refused).toHaveLength(0);
+    expect(out.eventuallySucceeded).toBe(1);
+    expect(out.notes.join(' ')).toMatch(/indistinguishable/);
+  });
+
   it('calls exit 10 a budget-exhausted refusal', () => {
     expect(deriveRetry({ exitCode: 10, ok: false, wallMs: 150_000 })).toBe('derived-budget-exhausted');
   });

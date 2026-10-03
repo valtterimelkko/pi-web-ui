@@ -54,6 +54,11 @@ export function analyseArmA(input: {
   }
 
   const eventuallySucceeded = input.creates.filter((c) => c.ok && c.retried === 'derived-yes').length;
+  if (eventuallySucceeded > 0 && refused.length === 0) {
+    notes.push(
+      `${String(eventuallySucceeded)} create(s) took ≥15 s wall with exit 0 and NO client-visible refusal — a slow create (server stall), not provably a hidden Retry-After retry; pi-orch surfaces only the final outcome, so the two are indistinguishable client-side`,
+    );
+  }
 
   // Documented shape: pressure refusals are 503 ADMISSION_CAPACITY_EXHAUSTED
   // with reason + Retry-After (B2), and pi-orch honours the wait until its
