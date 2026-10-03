@@ -93,3 +93,45 @@ describe('createPiGoalEventBridge', () => {
     expect(published).toHaveLength(1);
   });
 });
+
+describe('createPiGoalEventBridge — R6 live interruption hook', () => {
+  const PAUSED = { supported: true, status: 'paused' as const, pausedReason: 'error', runtimeState: { lastErrorMessage: 'Provider overloaded (HTTP 429)' } };
+
+  it('invokes onPausedOrFailed for a paused/failed goal_state after publishing', async () => {
+    const published: unknown[] = [];
+    const seen: unknown[] = [];
+    const bridge = createPiGoalEventBridge({
+      readProjection: async () => PAUSED,
+      publish: (e) => published.push(e),
+      onPausedOrFailed: async (projection) => { seen.push(projection); },
+    });
+    await bridge(goalStatusMessage('⏸ paused'));
+    expect(published).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ status: 'paused' });
+  });
+
+  it('does not invoke the hook for running or terminal projections', async () => {
+    const seen: unknown[] = [];
+    for (const projection of [RUNNING, ACHIEVED]) {
+      const bridge = createPiGoalEventBridge({
+        readProjection: async () => projection,
+        publish: () => undefined,
+        onPausedOrFailed: async (p) => { seen.push(p); },
+      });
+      await bridge(goalStatusMessage('x'));
+    }
+    expect(seen).toHaveLength(0);
+  });
+
+  it('a throwing hook never breaks publishing', async () => {
+    const published: unknown[] = [];
+    const bridge = createPiGoalEventBridge({
+      readProjection: async () => PAUSED,
+      publish: (e) => published.push(e),
+      onPausedOrFailed: async () => { throw new Error('sweep down'); },
+    });
+    await expect(bridge(goalStatusMessage('x'))).resolves.toBeUndefined();
+    expect(published).toHaveLength(1);
+  });
+});

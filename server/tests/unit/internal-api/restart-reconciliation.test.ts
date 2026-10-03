@@ -286,6 +286,50 @@ describe('WatchManager fires parents\' watches for restart-interrupted runs (B4)
     await flush();
     expect(manager.get('child-8')?.status).toBe('active');
   });
+
+  // Wave K (contract 1.59.0) R5: when the interruption sweep auto-continues a
+  // session, the synthetic goal_end would be a FALSE end — the parent must be
+  // woken once, at the real end.
+  it('does not fire the synthetic goal_end for a session the sweep auto-continued (R5)', async () => {
+    await arm('goal-k', { conditions: [{ type: 'event_type', eventType: 'goal_end' }] });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [interrupted('goal-k', 'run-k')],
+      hasGoalContinueMarker: async (sessionId) => sessionId === 'goal-k',
+    });
+    await manager.init();
+    await flush();
+    expect(manager.get('goal-k')?.firingCount).toBe(0);
+  });
+
+  it('still fires the synthetic agent_end for an auto-continued session (B4 contract unchanged)', async () => {
+    await arm('goal-k2', { conditions: [{ type: 'event_type', eventType: 'agent_end' }] });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [interrupted('goal-k2', 'run-k2')],
+      hasGoalContinueMarker: async (sessionId) => sessionId === 'goal-k2',
+    });
+    await manager.init();
+    await flush();
+    const w = manager.get('goal-k2');
+    expect(w?.firingCount).toBe(1);
+    expect(w?.firings[0].eventType).toBe('agent_end');
+    expect(w?.firings[0].evidence).toContain('interrupted by restart');
+  });
+
+  it('fires the synthetic goal_end as today when no continue marker exists (control)', async () => {
+    await arm('goal-k3', { conditions: [{ type: 'event_type', eventType: 'goal_end' }] });
+    manager = new WatchManager({
+      broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin,
+      getRestartInterruptedRuns: () => [interrupted('goal-k3', 'run-k3')],
+      hasGoalContinueMarker: async () => false,
+    });
+    await manager.init();
+    await flush();
+    const w = manager.get('goal-k3');
+    expect(w?.firingCount).toBe(1);
+    expect(w?.firings[0].eventType).toBe('goal_end');
+  });
 });
 
 describe('WatchManager fires parents\' watches for receipt-less busy sessions cut off by a restart (B4.1)', () => {
@@ -410,4 +454,5 @@ describe('WatchManager fires parents\' watches for receipt-less busy sessions cu
     await flush();
     expect(manager.get('child-r')?.firingCount).toBe(1);
   });
+
 });

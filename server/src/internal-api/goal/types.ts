@@ -6,6 +6,24 @@
  * docs/plans/CROSS-RUNTIME-GOAL-FUNCTION-PLAN.md §5. Undefined beats guessing:
  * omit what a runtime cannot know rather than inventing a value.
  */
+import type { GoalInterruptionCause } from './transient-cause.js';
+
+/**
+ * Wave K (contract 1.59.0, additive): interruption facts for a goal stop that
+ * the server detected. `cause` is the K1 closed vocabulary (see
+ * docs/INTERNAL-API.md § Goal); `autoContinued` marks the single automatic
+ * continue. A non-continued stop projects as `status: "paused"`,
+ * `pausedReason: "interrupted"` — no new top-level status (R4).
+ */
+export interface GoalInterruptionInfo {
+  cause: GoalInterruptionCause;
+  source: 'receipt' | 'drain' | 'boot_orphan' | 'rehydrate_pause' | 'provider_abort';
+  detectedAt: number;
+  continueCount?: number;
+  autoContinued?: boolean;
+  continueNote?: string;
+  inFlightToolCall?: { name: string; argsSummary: string } | null;
+}
 
 /** Canonical goal status across runtimes. */
 export type CanonicalGoalStatus =
@@ -45,6 +63,8 @@ export interface SessionGoalProjection {
   pausedReason?: string | null;
   /** Server-side auto-continue loop state (Claude; Command Code mod arming). */
   autoContinue?: boolean;
+  /** Wave K (contract 1.59.0): interruption/auto-continue facts (Pi only). */
+  interruption?: GoalInterruptionInfo;
   /** Verbatim native state, for consumers that want more than the projection. */
   runtimeState?: unknown;
 }

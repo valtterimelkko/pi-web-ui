@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { homedirOverride } from './homedir.js';
+import { getInterruptionOverlayStore, applyInterruptionOverlay, readGoalFileIdentity } from './interruption-overlay.js';
 import type { CanonicalGoalStatus, GoalVerificationStatus, SessionGoalProjection } from './types.js';
 
 /** Raw shape of the extension's persisted GoalState (subset we consume). */
@@ -169,7 +170,30 @@ export function projectPiGoalState(raw: PiGoalStateLike | null | typeof INVALID_
   return projection;
 }
 
-/** Convenience: read + project in one call. */
+/**
+ * Convenience: read + project in one call.
+ *
+ * Wave K (contract 1.59.0): when the server holds a durable interruption
+ * overlay for this session (R4) and the goal file is unchanged since the
+ * detection, the projection reads `paused`/`interrupted` (or carries the
+ * `autoContinued` annotation) instead of the stale `running` on disk. Any
+ * engine write clears the overlay lazily and disk truth resumes. Overlay
+ * failures never break the read path.
+ */
 export async function readProjectPiGoalState(sessionKey: string): Promise<SessionGoalProjection> {
-  return projectPiGoalState(await readPiGoalStateFile(sessionKey));
+  const projection = projectPiGoalState(await readPiGoalStateFile(sessionKey));
+  const store = getInterruptionOverlayStore();
+  if (!store) return projection;
+  try {
+    const overlay = await store.get(sessionKey);
+    if (!overlay) return projection;
+    const identity = await readGoalFileIdentity(piGoalStatePath(sessionKey));
+    const applied = applyInterruptionOverlay(projection, overlay, identity);
+    if (identity && applied.interruption === undefined) {
+      await store.clear(sessionKey).catch(() => undefined);
+    }
+    return applied;
+  } catch {
+    return projection;
+  }
 }

@@ -29,6 +29,15 @@ export interface CreatePiGoalEventBridgeDeps {
   readProjection: () => Promise<SessionGoalProjection | null>;
   /** Broker publish callback (already bound to the right broker key). */
   publish: (event: { type: string; timestamp: number; data: unknown }) => void;
+  /**
+   * Wave K (contract 1.59.0, R6): live interruption hook. Invoked after the
+   * `goal_state` publish whenever the projection reads paused/failed — the
+   * server-side interruption sweep classifies it and continues once on
+   * positive provider-abort evidence. Absent = no live handling (plain
+   * bridging, byte-identical to pre-wave behaviour). Must never throw into
+   * the bridge's caller.
+   */
+  onPausedOrFailed?: (projection: SessionGoalProjection) => Promise<void>;
 }
 
 /** Extension UI keys owned by the goal engine. */
@@ -67,6 +76,9 @@ export function createPiGoalEventBridge(deps: CreatePiGoalEventBridgeDeps): PiGo
         // A non-terminal observation re-arms terminal detection: a goal can be
         // achieved, cleared, then started again within one session.
         lastEmittedTerminal = null;
+        if (deps.onPausedOrFailed && (projection.status === 'paused' || projection.status === 'failed')) {
+          await deps.onPausedOrFailed(projection);
+        }
       }
     } catch {
       /* never break the caller (WebSocket fan-out) or the broker */
