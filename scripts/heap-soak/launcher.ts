@@ -9,6 +9,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { InternalApiClient } from '../../server/src/live-validation/internal-api-client.js';
 import { buildIsolatedAgentDir } from './agent-dir.js';
+import { parseAllowedProviders } from '../../server/src/live-validation/heap-soak/credential-scope.js';
 import { applyExtensionsOverlays, type AppliedExtensionOverlay } from '../../server/src/live-validation/heap-soak/extensions-overlay.js';
 import { resolveRunPaths, serverUnitName, supervisorUnitName, type RunPaths } from './paths.js';
 import { soakSliceName } from '../../server/src/live-validation/heap-soak/unit-names.js';
@@ -42,6 +43,10 @@ export interface LaunchResult {
   httpPort: number;
   /** B0 defect 6: extensions overlaid into the isolated agent dir (empty when none were given). */
   extensionsOverlaysApplied: AppliedExtensionOverlay[];
+  /** E2a-1: providers the agent-dir credential scope kept (undefined = unscoped full copy). */
+  credentialScope?: string[];
+  /** E2a-1: models.json provider entries dropped because they carried an apiKey outside the scope. */
+  droppedCredentialProviders?: string[];
   /** B0.1 defect 1: the checkout HEAD + build-freshness record the run started on. */
   build: BuildRecord;
 }
@@ -114,7 +119,12 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   // Isolation: run dir must never alias a production path.
   assertOutsideProductionPaths(path.resolve(paths.runDir), productionGuardedPaths(homedir()));
 
-  const { agentDir } = buildIsolatedAgentDir(paths.agentDir);
+  // E2a-1 parent condition (01-answer.md): when HEAP_SOAK_CREDENTIAL_PROVIDERS
+  // is set, the isolated agent dir carries ONLY those providers' credentials
+  // (auth.json entries + models.json apiKey entries) and the build refuses
+  // unless the scoped run's providers all have one. Unset ⇒ historic full copy.
+  const allowedCredentialProviders = parseAllowedProviders();
+  const { agentDir, credentialScope, droppedCredentialProviders } = buildIsolatedAgentDir(paths.agentDir, undefined, allowedCredentialProviders === undefined ? {} : { allowedCredentialProviders });
   assertOutsideProductionPaths(path.resolve(agentDir), productionGuardedPaths(homedir()));
 
   // B0 defect 6: overlay any extension fix directories on top of the copied
@@ -300,7 +310,7 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   };
   saveRunState(paths.runStatePath, runState);
 
-  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort, extensionsOverlaysApplied, build };
+  return { paths, serverUnit, supervisorUnit, serverMainPid, inspectorPort, socketPath, tokenPath, client, auditMarkerPath: auditMarker.markerPath, seededRegistryCount, httpPort, extensionsOverlaysApplied, build, ...(credentialScope !== undefined ? { credentialScope, droppedCredentialProviders } : {}) };
 }
 
 export async function startSupervisorUnit(runId: string, paths: RunPaths, supervisorUnit: string): Promise<void> {

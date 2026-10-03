@@ -6,10 +6,11 @@
  * Lane C would have been added here, never to the production file — see
  * scripts/heap-soak/README.md for why Lane C ended up disabled instead).
  */
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { cpSync } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { assertAllowedProviderPresent, scopeAuthJson, scopeModelsJson } from '../../server/src/live-validation/heap-soak/credential-scope.js';
 
 export const PRODUCTION_AGENT_DIR = path.join(homedir(), '.pi', 'agent');
 
@@ -20,10 +21,19 @@ export interface AgentDirBuildResult {
   agentDir: string;
   copied: string[];
   skippedMissing: string[];
+  /** E2a-1 parent condition: providers the scoped copy keeps credentials for (undefined = unscoped full copy). */
+  credentialScope?: string[];
+  /** Provider entries dropped from models.json because they carried an apiKey outside the scope. */
+  droppedCredentialProviders?: string[];
 }
 
-/** Copies the allowlisted entries from the real agent dir into `destDir`, creating it first. Read-only on the source. */
-export function buildIsolatedAgentDir(destDir: string, sourceDir: string = PRODUCTION_AGENT_DIR): AgentDirBuildResult {
+/** Copies the allowlisted entries from the real agent dir into `destDir`, creating it first. Read-only on the source.
+ *
+ * E2a-1 parent condition: when `allowedCredentialProviders` is given, the copy is reduced to those providers'
+ * credentials (auth.json entries and models.json apiKey entries), and the build REFUSES unless every allowed
+ * provider still has a credential — the scoped run depends on it.
+ */
+export function buildIsolatedAgentDir(destDir: string, sourceDir: string = PRODUCTION_AGENT_DIR, options: { allowedCredentialProviders?: readonly string[] } = {}): AgentDirBuildResult {
   mkdirSync(destDir, { recursive: true, mode: 0o700 });
   const copied: string[] = [];
   const skippedMissing: string[] = [];
@@ -36,6 +46,19 @@ export function buildIsolatedAgentDir(destDir: string, sourceDir: string = PRODU
     }
     cpSync(source, dest, { recursive: true, dereference: true });
     copied.push(entry);
+  }
+  const allowed = options.allowedCredentialProviders;
+  if (allowed !== undefined) {
+    const authPath = path.join(destDir, 'auth.json');
+    const modelsPath = path.join(destDir, 'models.json');
+    const auth = existsSync(authPath) ? (JSON.parse(readFileSync(authPath, 'utf8')) as Record<string, unknown>) : {};
+    const models = existsSync(modelsPath) ? (JSON.parse(readFileSync(modelsPath, 'utf8')) as Record<string, unknown>) : {};
+    const scopedAuth = scopeAuthJson(auth, allowed);
+    const scopedModels = scopeModelsJson(models, allowed);
+    assertAllowedProviderPresent(scopedAuth, allowed, scopedModels.scoped);
+    writeFileSync(authPath, `${JSON.stringify(scopedAuth, null, 1)}\n`, { mode: 0o600 });
+    if (existsSync(modelsPath)) writeFileSync(modelsPath, `${JSON.stringify(scopedModels.scoped, null, 1)}\n`, { mode: 0o600 });
+    return { agentDir: destDir, copied, skippedMissing, credentialScope: [...allowed], droppedCredentialProviders: scopedModels.droppedCredentialProviders };
   }
   return { agentDir: destDir, copied, skippedMissing };
 }
