@@ -156,3 +156,20 @@ Duplicates: progress-text and uncommitted-write effects unmeasured; ledger
 not tamper-resistant (above). The reviewer's live kill-arm re-run is still
 pending. Two operation-ledger lines in the first Phase-2 attempt recorded
 empty commit lists (transient sampling errors).
+
+## Review record and parent acceptance (2026-10-03 11:30 UTC)
+
+| Round | Verdict | Outcome |
+|---|---|---|
+| Luna r1 | REJECT | The drain-arm "self-recovery" was false, and placement was off. Correction 09 re-ran both arms. |
+| Luna r2 | REJECT | The measurement and wording majors were addressed by the parent's FINAL correction 13 (`bc1980bc`, `3f727122`). The parent then fixed the delay labels in `3144310b`: the 0.02–0.27 s figure is turn start, not output. |
+| Luna r3 (closure plus a live kill arm) | REJECT on completeness only | Every r2 measurement major is CLOSED except build/duplicate scope, which is PARTLY CLOSED: the ledger is not tamper-resistant, as the report states. The reviewer's **independent live kill arm** (run `a6c-rv`, 4 GLM children, hard kill at 10:17:01Z, restart in 10.3 s) recorded the full 10-minute no-action window. In it, **4/4 goals stayed `running` with the session idle: 0 of 38 samples busy, 0 child entries and 0 tool calls.** Then the reviewer's foreground command was aborted, so the parent-prompt phase was never recorded. |
+
+**Parent acceptance (owner-approved scope trim, 10:02 UTC: no new correction cycle).**
+- **The silent stall after a hard kill is confirmed twice:**
+  - by the lane's run (8/8 across the kill and drain arms, recomputed from raw by the reviewer and the parent);
+  - independently, live, by the reviewer (4/4, reconstructed from the last no-action samples, because no boundary snapshot was persisted).
+- **Recovery after a parent prompt** rests on the lane's run alone (8/8, recomputed twice from raw). It was not live-re-run independently.
+- **The two r-v follow-up receipts** that ended `RUNTIME_ERROR` in under 200 ms have an unknown cause.
+- **Lesson for long arms:** a foreground tool call can be cancelled with no shell trap running. The r-v driver stopped at 10:27:17, about 15 minutes after launch, which suggests a tool time limit (unverified). Run long arms as their own supervised units, with cleanup outside the tool call.
+- **Evidence:** `/root/orch-ops/orchestration-scaling/e2/E2a-6c-reviewer/evidence-a6c-rv/` and `reviews/E2a-6c-luna-review-r3.md`.
