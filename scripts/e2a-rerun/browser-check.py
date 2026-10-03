@@ -194,7 +194,11 @@ def open_child_session(page, seed_needle='1 through 60'):
         close_drawer(page)
         # the virtualised list renders only the newest rows; bring the
         # transcript's head (goal context) into view before asserting
-        for _ in range(6):
+        try:
+            page.mouse.move(195, 400)  # over the transcript area (mobile width 390)
+        except Exception:
+            pass
+        for _ in range(8):
             try:
                 page.mouse.wheel(0, -3000)
                 page.wait_for_timeout(400)
