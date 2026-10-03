@@ -169,7 +169,7 @@ def shoot(page, name):
     print(f'screenshot: {out}', flush=True)
 
 
-def open_child_session(page, seed_needle):
+def open_child_session(page, seed_needle='GOAL_ACHIEVED'):
     page.goto(BASE)
     page.wait_for_load_state('networkidle')
     if page.locator('input[type="password"]').count() > 0:
