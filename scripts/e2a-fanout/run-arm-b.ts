@@ -186,11 +186,17 @@ async function main(): Promise<number> {
     for (const child of plan.children) {
       const clone = await run(['git', 'clone', '--quiet', '--local', '/root/pi-orch', child.cwd], 300_000);
       if (clone.code !== 0) throw new Error(`clone failed for ${child.name}: ${clone.stderr}`);
-      if (!existsSync(join(child.cwd, 'package-lock.json'))) throw new Error(`clone missing package-lock.json: ${child.cwd}`);
+      // pi-orch commits no package-lock.json: npm ci when one exists, plain
+      // install otherwise — ALWAYS behind the incident guard with the clone's
+      // explicit cwd (never an inherited one; never in a worktree/checkout).
       assertSafeNpmCwd(child.cwd); // incident guard: never npm into an inherited/symlinked cwd (03-blocked.md)
-      const ci = await run(['npm', 'ci', '--no-audit', '--no-fund', '--ignore-scripts'], 300_000, { cwd: child.cwd });
-      appendFileSync(join(runRoot, 'logs', 'npm-ci.log'), `${child.cwd} exit ${String(ci.code)}\n`);
-      if (ci.code !== 0) throw new Error(`npm ci failed for ${child.name}: ${ci.stderr.slice(0, 300)}`);
+      const hasLock = existsSync(join(child.cwd, 'package-lock.json'));
+      const npmArgv = hasLock
+        ? ['npm', 'ci', '--no-audit', '--no-fund', '--ignore-scripts']
+        : ['npm', 'install', '--no-audit', '--no-fund', '--ignore-scripts', '--no-package-lock'];
+      const ci = await run(npmArgv, 300_000, { cwd: child.cwd });
+      appendFileSync(join(runRoot, 'logs', 'npm-ci.log'), `${child.cwd} ${hasLock ? 'ci' : 'install'} exit ${String(ci.code)}\n`);
+      if (ci.code !== 0) throw new Error(`npm ${hasLock ? 'ci' : 'install'} failed for ${child.name}: ${ci.stderr.slice(0, 300)}`);
     }
     for (const f of plan.fixtures) writeFileSync(join(f.dir, 'task.txt'), f.taskText);
     log('fixtures ready (clones + npm ci + task files)');
