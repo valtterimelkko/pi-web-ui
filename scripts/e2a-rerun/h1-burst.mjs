@@ -150,6 +150,64 @@ async function prepare() {
   console.error(`prepare: wrote ${sessions.length} cold targets`);
 }
 
+// H1's method (seed-corpus.mjs): real-shaped Pi session FILES + registry entries
+// written BEFORE the server boots, so the burst switches target COLD sessions
+// (view-only opens under the flag) — never residents. API-created targets would
+// materialise agents (observed in the first attempt: residentSessions 20) and
+// measure the wrong path.
+async function seed() {
+  const count = parseInt(arg('count', '66'), 10);
+  const messages = parseInt(arg('messages', '24'), 10);
+  const { randomUUID } = await import('node:crypto');
+  const SESSIONS_DIR = path.join(RUN, 'server', 'pi-sessions');
+  const REGISTRY_PATH = path.join(RUN, 'server', 'session-registry.json');
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.mkdirSync(path.join(RUN, 'workspaces'), { recursive: true });
+  let registry = { version: 1, updatedAt: new Date().toISOString(), entries: [] };
+  if (fs.existsSync(REGISTRY_PATH)) registry = JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
+  const existingPaths = new Set(registry.entries.map((e) => e.path));
+  const now = Date.now();
+  const tsName = (d) => {
+    const p = (n, w = 2) => String(n).padStart(w, '0');
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}-${p(d.getUTCMinutes())}-${p(d.getUTCSeconds())}-${p(d.getUTCMilliseconds(), 3)}Z`;
+  };
+  const sessions = [];
+  for (let i = 0; i < count; i++) {
+    const id = randomUUID();
+    const created = new Date(now - (count - i) * 90_000);
+    const name = `${tsName(created)}_${id}.jsonl`;
+    const file = path.join(SESSIONS_DIR, name);
+    const cwd = path.join(RUN, 'workspaces', `cold-ws-${String(i).padStart(3, '0')}`);
+    fs.mkdirSync(cwd, { recursive: true });
+    const lines = [JSON.stringify({ type: 'session', id, timestamp: created.getTime(), cwd })];
+    let last = created.getTime();
+    let firstMessage = '';
+    for (let m = 0; m < messages; m++) {
+      last += 5_000;
+      const role = m % 2 === 0 ? 'user' : 'assistant';
+      const text = role === 'user'
+        ? `cold target message ${m} for session ${i}: analyse the module and report.`
+        : `cold target reply ${m}: analysis with a short summary paragraph of findings. `.repeat(4);
+      if (role === 'user' && !firstMessage) firstMessage = text.slice(0, 120);
+      lines.push(JSON.stringify({ type: 'message', timestamp: last, message: { role, content: [{ type: 'text', text }], timestamp: last } }));
+    }
+    fs.writeFileSync(file, lines.join('\n') + '\n');
+    fs.utimesSync(file, new Date(last), new Date(last));
+    if (!existingPaths.has(file)) {
+      registry.entries.push({
+        id, sdkType: 'pi', path: file, cwd, firstMessage, messageCount: messages,
+        createdAt: new Date(created).toISOString(), lastActivity: new Date(last).toISOString(),
+        status: 'idle', origin: 'internal-api',
+      });
+    }
+    sessions.push({ sessionId: id, sessionPath: file, cwd });
+  }
+  registry.updatedAt = new Date().toISOString();
+  fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry));
+  fs.writeFileSync(path.join(RUN, 'sessions.json'), JSON.stringify(sessions, null, 1));
+  console.error(`seed: ${sessions.length} cold target files + ${registry.entries.length} registry entries (pre-boot)`);
+}
+
 async function children() {
   fs.mkdirSync(path.join(RUN, 'workspaces'), { recursive: true });
   const marker = arg('marker', `A5H1-${Date.now().toString(36).toUpperCase()}`);
@@ -158,7 +216,7 @@ async function children() {
   fs.mkdirSync(path.join(cwd0, 'src'), { recursive: true });
   fs.writeFileSync(path.join(cwd0, 'README.md'), `# goal child worktree (${marker})\n`);
   const goalObjective = arg('goal-objective',
-    `Write the numbers 1 through 40 into count.txt in this directory, ten numbers per bash call, across four separate bash calls, then say DONE.`);
+    `Write the numbers 1 through 60 into count.txt in this directory, ten numbers per bash call, across six separate bash calls, then say DONE.`);
   const res0 = await apiCall('POST', '/api/v1/sessions', {
     runtime: 'pi', cwd: cwd0, model: 'zai/glm-5.3-flash', thinkingLevel: 'low',
     goal: { objective: goalObjective, maxTurns: 12 },
@@ -167,22 +225,29 @@ async function children() {
   const c0 = JSON.parse(res0.body);
   console.error(`children: goal-armed child 0 created ${c0.sessionId}`);
 
-  // Child 1 — plain, tool-using work (H1 M5: six sequential sleep-25 calls).
-  const cwd1 = path.join(RUN, 'workspaces', 'child-plain');
-  fs.mkdirSync(cwd1, { recursive: true });
-  const res1 = await apiCall('POST', '/api/v1/sessions', {
-    runtime: 'pi', cwd: cwd1, model: 'zai/glm-5.3-flash', thinkingLevel: 'low',
-  });
-  if (res1.status !== 201) throw new Error(`plain child create failed ${res1.status}: ${res1.body.slice(0, 300)}`);
-  const c1 = JSON.parse(res1.body);
-  console.error(`children: plain child 1 created ${c1.sessionId}`);
+  // Child 1/2 — plain, tool-using work (H1 M5: sequential sleep calls).
+  const plainChildren = [];
+  for (const k of [1, 2]) {
+    const cwdK = path.join(RUN, 'workspaces', `child-plain-${k}`);
+    fs.mkdirSync(cwdK, { recursive: true });
+    const resK = await apiCall('POST', '/api/v1/sessions', {
+      runtime: 'pi', cwd: cwdK, model: 'zai/glm-5.3-flash', thinkingLevel: 'low',
+    });
+    if (resK.status !== 201) throw new Error(`plain child ${k} create failed ${resK.status}: ${resK.body.slice(0, 300)}`);
+    const cK = JSON.parse(resK.body);
+    plainChildren.push(cK);
+    console.error(`children: plain child ${k} created ${cK.sessionId}`);
+  }
+  const c1 = plainChildren[0];
+  const c2 = plainChildren[1];
 
   const list = [
     { ...c0, kind: 'goal' },
-    { ...c1, kind: 'plain', prompt: `Run exactly six sequential bash commands, each \`sleep 25\`. After the sixth, reply with exactly one line: ${marker}-DONE. Do not skip any sleep.` },
+    { ...c1, kind: 'plain', prompt: `Run exactly eight sequential bash commands, each \`sleep 25\`. After the eighth, reply with exactly one line: ${marker}-DONE-1. Do not skip any sleep.` },
+    { ...c2, kind: 'plain', prompt: `Run exactly eight sequential bash commands, each \`sleep 25\`. After the eighth, reply with exactly one line: ${marker}-DONE-2. Do not skip any sleep.` },
   ];
   fs.writeFileSync(path.join(RUN, 'children.json'), JSON.stringify(list, null, 1));
-  console.error(`children: wrote children.json marker=${marker}`);
+  console.error(`children: wrote children.json marker=${marker} (1 goal + 2 long-turn plain)`);
 }
 
 async function burst() {
@@ -206,7 +271,11 @@ async function burst() {
     if (c.kind === 'goal') continue;
     childPromises.push(
       apiCall('POST', `/api/v1/sessions/${c.sessionId}/prompt`, { message: c.prompt })
-        .then((r) => ({ sessionId: c.sessionId, status: r.status, body: r.body.slice(0, 200) }))
+        .then((r) => {
+          let turnComplete = null; let content = null;
+          try { const j = JSON.parse(r.body); turnComplete = j.turnComplete ?? null; content = typeof j.content === 'string' ? j.content.slice(0, 80) : null; } catch { /* non-json */ }
+          return { sessionId: c.sessionId, status: r.status, turnComplete, content };
+        })
         .catch((e) => ({ sessionId: c.sessionId, error: String(e) })),
     );
   }
@@ -225,7 +294,10 @@ async function burst() {
       } catch { /* metrics not there yet */ }
       await new Promise((r) => setTimeout(r, 5000));
     }
-    console.error(`burst: wait-turns ${waitTurns} ${turnsSeen ? 'satisfied' : 'TIMED OUT'} (children start ${new Date(burstStartMs).toISOString()})`);
+    if (!turnsSeen) {
+      throw new Error(`ABORT: A2 never showed activeTurns >= ${waitTurns} within ${waitTurnsTimeoutMs} ms — refusing to burst unloaded (the load claim needs running children; record this as a finding)`);
+    }
+    console.error(`burst: wait-turns ${waitTurns} satisfied (children start ${new Date(burstStartMs).toISOString()})`);
   }
   const turnsSatisfiedAtMs = Date.now();
 
@@ -358,7 +430,7 @@ async function collect() {
   console.error(`collect: readings=${readings.length} latch=${latch.latched} rehydrations=${rehydrations} refusals=${admissionRefusals} → ${outPath}`);
 }
 
-const commands = { prepare, children, burst, collect };
+const commands = { prepare, seed, children, burst, collect };
 const fn = commands[COMMAND];
 if (!fn) { console.error(`unknown command ${COMMAND}`); process.exit(2); }
 fn().catch((err) => { console.error('FATAL', err); process.exit(1); });

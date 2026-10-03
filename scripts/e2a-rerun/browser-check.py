@@ -57,6 +57,7 @@ VIEWPORTS = {
     'mobile': dict(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2),
 }
 LABEL = 'goal'  # child #0's workspace dir name fragment used in search
+CURRENT_VIEW = 'desktop'  # set per run_viewport/run_smoke before opening sessions
 
 
 def api(method, path_, body=None, timeout=300):
@@ -165,7 +166,7 @@ def open_child_session(page, seed_needle):
     assert rows.count() >= 1, 'child session row not found in sidebar'
     rows.first.click()
     page.wait_for_timeout(3000)
-    if VIEW != 'desktop':
+    if CURRENT_VIEW != 'desktop':
         close_drawer(page)
     body = page.locator('body').inner_text()
     assert seed_needle in body, f'child transcript not visible after open ({VIEW})'
@@ -191,6 +192,8 @@ def close_drawer(page):
 
 
 def run_viewport(pw, view, results):
+    global CURRENT_VIEW
+    CURRENT_VIEW = view
     view_results = {'viewport': view, 'consoleErrors': [], 'pageErrors': [], 'httpProblems': []}
     browser = pw.chromium.launch(headless=True)
     ctx = browser.new_context(**VIEWPORTS[view])
@@ -290,6 +293,8 @@ exit_code = 0
 
 
 def run_smoke(pw, view):
+    global CURRENT_VIEW
+    CURRENT_VIEW = view
     """Smoke mode: app opens, login works, sidebar renders, no unexpected
     console/page errors. The app's cold-load /api/auth/me probe returns 401
     before login (pre-existing behaviour at this build) and Chromium logs that

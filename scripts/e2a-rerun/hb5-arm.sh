@@ -26,5 +26,6 @@ systemd-run --quiet --collect --wait \
     --worktree="${WT}" --run-dir="${RUN_DIR}" --unit=e2a-5-hb5
 rc=$?
 echo "hb5-arm: driver exit ${rc}"
+rm -f "${RUN_DIR}/val/internal-api-token"
 systemctl is-active e2a-5-hb5 >/dev/null 2>&1 && systemctl stop e2a-5-hb5
 exit "${rc}"

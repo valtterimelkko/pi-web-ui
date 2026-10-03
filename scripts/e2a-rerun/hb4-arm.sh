@@ -31,6 +31,7 @@ systemd-run --quiet --collect --wait \
     --worktree="${WT}" --run-dir="${RUN_DIR}"
 rc=$?
 echo "hb4-arm: driver exit ${rc}"
+rm -f "${RUN_DIR}/val/internal-api-token"
 # unit self-terminates (--wait); verify gone
 systemctl is-active e2a-5-admission >/dev/null 2>&1 && systemctl stop e2a-5-admission
 exit "${rc}"

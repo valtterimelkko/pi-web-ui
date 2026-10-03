@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E2a-5 arms 2+3 — H1 burst + hb2/hb6 browser check on the deployed build.
-# Runs the disposable server inside transient unit e2a-5-h1 (MemoryMax=12G,
+# Runs the disposable server inside transient unit e2a-5-h1 (MemoryMax=8G per parent answer 01,
 # MemorySwapMax=1G, CPUWeight=100), the vite dev client inside e2a-5-vite
 # (MemoryMax=2G), the burst driver OUTSIDE the units, and the Playwright oracle
 # mid-burst. STRESS-GATE: caller must hold the stress lock for this arm.
@@ -37,6 +37,7 @@ cleanup() {
     (cd "$WT" && node scripts/validation-server-stop.mjs --dir "$RUN/server" --timeout-ms 8000 >>"$LOG" 2>&1) || true
   fi
   systemctl stop e2a-5-h1 2>/dev/null || true
+  rm -f "$RUN/server/internal-api-token"
 }
 trap cleanup EXIT
 
@@ -62,7 +63,7 @@ ln -sf "$WT/scripts/heap-soak/agent-os-stub.mjs" "$RUN/bin/agent-os"
 # ── server unit ───────────────────────────────────────────────────────────────
 PORT=$(node -e "const net=require('net');const s=net.createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")
 echo "$PORT" > "$RUN/port"
-log "starting server unit e2a-5-h1 (port $PORT, view-only subscribe ON, MemoryMax=12G)"
+log "starting server unit e2a-5-h1 (port $PORT, view-only subscribe ON, MemoryMax=8G)"
 systemd-run --collect --quiet --unit=e2a-5-h1 \
   -p CPUWeight=100 -p MemoryMax=8G -p MemorySwapMax=1G \
   --setenv=PI_WEB_UI_VIEW_ONLY_SUBSCRIBE=on \
