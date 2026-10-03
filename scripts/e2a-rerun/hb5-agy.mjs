@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync } fr
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
-  parseArgs, now, assertMemAvailable, bootServer, api, readBuildIdentity, GiB,
+  parseArgs, now, readTrim, assertMemAvailable, bootServer, api, readBuildIdentity, GiB,
 } from './lib.mjs';
 
 const argv = parseArgs(process.argv.slice(2));
@@ -57,6 +57,11 @@ const finish = (code) => {
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: opts.timeoutMs ?? 30_000, ...opts });
   return { code: r.status, stdout: (r.stdout ?? '').trim(), stderr: (r.stderr ?? '').trim() };
+}
+
+/** Parent adjustment 3: size+mtime line for every file under a /root/.gemini/antigravity* path. */
+function geminiAntigravitySnapshot() {
+  return run('find', [GEMINI, '-maxdepth', '4', '-path', '*antigravity*', '-type', 'f', '-printf', '%s %T@ %p\n'], { timeoutMs: 30_000 }).stdout;
 }
 
 let server = null;
@@ -95,6 +100,11 @@ try {
   writeFileSync(refFile, String(Date.now()));
   result.geminiSweepBefore = run('find', [GEMINI, '-maxdepth', '2', '-newer', refFile], { timeoutMs: 20_000 }).stdout;
 
+  // Parent adjustment 3: full size+mtime snapshot of /root/.gemini/antigravity*
+  // before and after; ANY diff is a finding and fails the arm.
+  const snapBefore = geminiAntigravitySnapshot();
+  writeFileSync(path.join(RUN_DIR, 'gemini-antigravity-before.txt'), snapBefore);
+
   // cheapest auth probe: the models listing with the fake HOME (no model call).
   result.agyModelsWithFakeHome = run(AGY_REAL, ['models'], {
     env: { ...process.env, HOME: FAKE_HOME }, timeoutMs: 30_000,
@@ -132,6 +142,18 @@ try {
     timeoutMs: 150_000,
   });
   result.server = { valDir: server.valDir, buildRevision: result.build.revision, startedAt: now() };
+
+  // Parent adjustment 2: the pi service's provider line must NOT list zai
+  // (arm 4 has no GLM child); the antigravity set is proven by the fresh
+  // /models read below plus the counted credential copies.
+  const provLine = readTrim(path.join(RUN_DIR, 'server.log'))?.split('\n').find((l) => l.includes('Available providers (with auth):'));
+  const provList = provLine?.split('Available providers (with auth):')[1]?.trim() ?? null;
+  result.availableProviders = { line: provLine ?? null, list: provList };
+  if (provList && /\bzai\b/.test(provList)) {
+    console.error(`ABORT: provider assertion failed — zai must not be available on the hb5 server, got: ${provList}`);
+    finish(1);
+  }
+  out(`provider assertion ok: no zai on the hb5 server (list: ${provList ?? '(empty)'})`);
   const call = (method, apiPath, body, timeoutMs) =>
     api({ socketPath: server.socketPath, tokenPath: server.tokenPath, method, apiPath, body, timeoutMs });
 
@@ -309,5 +331,11 @@ try {
   result.credentialCopySweep = { command: `find ${RUN_DIR} -name auth.json -o -name oauth_creds.json -o -name antigravity-oauth-token`, stdout: findCopies.stdout, remaining: findCopies.stdout.split('\n').filter(Boolean).length };
   result.geminiSweepAfter = run('find', [GEMINI, '-maxdepth', '2', '-newer', path.join(RUN_DIR, 'gemini-mtime-ref')], { timeoutMs: 20_000 }).stdout;
   result.geminiRealStateTouched = result.geminiSweepAfter.split('\n').filter(Boolean).length > 0;
+  // antigravity* diff (sizes + mtimes, sorted): identical → no real-state writes
+  const snapAfter = geminiAntigravitySnapshot();
+  writeFileSync(path.join(RUN_DIR, 'gemini-antigravity-after.txt'), snapAfter);
+  const diff = run('diff', [path.join(RUN_DIR, 'gemini-antigravity-before.txt'), path.join(RUN_DIR, 'gemini-antigravity-after.txt')], { timeoutMs: 20_000 });
+  result.geminiAntigravityDiff = { exitCode: diff.code, output: (diff.stdout + '\n' + diff.stderr).slice(0, 4000), identical: diff.code === 0 };
+  result.geminiRealStateTouched = result.geminiRealStateTouched || diff.code !== 0;
   finish(result.pass && !result.geminiRealStateTouched ? 0 : 2);
 }

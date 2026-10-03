@@ -16,7 +16,7 @@ mkdir -p "${RUN_DIR}"
 
 systemd-run --quiet --collect --wait \
   --unit=e2a-5-hb5 \
-  --property=MemoryMax=12G \
+  --property=MemoryMax=8G \
   --property=MemorySwapMax=1G \
   --property=RuntimeMaxSec=1800 \
   --property=CPUWeight=100 \

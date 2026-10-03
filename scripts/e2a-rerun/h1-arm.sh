@@ -64,7 +64,7 @@ PORT=$(node -e "const net=require('net');const s=net.createServer();s.listen(0,'
 echo "$PORT" > "$RUN/port"
 log "starting server unit e2a-5-h1 (port $PORT, view-only subscribe ON, MemoryMax=12G)"
 systemd-run --collect --quiet --unit=e2a-5-h1 \
-  -p CPUWeight=100 -p MemoryMax=12G -p MemorySwapMax=1G \
+  -p CPUWeight=100 -p MemoryMax=8G -p MemorySwapMax=1G \
   --setenv=PI_WEB_UI_VIEW_ONLY_SUBSCRIBE=on \
   --setenv=ALLOWED_ORIGINS="http://localhost:3457,http://127.0.0.1:3457,http://localhost:3000" \
   --working-directory="$WT" \
@@ -79,6 +79,16 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
 done
 [ -S "$RUN/server/internal-api.sock" ] || { log "FATAL: server socket never appeared"; tail -30 "$RUN/server.log" >&2 || true; exit 1; }
 log "server ready (build $(node -e "console.log(JSON.parse(require('fs').readFileSync('$WT/server/dist/build-identity/embedded-manifest.json','utf8')).revision.slice(0,8))" 2>/dev/null || echo '?'))"
+
+# Parent adjustment 2: the journal provider line must list ONLY zai (arms 2-3).
+PROV_LINE=$(grep -m1 "Available providers (with auth):" "$RUN/server.log" || true)
+PROV_LIST="${PROV_LINE#*Available providers (with auth):}"
+PROV_LIST="$(echo "$PROV_LIST" | xargs)"
+log "providers (with auth): [$PROV_LIST]"
+if [ "$PROV_LIST" != "zai" ]; then
+  log "FATAL: provider assertion failed — expected only 'zai', got [$PROV_LIST]"
+  exit 1
+fi
 
 # ── prepare targets + children ────────────────────────────────────────────────
 node "$WT/scripts/e2a-rerun/h1-burst.mjs" prepare --run-dir="$RUN" --count="$COUNT" 2>>"$LOG"

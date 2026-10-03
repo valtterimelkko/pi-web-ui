@@ -23,7 +23,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { spawn as spawnProc } from 'node:child_process';
 import path from 'node:path';
 import {
-  parseArgs, now, readNum, assertMemAvailable, sampleCgroup, rmdirCgroup,
+  parseArgs, now, readNum, readTrim, assertMemAvailable, sampleCgroup, rmdirCgroup,
   bootServer, api, readBuildIdentity, MB, GiB,
 } from './lib.mjs';
 
@@ -151,6 +151,16 @@ try {
   });
   result.server = { valDir, buildRevision: result.build.revision, startedAt: now() };
   out(`server up: build ${result.build.revision?.slice(0, 8)} socket ${server.socketPath}`);
+
+  // Parent adjustment 2: the server journal must list ONLY the arm's route.
+  const provLine = readTrim(path.join(RUN_DIR, 'server.log'))?.split('\n').find((l) => l.includes('Available providers (with auth):'));
+  const provList = provLine?.split('Available providers (with auth):')[1]?.trim() ?? null;
+  result.availableProviders = { line: provLine ?? null, list: provList };
+  if (provList !== 'zai') {
+    console.error(`ABORT: provider assertion failed — expected only 'zai', got: ${provList ?? '(line missing)'}`);
+    finish(1);
+  }
+  out('provider assertion ok: only zai');
 
   const workspace = path.join(RUN_DIR, 'workspace');
   mkdirSync(workspace, { recursive: true });
