@@ -132,6 +132,17 @@ try {
   if (!result.build?.revision) { console.error('ABORT: no build identity — build first'); finish(1); }
 
   // ── one disposable server, PI_TOOLS_SLICE at this unit's live tools tree ─
+  // J6 note: this build's launcher strips PI_TOOLS_* from its own env, so the
+  // deliberate placement config goes through the sanctioned --env-file/--env-key
+  // channel (the caller asserts the resolved root is this unit's subtree, never
+  // production's — the values name paths under THIS unit's cgroup only).
+  const placementEnvFile = path.join(RUN_DIR, 'placement.env');
+  writeFileSync(placementEnvFile, [
+    `PI_TOOLS_PLACEMENT=on`,
+    `PI_TOOLS_CGROUP_ROOT=${CG_ROOT}`,
+    `PI_TOOLS_SLICE=${toolsDir}`,
+    `PI_TOOLS_RUNTIME_DIR=${path.join(RUN_DIR, 'placement')}`,
+  ].join('\n') + '\n', { mode: 0o600 });
   const valDir = path.join(RUN_DIR, 'val');
   server = await bootServer({
     wt: WT, valDir,
@@ -141,12 +152,15 @@ try {
       HOME: fakeHome,
       PI_AGENT_DIR: agentDir,
       PI_CODING_AGENT_DIR: agentDir,
-      PI_TOOLS_PLACEMENT: 'on',
-      PI_TOOLS_CGROUP_ROOT: CG_ROOT,
-      PI_TOOLS_SLICE: toolsDir,
-      PI_TOOLS_RUNTIME_DIR: path.join(RUN_DIR, 'placement'),
       ...(PORT !== '0' ? { PORT } : {}),
     },
+    launcherArgs: [
+      '--env-file', placementEnvFile,
+      '--env-key', 'PI_TOOLS_PLACEMENT',
+      '--env-key', 'PI_TOOLS_SLICE',
+      '--env-key', 'PI_TOOLS_CGROUP_ROOT',
+      '--env-key', 'PI_TOOLS_RUNTIME_DIR',
+    ],
     logFile: path.join(RUN_DIR, 'server.log'),
   });
   result.server = { valDir, buildRevision: result.build.revision, startedAt: now() };

@@ -96,11 +96,15 @@ export async function rmdirCgroup(g, label) {
  * wrapper strips PI_TOOLS_* itself, we still strip here for defence in depth).
  * Resolves when the unix socket + token exist; records build identity.
  */
-export async function bootServer({ wt, valDir, env, logFile, timeoutMs = 120_000, port }) {
+export async function bootServer({ wt, valDir, env, logFile, timeoutMs = 120_000, port, launcherArgs = [] }) {
   mkdirSync(valDir, { recursive: true, mode: 0o700 });
   const childEnv = { ...process.env, ...env };
   for (const k of Object.keys(childEnv)) {
-    if (k.startsWith('PI_TOOLS_')) delete childEnv[k];
+    // J6: drop INHERITED placement keys, but keep keys the CALLER's env object
+    // explicitly provided (a proof driver may deliberately configure placement
+    // against its own delegated unit; the launcher still requires the
+    // --env-file/--env-key channel for the server child itself).
+    if (k.startsWith('PI_TOOLS_') && env?.[k] === undefined) delete childEnv[k];
   }
   for (const k of ['PI_SESSION_ID', 'PI_WEB_UI_SESSION_ID', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_WATCH_WAKE_ARMED']) {
     delete childEnv[k];
@@ -112,7 +116,7 @@ export async function bootServer({ wt, valDir, env, logFile, timeoutMs = 120_000
     if (childEnv[k] !== undefined && env?.[k] === undefined) delete childEnv[k];
   }
   const portArgs = port !== undefined ? ['--port', String(port)] : [];
-  const child = spawnProc('node', ['--import', 'tsx', 'scripts/validation-server.ts', '--dir', valDir, '--compiled', ...portArgs], {
+  const child = spawnProc('node', ['--import', 'tsx', 'scripts/validation-server.ts', '--dir', valDir, '--compiled', ...portArgs, ...launcherArgs], {
     cwd: wt,
     env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
