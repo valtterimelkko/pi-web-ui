@@ -651,7 +651,7 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
       const silentStall = classifyWindowEnd(goalState, busy, qualifyingWork);
       // Wave K: capture the full projection (pausedReason/interruption evidence).
       const projection = await getGoalProjection(target, child.sessionId).catch(() => ({}));
-      armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall });
+      armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall, projection });
       logLine(paths, 'kill', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall, projection });
     }
 
@@ -830,7 +830,7 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
       const silentStall = classifyWindowEnd(goalState, busy, qualifyingWork);
       // Wave K: capture the full projection (pausedReason/interruption evidence).
       const projection = await getGoalProjection(target, child.sessionId).catch(() => ({}));
-      armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall });
+      armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall, projection });
       logLine(paths, 'drain-timeout', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall, projection });
     }
 

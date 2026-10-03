@@ -77,10 +77,20 @@ export async function spawnGoalChild(
       if (!m) throw new Error(`pi-orch spawn template failure and no session id recoverable: ${stderr.slice(0, 300)}`);
       sessionId = m[1];
     }
-    const resend = await piOrch([
+    // The child's own objective turn may still hold the session when the
+    // template re-send fires — retry through the busy window instead of
+    // aborting the arm (observed 2026-10-03: SESSION_BUSY at +5 s).
+    let resend = await piOrch([
       'prompt', sessionId, '--message', applyGoalObjectiveTemplate(opts.objective),
       '--socket', target.socketPath, '--token-path', target.tokenPath, '--parent-session', target.parentSession, '--id-only',
     ], 60_000);
+    for (let attempt = 0; resend.exitCode !== 0 && attempt < 5; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 15_000));
+      resend = await piOrch([
+        'prompt', sessionId, '--message', applyGoalObjectiveTemplate(opts.objective),
+        '--socket', target.socketPath, '--token-path', target.tokenPath, '--parent-session', target.parentSession, '--id-only',
+      ], 60_000);
+    }
     if (resend.exitCode !== 0) throw new Error(`template re-send failed (exit ${resend.exitCode}): ${resend.stderr.slice(0, 200)}`);
     return sessionId;
   }
