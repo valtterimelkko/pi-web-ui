@@ -123,6 +123,24 @@ function appendOperationLedger(paths: RunPaths, arm: string, childId: string, re
   appendFileSync(statePath(paths, `op-ledger-${arm}.jsonl`), `${JSON.stringify(entry)}\n`);
 }
 
+
+/** Correction 03: pause a child's goal and VERIFY the explicit state sticks (a queued continuation can transiently revert it). */
+async function pauseAndVerify(target: OrchTarget, sessionId: string, action: 'pause' | 'pause-now', wantStatus: 'paused' | 'wrapping_up', attempts = 4): Promise<{ stuck: boolean; projection: Record<string, unknown>; pauseResponse: unknown }> {
+  let pauseResponse: unknown;
+  let projection: Record<string, unknown> = {};
+  for (let i = 0; i < attempts; i++) {
+    pauseResponse = await pauseGoalChild(target, sessionId, action);
+    await new Promise((r) => setTimeout(r, 8_000));
+    projection = await getGoalProjection(target, sessionId).catch(() => ({}));
+    const status = String(projection.status ?? '');
+    const pausedReason = String(projection.pausedReason ?? '');
+    if (status === wantStatus && pausedReason !== 'interrupted' && pausedReason !== 'restored_on_session_start') {
+      return { stuck: true, projection, pauseResponse };
+    }
+  }
+  return { stuck: false, projection, pauseResponse };
+}
+
 /** git HEAD hash of a fixture repo (baseline commit for later commit counting). */
 function gitHead(repoDir: string): string {
   return execFileSync('git', ['-C', repoDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
@@ -598,11 +616,10 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
         if (st.busy === true) break;
         await new Promise((r) => setTimeout(r, 5_000));
       }
-      const pauseResponse = await pauseGoalChild(target, sessionId, 'pause-now');
-      const st = await getChildStatus(target, sessionId).catch(() => ({ goalState: 'unknown' }));
+      const verified = await pauseAndVerify(target, sessionId, 'pause-now', 'paused');
       armState.pausedNegative = { sessionId, watchId, autoWatchId, repoDir: fixture.repoDir, label, baselineCommit: gitHead(fixture.repoDir) };
-      armState.pausedNegativeEvidence = { projection: {}, markerFiles: [], pauseResponse };
-      logLine(paths, 'kill', 'negative-child-paused', { label, sessionId, goalState: st.goalState, pauseResponse });
+      armState.pausedNegativeEvidence = { projection: verified.projection, markerFiles: [], pauseResponse: verified.pauseResponse, stuck: verified.stuck };
+      logLine(paths, 'kill', 'negative-child-paused', { label, sessionId, stuck: verified.stuck, projection: verified.projection });
     }
     {
       const fixture = freshFixtures(paths, ['fixture-10'])[0];
@@ -620,11 +637,10 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
         if (st.busy === true) break;
         await new Promise((r) => setTimeout(r, 5_000));
       }
-      const pauseResponse = await pauseGoalChild(target, sessionId, 'pause');
-      const st = await getChildStatus(target, sessionId).catch(() => ({ goalState: 'unknown' }));
+      const verified = await pauseAndVerify(target, sessionId, 'pause', 'wrapping_up');
       armState.wrappingNegative = { sessionId, watchId, autoWatchId, repoDir: fixture.repoDir, label, baselineCommit: gitHead(fixture.repoDir) };
-      armState.wrappingNegativeEvidence = { projection: {}, markerFiles: [], pauseResponse };
-      logLine(paths, 'kill', 'wrapping-negative-child-paused', { label, sessionId, goalState: st.goalState, pauseResponse });
+      armState.wrappingNegativeEvidence = { projection: verified.projection, markerFiles: [], pauseResponse: verified.pauseResponse, stuck: verified.stuck };
+      logLine(paths, 'kill', 'wrapping-negative-child-paused', { label, sessionId, stuck: verified.stuck, projection: verified.projection });
     }
 
     // Work phase: wait until every child is mid-turn with tool commands running.
