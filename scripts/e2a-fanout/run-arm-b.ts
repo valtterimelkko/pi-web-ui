@@ -19,8 +19,9 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { assertSafeNpmCwd } from './lib/fixtures.ts';
 import { getCapacity } from './lib/httpclient.ts';
-import { filterPlacedProcs, parsePsCgroupLine, readMemAvailableKb, readPressure } from './lib/hostsample.ts';
+import { readMemAvailableKb, readPressure } from './lib/hostsample.ts';
 import { GUARD_STATE_DIR, preflight, releaseLock, takeLock } from './lib/preflight.ts';
 import { run, systemctlShow } from './lib/procsystemd.ts';
 import { buildArmBPlan, cleanupArgv, promptArgv, spawnArgv, statusByOwnerArgv } from './lib/spawn-plan.ts';
@@ -186,6 +187,7 @@ async function main(): Promise<number> {
       const clone = await run(['git', 'clone', '--quiet', '--local', '/root/pi-orch', child.cwd], 300_000);
       if (clone.code !== 0) throw new Error(`clone failed for ${child.name}: ${clone.stderr}`);
       if (!existsSync(join(child.cwd, 'package-lock.json'))) throw new Error(`clone missing package-lock.json: ${child.cwd}`);
+      assertSafeNpmCwd(child.cwd); // incident guard: never npm into an inherited/symlinked cwd (03-blocked.md)
       const ci = await run(['npm', 'ci', '--no-audit', '--no-fund', '--ignore-scripts'], 300_000, { cwd: child.cwd });
       appendFileSync(join(runRoot, 'logs', 'npm-ci.log'), `${child.cwd} exit ${String(ci.code)}\n`);
       if (ci.code !== 0) throw new Error(`npm ci failed for ${child.name}: ${ci.stderr.slice(0, 300)}`);
@@ -283,7 +285,7 @@ async function main(): Promise<number> {
         abortReasons.push(modelViolation);
         log(`MODEL VIOLATION: ${modelViolation} — aborting further dispatch`);
       } else {
-        const promptRunIds = promptResults.filter((p): p is { child: string; exitCode: number; runId: string } => p !== null && p.exitCode === 0 && !!p.runId);
+        const promptRunIds = promptResults.filter((p): p is { child: string; exitCode: number; runId: string; error: string | null } => p !== null && p.exitCode === 0 && typeof p.runId === 'string');
         writeFileSync(join(runRoot, 'prompt-runs.json'), `${JSON.stringify(promptRunIds, null, 2)}\n`);
         log(`prompts dispatched: ${String(promptRunIds.length)}/${String(created.length)}`);
         writeFileSync(join(runRoot, 'prompt-failures.json'), `${JSON.stringify(promptResults.filter((p) => p === null || p.exitCode !== 0), null, 2)}\n`);

@@ -124,7 +124,7 @@ export function buildArmBPlan(opts: { fixtureRoot: string; owner: string }): Arm
   return { children, fixtures };
 }
 
-export function spawnArgv(spec: ChildSpec, conn: Connection): string[] {
+export function spawnArgv(spec: ChildSpec, conn: Connection, jsonOutput = false): string[] {
   const argv = [
     conn.piOrchBin,
     'spawn',
@@ -141,10 +141,15 @@ export function spawnArgv(spec: ChildSpec, conn: Connection): string[] {
     spec.routeLimit,
     `--label=${spec.label}`,
     '--no-completion-template',
-    // --id-only WITHOUT --json: output() prefers --json, so --json would
-    // suppress the bare-id rendering (smoke-found).
-    '--id-only',
   ];
+  if (jsonOutput) {
+    // --json prints the full body (sessionId, resolvedModel, leaseId) — arm B
+    // asserts the create-time model from it. Mutually exclusive with
+    // --id-only (output() prefers --json).
+    argv.push('--json');
+  } else {
+    argv.push('--id-only');
+  }
   if (spec.goalObjective !== undefined) {
     argv.push('--goal-objective', spec.goalObjective);
   }
