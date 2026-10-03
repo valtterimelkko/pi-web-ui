@@ -74,6 +74,19 @@ def api(method, path_, body=None, timeout=300):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10).stdout
 
 
+def api_async(method, path_, body=None, timeout=300):
+    """Fire the request WITHOUT waiting for the turn: sampling must cover the
+    stream, and a synchronous prompt only returns at turn-complete."""
+    import subprocess
+    payload = json.dumps(body) if body is not None else None
+    cmd = ['curl', '-s', '--max-time', str(timeout), '--unix-socket', SOCKET, '-X', method,
+           '-H', f'authorization: Bearer {TOKEN}', '-H', 'content-type: application/json']
+    if payload is not None:
+        cmd += ['-d', payload]
+    cmd += [f'http://localhost{path_}']
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+
 def transcript_entries(path_str):
     """Parsed JSONL entries of the child's session file."""
     p = Path(path_str)
@@ -289,20 +302,24 @@ def run_viewport(pw, view, results):
     # ── 2. API prompt → first streamed chunk exactly once (hb2) ─────────────
     live_marker = f'{MARKER}-API-{view.upper()}'
     stream_samples = []
-    resp = api('POST', f"/api/v1/sessions/{CHILD['sessionId']}/prompt",
-               {'message': f'Reply with exactly one line: {live_marker} and nothing else.'})
-    print(f'api prompt sent ({view}): {resp[:80].strip()}', flush=True)
+    prompt_proc = api_async('POST', f"/api/v1/sessions/{CHILD['sessionId']}/prompt",
+                            {'message': f'Reply with exactly one line: {live_marker} and nothing else.'})
+    print(f'api prompt fired (detached, {view})', flush=True)
     # correction 04: observe the reply AS IT STREAMS — poll from the MAIN thread
-    # (Playwright's sync API is not thread-safe; a sampler thread yields only
-    # swallowed exceptions). Sampling cadence <= 100 ms.
+    # while the detached prompt runs (cadence <= 100 ms).
     deadline = time.time() + 120
     while time.time() < deadline and live_marker not in Path(CHILD['sessionPath']).read_text():
         stream_samples.append(sample_assistant_texts(page))
         time.sleep(0.1)
+    try:
+        prompt_proc.wait(timeout=60)
+    except Exception:
+        pass
     time.sleep(3)  # let the render settle
     stream_samples.append(sample_assistant_texts(page))
     non_empty = sum(1 for s in stream_samples if s)
     print(f'stream samples: {len(stream_samples)} collected, {non_empty} non-empty', flush=True)
+    assert non_empty >= 3, f'streaming sampling did not observe the reply rendering (non-empty samples {non_empty})'
     entries_after = transcript_entries(CHILD['sessionPath'])
     final_text = final_assistant_text(entries_after)
     assert final_text and live_marker in final_text, f'transcript missing live marker ({view}): {final_text!r}'
