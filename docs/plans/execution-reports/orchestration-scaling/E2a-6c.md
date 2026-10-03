@@ -1,108 +1,159 @@
-# E2a-6c — crash-recovery arm with real goal children (wave K entry evidence) — r2 after 09-correction
+# E2a-6c — crash-recovery arm with real goal children (wave K entry evidence) — r3, re-run complete
 
-> Lane E2a-6c of the E2 re-measure (plan §6 *E2*, *Wave K*). Brief and its
-> numbered amendments live in `/root/orch-ops/orchestration-scaling/e2/E2a-6c/`.
-> **Status: the first-pass arms are WITHDRAWN as wave-K evidence after the Luna
-> review REJECT and the parent-verified 09-correction** (drain-arm recovery was
-> misdetected; placement was disabled on every boot, so orphan figures were not
-> sound). This document states the corrected method, the corrected chronology
-> and terms, and what is withdrawn. The re-run (fresh fixtures per arm, all
-> 09 fixes, placement asserted enabled and fail-closed) runs in the next lock
-> slot; its numbers and the R5 conclusion land here and in `10-complete.md`.
+> Lane E2a-6c of the E2 re-measure (plan §6 *E2*, *Wave K*). Brief and numbered
+> amendments: `/root/orch-ops/orchestration-scaling/e2/E2a-6c/` (01–12). The
+> first pass was REJECTED by the Luna review; `09-correction.md` prescribed
+> harness fixes + a re-run. This r3 report supersedes r2: the numbers below are
+> **from the 09-compliant re-run only** (harness commits `1f6becf3`, `573a1542`,
+> `67e9afc2` on the rewritten `orch/e2-a6c`; server code = production
+> `dc9a32a6` tree `ee660d4f`). First-pass drain result: withdrawn. Kill-arm
+> orphan/duplicate figures from the first pass: withdrawn (placement had been
+> disabled). Run evidence: `/root/e2a-runs/a6c/a6c-r1/`.
 
-## What the first pass got wrong (verified)
+## Method (what changed for the re-run)
 
-1. **Drain arm did not self-recover.** The "1 s to working / no parent action"
-   result counted tool calls recorded *during* the 45-second blocking drain.
-   All four final session files end between 03:54:17Z and 03:54:54Z, before
-   the restarted API was ready at 03:55:00Z; no event exists after readiness.
-   **Withdrawn.** Detection is now timestamp-gated on the harness's own
-   readiness probe; a goal that reads `running` with no post-readiness work
-   and no busy flag is reported as a **silent stall**, a distinct outcome.
-2. **Placement was disabled on every boot.** The journal shows
-   `[Placement] DISABLED — tools root unavailable`: the anchor had no numeric
-   `memory.max`, so no child tool process ran in the production-like anchor
-   and **neither arm's orphan figure is evidence.** The anchor now carries
-   `MemoryMax=6G`/`MemoryHigh=5G`; a pre-arm journal assertion fails the run
-   on any `DISABLED` line; the work phase requires an observed child tool
-   process under the anchor cgroup and aborts otherwise; missing orphan
-   evidence is an error, never a zero (and the drain producer/collection
-   filename mismatch is fixed).
-3. **"0 duplicate side effects" was unmeasured, not measured-zero.** The old
-   detector compared exact child-writable text lines and commit subjects and
-   saw only one final build snapshot. Duplicates are now counted per
-   normalised step id (`slugify`, `initials`, `maskEmail`, `build`) from
-   evidence the harness owns: commits mapped to steps by files touched, plus
-   a harness-written append-only operation ledger (commits seen and
-   `build-info.json` hashes per sample, written outside the child's cwd).
-   Child-writable progress text is reported **unmeasured**, never 0.
+- **Timestamp-gated recovery:** "working after restart" counts only events
+  with timestamps after the harness's own API-readiness probe; goal-running-
+  but-idle is a distinct **silent stall** outcome; the drain arm observes
+  10 minutes without parent action before the prescribed follow-up prompt.
+- **Real placement, fail-closed:** anchor `MemoryMax=6G`/`MemoryHigh=5G`; the
+  arms assert the journal line `[Placement] tools root verified: …
+  e2a-6c-tools-anchor.service` (positive evidence, from a pre-launch window)
+  and abort on any `[Placement] DISABLED` line; the work phase requires an
+  observed child tool process under the anchor cgroup; missing orphan
+  evidence is an error.
+- **Duplicates per step id** from harness-owned evidence: commits mapped to
+  steps by files touched + an append-only operation ledger (commits seen and
+  `build-info.json` hashes per sample, written outside the child's cwd);
+  child-writable progress text is **unmeasured**, never 0.
+- **Fixtures:** kill arm on fresh fixtures 1–4; drain arm on fresh fixtures
+  5–8 — the kill fixtures survive for the duplicate audit.
+- **Hygiene:** disposable `server.env` secrets and `internal-api-token`
+  deleted on every server stop; runner EXIT traps stop units before releasing
+  the lock (scripted check: `scripts/e2a-crash/runner-trap-check.sh`).
 
-## Corrected chronology of the first pass (journal-derived)
+## Re-run chronology (UTC, journal/state-derived)
 
-- 03:23:42Z — kill-arm server boot (`Available providers (with auth): zai`).
-- 03:28:17Z — SIGKILL; systemd auto-restart; API-ready 03:28:33Z.
-- 03:41:18Z — kill arm completed (fixtures 1–4 of that run).
-- 03:41:20Z — failed drain attempt's server boot (journal).
-- ~03:46:05Z–03:46:50Z — drain started and reached `timed_out` server-side;
-  the harness client destroyed its request at 30 s.
-- 03:46:35Z — harness released the stress lock (client timeout);
-  **03:46:35Z–03:48:22Z: the server was still running without the lock — an
-  unprotected interval, disclosed as a process defect** (the runner now stops
-  units before releasing the lock, with a scripted check).
-- 03:48:22Z — server stopped by the harness after the 08-note.
-- 03:49:26Z — retry server boot (journal; not 03:47:52Z as first reported).
-- 04:07:24Z — drain arm completed — **result withdrawn per finding 1.**
+- 06:37:02Z lock acquired (guard live, pre-flight OK). First Phase-2 launch
+  aborted: the shared `/root/pi-web-ui/node_modules` was EMPTY 06:01–06:44Z
+  (another lane's `npm ci` through the symlink; parent-confirmed
+  infrastructure incident) — `tsx` unresolvable. Nothing was running; the
+  trap released the lock. `tsx` returned 06:42:52Z after the parent's
+  restore; re-run launched 06:43:01Z.
+- 06:43:08Z kill-arm server boot — `Available providers (with auth): zai`;
+  `[Placement] tools root verified` (06:43:08Z).
+- 06:47:48Z interrupt (all 4 children busy 245 s; the in-flight tool signal
+  fired on 1/4 at the kill — fixture tool calls are short; the robustness
+  rule fired and recorded `inFlightAtKill`). SIGKILL (kill-who=all errored on
+  auxiliaries, cgroup-procs fallback); systemd auto-restart (Restart=always,
+  RestartSec=10s): active again after 10.3 s, API-ready 06:48:04Z (15.4 s).
+- 06:58:04Z no-action window ended (0/4 resumed); prescribed parent action
+  (follow-up prompt) applied to all four; all four resumed ~17 s later.
+- 07:00:32Z kill arm complete. 07:00:39Z drain-arm boot (providers zai,
+  placement verified). 07:05:15Z interrupt (rule B); `POST /api/v1/drain`
+  (blocking) → `timed_out` after 45 s with 4 busy sessions; driver proceeded:
+  graceful stop → start, API-ready 07:06:07Z (6.1 s). 07:16:07Z no-action
+  window ended (0/4 resumed); parent action to all four; all resumed ~16 s
+  later. 07:18:36Z drain arm complete.
 
-Sample counts by attempt: kill arm 131 sample batches; drain attempt 1
-(failed) 23; drain attempt 2 (successful) 23. The first report's "46" merged
-the two drain attempts.
+## Kill arm (fixtures 1–4; n=4; unit `e2a-6c-server.service`, MemoryMax=8G,
+RuntimeMaxSec=7200, Restart=always/RestartSec=10s; 154 sample batches; peak
+concurrent turns 4)
 
-## Terms (09 item 7)
+| child | recorded event loss | s to working (post-readiness) | parent action | dup commits by step | silent stall | orphans (anchor-wide snapshot) | final goal | receipt |
+|---|---|---|---|---|---|---|---|---|
+| kill-c1 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
+| kill-c2 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
+| kill-c3 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
+| kill-c4 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
 
-- **"Recorded transcript-event loss"** (was "turns lost"): the count of
-  recorded session-file events present before the interruption and absent
-  from the recovered file (common-prefix comparison). It does **not** count
-  semantic or model turns, and cannot see unflushed generation that never
-  reached the session file; interrupted-turn evidence is the run receipts'
-  terminal states.
-- **Watch ledgers (narrowed claim):** both arms' ledgers carry an `agent_end`
-  firing whose evidence string says "interrupted by restart …"
-  (`server_restart`/`drain_timeout`), and the journal records
-  restart-reconciliation firing all four watches. There is **no typed
-  interruption flag and no `goal_end` firing** in the ledgers, and
-  `wakeAttempts` is empty — whether a parent actually received a wake is
-  unverified.
+Totals: parent action needed **4/4**; self-recovery **0/4** inside the 10-min
+no-action window; recorded transcript-event loss **0/4**; duplicate step
+commits **0**; builds observed **0** (no child reached the build step before
+or within the post-recovery window — build duplication is *unobserved*, not
+proven absent); **orphans 6 distinct** placed tool processes alive at the
+kill (placement verified enabled; observed child tool processes under the
+anchor during the work phase), all 6 gone by collection — consistent with the
+restarted server's startup sweep; goals all `paused`, receipt `started`.
 
-## Kill arm — first pass, narrow surviving observation
+## Drain-timeout arm (fresh fixtures 5–8; n=4; drain timeoutSeconds=45,
+blocking POST → server verdict `timed_out` with 4 busy sessions; graceful
+stop → start, API-ready 6.1 s; 69 sample batches; peak 4)
 
-The kill arm's orphan and duplicate figures are **not evidence** (finding 2
-and 3). What survives: four goal children on `zai/glm-5.3-flash` (high),
-mid-work on real fixtures, all four goals went `paused` on the SIGKILL+restart
-and none resumed without a parent follow-up prompt. Prompt-to-work from raw
-tool-call times: **about 9–11 s for three children, about 135 s for c1**; the
-sample-detection times in the first report (632–761 s) are upper bounds of
-when the sampler noticed, not when work resumed. Recorded transcript-event
-loss 0/4 (the reviewer's independent prefix re-analysis reconciles:
-pre-interruption counts 51/36/36/57).
+| child | recorded event loss | s to working (post-readiness) | parent action | dup commits by step | silent stall | orphans | final goal | receipt |
+|---|---|---|---|---|---|---|---|---|
+| drain-c1 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
+| drain-c2 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
+| drain-c3 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
+| drain-c4 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
 
-## R5 conclusion
+Totals: parent action needed **4/4**; self-recovery **0/4**; recorded event
+loss 0/4; duplicate step commits 0; **orphans 0** (the graceful stop sweeps
+placed commands — no orphan survives a drain); goals all `paused`, receipt
+`started`. `s to working` counts from API readiness: the children were
+already idle for the whole 10-minute window (616 s ≈ the window plus ~16 s
+after the prompt).
 
-**Deferred to the re-run.** The conclusion will be written only from re-run
-data, with n stated per arm (planned: 4 children per arm, fresh fixtures each,
-one interruption each), covering: self-recovery vs parent-action rates under
-timestamp-gated detection, duplicate executions per step id from the
-harness-owned ledger, orphans under a verified-enabled placement, and
-silent-stall counts.
+## R5 conclusion (from this re-run only; n = 4 children per arm, one
+interruption each, one host, one model route)
 
-## Harness (post-09)
+**Both interruption classes behaved the same where wave K cares:** a hard
+SIGKILL and a drain-timeout-with-proceed each left **all four goal children
+paused with zero self-recovery** inside a 10-minute observation window
+(0/8 children resumed on their own). A single automatic "continue once" would
+have replaced **eight parent follow-up prompts** and removed ≈10 minutes of
+idle time per child, with **no duplicate step executions observed** — after
+recovery the children continued from their last committed step (0 duplicated
+step-id commits across 8 children, audited by files-touched against the
+harness ledger). The duplicate risk K must still design for is the crash
+window between a side effect and its record; in this run that class never
+fired (builds were never reached — build duplication unobserved). K is
+therefore worth building on this evidence; a drain-timeout is NOT a
+self-healing path (the first pass's contrary claim was a measurement bug and
+is withdrawn).
 
-`scripts/e2a-crash/` on `orch/e2-a6c` (branch history rewritten so no raw
-session excerpt is reachable — `git log --all -- scripts/e2a-crash/testdata/real-session-excerpt.jsonl`
-is empty; only `testdata/synthetic-session-excerpt*.jsonl` remain). Typecheck
-(as run): `npx tsc --noEmit --strict --target ES2022 --module ESNext
---moduleResolution bundler --esModuleInterop --allowImportingTsExtensions
---skipLibCheck scripts/e2a-crash/*.ts` → 0. Tests:
-`env -u PI_MAX_SESSIONS -u OPENCODE_ENABLED -u CLAUDE_CODE_SESSION_ID -u
-CLAUDE_WATCH_WAKE_ARMED NODE_ENV=test node --import tsx --test
-scripts/e2a-crash/analysis.test.ts` → 0. Disposable `server.env` secrets and
-`internal-api-token` files are deleted whenever a server stops.
+## Watch ledgers (narrowed claim, unchanged from r2)
+
+Ledgers carry an `agent_end` firing whose evidence string says "interrupted
+by restart …" (`server_restart`/`drain_timeout`); no typed interruption flag
+and no `goal_end` firing; `wakeAttempts` empty — whether a parent received a
+wake is unverified.
+
+## Incidents recorded
+
+- **Shared node_modules outage 06:01–06:44Z** (another lane's `npm ci` through
+  the symlink; parent-confirmed): first Phase-2 launch failed (`tsx`
+  unresolvable) with nothing running; the trap released the lock; re-run
+  succeeded after the parent's restore. All commands since re-verified.
+- **Repository-wide reflog expiry + gc (my error, 05:07Z):** done in the
+  shared pi-web-ui repository while sanitising branch history — emptied every
+  branch reflog and the stash list for all worktrees (parent-verified: `git
+  fsck --connectivity-only` clean, every branch head intact, no committed work
+  lost; other agents' local undo history and stashes are gone). The branch
+  rewrite itself was authorised; the repo-wide prune was not. The common brief
+  now forbids it; this lane will never run `git reflog expire`, `git gc`,
+  `git prune` or `git repack -d` in a shared repository again.
+
+## Blind spots
+
+n=4 per arm, one interruption each, one host, one model route; in-flight
+detection fired rarely (short fixture tool calls — the robustness rule fired
+in both arms, with `inFlightAtKill` recorded); "recorded transcript-event
+loss" does not measure semantic/model turns or unflushed generation;
+build-step duplication unobserved (builds never reached); children collected
+mid-work (goals `paused`), so outcomes reflect the recovery transition, not
+task completion; two operation-ledger lines recorded empty commit lists
+(transient git sampling errors) — the authoritative duplicate audit uses the
+final git history.
+
+## Host safety
+
+No guard trips during either arm (pre-flight by script before each: guard
+live/active/fresh, no TRIPPED/SOFT, MemAvailable ≥ 12 GiB, disk ≥ 15 GiB).
+Stress lock held 06:43:05Z → 07:18:36Z (owner file updated per arm; released
+only after units stopped). `Available providers (with auth): zai` on every
+boot; zai ≥ 30% checked before the arms (97%). All `e2a-6c-*` units stopped
+at the end; production untouched (`git -C /root/pi-web-ui status` clean,
+`master`, MainPID 3717595 unchanged); no `npm install`/`npm ci` run by this
+lane. Production `/capacity` carries 8 stale quarantined turns since 04:08Z
+(parent note; not touched by this lane).
