@@ -16,7 +16,7 @@
  *   write 03-blocked.md;
  * - fixtures and credential copies deleted afterwards; token files removed.
  */
-import { appendFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getCapacity } from './lib/httpclient.ts';
@@ -93,13 +93,26 @@ async function sampleProduction(runRoot: string): Promise<void> {
     appendFileSync(join(samplesDir, 'prod-anchor-groups.jsonl'), `${JSON.stringify({ atMs: Date.now(), groups: [] })}\n`);
   }
   appendFileSync(join(samplesDir, 'prod-host.jsonl'), `${JSON.stringify({ atMs: Date.now(), memAvailableKb: readMemAvailableKb(), cpuPsi: readPressure('cpu'), memPsi: readPressure('memory') })}\n`);
-  // Placement proof: which live processes sit under the anchor.
-  const ps = await run(['ps', '-eo', 'pid,cgroup,args', '-ww'], 20_000);
+  // Placement proof: pids whose /proc/<pid>/cgroup sits under the anchor.
+  // `ps -eo cgroup` truncates the column (arm-B-run-1 finding), so read the
+  // authoritative per-pid file instead. Written even when empty: absence is data.
+  const placed: Array<{ pid: number; cgroup: string; args: string }> = [];
+  const ps = await run(['ps', '-eo', 'pid,args', '-ww'], 20_000);
   if (ps.code === 0) {
-    const rows = ps.stdout.split('\n').slice(1).map(parsePsCgroupLine).filter((r): r is NonNullable<typeof r> => r !== null);
-    const placed = filterPlacedProcs(rows, ANCHOR_FRAGMENT);
-    if (placed.length > 0) appendFileSync(join(samplesDir, 'placement-proof.jsonl'), `${JSON.stringify({ atMs: Date.now(), placed: placed.slice(0, 40) })}\n`);
+    for (const line of ps.stdout.split('\n').slice(1)) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      try {
+        const cg = readFileSync(`/proc/${String(pid)}/cgroup`, 'utf8').trim();
+        const path = cg.split(':').pop() ?? '';
+        if (path.includes(ANCHOR_FRAGMENT)) placed.push({ pid, cgroup: path, args: (m[2] ?? '').slice(0, 160) });
+      } catch {
+        /* pid vanished between listing and read */
+      }
+    }
   }
+  appendFileSync(join(samplesDir, 'placement-proof.jsonl'), `${JSON.stringify({ atMs: Date.now(), placedCount: placed.length, placed: placed.slice(0, 40) })}\n`);
 }
 
 interface CapacityDebt {
@@ -172,7 +185,8 @@ async function main(): Promise<number> {
     for (const child of plan.children) {
       const clone = await run(['git', 'clone', '--quiet', '--local', '/root/pi-orch', child.cwd], 300_000);
       if (clone.code !== 0) throw new Error(`clone failed for ${child.name}: ${clone.stderr}`);
-      const ci = await run(['npm', 'ci', '--no-audit', '--no-fund', '--ignore-scripts'], 300_000);
+      if (!existsSync(join(child.cwd, 'package-lock.json'))) throw new Error(`clone missing package-lock.json: ${child.cwd}`);
+      const ci = await run(['npm', 'ci', '--no-audit', '--no-fund', '--ignore-scripts'], 300_000, { cwd: child.cwd });
       appendFileSync(join(runRoot, 'logs', 'npm-ci.log'), `${child.cwd} exit ${String(ci.code)}\n`);
       if (ci.code !== 0) throw new Error(`npm ci failed for ${child.name}: ${ci.stderr.slice(0, 300)}`);
     }
@@ -214,15 +228,27 @@ async function main(): Promise<number> {
       const fanoutStart = Date.now();
       const outcomes = await Promise.all(plan.children.map(async (child) => {
         const startedAtMs = Date.now();
-        const res = await run(spawnArgv(child, PROD_CONN), 600_000);
-        const sessionId = res.code === 0 ? res.stdout.trim().split('\n').pop()?.trim() : undefined;
+        const res = await run(spawnArgv(child, PROD_CONN, true), 600_000);
+        let sessionId: string | undefined;
+        let resolvedModel: unknown = null;
+        if (res.code === 0) {
+          try {
+            const body = JSON.parse(res.stdout) as Record<string, unknown>;
+            sessionId = typeof body['sessionId'] === 'string' ? body['sessionId'] : undefined;
+            resolvedModel = body['resolvedModel'] ?? null;
+          } catch {
+            sessionId = undefined;
+          }
+        }
         if (sessionId) {
           appendFileSync(OWNED_SESSIONS, `${sessionId}\n`);
           appendFileSync(join(runRoot, 'logs', 'owned-sessions.txt'), `${sessionId}\n`);
         }
+        const expectedModel = EXPECTED_MODEL[child.route];
         const record = {
           child: child.name, route: child.route, startedAtMs, endedAtMs: Date.now(), wallMs: Date.now() - startedAtMs,
-          exitCode: res.code, ok: res.code === 0 && !!sessionId, sessionId,
+          exitCode: res.code, ok: res.code === 0 && !!sessionId, sessionId, resolvedModel,
+          createModelOk: resolvedModel === expectedModel,
           errorCode: /^pi-orch: ([A-Z_0-9]+):/m.exec(res.stderr)?.[1],
           retryAfterSeconds: Number(/retry-after: (\d+)s/m.exec(res.stderr)?.[1] ?? NaN) || undefined,
           stderrTail: res.stderr ? res.stderr.slice(-400) : undefined,
@@ -232,20 +258,26 @@ async function main(): Promise<number> {
       }));
       const fanoutWallMs = Date.now() - fanoutStart;
       const created = outcomes.filter((o) => o.ok);
-      log(`fan-out done in ${String(fanoutWallMs)} ms; created ${String(created.length)}/${String(outcomes.length)}; refusals ${String(outcomes.length - created.length)}`);
+      log(`fan-out done in ${String(fanoutWallMs)} ms; created ${String(created.length)}/${String(outcomes.length)}; refusals ${String(outcomes.length - created.length)}; create-model OK ${String(outcomes.filter((o) => o.createModelOk).length)}/${String(outcomes.length)}`);
+      const badModel = outcomes.find((o) => o.ok && !o.createModelOk);
+      if (badModel) {
+        abortReasons.push(`create-time resolvedModel mismatch on ${badModel.child}: ${String(badModel.resolvedModel)}`);
+      }
 
-      // Pre-prompt model check (fallbackApplied), then tasks.
+      // Pre-prompt model check (fallbackApplied), then tasks — every attempt recorded.
       let modelViolation: string | null = null;
       const promptResults = await Promise.all(plan.children.map(async (child) => {
         const rec = outcomes.find((o) => o.child === child.name);
-        if (!rec?.sessionId) return null;
+        if (!rec?.sessionId) return { child: child.name, exitCode: -1, runId: null, error: 'no session (create failed)' };
         const status = await run([PI_ORCH_BIN, 'status', rec.sessionId, '--socket=' + PROD_CONN.socketPath, '--token-path=' + PROD_CONN.tokenPath, '--json'], 30_000);
         if (status.code === 0 && /"fallbackApplied":\s*true/.test(status.stdout)) {
           modelViolation = `fallbackApplied=true on ${child.name}`;
-          return null;
+          return { child: child.name, exitCode: -1, runId: null, error: modelViolation };
         }
         const prompt = await run(promptArgv(rec.sessionId, child.taskText, `e2a4-armb-${child.name}`, PROD_CONN), 120_000);
-        return { child: child.name, exitCode: prompt.code, runId: prompt.stdout.trim().split('\n').pop() };
+        const outcome = { child: child.name, exitCode: prompt.code, runId: prompt.code === 0 ? prompt.stdout.trim().split('\n').pop() : null, error: prompt.code === 0 ? null : prompt.stderr.slice(-300) };
+        appendFileSync(join(runRoot, 'creates', `${child.name}.prompt.json`), `${JSON.stringify(outcome, null, 2)}\n`);
+        return outcome;
       }));
       if (modelViolation) {
         abortReasons.push(modelViolation);
@@ -254,6 +286,7 @@ async function main(): Promise<number> {
         const promptRunIds = promptResults.filter((p): p is { child: string; exitCode: number; runId: string } => p !== null && p.exitCode === 0 && !!p.runId);
         writeFileSync(join(runRoot, 'prompt-runs.json'), `${JSON.stringify(promptRunIds, null, 2)}\n`);
         log(`prompts dispatched: ${String(promptRunIds.length)}/${String(created.length)}`);
+        writeFileSync(join(runRoot, 'prompt-failures.json'), `${JSON.stringify(promptResults.filter((p) => p === null || p.exitCode !== 0), null, 2)}\n`);
 
         // Observe at 5 s; abort instantly on a guard trip; hard-bounded.
         const bound = Date.now() + BOUND_S * 1000;

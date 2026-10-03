@@ -165,6 +165,10 @@ describe('arm-A spawn plan', () => {
     expect(text).toContain('--no-completion-template');
     expect(text).toContain('--id-only');
     expect(text).not.toContain(' --json');
+    // jsonOutput mode swaps the bare id for the full body (resolvedModel evidence).
+    const jsonArgv = spawnArgv(plan.pass1[0]!, { piOrchBin: '/root/pi-orch/bin/pi-orch', socketPath: '/tmp/s.sock', tokenPath: '/tmp/s.tok' }, true);
+    expect(jsonArgv.join(' ')).toContain(' --json');
+    expect(jsonArgv.join(' ')).not.toContain('--id-only');
   });
 
   it('prompt/cleanup/wait argv target the right session and dispatch detached with idempotency keys', () => {

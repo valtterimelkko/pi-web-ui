@@ -5,11 +5,14 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);
 
-export async function run(argv: string[], timeoutMs = 120_000): Promise<{ code: number; stdout: string; stderr: string }> {
+export async function run(argv: string[], timeoutMs = 120_000, opts: { cwd?: string } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   const file = argv[0];
   if (file === undefined) return { code: -1, stdout: '', stderr: 'empty argv' };
   try {
-    const { stdout, stderr } = await execFile(file, argv.slice(1), { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+    // opts.cwd MUST be passed for any command whose working directory matters:
+    // an inherited cwd once ran `npm ci` against the worktree root whose
+    // node_modules symlinked into production (2026-10-03 incident).
+    const { stdout, stderr } = await execFile(file, argv.slice(1), { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, cwd: opts.cwd });
     return { code: 0, stdout, stderr };
   } catch (err) {
     const e = err as { code?: number | string; stdout?: string; stderr?: string; killed?: boolean };
