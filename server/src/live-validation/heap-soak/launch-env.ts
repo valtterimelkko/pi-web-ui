@@ -70,10 +70,21 @@ const CREDENTIALISH_KEY = /(token|secret|password|credential|apikey|api_key|auth
  * scripts/e2a-soak/assert-evidence-clean.ts).
  */
 export function redactEnvironmentForEvidence(text: string): string {
-  return text.replace(/([A-Za-z_][A-Za-z0-9_]*)=(\S+)/g, (whole, key: string, value: string) => {
-    if (!CREDENTIALISH_KEY.test(key)) return whole;
-    return `${key}=${/path|file|dir/i.test(key) ? value : 'REDACTED'}`;
-  });
+  const redactAssignments = (chunk: string): string =>
+    chunk.replace(/([A-Za-z_][A-Za-z0-9_]*)=(\S+)/g, (whole, key: string, value: string) => {
+      if (!CREDENTIALISH_KEY.test(key)) return whole;
+      return `${key}=${/path|file|dir/i.test(key) ? value : 'REDACTED'}`;
+    });
+  // Parent FINAL correction 03: `systemctl show` prints `Environment=K1=v1 K2=v2`.
+  // Strip the property prefix first, or the regex reads `Environment` as the key
+  // and `K1=v1` as its value, leaking the FIRST assignment unredacted.
+  return text
+    .split('\n')
+    .map((line) => {
+      const m = /^(Environment=)(.*)$/.exec(line);
+      return m ? `${m[1]}${redactAssignments(m[2])}` : redactAssignments(line);
+    })
+    .join('\n');
 }
 
 /**

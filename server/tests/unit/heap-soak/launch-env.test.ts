@@ -93,3 +93,22 @@ describe('redactEnvironmentForEvidence (correction 02: capture BOTH units’ pro
     expect(redactEnvironmentForEvidence(text)).toContain('PI_WEB_UI_WATCH_WAKE_TOKEN_FILE=/run/x/internal-api-token');
   });
 });
+
+describe('redactEnvironmentForEvidence — exact systemctl show shape (parent FINAL correction 03, Luna r2)', () => {
+  it('redacts the FIRST assignment after the Environment= prefix too', () => {
+    const red = redactEnvironmentForEvidence('Environment=API_TOKEN=FAKE_FIRST_SECRET HOME=/tmp JWT_SECRET=FAKE_LATER');
+    expect(red).not.toContain('FAKE_FIRST_SECRET');
+    expect(red).not.toContain('FAKE_LATER');
+    expect(red).toContain('Environment=API_TOKEN=REDACTED');
+    expect(red).toContain('HOME=/tmp');
+  });
+
+  it('handles several property lines, only redacting credential-ish keys', () => {
+    const red = redactEnvironmentForEvidence('MemoryMax=8589934592\nEnvironment=AUTH_PASSWORD=FAKE_PW NODE_ENV=test\nMainPID=42');
+    expect(red).not.toContain('FAKE_PW');
+    expect(red).toContain('MemoryMax=8589934592');
+    expect(red).toContain('NODE_ENV=test');
+    expect(red).toContain('MainPID=42');
+  });
+});
+

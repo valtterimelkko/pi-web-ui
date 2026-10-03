@@ -32,7 +32,9 @@ function modelsFileHasKeys(path: string): boolean {
     };
     return hasKey(parsed);
   } catch {
-    return false; // unparseable non-credential file; name-based rules above still apply
+    // Parent FINAL correction 03 (Luna r2): fail closed — a models.json we cannot
+    // parse cannot be shown key-free, so it is an offender.
+    return true;
   }
 }
 
