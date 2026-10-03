@@ -215,6 +215,11 @@ async function main(): Promise<number> {
     const prodMainPidBefore = (await systemctlShow('pi-web-ui.service', ['MainPID']))['MainPID'];
     log(`production MainPID before: ${prodMainPidBefore ?? '?'}`);
 
+    // 05-answer binding: production node_modules count before, re-checked at
+    // the end; any change aborts (the 2026-10-03 incident must never repeat).
+    const prodNodeModulesBefore = readdirSync('/root/pi-web-ui/node_modules').length;
+    log(`production node_modules before: ${String(prodNodeModulesBefore)}`);
+
     // ── 5-minute pre-window at 5 s ──
     const warmupEnd = Date.now() + 5 * 60_000;
     log('5-minute pre-window sampling');
@@ -345,7 +350,12 @@ async function main(): Promise<number> {
       if (!clean) abortReasons.push('cleanup verification failed — owned sessions may remain');
 
       const prodMainPidAfter = (await systemctlShow('pi-web-ui.service', ['MainPID']))['MainPID'];
-      writeFileSync(join(runRoot, 'mainpid.json'), `${JSON.stringify({ before: prodMainPidBefore, after: prodMainPidAfter, unchanged: prodMainPidBefore === prodMainPidAfter })}\n`);
+      const prodNodeModulesAfter = readdirSync('/root/pi-web-ui/node_modules').length;
+      writeFileSync(join(runRoot, 'mainpid.json'), `${JSON.stringify({ before: prodMainPidBefore, after: prodMainPidAfter, unchanged: prodMainPidBefore === prodMainPidAfter, nodeModulesBefore: prodNodeModulesBefore, nodeModulesAfter: prodNodeModulesAfter, nodeModulesUnchanged: prodNodeModulesBefore === prodNodeModulesAfter })}\n`);
+      if (prodNodeModulesAfter !== prodNodeModulesBefore) {
+        abortReasons.push(`production node_modules count changed during the arm: ${String(prodNodeModulesBefore)} -> ${String(prodNodeModulesAfter)}`);
+      }
+      log(`MainPID before=${prodMainPidBefore ?? '?'} after=${prodMainPidAfter ?? '?'}; node_modules ${String(prodNodeModulesBefore)} -> ${String(prodNodeModulesAfter)}`);
       copyFileSync(OWNED_SESSIONS, join(runRoot, 'owned-sessions-snapshot.txt'));
       log(`MainPID before=${prodMainPidBefore ?? '?'} after=${prodMainPidAfter ?? '?'}`);
     } else {
