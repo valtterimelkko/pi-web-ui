@@ -135,14 +135,17 @@ export function spawnArgv(spec: ChildSpec, conn: Connection): string[] {
     `--model-selector=${spec.modelSelector}`,
     `--thinking=${spec.thinking}`,
     `--owner=${spec.owner}`,
-    `--route-limit=${spec.routeLimit}`,
+    // Space form: pi-orch's parser truncates equals-form values that
+    // themselves contain '=' (smoke-found: --route-limit=X=10 became X).
+    '--route-limit',
+    spec.routeLimit,
     `--label=${spec.label}`,
     '--no-completion-template',
     '--json',
     '--id-only',
   ];
   if (spec.goalObjective !== undefined) {
-    argv.push(`--goal-objective=${spec.goalObjective}`);
+    argv.push('--goal-objective', spec.goalObjective);
   }
   return argv;
 }
@@ -154,7 +157,9 @@ export function promptArgv(sessionId: string, message: string, idempotencyKey: s
     sessionId,
     `--socket=${conn.socketPath}`,
     `--token-path=${conn.tokenPath}`,
-    `--message=${message}`,
+    // Space form: task text carries spaces and must survive parser splitting.
+    '--message',
+    message,
     `--idempotency-key=${idempotencyKey}`,
     '--json',
     '--id-only',

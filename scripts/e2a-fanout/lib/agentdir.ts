@@ -5,8 +5,8 @@
  * is never copied (it holds apiKey entries — the 2026-10-03 amendment).
  */
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export const PRODUCTION_AGENT_DIR = '/root/.pi/agent';
 const APPROVED_AUTH_PROVIDERS = ['zai'] as const;
@@ -71,10 +71,16 @@ export function buildIsolatedAgentDir(destDir: string, sourceDir = PRODUCTION_AG
   return { agentDir: destDir, copiedExtensions, providersInAuth, sha256ManifestPath: manifestPath };
 }
 
-/** Guard: refuse to build on top of the real agent dir. */
+/** Guard: refuse to build on top of the real agent dir (path equality, not the basename). */
 export function assertNotProductionAgentDir(destDir: string): void {
-  if (destDir === PRODUCTION_AGENT_DIR || basename(destDir) === 'agent') {
-    throw new Error(`refusing to build the isolated agent dir on top of a production-shaped path: ${destDir}`);
+  const resolved = destDir.replace(/\/+$/, '');
+  if (resolved === PRODUCTION_AGENT_DIR) {
+    throw new Error(`refusing to build the isolated agent dir on top of the production agent dir: ${destDir}`);
+  }
+  if (existsSync(destDir) && existsSync(PRODUCTION_AGENT_DIR)) {
+    if (statSync(destDir).ino === statSync(PRODUCTION_AGENT_DIR).ino) {
+      throw new Error(`refusing: ${destDir} is the same inode as the production agent dir`);
+    }
   }
 }
 

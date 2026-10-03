@@ -97,6 +97,7 @@ describe('unit argv builders', () => {
     const script = anchorStartScript();
     expect(script).toContain('cgroup.subtree_control');
     expect(script).toContain('sleep infinity');
+    expect(script).toContain('r=/sys/fs/cgroup$(sed');
     expect(script).toContain('/supervisor$');
   });
 
@@ -116,7 +117,8 @@ describe('unit argv builders', () => {
     expect(text).toContain('UnsetEnvironment=PI_TOOLS_PLACEMENT PI_TOOLS_SLICE PI_TOOLS_CGROUP_ROOT PI_TOOLS_RUNTIME_DIR');
     expect(text).toContain('--setenv=PI_TOOLS_SLICE=e2a-4-tools-anchor.service');
     expect(text).toContain('--compiled');
-    expect(text).toContain('--dir=/root/e2a-runs/a4/arm-a/server');
+    expect(text).toMatch(/--dir \/root\/e2a-runs\/a4\/arm-a\/server/);
+    expect(text).toMatch(/--port 45671/);
   });
 });
 
@@ -158,7 +160,7 @@ describe('arm-A spawn plan', () => {
     expect(text).toContain('--token-path=/tmp/s.tok');
     expect(text).toContain("--model-selector=zai/glm-5.3-flash");
     expect(text).toContain('--thinking=high');
-    expect(text).toContain('--route-limit=zai/glm-5.3-flash=10');
+    expect(text).toMatch(/--route-limit zai\/glm-5\.3-flash=10( |$)/);
     expect(text).toContain('--owner=orch-e2-0798cc10-E2a-4-fan');
     expect(text).toContain('--no-completion-template');
     expect(text).toContain('--json');
@@ -169,6 +171,7 @@ describe('arm-A spawn plan', () => {
     const conn = { piOrchBin: '/root/pi-orch/bin/pi-orch', socketPath: '/tmp/s.sock', tokenPath: '/tmp/s.tok' };
     const prompt = promptArgv('sess-1', 'do the tiny task', 'e2a4-prompt-1', conn).join(' ');
     expect(prompt).toContain('prompt sess-1');
+    expect(prompt).toContain('--message do the tiny task');
     expect(prompt).toContain('--idempotency-key=e2a4-prompt-1');
     expect(prompt).not.toContain('--no-detach');
     expect(cleanupArgv('sess-1', conn, 'orch-e2-0798cc10-E2a-4-fan').join(' ')).toContain('--owner=orch-e2-0798cc10-E2a-4-fan');

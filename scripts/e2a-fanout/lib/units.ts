@@ -14,7 +14,7 @@ export function anchorStartScript(): string {
   return [
     '#!/bin/sh',
     '# E2a-4 lane tools anchor (mirrors deploy/pi-web-ui-tools-anchor.service).',
-    "r=$(sed -n 's|^0::||;s|/supervisor$||p' /proc/self/cgroup)",
+    "r=/sys/fs/cgroup$(sed -n 's|^0::||;s|/supervisor$||p' /proc/self/cgroup)",
     '[ -d "$r" ] || exit 1',
     "echo '+cpu +memory +pids' > \"$r/cgroup.subtree_control\" || exit 1",
     'exec sleep infinity',
@@ -94,9 +94,12 @@ export function buildServerUnitArgs(opts: ServerUnitOptions): string[] {
     'npx',
     'tsx',
     'scripts/validation-server.ts',
-    `--dir=${opts.validationDir}`,
+    // Space form: the validation server's argv parser ignores --dir=VALUE / --port=VALUE.
+    '--dir',
+    opts.validationDir,
     '--compiled',
-    `--port=${String(opts.httpPort)}`,
+    '--port',
+    String(opts.httpPort),
   );
   return argv;
 }

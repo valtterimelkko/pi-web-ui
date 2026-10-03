@@ -229,7 +229,8 @@ export async function runArm(opts: ArmOptions): Promise<{ ok: boolean; summaryPa
     const anchorStart = await run(anchorArgs, 30_000);
     if (anchorStart.code !== 0) throw new Error(`anchor start failed: ${anchorStart.stderr}`);
     anchorStarted = true;
-    await waitForMainPid(anchorUnit, 20_000);
+    const anchorPid = await waitForMainPid(anchorUnit, 20_000);
+    if (!anchorPid) throw new Error('anchor unit never reported a MainPID (start script failed — see journalctl -u e2a-4-tools-anchor.service)');
     const anchorCgroup = (await systemctlShow(anchorUnit, ['ControlGroup']))['ControlGroup'] ?? '';
     writeFileSync(join(runRoot, 'anchor-cgroup.txt'), `${anchorCgroup}\n`);
     if (!anchorCgroup.includes('e2a-4') || anchorCgroup.includes('pi-web-ui')) {
