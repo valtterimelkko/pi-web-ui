@@ -20,6 +20,14 @@ const logger = createLogger('DeletedSessionCessation');
  *     leak, and a bounded false-release window.
  * A session that disappears without having been recorded deleted is held
  * (fail-closed): the tracker is process-local and every delete records.
+ *
+ * Correction 02 (Luna r2 new finding 1): records are RETIRED — once no
+ * active or draining receipt for the session can still consult the record
+ * (`hasConsultant`, manager-backed) the record is removed: an acked delete
+ * with no consultant is retired at once, and a grace-released record is
+ * removed after its release. Retirement keeps the map bounded for the
+ * server's lifetime without ever stranding a second quarantined run of the
+ * same deleted session (any such run keeps the consultant predicate true).
  */
 export interface DeletedSessionCessationOptions {
   now?: () => number;
@@ -27,6 +35,13 @@ export interface DeletedSessionCessationOptions {
   graceMs?: number;
   /** Log sink seam for tests. Default: the shared logger. */
   log?: (line: string) => void;
+  /**
+   * Correction 02: whether any receipt (non-terminal run, or a draining /
+   * quarantined entry) for this session can still consult its record.
+   * Manager-backed in the wiring; a test may inject a fixed answer.
+   * Default `() => true` (conservative: never retire for want of a consultant).
+   */
+  hasConsultant?: (sessionId: string) => boolean;
 }
 
 interface DeletedRecord {
@@ -43,15 +58,20 @@ export class DeletedSessionCessation {
   private readonly now: () => number;
   private readonly graceMs: number;
   private readonly log: (line: string) => void;
+  private readonly hasConsultant: (sessionId: string) => boolean;
 
   constructor(options: DeletedSessionCessationOptions = {}) {
     this.now = options.now ?? Date.now;
     this.graceMs = options.graceMs ?? DELETION_CESSATION_GRACE_MS;
     this.log = options.log ?? ((line: string) => logger.warn(line));
+    this.hasConsultant = options.hasConsultant ?? (() => true);
   }
 
   /** Record a deletion observed by the delete/dispose path. */
   record(sessionId: string, runtime: SessionRuntime, terminationAcked: boolean): void {
+    // Correction 02: an acked delete that no receipt can consult is retired at
+    // once — recording it would only grow the map for the server's lifetime.
+    if (terminationAcked && !this.hasConsultant(sessionId)) return;
     this.records.set(sessionId, {
       runtime,
       deletedAtMs: this.now(),
@@ -60,15 +80,34 @@ export class DeletedSessionCessation {
     });
   }
 
+  /** Correction 02: whether a deletion record is currently held for a session. */
+  has(sessionId: string): boolean {
+    return this.records.has(sessionId);
+  }
+
+  /** Correction 02: bounded-growth evidence — how many records are held. */
+  retainedCount(): number {
+    return this.records.size;
+  }
+
   /**
    * Whether a deleted session's runtime has positive cessation evidence: an
    * awaited ack → immediately; otherwise only after the bounded grace (logged
    * once as a grace-release). Never-observed sessions are held.
+   *
+   * Correction 02: each consult also retires the record when no receipt can
+   * consult it any more — acked records after answering, grace-pending ones
+   * kept until their release, and past-grace ones removed with the release
+   * decision they had reached (never re-released after retirement).
    */
   isQuiescent(sessionId: string): boolean {
     const record = this.records.get(sessionId);
     if (!record) return false; // fail-closed: deletion never observed
-    if (record.terminationAcked) return true;
+    const consultant = this.hasConsultant(sessionId);
+    if (record.terminationAcked) {
+      if (!consultant) this.records.delete(sessionId);
+      return true;
+    }
     if (this.now() - record.deletedAtMs < this.graceMs) return false;
     if (!record.graceReleaseLogged) {
       record.graceReleaseLogged = true;
@@ -76,6 +115,7 @@ export class DeletedSessionCessation {
         `grace-release: runtime=${record.runtime} session=${sessionId} released from the deletion cessation fence after ${this.graceMs}ms grace (no awaited termination acknowledgement)`,
       );
     }
+    if (!consultant) this.records.delete(sessionId);
     return true;
   }
 }

@@ -955,6 +955,17 @@ export class RunReceiptManager {
     return n;
   }
 
+  /** Correction 02: whether a draining or quarantined entry (a retired-record
+   *  consultant) still exists for a session — its deletion record must be
+   *  kept until this turns false, so a second run of the same deleted session
+   *  can never be stranded by an early retirement. */
+  hasDrainingForSession(sessionId: string): boolean {
+    for (const entry of this.draining.values()) {
+      if (entry.sessionId === sessionId) return true;
+    }
+    return false;
+  }
+
   /** L1: age in ms of the oldest quarantined entry, or undefined when none. */
   getQuarantinedOldestAgeMs(): number | undefined {
     let oldest: number | undefined;

@@ -74,4 +74,81 @@ describe('DeletedSessionCessation (correction 01)', () => {
     expect(tracker.isQuiescent('pi-2')).toBe(true);
     expect(logLines).toEqual([]);
   });
+
+  // Correction 02 (Luna r2 new finding 1): the tracker is process-lifetime and
+  // every delete records — records must be RETIRED once no active or draining
+  // receipt can still consult them (and any required grace has elapsed), or
+  // routine child cleanup grows the map for the server's whole lifetime.
+  describe('record retirement (correction 02)', () => {
+    it('retires acked deletes at once when no receipt can consult them (100 acked deletes → 0 records)', () => {
+      make();
+      const unowned = new DeletedSessionCessation({
+        now: () => now,
+        graceMs: 15 * 60_000,
+        log: (l) => logLines.push(l),
+        hasConsultant: () => false, // no non-terminal receipt, no draining/quarantined entry
+      });
+      for (let i = 0; i < 100; i += 1) unowned.record(`deleted-${i}`, 'pi', true);
+      expect(unowned.retainedCount()).toBe(0);
+      expect(unowned.has('deleted-0')).toBe(false);
+      expect(unowned.has('deleted-99')).toBe(false);
+    });
+
+    it('keeps an acked record while a receipt can still consult it, retires it when the consultant clears', () => {
+      make();
+      let consultant = true;
+      const t = new DeletedSessionCessation({
+        now: () => now,
+        graceMs: 15 * 60_000,
+        log: (l) => logLines.push(l),
+        hasConsultant: () => consultant,
+      });
+      t.record('pi-live', 'pi', true);
+      expect(t.isQuiescent('pi-live')).toBe(true); // releases the quarantined run
+      expect(t.has('pi-live')).toBe(true); // a second run of the same session may still consult
+      consultant = false; // the last quarantined/draining run released
+      expect(t.isQuiescent('pi-live')).toBe(true); // answers once more…
+      expect(t.has('pi-live')).toBe(false); // …and the record is gone
+    });
+
+    it('keeps a grace-pending record until its release, then removes it after the release', () => {
+      make();
+      let consultant = true;
+      const t = new DeletedSessionCessation({
+        now: () => now,
+        graceMs: 60_000,
+        log: (l) => logLines.push(l),
+        hasConsultant: () => consultant,
+      });
+      t.record('claude-g', 'claude', false);
+      now += 30_000;
+      expect(t.isQuiescent('claude-g')).toBe(false); // inside the grace
+      expect(t.has('claude-g')).toBe(true); // survives: a receipt can still consult it
+      now += 31_000;
+      expect(t.isQuiescent('claude-g')).toBe(true); // grace-release
+      expect(t.has('claude-g')).toBe(true); // the consultant (quarantined run) has not released yet
+      consultant = false;
+      expect(t.isQuiescent('claude-g')).toBe(true); // answers…
+      expect(t.has('claude-g')).toBe(false); // …and the record is retired after the release
+      expect(logLines.filter((l) => l.includes('grace-release')).length).toBe(1); // logged exactly once
+    });
+
+    it('retires an unacked record once the grace has elapsed and no receipt can consult it (answer stays a release, logged once)', () => {
+      make();
+      const unowned = new DeletedSessionCessation({
+        now: () => now,
+        graceMs: 60_000,
+        log: (l) => logLines.push(l),
+        hasConsultant: () => false,
+      });
+      unowned.record('claude-x', 'claude', false);
+      now += 30_000;
+      expect(unowned.isQuiescent('claude-x')).toBe(false); // inside the grace: held, record kept
+      now += 31_000;
+      expect(unowned.isQuiescent('claude-x')).toBe(true); // past the grace: a release decision
+      expect(unowned.has('claude-x')).toBe(false); // retired: no receipt can consult it any more
+      expect(unowned.isQuiescent('claude-x')).toBe(false); // retired records fail closed (never re-release)
+      expect(logLines.filter((l) => l.includes('grace-release')).length).toBe(1);
+    });
+  });
 });

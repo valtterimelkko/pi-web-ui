@@ -32,7 +32,7 @@ import { createNotificationsRoutes } from './routes/notifications.js';
 import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
 import { buildStallNotification } from './run-receipts/stall-notification.js';
-import { readPiRuntimeQuiescence } from './runtime-quiescence.js';
+import { readPiRuntimeQuiescence, type PiSessionStatusInfo } from './runtime-quiescence.js';
 import { DeletedSessionCessation } from './run-receipts/deletion-cessation.js';
 import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
@@ -172,6 +172,51 @@ export function resolveInternalApiAdmissionOptions(input: Pick<InternalApiConfig
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
+/**
+ * Correction 02 (Luna r2, finding 2 remainder): the server's runtime-quiescence
+ * callback as a testable factory — the tests drive THIS ordering, not a copy.
+ *
+ * Ordering: a recorded deletion gates FIRST (a DELETE's abort-only runtimes —
+ * OpenCode among them — flip `isRunning()` to false before remote cessation is
+ * acknowledged, so a mid-delete poll must not read the flipped truth as
+ * quiescent); then the Command Code / registry branches as before; a missing
+ * entry consults the deletion tracker (fail-closed when never recorded).
+ */
+export interface RuntimeQuiescencePredicateDeps {
+  deletedSessionCessation: DeletedSessionCessation;
+  commandCodeService: { getSession: (sessionId: string) => Promise<unknown>; isRunning: (sessionId: string) => boolean } | undefined;
+  sessionRegistry: { get: (sessionId: string) => Promise<{ sdkType: string; path: string } | undefined> };
+  claudeService: { isRunning: (sessionId: string) => boolean };
+  opencodeService: { isRunning: (sessionId: string) => boolean };
+  antigravityService: { isRunning: (sessionId: string) => boolean };
+  readPiStatus: (sessionPath: string) => PiSessionStatusInfo | undefined;
+}
+
+export function createRuntimeQuiescencePredicate(deps: RuntimeQuiescencePredicateDeps): (sessionId: string) => Promise<boolean> {
+  return async (sessionId) => {
+    try {
+      // Correction 02: a recorded deletion decides before any isRunning() truth.
+      if (deps.deletedSessionCessation.has(sessionId)) {
+        return deps.deletedSessionCessation.isQuiescent(sessionId);
+      }
+      const commandCode = deps.commandCodeService;
+      if (commandCode) {
+        const commandCodeEntry = await commandCode.getSession(sessionId);
+        if (commandCodeEntry) return !commandCode.isRunning(sessionId);
+      }
+      const entry = await deps.sessionRegistry.get(sessionId);
+      if (!entry) return deps.deletedSessionCessation.isQuiescent(sessionId); // never recorded: fail closed
+      if (entry.sdkType === 'commandcode') return commandCode ? !commandCode.isRunning(sessionId) : true;
+      if (entry.sdkType === 'claude') return !deps.claudeService.isRunning(sessionId);
+      if (entry.sdkType === 'opencode') return !deps.opencodeService.isRunning(sessionId);
+      if (entry.sdkType === 'antigravity') return !deps.antigravityService.isRunning(sessionId);
+      return readPiRuntimeQuiescence(() => deps.readPiStatus(entry.path));
+    } catch {
+      return false; // status lookup failure is not positive cessation evidence
+    }
+  };
+}
+
 export class InternalApiServer {
   private server: Server | null = null;
   private config: InternalApiConfig;
@@ -267,7 +312,19 @@ export class InternalApiServer {
     const drainRecordPath = this.config.drainRecordPath || path.join(path.dirname(runReceiptDir), 'internal-api-drain.json');
     const priorDrain = consumeDrainRecord(drainRecordPath);
     const drainCutOff = new Set(priorDrain?.state === 'timed_out' ? priorDrain.cutOffRunIds : []);
-    const runReceiptManager = new RunReceiptManager({
+    // Correction 01/02 (Luna r1 finding 2, r2 new finding 1): gates the
+    // quiescence predicate's missing-entry branch and the deletion window —
+    // awaited-dispose runtimes release immediately, abort-only runtimes hold
+    // for the bounded deletion grace (grace-release). Records RETIRE once no
+    // receipt (non-terminal run or draining/quarantined entry) can consult
+    // them, so routine child cleanup cannot grow the map over the server's
+    // lifetime. Declared before the receipt manager, whose predicate wiring
+    // closes over it; the consultant lambda itself runs lazily.
+    const deletedSessionCessation = new DeletedSessionCessation({
+      hasConsultant: (sessionId) => runReceiptManager.hasDrainingForSession(sessionId)
+        || runReceiptManager.listNonterminal().some((run) => run.sessionId === sessionId),
+    });
+    const runReceiptManager: RunReceiptManager = new RunReceiptManager({
       store: new RunReceiptStore(runReceiptDir, {
         classifyRecovery: (record) => (drainCutOff.has(record.runId) ? 'drain_timeout' : 'server_restart'),
       }),
@@ -302,24 +359,19 @@ export class InternalApiServer {
       // the runtime confirms it has stopped, or a 30s drain timeout (quarantine).
       // Correction 01 (Luna r1 finding 2): a missing registry entry is NOT proof
       // of cessation — DELETE aborts Claude/OpenCode/Antigravity without
-      // awaiting termination. The deletion tracker admits an awaited dispose
-      // (Pi, Command Code) immediately and holds every other runtime for a
-      // bounded grace, releasing it once with a grace-release log.
-      isRuntimeQuiescent: async (sessionId) => {
-        try {
-          const commandCodeEntry = await this.commandCodeService.getSession(sessionId);
-          if (commandCodeEntry) return !this.commandCodeService.isRunning(sessionId);
-          const entry = await this.sessionRegistry.get(sessionId);
-          if (!entry) return deletedSessionCessation.isQuiescent(sessionId);
-          if (entry.sdkType === 'commandcode') return !this.commandCodeService.isRunning(sessionId);
-          if (entry.sdkType === 'claude') return !this.claudeService.isRunning(sessionId);
-          if (entry.sdkType === 'opencode') return !this.opencodeService.isRunning(sessionId);
-          if (entry.sdkType === 'antigravity') return !this.antigravityService.isRunning(sessionId);
-          return readPiRuntimeQuiescence(() => this.multiSessionManager.getSessionStatus(entry.path));
-        } catch {
-          return false; // status lookup failure is not positive cessation evidence
-        }
-      },
+      // awaiting termination. Correction 02 (Luna r2): the shared predicate
+      // factory consults the deletion tracker FIRST — a recorded deletion gates
+      // the answer before any isRunning() truth, because abort-only runtimes
+      // flip isRunning() false before remote cessation is acknowledged.
+      isRuntimeQuiescent: createRuntimeQuiescencePredicate({
+        deletedSessionCessation,
+        commandCodeService: this.commandCodeService,
+        sessionRegistry: this.sessionRegistry,
+        claudeService: this.claudeService,
+        opencodeService: this.opencodeService,
+        antigravityService: this.antigravityService,
+        readPiStatus: (sessionPath) => this.multiSessionManager.getSessionStatus(sessionPath),
+      }),
       // C2 (contract 1.57.0): the operator learns a dispatched run never
       // started without polling. The parent-watch firing sink is registered
       // separately by the route layer (it owns the watch manager).
@@ -464,10 +516,6 @@ export class InternalApiServer {
     const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: () => busySource.refresh() });
 
     // Create routes
-    // Correction 01 (Luna r1 finding 2): gates the quiescence wiring's
-    // missing-session branch — awaited-dispose runtimes release immediately,
-    // abort-only runtimes hold for the bounded deletion grace (grace-release).
-    const deletedSessionCessation = new DeletedSessionCessation();
     const sessionRoutes = createSessionRoutes({
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,

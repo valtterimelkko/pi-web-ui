@@ -257,6 +257,34 @@ describe('L1 reconciliation guard for quarantined admission leases', () => {
     }
   });
 
+  // Correction 02 (Luna r2 new finding 1): the deletion tracker is consulted
+  // for retirement decisions — expose whether the manager still holds a
+  // draining or quarantined entry for a session.
+  it('hasDrainingForSession sees draining and quarantined entries and clears on release', async () => {
+    const h = await makeHarness();
+    try {
+      quiescent = false;
+      const wired = new RunReceiptManager({
+        store: h.store, now: h.getNow, idFactory: () => `c02-${Math.random().toString(36).slice(2, 8)}`,
+        idempotencyTtlMs: 1_000, metrics: h.metrics,
+        drainPollMs: 5, drainTimeoutMs: 50, quarantineReconcileMs: 3_600_000, // stay quarantined
+        isRuntimeQuiescent: async () => quiescent,
+      });
+      await wired.init();
+      expect(wired.hasDrainingForSession('c02-session')).toBe(false);
+      const begun = await wired.beginRun({ ...baseInput, sessionId: 'c02-session', idempotencyKey: 'c02' });
+      wired.attachLease(begun.receipt.runId, { release: () => undefined });
+      await wired.cancelRun(begun.receipt.runId);
+      await sleep(150); // past the drain timeout → quarantined
+      expect(wired.hasDrainingForSession('c02-session')).toBe(true);
+      await wired.confirmRuntimeQuiescent(begun.receipt.runId); // released
+      expect(wired.hasDrainingForSession('c02-session')).toBe(false);
+      await wired.shutdown();
+    } finally {
+      await harnessCleanup(h);
+    }
+  });
+
   it('getQuarantinedOldestAgeMs reports the oldest quarantined entry age and undefined when none', async () => {
     const h = await makeHarness();
     try {

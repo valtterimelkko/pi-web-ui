@@ -3212,6 +3212,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // Idempotent; runs no handles unless a surface registered under the path.
       if (entry.path && entry.path !== sessionId) disposal.dispose(entry.path);
 
+      // Correction 02 (Luna r2, finding 2 remainder): record the deletion
+      // BEFORE the runtime abort — the abort of an abort-only runtime
+      // (OpenCode) clears isRunning() while the remote cessation is still
+      // unacknowledged, and the quiescence callback consults this tracker
+      // before any isRunning() truth, so the record must exist from the
+      // earliest moment of the deletion window. Pi's awaited dispose and
+      // Command Code's awaited delete are termination acknowledgements
+      // (released immediately); Claude, OpenCode and Antigravity hold through
+      // the bounded deletion grace.
+      deletedSessionCessation?.record(
+        sessionId,
+        entry.sdkType as SessionRuntime,
+        entry.sdkType === 'pi',
+      );
+
       if (entry.sdkType === 'claude') {
         claudeService.abort(sessionId);
       } else if (entry.sdkType === 'opencode') {
@@ -3255,18 +3270,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       await watchManager.delete(sessionId);
       if (pinExpiry) await pinExpiry.clear(sessionId);
       await unpinSessionById(sessionId).catch(() => false); // human Web UI claim
-      // Correction 01 (Luna r1 finding 2): record the deletion BEFORE the
-      // registry entry disappears, so the quiescence wiring's missing-entry
-      // branch is gated from the moment the id stops resolving. Pi's awaited
-      // disposeLoadedSession completes in this handler before the registry
-      // delete, so by the time the id stops resolving its termination is
-      // acknowledged; Claude, OpenCode and Antigravity only aborted without
-      // awaiting termination and hold through the bounded deletion grace.
-      deletedSessionCessation?.record(
-        sessionId,
-        entry.sdkType as SessionRuntime,
-        entry.sdkType === 'pi',
-      );
 
       if (entry.sdkType === 'pi') {
         // Dispose the live SDK object before unlinking its backing JSONL. This
