@@ -252,6 +252,14 @@ describe('unsupported runtimes (R4 visibility)', () => {
     expect(event?.projection.pausedReason).toBe('interrupted');
     expect(event?.projection.interruption).toMatchObject({ cause: 'unsupported_runtime', source: 'receipt' });
   });
+
+  it('an announced candidate whose goal since reached a terminal state is skipped (stale receipt)', async () => {
+    const h = harness({ readRawProjection: async () => ({ supported: true, status: 'achieved', completedAt: 99 }) });
+    const report = await runSweep(h, [apiChild({ announced: { source: 'receipt', interruptionReason: 'server_restart' } })]);
+    expect(h.dispatches).toHaveLength(0);
+    expect(h.events).toHaveLength(0);
+    expect(report.skipped).toContain('pi-child-1');
+  });
 });
 
 describe('helpers', () => {

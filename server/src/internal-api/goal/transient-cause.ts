@@ -55,7 +55,7 @@ export type GoalStopClassification =
   | { transient: false; reason: string };
 
 /** Receipt/drain reasons that mean the server cut the run off (not the child or parent). */
-const RESTART_REASONS = new Set(['SERVER_RESTART', 'interruptedByRestart', 'drain_timeout']);
+const RESTART_REASONS = new Set(['SERVER_RESTART', 'server_restart', 'interruptedByRestart', 'drain_timeout']);
 
 /**
  * Positive provider evidence only (R6). A bare "aborted" is ambiguous — a

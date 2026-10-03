@@ -3281,7 +3281,7 @@ without any parent action. The transient cause list is closed (K1):
 
 | Cause | Detected from |
 | --- | --- |
-| `restart_interruption` | a restart-interrupted run receipt (`SERVER_RESTART`, `interruptedByRestart`), a drain timeout (`drain_timeout`), or a boot-orphan goal (`running`/`wrapping_up` on disk, session idle, at boot) |
+| `restart_interruption` | a restart-interrupted run receipt (`SERVER_RESTART`/`server_restart`, `interruptedByRestart`), a drain timeout (`drain_timeout`), or a boot-orphan goal (`running`/`wrapping_up` on disk, session idle, at boot) |
 | `rehydrate_pause` | the goal engine's `pausedReason: "restored_on_session_start"` inside a restart/orphan scope |
 | `provider_abort` | positive provider evidence only: overload, 429, rate limit, 5xx, provider connection reset, exhausted provider retries |
 

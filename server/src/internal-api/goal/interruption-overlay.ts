@@ -35,6 +35,12 @@ export interface InterruptionOverlayRecord {
   detectedAt: number;
   /** 0 = not continued (visible interruption), 1 = auto-continued once. */
   continueCount?: number;
+  /**
+   * Explicit: this overlay records an auto-continue (status stays running) —
+   * never inferred from continueCount, which a second-transient overlay also
+   * carries (the PAST continue count).
+   */
+  autoContinued?: boolean;
   continueNote?: string;
   inFlightToolCall?: InFlightToolCall | null;
   goalFile: GoalFileIdentity;
@@ -113,7 +119,7 @@ export function applyInterruptionOverlay(
     source: overlay.source,
     detectedAt: overlay.detectedAt,
     continueCount: overlay.continueCount ?? 0,
-    autoContinued: annotation?.autoContinued ?? (overlay.continueCount ?? 0) >= 1,
+    autoContinued: annotation?.autoContinued ?? overlay.autoContinued === true,
     continueNote: overlay.continueNote,
     inFlightToolCall: overlay.inFlightToolCall ?? null,
   };

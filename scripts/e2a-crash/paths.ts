@@ -1,11 +1,11 @@
 /**
  * Run-directory layout for the E2a-6c crash-recovery harness.
  * Everything lives under /root/e2a-runs/a6c/<run-id>/ — never in the repo.
- * Units are named e2a-6c-* so the host guard's protection applies.
+ * Units are named k-K-arm-* (wave K lane; the guard's unit-scoped protection applies).
  */
 import path from 'node:path';
 
-export const RUNS_ROOT = '/root/e2a-runs/a6c';
+export const RUNS_ROOT = '/root/e2a-runs/k';
 
 export function runIdPath(runId: string): string {
   if (!/^[a-zA-Z0-9._-]{1,64}$/.test(runId)) {
@@ -60,13 +60,13 @@ export function resolveRunPaths(runId: string): RunPaths {
 }
 
 export function anchorUnitName(): string {
-  return 'e2a-6c-tools-anchor.service';
+  return 'k-K-arm-tools-anchor.service';
 }
 
 export function serverUnitName(): string {
-  return 'e2a-6c-server.service';
+  return 'k-K-arm-server.service';
 }
 
 export function sliceName(): string {
-  return 'e2a-6c.slice';
+  return 'k-K-arm.slice';
 }

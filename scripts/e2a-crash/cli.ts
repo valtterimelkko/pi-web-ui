@@ -7,12 +7,14 @@
  *   cli.ts smoke     --run-id a6c-r1
  *   cli.ts kill-arm  --run-id a6c-r1 --children 4
  *   cli.ts drain-arm --run-id a6c-r1 --children 4
+ *   cli.ts second-fault --run-id a6c-r1
  *   cli.ts analyse   --run-id a6c-r1 --arm kill
  *   cli.ts stop-server --run-id a6c-r1
  *   cli.ts status
  */
 import { statusUnits } from './harness-status.ts';
 import { prepare, startServerForRun, stopServerForRun, runSmoke, runKillArm, runDrainArm, runPlacementSmoke, analyseArm } from './driver.ts';
+import { runSecondFaultArm } from './wavek.ts';
 
 function flag(args: string[], name: string, fallback?: string): string | undefined {
   const i = args.indexOf(`--${name}`);
@@ -53,6 +55,9 @@ async function main(): Promise<void> {
     }
     case 'analyse':
       await analyseArm(runId, flag(rest, 'arm', 'kill') as string);
+      break;
+    case 'second-fault':
+      await runSecondFaultArm(runId);
       break;
     case 'placement-smoke':
       await runPlacementSmoke(runId);

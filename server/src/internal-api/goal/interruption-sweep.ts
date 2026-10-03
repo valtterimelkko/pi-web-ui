@@ -49,6 +49,8 @@ export interface SweepReport {
   continued: string[];
   interruptedVisible: string[];
   skipped: string[];
+  /** Why each skipped candidate was skipped (diagnostics; id -> reason). */
+  skipReasons: Record<string, string>;
 }
 
 export interface InterruptionSweepDeps {
@@ -117,6 +119,11 @@ interface ClassifiedStop {
 async function classifyCandidate(candidate: SweepCandidate, deps: InterruptionSweepDeps): Promise<{ stop: ClassifiedStop | null; projection: SessionGoalProjection }> {
   const projection = await deps.readRawProjection(candidate.sessionPath);
   if (candidate.announced) {
+    // A stale receipt describes history: when the goal since reached a
+    // terminal state the interruption already resolved — never re-announce it.
+    if (projection.status === 'achieved' || projection.status === 'cleared' || projection.status === 'idle') {
+      return { stop: null, projection };
+    }
     const verdict = classifyGoalStop({ source: candidate.announced.source, interruptionReason: candidate.announced.interruptionReason });
     if (verdict.transient) return { stop: { transient: true, cause: verdict.cause, source: candidate.announced.source }, projection };
     return { stop: null, projection };
@@ -164,6 +171,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
         source: stop.source,
         detectedAt: interruption.detectedAt,
         continueCount: existing.count,
+        autoContinued: false,
         goalFile: (await deps.readGoalFileIdentity(candidate.sessionPath)) ?? { mtimeMs: 0, size: 0 },
       };
       await deps.overlayStore.set(overlayRecord);
@@ -197,6 +205,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
           source: stop.source,
           detectedAt: now(),
           continueCount: 1,
+          autoContinued: true,
           continueNote: note,
           inFlightToolCall,
           goalFile: identity,
@@ -225,6 +234,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
       source: stop.source,
       detectedAt: interruption.detectedAt,
       continueCount: 0,
+      autoContinued: false,
       goalFile: (await deps.readGoalFileIdentity(candidate.sessionPath)) ?? { mtimeMs: 0, size: 0 },
     };
     await deps.overlayStore.set(overlayRecord);
@@ -233,12 +243,16 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
   }
 
   async function handleCandidate(candidate: SweepCandidate, bootTimeMs: number, report: SweepReport): Promise<void> {
-    if (!isApiOriginChild(candidate)) { report.skipped.push(candidate.sessionId); return; }
-    if (!candidate.announced && !withinPreviousLifetime(candidate, bootTimeMs, deps.restartBoundMs ?? DEFAULT_RESTART_BOUND_MS)) {
+    const skip = (reason: string): void => {
       report.skipped.push(candidate.sessionId);
+      report.skipReasons[candidate.sessionId] = reason;
+    };
+    if (!isApiOriginChild(candidate)) { skip(`origin '${candidate.origin ?? 'none'}' is not an API child`); return; }
+    if (!candidate.announced && !withinPreviousLifetime(candidate, bootTimeMs, deps.restartBoundMs ?? DEFAULT_RESTART_BOUND_MS)) {
+      skip(`last activity ${candidate.lastActivityMs ?? 'unknown'} outside the previous lifetime bound`);
       return;
     }
-    if (await deps.isSessionBusy(candidate.sessionId)) { report.skipped.push(candidate.sessionId); return; }
+    if (await deps.isSessionBusy(candidate.sessionId)) { skip('session is live (busy)'); return; }
 
     if (candidate.runtime !== 'pi') {
       // Runtimes without a resume path this wave: visible interruption only.
@@ -253,19 +267,22 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
           return;
         }
       }
-      report.skipped.push(candidate.sessionId);
+      skip(`runtime '${candidate.runtime}' has no resume path this wave`);
       return;
     }
 
     const { stop, projection } = await classifyCandidate(candidate, deps);
-    if (!stop) { report.skipped.push(candidate.sessionId); return; }
+    if (!stop) {
+      skip(`goal state '${projection.status}' is not a transient stop (no continue, nothing silent)`);
+      return;
+    }
     await continueOnce(candidate, stop, projection, report);
   }
 
   return {
     /** Boot / drain-timeout sweep. `candidates` come from the server wiring. */
     async run(candidates: SweepCandidate[], bootTimeMs: number): Promise<SweepReport> {
-      const report: SweepReport = { continued: [], interruptedVisible: [], skipped: [] };
+      const report: SweepReport = { continued: [], interruptedVisible: [], skipped: [], skipReasons: {} };
       // Dedupe by sessionId (a session can appear in both receipt and drain sets).
       const unique = new Map<string, SweepCandidate>();
       for (const candidate of candidates) {
@@ -279,8 +296,9 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
           const candidate = list[index++];
           try {
             await handleCandidate(candidate, bootTimeMs, report);
-          } catch {
+          } catch (error) {
             report.skipped.push(candidate.sessionId);
+            report.skipReasons[candidate.sessionId] = `error: ${error instanceof Error ? error.message : String(error)}`;
           }
         }
       };
@@ -298,7 +316,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
       const verdict = classifyGoalStop({ source: 'provider_abort', status: projection.status === 'failed' ? 'failed' : 'paused', lastErrorMessage: extractLastErrorMessage(projection) });
       if (!verdict.transient) return;
       const stop: ClassifiedStop = { transient: true, cause: 'provider_abort', source: 'provider_abort' };
-      const report: SweepReport = { continued: [], interruptedVisible: [], skipped: [] };
+      const report: SweepReport = { continued: [], interruptedVisible: [], skipped: [], skipReasons: {} };
       await continueOnce({ sessionId, sessionPath, runtime: 'pi' }, stop, projection, report);
     },
   };

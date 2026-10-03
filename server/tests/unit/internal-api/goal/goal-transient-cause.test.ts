@@ -25,6 +25,7 @@ function row(name: string, facts: StopFacts, expected: { transient: boolean; cau
 
 describe('classifyGoalStop — transient rows', () => {
   row('receipt SERVER_RESTART', { source: 'receipt', interruptionReason: 'SERVER_RESTART' }, { transient: true, cause: 'restart_interruption' });
+  row('receipt server_restart (run-receipt spelling)', { source: 'receipt', interruptionReason: 'server_restart' }, { transient: true, cause: 'restart_interruption' });
   row('receipt interruptedByRestart', { source: 'receipt', interruptionReason: 'interruptedByRestart' }, { transient: true, cause: 'restart_interruption' });
   row('drain drain_timeout', { source: 'drain', interruptionReason: 'drain_timeout' }, { transient: true, cause: 'restart_interruption' });
   row('boot orphan: goal running on disk, session not busy', { source: 'boot_orphan', diskStatus: 'running', sessionBusy: false }, { transient: true, cause: 'restart_interruption' });

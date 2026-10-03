@@ -145,6 +145,9 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
         `[InternalAPI] wave K sweep: ${candidates.length} registry candidate(s), ` +
         `${report.continued.length} continued, ${report.interruptedVisible.length} interrupted-visible, ${report.skipped.length} skipped`,
       );
+      for (const [sessionId, reason] of Object.entries(report.skipReasons)) {
+        logger?.info(`[InternalAPI] wave K sweep: skipped ${sessionId}: ${reason}`);
+      }
       return report;
     },
 

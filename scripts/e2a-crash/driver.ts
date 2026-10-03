@@ -14,7 +14,7 @@ import { buildCrashAgentDir } from './agent-dir.ts';
 import { prepareServerEnv, startServerUnit, killServerUnit, stopServerUnits, assertPlacementRootIsolated, assertPlacementEnabledInJournal, waitForSystemdAutoRestart, waitForServerReadyViaApi, journalRestartEvidence, SMOKE_MODE, ARM_MODE, getUnitStatus, type StartedServer, type ServerMode } from './server.ts';
 import {
   spawnGoalChild, registerObserverWatch, getChildStatus, startDrain, getDrainStatus,
-  assertServedModel, snapshotChildToolProcesses, type OrchTarget, type ProcRecord,
+  assertServedModel, snapshotChildToolProcesses, getGoalProjection, type OrchTarget, type ProcRecord,
 } from './dispatch.ts';
 import { unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -25,8 +25,8 @@ import {
 } from './analysis.ts';
 import { copyFileSync } from 'node:fs';
 
-const REPO_ROOT = '/root/.worktrees/orch-scaling/e2-a6c-pi-web-ui'; // lane-fixed: this harness runs from the E2a-6c execution worktree
-const OWNER = 'orch-e2-0798cc10-E2a-6c';
+const REPO_ROOT = '/root/.worktrees/orch-scaling/k-pi-web-ui'; // lane-fixed: this harness runs from the wave K execution worktree
+const OWNER = 'orch-0798cc10-waveK';
 const MODEL_SELECTOR = 'zai/glm-5.3-flash';
 const SAMPLE_INTERVAL_MS = 10_000;
 const OBSERVE_INTERVAL_MS = 15_000;
@@ -482,7 +482,7 @@ export async function runSmoke(runId: string): Promise<void> {
         maxTurns: 8,
         budgetTokens: 2_000_000,
       });
-      const watchId = await registerObserverWatch(target, sessionId, `e2a-6c-${label}`);
+      const watchId = await registerObserverWatch(target, sessionId, `k-K-${label}`);
       armState.children.push({ sessionId, watchId, repoDir: fixture.repoDir, label, baselineCommit: fixture.baselineCommit });
       logLine(paths, 'smoke', 'child-spawned', { label, sessionId, watchId });
     }
@@ -503,6 +503,11 @@ export async function runSmoke(runId: string): Promise<void> {
     for (const child of armState.children) {
       preTranscripts.set(child.sessionId, readRawSession(paths, child.sessionId).events);
     }
+    // Smoke has no interruption: write the orphan snapshot honestly (both sides
+    // identical) so the collection-time assertion holds without a silent zero.
+    const anchorCgSmoke = (await getUnitStatus('k-K-arm-tools-anchor.service')).controlGroup ?? '';
+    const smokeSnap = snapshotChildToolProcesses(anchorCgSmoke);
+    saveJson(statePath(paths, 'smoke-orphans.json'), { atKill: smokeSnap, afterKill: smokeSnap });
     await finishArm(target, paths, armState, preTranscripts, rows);
   } finally {
     saveJson(statePath(paths, 'smoke-arm-state.json'), { ...armState, secondsToWorking: Object.fromEntries(armState.secondsToWorking) });
@@ -532,15 +537,15 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
         repoDir: fixture.repoDir, objective: armObjective(fixture.repoDir, label), label, owner: OWNER,
         maxTurns: 25, budgetTokens: 20_000_000,
       });
-      const watchId = await registerObserverWatch(target, sessionId, `e2a-6c-${label}`);
+      const watchId = await registerObserverWatch(target, sessionId, `k-K-${label}`);
       armState.children.push({ sessionId, watchId, repoDir: fixture.repoDir, label, baselineCommit: fixture.baselineCommit });
       logLine(paths, 'kill', 'child-spawned', { label, sessionId, watchId });
     }
 
     // Work phase: wait until every child is mid-turn with tool commands running.
-    const anchorCgPre = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
+    const anchorCgPre = (await getUnitStatus('k-K-arm-tools-anchor.service')).controlGroup ?? '';
     const { transcripts, condition, inFlightAtKill, partial } = await waitForChildrenReadyToInterrupt(target, paths, armState, anchorCgPre);
-    const anchorCg = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
+    const anchorCg = (await getUnitStatus('k-K-arm-tools-anchor.service')).controlGroup ?? '';
     const procsAtKill = snapshotChildToolProcesses(anchorCg);
     armState.interruptAt = nowIso();
     armState.interruptCondition = condition;
@@ -557,7 +562,7 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
     // 01-answer Q3: mirror production — systemd auto-restarts the killed unit
     // (Restart=always, RestartSec=10s, TimeoutStopSec=30s); the driver must not
     // start it by hand in the kill arm.
-    const beforeKill = await getUnitStatus('e2a-6c-server.service');
+    const beforeKill = await getUnitStatus('k-K-arm-server.service');
     const auto = await waitForSystemdAutoRestart(beforeKill.mainPid ?? 0, 120_000);
     const ready = await waitForServerReadyViaApi(server.socketPath, server.tokenPath, 90_000);
     const journal = await journalRestartEvidence(armState.interruptAt);
@@ -604,8 +609,10 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
       const busy = st.busy === true;
       const qualifyingWork = killWindowWork.get(child.sessionId) === true;
       const silentStall = classifyWindowEnd(goalState, busy, qualifyingWork);
+      // Wave K: capture the full projection (pausedReason/interruption evidence).
+      const projection = await getGoalProjection(target, child.sessionId).catch(() => ({}));
       armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall });
-      logLine(paths, 'kill', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall });
+      logLine(paths, 'kill', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall, projection });
     }
 
     // Parent action for children still not working (the skills' prescribed action).
@@ -688,14 +695,14 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
         repoDir: fixture.repoDir, objective: armObjective(fixture.repoDir, label), label, owner: OWNER,
         maxTurns: 25, budgetTokens: 20_000_000,
       });
-      const watchId = await registerObserverWatch(target, sessionId, `e2a-6c-${label}`);
+      const watchId = await registerObserverWatch(target, sessionId, `k-K-${label}`);
       armState.children.push({ sessionId, watchId, repoDir: fixture.repoDir, label, baselineCommit: gitHead(fixture.repoDir) });
       logLine(paths, 'drain-timeout', 'child-spawned', { label, sessionId, watchId });
     }
 
-    const anchorCgPre = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
+    const anchorCgPre = (await getUnitStatus('k-K-arm-tools-anchor.service')).controlGroup ?? '';
     const { transcripts, condition, inFlightAtKill, partial } = await waitForChildrenReadyToInterrupt(target, paths, armState, anchorCgPre);
-    const anchorCg = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
+    const anchorCg = (await getUnitStatus('k-K-arm-tools-anchor.service')).controlGroup ?? '';
     const procsAtDrain = snapshotChildToolProcesses(anchorCg);
     armState.interruptAt = nowIso();
     armState.interruptCondition = condition;
@@ -705,7 +712,7 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
 
     // Drain with a SHORT timeout: it waits for busy turns, times out, and the
     // driver proceeds (the deploy-script choice) — cutting the turns off.
-    await startDrain(target.socketPath, target.tokenPath, DRAIN_TIMEOUT_SECONDS, `e2a-6c drain-timeout arm ${runId}`);
+    await startDrain(target.socketPath, target.tokenPath, DRAIN_TIMEOUT_SECONDS, `k-K drain-timeout arm ${runId}`);
     let drainTimedOut = false;
     const drainDeadline = Date.now() + (DRAIN_TIMEOUT_SECONDS + 30) * 1000;
     while (Date.now() < drainDeadline) {
@@ -764,8 +771,10 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
       const busy = st.busy === true;
       const qualifyingWork = drainWindowWork.get(child.sessionId) === true;
       const silentStall = classifyWindowEnd(goalState, busy, qualifyingWork);
+      // Wave K: capture the full projection (pausedReason/interruption evidence).
+      const projection = await getGoalProjection(target, child.sessionId).catch(() => ({}));
       armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall });
-      logLine(paths, 'drain-timeout', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall });
+      logLine(paths, 'drain-timeout', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall, projection });
     }
 
     // Parent action for stuck children.

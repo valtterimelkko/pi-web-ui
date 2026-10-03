@@ -100,19 +100,30 @@ function parseSpawnSessionId(stdout: string): string | undefined {
   }
 }
 
-/** Register a pure-observer watch (agent_end + goal_end) on a child; returns the watch id. */
+/**
+ * Register a pure-observer watch (agent_end + goal_end + goal_state) on a
+ * child; returns the watch id. Registered through the raw Internal API:
+ * pi-orch's client-side condition set predates goal_state (wave K).
+ */
 export async function registerObserverWatch(target: OrchTarget, sessionId: string, label: string): Promise<string> {
-  const { stdout, exitCode } = await piOrch([
-    'watch', sessionId, 'register',
-    '--conditions', 'agent_end,goal_end',
-    '--label', label,
-    '--id-only',
-    '--socket', target.socketPath,
-    '--token-path', target.tokenPath,
-    '--parent-session', target.parentSession,
-  ], 30_000);
-  if (exitCode !== 0) throw new Error(`watch register failed (exit ${exitCode}): ${stdout.slice(0, 300)}`);
-  return stdout.trim().split('\n').pop() as string;
+  const response = await internalApiRequest<Record<string, unknown>>(
+    target.socketPath,
+    target.tokenPath,
+    'POST',
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`,
+    {
+      label,
+      conditions: [
+        { type: 'event_type', eventType: 'agent_end' },
+        { type: 'event_type', eventType: 'goal_end' },
+        { type: 'event_type', eventType: 'goal_state' },
+      ],
+    },
+    30_000,
+  );
+  const watchId = typeof response.watchId === 'string' ? response.watchId : (response.id as string | undefined);
+  if (!watchId) throw new Error(`watch register: no watch id in response: ${JSON.stringify(response).slice(0, 200)}`);
+  return watchId;
 }
 
 export interface ChildStatus {
@@ -251,4 +262,9 @@ export function processesUnderCgroup(cgroupPrefix: string): ProcRecord[] {
 /** Snapshot processes belonging to the children's tool commands: anything under the anchor cgroup EXCEPT the anchor's own sleeper. */
 export function snapshotChildToolProcesses(anchorCgroup: string): ProcRecord[] {
   return processesUnderCgroup(anchorCgroup).filter((p) => !p.cmd.includes('sleep infinity') && p.pid !== 1);
+}
+
+/** Full goal projection for a child (wave K: pausedReason + interruption evidence). */
+export async function getGoalProjection(target: OrchTarget, sessionId: string): Promise<Record<string, unknown>> {
+  return internalApiRequest<Record<string, unknown>>(target.socketPath, target.tokenPath, 'GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`);
 }

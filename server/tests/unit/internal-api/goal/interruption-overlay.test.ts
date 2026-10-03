@@ -84,8 +84,16 @@ describe('applyInterruptionOverlay (pure)', () => {
     expect(out.interruption?.cause).toBe('restart_interruption');
   });
 
+  it('a second-transient overlay (past continue, not continued now) reads paused/interrupted on re-application', () => {
+    const second = { ...overlay, continueCount: 1, cause: 'second_transient' as const };
+    const out = applyInterruptionOverlay(running, second, { mtimeMs: 10, size: 20 });
+    expect(out.status).toBe('paused');
+    expect(out.pausedReason).toBe('interrupted');
+    expect(out.interruption).toMatchObject({ cause: 'second_transient', autoContinued: false, continueCount: 1 });
+  });
+
   it('annotates an auto-continued projection without changing its running status', () => {
-    const continued = { ...overlay, continueCount: 1, continueNote: '[auto-continue] restarted' };
+    const continued = { ...overlay, continueCount: 1, autoContinued: true, continueNote: '[auto-continue] restarted' };
     const out = applyInterruptionOverlay(running, continued, { mtimeMs: 10, size: 20 }, { autoContinued: true });
     expect(out.status).toBe('running');
     expect(out.interruption).toMatchObject({ autoContinued: true, continueCount: 1, cause: 'restart_interruption' });
