@@ -339,11 +339,22 @@ export async function runArm(opts: ArmOptions): Promise<{ ok: boolean; summaryPa
         if (sessionIds.length > 0) {
           const promptResults = await Promise.all(outcomes.map(async (o) => {
             if (!o.sessionId) return null;
-            const argv = promptArgv(o.sessionId, specs.find((s) => s.name === o.record.child)?.taskText ?? 'Read task.txt and write its first line to result.txt, then end.', `e2a4-${opts.mode}-${o.record.child}`, { piOrchBin: PI_ORCH_BIN, socketPath: conn.socketPath, tokenPath: conn.tokenPath });
-            return run(argv, 120_000);
+            const spec = specs.find((s) => s.name === o.record.child);
+            if (spec?.goalObjective !== undefined) {
+              // Goal-armed children are already running their goal turn (the
+              // objective IS their task); a manual prompt would be refused
+              // busy. The owner's real pattern dispatches nothing extra.
+              appendFileSync(join(runRoot, 'creates', `${o.record.child}.prompt.json`), `${JSON.stringify({ skipped: 'goal-armed', atMs: Date.now() })}\n`);
+              return null;
+            }
+            const argv = promptArgv(o.sessionId, spec?.taskText ?? 'Read task.txt and write its first line to result.txt, then end.', `e2a4-${opts.mode}-${o.record.child}`, { piOrchBin: PI_ORCH_BIN, socketPath: conn.socketPath, tokenPath: conn.tokenPath });
+            const res = await run(argv, 120_000);
+            appendFileSync(join(runRoot, 'creates', `${o.record.child}.prompt.json`), `${JSON.stringify({ exitCode: res.code, stdoutTail: res.stdout.slice(-200), stderrTail: res.stderr.slice(-300) })}\n`);
+            return res;
           }));
           const promptOk = promptResults.filter((r) => r !== null && r.code === 0).length;
-          log(`PASS ${pass.step} prompts dispatched: ${String(promptOk)}/${String(sessionIds.length)}`);
+          const promptSkipped = promptResults.filter((r) => r === null).length;
+          log(`PASS ${pass.step} prompts dispatched: ${String(promptOk)}/${String(sessionIds.length)} (goal-armed skipped: ${String(promptSkipped)})`);
 
           const wait = await run(waitAllArgv(sessionIds, opts.promptDeadlineS, { piOrchBin: PI_ORCH_BIN, socketPath: conn.socketPath, tokenPath: conn.tokenPath }), (opts.promptDeadlineS + 120) * 1000);
           writeFileSync(join(runRoot, 'logs', `wait-${pass.step}.txt`), `# exit ${String(wait.code)}\n${wait.stdout}\n${wait.stderr}\n`);
