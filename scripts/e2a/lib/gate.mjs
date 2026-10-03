@@ -124,12 +124,37 @@ export function acquireLock(owner, lockDir = LOCK_DIR) {
   return { acquired: true };
 }
 
-export function releaseLock(lockDir = LOCK_DIR) {
+/** Pure release decision (correction 01 item 1): the lock may be removed only by
+ *  its owner — the caller's token must be a prefix of the recorded owner text.
+ *  A missing or unreadable owner file is a refusal, never a removal. */
+export function evaluateRelease(ownerText, callerToken) {
+  if (typeof ownerText !== 'string' || ownerText.trim() === '') {
+    return { allowed: false, reason: 'owner file missing or unreadable' };
+  }
+  if (typeof callerToken !== 'string' || callerToken.trim() === '') {
+    return { allowed: false, reason: 'no caller token given' };
+  }
+  if (!ownerText.trimStart().startsWith(callerToken.trim())) {
+    return { allowed: false, reason: `caller token ${JSON.stringify(callerToken)} does not match lock owner ${JSON.stringify(ownerText.trim().slice(0, 60))}` };
+  }
+  return { allowed: true };
+}
+
+/** Release only if the caller owns the lock; otherwise refuse and change nothing. */
+export function releaseLock(callerToken, lockDir = LOCK_DIR) {
+  let ownerText;
+  try {
+    ownerText = fs.readFileSync(path.join(lockDir, 'owner'), 'utf8');
+  } catch {
+    return { released: false, reason: 'owner file missing or unreadable (not the lock owner)' };
+  }
+  const verdict = evaluateRelease(ownerText, callerToken);
+  if (!verdict.allowed) return { released: false, reason: verdict.reason };
   try {
     fs.rmSync(lockDir, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
+    return { released: true };
+  } catch (err) {
+    return { released: false, reason: err.message };
   }
 }
 
@@ -198,9 +223,15 @@ export async function cli() {
     return;
   }
   if (cmd === '--release') {
-    const released = releaseLock();
-    console.log(JSON.stringify({ released }));
-    process.exitCode = released ? 0 : 1;
+    const token = flag('--token');
+    if (!token) {
+      console.log(JSON.stringify({ released: false, reason: '--token is required (the release refuses without an owner check)' }));
+      process.exitCode = 1;
+      return;
+    }
+    const r = releaseLock(token);
+    console.log(JSON.stringify(r));
+    process.exitCode = r.released ? 0 : 1;
     return;
   }
   if (cmd === '--lock-owner') {

@@ -276,25 +276,23 @@ async function main() {
     const capFull = Number(arg('--psi-cap-full', 5)); // 05-answer: stay under host PSI full avg10 5
     const capSome = Number(arg('--psi-cap-some', 20));
     const statusFile = arg('--status-file');
-    const keep = [];
-    let allocated = 0;
-    let capped = null;
-    while (allocated < target && allocated < 10 * GiB) {
-      const psi = readMemoryPsi();
-      if (psi.fullAvg10 >= capFull || psi.someAvg10 >= capSome) {
-        capped = { at: new Date().toISOString(), psi, allocated };
-        break;
-      }
-      const buf = Buffer.alloc(step, 1);
-      keep.push(buf);
-      allocated += step;
-      await sleep(stepMs);
-    }
+    // Correction 01 item 2: the cap is enforced during allocation AND during the hold;
+    // on the threshold the buffers are freed and the hog exits at once.
+    const result = await runHogCore({
+      targetBytes: target,
+      stepBytes: step,
+      stepMs,
+      capFull,
+      capSome,
+      readPsi: readMemoryPsi,
+      delay: (ms) => sleep(ms),
+      holdMs: 20_000,
+      holdCheckMs: 1000,
+    });
     if (statusFile) {
-      fs.writeFileSync(statusFile, `${JSON.stringify({ capped, allocatedBytes: allocated, targetBytes: target, at: new Date().toISOString() })}\n`);
+      fs.writeFileSync(statusFile, `${JSON.stringify({ capped: result.capped, allocatedBytes: result.allocatedBytes, targetBytes: target, buffersHeld: result.buffersHeld, at: new Date().toISOString() })}\n`);
     }
-    console.log(JSON.stringify({ hogDone: allocated, capped: capped != null }));
-    await sleep(20_000); // hold the working set so the after-passes see steady-state eviction
+    console.log(JSON.stringify({ hogDone: result.allocatedBytes, capped: result.capped != null }));
     return;
   }
 
@@ -314,6 +312,57 @@ function readMemoryPsi() {
   const some = /some avg10=([\d.]+)/.exec(text)?.[1];
   const full = /full avg10=([\d.]+)/.exec(text)?.[1];
   return { someAvg10: Number(some ?? 0), fullAvg10: Number(full ?? 0), at: new Date().toISOString() };
+}
+
+const HOG_GIB = 1024 ** 3;
+
+/**
+ * Correction 01 item 2 — the hog's core, with injectable PSI reader and delay so the
+ * stop-on-cap behaviour is unit-testable. The cap is enforced BEFORE every allocation
+ * step AND throughout the hold: on the threshold the buffers are freed and the hog
+ * exits at once (the old version retained its buffers and slept 20 s blind, which let
+ * the host PSI pass the binding limit while the hog sat at its target).
+ */
+export async function runHogCore({
+  targetBytes,
+  stepBytes,
+  stepMs = 1000,
+  capFull,
+  capSome,
+  readPsi,
+  delay = () => Promise.resolve(),
+  holdMs = 20_000,
+  holdCheckMs = 1000,
+  maxAllocBytes = 10 * HOG_GIB,
+  now = () => Date.now(),
+}) {
+  const tripped = (psi) => psi.fullAvg10 >= capFull || psi.someAvg10 >= capSome;
+  const keep = [];
+  let allocated = 0;
+  let capped = null;
+  while (allocated < targetBytes && allocated < maxAllocBytes) {
+    const psi = readPsi();
+    if (tripped(psi)) {
+      capped = { phase: 'allocation', psi, allocated };
+      break;
+    }
+    keep.push(Buffer.alloc(stepBytes, 1));
+    allocated += stepBytes;
+    await delay(stepMs);
+  }
+  if (!capped) {
+    const deadline = now() + holdMs;
+    while (now() < deadline) {
+      await delay(holdCheckMs);
+      const psi = readPsi();
+      if (tripped(psi)) {
+        capped = { phase: 'hold', psi, allocated };
+        break;
+      }
+    }
+  }
+  keep.length = 0; // free the buffers before returning, in every path
+  return { allocatedBytes: allocated, capped, buffersHeld: keep.length };
 }
 
 function startPsiMonitor(outFile) {
