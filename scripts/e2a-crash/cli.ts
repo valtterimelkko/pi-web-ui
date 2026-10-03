@@ -26,7 +26,8 @@ async function main(): Promise<void> {
   switch (command) {
     case 'prepare': {
       const fixtures = Number(flag(rest, 'fixtures', '6'));
-      await prepare(runId, fixtures);
+      const from = Number(flag(rest, 'from', '1'));
+      await prepare(runId, fixtures, from);
       break;
     }
     case 'start-server': {

@@ -127,11 +127,11 @@ function gitHead(repoDir: string): string {
 // prepare / server lifecycle
 // ---------------------------------------------------------------------------
 
-export async function prepare(runId: string, fixtureCount: number): Promise<void> {
+export async function prepare(runId: string, fixtureCount: number, firstFixtureNumber = 1): Promise<void> {
   const paths = resolveRunPaths(runId);
   mkdirSync(paths.runDir, { recursive: true, mode: 0o700 });
   const agentDir = buildCrashAgentDir(paths.agentDir);
-  const fixtures = buildFixtures(paths.fixturesRoot, fixtureCount);
+  const fixtures = Array.from({ length: fixtureCount }, (_, i) => buildFixture(paths.fixturesRoot, `fixture-${firstFixtureNumber + i}`));
   prepareServerEnv(paths, REPO_ROOT);
   const record = {
     runId,
@@ -642,7 +642,7 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
   try {
     // The drain arm runs after the kill arm and REBUILDS its fixtures, so it
     // can reuse the same names (fixture-1..N) with clean side-effect state.
-    const drainFixtures = freshFixtures(paths, Array.from({ length: childCount }, (_, i) => `fixture-${i + 1}`));
+    const drainFixtures = freshFixtures(paths, Array.from({ length: childCount }, (_, i) => `fixture-${i + 5}`));
     for (let i = 0; i < childCount; i += 1) {
       const fixture = drainFixtures[i];
       const label = `drain-c${i + 1}`;
