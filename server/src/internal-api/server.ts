@@ -33,6 +33,7 @@ import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
 import { buildStallNotification } from './run-receipts/stall-notification.js';
 import { readPiRuntimeQuiescence } from './runtime-quiescence.js';
+import { DeletedSessionCessation } from './run-receipts/deletion-cessation.js';
 import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
 import { NotificationIngressSpool } from '../notifications/notification-ingress-spool.js';
@@ -299,12 +300,17 @@ export class InternalApiServer {
       },
       // §11 fence: on cancel/stall the admission slot is held (not reusable) until
       // the runtime confirms it has stopped, or a 30s drain timeout (quarantine).
+      // Correction 01 (Luna r1 finding 2): a missing registry entry is NOT proof
+      // of cessation — DELETE aborts Claude/OpenCode/Antigravity without
+      // awaiting termination. The deletion tracker admits an awaited dispose
+      // (Pi, Command Code) immediately and holds every other runtime for a
+      // bounded grace, releasing it once with a grace-release log.
       isRuntimeQuiescent: async (sessionId) => {
         try {
           const commandCodeEntry = await this.commandCodeService.getSession(sessionId);
           if (commandCodeEntry) return !this.commandCodeService.isRunning(sessionId);
           const entry = await this.sessionRegistry.get(sessionId);
-          if (!entry) return true; // session gone -> quiescent
+          if (!entry) return deletedSessionCessation.isQuiescent(sessionId);
           if (entry.sdkType === 'commandcode') return !this.commandCodeService.isRunning(sessionId);
           if (entry.sdkType === 'claude') return !this.claudeService.isRunning(sessionId);
           if (entry.sdkType === 'opencode') return !this.opencodeService.isRunning(sessionId);
@@ -458,6 +464,10 @@ export class InternalApiServer {
     const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: () => busySource.refresh() });
 
     // Create routes
+    // Correction 01 (Luna r1 finding 2): gates the quiescence wiring's
+    // missing-session branch — awaited-dispose runtimes release immediately,
+    // abort-only runtimes hold for the bounded deletion grace (grace-release).
+    const deletedSessionCessation = new DeletedSessionCessation();
     const sessionRoutes = createSessionRoutes({
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
@@ -468,6 +478,7 @@ export class InternalApiServer {
       internalClientId: this.internalClientId,
       watchDir: this.config.watchDir || DEFAULT_WATCH_DIR,
       runReceiptManager,
+      deletedSessionCessation,
       pinDir: this.config.pinDir || DEFAULT_PIN_DIR,
       pinDefaultTtlMs: this.config.pinDefaultTtlMs,
       pinMaxTtlMs: this.config.pinMaxTtlMs,

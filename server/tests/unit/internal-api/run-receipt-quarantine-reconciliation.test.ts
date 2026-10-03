@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { RunReceiptManager, type BeginRunInput } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
+import { DeletedSessionCessation } from '../../../src/internal-api/run-receipts/deletion-cessation.js';
+import { isPiSessionQuiescent } from '../../../src/internal-api/runtime-quiescence.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
 
@@ -154,6 +156,102 @@ describe('L1 reconciliation guard for quarantined admission leases', () => {
       await sleep(150);
       expect(release).toHaveBeenCalledTimes(1);
       expect(h.manager.getQuarantinedCount()).toBe(0);
+    } finally {
+      await harnessCleanup(h);
+    }
+  });
+
+  // Correction 01 (Luna r1 finding 1): the stale-streaming watchdog can reset
+  // manager status to idle without stopping the SDK stream. The release
+  // predicate must share the piLiveness busy truth, so idle+sdkStreaming stays
+  // quarantined and releases only when streaming actually ends.
+  it('stays quarantined through a stale-streaming reset while the SDK still streams; releases only when streaming ends', async () => {
+    const h = await makeHarness();
+    try {
+      let statusInfo: { status?: string; sdkStreaming?: boolean } = { status: 'streaming', sdkStreaming: true };
+      const wired = new RunReceiptManager({
+        store: h.store, now: h.getNow, idFactory: () => `c01-${Math.random().toString(36).slice(2, 8)}`,
+        idempotencyTtlMs: 1_000, metrics: h.metrics,
+        drainPollMs: 5, drainTimeoutMs: 50, quarantineReconcileMs: 20,
+        isRuntimeQuiescent: async () => isPiSessionQuiescent(statusInfo),
+      });
+      await wired.init();
+      const begun = await wired.beginRun({ ...baseInput, sessionId: 'stale-stream', idempotencyKey: 'c01' });
+      const release = vi.fn();
+      wired.attachLease(begun.receipt.runId, { release });
+      await wired.cancelRun(begun.receipt.runId);
+      await sleep(150); // past the drain timeout → quarantined
+      expect(wired.getQuarantinedCount()).toBe(1);
+
+      statusInfo = { status: 'idle', sdkStreaming: true }; // the stale-streaming reset: status idle, SDK still streaming
+      await sleep(200); // many reconcile ticks
+      expect(release).not.toHaveBeenCalled(); // idle status + streaming SDK is NOT quiescent
+      expect(wired.getQuarantinedCount()).toBe(1);
+
+      statusInfo = { status: 'idle', sdkStreaming: false }; // streaming actually ends
+      await sleep(150);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(wired.getQuarantinedCount()).toBe(0);
+      await wired.shutdown();
+    } finally {
+      await harnessCleanup(h);
+    }
+  });
+
+  // Correction 01 (Luna r1 finding 2): a deleted session is not proof of
+  // cessation unless the runtime gave an awaited termination ack (Pi) — a
+  // non-awaiting runtime (Claude) holds through the bounded deletion grace and
+  // is then released with the grace-release log.
+  it('a DELETE during a quarantined run: Pi releases on the awaited dispose ack; Claude holds through the grace then grace-releases', async () => {
+    const h = await makeHarness();
+    try {
+      const logLines: string[] = [];
+      const tracker = new DeletedSessionCessation({
+        now: h.getNow,
+        graceMs: 20,
+        log: (line) => logLines.push(line),
+      });
+      const wiredFor = (sessionId: string): RunReceiptManager => new RunReceiptManager({
+        store: h.store, now: h.getNow, idFactory: () => `c01d-${Math.random().toString(36).slice(2, 8)}`,
+        idempotencyTtlMs: 1_000, metrics: h.metrics,
+        drainPollMs: 5, drainTimeoutMs: 50, quarantineReconcileMs: 20,
+        // The server.ts wiring shape: a missing registry entry consults the deletion tracker.
+        isRuntimeQuiescent: async () => tracker.isQuiescent(sessionId),
+      });
+
+      // Pi: DELETE awaits disposeLoadedSession → termination acked → releases on the next tick.
+      const piManager = wiredFor('pi-del');
+      await piManager.init();
+      const piRun = await piManager.beginRun({ ...baseInput, sessionId: 'pi-del', idempotencyKey: 'pi-del' });
+      const piRelease = vi.fn();
+      piManager.attachLease(piRun.receipt.runId, { release: piRelease });
+      await piManager.cancelRun(piRun.receipt.runId);
+      await sleep(120); // quarantined; the session still exists (predicate false)
+      expect(piManager.getQuarantinedCount()).toBe(1);
+      tracker.record('pi-del', 'pi', true); // handleDeleteSession: awaited dispose
+      await sleep(120);
+      expect(piRelease).toHaveBeenCalledTimes(1);
+      await piManager.shutdown();
+
+      // Claude: DELETE only aborts without awaiting termination → held through the grace, then grace-released.
+      const claudeManager = wiredFor('claude-del');
+      await claudeManager.init();
+      const claudeRun = await claudeManager.beginRun({ ...baseInput, sessionId: 'claude-del', idempotencyKey: 'claude-del' });
+      const claudeRelease = vi.fn();
+      claudeManager.attachLease(claudeRun.receipt.runId, { release: claudeRelease });
+      await claudeManager.cancelRun(claudeRun.receipt.runId);
+      await sleep(120);
+      expect(claudeManager.getQuarantinedCount()).toBe(1);
+      tracker.record('claude-del', 'claude', false); // no awaited termination ack
+      await sleep(120); // reconcile ticks inside the grace (fake now unmoved)
+      expect(claudeRelease).not.toHaveBeenCalled();
+      h.setNow(h.getNow() + 21); // advance the fake clock past the 20 ms grace
+      await sleep(120);
+      expect(claudeRelease).toHaveBeenCalledTimes(1);
+      const graceLines = logLines.filter((l) => l.includes('grace-release'));
+      expect(graceLines.length).toBe(1);
+      expect(graceLines[0]).toMatch(/runtime=claude/);
+      await claudeManager.shutdown();
     } finally {
       await harnessCleanup(h);
     }

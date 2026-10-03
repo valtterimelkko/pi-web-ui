@@ -344,6 +344,20 @@ describe('B2 admission at the route level', () => {
     });
   });
 
+  // Correction 01 (Luna r1 finding 2): handleDeleteSession records the deletion
+  // into the cessation tracker — awaited-dispose runtimes (pi, commandcode)
+  // acked; abort-only runtimes (claude, opencode, antigravity) not.
+  it('DELETE records deletion cessation: pi/commandcode acked, claude not (correction 01)', async () => {
+    const { DeletedSessionCessation } = await import('../../../src/internal-api/run-receipts/deletion-cessation.js');
+    const tracker = new DeletedSessionCessation();
+    const recordSpy = vi.spyOn(tracker, 'record');
+    const routes = makeRoutes(admissionWith(), { deletedSessionCessation: tracker });
+    const del = createMockRes();
+    await routes.handleDeleteSession(createJsonReq('DELETE', '/x'), del, 'claude-1');
+    expect(del.statusCode).toBe(200);
+    expect(recordSpy).toHaveBeenCalledWith('claude-1', 'claude', false);
+  });
+
   it('GET /capacity reports quarantinedRuns with the oldest quarantined age (L1)', async () => {
     const receipts = new RunReceiptManager({
       store: new RunReceiptStore(path.join(dir, 'receipts-l1')),

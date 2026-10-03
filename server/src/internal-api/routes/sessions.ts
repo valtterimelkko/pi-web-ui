@@ -89,6 +89,8 @@ import {
   RunReceiptManager,
 } from '../run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../run-receipts/run-receipt-store.js';
+import { DeletedSessionCessation } from '../run-receipts/deletion-cessation.js';
+import { isPiSessionQuiescent } from '../runtime-quiescence.js';
 import { resolveExecutionInstanceId } from '../execution-instance.js';
 import { classifyPhase7PiShadow } from '../phase7-pi-shadow.js';
 // Contract 1.48.0 (B3a): the Pi runtime's streaming tool-argument budget.
@@ -457,6 +459,8 @@ export interface SessionRoutesDeps {
   runReceiptDir?: string;
   /** Idempotency replay window for a newly accepted run. */
   runReceiptIdempotencyTtlMs?: number;
+  /** Correction 01 (Luna r1 finding 2): deletion-cessation tracker consulted by the quiescence wiring when a registry entry is missing. Optional: absent in some direct route tests (no gating). */
+  deletedSessionCessation?: DeletedSessionCessation;
   /** Directory for the durable API-pin expiry ledger. Optional: when absent, pin
    * requests still pin in-memory but are not time-bounded/tracked (used by some unit tests). */
   pinDir?: string;
@@ -538,6 +542,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onBrowserMessage,
   } = deps;
   const commandCodeService = deps.commandCodeService;
+  // Correction 01 (Luna r1 finding 2): deletes record here so the quiescence
+  // wiring can gate the missing-session branch on awaited termination acks or
+  // the bounded deletion grace instead of raw registry absence.
+  const deletedSessionCessation = deps.deletedSessionCessation;
 
   // Contract 1.34.0 child surfacing: automatic parent linkage fallback fed by
   // the pi tool event stream (header-first linkage needs no correlation).
@@ -3179,6 +3187,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         if (pinExpiry) await pinExpiry.clear(commandCodeEntry.sessionId);
         await unpinSessionById(commandCodeEntry.sessionId).catch(() => false);
         await commandCodeService!.deleteSession(commandCodeEntry.sessionId);
+        // Correction 01 (Luna r1 finding 2): Command Code's delete awaits the
+        // session teardown — positive termination acknowledgement.
+        deletedSessionCessation?.record(commandCodeEntry.sessionId, 'commandcode', true);
         sendJson(res, 200, { success: true, nativeTranscriptRetained: true });
         return;
       }
@@ -3244,6 +3255,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       await watchManager.delete(sessionId);
       if (pinExpiry) await pinExpiry.clear(sessionId);
       await unpinSessionById(sessionId).catch(() => false); // human Web UI claim
+      // Correction 01 (Luna r1 finding 2): record the deletion BEFORE the
+      // registry entry disappears, so the quiescence wiring's missing-entry
+      // branch is gated from the moment the id stops resolving. Pi's awaited
+      // disposeLoadedSession completes in this handler before the registry
+      // delete, so by the time the id stops resolving its termination is
+      // acknowledged; Claude, OpenCode and Antigravity only aborted without
+      // awaiting termination and hold through the bounded deletion grace.
+      deletedSessionCessation?.record(
+        sessionId,
+        entry.sdkType as SessionRuntime,
+        entry.sdkType === 'pi',
+      );
 
       if (entry.sdkType === 'pi') {
         // Dispose the live SDK object before unlinking its backing JSONL. This
@@ -3432,11 +3455,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    */
   function piLiveness(entry: RegistryEntry): { busy: boolean; liveTurn: boolean; compacting: boolean } {
     const statusInfo = multiSessionManager.getSessionStatus?.(entry.path);
-    const managerBusy = statusInfo?.status === 'busy' || statusInfo?.status === 'streaming';
+    // Correction 01 (Luna r1 finding 1): the busy truth is shared with the
+    // Internal API quiescence wiring via isPiSessionQuiescent — manager
+    // status, the SDK's own streaming truth and compaction, one predicate.
+    const busy = !isPiSessionQuiescent(statusInfo);
     const sdkStreaming = statusInfo?.sdkStreaming === true;
     const compacting = statusInfo?.compacting === true;
     return {
-      busy: managerBusy || sdkStreaming || compacting,
+      busy,
       // A LIVE runtime turn the queue can drain: a streaming status, or the
       // SDK's own streaming truth. The manager's pre-start `busy` limbo and
       // compaction are busy but NOT live turns (compaction is refused earlier).

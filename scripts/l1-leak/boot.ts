@@ -9,7 +9,7 @@
  * lifecycle, nothing here auto-restarts.
  */
 import { execFile as execFileCb } from 'node:child_process';
-import { existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import net from 'node:net';
@@ -266,16 +266,59 @@ export async function assertOnlyZaiProvider(sinceIso: string): Promise<string> {
   return line.trim().slice(0, 300);
 }
 
-/** Stop the server + anchor units and delete the disposable token credential. */
-export async function stopServer(): Promise<void> {
+/** Stop the server + anchor units, delete the disposable token credential, and
+ *  remove + verify the filtered agent-dir credential copies (correction 01).
+ *  Returns the cleanup verification lines for the evidence record. */
+export async function stopServer(runId?: string): Promise<string[]> {
   for (const unit of [SERVER_UNIT, ANCHOR_UNIT]) {
     try { await execFile('systemctl', ['stop', unit]); } catch { /* already stopped */ }
   }
+  const idFlag = process.argv.indexOf('--run-id');
+  const effectiveRunId = runId ?? process.argv[idFlag + 1];
+  if (!effectiveRunId) throw new Error('stop requires --run-id <id>');
+  const paths = resolveRunPaths(effectiveRunId);
+  const lines: string[] = [];
   // The socket dir holds the disposable internal-api token: remove it (credential hygiene).
-  for (const runIdDir of [process.argv[process.argv.indexOf('--run-id') + 1]].filter(Boolean)) {
-    const tokenPath = path.join(resolveRunPaths(runIdDir!).validationDir, 'internal-api-token');
-    try { unlinkSync(tokenPath); } catch { /* absent */ }
+  const tokenPath = path.join(paths.validationDir, 'internal-api-token');
+  try { unlinkSync(tokenPath); lines.push(`removed token: ${tokenPath}`); } catch { /* absent */ }
+  // Correction 01 (Luna r1 finding 3): remove the filtered credential copies the
+  // isolated agent dir contains (zai-only auth.json, models.json), then VERIFY
+  // that no credential copy remains anywhere in the run directory.
+  const agentDirCredentials = ['auth.json', 'models.json'];
+  for (const name of agentDirCredentials) {
+    const candidate = path.join(paths.agentDir, name);
+    try { unlinkSync(candidate); lines.push(`removed credential copy: ${candidate}`); } catch { /* absent */ }
   }
+  const leftovers = findCredentialCopies(paths.runDir);
+  if (leftovers.length > 0) {
+    throw new Error(`credential cleanup FAILED — still present after stop: ${leftovers.join(', ')}`);
+  }
+  lines.push(`verified clean: no auth.json/models.json/internal-api-token under ${paths.runDir}`);
+  return lines;
+}
+
+/** Bounded walk of a run directory for credential copies (agent-dir scoped names). */
+export function findCredentialCopies(root: string): string[] {
+  const found: string[] = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop() as string;
+    let entries: string[] = [];
+    try { entries = readdirSync(dir); } catch { continue; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry);
+      let stat: import('node:fs').Stats;
+      try { stat = statSync(full); } catch { continue; }
+      if (stat.isDirectory()) {
+        // node_modules/extension trees cannot contain OUR credential copies.
+        if (entry === 'node_modules') continue;
+        stack.push(full);
+      } else if (entry === 'auth.json' || entry === 'models.json' || entry === 'internal-api-token') {
+        found.push(full);
+      }
+    }
+  }
+  return found;
 }
 
 async function main(): Promise<void> {
@@ -291,13 +334,25 @@ async function main(): Promise<void> {
       break;
     }
     case 'stop': {
-      await stopServer();
+      const lines = await stopServer(runId);
       const status = await getUnitStatus(SERVER_UNIT);
+      for (const line of lines) console.log(line);
       console.log(`SERVER_STOPPED activeState=${status.activeState}`);
       break;
     }
+    case 'verify-clean': {
+      const paths = resolveRunPaths(runId);
+      const leftovers = findCredentialCopies(paths.runDir);
+      if (leftovers.length > 0) {
+        console.error(`NOT CLEAN — credential copies remain: ${leftovers.join(', ')}`);
+        process.exitCode = 1;
+      } else {
+        console.log(`VERIFIED CLEAN: no auth.json/models.json/internal-api-token under ${paths.runDir}`);
+      }
+      break;
+    }
     default:
-      console.error('usage: boot.ts start|stop --run-id <id>');
+      console.error('usage: boot.ts start|stop|verify-clean --run-id <id>');
       process.exitCode = 2;
   }
 }
