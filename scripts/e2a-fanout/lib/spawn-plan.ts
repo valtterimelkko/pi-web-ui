@@ -30,9 +30,9 @@ const GLM_TASK =
   'Tiny task: read the file task.txt in your current working directory, then write its first line into result.txt. End your turn immediately after.';
 
 const ARMB_GLM_TASK =
-  'Work in this repository: (1) run `npm test` and note the result; ' +
-  '(2) add one small function `greet(name)` that returns `hello <name>` in a new file src/greet.ts, with a test for it in test/greet.test.ts following the existing test style; ' +
-  '(3) run `npm test` again and make sure the suite passes with your new test; ' +
+  'Work in this repository: (1) run `npm test` and note the result. One pre-existing, host-dependent failure is known and acceptable: the skills-alias scan test (unknown-flags.test.ts, it reads files outside this clone) may fail — that one is NOT yours to fix. Every other test must pass before and after your change. ' +
+  '(2) add one small function `greet(name)` that returns `hello <name>` in a new file src/greet.ts, with a test for it in test/greet.test.ts following the existing test style. ' +
+  '(3) run `npm test` again: your new test must pass, and there must be no NEW failures beyond the known one. ' +
   '(4) `git add -A && git commit -m "add greet function with test"` on the current branch. Do not push. Then end your turn.';
 
 const ARMB_LUNA_TASK =
