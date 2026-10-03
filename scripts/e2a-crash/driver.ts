@@ -19,7 +19,7 @@ import {
 import { unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {
-  parseRawSessionJsonl, detectInFlightToolCall, diffTranscriptSnapshots, firstWorkingAfterReadiness,
+  parseRawSessionJsonl, detectInFlightToolCall, diffTranscriptSnapshots, firstWorkingAfterReadiness, classifyWindowEnd,
   summariseDuplicatesByStepId, buildOperationLedgerEntry, summariseWatchLedger, diffProcessSnapshots, buildChildRow, totalsRows,
   type CrashEventRecord, type ChildOutcomeRow,
 } from './analysis.ts';
@@ -403,14 +403,26 @@ async function collectChildEvidence(
   const status = await getChildStatus(target, child.sessionId);
   const finalOutcome = status.goalState ?? 'unknown';
   const workedAfterReadiness = (armState as ArmState & { workedAfterReadiness?: Map<string, boolean> }).workedAfterReadiness?.get(child.sessionId) === true;
-  // 09-correction item 1: "goal running but idle" with no post-readiness work — a silent stall.
-  const silentStall = finalOutcome === 'running' && !workedAfterReadiness && status.busy !== true;
+  // 13 item 1: silent stall comes from the WINDOW-BOUNDARY snapshot (taken
+  // before any parent prompt): goal running + idle + no qualifying work in
+  // the window. Not a collection-time guess.
+  const boundary = (armState as ArmState & { windowEnd?: Array<{ childId: string; label: string; silentStall: boolean }> }).windowEnd?.find((w) => w.childId === child.sessionId);
+  const silentStall = boundary?.silentStall ?? false;
+  // 13 item 2: prompt-to-first-child-event delay from the final session file
+  // (assistant/toolCall events only, measured from the child's own prompt).
+  const promptAtMs = (armState as ArmState & { promptAtMs?: Map<string, number> }).promptAtMs?.get(child.sessionId);
+  let promptToWorkSeconds: number | null = null;
+  if (promptAtMs !== undefined) {
+    const pr = firstWorkingAfterReadiness(finalEvents, promptAtMs);
+    if (pr.firstEventAtMs !== null) promptToWorkSeconds = Math.round((pr.firstEventAtMs - promptAtMs) / 100) / 10;
+  }
 
   return buildChildRow({
     childId: child.label,
     arm: armState.arm === 'smoke' ? 'smoke' : armState.arm === 'kill' ? 'kill' : 'drain-timeout',
     transcriptDiff: diff,
     secondsToWorking: (armState as ArmState & { secondsToWorking?: Map<string, number> }).secondsToWorking?.get(child.sessionId) ?? null,
+    promptToWorkSeconds,
     workedAfterReadiness,
     silentStall,
     parentAction: (armState.parentActions ?? []).find((a) => a.childId === child.label)?.action ?? null,
@@ -507,8 +519,8 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
   saveJson(statePath(paths, 'kill-placement-evidence.json'), placement);
   const prepareRec = loadJson<{ fixtures: Array<{ name: string; repoDir: string; baselineCommit: string }> }>(statePath(paths, 'prepare.json'));
   if (!prepareRec || prepareRec.fixtures.length < childCount) throw new Error(`need ${childCount} prepared fixtures — run prepare first`);
-  const armState: ArmState & { secondsToWorking: Map<string, number>; workedAfterReadiness: Map<string, boolean> } = {
-    runId, arm: 'kill', startedAt: nowIso(), children: [], secondsToWorking: new Map(), workedAfterReadiness: new Map(),
+  const armState: ArmState & { secondsToWorking: Map<string, number>; workedAfterReadiness: Map<string, boolean>; windowEnd: Array<{ childId: string; label: string; goalState: string; busy: boolean; qualifyingWork: boolean; silentStall: boolean }>; promptAtMs: Map<string, number> } = {
+    runId, arm: 'kill', startedAt: nowIso(), children: [], secondsToWorking: new Map(), workedAfterReadiness: new Map(), windowEnd: [], promptAtMs: new Map(),
   };
   const rows: ChildOutcomeRow[] = [];
   try {
@@ -559,24 +571,41 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
     saveJson(statePath(paths, 'kill-restart-evidence.json'), { killAt: armState.interruptAt, auto, ready, journal });
     logLine(paths, 'kill', 'server-restarted', { auto, ready, journalLines: journal.length });
 
-    // Observe 10 minutes WITHOUT parent action (measured from API-ready).
+    // Observe 10 minutes WITHOUT parent action — gated on API readiness (09
+    // item 1); 13 item 1: only the child's OWN work (assistant message or tool
+    // call after readiness) counts, the window boundary is snapshotted BEFORE
+    // any parent prompt, and the harness operation ledger keeps sampling.
     const observeStart = Date.now();
+    const killWindowWork = new Map<string, boolean>();
     while (Date.now() - observeStart < OBSERVE_NO_PARENT_ACTION_MS) {
       const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'kill', 'observe-no-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
         const now = nowTranscripts.get(child.sessionId) ?? [];
-        // 09-correction item 1: only events timestamped AFTER API readiness count.
         const r = firstWorkingAfterReadiness(now, tRestart);
         if (r.working) {
-          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+          const secs = Math.max(0, Math.round(((r.firstEventAtMs ?? tRestart) - tRestart) / 1000));
           armState.secondsToWorking.set(child.sessionId, secs);
           armState.workedAfterReadiness.set(child.sessionId, true);
-          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness event' });
+          killWindowWork.set(child.sessionId, true);
+          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness child event' });
         }
       }
+      for (const child of armState.children) {
+        appendOperationLedger(paths, 'kill', child.label, child.repoDir, child.baselineCommit);
+      }
       await new Promise((r) => setTimeout(r, OBSERVE_INTERVAL_MS));
+    }
+    // 13 item 1: boundary snapshot (goal/busy/qualifying work) BEFORE prompts.
+    for (const child of armState.children) {
+      const st = await getChildStatus(target, child.sessionId);
+      const goalState = st.goalState ?? 'unknown';
+      const busy = st.busy === true;
+      const qualifyingWork = killWindowWork.get(child.sessionId) === true;
+      const silentStall = classifyWindowEnd(goalState, busy, qualifyingWork);
+      armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall });
+      logLine(paths, 'kill', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall });
     }
 
     // Parent action for children still not working (the skills' prescribed action).
@@ -593,26 +622,35 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
         action = 'goal-rearm';
         reason = `goal state '${status.goalState ?? 'none'}' — the goal is gone from the projection; re-arm with the same objective`;
       }
+      const promptAtMs = Date.now();
+      armState.promptAtMs.set(child.sessionId, promptAtMs);
       await piOrchPrompt(target, child.sessionId, action, armState);
       armState.parentActions.push({ at: nowIso(), childId: child.label, action, reason });
-      logLine(paths, 'kill', 'parent-action', { childId: child.label, action, reason });
+      logLine(paths, 'kill', 'parent-action', { childId: child.label, action, reason, promptAtMs });
     }
 
     // Observe up to 20 more minutes with the parent action applied.
+    // 13 item 1: post-action work is measured from each child's OWN prompt
+    // timestamp — assistant/toolCall events only, no polling-time fallback.
     const observeStart2 = Date.now();
     while (Date.now() - observeStart2 < OBSERVE_WITH_PARENT_ACTION_MS) {
       const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'kill', 'observe-parent-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
+        const promptAtMs = armState.promptAtMs.get(child.sessionId);
+        if (promptAtMs === undefined) continue;
         const now = nowTranscripts.get(child.sessionId) ?? [];
-        const r = firstWorkingAfterReadiness(now, tRestart);
-        if (r.working) {
-          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+        const r = firstWorkingAfterReadiness(now, promptAtMs);
+        if (r.working && r.firstEventAtMs !== null) {
+          const secs = Math.max(0, Math.round((r.firstEventAtMs - promptAtMs) / 1000));
           armState.secondsToWorking.set(child.sessionId, secs);
           armState.workedAfterReadiness.set(child.sessionId, true);
-          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, afterParentAction: true, measuredFrom: 'first post-readiness event' });
+          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, afterParentAction: true, measuredFrom: 'first child event after own prompt' });
         }
+      }
+      for (const child of armState.children) {
+        appendOperationLedger(paths, 'kill', child.label, child.repoDir, child.baselineCommit);
       }
       const allDone = armState.children.every((c) => armState.secondsToWorking.has(c.sessionId));
       if (allDone && Date.now() - observeStart2 > 2 * 60_000) break;
@@ -635,8 +673,8 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
   saveJson(statePath(paths, 'drain-placement-evidence.json'), placement);
   const prepareRec = loadJson<{ fixtures: Array<{ name: string; repoDir: string; baselineCommit: string }> }>(statePath(paths, 'prepare.json'));
   if (!prepareRec || prepareRec.fixtures.length < childCount) throw new Error(`need ${childCount} prepared fixtures — run prepare first`);
-  const armState: ArmState & { secondsToWorking: Map<string, number>; workedAfterReadiness: Map<string, boolean> } = {
-    runId, arm: 'drain-timeout', startedAt: nowIso(), children: [], secondsToWorking: new Map(), workedAfterReadiness: new Map(),
+  const armState: ArmState & { secondsToWorking: Map<string, number>; workedAfterReadiness: Map<string, boolean>; windowEnd: Array<{ childId: string; label: string; goalState: string; busy: boolean; qualifyingWork: boolean; silentStall: boolean }>; promptAtMs: Map<string, number> } = {
+    runId, arm: 'drain-timeout', startedAt: nowIso(), children: [], secondsToWorking: new Map(), workedAfterReadiness: new Map(), windowEnd: [], promptAtMs: new Map(),
   };
   const rows: ChildOutcomeRow[] = [];
   try {
@@ -693,24 +731,41 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
     const restart = await restartServer(paths, ARM_MODE, 'drain timed out; graceful stop then start');
     armState.serverRestart = { at: armState.interruptAt, readyAt: restart.readyAt, durationMs: restart.durationMs };
 
-    // Observe 10 minutes WITHOUT parent action — gated on API readiness (09 item 1).
+    // Observe 10 minutes WITHOUT parent action — gated on API readiness (09
+    // item 1); 13 item 1: child's own work only, boundary snapshot before prompts.
     const tRestart = Date.parse(restart.readyAt);
     const observeStart = Date.now();
+    const drainWindowWork = new Map<string, boolean>();
     while (Date.now() - observeStart < OBSERVE_NO_PARENT_ACTION_MS) {
       const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'drain-timeout', 'observe-no-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
         const now = nowTranscripts.get(child.sessionId) ?? [];
+        // 13 item 1: only the child's OWN work (assistant/toolCall) after readiness.
         const r = firstWorkingAfterReadiness(now, tRestart);
         if (r.working) {
-          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+          const secs = Math.max(0, Math.round(((r.firstEventAtMs ?? tRestart) - tRestart) / 1000));
           armState.secondsToWorking.set(child.sessionId, secs);
           armState.workedAfterReadiness.set(child.sessionId, true);
-          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness event' });
+          drainWindowWork.set(child.sessionId, true);
+          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness child event' });
         }
       }
+      for (const child of armState.children) {
+        appendOperationLedger(paths, 'drain-timeout', child.label, child.repoDir, child.baselineCommit);
+      }
       await new Promise((r) => setTimeout(r, OBSERVE_INTERVAL_MS));
+    }
+    // 13 item 1: boundary snapshot (goal/busy/qualifying work) BEFORE prompts.
+    for (const child of armState.children) {
+      const st = await getChildStatus(target, child.sessionId);
+      const goalState = st.goalState ?? 'unknown';
+      const busy = st.busy === true;
+      const qualifyingWork = drainWindowWork.get(child.sessionId) === true;
+      const silentStall = classifyWindowEnd(goalState, busy, qualifyingWork);
+      armState.windowEnd.push({ childId: child.sessionId, label: child.label, goalState, busy, qualifyingWork, silentStall });
+      logLine(paths, 'drain-timeout', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall });
     }
 
     // Parent action for stuck children.
@@ -727,24 +782,30 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
         action = 'goal-rearm';
         reason = `goal state '${status.goalState ?? 'none'}' — goal gone from the projection; re-arm`;
       }
+      const promptAtMs = Date.now();
+      armState.promptAtMs.set(child.sessionId, promptAtMs);
       await piOrchPrompt(target, child.sessionId, action, armState);
       armState.parentActions.push({ at: nowIso(), childId: child.label, action, reason });
-      logLine(paths, 'drain-timeout', 'parent-action', { childId: child.label, action, reason });
+      logLine(paths, 'drain-timeout', 'parent-action', { childId: child.label, action, reason, promptAtMs });
     }
 
+    // 13 item 1: post-action work is measured from each child's OWN prompt
+    // timestamp — assistant/toolCall events only, no polling-time fallback.
     const observeStart2 = Date.now();
     while (Date.now() - observeStart2 < OBSERVE_WITH_PARENT_ACTION_MS) {
       const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'drain-timeout', 'observe-parent-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
+        const promptAtMs = armState.promptAtMs.get(child.sessionId);
+        if (promptAtMs === undefined) continue;
         const now = nowTranscripts.get(child.sessionId) ?? [];
-        const r = firstWorkingAfterReadiness(now, tRestart);
-        if (r.working) {
-          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+        const r = firstWorkingAfterReadiness(now, promptAtMs);
+        if (r.working && r.firstEventAtMs !== null) {
+          const secs = Math.max(0, Math.round((r.firstEventAtMs - promptAtMs) / 1000));
           armState.secondsToWorking.set(child.sessionId, secs);
           armState.workedAfterReadiness.set(child.sessionId, true);
-          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, afterParentAction: true, measuredFrom: 'first post-readiness event' });
+          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, afterParentAction: true, measuredFrom: 'first child event after own prompt' });
         }
       }
       const allDone = armState.children.every((c) => armState.secondsToWorking.has(c.sessionId));
@@ -797,11 +858,11 @@ export function analyseArm(runId: string, arm: string): void {
   const results = loadJson<{ rows: ChildOutcomeRow[]; totals: Record<string, number> }>(resultsFile);
   if (!results) throw new Error(`no results at ${resultsFile}`);
   const lines: string[] = [];
-  lines.push(`| child | recorded event loss | s to working (post-readiness) | parent action | dup commits by step | builds seen | silent stall | orphans | final goal | receipt | watch saw |`);
-  lines.push('|---|---|---|---|---|---|---|---|---|---|---|');
+  lines.push(`| child | recorded event loss | s to working (no-action window) | s prompt→first child event | parent action | dup commits by step | builds seen | silent stall (window end) | orphans | final goal (collection) | receipt | watch saw |`);
+  lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const r of results.rows) {
     const stepDups = Object.entries(r.duplicateByStep.byStepId).filter(([, n]) => n > 0).map(([k, n]) => `${k}:${n}`).join(',') || 'none';
-    lines.push(`| ${r.childId} | ${r.turnsLost} | ${r.secondsToWorking ?? 'never'} | ${r.parentAction ?? 'none'} | ${stepDups} | ${r.duplicateByStep.buildRuns} | ${r.silentStall ? 'YES' : 'no'} | ${r.orphans.orphansAtKill} | ${r.finalOutcome} | ${r.receiptState} | ${r.watch.firingKinds.join(',')} |`);
+    lines.push(`| ${r.childId} | ${r.turnsLost} | ${r.secondsToWorking ?? 'none'} | ${r.promptToWorkSeconds ?? 'none'} | ${r.parentAction ?? 'none'} | ${stepDups} | ${r.duplicateByStep.buildRuns} | ${r.silentStall ? 'YES' : 'no'} | ${r.orphans.orphansAtKill} | ${r.finalOutcome} | ${r.receiptState} | ${r.watch.firingKinds.join(',')} |`);
   }
   lines.push('');
   lines.push(`Totals: ${JSON.stringify(results.totals)}`);

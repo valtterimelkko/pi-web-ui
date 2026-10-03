@@ -34,7 +34,16 @@ BOOT_T=$(date -u +%FT%TZ)
 node --import tsx scripts/e2a-crash/preflight.ts || { echo "PREFLIGHT FAILED (drain)"; exit 4; }
 node --import tsx scripts/e2a-crash/cli.ts stop-server --run-id a6c-r1 || true
 rm -rf "$RUN/server"
-node --import tsx scripts/e2a-crash/cli.ts prepare --run-id a6c-r1 --fixtures 6 || exit 5
+# 13 item 6: prepare fixtures 5-8 ONLY — the kill arm's fixtures 1-4 must
+# survive for the duplicate audit; assert their baselines stay unchanged.
+BASELINES_BEFORE=$(for i in 1 2 3 4; do git -C "$RUN/fixtures/fixture-$i/repo" rev-parse HEAD 2>/dev/null; echo; done)
+node --import tsx scripts/e2a-crash/cli.ts prepare --run-id a6c-r1 --fixtures 4 --from 5 || exit 5
+BASELINES_AFTER=$(for i in 1 2 3 4; do git -C "$RUN/fixtures/fixture-$i/repo" rev-parse HEAD 2>/dev/null; echo; done)
+if [ "$BASELINES_BEFORE" != "$BASELINES_AFTER" ]; then
+  echo "FAIL: kill fixtures 1-4 baselines changed during drain prepare"
+  exit 5
+fi
+echo "kill fixture baselines unchanged: $BASELINES_AFTER"
 node --import tsx scripts/e2a-crash/cli.ts start-server --run-id a6c-r1 --mode arm || exit 6
 sleep 3
 {

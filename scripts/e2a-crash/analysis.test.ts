@@ -25,6 +25,7 @@ import {
   detectInFlightToolCall,
   drainRequestTimeoutMs,
   firstWorkingAfterReadiness,
+  classifyWindowEnd,
   summariseDuplicatesByStepId,
   buildOperationLedgerEntry,
   type CommitRecord,
@@ -292,6 +293,7 @@ test('buildChildRow derives the per-child record and totalsRows reconciles', () 
       parseTranscriptEvents({ events: [{ type: 'message', id: 'a' }] }),
     ),
     secondsToWorking: 120,
+    promptToWorkSeconds: null,
     workedAfterReadiness: true,
     silentStall: false,
     parentAction: null,
@@ -315,6 +317,7 @@ test('buildChildRow derives the per-child record and totalsRows reconciles', () 
     arm: 'kill',
     transcriptDiff: { lostCount: 0, lostKinds: {}, retainedCount: 5, newCount: 3, newKinds: {}, lostExamples: [], lostToolCalls: [] },
     secondsToWorking: null,
+    promptToWorkSeconds: null,
     workedAfterReadiness: false,
     silentStall: true,
     parentAction: 'follow-up-prompt',
@@ -340,7 +343,7 @@ test('buildChildRow derives the per-child record and totalsRows reconciles', () 
 test('totalsRows: anchor-wide orphan snapshots are deduplicated by pid union, never summed', () => {
   const mk = (id: string): ChildOutcomeRow => ({
     childId: id, arm: 'kill',
-    turnsLost: 0, toolResultsLost: 0, editsLost: 0, newAfterRecovery: 0,
+    turnsLost: 0, toolResultsLost: 0, editsLost: 0, newAfterRecovery: 0, promptToWorkSeconds: null,
     secondsToWorking: null, workedAfterReadiness: false, silentStall: false,
     parentActionNeeded: false, parentAction: null,
     duplicateByStep: summariseDuplicatesByStepId([], [], ['slugify', 'initials', 'maskEmail', 'build']),
@@ -379,7 +382,7 @@ test('firstWorkingAfterReadiness: work recorded BEFORE readiness is not recovery
   ]);
   const r = firstWorkingAfterReadiness(events, T0 + 60_000);
   assert.equal(r.working, false, 'work before readiness must NOT count as recovery (09 finding 1)');
-  assert.equal(r.firstNewToolCallAtMs, null);
+  assert.equal(r.firstEventAtMs, null);
 });
 
 test('firstWorkingAfterReadiness: a tool call after readiness is recovery, with its exact time', () => {
@@ -391,7 +394,7 @@ test('firstWorkingAfterReadiness: a tool call after readiness is recovery, with 
   ]);
   const r = firstWorkingAfterReadiness(events, T0 + 60_000);
   assert.equal(r.working, true);
-  assert.equal(r.firstNewToolCallAtMs, T0 + 70_000);
+  assert.equal(r.firstEventAtMs, T0 + 70_000);
 });
 
 test('firstWorkingAfterReadiness: assistant text after readiness counts as a resumed turn, tool-less', () => {
@@ -401,7 +404,7 @@ test('firstWorkingAfterReadiness: assistant text after readiness counts as a res
   ]);
   const r = firstWorkingAfterReadiness(events, T0 + 60_000);
   assert.equal(r.working, true);
-  assert.equal(r.firstNewToolCallAtMs, null);
+  assert.equal(r.firstEventAtMs, T0 + 90_000, 'the assistant record itself is the child event (13 item 1)');
 });
 
 // ---------------------------------------------------------------------------
@@ -438,4 +441,67 @@ test('duplicates by step id: progress-log text is reported unmeasured, never as 
   const r = summariseDuplicatesByStepId([], [], ['slugify', 'initials', 'maskEmail', 'build']);
   assert.equal(r.unmeasuredClasses.includes('progress-log-lines'), true, 'child-writable progress text is unmeasured by design');
   assert.equal(r.totalDuplicateCommits, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 13-final-correction item 1: the post-action metric counts the CHILD'S OWN
+// work only — the first ASSISTANT message or TOOL CALL after the reference
+// point. User, system and tool-result records never count, and there is no
+// Date.now()/polling-time fallback: no qualifying event = not working.
+// ---------------------------------------------------------------------------
+
+test('firstChildWorkAfter: a post-reference USER record (the parent prompt echo) is not work', () => {
+  const events = parseRawSessionJsonl([
+    rawLine('user', T0),
+    rawLine('user', T0 + 60_000), // the follow-up prompt lands as a user record
+  ]);
+  const r = firstWorkingAfterReadiness(events, T0 + 30_000);
+  assert.equal(r.working, false, 'a user record is not the child\'s own work (13 item 1)');
+  assert.equal(r.firstEventAtMs, null);
+});
+
+test('firstChildWorkAfter: assistant or tool event after the reference counts, with its own timestamp', () => {
+  const events = parseRawSessionJsonl([
+    rawLine('user', T0),
+    rawLine('assistant', T0 + 78_650, { id: 'call_1', name: 'bash' }),
+    rawLine('toolResult', T0 + 80_000, { id: 'call_1', name: 'bash' }),
+  ]);
+  const r = firstWorkingAfterReadiness(events, T0 + 30_000);
+  assert.equal(r.working, true);
+  assert.equal(r.firstEventAtMs, T0 + 78_650, 'event timestamp, never polling time');
+});
+
+test('firstChildWorkAfter: tool results alone after the reference never count', () => {
+  const events = parseRawSessionJsonl([
+    rawLine('user', T0),
+    rawLine('assistant', T0 + 10_000, { id: 'call_pre', name: 'bash' }),
+    rawLine('toolResult', T0 + 70_000, { id: 'call_pre', name: 'bash' }),
+  ]);
+  const r = firstWorkingAfterReadiness(events, T0 + 30_000);
+  assert.equal(r.working, false, 'a late tool result belongs to pre-reference work');
+  assert.equal(r.firstEventAtMs, null);
+});
+
+test('classifyWindowEnd: goal running + idle + no qualifying work = silent stall at the boundary', () => {
+  assert.equal(classifyWindowEnd('running', false, false), true);
+  assert.equal(classifyWindowEnd('running', true, false), false, 'busy is working, not stalled');
+  assert.equal(classifyWindowEnd('running', false, true), false, 'qualifying work in the window is recovery, not stall');
+  assert.equal(classifyWindowEnd('paused', false, false), false, 'a paused goal is a different outcome');
+});
+
+// ---------------------------------------------------------------------------
+// 13 item 5: the harness operation ledger must be appended in the WORK phase,
+// the POST-RESTART observation loop and the POST-PROMPT observation loop —
+// not only before the interruption (the r2 review's 'sampled only before
+// interruption' finding).
+// ---------------------------------------------------------------------------
+
+test('operation ledger is appended in all three phases of both arms', () => {
+  const { readFileSync: rf } = require('node:fs');
+  const src = rf('/root/.worktrees/orch-scaling/e2-a6c-pi-web-ui/scripts/e2a-crash/driver.ts', 'utf8');
+  const count = (src.match(/appendOperationLedger\(paths, '/g) ?? []).length;
+  assert.ok(count >= 3, `appendOperationLedger must be called in work + no-action + post-action loops (found ${count} arm-phase call sites)`);
+  for (const arm of ['kill', 'drain-timeout']) {
+    assert.ok(src.includes(`appendOperationLedger(paths, '${arm}'`), `missing ledger call for arm ${arm}`);
+  }
 });

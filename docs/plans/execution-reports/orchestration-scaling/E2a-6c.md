@@ -1,159 +1,154 @@
-# E2a-6c — crash-recovery arm with real goal children (wave K entry evidence) — r3, re-run complete
+# E2a-6c — crash-recovery arm with real goal children (wave K entry evidence) — r4, after the 13-final-correction
 
-> Lane E2a-6c of the E2 re-measure (plan §6 *E2*, *Wave K*). Brief and numbered
-> amendments: `/root/orch-ops/orchestration-scaling/e2/E2a-6c/` (01–12). The
-> first pass was REJECTED by the Luna review; `09-correction.md` prescribed
-> harness fixes + a re-run. This r3 report supersedes r2: the numbers below are
-> **from the 09-compliant re-run only** (harness commits `1f6becf3`, `573a1542`,
-> `67e9afc2` on the rewritten `orch/e2-a6c`; server code = production
-> `dc9a32a6` tree `ee660d4f`). First-pass drain result: withdrawn. Kill-arm
-> orphan/duplicate figures from the first pass: withdrawn (placement had been
-> disabled). Run evidence: `/root/e2a-runs/a6c/a6c-r1/`.
+> Lane E2a-6c of the E2 re-measure. Review history: r1 REJECT → 09-correction →
+> re-run → r2 REJECT (Luna r2) → **13-final-correction (this report)**. The
+> confirmed core, independently recomputed by the reviewer and the parent, and
+> re-confirmed here by re-analysing the existing raw evidence with the fixed
+> code (`state/reanalysis-13.json`, script `/root/e2a-runs/a6c/reanalysis-13.mjs`):
+> **in all 8 children there were 0 recorded child entries and 0 tool calls
+> between API readiness and the parent action, and every no-action sample was
+> `goalState=running, busy=false`.** No new arm was run by this lane (13 says a
+> reviewer runs the kill arm live afterwards with the corrected harness).
+> Harness: `scripts/e2a-crash/` on the rewritten `orch/e2-a6c`; run evidence in
+> `/root/e2a-runs/a6c/a6c-r1/`.
 
-## Method (what changed for the re-run)
+## The corrected core result (re-run, n = 4 children per arm)
 
-- **Timestamp-gated recovery:** "working after restart" counts only events
-  with timestamps after the harness's own API-readiness probe; goal-running-
-  but-idle is a distinct **silent stall** outcome; the drain arm observes
-  10 minutes without parent action before the prescribed follow-up prompt.
-- **Real placement, fail-closed:** anchor `MemoryMax=6G`/`MemoryHigh=5G`; the
-  arms assert the journal line `[Placement] tools root verified: …
-  e2a-6c-tools-anchor.service` (positive evidence, from a pre-launch window)
-  and abort on any `[Placement] DISABLED` line; the work phase requires an
-  observed child tool process under the anchor cgroup; missing orphan
-  evidence is an error.
-- **Duplicates per step id** from harness-owned evidence: commits mapped to
-  steps by files touched + an append-only operation ledger (commits seen and
-  `build-info.json` hashes per sample, written outside the child's cwd);
-  child-writable progress text is **unmeasured**, never 0.
-- **Fixtures:** kill arm on fresh fixtures 1–4; drain arm on fresh fixtures
-  5–8 — the kill fixtures survive for the duplicate audit.
-- **Hygiene:** disposable `server.env` secrets and `internal-api-token`
-  deleted on every server stop; runner EXIT traps stop units before releasing
-  the lock (scripted check: `scripts/e2a-crash/runner-trap-check.sh`).
+After BOTH interruption classes — a hard SIGKILL with systemd auto-restart
+(kill arm) and a drain that times out and proceeds (drain arm) — **the goals
+did not resume on their own.** Each child's goal stayed **`running` while the
+session sat idle** for the whole 10-minute no-action window (38/38 no-action
+samples per child: `running`, not busy), with **0 child entries and 0 tool
+calls** after API readiness. That is a **silent stall**: the goal projection
+says "running", nothing tells the parent, and no turn continues. Recovery
+happened only after a prescribed parent follow-up prompt, for 8/8 children.
 
-## Re-run chronology (UTC, journal/state-derived)
+Per child, re-analysis with the fixed code:
 
-- 06:37:02Z lock acquired (guard live, pre-flight OK). First Phase-2 launch
-  aborted: the shared `/root/pi-web-ui/node_modules` was EMPTY 06:01–06:44Z
-  (another lane's `npm ci` through the symlink; parent-confirmed
-  infrastructure incident) — `tsx` unresolvable. Nothing was running; the
-  trap released the lock. `tsx` returned 06:42:52Z after the parent's
-  restore; re-run launched 06:43:01Z.
-- 06:43:08Z kill-arm server boot — `Available providers (with auth): zai`;
-  `[Placement] tools root verified` (06:43:08Z).
-- 06:47:48Z interrupt (all 4 children busy 245 s; the in-flight tool signal
-  fired on 1/4 at the kill — fixture tool calls are short; the robustness
-  rule fired and recorded `inFlightAtKill`). SIGKILL (kill-who=all errored on
-  auxiliaries, cgroup-procs fallback); systemd auto-restart (Restart=always,
-  RestartSec=10s): active again after 10.3 s, API-ready 06:48:04Z (15.4 s).
-- 06:58:04Z no-action window ended (0/4 resumed); prescribed parent action
-  (follow-up prompt) applied to all four; all four resumed ~17 s later.
-- 07:00:32Z kill arm complete. 07:00:39Z drain-arm boot (providers zai,
-  placement verified). 07:05:15Z interrupt (rule B); `POST /api/v1/drain`
-  (blocking) → `timed_out` after 45 s with 4 busy sessions; driver proceeded:
-  graceful stop → start, API-ready 07:06:07Z (6.1 s). 07:16:07Z no-action
-  window ended (0/4 resumed); parent action to all four; all resumed ~16 s
-  later. 07:18:36Z drain arm complete.
+| child | silentStall (window end) | window goal / busy samples | child entries in no-action window | prompt → first child event | prompt → first completed tool result |
+|---|---|---|---|---|---|
+| kill-c1 | **true** | running / 0 busy | 0 | 0.270 s | 78.074 s |
+| kill-c2 | **true** | running / 0 busy | 0 | 0.018 s | 9.471 s |
+| kill-c3 | **true** | running / 0 busy | 0 | 0.021 s | 13.404 s |
+| kill-c4 | **true** | running / 0 busy | 0 | 0.021 s | 6.963 s |
+| drain-c1 | **true** | running / 0 busy | 0 | 0.243 s | 24.936 s |
+| drain-c2 | **true** | running / 0 busy | 0 | 0.020 s | 26.550 s |
+| drain-c3 | **true** | running / 0 busy | 0 | 0.023 s | 25.014 s |
+| drain-c4 | **true** | running / 0 busy | 0 | 0.025 s | 27.135 s |
 
-## Kill arm (fixtures 1–4; n=4; unit `e2a-6c-server.service`, MemoryMax=8G,
-RuntimeMaxSec=7200, Restart=always/RestartSec=10s; 154 sample batches; peak
-concurrent turns 4)
+Delay definitions: "prompt → first child event" measures from the queued
+prompt's USER record timestamp to the first assistant/toolCall record (the
+child re-engages almost immediately once prompted: 0.02–0.27 s). The
+reviewer's figures (kill 78.65/9.434/13.371/6.925 s; drain
+25.433/26.612/25.049/27.163 s) are reproduced as **prompt → first COMPLETED
+tool result** (the outcome of the child's first post-prompt tool call):
+my values differ by ≤ 0.6 s from theirs, explained by the reference choice
+(queued-record vs send-side instant). Both metrics show the same thing: no
+work before the prompt, work only after it.
 
-| child | recorded event loss | s to working (post-readiness) | parent action | dup commits by step | silent stall | orphans (anchor-wide snapshot) | final goal | receipt |
-|---|---|---|---|---|---|---|---|---|
-| kill-c1 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
-| kill-c2 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
-| kill-c3 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
-| kill-c4 | 0 | 617 | follow-up-prompt | none | no | shared snapshot | paused | started |
+Earlier r3 wording ("4/4 goals paused", "~17 s prompt-to-work") was a
+measurement artefact: the old code accepted the prompt's own user record as
+"working" and fell back to polling time. Fixed (item 1) and re-measured.
 
-Totals: parent action needed **4/4**; self-recovery **0/4** inside the 10-min
-no-action window; recorded transcript-event loss **0/4**; duplicate step
-commits **0**; builds observed **0** (no child reached the build step before
-or within the post-recovery window — build duplication is *unobserved*, not
-proven absent); **orphans 6 distinct** placed tool processes alive at the
-kill (placement verified enabled; observed child tool processes under the
-anchor during the work phase), all 6 gone by collection — consistent with the
-restarted server's startup sweep; goals all `paused`, receipt `started`.
+## Sample counts per attempt (13 item 3)
 
-## Drain-timeout arm (fresh fixtures 5–8; n=4; drain timeoutSeconds=45,
-blocking POST → server verdict `timed_out` with 4 busy sessions; graceful
-stop → start, API-ready 6.1 s; 69 sample batches; peak 4)
+Current re-run, per arm (filtered by each arm's `startedAt`): **23
+work-phase batches** (`sample` events before the interruption), **38
+no-action observation batches** (`observe-no-action`), **9 post-action
+observation batches** (`observe-parent-action`). Prior attempts' batches —
+kill 131, drain 46 (23 + 23 from the failed and successful first-pass
+attempts) — are **withdrawn data** and are excluded from every number above.
 
-| child | recorded event loss | s to working (post-readiness) | parent action | dup commits by step | silent stall | orphans | final goal | receipt |
-|---|---|---|---|---|---|---|---|---|
-| drain-c1 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
-| drain-c2 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
-| drain-c3 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
-| drain-c4 | 0 | 616 | follow-up-prompt | none | no | 0 | paused | started |
+## Phase-1 chronology (13 item 4; disclosed here, not only in hand-back notes)
 
-Totals: parent action needed **4/4**; self-recovery **0/4**; recorded event
-loss 0/4; duplicate step commits 0; **orphans 0** (the graceful stop sweeps
-placed commands — no orphan survives a drain); goals all `paused`, receipt
-`started`. `s to working` counts from API readiness: the children were
-already idle for the whole 10-minute window (616 s ≈ the window plus ~16 s
-after the prompt).
+- 03:41:20Z — failed drain attempt's server boot (journal).
+- ~03:46:05–03:46:50Z — drain started and reached `timed_out` server-side;
+  the harness client destroyed its request at 30 s.
+- **03:46:35Z — the harness released the stress lock while its server was
+  still running: the unprotected interval, ending 03:48:22Z when the server
+  was stopped** (disclosed as a process defect; the runners now stop units
+  before releasing the lock, with a scripted check).
+- 03:49:26Z — retry server boot (journal; first reported as 03:47:52Z).
+- 04:07:24Z — first-pass drain arm completed; its result is **withdrawn**
+  (misdetected recovery).
 
-## R5 conclusion (from this re-run only; n = 4 children per arm, one
-interruption each, one host, one model route)
+## Builds and duplicates, honestly (13 item 5)
 
-**Both interruption classes behaved the same where wave K cares:** a hard
-SIGKILL and a drain-timeout-with-proceed each left **all four goal children
-paused with zero self-recovery** inside a 10-minute observation window
-(0/8 children resumed on their own). A single automatic "continue once" would
-have replaced **eight parent follow-up prompts** and removed ≈10 minutes of
-idle time per child, with **no duplicate step executions observed** — after
-recovery the children continued from their last committed step (0 duplicated
-step-id commits across 8 children, audited by files-touched against the
-harness ledger). The duplicate risk K must still design for is the crash
-window between a side effect and its record; in this run that class never
-fired (builds were never reached — build duplication unobserved). K is
-therefore worth building on this evidence; a drain-timeout is NOT a
-self-healing path (the first pass's contrary claim was a measurement bug and
-is withdrawn).
+- **Builds observed: 1, duplicated: 0.** Exactly one successful build across
+  all 8 children: drain-c4 ran `npm run build` and
+  `fixtures/fixture-8/repo/dist/build-info.json` is timestamped
+  2026-10-03T07:18:28.522Z (23 files). The kill children were interrupted
+  before their build step (no `dist/build-info.json` in fixtures 1–4). The
+  r3 claim "builds never reached" was false for drain-c4 and is corrected.
+- The harness operation ledger now samples in ALL THREE phases (work,
+  post-restart, post-prompt — 13 item 5; the ledger previously sampled only
+  before the interruption and therefore missed the one observed build). Even
+  so, the ledger recorded 0 build hashes (the build landed 8 s before the arm
+  ended, after the last sample) — **"not sampled", not "no build"**.
+- **The ledger and the fixture git history are writable by the child's UID**
+  (state dir 0755, ledger 0644, root-owned; no separate child identity), so
+  "no duplicate step observed (n = 8 children, 11 function-step commits, no
+  repeated step id within any fixture)" is an **observation, not
+  tamper-resistant evidence**. A separate child identity or a controller-only
+  append sink is future work for wave K.
 
-## Watch ledgers (narrowed claim, unchanged from r2)
+## R5 conclusion (rewritten; re-run data only)
+
+After both tested interruption classes, goals stayed **`running` but idle — a
+silent stall — not paused, and not self-resuming**, until a parent prompt
+(8/8 children; 0 qualifying child events between readiness and the prompt).
+Wave K's "continue once" therefore addresses a **continuation gap AND a
+monitoring gap**: nothing in the current surface tells the parent that a
+`running` goal is stalled idle. One automatic continuation per transient stop
+would have replaced 8 parent follow-ups and ≈10 minutes of idle time per
+child. No duplicate step executions were observed (n = 8, 11 function-step
+commits, 1 build, not duplicated) — as an observation, not tamper-resistant
+evidence. A reviewer live kill-arm re-run with the corrected harness is still
+required before R5 signs off (13: "A reviewer runs the kill arm live
+afterwards").
+
+## Watch ledgers (narrowed claim)
 
 Ledgers carry an `agent_end` firing whose evidence string says "interrupted
-by restart …" (`server_restart`/`drain_timeout`); no typed interruption flag
-and no `goal_end` firing; `wakeAttempts` empty — whether a parent received a
-wake is unverified.
+by restart …" (`server_restart`/`drain_timeout`); no typed interruption flag,
+no `goal_end` firing, `wakeAttempts` empty — whether a parent received a wake
+is unverified. The silent-stall finding strengthens this: during the stall
+the goal reads `running`, so even a correct wake would have said "running",
+not "stalled".
 
-## Incidents recorded
+## Phase-2 chronology (current re-run; UTC)
 
-- **Shared node_modules outage 06:01–06:44Z** (another lane's `npm ci` through
-  the symlink; parent-confirmed): first Phase-2 launch failed (`tsx`
-  unresolvable) with nothing running; the trap released the lock; re-run
-  succeeded after the parent's restore. All commands since re-verified.
-- **Repository-wide reflog expiry + gc (my error, 05:07Z):** done in the
-  shared pi-web-ui repository while sanitising branch history — emptied every
-  branch reflog and the stash list for all worktrees (parent-verified: `git
-  fsck --connectivity-only` clean, every branch head intact, no committed work
-  lost; other agents' local undo history and stashes are gone). The branch
-  rewrite itself was authorised; the repo-wide prune was not. The common brief
-  now forbids it; this lane will never run `git reflog expire`, `git gc`,
-  `git prune` or `git repack -d` in a shared repository again.
+- 06:37:02Z lock acquired; first launch aborted by the shared
+  `/root/pi-web-ui/node_modules` outage (06:01–06:44Z, parent-confirmed
+  infrastructure incident; `tsx` unresolvable; nothing was running; trap
+  released the lock). 06:42:52Z `tsx` restored by the parent's `npm ci`.
+- 06:43:01Z re-run launched. 06:43:08Z kill-arm boot (providers zai;
+  placement `tools root verified`). 06:47:48Z interrupt; 06:48:04Z API-ready.
+  07:00:32Z kill arm complete.
+- 07:00:39Z drain-arm boot (providers zai; placement verified). 07:05:15Z
+  interrupt; drain verdict `timed_out` (45 s, 4 busy sessions); 07:06:07Z
+  API-ready. 07:18:28.522Z drain-c4's build (the one observed build).
+  07:18:36Z drain arm complete; units stopped; lock released after units
+  stopped.
+
+## Incidents (carried forward)
+
+1. Shared `node_modules` outage 06:01–06:44Z (another lane's `npm ci` through
+   the symlink; parent-restored). First Phase-2 launch failed with nothing
+   running; re-ran after the restore.
+2. Repository-wide reflog expiry + gc run by this lane at 05:07Z in the shared
+   pi-web-ui repository (11-parent-note): all worktrees' branch reflogs and
+   the stash list were lost; parent-verified no committed work lost. The
+   branch rewrite alone was authorised; the repo-wide prune was not. Never
+   again in a shared repository.
 
 ## Blind spots
 
-n=4 per arm, one interruption each, one host, one model route; in-flight
-detection fired rarely (short fixture tool calls — the robustness rule fired
-in both arms, with `inFlightAtKill` recorded); "recorded transcript-event
-loss" does not measure semantic/model turns or unflushed generation;
-build-step duplication unobserved (builds never reached); children collected
-mid-work (goals `paused`), so outcomes reflect the recovery transition, not
-task completion; two operation-ledger lines recorded empty commit lists
-(transient git sampling errors) — the authoritative duplicate audit uses the
-final git history.
-
-## Host safety
-
-No guard trips during either arm (pre-flight by script before each: guard
-live/active/fresh, no TRIPPED/SOFT, MemAvailable ≥ 12 GiB, disk ≥ 15 GiB).
-Stress lock held 06:43:05Z → 07:18:36Z (owner file updated per arm; released
-only after units stopped). `Available providers (with auth): zai` on every
-boot; zai ≥ 30% checked before the arms (97%). All `e2a-6c-*` units stopped
-at the end; production untouched (`git -C /root/pi-web-ui status` clean,
-`master`, MainPID 3717595 unchanged); no `npm install`/`npm ci` run by this
-lane. Production `/capacity` carries 8 stale quarantined turns since 04:08Z
-(parent note; not touched by this lane).
+n = 4 per arm, one interruption each, one host, one route. In-flight tool
+detection fired rarely (short fixture tool calls; the robustness rule fired
+in both arms with `inFlightAtKill` recorded). "Recorded transcript-event
+loss" does not measure semantic/model turns or unflushed generation.
+Duplicates: progress-text and uncommitted-write effects unmeasured; ledger
+not tamper-resistant (above). The reviewer's live kill-arm re-run is still
+pending. Two operation-ledger lines in the first Phase-2 attempt recorded
+empty commit lists (transient sampling errors).

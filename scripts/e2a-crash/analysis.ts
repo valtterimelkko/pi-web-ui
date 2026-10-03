@@ -87,6 +87,8 @@ export interface ChildOutcomeRow {
   newAfterRecovery: number;
   /** Seconds from API readiness until the first NEW (timestamp-gated) tool call; null if none. */
   secondsToWorking: number | null;
+  /** 13 item 2: seconds from the child's OWN parent prompt to its first assistant/tool event; null if none observed. */
+  promptToWorkSeconds: number | null;
   /** At least one new tool call/turn with a timestamp after readiness. */
   workedAfterReadiness: boolean;
   /** Goal running but idle with no post-readiness work — a silent stall (09 item 1). */
@@ -269,26 +271,35 @@ export function diffTranscriptSnapshots(before: CrashEventRecord[], after: Crash
 }
 
 /**
- * 09-correction item 1: is the child working AFTER the restarted API was
- * ready? Only events with timestamps strictly after `readyAtMs` count — work
- * recorded during a blocking drain, before the shutdown, is not recovery.
- * A tool call after readiness sets firstNewToolCallAtMs; a text/thinking-only
- * assistant message after readiness counts as a resumed turn without one.
+ * 13-final-correction item 1: is the child doing its OWN work after a
+ * reference point (API readiness for the no-action window; the parent prompt
+ * for the post-action window)? Qualifying events are the child's own output:
+ * an ASSISTANT message or a TOOL CALL with a timestamp strictly after
+ * `refMs`. User, system and tool-result records never count (the follow-up
+ * prompt itself lands as a user record), and there is NO polling-time
+ * fallback: no qualifying event means not working.
  */
 export function firstWorkingAfterReadiness(
   events: CrashEventRecord[],
-  readyAtMs: number,
-): { working: boolean; firstNewToolCallAtMs: number | null } {
-  let working = false;
-  let firstNewToolCallAtMs: number | null = null;
+  refMs: number,
+): { working: boolean; firstEventAtMs: number | null } {
+  let firstEventAtMs: number | null = null;
   for (const e of events) {
-    if (e.timestamp === undefined || e.timestamp <= readyAtMs) continue;
-    working = true;
-    if (e.kind === 'toolCall' && (firstNewToolCallAtMs === null || e.timestamp < firstNewToolCallAtMs)) {
-      firstNewToolCallAtMs = e.timestamp;
-    }
+    if (e.timestamp === undefined || e.timestamp <= refMs) continue;
+    if (e.kind !== 'assistant' && e.kind !== 'toolCall') continue;
+    if (firstEventAtMs === null || e.timestamp < firstEventAtMs) firstEventAtMs = e.timestamp;
   }
-  return { working, firstNewToolCallAtMs };
+  return { working: firstEventAtMs !== null, firstEventAtMs };
+}
+
+/**
+ * 13-final-correction item 1: classification at the END of the no-action
+ * window, snapshotted BEFORE any parent prompt. A goal that still reads
+ * `running` while the session is idle and produced no qualifying event in the
+ * window is a SILENT STALL — running-but-idle, invisible to monitoring.
+ */
+export function classifyWindowEnd(goalState: string | undefined, busy: boolean, qualifyingWork: boolean): boolean {
+  return goalState === 'running' && !busy && !qualifyingWork;
 }
 
 /** One harness-owned observation for the append-only operation ledger (09 item 3). */
@@ -450,6 +461,7 @@ export function buildChildRow(input: {
   arm: ArmName;
   transcriptDiff: TranscriptDiff;
   secondsToWorking: number | null;
+  promptToWorkSeconds: number | null;
   workedAfterReadiness: boolean;
   silentStall: boolean;
   parentAction: string | null;
@@ -471,6 +483,7 @@ export function buildChildRow(input: {
     editsLost,
     newAfterRecovery: input.transcriptDiff.newCount,
     secondsToWorking: input.secondsToWorking,
+    promptToWorkSeconds: input.promptToWorkSeconds,
     workedAfterReadiness: input.workedAfterReadiness,
     silentStall: input.silentStall,
     parentActionNeeded: input.parentAction !== null,
