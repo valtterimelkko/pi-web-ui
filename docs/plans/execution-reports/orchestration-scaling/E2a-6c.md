@@ -25,26 +25,30 @@ happened only after a prescribed parent follow-up prompt, for 8/8 children.
 
 Per child, re-analysis with the fixed code:
 
-| child | silentStall (window end) | window goal / busy samples | child entries in no-action window | prompt → first child event | prompt → first completed tool result |
-|---|---|---|---|---|---|
-| kill-c1 | **true** | running / 0 busy | 0 | 0.270 s | 78.074 s |
-| kill-c2 | **true** | running / 0 busy | 0 | 0.018 s | 9.471 s |
-| kill-c3 | **true** | running / 0 busy | 0 | 0.021 s | 13.404 s |
-| kill-c4 | **true** | running / 0 busy | 0 | 0.021 s | 6.963 s |
-| drain-c1 | **true** | running / 0 busy | 0 | 0.243 s | 24.936 s |
-| drain-c2 | **true** | running / 0 busy | 0 | 0.020 s | 26.550 s |
-| drain-c3 | **true** | running / 0 busy | 0 | 0.023 s | 25.014 s |
-| drain-c4 | **true** | running / 0 busy | 0 | 0.025 s | 27.135 s |
+| child | silentStall (window end) | window goal / busy samples | child entries in no-action window | prompt → turn start (assistant `message.timestamp`) | prompt → first assistant record persisted | prompt → first completed tool result |
+|---|---|---|---|---|---|---|
+| kill-c1 | **true** | running / 0 busy | 0 | 0.270 s | 77.925 s | 78.074 s |
+| kill-c2 | **true** | running / 0 busy | 0 | 0.018 s | 9.347 s | 9.471 s |
+| kill-c3 | **true** | running / 0 busy | 0 | 0.021 s | 13.278 s | 13.404 s |
+| kill-c4 | **true** | running / 0 busy | 0 | 0.021 s | 6.831 s | 6.963 s |
+| drain-c1 | **true** | running / 0 busy | 0 | 0.243 s | 24.795 s | 24.936 s |
+| drain-c2 | **true** | running / 0 busy | 0 | 0.020 s | 26.438 s | 26.550 s |
+| drain-c3 | **true** | running / 0 busy | 0 | 0.023 s | 24.885 s | 25.014 s |
+| drain-c4 | **true** | running / 0 busy | 0 | 0.025 s | 27.000 s | 27.135 s |
 
-Delay definitions: "prompt → first child event" measures from the queued
-prompt's USER record timestamp to the first assistant/toolCall record (the
-child re-engages almost immediately once prompted: 0.02–0.27 s). The
-reviewer's figures (kill 78.65/9.434/13.371/6.925 s; drain
-25.433/26.612/25.049/27.163 s) are reproduced as **prompt → first COMPLETED
-tool result** (the outcome of the child's first post-prompt tool call):
-my values differ by ≤ 0.6 s from theirs, explained by the reference choice
-(queued-record vs send-side instant). Both metrics show the same thing: no
-work before the prompt, work only after it.
+Delay definitions (parent verification, 2026-10-03 09:30 UTC, corrected from
+the 14-complete wording): all three are measured from the queued prompt's USER
+message timestamp. **Turn start** (0.02–0.27 s) is the assistant message's
+internal `message.timestamp`, set when the turn's provider request is created.
+It shows the turn began at once on the prompt, **not** that the model had
+produced output. **First assistant record persisted** (kill 6.8–77.9 s, drain
+24.8–27.0 s) is the record timestamp of the first assistant output written to
+the session file. **First completed tool result** reproduces the reviewer's
+figures (kill 78.65/9.434/13.371/6.925 s; drain 25.433/26.612/25.049/27.163 s)
+within ≤ 0.6 s; the difference is the reference instant (queued record vs
+send-side). All three show the same thing: no work before the prompt, work
+only after it. Source: `e2/E2a-6c/15-parent-verification-delays.txt` (parent
+recomputation from the raw final-session files).
 
 Earlier r3 wording ("4/4 goals paused", "~17 s prompt-to-work") was a
 measurement artefact: the old code accepted the prompt's own user record as
