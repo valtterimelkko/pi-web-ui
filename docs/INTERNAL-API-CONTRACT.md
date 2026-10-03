@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.58.5",
+  "contractVersion": "1.59.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -37,6 +37,10 @@ Current contract:
 > below; unplanned wire features stay out. (C6, orchestration-scaling plan: the contract moved
 > 1.15.0 → 1.47.0 in about eight weeks; the window lets parents, clients and
 > skills catch up with a stable surface.)
+>
+> **R5 (2026-10-03) authorised the window's first minor bump for wave K** (GO,
+> slimmed): the 1.59.0 row below is that recorded exception. The rules above
+> still govern anything else.
 
 Inside the window, **bug fixes only**. Allowed without owner involvement:
 
@@ -70,10 +74,12 @@ Exception table (date, owner decision, what, version):
 
 | Date | Owner decision | What | Version |
 | --- | --- | --- | --- |
+| 2026-10-03 | R5 (wave K GO, slimmed) | 1.59.0: wave K — a Pi goal child continues once after a transient stop; non-continued stops surface as `goal_state` `paused`/`interrupted` with the additive `interruption` object | 1.59 |
 | 2026-10-02 | post-H-b review (owner accepted) | 1.58.5: /capacity memory.currentBytes and admission memory checks report working set (current − inactive_file), not total | 1.58.5 |
 
 ### Changelog
 
+- **1.59.0** (minor — wave K, after the C6 window closed at R5). Additive goal changes: the `SessionGoalProjection` gains an optional `interruption` object (`cause`, `source`, `detectedAt`, `continueCount`, `autoContinued?`, `continueNote?`, `inFlightToolCall?`); a stop that does not auto-continue projects as `status: "paused"`, `pausedReason: "interrupted"` (no new canonical status); an auto-continue keeps `status: "running"` with `interruption.autoContinued: true` and emits `goal_state` — never `goal_end`. `goal_state` event data carries the same projection. The K1 transient-cause list (`restart_interruption`, `rehydrate_pause`, `provider_abort` on positive provider evidence) and the runtime support matrix (Pi continue; Claude/Antigravity/Command Code emit `unsupported_runtime` visibility only) are documented in [`INTERNAL-API.md`](./INTERNAL-API.md) § Goal. Server-owned continue markers live under `<run-receipts dir>/goal-continue/`. No existing shape changed: all additions are optional fields; consumers not matching on the new fields are unaffected.
 - **1.58.5** (patch — Hb4 working-set memory capacity; bug fix inside the C6 window). `readToolsSliceMemory` and `readServiceMemoryCapacity` compute working-set memory by deducting reclaimable `inactive_file` page cache from `memory.current` (floored at 0, matching kubelet/cAdvisor working set definition). Eliminates false-positive `ADMISSION_CAPACITY_EXHAUSTED` (code `memory_pressure`) on hosts with heavy file I/O where inactive page cache can be reclaimed immediately under pressure. Wire shape is unchanged: `/capacity` `currentBytes` and admission checks report working set rather than total mapped cache. No new route, field, error code, event, or default.
 - **1.58.4** (patch — Hb2 doubled-first-chunk fix; bug fix inside the C6 window). The **browser WS `session_event` `message_start` frame for an assistant message no longer carries streamed text**. Root cause (captured live on a disposable server): the pi-ai provider adapters mutate one shared output object in place as provider chunks land, and the agent loop emits `message_start` with a shallow copy of it; the event crosses several async hops before the transport projection copies the content, so by then the array already held the first streamed chunk — the browser received the first chunk twice (once in `message_start.content`, once as the first `text_delta`) and rendered the reply with a doubled first chunk (e.g. transcript `HB2LIVE-6612`, rendered `HBHB2LIVE-6612`), on every live prompt path (Internal API and typed), flag on and off. The projection now neutralises assistant-role `message_start` content to typed-empty blocks (block types and order preserved; user-role frames and the manager's synthetic skill placeholder — now marked `customType: 'skill-content'` — pass through verbatim), so clients rebuild streamed text from deltas exactly once. Companion client behaviour (same release): the browser's `message_end` handler fills text/thinking blocks whose streamed payload is empty from the terminal message (positionally matched, missing terminal blocks appended) and never replaces non-empty streamed text, so an assistant message that legitimately arrives as start+end with no deltas (error/abort shape) still renders its text. Run receipts are unaffected (they parse `message_end`, which always passed through untouched — receipts never carried the doubled chunk). No new route, field, error code, event or default: the snapshot fingerprints identically to 1.58.0 apart from the version.
 - **1.58.3** (patch — antigravity goal provider-error strikes; bug fix inside the C6 window). The antigravity server-side goal manager no longer treats provider-error turns as ordinary unmet turns: strikes 1–2 retry the continuation without consuming a run, and the third consecutive strike pauses the goal. A resume or a start opens a fresh strike window, and a resume whose continuation is refused while the session settles leaves it owed: the sweeper dispatches it once the session settles. A completed antigravity turn finalized `status: "error"` (agy's own terminal verdict: `INTERNAL (code 500)`, `UNAVAILABLE (code 503)`, a turn timeout — the turn has no assistant answer) is an **error strike**, not an ordinary unmet turn: it consumes no `runs` budget and never reaches goal verification. Consecutive strikes retry the continuation (`provider error (strike N/3)` in `lastReason`), and the **third consecutive strike pauses** the goal with `status: "paused"`, `pausedReason: "error"` (a value Pi goals already report) and a `lastReason` naming the error; nothing is dispatched on the pausing strike. Any successful turn resets the strike count, and `resume` re-arms with a fresh three-strike window (the paused record's counter is 0; the count that caused the pause is stated in `lastReason`). Motivation: the H2s Gemini session burned 27 of its 40 goal runs on 500/503 turns because each failed turn counted as an unmet turn and was continued. No new route, field, error code, event or default: `pausedReason` already carries runtime-specific strings, and the client snapshot fingerprints identically to 1.58.0 apart from the version.

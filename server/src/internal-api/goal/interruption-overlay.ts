@@ -18,7 +18,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionGoalProjection } from './types.js';
-import type { GoalInterruptionCause, InterruptionSource, TransientCause } from './transient-cause.js';
+import type { GoalInterruptionCause, InterruptionSource } from './transient-cause.js';
 import type { InFlightToolCall } from './continue-note.js';
 
 export interface GoalFileIdentity {

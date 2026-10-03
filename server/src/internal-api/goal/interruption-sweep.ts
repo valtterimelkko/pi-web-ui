@@ -24,7 +24,7 @@
 import { classifyGoalStop, type GoalInterruptionCause, type InterruptionSource, type TransientCause } from './transient-cause.js';
 import { goalFingerprint, type ContinueMarkerStore } from './continue-marker.js';
 import type { InterruptionOverlayRecord, InterruptionOverlayStore, GoalFileIdentity } from './interruption-overlay.js';
-import { findInFlightToolCall, buildContinueNote, type InFlightToolCall } from './continue-note.js';
+import { findInFlightToolCall, buildContinueNote } from './continue-note.js';
 import type { SessionGoalProjection } from './types.js';
 
 export interface SweepCandidate {
@@ -158,7 +158,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
       // Second transient stop: fail honestly, visibly (brief K2 / R4).
       const interruption = { cause: 'second_transient' as GoalInterruptionCause, source: stop.source, detectedAt: now(), continueCount: existing.count };
       const overlayRecord: InterruptionOverlayRecord = {
-        sessionId: candidate.sessionId,
+        sessionId: candidate.sessionPath,
         fingerprint,
         cause: 'second_transient',
         source: stop.source,
@@ -191,7 +191,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
       const identity = await deps.readGoalFileIdentity(candidate.sessionPath);
       if (identity) {
         const overlayRecord: InterruptionOverlayRecord = {
-          sessionId: candidate.sessionId,
+          sessionId: candidate.sessionPath,
           fingerprint,
           cause: stop.cause,
           source: stop.source,
@@ -219,7 +219,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
     await deps.markerStore.rollback(candidate.sessionId, fingerprint);
     const interruption = { cause: 'continue_failed' as GoalInterruptionCause, source: stop.source, detectedAt: now(), continueCount: 0 };
     const overlayRecord: InterruptionOverlayRecord = {
-      sessionId: candidate.sessionId,
+      sessionId: candidate.sessionPath,
       fingerprint,
       cause: 'continue_failed',
       source: stop.source,

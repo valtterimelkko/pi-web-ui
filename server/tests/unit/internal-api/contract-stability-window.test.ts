@@ -59,15 +59,22 @@ const EXCEPTION_ROW: StabilityExceptionRow = {
 };
 
 /**
- * The live table's single row (J4, 2026-10-02): a RETROACTIVE record of the
- * owner-accepted 1.58.5 working-set change. The changelog had already
- * documented it as a wire-identical bug fix (the snapshot fingerprints
- * identically to 1.58.0 apart from the version), so this row records the
- * semantic change — it grants nothing. The guard keeps the shape check
- * strict: a patch-version row never satisfies the snapshot-shape exception
- * lookup, because shape changes ride minor bumps whose rows name the
- * major.minor (pinned below).
+ * The live table's rows: (1) R5 (2026-10-03) — the owner-authorised wave K
+ * minor bump that closed the window's minor-bump moratorium; (2) the
+ * RETROACTIVE 1.58.5 record (J4, 2026-10-02) of the owner-accepted
+ * working-set change. The 1.58.5 changelog had already documented it as a
+ * wire-identical bug fix (the snapshot fingerprints identically to 1.58.0
+ * apart from the version), so that row records the semantic change — it
+ * grants nothing. The 1.59.0 row is what admits the wave K shape and version
+ * move below.
  */
+const R5_WAVE_K_ROW: StabilityExceptionRow = {
+  date: '2026-10-03',
+  decision: 'R5 (wave K GO, slimmed)',
+  what: '1.59.0: wave K — a Pi goal child continues once after a transient stop; non-continued stops surface as `goal_state` `paused`/`interrupted` with the additive `interruption` object',
+  version: '1.59',
+};
+
 const RETROACTIVE_1_58_5_ROW: StabilityExceptionRow = {
   date: '2026-10-02',
   decision: 'post-H-b review (owner accepted)',
@@ -80,9 +87,24 @@ describe('contract stability window (C6)', () => {
   const committed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as ClientContractSnapshot;
   const parsed = parseStabilityWindow(doc);
 
-  /** Deep-clone the committed snapshot and hand it a simulated minor bump. */
-  function bumpedSnapshot(mutate: (clone: ClientContractSnapshot) => void): ClientContractSnapshot {
+  /**
+   * The 1.58.0 window-baseline shape, reconstructed from the committed
+   * snapshot by removing exactly the wave K additions (R5 exception). The
+   * baseline-fingerprint tests simulate bumps from THIS shape.
+   */
+  function baselineSnapshot(): ClientContractSnapshot {
     const clone = JSON.parse(JSON.stringify(committed)) as ClientContractSnapshot;
+    clone.contractVersion = '1.58.0';
+    delete (clone.types as Record<string, unknown>).GoalInterruptionInfo;
+    delete (clone.types as Record<string, unknown>).GoalInterruptionCause;
+    const projection = clone.types.SessionGoalProjection?.fields as Record<string, unknown> | undefined;
+    delete projection?.interruption;
+    return clone;
+  }
+
+  /** Deep-clone the baseline snapshot and hand it a simulated minor bump. */
+  function bumpedSnapshot(mutate: (clone: ClientContractSnapshot) => void): ClientContractSnapshot {
+    const clone = JSON.parse(JSON.stringify(baselineSnapshot())) as ClientContractSnapshot;
     clone.contractVersion = '1.59.0';
     mutate(clone);
     return clone;
@@ -103,8 +125,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: exactly the retroactive 1.58.5 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW]);
+    it('parses the live exception table: the R5 wave K row plus the retroactive 1.58.5 row', () => {
+      expect(parsed?.exceptions).toEqual([R5_WAVE_K_ROW, RETROACTIVE_1_58_5_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -123,12 +145,15 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version while it stays inside 1.58', () => {
+    it('accepts the live contract version: 1.59.0 is admitted by the R5 wave K exception row', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
       expect(verdict.ok).toBe(true);
-      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.58');
+      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.59');
+      // and it would fail without the R5 row (the window is otherwise closed):
+      const unauthorised = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, [RETROACTIVE_1_58_5_ROW]);
+      expect(unauthorised.ok).toBe(false);
     });
 
     it('passes a simulated patch bump (1.58.x) with no exception row', () => {
@@ -161,22 +186,25 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('snapshot fingerprint guard', () => {
-    it('committed snapshot shape matches the 1.58.0 window baseline', () => {
+    it('the regenerated 1.59.0 snapshot shape differs from the 1.58.0 baseline and is admitted by the R5 wave K row', () => {
       expect(parsed).not.toBeNull();
-      expect(shapeFingerprint(committed)).toBe(BASELINE_SHAPE_SHA256);
+      expect(shapeFingerprint(committed)).not.toBe(BASELINE_SHAPE_SHA256);
       const verdict = guardSnapshotShape(committed, parsed!.exceptions, INTERNAL_API_CONTRACT_VERSION);
       expect(verdict.ok).toBe(true);
       expect(verdict.problems).toEqual([]);
+      // and it would fail without the R5 row:
+      const unauthorised = guardSnapshotShape(committed, [RETROACTIVE_1_58_5_ROW], INTERNAL_API_CONTRACT_VERSION);
+      expect(unauthorised.ok).toBe(false);
     });
 
-    it('route and type sets still match the baseline (explicit enumeration)', () => {
+    it('route set matches the baseline; the type set gains exactly the two wave K types (explicit enumeration)', () => {
       expect(Object.keys(committed.routes).sort()).toEqual([...BASELINE_ROUTES].sort());
-      expect(Object.keys(committed.types).sort()).toEqual([...BASELINE_TYPES].sort());
+      expect(Object.keys(committed.types).sort()).toEqual([...BASELINE_TYPES, 'GoalInterruptionInfo'].sort());
     });
 
     it('canonical shape strips only contractVersion (deterministic)', () => {
-      const again = JSON.parse(JSON.stringify(committed)) as ClientContractSnapshot;
-      expect(canonicalShapeSnapshot(committed)).toBe(canonicalShapeSnapshot(again));
+      const again = JSON.parse(JSON.stringify(baselineSnapshot())) as ClientContractSnapshot;
+      expect(canonicalShapeSnapshot(baselineSnapshot())).toBe(canonicalShapeSnapshot(again));
       again.contractVersion = '1.58.1';
       expect(shapeFingerprint(again)).toBe(BASELINE_SHAPE_SHA256);
     });
@@ -248,9 +276,11 @@ describe('contract stability window (C6)', () => {
       const added = bumpedSnapshot((clone) => {
         (clone.types.SessionInfo.fields as Record<string, unknown>).newWireField = { type: 'string' };
       });
-      const withLiveRows = guardSnapshotShape(added, parsed!.exceptions, INTERNAL_API_CONTRACT_VERSION);
-      expect(withLiveRows.ok).toBe(false);
-      expect(withLiveRows.problems.join(' ')).toMatch(/no exception row/);
+      // The wave K shape change is admitted by the R5 row; a patch-version
+      // row alone (the retroactive 1.58.5 record) must still admit nothing.
+      const withPatchRowOnly = guardSnapshotShape(added, [RETROACTIVE_1_58_5_ROW], INTERNAL_API_CONTRACT_VERSION);
+      expect(withPatchRowOnly.ok).toBe(false);
+      expect(withPatchRowOnly.problems.join(' ')).toMatch(/no exception row/);
       const withSyntheticTwin = guardSnapshotShape(added, [RETROACTIVE_1_58_5_ROW], '1.58.5');
       expect(withSyntheticTwin.ok).toBe(false);
     });

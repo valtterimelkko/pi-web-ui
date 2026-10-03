@@ -138,6 +138,13 @@ export interface DrainControllerDeps {
   maxTimeoutMs?: number;
   holdMs?: number;
   retryAfterSeconds?: number;
+  /**
+   * Wave K (contract 1.59.0): fired once when a drain times out, with the
+   * cut-off context, so the server can run the interruption sweep for goal
+   * children the timeout cut off (in-process; the next boot re-runs it).
+   * Best-effort: errors are swallowed.
+   */
+  onTimedOut?: (cutOff: { runIds: string[]; sessionIds: string[] }) => void;
 }
 
 export interface DrainStartInput {
@@ -197,6 +204,7 @@ export class DrainController {
   private readonly maxTimeoutMs: number;
   private readonly defaultHoldMs: number;
   readonly retryAfterSeconds: number;
+  private readonly onTimedOut?: DrainControllerDeps['onTimedOut'];
 
   private state: DrainState = 'idle';
   private reason?: string;
@@ -232,6 +240,7 @@ export class DrainController {
     this.defaultTimeoutMs = clampInt(deps.defaultTimeoutMs, DEFAULT_DRAIN_TIMEOUT_MS, 0, this.maxTimeoutMs);
     this.defaultHoldMs = clampInt(deps.holdMs, DEFAULT_DRAIN_HOLD_MS, 1, MAX_DRAIN_TIMEOUT_MS);
     this.retryAfterSeconds = clampInt(deps.retryAfterSeconds, DEFAULT_DRAIN_RETRY_AFTER_SECONDS, 1, 3600);
+    this.onTimedOut = deps.onTimedOut;
   }
 
   /** Begin draining, or join the drain already in progress (its parameters win). */
@@ -435,6 +444,11 @@ export class DrainController {
     this.holdTimer = setTimeout(() => { void this.cancel('hold_expired'); }, this.holdUntilMs - this.finishedAtMs);
     this.holdTimer.unref?.();
     this.flushWaiters(this.status());
+    if (state === 'timed_out' && this.onTimedOut) {
+      try {
+        this.onTimedOut({ runIds: [...this.cutOffRunIds], sessionIds: [...this.cutOffSessionIds] });
+      } catch { /* best-effort: the sweep re-runs at boot */ }
+    }
   }
 
   private flushWaiters(status: DrainStatus): void {

@@ -94,6 +94,18 @@ export interface RestartInterruptedBusySession {
 /** Completion-type event conditions eligible for `fireIfSettled`. */
 const SETTLED_COMPLETION_EVENT_TYPES = new Set(['agent_end', 'goal_end']);
 
+/**
+ * Wave K (R5): module-level fallback probe used when a WatchManager is
+ * constructed without `hasGoalContinueMarker`. Server wiring (server.ts, which
+ * owns the marker store) installs it at boot; unit tests that pass the dep are
+ * unaffected. Awaited by the restart reconciliation before a synthetic goal_end.
+ */
+let moduleGoalContinueProbe: ((sessionId: string) => boolean | Promise<boolean>) | undefined;
+
+export function setGoalContinueProbe(probe: ((sessionId: string) => boolean | Promise<boolean>) | undefined): void {
+  moduleGoalContinueProbe = probe;
+}
+
 export type WatchWakeDispatchResult =
   | { status: 'dispatched'; runId?: string; deliveryKind?: WatchWakeDeliveryKind }
   | { status: 'failed'; errorCode: string; detail?: string };
@@ -142,6 +154,7 @@ export interface WatchManagerDeps {
    * `goal_end` would then be a FALSE end (the sweep continues the child), so
    * only the `agent_end` interruption evidence fires. Awaited, so the boot
    * sweep's classification phase can be ordered before reconciliation.
+   * Falls back to the module-level probe (`setGoalContinueProbe`) when absent.
    */
   hasGoalContinueMarker?: (sessionId: string) => boolean | Promise<boolean>;
   /**
@@ -567,7 +580,8 @@ export class WatchManager {
           // Wave K (R5): a session the interruption sweep auto-continues gets
           // NO synthetic goal_end — it would be a false end. The parent is
           // woken once, at the real end (the sweep emits goal_state only).
-          const autoContinued = this.hasGoalContinueMarker ? await this.hasGoalContinueMarker(sessionId) : false;
+          const probe = this.hasGoalContinueMarker ?? moduleGoalContinueProbe;
+          const autoContinued = probe ? await probe(sessionId) : false;
           if (autoContinued) {
             logger.info(`restart reconciliation: suppressed synthetic goal_end for ${sessionId} (goal auto-continue marker present)`);
           } else {

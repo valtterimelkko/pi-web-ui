@@ -3274,6 +3274,64 @@ is bounded and env-tunable: `CLAUDE_GOAL_AUTO_CONTINUE=false` disables it;
 (30s) tune it. Budget exhaustion marks the goal `failed` with
 `pausedReason: "budget"` and emits `goal_end`.
 
+#### Wave K: one automatic continue after a transient stop (contract 1.59.0)
+
+A Pi goal child whose run was cut off by a **transient** stop continues ONCE
+without any parent action. The transient cause list is closed (K1):
+
+| Cause | Detected from |
+| --- | --- |
+| `restart_interruption` | a restart-interrupted run receipt (`SERVER_RESTART`, `interruptedByRestart`), a drain timeout (`drain_timeout`), or a boot-orphan goal (`running`/`wrapping_up` on disk, session idle, at boot) |
+| `rehydrate_pause` | the goal engine's `pausedReason: "restored_on_session_start"` inside a restart/orphan scope |
+| `provider_abort` | positive provider evidence only: overload, 429, rate limit, 5xx, provider connection reset, exhausted provider retries |
+
+Everything else is a real stop and never auto-continues: a user or parent
+abort (a bare `aborted` message is ambiguous — user, parent and browser stop
+look identical — and is NOT transient), a budget or turn limit, a
+verification failure, a real tool error, a question pause, a parent `clear`.
+
+**Scope (R1).** Only Internal-API goal children are candidates: registry
+origin `internal-api` (or a `parentSource`), last activity inside the previous
+server lifetime (bounded at 6 h before the restart) or announced by the prior
+drain/receipts, runtime Pi, and not busy. Browser- and CLI-origin sessions
+keep their existing behaviour.
+
+**Visibility (R4).** A non-continued stop surfaces at once as a `goal_state`
+event with `status: "paused"`, `pausedReason: "interrupted"` and the additive
+`interruption` object on the projection:
+`{ cause, source, detectedAt, continueCount, autoContinued?, continueNote?,
+inFlightToolCall?: { name, argsSummary } | null }`. Causes: the three
+transient causes plus `second_transient`, `limit`, `question`,
+`unsupported_runtime`, `continue_failed`. No new top-level canonical status
+exists; every existing `dataMatch {status:"paused"}` watch wakes unchanged.
+The projection overlay persists across restarts and clears when the goal file
+changes (resume, clear, a new start, or the engine's own write), so an
+ordinary `POST /goal {"action":"resume"}` works on it.
+
+**Auto-continue (K2).** The continue dispatches once through the normal
+prompt path (shared admission) as `/goal resume "<note>"`. The note names the
+cause, states that the worktree is intact, and — read from the transcript —
+the tool call that was in flight with a short argument summary (K3: check its
+effects before repeating it; nothing re-executes automatically). A durable
+once-marker under the server's data root (`<run-receipts dir>/goal-continue/`)
+makes it exactly-once per goal instance; a second transient stop does not
+continue and emits the visible `interrupted` state. An auto-continue emits
+`goal_state` with `status: "running"` plus `interruption.autoContinued: true`,
+`cause` and `continueCount` — never a `goal_end`; the parent is woken once,
+at the real end. Budget and turn limits are never overridden.
+
+**Runtimes.** Pi is supported for the continue. Claude, Antigravity and
+Command Code are unsupported this wave: they emit the visible `interrupted`
+`goal_state` (cause `unsupported_runtime`) instead of continuing.
+
+**Watches (R5).** A session the sweep auto-continues gets no synthetic
+`goal_end` from the restart reconciliation — the parent is woken once, at the
+real end.
+
+**Watches:** a parent watching `goal_state` with
+`dataMatch {"interruption.autoContinued": true}` sees continues;
+`dataMatch {"status":"paused","pausedReason":"interrupted"}` sees stops.
+
 ### Create-with-goal
 
 `POST /sessions` and `POST /sessions/batch` accept an optional `goal` object

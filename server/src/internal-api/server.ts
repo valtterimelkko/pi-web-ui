@@ -12,7 +12,7 @@
  * - Three verbosity levels: answers, tasks, full
  */
 
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
+import { createServer, request as httpRequest, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import type { Socket } from 'net';
 import { randomBytes } from 'crypto';
 import { writeFile, readFile, mkdir } from 'fs/promises';
@@ -42,6 +42,8 @@ import { readPreferences, deriveLegacyArrays } from '../routes/preferences.js';
 import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
 import { setLogTap } from '../logging/logger.js';
+import { wireGoalInterruptions, type GoalInterruptionWiring, type AnnouncedInterruption } from './goal/interruption-wiring.js';
+import { setGoalContinueProbe } from './watch/watch-manager.js';
 import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
 import type { AntigravityService } from '../antigravity/antigravity-service.js';
@@ -196,6 +198,11 @@ export class InternalApiServer {
   private eventBroker: import('../internal-api/event-broker.js').InternalApiEventBroker | null = null;
   private onBrowserMessage?: (message: Record<string, unknown>) => void;
   private goalControlHandler: ((sessionId: string, body: Record<string, unknown>) => Promise<{ statusCode: number; body: Record<string, unknown> }>) | null = null;
+  /** Wave K (contract 1.59.0): interruption sweep wiring; null before start. */
+  private goalInterruptions: GoalInterruptionWiring | null = null;
+  private goalInterruptionStop: (() => void) | null = null;
+  /** Unix socket path this server is listening on (loopback dispatch). */
+  private listeningSocketPath: string | null = null;
   private stopPromise: Promise<void> | null = null;
   private readonly connections = new Set<Socket>();
 
@@ -453,6 +460,18 @@ export class InternalApiServer {
       refreshBusySessions: () => busySource.refresh(),
       quarantinedTurns: () => runReceiptManager.getQuarantinedCount(),
       recordPath: drainRecordPath,
+      // Wave K: a timed-out drain re-runs the interruption sweep shortly after
+      // the verdict (the cut-off sessions are still busy at that instant; the
+      // re-runs catch them once they go idle when no restart follows).
+      onTimedOut: (cutOff) => {
+        const announced = new Map(cutOff.sessionIds.map((sessionId) => [sessionId, { source: 'drain' as const, interruptionReason: 'drain_timeout' as const }]));
+        for (const delayMs of [120_000, 300_000]) {
+          const timer = setTimeout(() => {
+            void this.goalInterruptions?.runSweep(announced).catch(() => undefined);
+          }, delayMs);
+          timer.unref?.();
+        }
+      },
     });
     this.drainController = drainController;
     const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: () => busySource.refresh() });
@@ -486,6 +505,41 @@ export class InternalApiServer {
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
     this.eventBroker = sessionRoutes.broker;
+
+    // Wave K (contract 1.59.0): interruption sweep wiring — durable stores,
+    // sweep, R6 live observers, R5 probe for the watch reconciliation.
+    const goalContinueRoot = path.join(path.dirname(runReceiptDir), 'goal-continue');
+    const goalInterruptions = wireGoalInterruptions({
+      listRegistryEntries: async () => {
+        const all = await this.sessionRegistry.listAll();
+        return all.map((entry) => ({ id: entry.id, path: entry.path, sdkType: entry.sdkType, origin: entry.origin, parentSource: entry.parentSource }));
+      },
+      isSessionBusy: (sessionId) => {
+        const busy = this.multiSessionManager.listBusySessions();
+        return busy.some((b) => b.sessionId === sessionId || b.sessionPath === sessionId);
+      },
+      dispatchPrompt: (sessionId, message) => this.dispatchGoalContinuePrompt(sessionId, message),
+      brokerPublish: (brokerKey, event) => {
+        try {
+          this.eventBroker?.publish(brokerKey, event as Parameters<NonNullable<typeof this.eventBroker>['publish']>[1]);
+        } catch { /* best-effort visibility */ }
+      },
+      addExtensionUiObserver: (sessionPath, observer) => {
+        this.multiSessionManager.addExtensionUiObserver?.(sessionPath, observer);
+      },
+      removeExtensionUiObserver: (sessionPath, observer) => {
+        this.multiSessionManager.removeExtensionUiObserver?.(sessionPath, observer);
+      },
+      markerDir: path.join(goalContinueRoot, 'markers'),
+      overlayDir: path.join(goalContinueRoot, 'overlay'),
+      logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message) },
+    });
+    this.goalInterruptions = goalInterruptions;
+    setGoalContinueProbe((sessionId) => goalInterruptions.hasGoalContinueMarker(sessionId));
+    this.goalInterruptionStop = () => {
+      goalInterruptions.shutdown();
+      setGoalContinueProbe(undefined);
+    };
     this.goalControlHandler = async (sessionId, body) => {
       // Re-enter the HTTP handler through a synthetic exchange so the browser
       // control path uses the exact same logic as the Internal API route.
@@ -708,6 +762,25 @@ export class InternalApiServer {
 
     logger.info(`[InternalAPI] Listening on Unix socket: ${socketPath}`);
     logger.info(`[InternalAPI] API token ready at: ${tokenPath}`);
+
+    // Wave K: the boot sweep runs once the API is reachable (continue dispatch
+    // goes through the loopback prompt path so admission applies). R5 ordering:
+    // the watch reconciliation's continue probe awaits this classification.
+    this.listeningSocketPath = socketPath;
+    {
+      const announced = new Map<string, AnnouncedInterruption>();
+      for (const run of runReceiptManager.getRestartRecoveredRuns()) {
+        announced.set(run.sessionId, { source: 'receipt', interruptionReason: run.interruptionReason });
+      }
+      for (const busy of interruptedBusySessions) {
+        if (!announced.has(busy.sessionId)) {
+          announced.set(busy.sessionId, { source: 'drain', interruptionReason: busy.interruptionReason });
+        }
+      }
+      void goalInterruptions.runSweep(announced)
+        .then(() => goalInterruptions.startObserving())
+        .catch((error) => logger.warn(`[InternalAPI] wave K boot sweep failed: ${error instanceof Error ? error.message : String(error)}`));
+    }
     } catch (error) {
       this.drainController?.shutdown();
       this.drainController = null;
@@ -718,6 +791,9 @@ export class InternalApiServer {
       this.multiSessionManager.setSessionMaterializedHandler(undefined);
       this.admissionLagUnsubscribe?.();
       this.admissionLagUnsubscribe = null;
+      this.goalInterruptionStop?.();
+      this.goalInterruptionStop = null;
+      this.goalInterruptions = null;
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch(() => { /* preserve startup error */ });
         this.sessionRoutesShutdown = null;
@@ -793,6 +869,9 @@ export class InternalApiServer {
       this.multiSessionManager.setSessionMaterializedHandler(undefined);
       this.admissionLagUnsubscribe?.();
       this.admissionLagUnsubscribe = null;
+      this.goalInterruptionStop?.();
+      this.goalInterruptionStop = null;
+      this.goalInterruptions = null;
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch((error) => failures.push(error));
         this.sessionRoutesShutdown = null;
@@ -1245,6 +1324,60 @@ export class InternalApiServer {
   }
 
   // ── API key management ───────────────────────────────────────────────────
+
+  /**
+   * Wave K (contract 1.59.0): dispatch a goal continue through the server's
+   * OWN prompt endpoint over loopback — the full prompt pipeline (injection
+   * checks, admission with shared parents' capacity, receipts, broker fan-out)
+   * applies, exactly as for an external caller. Maps admission/draining
+   * refusals to a Retry-After for the sweep's bounded retry window.
+   */
+  private dispatchGoalContinuePrompt(sessionId: string, message: string): Promise<{ ok: boolean; retryAfterSeconds?: number; reason?: string }> {
+    const socketPath = this.listeningSocketPath;
+    if (!socketPath || !this.apiKey) {
+      return Promise.resolve({ ok: false, reason: 'server not listening' });
+    }
+    return new Promise((resolve) => {
+      const body = Buffer.from(JSON.stringify({ message, mode: 'prompt' }));
+      const request = httpRequest({
+        host: 'localhost',
+        socketPath,
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': body.length,
+          authorization: `Bearer ${this.apiKey}`,
+        },
+        timeout: 15_000,
+      }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          const status = response.statusCode ?? 0;
+          if (status === 200 || status === 202) {
+            resolve({ ok: true });
+            return;
+          }
+          const retryAfterHeader = response.headers['retry-after'];
+          const retryAfterSeconds = typeof retryAfterHeader === 'string' ? Number.parseInt(retryAfterHeader, 10) : undefined;
+          resolve({
+            ok: false,
+            ...(Number.isFinite(retryAfterSeconds) && (status === 429 || status === 503) ? { retryAfterSeconds } : {}),
+            reason: `prompt endpoint answered ${status}: ${Buffer.concat(chunks).toString('utf8').slice(0, 200)}`,
+          });
+        });
+      });
+      request.on('timeout', () => {
+        request.destroy();
+        resolve({ ok: false, reason: 'loopback prompt timed out' });
+      });
+      request.on('error', (error) => {
+        resolve({ ok: false, reason: `loopback prompt failed: ${error.message}` });
+      });
+      request.end(body);
+    });
+  }
 
   private async resolveApiKey(tokenPath: string): Promise<string> {
     // Check env var first

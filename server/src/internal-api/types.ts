@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.58.5' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.59.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
