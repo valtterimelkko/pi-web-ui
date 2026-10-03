@@ -6,8 +6,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   percentile, windowStats, replayLatch, doubledFirstChunkVerdict, hb4VerdictOk, parseArgs,
+  writeSeedTargets, classifyResidency, coldOnlyPercentiles, verifyCredentialSweep, cleanupRunOwnedDirs,
 } from './lib.mjs';
 
 const rd = (atMs, lagP99Ms, extra = {}) => ({ atMs, at: new Date(atMs).toISOString(), lagP99Ms, lagP50Ms: Math.round(lagP99Ms / 2), lagMaxMs: lagP99Ms, activeTurns: 0, lagSampleCount: 100, ...extra });
@@ -76,4 +80,77 @@ test('hb4VerdictOk encodes the two claims', () => {
 test('parseArgs handles --key=value and bare flags', () => {
   const a = parseArgs(['--run-dir=/tmp/x', '--smoke', '--count=66']);
   assert.deepEqual(a, { 'run-dir': '/tmp/x', smoke: 'true', count: '66' });
+});
+
+// ── correction 04 item 1: cold targets ─────────────────────────────────────
+test('writeSeedTargets produces offline, non-resident, real-shaped targets', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'a5seed-'));
+  const sessionsDir = path.join(tmp, 'pi-sessions');
+  const registryPath = path.join(tmp, 'session-registry.json');
+  const out = writeSeedTargets({
+    sessionsDir, registryPath, workspacesRoot: path.join(tmp, 'ws'),
+    count: 5, messages: 3, nowMs: Date.now(),
+  });
+  // structural non-residency: the seeding core takes no socket/endpoint — it
+  // cannot have materialised an agent; assert its output is files + registry
+  assert.equal(out.length, 5);
+  for (const t of out) {
+    assert.ok(t.sessionPath.startsWith(sessionsDir + '/'), 'target is a file path under pi-sessions');
+    assert.ok(fs.existsSync(t.sessionPath), 'seed file exists on disk');
+    const lines = fs.readFileSync(t.sessionPath, 'utf8').trim().split('\n');
+    const header = JSON.parse(lines[0]);
+    assert.equal(header.type, 'session');
+    assert.ok(t.sessionPath.endsWith(`_${header.id}.jsonl`), 'filename carries the header id (H1 shape)');
+    assert.equal(lines.length, 1 + 3, 'header + messages');
+  }
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  assert.equal(registry.entries.length, 5);
+  for (const e of registry.entries) assert.ok(fs.existsSync(e.path));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('classifyResidency marks every target from server evidence only', () => {
+  const targets = [
+    { sessionPath: '/run/pi-sessions/a.jsonl' },
+    { sessionPath: '/run/pi-sessions/b.jsonl' },
+    { sessionPath: '/run/pi-sessions/c.jsonl' },
+  ];
+  const all = classifyResidency(targets, new Set());
+  assert.deepEqual(all.map((t) => t.resident), [false, false, false]);
+  const some = classifyResidency(targets, new Set(['/run/pi-sessions/b.jsonl']));
+  assert.deepEqual(some.map((t) => t.resident), [false, true, false]);
+});
+
+test('coldOnlyPercentiles computes over non-resident switches only', () => {
+  const switches = [
+    { wallMs: 10, targetResident: false },
+    { wallMs: 20, targetResident: true },
+    { wallMs: 30, targetResident: false },
+    { wallMs: 400, targetResident: false },
+  ];
+  const cold = coldOnlyPercentiles(switches);
+  assert.equal(cold.coldCount, 3);
+  assert.equal(cold.p50, 30);
+  assert.equal(cold.p99, 400);
+  assert.equal(cold.excludedResident, 1);
+  const none = coldOnlyPercentiles([{ wallMs: 5, targetResident: true }]);
+  assert.equal(none.coldCount, 0);
+  assert.equal(none.p50, null);
+});
+
+// ── correction 04 item 3: hb5 cleanup sweep ─────────────────────────────
+test('verifyCredentialSweep finds planted credential files and cleanupRunOwnedDirs removes them', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'a5sweep-'));
+  const agentDir = path.join(tmp, 'agent-dir');
+  const fakeHome = path.join(tmp, 'fake-home');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+  fs.writeFileSync(path.join(agentDir, 'auth.json'), '{}');
+  fs.writeFileSync(path.join(fakeHome, '.gemini', 'oauth_creds.json'), '{}');
+  let remaining = verifyCredentialSweep([tmp]);
+  assert.equal(remaining.length, 2, 'both planted copies found before cleanup');
+  cleanupRunOwnedDirs([agentDir, fakeHome]);
+  remaining = verifyCredentialSweep([tmp]);
+  assert.equal(remaining.length, 0, 'sweep clean after cleanup');
+  fs.rmSync(tmp, { recursive: true, force: true });
 });

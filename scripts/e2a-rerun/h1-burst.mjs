@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { spawn as spawnProc } from 'node:child_process';
-import { parseArgs, now, readMetrics, windowStats, replayLatch, readTrim } from './lib.mjs';
+import { parseArgs, now, readMetrics, windowStats, replayLatch, readTrim, writeSeedTargets, classifyResidency, coldOnlyPercentiles } from './lib.mjs';
 
 const argv = parseArgs(process.argv.slice(2));
 const COMMAND = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : undefined;
@@ -29,11 +29,14 @@ const RUN = path.resolve(argv['run-dir'] ?? process.cwd());
 const SOCKET = path.join(RUN, 'server', 'internal-api.sock');
 const TOKEN = path.join(RUN, 'server', 'internal-api-token');
 const PORT_FILE = path.join(RUN, 'port');
-if (!COMMAND || !fs.existsSync(SOCKET)) {
-  console.error('usage: node h1-burst.mjs <prepare|children|burst|collect> --run-dir=<dir> [options]');
+const PRE_BOOT_COMMANDS = ['seed'];
+if (!COMMAND || (!fs.existsSync(SOCKET) && !PRE_BOOT_COMMANDS.includes(COMMAND))) {
+  console.error('usage: node h1-burst.mjs <seed|children|burst|collect> --run-dir=<dir> [options] (seed runs pre-boot, no socket)');
   process.exit(64);
 }
-const PORT = parseInt(fs.readFileSync(PORT_FILE, 'utf8').trim(), 10);
+function portNumber() {
+  return parseInt(fs.readFileSync(PORT_FILE, 'utf8').trim(), 10);
+}
 
 function arg(name, fallback) {
   const v = argv[name];
@@ -100,9 +103,9 @@ class BrowserClient {
     this.ws = null;
   }
   async connect() {
-    const token = await login(PORT);
+    const token = await login(portNumber());
     const { WebSocket } = await import('ws');
-    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, {
+    this.ws = new WebSocket(`ws://127.0.0.1:${portNumber()}/ws`, {
       headers: { Origin: 'http://localhost:3457', Cookie: `accessToken=${token}` },
       maxPayload: 256 * 1024 * 1024,
     });
@@ -134,20 +137,10 @@ class BrowserClient {
 }
 
 async function prepare() {
-  const count = parseInt(arg('count', '66'), 10);
-  fs.mkdirSync(path.join(RUN, 'workspaces'), { recursive: true });
-  const sessions = [];
-  for (let i = 0; i < count; i++) {
-    const cwd = path.join(RUN, 'workspaces', `ws-${String(i).padStart(3, '0')}`);
-    fs.mkdirSync(cwd, { recursive: true });
-    const res = await apiCall('POST', '/api/v1/sessions', { runtime: 'pi', cwd, model: 'zai/glm-5.3-flash' });
-    if (res.status !== 201) throw new Error(`create ${i} failed ${res.status}: ${res.body.slice(0, 300)}`);
-    const j = JSON.parse(res.body);
-    sessions.push({ sessionId: j.sessionId, sessionPath: j.sessionPath, cwd });
-    if ((i + 1) % 10 === 0) console.error(`prepare: ${i + 1}/${count}`);
-  }
-  fs.writeFileSync(path.join(RUN, 'sessions.json'), JSON.stringify(sessions, null, 1));
-  console.error(`prepare: wrote ${sessions.length} cold targets`);
+  // Correction 04 item 1: the API-create target path is REMOVED — API-created
+  // targets materialise residents and measure the wrong path. Fail loudly.
+  console.error('prepare: REFUSED — API-created targets are residents, not cold targets. Use `seed` (offline, pre-boot).');
+  process.exit(64);
 }
 
 // H1's method (seed-corpus.mjs): real-shaped Pi session FILES + registry entries
@@ -158,54 +151,15 @@ async function prepare() {
 async function seed() {
   const count = parseInt(arg('count', '66'), 10);
   const messages = parseInt(arg('messages', '24'), 10);
-  const { randomUUID } = await import('node:crypto');
   const SESSIONS_DIR = path.join(RUN, 'server', 'pi-sessions');
   const REGISTRY_PATH = path.join(RUN, 'server', 'session-registry.json');
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.mkdirSync(path.join(RUN, 'workspaces'), { recursive: true });
-  let registry = { version: 1, updatedAt: new Date().toISOString(), entries: [] };
-  if (fs.existsSync(REGISTRY_PATH)) registry = JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
-  const existingPaths = new Set(registry.entries.map((e) => e.path));
-  const now = Date.now();
-  const tsName = (d) => {
-    const p = (n, w = 2) => String(n).padStart(w, '0');
-    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}-${p(d.getUTCMinutes())}-${p(d.getUTCSeconds())}-${p(d.getUTCMilliseconds(), 3)}Z`;
-  };
-  const sessions = [];
-  for (let i = 0; i < count; i++) {
-    const id = randomUUID();
-    const created = new Date(now - (count - i) * 90_000);
-    const name = `${tsName(created)}_${id}.jsonl`;
-    const file = path.join(SESSIONS_DIR, name);
-    const cwd = path.join(RUN, 'workspaces', `cold-ws-${String(i).padStart(3, '0')}`);
-    fs.mkdirSync(cwd, { recursive: true });
-    const lines = [JSON.stringify({ type: 'session', id, timestamp: created.getTime(), cwd })];
-    let last = created.getTime();
-    let firstMessage = '';
-    for (let m = 0; m < messages; m++) {
-      last += 5_000;
-      const role = m % 2 === 0 ? 'user' : 'assistant';
-      const text = role === 'user'
-        ? `cold target message ${m} for session ${i}: analyse the module and report.`
-        : `cold target reply ${m}: analysis with a short summary paragraph of findings. `.repeat(4);
-      if (role === 'user' && !firstMessage) firstMessage = text.slice(0, 120);
-      lines.push(JSON.stringify({ type: 'message', timestamp: last, message: { role, content: [{ type: 'text', text }], timestamp: last } }));
-    }
-    fs.writeFileSync(file, lines.join('\n') + '\n');
-    fs.utimesSync(file, new Date(last), new Date(last));
-    if (!existingPaths.has(file)) {
-      registry.entries.push({
-        id, sdkType: 'pi', path: file, cwd, firstMessage, messageCount: messages,
-        createdAt: new Date(created).toISOString(), lastActivity: new Date(last).toISOString(),
-        status: 'idle', origin: 'internal-api',
-      });
-    }
-    sessions.push({ sessionId: id, sessionPath: file, cwd });
-  }
-  registry.updatedAt = new Date().toISOString();
-  fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry));
+  const sessions = writeSeedTargets({
+    sessionsDir: SESSIONS_DIR, registryPath: REGISTRY_PATH,
+    workspacesRoot: path.join(RUN, 'workspaces'),
+    count, messages, nowMs: Date.now(),
+  });
   fs.writeFileSync(path.join(RUN, 'sessions.json'), JSON.stringify(sessions, null, 1));
-  console.error(`seed: ${sessions.length} cold target files + ${registry.entries.length} registry entries (pre-boot)`);
+  console.error(`seed: ${sessions.length} cold target files written OFFLINE pre-boot (non-resident by construction; no API calls)`);
 }
 
 async function children() {
@@ -285,21 +239,55 @@ async function burst() {
   const metricsFile = path.join(RUN, 'server', 'metrics', 'health-metrics.jsonl');
   let turnsSeen = false;
   {
-    const deadline = Date.now() + waitTurnsTimeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        const lines = fs.readFileSync(metricsFile, 'utf-8').trim().split('\n');
-        const last = JSON.parse(lines[lines.length - 1]);
-        if ((last.activeTurns ?? 0) >= waitTurns && Date.now() - last.atMs < 45_000) { turnsSeen = true; break; }
-      } catch { /* metrics not there yet */ }
-      await new Promise((r) => setTimeout(r, 5000));
+    if (arg('skip-turn-wait') === 'true') {
+      console.error('burst: skip-turn-wait=true (zero-child smoke only — no load claim)');
+    } else {
+      const deadline = Date.now() + waitTurnsTimeoutMs;
+      while (Date.now() < deadline) {
+        try {
+          const lines = fs.readFileSync(metricsFile, 'utf-8').trim().split('\n');
+          const last = JSON.parse(lines[lines.length - 1]);
+          if ((last.activeTurns ?? 0) >= waitTurns && Date.now() - last.atMs < 45_000) { turnsSeen = true; break; }
+        } catch { /* metrics not there yet */ }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      if (!turnsSeen) {
+        throw new Error(`ABORT: A2 never showed activeTurns >= ${waitTurns} within ${waitTurnsTimeoutMs} ms — refusing to burst unloaded (the load claim needs running children; record this as a finding)`);
+      }
     }
-    if (!turnsSeen) {
-      throw new Error(`ABORT: A2 never showed activeTurns >= ${waitTurns} within ${waitTurnsTimeoutMs} ms — refusing to burst unloaded (the load claim needs running children; record this as a finding)`);
-    }
-    console.error(`burst: wait-turns ${waitTurns} satisfied (children start ${new Date(burstStartMs).toISOString()})`);
+    console.error(`burst: wait-turns ${waitTurns} ${arg('skip-turn-wait') === 'true' ? 'skipped' : 'satisfied'} (children start ${new Date(burstStartMs).toISOString()})`);
   }
   const turnsSatisfiedAtMs = Date.now();
+
+  // Correction 04 item 1: per-target residency classification from the
+  // server's OWN evidence before the first switch. Seeded targets are cold by
+  // construction; a target is resident only if the server log shows the server
+  // rehydrated (materialised) its session id, or it is a child/browser session.
+  const serverLogPath = path.join(RUN, 'server.log');
+  const serverLogText = fs.existsSync(serverLogPath) ? fs.readFileSync(serverLogPath, 'utf8') : '';
+  const rehydratedIds = new Set([...serverLogText.matchAll(/Session rehydrated: ([0-9a-f-]{36})/g)].map((m) => m[1]));
+  const residentPaths = new Set([
+    ...all.filter((t) => rehydratedIds.has(t.sessionId)).map((t) => t.sessionPath),
+    ...children.map((c) => c.sessionPath),
+  ]);
+  const classifiedTargets = classifyResidency(all, residentPaths);
+  fs.writeFileSync(path.join(RUN, 'target-residency.json'), JSON.stringify({
+    at: now(), rehydratedSessionIds: [...rehydratedIds],
+    residentPaths: [...residentPaths],
+    targets: classifiedTargets.map((t) => ({ sessionPath: t.sessionPath, resident: t.resident })),
+  }, null, 1));
+  const residentTargets = classifiedTargets.filter((t) => t.resident).length;
+  if (residentTargets > 0) {
+    throw new Error(`ABORT: ${residentTargets}/${all.length} burst targets are RESIDENT before the burst (server evidence) — the cold-target claim would be void`);
+  }
+  console.error(`burst: residency classified — ${all.length}/${all.length} targets cold (server evidence: ${rehydratedIds.size} rehydrated ids, ${children.length} children resident)`);
+  // A2 residentSessions must agree: at most the children (+1 browser page later).
+  const preReadings = readMetrics(path.join(RUN, 'server'));
+  const preResidents = preReadings.length ? preReadings[preReadings.length - 1].residentSessions : null;
+  console.error(`burst: A2 residentSessions pre-burst: ${preResidents}`);
+  if (preResidents !== null && preResidents > children.length + 1) {
+    throw new Error(`ABORT: A2 residentSessions ${preResidents} > expected <= ${children.length + 1} — targets may have been materialised`);
+  }
 
   const client = await new BrowserClient().connect();
   const switches = [];
@@ -321,7 +309,7 @@ async function burst() {
         });
         console.error(`burst: browser hook finished code=${browserHookResult.code}`);
       }
-      const target = all[i % all.length];
+      const target = classifiedTargets[i % classifiedTargets.length];
       const t1 = performance.now();
       client.send({ type: 'switch_session', sessionPath: target.sessionPath });
       const ack = await client.waitFor(
@@ -331,7 +319,8 @@ async function burst() {
       const wallMs = performance.now() - t1;
       const messages = ack.type === 'session_switched' ? ack.messages?.length ?? 0 : null;
       switches.push({
-        i, sessionPath: target.sessionPath, ok: ack.type === 'session_switched',
+        i, sessionPath: target.sessionPath, targetResident: target.resident === true,
+        ok: ack.type === 'session_switched',
         wallMs: Math.round(wallMs * 10) / 10, replayedMessages: messages,
         error: ack.type === 'error' ? String(ack.error ?? ack.message ?? 'error').slice(0, 200) : null,
       });
@@ -383,6 +372,7 @@ async function burst() {
       ok: okSwitches.length, failed: switches.length - okSwitches.length,
       wallP50: q(walls, 0.5), wallP99: q(walls, 0.99), wallMax: walls[walls.length - 1] ?? null,
     },
+    coldOnly: coldOnlyPercentiles(switches),
     a2: {
       readingCount: stats.readingCount,
       lagP50: stats.lagP50, lagP99: stats.lagP99, lagMax: stats.lagMax,
@@ -413,9 +403,17 @@ async function collect() {
     }
   }
   const diag = await apiCall('GET', '/api/v1/diagnostics?component=LoopAttribution&limit=200').catch(() => null);
+  // Correction 04 item 1: preserve the raw A2 rows and the latch replay trace
+  // so a reviewer can recompute both without touching the server dir.
+  const rawRowsPath = path.join(RUN, 'a2-raw-readings.jsonl');
+  fs.writeFileSync(rawRowsPath, readings.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const latchTracePath = path.join(RUN, 'latch-replay-trace.json');
+  fs.writeFileSync(latchTracePath, JSON.stringify({ generatedAt: now(), rule: { thresholdMs: 300, sustained: 2, recoveryMs: 150, stalenessMs: 75000 }, trace: latch.trace }, null, 1));
   const outPath = path.join(RUN, `collect-${label}.json`);
   fs.writeFileSync(outPath, JSON.stringify({
     generatedAt: now(),
+    rawRowsFile: rawRowsPath,
+    latchTraceFile: latchTracePath,
     readingsCount: readings.length,
     burstWindow: window ? {
       readingCount: window.readingCount,

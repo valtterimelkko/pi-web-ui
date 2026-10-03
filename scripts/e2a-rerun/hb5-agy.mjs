@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
   parseArgs, now, readTrim, assertMemAvailable, bootServer, api, readBuildIdentity, GiB,
+  verifyCredentialSweep, cleanupRunOwnedDirs,
 } from './lib.mjs';
 
 const argv = parseArgs(process.argv.slice(2));
@@ -65,6 +66,7 @@ function geminiAntigravitySnapshot() {
 }
 
 let server = null;
+let agentDir = null;
 try {
   assertMemAvailable(12 * GiB);
   const selfCg = readFileSync('/proc/self/cgroup', 'utf8').trim();
@@ -113,7 +115,7 @@ try {
   });
 
   // ── isolated minimal agent dir (no credentials; no pi sessions are used) ─
-  const agentDir = path.join(RUN_DIR, 'agent-dir');
+  agentDir = path.join(RUN_DIR, 'agent-dir');
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(path.join(FAKE_HOME, 'agent-os-vault'), { recursive: true });
   mkdirSync(path.join(RUN_DIR, 'board'), { recursive: true });
@@ -328,10 +330,23 @@ try {
 } finally {
   // ── cleanup ───────────────────────────────────────────────────────────────
   if (server) { try { await server.stop(); } catch { /* best effort */ } }
-  // delete every credential copy (counted above), then verify none remain
-  try { rmSync(FAKE_HOME, { recursive: true, force: true }); } catch { /* recorded below */ }
-  const findCopies = run('find', [RUN_DIR, '-name', 'auth.json', '-o', '-name', 'oauth_creds.json', '-o', '-name', 'antigravity-oauth-token'], { timeoutMs: 20_000 });
-  result.credentialCopySweep = { command: `find ${RUN_DIR} -name auth.json -o -name oauth_creds.json -o -name antigravity-oauth-token`, stdout: findCopies.stdout, remaining: findCopies.stdout.split('\n').filter(Boolean).length };
+  // correction 04 item 3: remove every run-owned credential-bearing directory
+  // (fake HOME AND the agent dir), then VERIFY the sweep before returning.
+  cleanupRunOwnedDirs([FAKE_HOME, agentDir]);
+  // the tested lib verifier (same function harness.test.mjs exercises)
+  const remainingAfter = verifyCredentialSweep([RUN_DIR]);
+  result.credentialCopySweep = {
+    command: 'verifyCredentialSweep([RUN_DIR]) — auth.json, models.json, internal-api-token, server.env, oauth_creds.json, antigravity-oauth-token',
+    remaining: remainingAfter.length,
+    remainingPaths: remainingAfter,
+    verifiedClean: remainingAfter.length === 0,
+  };
+  if (remainingAfter.length > 0) {
+    // last-resort removal for anything the directory cleanup missed, then re-verify
+    for (const f of remainingAfter) { try { rmSync(f, { force: true }); } catch { /* recorded */ } }
+    const recheck = run('find', [RUN_DIR, '-name', 'auth.json', '-o', '-name', 'models.json', '-o', '-name', 'oauth_creds.json', '-o', '-name', 'antigravity-oauth-token', '-o', '-name', 'internal-api-token'], { timeoutMs: 20_000 });
+    result.credentialCopySweep.recheckRemaining = recheck.stdout.split('\n').filter(Boolean).length;
+  }
   result.geminiSweepAfter = run('find', [GEMINI, '-maxdepth', '2', '-newer', path.join(RUN_DIR, 'gemini-mtime-ref')], { timeoutMs: 20_000 }).stdout;
   result.geminiRealStateTouched = result.geminiSweepAfter.split('\n').filter(Boolean).length > 0;
   // antigravity* diff (sizes + mtimes, sorted): identical → no real-state writes

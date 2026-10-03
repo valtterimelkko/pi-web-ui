@@ -9,7 +9,8 @@
  * Nothing here targets production: every server is disposable, booted from a
  * driver, inside an `e2a-5-*` systemd unit owned by this lane.
  */
-import { readFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { spawn as spawnProc } from 'node:child_process';
 import path from 'node:path';
 
@@ -315,4 +316,103 @@ export async function waitForFileLines(file, n, timeoutMs, { pollMs = 300 } = {}
     await new Promise((r) => setTimeout(r, pollMs));
   }
   return { ok: false, lines };
+}
+
+// ── correction 04 item 1: cold seeded targets (H1's offline seed method) ───
+
+/**
+ * Write `count` real-shaped Pi session FILES + registry entries — strictly
+ * offline (no socket, no API): the targets are non-resident by construction.
+ * Returns the target list [{sessionId, sessionPath, cwd}]. H1's seed-corpus
+ * shape: <timestamp>_<uuid>.jsonl with a type:"session" header whose id
+ * matches the filename, then message entries; registry entries reference them.
+ */
+export function writeSeedTargets({ sessionsDir, registryPath, workspacesRoot, count, messages = 24, nowMs = Date.now() }) {
+  mkdirSync(sessionsDir, { recursive: true });
+  mkdirSync(workspacesRoot, { recursive: true });
+  let registry = { version: 1, updatedAt: new Date().toISOString(), entries: [] };
+  if (existsSync(registryPath)) registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+  const existingPaths = new Set(registry.entries.map((e) => e.path));
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  const tsName = (d) => `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}-${p(d.getUTCMinutes())}-${p(d.getUTCSeconds())}-${p(d.getUTCMilliseconds(), 3)}Z`;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const id = randomUUID();
+    const created = new Date(nowMs - (count - i) * 90_000);
+    const file = path.join(sessionsDir, `${tsName(created)}_${id}.jsonl`);
+    const cwd = path.join(workspacesRoot, `cold-ws-${String(i).padStart(3, '0')}`);
+    mkdirSync(cwd, { recursive: true });
+    const lines = [JSON.stringify({ type: 'session', id, timestamp: created.getTime(), cwd })];
+    let last = created.getTime();
+    let firstMessage = '';
+    for (let m = 0; m < messages; m++) {
+      last += 5_000;
+      const role = m % 2 === 0 ? 'user' : 'assistant';
+      const text = role === 'user'
+        ? `cold target message ${m} for session ${i}: analyse the module and report.`
+        : `cold target reply ${m}: analysis with a short summary paragraph of findings. `.repeat(4);
+      if (role === 'user' && !firstMessage) firstMessage = text.slice(0, 120);
+      lines.push(JSON.stringify({ type: 'message', timestamp: last, message: { role, content: [{ type: 'text', text }], timestamp: last } }));
+    }
+    writeFileSync(file, lines.join('\n') + '\n');
+    utimesSync(file, new Date(last), new Date(last));
+    if (!existingPaths.has(file)) {
+      registry.entries.push({
+        id, sdkType: 'pi', path: file, cwd, firstMessage, messageCount: messages,
+        createdAt: new Date(created).toISOString(), lastActivity: new Date(last).toISOString(),
+        status: 'idle', origin: 'internal-api',
+      });
+    }
+    out.push({ sessionId: id, sessionPath: file, cwd });
+  }
+  registry.updatedAt = new Date().toISOString();
+  writeFileSync(registryPath, JSON.stringify(registry));
+  return out;
+}
+
+/**
+ * Per-target residency classification from the server's own evidence: a target
+ * is resident only if its path appears in the server's materialisation evidence
+ * (rehydrate/materialise log scan or a per-session state source).
+ */
+export function classifyResidency(targets, residentPaths) {
+  return targets.map((t) => ({ ...t, resident: residentPaths.has(t.sessionPath) }));
+}
+
+/** Percentiles over non-resident switches only, plus the exclusion count. */
+export function coldOnlyPercentiles(switches) {
+  const cold = switches.filter((s) => s.targetResident === false).map((s) => s.wallMs).sort((a, b) => a - b);
+  return {
+    coldCount: cold.length,
+    excludedResident: switches.length - cold.length,
+    p50: percentile(cold, 0.5),
+    p99: percentile(cold, 0.99),
+    max: cold[cold.length - 1] ?? null,
+  };
+}
+
+/** Scan `roots` for credential-shaped files. Returns remaining paths. */
+export function verifyCredentialSweep(roots) {
+  const names = ['auth.json', 'models.json', 'internal-api-token', 'server.env', 'oauth_creds.json', 'antigravity-oauth-token'];
+  const found = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = fsReaddir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (names.includes(e.name)) found.push(full);
+    }
+  };
+  for (const r of roots) walk(r);
+  return found;
+}
+
+/** rm -rf run-owned directories (agent dir, fake HOME, ...) and return what was removed. */
+export function cleanupRunOwnedDirs(dirs) {
+  const removed = [];
+  for (const d of dirs) {
+    try { rmSync(d, { recursive: true, force: true }); removed.push(d); } catch { /* recorded by the caller */ }
+  }
+  return removed;
 }

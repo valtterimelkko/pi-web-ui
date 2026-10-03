@@ -91,8 +91,10 @@ if [ "$PROV_LIST" != "zai" ]; then
   exit 1
 fi
 
-# ── prepare targets + children ────────────────────────────────────────────────
-node "$WT/scripts/e2a-rerun/h1-burst.mjs" prepare --run-dir="$RUN" --count="$COUNT" 2>>"$LOG"
+# ── correction 04: seed COLD targets OFFLINE, BEFORE the server boots ──────
+node "$WT/scripts/e2a-rerun/h1-burst.mjs" seed --run-dir="$RUN" --count="$COUNT" 2>>"$LOG"
+grep -q "cold target files written OFFLINE pre-boot" "$LOG" || { log "FATAL: seed did not run pre-boot"; exit 1; }
+
 MARKER="A5H1-$(date -u +%H%M%S)"
 A5_BROWSER_MARKER="$MARKER" node "$WT/scripts/e2a-rerun/h1-burst.mjs" children --run-dir="$RUN" 2>>"$LOG"
 

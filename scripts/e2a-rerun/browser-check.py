@@ -32,6 +32,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import oracle_lib  # the actual oracle logic (tested in oracle.test.py)
+
 from playwright.sync_api import sync_playwright
 
 args = {}
@@ -138,6 +141,44 @@ def dom_occurrences(page, needle):
           clone.querySelectorAll('[data-testid="streaming-queue"]').forEach((n) => n.remove());
           return (clone.textContent || '').split(needle).length - 1;
         }""", needle)
+
+
+BUBBLE_SNAPSHOT_JS = """() => {
+  const root = document.querySelector('[data-testid="chat-interface"]');
+  if (!root) return [];
+  const out = [];
+  for (const div of root.querySelectorAll('div')) {
+    const cls = div.className || '';
+    if (typeof cls !== 'string') continue;
+    const has = (c) => cls.split(/\\s+/).includes(c);
+    let role = null;
+    if (has('bg-gray-100') && has('rounded-2xl')) role = 'user';
+    else if (has('border-l-2') && has('break-words')) role = 'assistant';
+    if (!role) continue;
+    // innermost only: skip wrappers that contain another same-role wrapper
+    const nested = [...div.querySelectorAll('div')].some((d) => {
+      const c2 = d.className || '';
+      return typeof c2 === 'string'
+        && ((role === 'user' && c2.split(/\\s+/).includes('bg-gray-100') && c2.split(/\\s+/).includes('rounded-2xl'))
+          || (role === 'assistant' && c2.split(/\\s+/).includes('border-l-2') && c2.split(/\\s+/).includes('break-words')));
+    });
+    if (nested) continue;
+    out.push({ role, text: (div.innerText || '').trim() });
+  }
+  return out;
+}"""
+
+
+def snapshot_bubbles(page):
+    """Role-tagged bubble snapshot via the collector JS."""
+    try:
+        return page.evaluate(BUBBLE_SNAPSHOT_JS)
+    except Exception:
+        return []
+
+
+def sample_assistant_texts(page):
+    return [b['text'] for b in snapshot_bubbles(page) if b.get('role') == 'assistant']
 
 
 def assistant_scoped_check(page, needle):
@@ -247,13 +288,25 @@ def run_viewport(pw, view, results):
 
     # ── 2. API prompt → first streamed chunk exactly once (hb2) ─────────────
     live_marker = f'{MARKER}-API-{view.upper()}'
+    import threading
+    stop_sampling = threading.Event()
+    stream_samples = []
+    def sampler():
+        # correction 04: observe the reply AS IT STREAMS (polling at <= 100 ms)
+        while not stop_sampling.is_set():
+            stream_samples.append(sample_assistant_texts(page))
+            stop_sampling.wait(0.1)
+    sampler_thread = threading.Thread(target=sampler, daemon=True)
+    sampler_thread.start()
     resp = api('POST', f"/api/v1/sessions/{CHILD['sessionId']}/prompt",
                {'message': f'Reply with exactly one line: {live_marker} and nothing else.'})
     print(f'api prompt sent ({view}): {resp[:80].strip()}', flush=True)
     deadline = time.time() + 120
     while time.time() < deadline and live_marker not in Path(CHILD['sessionPath']).read_text():
-        time.sleep(1)
+        time.sleep(0.1)
     time.sleep(3)  # let the render settle
+    stop_sampling.set()
+    sampler_thread.join(timeout=2)
     entries_after = transcript_entries(CHILD['sessionPath'])
     final_text = final_assistant_text(entries_after)
     assert final_text and live_marker in final_text, f'transcript missing live marker ({view}): {final_text!r}'
@@ -290,8 +343,9 @@ def run_viewport(pw, view, results):
         time.sleep(1)
     time.sleep(5)  # settle: run end + chip effects
     chips = page.locator('[data-testid="streaming-queue"]').count()
-    d1 = dom_occurrences(page, t1)
-    d2 = dom_occurrences(page, t2)
+    bubbles = snapshot_bubbles(page)
+    u_counts = oracle_lib.hb6_user_counts(bubbles, [t1, t2])
+    d1, d2 = u_counts[0], u_counts[1]  # role-scoped user-bubble counts (correction 04)
     f_ok = (f'{MARKER}-T1-{view.upper()}' in file_path.read_text()
             and f'{MARKER}-T2-{view.upper()}' in file_path.read_text())
     entries_final = transcript_entries(CHILD['sessionPath'])
