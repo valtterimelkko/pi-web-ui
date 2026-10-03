@@ -440,6 +440,19 @@ Artefacts for a run: `~/.pi-web-ui/validation/heap-soak/<run-id>/` —
 `samples.csv`, `events.jsonl`, `run-state.json`, `snapshots/*.heapsnapshot`,
 `report.md`, `report.json`, `sampler.heartbeat`.
 
+## E2 bounded-run switches (2026-10-03, E2a-1)
+
+All env-driven (default = the pre-E2 behaviour), read fail-closed by tested pure functions; no CLI surface changed:
+
+| Env | Effect |
+|---|---|
+| `HEAP_SOAK_LANES` | Comma-separated lane names (e.g. `A`): disables every enabled lane not named. Unknown names, or a selection without the backbone lane, refuse to run. E2 authorises the zai route only, so its bounded soak runs `HEAP_SOAK_LANES=A` (lane B is OpenRouter, a pay-as-you-go provider). Read by `applyLaneSelection` in `server/src/live-validation/heap-soak/lanes.ts`; consumed by the supervisor and Gate 0 via `resolveDriverLanes`. |
+| `HEAP_SOAK_MAX_CONCURRENT` | Caps every lane's `maxConcurrent` at the value (never raises). E2a-1 caps lane A at 4. |
+| `HEAP_SOAK_MEMORY_MAX_MIB` / `HEAP_SOAK_MEMORY_HIGH_MIB` | Override the B0 12G/10G unit caps (validated: integer, floor, ≤ the 14G host-safety cap, high strictly below max). E2a-1's brief binds 8G/6G. |
+| `HEAP_SOAK_UNIT_PREFIX` | Unit-name prefix (default `pi-web-ui-soak`): E2's host guard stops exactly the `^e2a-` units, so an E2 arm runs with `HEAP_SOAK_UNIT_PREFIX=e2a-1` (`e2a-1-server-<run>`, `e2a-1-supervisor-<run>`, slice `e2a-1.slice`). Gate 1's own literal slice name is unchanged (Gate 1 is a pre-E2 gate). |
+| `HEAP_SOAK_RUNTIME_MAX_SEC` | Adds a `RuntimeMaxSec` backstop to both transient units so an arm cannot outlive its window even if its own teardown dies. Unset ⇒ no property (historic behaviour). |
+| `HEAP_SOAK_VIEW_ONLY_SUBSCRIBE` | `on`\|`true`\|`1` boots the disposable server with `PI_WEB_UI_VIEW_ONLY_SUBSCRIBE=on` — production's setting since wave J — so the soak exercises the view-only subscribe path. Any other value refuses the launch. |
+
 ## Test seam (Gate 1 only)
 
 `HEAP_SOAK_FORCE_BAD_LANE=<A|B|C>` (env, read by `applyForcedBadLanes` in

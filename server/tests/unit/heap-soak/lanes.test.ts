@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyForcedBadLanes, backboneLane, enabledLanes, LANE_DEFINITIONS, pickLane } from '../../../src/live-validation/heap-soak/lanes.js';
+import { applyForcedBadLanes, applyLaneMaxConcurrent, applyLaneSelection, backboneLane, enabledLanes, LANE_DEFINITIONS, pickLane, resolveDriverLanes } from '../../../src/live-validation/heap-soak/lanes.js';
 import { createBreakerState, recordFailure } from '../../../src/live-validation/heap-soak/circuit-breaker.js';
 import type { CircuitBreakerState, LaneName } from '../../../src/live-validation/heap-soak/types.js';
 
@@ -55,6 +55,92 @@ describe('applyForcedBadLanes', () => {
 
   it('refuses to force-fail the backbone lane', () => {
     expect(() => applyForcedBadLanes(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_FORCE_BAD_LANE: 'A' })).toThrow(/backbone/);
+  });
+});
+
+describe('applyLaneSelection (HEAP_SOAK_LANES — E2a-1: lane A only, OpenRouter not authorised)', () => {
+  it('is a no-op when the env key is unset or blank', () => {
+    expect(applyLaneSelection(enabledLanes(LANE_DEFINITIONS), {})).toEqual(enabledLanes(LANE_DEFINITIONS));
+    expect(applyLaneSelection(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_LANES: '' })).toEqual(enabledLanes(LANE_DEFINITIONS));
+    expect(applyLaneSelection(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_LANES: '  ' })).toEqual(enabledLanes(LANE_DEFINITIONS));
+  });
+
+  it('disables every lane not named, keeping named lanes untouched', () => {
+    const lanes = applyLaneSelection(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_LANES: 'A' });
+    expect(lanes.map((l) => l.name).sort()).toEqual(['A', 'B']); // same lanes, B now disabled
+    const a = lanes.find((l) => l.name === 'A')!;
+    const b = lanes.find((l) => l.name === 'B')!;
+    expect(a.enabled).toBe(true);
+    expect(a).toEqual(enabledLanes(LANE_DEFINITIONS).find((l) => l.name === 'A'));
+    expect(b.enabled).toBe(false);
+    expect(b.disabledReason).toMatch(/HEAP_SOAK_LANES/);
+  });
+
+  it('accepts a comma-separated list and ignores whitespace', () => {
+    const lanes = applyLaneSelection(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_LANES: ' A , B ' });
+    expect(lanes.every((l) => l.enabled)).toBe(true);
+  });
+
+  it('refuses unknown lane names', () => {
+    expect(() => applyLaneSelection(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_LANES: 'A,Z' })).toThrow(/unknown lane/i);
+  });
+
+  it('refuses a selection without the backbone lane (the harness requires one load-bearing lane)', () => {
+    expect(() => applyLaneSelection(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_LANES: 'B' })).toThrow(/backbone/);
+  });
+
+  it('does not mutate the input definitions', () => {
+    const before = JSON.stringify(enabledLanes(LANE_DEFINITIONS));
+    applyLaneSelection(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_LANES: 'A' });
+    expect(JSON.stringify(enabledLanes(LANE_DEFINITIONS))).toBe(before);
+  });
+});
+
+describe('applyLaneMaxConcurrent (HEAP_SOAK_MAX_CONCURRENT — E2a-1: lane A at most 4)', () => {
+  it('is a no-op when the env key is unset', () => {
+    expect(applyLaneMaxConcurrent(enabledLanes(LANE_DEFINITIONS), {})).toEqual(enabledLanes(LANE_DEFINITIONS));
+  });
+
+  it('caps a lane whose maxConcurrent is above the cap and leaves lanes already at or below it', () => {
+    const lanes = applyLaneMaxConcurrent(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_MAX_CONCURRENT: '4' });
+    const byName = Object.fromEntries(lanes.map((l) => [l.name, l]));
+    expect(byName.A.maxConcurrent).toBe(4);
+    expect(byName.B.maxConcurrent).toBe(1); // already below the cap; untouched
+  });
+
+  it('never raises a lane above its own definition', () => {
+    const lanes = applyLaneMaxConcurrent(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_MAX_CONCURRENT: '99' });
+    const byName = Object.fromEntries(lanes.map((l) => [l.name, l]));
+    expect(byName.A.maxConcurrent).toBe(6);
+    expect(byName.B.maxConcurrent).toBe(1);
+  });
+
+  it('refuses non-positive or non-integer caps', () => {
+    expect(() => applyLaneMaxConcurrent(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_MAX_CONCURRENT: '0' })).toThrow(/whole number/);
+    expect(() => applyLaneMaxConcurrent(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_MAX_CONCURRENT: '2.5' })).toThrow(/whole number/);
+    expect(() => applyLaneMaxConcurrent(enabledLanes(LANE_DEFINITIONS), { HEAP_SOAK_MAX_CONCURRENT: 'x' })).toThrow(/whole number/);
+  });
+});
+
+describe('resolveDriverLanes (the supervisor\'s composed selection)', () => {
+  it('with no env set, equals the old behaviour: enabled lanes, no forced-bad, no cap change', () => {
+    const lanes = resolveDriverLanes({});
+    expect(lanes.map((l) => l.name).sort()).toEqual(['A', 'B']);
+    const byName = Object.fromEntries(lanes.map((l) => [l.name, l]));
+    expect(byName.A.maxConcurrent).toBe(6);
+    expect(byName.A.modelIds).toEqual(['zai/glm-5.3-flash']);
+  });
+
+  it('with the E2a-1 env, only lane A remains enabled and capped at 4', () => {
+    const lanes = resolveDriverLanes({ HEAP_SOAK_LANES: 'A', HEAP_SOAK_MAX_CONCURRENT: '4' });
+    expect(lanes.filter((l) => l.enabled).map((l) => l.name)).toEqual(['A']);
+    expect(lanes.find((l) => l.name === 'A')!.maxConcurrent).toBe(4);
+  });
+
+  it('still applies forced-bad lanes on top of the selection (Gate 1 seam keeps working)', () => {
+    expect(() => resolveDriverLanes({ HEAP_SOAK_LANES: 'A', HEAP_SOAK_FORCE_BAD_LANE: 'A' })).toThrow(/backbone/);
+    const lanes = resolveDriverLanes({ HEAP_SOAK_LANES: 'A,B', HEAP_SOAK_FORCE_BAD_LANE: 'B' });
+    expect(lanes.find((l) => l.name === 'B')!.modelIds).toEqual(['invalid-provider/does-not-exist-model']);
   });
 });
 

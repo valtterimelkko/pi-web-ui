@@ -11,6 +11,8 @@ import { InternalApiClient } from '../../server/src/live-validation/internal-api
 import { buildIsolatedAgentDir } from './agent-dir.js';
 import { applyExtensionsOverlays, type AppliedExtensionOverlay } from '../../server/src/live-validation/heap-soak/extensions-overlay.js';
 import { resolveRunPaths, serverUnitName, supervisorUnitName, type RunPaths } from './paths.js';
+import { soakSliceName } from '../../server/src/live-validation/heap-soak/unit-names.js';
+import { soakRuntimeMaxSec, viewOnlySubscribeServerEnv } from '../../server/src/live-validation/heap-soak/launch-env.js';
 import { startTransientUnit, waitForMainPid } from './systemd-units.js';
 import { InspectorClient } from './inspector.js';
 import { saveRunState } from './run-state-io.js';
@@ -168,19 +170,28 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
   const httpPort = await findFreeTcpPort();
   const serverUnit = serverUnitName(runId);
   const supervisorUnit = supervisorUnitName(runId);
+  // E2 containment: a RuntimeMaxSec backstop (when HEAP_SOAK_RUNTIME_MAX_SEC is
+  // set) so the arm cannot outlive its window even if its own teardown dies.
+  const runtimeMaxSec = soakRuntimeMaxSec();
+  const runtimeMaxProps = runtimeMaxSec === undefined ? {} : { RuntimeMaxSec: String(runtimeMaxSec) };
   // B0 defect 4: pick a cgroup cap large enough that admission's memory_pressure
   // does not throttle the load profile before the 4 GiB V8 heap cap binds.
   // See resources.ts for the measured A1 grounding and the arithmetic.
+  // E2a-1: HEAP_SOAK_MEMORY_MAX_MIB / _HIGH_MIB override the B0 12G/10G (the
+  // bounded soak's brief binds 8G/6G); invalid values refuse the launch.
   const memoryLimits = resolveSoakMemoryLimits();
 
   await startTransientUnit({
     unitName: serverUnit,
-    sliceName: 'pi-web-ui-soak.slice',
+    sliceName: soakSliceName(),
     restart: 'no', // the server must NEVER be auto-restarted — that would reset the heap under test
     workingDirectory: root,
     properties: {
       MemoryMax: `${memoryLimits.memoryMaxMiB}M`,
       MemoryHigh: `${memoryLimits.memoryHighMiB}M`,
+      // E2 containment rule: every long-lived unit carries MemorySwapMax ≤ 1G.
+      MemorySwapMax: '1G',
+      ...runtimeMaxProps,
       // Matches production (parent amendment 2026-09-26): production reserves
       // 96 PIDs/turn and allows 14 API turns (~1344 projected pids at full
       // admission), well within an 8192 cgroup pids limit — 512 here was an
@@ -226,6 +237,9 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
       PI_WEB_UI_GOAL_HOME: paths.goalHomeDir,
       PI_COMPACTION_LOG: paths.compactionLogPath,
       PI_BG_TASKS_DIR: paths.bgTasksDir,
+      // E2a-1: boot the soak server exactly as production runs (PI_WEB_UI_VIEW_
+      // ONLY_SUBSCRIBE=on since wave J) when HEAP_SOAK_VIEW_ONLY_SUBSCRIBE is set.
+      ...viewOnlySubscribeServerEnv(),
     },
     executable: 'npx',
     args: [
@@ -291,12 +305,19 @@ export async function launchDisposableServer(runId: string, mode: 'micro' | 'ful
 
 export async function startSupervisorUnit(runId: string, paths: RunPaths, supervisorUnit: string): Promise<void> {
   const root = repoRoot();
+  const runtimeMaxSec = soakRuntimeMaxSec();
   await startTransientUnit({
     unitName: supervisorUnit,
-    sliceName: 'pi-web-ui-soak.slice',
+    sliceName: soakSliceName(),
     restart: 'on-failure',
     workingDirectory: root,
-    properties: { MemoryMax: '1G', TasksMax: '128' },
+    properties: {
+      MemoryMax: '1G',
+      // E2 containment rule: MemorySwapMax ≤ 1G and a RuntimeMaxSec backstop here too.
+      MemorySwapMax: '1G',
+      ...(runtimeMaxSec === undefined ? {} : { RuntimeMaxSec: String(runtimeMaxSec) }),
+      TasksMax: '128',
+    },
     env: { HOME: homedir(), PATH: process.env.PATH ?? '/usr/bin:/bin' },
     executable: 'npx',
     args: ['tsx', 'scripts/heap-soak/supervisor.ts', '--run-state', paths.runStatePath],

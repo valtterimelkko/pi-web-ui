@@ -103,10 +103,70 @@ export function applyForcedBadLanes(lanes: readonly LaneDefinition[], env: NodeJ
   });
 }
 
-export function backboneLane(lanes: readonly LaneDefinition[] = LANE_DEFINITIONS): LaneDefinition {
+export function backboneLane(lanes: readonly LaneDefinition[]): LaneDefinition {
   const backbone = lanes.find((l) => l.isBackbone);
   if (!backbone) throw new Error('No backbone lane defined — the harness requires exactly one load-bearing lane.');
   return backbone;
+}
+
+export const LANES_ENV_KEY = 'HEAP_SOAK_LANES';
+export const MAX_CONCURRENT_ENV_KEY = 'HEAP_SOAK_MAX_CONCURRENT';
+
+/**
+ * E2a-1 lane selection (`HEAP_SOAK_LANES`, a comma-separated lane-name list):
+ * disables every enabled lane NOT named so a run can restrict itself to the
+ * authorised route. E2's common brief authorises `zai/glm-5.3-flash` only —
+ * lane B is OpenRouter, a pay-as-you-go provider that is NOT authorised in
+ * this wave — so the bounded soak runs with `HEAP_SOAK_LANES=A`. Unset/blank
+ * ⇒ no-op (the historic behaviour). Fail-closed: an unknown lane name, or a
+ * selection without the backbone lane, throws (the harness requires exactly
+ * one load-bearing lane; silently running none would report an empty run as
+ * if it were a soak).
+ */
+export function applyLaneSelection(lanes: readonly LaneDefinition[], env: NodeJS.ProcessEnv = process.env): LaneDefinition[] {
+  const raw = (env[LANES_ENV_KEY] ?? '').trim();
+  if (raw === '') return [...lanes];
+  const wanted = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const known = new Set(lanes.map((l) => l.name as string));
+  const unknown = wanted.filter((name) => !known.has(name));
+  if (unknown.length > 0) {
+    throw new Error(`${LANES_ENV_KEY} names unknown lane(s): ${unknown.join(', ')} (known: ${[...known].join(', ')})`);
+  }
+  const backbone = lanes.find((l) => l.isBackbone);
+  if (backbone && !wanted.includes(backbone.name)) {
+    throw new Error(`${LANES_ENV_KEY} must include the backbone lane (${backbone.name}) — the harness requires exactly one load-bearing lane.`);
+  }
+  const selected = new Set(wanted);
+  return lanes.map((lane) => selected.has(lane.name)
+    ? lane
+    : { ...lane, enabled: false, disabledReason: `excluded by ${LANES_ENV_KEY}=${raw}` });
+}
+
+/**
+ * E2a-1 concurrency cap (`HEAP_SOAK_MAX_CONCURRENT`, a whole number ≥ 1):
+ * caps every lane's `maxConcurrent` AT the value — never raises one above its
+ * own definition. The bounded soak caps lane A at 4 (brief binding). Unset
+ * ⇒ no-op. A non-positive or non-integer cap throws (fail-closed).
+ */
+export function applyLaneMaxConcurrent(lanes: readonly LaneDefinition[], env: NodeJS.ProcessEnv = process.env): LaneDefinition[] {
+  const raw = (env[MAX_CONCURRENT_ENV_KEY] ?? '').trim();
+  if (raw === '') return [...lanes];
+  const cap = Number(raw);
+  if (!Number.isFinite(cap) || !Number.isInteger(cap) || cap < 1) {
+    throw new Error(`${MAX_CONCURRENT_ENV_KEY} must be a whole number >= 1 (got ${JSON.stringify(raw)})`);
+  }
+  return lanes.map((lane) => (lane.maxConcurrent <= cap ? lane : { ...lane, maxConcurrent: cap }));
+}
+
+/**
+ * The supervisor's composed lane resolution: enabled lanes → selection →
+ * concurrency cap → forced-bad (Gate 1's seam stays outermost so it can still
+ * force a non-backbone lane's model id invalid during an exercise). With no
+ * relevant env set this is exactly the pre-E2 behaviour.
+ */
+export function resolveDriverLanes(env: NodeJS.ProcessEnv = process.env): LaneDefinition[] {
+  const selected = applyLaneMaxConcurrent(applyLaneSelection(enabledLanes(LANE_DEFINITIONS), env), env);
+  return applyForcedBadLanes(selected, env);
 }
 
 export function enabledLanes(lanes: readonly LaneDefinition[]): LaneDefinition[] {

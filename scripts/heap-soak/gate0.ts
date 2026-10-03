@@ -22,7 +22,7 @@ import { boardWhoUnderRunDir } from './board-check.js';
 import { BrowserLikeWsClient } from './browser-ws-client.js';
 import { hasEnoughFreeDisk } from '../../server/src/live-validation/heap-soak/disk.js';
 import { parseHeapSnapshotSummary } from '../../server/src/live-validation/heap-soak/snapshot-parse.js';
-import { LANE_DEFINITIONS, enabledLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
+import { LANE_DEFINITIONS, resolveDriverLanes } from '../../server/src/live-validation/heap-soak/lanes.js';
 import { DEFAULT_WAVE_TARGET_CONFIG } from '../../server/src/live-validation/heap-soak/types.js';
 import path from 'node:path';
 
@@ -103,7 +103,11 @@ export async function runGate0(): Promise<Gate0Result> {
     }
 
     // Lane end-to-end checks. Lane A (backbone) is REQUIRED; B/C are best-effort.
-    const lanes = enabledLanes(LANE_DEFINITIONS);
+    // E2a-1: the composed selection (HEAP_SOAK_LANES…) so a restricted run's
+    // preflight exercises exactly the lanes the run will use — with
+    // HEAP_SOAK_LANES=A no OpenRouter model is ever called (E2 authorises the
+    // zai route only).
+    const lanes = resolveDriverLanes();
     for (const lane of lanes) {
       const result = await runChildWithDeadline(
         {
@@ -127,8 +131,13 @@ export async function runGate0(): Promise<Gate0Result> {
         record(label, true /* never fails the gate */, result.success ? 'pass' : `best-effort ${result.timedOut ? 'SLOW/timeout' : 'FAIL'}: ${result.reason ?? 'unknown'} (does not fail Gate 0)`, false);
       }
     }
-    for (const lane of LANE_DEFINITIONS.filter((l) => !l.enabled)) {
-      record(`lane ${lane.name} disabled`, true, lane.disabledReason ?? 'disabled', false);
+    // Record every definition that is not enabled in the resolved selection —
+    // disabled in the defaults (lane C) or excluded by HEAP_SOAK_LANES (E2a-1's
+    // lane B) — so the preflight record states why each lane was not exercised.
+    for (const lane of LANE_DEFINITIONS) {
+      if (lanes.some((enabledLane) => enabledLane.name === lane.name && enabledLane.enabled)) continue;
+      const resolved = lanes.find((l) => l.name === lane.name);
+      record(`lane ${lane.name} disabled`, true, resolved?.disabledReason ?? lane.disabledReason ?? 'disabled', false);
     }
 
     // Board-pollution fix (owner amendment 2026-09-26): while the run is
