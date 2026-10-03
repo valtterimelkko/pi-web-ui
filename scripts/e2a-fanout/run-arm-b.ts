@@ -212,7 +212,8 @@ async function main(): Promise<number> {
     // 06-answer asks that the script RUNS without an install. A non-zero exit
     // is acceptable ONLY from the known host-state skills-alias scan (it reads
     // /root/.skills-global outside the clone); anything else aborts.
-    const executed = testCheck.stdout.includes('# tests ') || testCheck.stdout.includes('# pass ');
+    // node --test's default spec reporter prints `\u2139 tests 364`; TAP prints `# tests 364`.
+    const executed = /tests \d+/.test(testCheck.stdout) && /pass \d+/.test(testCheck.stdout);
     if (!executed) throw new Error(`clone test script did not execute (exit ${String(testCheck.code)}) — see logs/clone-test-check.log`);
     log(`clone test-script check: executed, exit ${String(testCheck.code)}${testCheck.code !== 0 ? ' (known host-state skills-alias failure — recorded)' : ''}`);
 
