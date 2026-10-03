@@ -283,15 +283,6 @@ export async function getGoalProjection(target: OrchTarget, sessionId: string): 
 }
 
 /** Explicitly pause a child's goal through the raw goal endpoint (correction 02 negative child). */
-export async function pauseGoalChild(target: OrchTarget, sessionId: string): Promise<unknown> {
-  return internalApiRequest<unknown>(target.socketPath, target.tokenPath, 'POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`, { action: 'pause' });
-}
-
-/**
- * Correction 03 (C6): register a dedicated auto-continue watch whose ledger is
- * the parent-visible record of the goal_state payload (dataMatch is shallow and
- * top-level, exactly as documented).
- */
 export async function registerAutoContinueWatch(target: OrchTarget, sessionId: string, label: string): Promise<string> {
   const response = await internalApiRequest<Record<string, unknown>>(
     target.socketPath,
