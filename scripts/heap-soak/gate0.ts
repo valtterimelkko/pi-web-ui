@@ -106,9 +106,11 @@ export async function runGate0(): Promise<Gate0Result> {
     // E2a-1: the composed selection (HEAP_SOAK_LANES…) so a restricted run's
     // preflight exercises exactly the lanes the run will use — with
     // HEAP_SOAK_LANES=A no OpenRouter model is ever called (E2 authorises the
-    // zai route only).
+    // zai route only). Only ENABLED lanes get a child: a selection-disabled
+    // lane must not be attempted (found live: the first E2a-1 smoke ran a lane
+    // B child because this loop predated selection-awareness).
     const lanes = resolveDriverLanes();
-    for (const lane of lanes) {
+    for (const lane of lanes.filter((l) => l.enabled)) {
       const result = await runChildWithDeadline(
         {
           client: launch.client,
