@@ -12,7 +12,7 @@
  *   cli.ts status
  */
 import { statusUnits } from './harness-status.ts';
-import { prepare, startServerForRun, stopServerForRun, runSmoke, runKillArm, runDrainArm, analyseArm } from './driver.ts';
+import { prepare, startServerForRun, stopServerForRun, runSmoke, runKillArm, runDrainArm, runPlacementSmoke, analyseArm } from './driver.ts';
 
 function flag(args: string[], name: string, fallback?: string): string | undefined {
   const i = args.indexOf(`--${name}`);
@@ -52,6 +52,9 @@ async function main(): Promise<void> {
     }
     case 'analyse':
       await analyseArm(runId, flag(rest, 'arm', 'kill') as string);
+      break;
+    case 'placement-smoke':
+      await runPlacementSmoke(runId);
       break;
     case 'status':
       await statusUnits();

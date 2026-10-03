@@ -156,6 +156,37 @@ export async function startServerForRun(runId: string, modeName: 'smoke' | 'arm'
   return started;
 }
 
+/**
+ * 09-correction Phase-1 placement smoke: ZERO model children, STRESS-GATE
+ * smoke allowance (server MemoryMax=2G, RuntimeMaxSec=300), no stress lock.
+ * Proves the anchor's numeric limits make placement ENABLE — no
+ * '[Placement] DISABLED' journal line after boot — and that the resolved
+ * placement root is ours, then stops and disposes.
+ */
+export async function runPlacementSmoke(runId: string): Promise<void> {
+  const paths = resolveRunPaths(runId);
+  mkdirSync(paths.runDir, { recursive: true, mode: 0o700 });
+  await prepare(runId, 0); // agent dir + env file, ZERO fixture repos
+  const started = await startServerUnit(REPO_ROOT, paths, SMOKE_MODE);
+  try {
+    await new Promise((r) => setTimeout(r, 8_000)); // startup sweep + placement resolution
+    const placement = await assertPlacementEnabledInJournal(started.launchedAt);
+    const anchorCg = await assertPlacementRootIsolated();
+    const record = {
+      at: started.launchedAt,
+      mode: 'zero-child placement smoke (server MemoryMax=2G, RuntimeMaxSec=300)',
+      anchorCgroup: anchorCg,
+      placementEnabled: true,
+      verifiedLine: placement.verifiedLine,
+      placementJournalLines: placement.placementLines,
+    };
+    saveJson(statePath(paths, 'placement-smoke.json'), record);
+    console.log(`PLACEMENT SMOKE OK: ${placement.verifiedLine.slice(0, 140)}`);
+  } finally {
+    await stopServerForRun(runId);
+  }
+}
+
 export async function stopServerForRun(runId: string): Promise<void> {
   const paths = resolveRunPaths(runId);
   await stopServerUnits();
@@ -472,8 +503,7 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
   if (!server) throw new Error('server.json missing — run start-server first');
   const target: OrchTarget = { socketPath: server.socketPath, tokenPath: server.tokenPath, parentSession: process.env.PI_ORCH_PARENT ?? '' };
   await assertPlacementRootIsolated();
-  if (!server.startedAt) throw new Error('server.json lacks startedAt — cannot run the placement journal assertion');
-  const placement = await assertPlacementEnabledInJournal(server.startedAt).catch((err) => { throw err; });
+  const placement = await assertPlacementEnabledInJournal(server.launchedAt).catch((err) => { throw err; });
   saveJson(statePath(paths, 'kill-placement-evidence.json'), placement);
   const prepareRec = loadJson<{ fixtures: Array<{ name: string; repoDir: string; baselineCommit: string }> }>(statePath(paths, 'prepare.json'));
   if (!prepareRec || prepareRec.fixtures.length < childCount) throw new Error(`need ${childCount} prepared fixtures — run prepare first`);
@@ -601,8 +631,7 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
   if (!server) throw new Error('server.json missing — run start-server first');
   const target: OrchTarget = { socketPath: server.socketPath, tokenPath: server.tokenPath, parentSession: process.env.PI_ORCH_PARENT ?? '' };
   await assertPlacementRootIsolated();
-  if (!server.startedAt) throw new Error('server.json lacks startedAt — cannot run the placement journal assertion');
-  const placement = await assertPlacementEnabledInJournal(server.startedAt).catch((err) => { throw err; });
+  const placement = await assertPlacementEnabledInJournal(server.launchedAt).catch((err) => { throw err; });
   saveJson(statePath(paths, 'drain-placement-evidence.json'), placement);
   const prepareRec = loadJson<{ fixtures: Array<{ name: string; repoDir: string; baselineCommit: string }> }>(statePath(paths, 'prepare.json'));
   if (!prepareRec || prepareRec.fixtures.length < childCount) throw new Error(`need ${childCount} prepared fixtures — run prepare first`);

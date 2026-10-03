@@ -180,8 +180,8 @@ export interface StartedServer {
   anchorCgroup: string;
   memoryMax: string;
   runtimeMaxSec: number;
-  /** ISO boot instant recorded by startServerForRun — journal assertions run from it. */
-  startedAt?: string;
+  /** ISO instant captured BEFORE the unit launches — journal assertions must query from it (boot lines predate readiness). */
+  launchedAt: string;
 }
 
 /** Prepare the env file + stub bin dir the server unit needs. */
@@ -219,6 +219,7 @@ export function prepareServerEnv(paths: RunPaths, repoRoot: string): void {
 
 /** Start the disposable server (idempotent per run dir). Asserts placement isolation first. */
 export async function startServerUnit(repoRoot: string, paths: RunPaths, mode: ServerMode): Promise<StartedServer> {
+  const launchedAt = new Date().toISOString(); // BEFORE launch: boot's own journal lines must be inside the assertion window
   await startAnchorUnit(path.join(paths.binDir, 'anchor-start.sh'));
   const anchorCgroup = await assertPlacementRootIsolated();
 
@@ -226,15 +227,19 @@ export async function startServerUnit(repoRoot: string, paths: RunPaths, mode: S
   const tokenPath = path.join(paths.validationDir, 'internal-api-token');
   const existing = await getUnitStatus(serverUnitName());
   if (existing.activeState === 'active' && existing.mainPid && existsSync(socketPath)) {
+    // Idempotent re-entry: reuse the running server, but the journal assertion
+    // window still needs a pre-boot instant — read the one the state file kept.
+    const prior = readFileSync(path.join(paths.stateDir, 'server.json'), 'utf8');
     return {
       unit: serverUnitName(),
       mainPid: existing.mainPid,
       socketPath,
       tokenPath,
-      httpPort: readFileSync(path.join(paths.stateDir, 'http-port'), 'utf8').trim() ? Number(readFileSync(path.join(paths.stateDir, 'http-port'), 'utf8')) : 0,
+      httpPort: Number(readFileSync(path.join(paths.stateDir, 'http-port'), 'utf8') || 0),
       anchorCgroup,
       memoryMax: mode.memoryMax,
       runtimeMaxSec: mode.runtimeMaxSec,
+      launchedAt: (JSON.parse(prior) as { launchedAt?: string }).launchedAt ?? launchedAt,
     };
   }
 
@@ -301,7 +306,7 @@ export async function startServerUnit(repoRoot: string, paths: RunPaths, mode: S
       // The token file is written before the socket binds; give the socket a
       // beat to accept connections (heap-soak learned this the hard way).
       await new Promise((r) => setTimeout(r, 500));
-      return { unit, mainPid: s.mainPid as number, socketPath, tokenPath, httpPort, anchorCgroup, memoryMax: mode.memoryMax, runtimeMaxSec: mode.runtimeMaxSec };
+      return { unit, mainPid: s.mainPid as number, socketPath, tokenPath, httpPort, anchorCgroup, memoryMax: mode.memoryMax, runtimeMaxSec: mode.runtimeMaxSec, launchedAt };
     }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -376,16 +381,20 @@ export async function waitForServerReadyViaApi(socketPath: string, tokenPath: st
  * no numeric memory.max. Fail closed: any DISABLED line after the boot time
  * aborts; the placement journal lines are returned for the evidence record.
  */
-export async function assertPlacementEnabledInJournal(sinceIso: string): Promise<{ placementLines: string[] }> {
+export async function assertPlacementEnabledInJournal(sinceIso: string): Promise<{ placementLines: string[]; verifiedLine: string }> {
   const { stdout } = await execFile('journalctl', [
     '-u', serverUnitName(), '--since', sinceIso, '--no-pager', '-n', '400',
   ]);
-  const lines = stdout.split(/\r?\n/).filter((l) => /Placement/i.test(l));
-  const disabled = lines.filter((l) => /DISABLED/i.test(l));
+  const lines = stdout.split(/\r?\n/).filter((l) => /\[Placement\]/.test(l));
+  const disabled = lines.filter((l) => /DISABLED/.test(l));
   if (disabled.length > 0) {
     throw new Error(`Placement assertion FAILED: ${disabled.length} '[Placement] DISABLED' journal line(s) since ${sinceIso}: ${disabled[0].slice(0, 200)}`);
   }
-  return { placementLines: lines.slice(-8) };
+  const verified = lines.find((l) => /tools root verified/.test(l));
+  if (!verified) {
+    throw new Error(`Placement assertion FAILED: no '[Placement] tools root verified:' line since ${sinceIso} — placement did not positively resolve (placement lines seen: ${lines.length})`);
+  }
+  return { placementLines: lines.slice(-8), verifiedLine: verified };
 }
 
 /** Journal evidence lines for a restart window (01-answer Q3: record systemd's restart time). */
