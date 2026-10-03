@@ -12,6 +12,7 @@ import path from 'node:path';
 import {
   percentile, windowStats, replayLatch, doubledFirstChunkVerdict, hb4VerdictOk, parseArgs,
   writeSeedTargets, classifyResidency, coldOnlyPercentiles, verifyCredentialSweep, cleanupRunOwnedDirs,
+  seedPrebootOrderOk,
 } from './lib.mjs';
 
 const rd = (atMs, lagP99Ms, extra = {}) => ({ atMs, at: new Date(atMs).toISOString(), lagP99Ms, lagP50Ms: Math.round(lagP99Ms / 2), lagMaxMs: lagP99Ms, activeTurns: 0, lagSampleCount: 100, ...extra });
@@ -136,6 +137,27 @@ test('coldOnlyPercentiles computes over non-resident switches only', () => {
   const none = coldOnlyPercentiles([{ wallMs: 5, targetResident: true }]);
   assert.equal(none.coldCount, 0);
   assert.equal(none.p50, null);
+});
+
+test('seedPrebootOrderOk asserts seed lines precede server ready in the arm log', () => {
+  const good = [
+    'pre-seed checks: socket absent = yes; e2a-5-h1 inactive = yes',
+    'seed: 66 cold target files written OFFLINE pre-boot',
+    'seed complete (pre-boot: no socket, no unit — verified above)',
+    'starting server unit e2a-5-h1',
+    'server ready (build ee660d4f)',
+  ].join('\n');
+  assert.equal(seedPrebootOrderOk(good).ok, true);
+  const lateSeed = [
+    'starting server unit e2a-5-h1',
+    'server ready (build ee660d4f)',
+    'pre-seed checks: socket absent = yes; e2a-5-h1 inactive = yes',
+    'seed complete (pre-boot: no socket, no unit — verified above)',
+  ].join('\n');
+  const bad = seedPrebootOrderOk(lateSeed);
+  assert.equal(bad.ok, false);
+  const missing = seedPrebootOrderOk('server ready (build ee660d4f)');
+  assert.equal(missing.ok, false);
 });
 
 // ── correction 04 item 3: hb5 cleanup sweep ─────────────────────────────

@@ -14,54 +14,87 @@ FINAL = 'A5H1-045230-API-DESKTOP'
 
 
 class TestHb2StreamVerdict(unittest.TestCase):
-    def test_clean_streaming_passes(self):
+    """Correction 07 item 1: samples are tagged {t_ms, phase, texts}; the
+    verdict requires a response-specific PRE-TERMINAL observation (a live
+    sample with a >=4-char proper prefix of the final text) or a live sample
+    holding the full final text before the transcript recorded completion."""
+
+    @staticmethod
+    def sample(phase, *texts, t_ms=0):
+        return {'t_ms': t_ms, 'phase': phase, 'texts': [t for t in texts if t is not None]}
+
+    def test_reviewer_counterexample_settled_only_fails(self):
+        # the reviewer's exact counterexample: a single sample holding FINAL
+        v = oracle_lib.hb2_stream_verdict([self.sample('settled', FINAL)], FINAL)
+        self.assertFalse(v['ok'], v)
+        self.assertEqual(v['reason'], 'streaming-not-observed')
+
+    def test_settled_only_samples_fail(self):
+        # settled-phase samples only, carrying just the final text
+        samples = [self.sample('settled', FINAL, t_ms=1000)]
+        v = oracle_lib.hb2_stream_verdict(samples, FINAL)
+        self.assertFalse(v['ok'], v)
+        self.assertEqual(v['reason'], 'streaming-not-observed')
+
+    def test_live_unrelated_bubbles_then_settled_final_fails(self):
+        # pre-existing transcript bubbles do not count towards "reply observed"
         samples = [
-            [],
-            [FINAL[:3]],
-            [FINAL[:8]],
-            [FINAL],
-            [FINAL],
+            self.sample('live', 'Goal: write numbers', 'DONE — count.txt has the values'),
+            self.sample('live', 'Goal: write numbers'),
+            self.sample('settled', 'Goal: write numbers', FINAL),
+        ]
+        v = oracle_lib.hb2_stream_verdict(samples, FINAL)
+        self.assertFalse(v['ok'], v)
+        self.assertEqual(v['reason'], 'streaming-not-observed')
+
+    def test_live_proper_prefix_then_final_passes(self):
+        samples = [
+            self.sample('live', FINAL[:6], t_ms=100),
+            self.sample('live', FINAL, t_ms=200),
+            self.sample('settled', FINAL, t_ms=3000),
         ]
         v = oracle_lib.hb2_stream_verdict(samples, FINAL)
         self.assertTrue(v['ok'], v)
 
-    def test_doubled_prefix_in_any_sample_fails(self):
-        # the classic doubled first chunk: 'AA5H1...' rendered in one bubble
+    def test_live_full_text_before_completion_passes(self):
+        # a live sample already holding the full final text = pre-terminal
+        samples = [self.sample('live', FINAL, t_ms=100)]
+        v = oracle_lib.hb2_stream_verdict(samples, FINAL)
+        self.assertTrue(v['ok'], v)
+
+    def test_short_prefix_below_four_chars_does_not_count(self):
+        # a 3-char prefix is not response-specific enough
+        samples = [self.sample('live', FINAL[:3], t_ms=100)]
+        v = oracle_lib.hb2_stream_verdict(samples, FINAL)
+        self.assertFalse(v['ok'], v)
+        self.assertEqual(v['reason'], 'streaming-not-observed')
+
+    def test_doubled_prefix_in_later_live_sample_fails(self):
         samples = [
-            [],
-            [FINAL[:2]],
-            [FINAL[:2] + FINAL],  # doubled prefix contiguous
-            [FINAL],
+            self.sample('live', FINAL[:6], t_ms=100),
+            self.sample('live', FINAL[:6] + FINAL[:6], t_ms=200),
+            self.sample('settled', FINAL, t_ms=3000),
         ]
         v = oracle_lib.hb2_stream_verdict(samples, FINAL)
         self.assertFalse(v['ok'], v)
         self.assertEqual(v['reason'], 'doubled-prefix-in-sample')
 
-    def test_doubled_prefix_transient_only_fails(self):
-        # even if the settled DOM is clean, a transient doubling is a failure
+    def test_doubled_prefix_in_settled_sample_fails(self):
         samples = [
-            [],
-            [FINAL[:4], FINAL[:4] + FINAL[:4]],  # transient duplicate partial
-            [FINAL],
+            self.sample('live', FINAL[:6], t_ms=100),
+            self.sample('settled', FINAL[:2] + FINAL, t_ms=3000),
         ]
         v = oracle_lib.hb2_stream_verdict(samples, FINAL)
         self.assertFalse(v['ok'], v)
+        self.assertEqual(v['reason'], 'doubled-prefix-in-sample')
 
-    def test_separate_bubble_carrying_reply_part_fails(self):
-        # a second assistant bubble carrying part of the reply while another
-        # carries it too — the duplicate evades settled-text checks
+    def test_separate_bubble_partial_duplicate_fails(self):
         samples = [
-            [],
-            [FINAL[:6]],
-            [FINAL[:6], FINAL],  # partial chunk duplicated into a new bubble
-            [FINAL],
+            self.sample('live', FINAL[:6], t_ms=100),
+            self.sample('live', FINAL[:6], FINAL, t_ms=200),
+            self.sample('settled', FINAL, t_ms=3000),
         ]
         v = oracle_lib.hb2_stream_verdict(samples, FINAL)
-        self.assertFalse(v['ok'], v)
-        self.assertEqual(v['reason'], 'duplicate-partial-across-bubbles')
-
-    def test_missing_reply_fails(self):
-        v = oracle_lib.hb2_stream_verdict([[], []], FINAL)
         self.assertFalse(v['ok'], v)
 
 

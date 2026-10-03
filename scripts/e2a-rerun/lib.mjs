@@ -391,6 +391,24 @@ export function coldOnlyPercentiles(switches) {
   };
 }
 
+/**
+ * Correction 07 item 2: scripted ordering assertion for the arm log — the
+ * pre-seed checks and the seed-complete line must appear BEFORE the server's
+ * `server ready` line (the seed is pre-boot), and both must be present.
+ */
+export function seedPrebootOrderOk(logText) {
+  const lines = (logText || '').split('\n');
+  const indexOf = (needle) => lines.findIndex((l) => l.includes(needle));
+  const preSeed = indexOf('pre-seed checks:');
+  const seedDone = indexOf('seed complete');
+  const ready = indexOf('server ready');
+  if (preSeed < 0 || seedDone < 0 || ready < 0) {
+    return { ok: false, reason: 'missing-lines', preSeed, seedDone, ready };
+  }
+  if (preSeed < ready && seedDone < ready) return { ok: true };
+  return { ok: false, reason: 'seed-after-server-ready', preSeed, seedDone, ready };
+}
+
 /** Scan `roots` for credential-shaped files. Returns remaining paths. */
 export function verifyCredentialSweep(roots) {
   const names = ['auth.json', 'models.json', 'internal-api-token', 'server.env', 'oauth_creds.json', 'antigravity-oauth-token'];

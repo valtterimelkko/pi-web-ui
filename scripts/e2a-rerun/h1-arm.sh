@@ -63,6 +63,20 @@ ln -sf "$WT/scripts/heap-soak/agent-os-stub.mjs" "$RUN/bin/agent-os"
 # ── server unit ───────────────────────────────────────────────────────────────
 PORT=$(node -e "const net=require('net');const s=net.createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")
 echo "$PORT" > "$RUN/port"
+# ── correction 07 item 2: seed COLD targets BEFORE the unit starts, asserted ──
+if [ -S "$RUN/server/internal-api.sock" ]; then
+  log "FATAL: socket exists before seeding — seed must run pre-boot"
+  exit 1
+fi
+if systemctl is-active --quiet e2a-5-h1; then
+  log "FATAL: e2a-5-h1 unit is active before seeding — seed must run pre-boot"
+  exit 1
+fi
+log "pre-seed checks: socket absent = yes; e2a-5-h1 inactive = yes"
+node "$WT/scripts/e2a-rerun/h1-burst.mjs" seed --run-dir="$RUN" --count="$COUNT" 2>>"$LOG"
+grep -q "cold target files written OFFLINE pre-boot" "$LOG" || { log "FATAL: seed did not complete"; exit 1; }
+log "seed complete (pre-boot: no socket, no unit — verified above)"
+
 log "starting server unit e2a-5-h1 (port $PORT, view-only subscribe ON, MemoryMax=8G)"
 systemd-run --collect --quiet --unit=e2a-5-h1 \
   -p CPUWeight=100 -p MemoryMax=8G -p MemorySwapMax=1G \
@@ -81,6 +95,10 @@ done
 [ -S "$RUN/server/internal-api.sock" ] || { log "FATAL: server socket never appeared"; tail -30 "$RUN/server.log" >&2 || true; exit 1; }
 log "server ready (build $(node -e "console.log(JSON.parse(require('fs').readFileSync('$WT/server/dist/build-identity/embedded-manifest.json','utf8')).revision.slice(0,8))" 2>/dev/null || echo '?'))"
 
+# correction 07 item 2: scripted ordering assertion — the seed ran pre-boot
+node -e "import('$WT/scripts/e2a-rerun/lib.mjs').then(m => { const r = m.seedPrebootOrderOk(require('fs').readFileSync('$LOG','utf8')); if (!r.ok) { console.error('FATAL: seed ordering violated:', JSON.stringify(r)); process.exit(1); } console.log('seed ordering assertion: ok'); }).catch(e => { console.error('FATAL:', e.message); process.exit(1); })" >>"$LOG" 2>&1 || { log "FATAL: seed ordering assertion failed"; exit 1; }
+log "seed ordering assertion: ok (seed preceded server ready)"
+
 # Parent adjustment 2: the journal provider line must list ONLY zai (arms 2-3).
 PROV_LINE=$(grep -m1 "Available providers (with auth):" "$RUN/server.log" || true)
 PROV_LIST="${PROV_LINE#*Available providers (with auth):}"
@@ -90,10 +108,6 @@ if [ "$PROV_LIST" != "zai" ]; then
   log "FATAL: provider assertion failed — expected only 'zai', got [$PROV_LIST]"
   exit 1
 fi
-
-# ── correction 04: seed COLD targets OFFLINE, BEFORE the server boots ──────
-node "$WT/scripts/e2a-rerun/h1-burst.mjs" seed --run-dir="$RUN" --count="$COUNT" 2>>"$LOG"
-grep -q "cold target files written OFFLINE pre-boot" "$LOG" || { log "FATAL: seed did not run pre-boot"; exit 1; }
 
 MARKER="A5H1-$(date -u +%H%M%S)"
 A5_BROWSER_MARKER="$MARKER" node "$WT/scripts/e2a-rerun/h1-burst.mjs" children --run-dir="$RUN" 2>>"$LOG"

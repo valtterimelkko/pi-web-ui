@@ -302,24 +302,28 @@ def run_viewport(pw, view, results):
     # ── 2. API prompt → first streamed chunk exactly once (hb2) ─────────────
     live_marker = f'{MARKER}-API-{view.upper()}'
     stream_samples = []
+    t0 = time.time()
+    prompt_text = (f'Reply with exactly: {live_marker} followed by the numbers 1 to 60 '
+                   f'separated by spaces, on one line, and nothing else.')
     prompt_proc = api_async('POST', f"/api/v1/sessions/{CHILD['sessionId']}/prompt",
-                            {'message': f'Reply with exactly one line: {live_marker} and nothing else.'})
+                            {'message': prompt_text})
     print(f'api prompt fired (detached, {view})', flush=True)
-    # correction 04: observe the reply AS IT STREAMS — poll from the MAIN thread
-    # while the detached prompt runs (cadence <= 100 ms).
+    # correction 07: observe the reply AS IT STREAMS — poll from the MAIN thread
+    # while the detached prompt runs (cadence <= 100 ms); every sample is tagged
+    # {t_ms, phase, texts}: loop samples are 'live', the post-settle sample is
+    # 'settled'.
     deadline = time.time() + 120
     while time.time() < deadline and live_marker not in Path(CHILD['sessionPath']).read_text():
-        stream_samples.append(sample_assistant_texts(page))
+        stream_samples.append({'t_ms': int((time.time() - t0) * 1000), 'phase': 'live',
+                               'texts': sample_assistant_texts(page)})
         time.sleep(0.1)
     try:
         prompt_proc.wait(timeout=60)
     except Exception:
         pass
     time.sleep(3)  # let the render settle
-    stream_samples.append(sample_assistant_texts(page))
-    non_empty = sum(1 for s in stream_samples if s)
-    print(f'stream samples: {len(stream_samples)} collected, {non_empty} non-empty', flush=True)
-    assert non_empty >= 3, f'streaming sampling did not observe the reply rendering (non-empty samples {non_empty})'
+    stream_samples.append({'t_ms': int((time.time() - t0) * 1000), 'phase': 'settled',
+                           'texts': sample_assistant_texts(page)})
     entries_after = transcript_entries(CHILD['sessionPath'])
     final_text = final_assistant_text(entries_after)
     assert final_text and live_marker in final_text, f'transcript missing live marker ({view}): {final_text!r}'
@@ -330,9 +334,20 @@ def run_viewport(pw, view, results):
     in_bubble = last_assistant.count(final_text.strip())
     dbl = doubled_present(chat_text, final_text)
     stream_v = oracle_lib.hb2_stream_verdict(stream_samples, final_text)
+    # correction 07: preserve the evidence — every sample's t_ms, phase and
+    # bubble texts (<= 200 chars each) for the reply-prefix bubbles plus the
+    # last assistant bubble.
+    sample_log = []
+    for sample in stream_samples:
+        reply_texts = [t[:200] for t in sample['texts']
+                       if final_text.startswith(t.strip()) and t.strip()]
+        last_assistant = sample['texts'][-1][:200] if sample['texts'] else ''
+        entry_texts = reply_texts + ([last_assistant] if last_assistant and last_assistant not in reply_texts else [])
+        sample_log.append({'t_ms': sample['t_ms'], 'phase': sample['phase'], 'texts': entry_texts})
     view_results['hb2'] = {'transcriptFinal': final_text,
                            **oracle_lib.hb2_combined_verdict(True, occurrences, in_bubble, dbl, stream_v),
-                           'streamSamples': len(stream_samples)}
+                           'streamSamples': len(stream_samples),
+                           'streamSampleLog': sample_log}
     shoot(page, f'{tag}-02-after-api-prompt.png')
 
     # ── 3.+4. two typed prompts + one queued chip (hb6 + correction 02) ─────
