@@ -228,6 +228,17 @@ function findSessionFile(paths: RunPaths, sessionId: string): string | undefined
   return undefined;
 }
 
+/** Correction 02: read the continue overlay record file for a session (raw copy of the auto_continued event payload). */
+function readOverlayRecord(validationDir: string, sessionId: string): Record<string, unknown> | null {
+  const file = path.join(validationDir, 'goal-continue', 'overlay', `${sessionId.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 /** Read + parse a child's raw session JSONL (empty when absent — first turn not yet written). */
 function readRawSession(paths: RunPaths, sessionId: string): { events: CrashEventRecord[]; file?: string } {
   const file = findSessionFile(paths, sessionId);
@@ -447,6 +458,15 @@ async function collectChildEvidence(
     interruption: payload.interruption ?? null,
     supported: payload.supported ?? null,
   } : null;
+  const workingPayload = (armState as ArmState & { workingPayloads?: Map<string, unknown> }).workingPayloads?.get(child.sessionId) as { autoContinuedPayload?: Record<string, unknown>; workingProjection?: Record<string, unknown> } | undefined;
+  (row as Record<string, unknown>).workingMomentPayload = workingPayload ? {
+    autoContinued: workingPayload.autoContinuedPayload ? {
+      autoContinued: workingPayload.autoContinuedPayload.autoContinued ?? null,
+      cause: workingPayload.autoContinuedPayload.cause ?? null,
+      continueCount: workingPayload.autoContinuedPayload.continueCount ?? null,
+    } : null,
+    projectionStatus: (workingPayload.workingProjection as Record<string, unknown> | undefined)?.status ?? null,
+  } : null;
   return row;
 }
 
@@ -634,7 +654,13 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
           armState.secondsToWorking.set(child.sessionId, secs);
           armState.workedAfterReadiness.set(child.sessionId, true);
           killWindowWork.set(child.sessionId, true);
-          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness child event' });
+          // Correction 02: the auto_continued event payload as recorded by the
+          // server (overlay record), captured before any projection read clears it.
+          const autoContinuedPayload = readOverlayRecord(paths.validationDir, child.sessionId);
+          const workingProjection = await getGoalProjection(target, child.sessionId).catch(() => ({}));
+          (armState as ArmState & { workingPayloads?: Map<string, unknown> }).workingPayloads = (armState as ArmState & { workingPayloads?: Map<string, unknown> }).workingPayloads ?? new Map();
+          (armState as ArmState & { workingPayloads: Map<string, unknown> }).workingPayloads.set(child.sessionId, { autoContinuedPayload, workingProjection });
+          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness child event', autoContinuedPayload });
         }
       }
       for (const child of armState.children) {
@@ -813,7 +839,13 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
           armState.secondsToWorking.set(child.sessionId, secs);
           armState.workedAfterReadiness.set(child.sessionId, true);
           drainWindowWork.set(child.sessionId, true);
-          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness child event' });
+          // Correction 02: the auto_continued event payload as recorded by the
+          // server (overlay record), captured before any projection read clears it.
+          const autoContinuedPayload = readOverlayRecord(paths.validationDir, child.sessionId);
+          const workingProjection = await getGoalProjection(target, child.sessionId).catch(() => ({}));
+          (armState as ArmState & { workingPayloads?: Map<string, unknown> }).workingPayloads = (armState as ArmState & { workingPayloads?: Map<string, unknown> }).workingPayloads ?? new Map();
+          (armState as ArmState & { workingPayloads: Map<string, unknown> }).workingPayloads.set(child.sessionId, { autoContinuedPayload, workingProjection });
+          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness child event', autoContinuedPayload });
         }
       }
       for (const child of armState.children) {
