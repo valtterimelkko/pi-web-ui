@@ -16,10 +16,11 @@
  *   write 03-blocked.md;
  * - fixtures and credential copies deleted afterwards; token files removed.
  */
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { assertSafeNpmCwd, fixtureInstallDecision } from './lib/fixtures.ts';
+import { peakConcurrentOwnTurns } from './lib/concurrency.ts';
 import { checkRoutes, fetchSessionStatusLive, verifyCleanup, withFailClosedCleanup } from './lib/verify.ts';
 import { getCapacity } from './lib/httpclient.ts';
 import { readMemAvailableKb, readPressure } from './lib/hostsample.ts';
@@ -260,22 +261,20 @@ async function main(): Promise<number> {
     if (!executed) throw new Error(`clone test script did not execute (exit ${String(testCheck.code)}) — see logs/clone-test-check.log`);
     log(`clone test-script check: executed, exit ${String(testCheck.code)}${testCheck.code !== 0 ? ' (known host-state skills-alias failure — recorded)' : ''}`);
 
-    // ── Dry pre-check 2: capacity debt (5-minute re-checks, at most 3) ──
+    // ── 08-correction pre-flight gate: just before the creates, sample
+    // /capacity in full; if activeTurns > 1 wait up to 10 minutes (60 s
+    // checks inside this command); then run anyway and report the baseline. ──
     let debt = await readDebt();
     writeFileSync(join(runRoot, 'capacity-before.json'), `${JSON.stringify({ atMs: Date.now(), debt, waitCycles: 0 }, null, 2)}\n`);
     let cycles = 0;
-    while (debt && ((debt.activeTurns ?? 0) > 2 || (debt.quarantinedRuns ?? 0) > 2) && cycles < 3) {
+    while (debt && (debt.activeTurns ?? 0) > 1 && cycles < 10) {
       cycles += 1;
-      log(`capacity debt (activeTurns=${String(debt.activeTurns)} quarantinedRuns=${String(debt.quarantinedRuns)}) — waiting 5 min (cycle ${String(cycles)}/3)`);
-      await new Promise((r) => setTimeout(r, 5 * 60_000));
+      log(`pre-create baseline activeTurns=${String(debt.activeTurns)} > 1 — waiting 60 s (cycle ${String(cycles)}/10)`);
+      await new Promise((r) => setTimeout(r, 60_000));
       debt = await readDebt();
       writeFileSync(join(runRoot, 'capacity-before.json'), `${JSON.stringify({ atMs: Date.now(), debt, waitCycles: cycles }, null, 2)}\n`);
     }
-    if (debt && ((debt.activeTurns ?? 0) > 2 || (debt.quarantinedRuns ?? 0) > 2)) {
-      log(`capacity debt did NOT clear after 3 waits (activeTurns=${String(debt.activeTurns)} quarantinedRuns=${String(debt.quarantinedRuns)}) — proceeding WITH the debt on record; refusals will be attributed accordingly`);
-    } else {
-      log(`capacity clear for fan-out (activeTurns=${String(debt?.activeTurns)} quarantinedRuns=${String(debt?.quarantinedRuns)})`);
-    }
+    log(`pre-create baseline recorded: activeTurns=${String(debt?.activeTurns)} quarantinedRuns=${String(debt?.quarantinedRuns)} after ${String(cycles)} wait cycle(s) — proceeding (08-correction: run anyway, report the baseline)`);
 
     const prodMainPidBefore = (await systemctlShow('pi-web-ui.service', ['MainPID']))['MainPID'];
     log(`production MainPID before: ${prodMainPidBefore ?? '?'}`);
@@ -368,6 +367,12 @@ async function main(): Promise<number> {
             const prompt = await run(promptArgv(rec.sessionId, child.taskText, `e2a4-armb-${child.name}`, PROD_CONN), 120_000);
             const outcome = { child: child.name, exitCode: prompt.code, runId: prompt.code === 0 ? prompt.stdout.trim().split('\n').pop() : null, error: prompt.code === 0 ? null : prompt.stderr.slice(-300) };
             appendFileSync(join(runRoot, 'creates', `${child.name}.prompt.json`), `${JSON.stringify(outcome, null, 2)}\n`);
+            if (prompt.code === 10) {
+              // 08-correction: on every refused prompt, snapshot /capacity
+              // within 1 s and record its reason.
+              const snap = await getCapacity({ socketPath: PROD_CONN.socketPath, tokenPath: PROD_CONN.tokenPath });
+              appendFileSync(join(runRoot, 'refusal-snapshots.jsonl'), `${JSON.stringify({ atMs: Date.now(), child: child.name, reason: snap?.['reason'] ?? null, available: snap?.['available'] ?? null, activeTurns: snap?.['activeTurns'] ?? null })}\n`);
+            }
             return outcome;
           }));
           const promptRunIds = promptResults.filter((p): p is { child: string; exitCode: number; runId: string; error: string | null } => p !== null && p.exitCode === 0 && typeof p.runId === 'string');
@@ -461,6 +466,51 @@ async function main(): Promise<number> {
     // ── Hygiene: fixtures + tokens deleted; find recorded ──
     rmSync(join(runRoot, 'fixtures'), { recursive: true, force: true });
     log('fixtures deleted');
+
+    // ── 08-correction: receipts for our session ids (read-only source) +
+    // receipt-interval concurrency + the never-deleted evidence copy ──
+    const receiptsSrc = '/root/.pi-web-ui/run-receipts';
+    mkdirSync(join(runRoot, 'receipts'), { recursive: true });
+    try {
+      let copied = 0;
+      for (const f of readdirSync(receiptsSrc)) {
+        if (!f.endsWith('.json')) continue;
+        try {
+          const body = JSON.parse(readFileSync(join(receiptsSrc, f), 'utf8')) as { sessionId?: string; startedAt?: string; terminalAt?: string };
+          if (body.sessionId && createdSessionIds.includes(body.sessionId)) {
+            copyFileSync(join(receiptsSrc, f), join(runRoot, 'receipts', f));
+            copied += 1;
+          }
+        } catch { /* skip unparsable receipt */ }
+      }
+      log(`receipts copied for our sessions: ${String(copied)}`);
+      const intervals: Array<{ child?: string; start: number; end: number }> = [];
+      for (const f of readdirSync(join(runRoot, 'receipts'))) {
+        try {
+          const body = JSON.parse(readFileSync(join(runRoot, 'receipts', f), 'utf8')) as { startedAt?: string; terminalAt?: string };
+          if (body.startedAt && body.terminalAt) {
+            intervals.push({ start: Date.parse(body.startedAt), end: Date.parse(body.terminalAt) });
+          }
+        } catch { /* skip */ }
+      }
+      const peak = peakConcurrentOwnTurns(intervals);
+      writeFileSync(join(runRoot, 'own-concurrency.json'), `${JSON.stringify({ method: 'receipt intervals [startedAt, terminalAt)', intervals: intervals.length, peak: peak.peak, at: peak.at !== null ? new Date(peak.at).toISOString() : null }, null, 2)}\n`);
+      log(`own concurrency from receipt intervals: peak ${String(peak.peak)}`);
+    } catch (err) {
+      log(`receipt copy/concurrency failed: ${String(err)}`);
+    }
+
+    // Never-deleted evidence copy (no credentials — sweep asserted first).
+    const evidenceDir = '/root/orch-ops/orchestration-scaling/e2/E2a-4/evidence/arm-b3';
+    const credSweep = run(['find', runRoot, '-name', 'auth.json', '-o', '-name', 'models.json', '-o', '-name', 'internal-api-token'], 30_000);
+    writeFileSync(join(runRoot, 'credential-sweep.txt'), (await credSweep).stdout || '(no matches)\n');
+    if ((await credSweep).stdout.trim() !== '') {
+      abortReasons.push('credential sweep found files — evidence copy skipped');
+    } else {
+      rmSync(evidenceDir, { recursive: true, force: true });
+      cpSync(runRoot, evidenceDir, { recursive: true });
+      log(`evidence copied to ${evidenceDir} (never deleted)`);
+    }
 
     if (abortReasons.length > 0) {
       const blockedPath = join(HAND_BACK, '03-blocked.md');
