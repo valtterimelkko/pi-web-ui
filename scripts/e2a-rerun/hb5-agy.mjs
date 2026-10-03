@@ -171,7 +171,8 @@ try {
   }
   const modelsRes = await call('GET', '/api/v1/models?runtime=antigravity');
   const modelsBody = JSON.parse(modelsRes.body);
-  const modelList = (modelsBody.models ?? modelsBody ?? []);
+  // route shape: { models: { pi: [...], antigravity: [{id, selector, ...}] } }
+  const modelList = modelsBody.models?.antigravity ?? modelsBody.models ?? [];
   const ids = Array.isArray(modelList) ? modelList.map((m) => m.id ?? m) : [];
   result.modelsRead = { at: now(), count: ids.length, ids };
   if (!ids.includes(MODEL)) {
