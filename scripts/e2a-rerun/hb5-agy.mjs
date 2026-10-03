@@ -74,7 +74,8 @@ try {
   result.unitCgroup = selfCg.split('\n').find((l) => l.startsWith('0::'))?.slice(3) ?? null;
 
   // ── agy binary copy (the launcher's explicit-AGY_BINARY opt-in channel) ──
-  cpSync('/root/.local/bin/agy', AGY_REAL, { mode: 0o755 });
+  cpSync('/root/.local/bin/agy', AGY_REAL);
+  spawnSync('chmod', ['755', AGY_REAL]);
   result.agyBinaryCopy = AGY_REAL;
   result.agyVersion = run(AGY_REAL, ['--version'], { timeoutMs: 15_000 });
 
@@ -89,7 +90,8 @@ try {
   ];
   for (const [name, src, dst] of candidates) {
     if (existsSync(src)) {
-      cpSync(src, dst, { mode: 0o600 });
+      cpSync(src, dst);
+      spawnSync('chmod', ['600', dst]);
       result.credentialCopies.push(name);
     }
   }
