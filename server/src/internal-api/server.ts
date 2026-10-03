@@ -524,12 +524,6 @@ export class InternalApiServer {
           this.eventBroker?.publish(brokerKey, event as Parameters<NonNullable<typeof this.eventBroker>['publish']>[1]);
         } catch { /* best-effort visibility */ }
       },
-      addExtensionUiObserver: (sessionPath, observer) => {
-        this.multiSessionManager.addExtensionUiObserver?.(sessionPath, observer);
-      },
-      removeExtensionUiObserver: (sessionPath, observer) => {
-        this.multiSessionManager.removeExtensionUiObserver?.(sessionPath, observer);
-      },
       markerDir: path.join(goalContinueRoot, 'markers'),
       overlayDir: path.join(goalContinueRoot, 'overlay'),
       logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message) },

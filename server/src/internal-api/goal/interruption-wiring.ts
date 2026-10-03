@@ -14,8 +14,7 @@
 import fs from 'node:fs/promises';
 import { createContinueMarkerStore, goalFingerprint as goalFingerprintFor, type ContinueMarkerStore } from './continue-marker.js';
 import { configureInterruptionOverlay, createInterruptionOverlayStore, readGoalFileIdentity, type InterruptionOverlayStore } from './interruption-overlay.js';
-import { createInterruptionSweep, isApiOriginChild, type SweepCandidate, type SweepDispatchResult, type SweepReport } from './interruption-sweep.js';
-import { createPiGoalEventBridge } from './goal-events.js';
+import { createInterruptionSweep, type SweepCandidate, type SweepDispatchResult, type SweepReport } from './interruption-sweep.js';
 import { piGoalStatePath, projectPiGoalState, readPiGoalStateFile } from './pi-goal.js';
 import type { SessionGoalProjection } from './types.js';
 
@@ -37,8 +36,6 @@ export interface GoalInterruptionWiringDeps {
   isSessionBusy(sessionId: string): boolean;
   dispatchPrompt(sessionId: string, message: string, idempotencyKey?: string): Promise<SweepDispatchResult>;
   brokerPublish(brokerKey: string, event: { type: string; timestamp: number; data: unknown }): void;
-  addExtensionUiObserver(sessionPath: string, observer: (message: unknown) => Promise<void>): void;
-  removeExtensionUiObserver(sessionPath: string, observer: (message: unknown) => Promise<void>): void;
   markerDir: string;
   overlayDir: string;
   logger?: { info(message: string): void; warn(message: string): void };
@@ -72,8 +69,6 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
   configureInterruptionOverlay(overlayStore);
   const logger = deps.logger;
   const idToPath = new Map<string, string>();
-  const observers = new Map<string, (message: unknown) => Promise<void>>();
-  let observeTimer: ReturnType<typeof setInterval> | undefined;
   let classifiedOnce = false;
   const bootTimeMs = Date.now();
 
@@ -134,7 +129,7 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
       }
     },
 
-    async runSweep(announced, opts?: { boot?: boolean }) {
+    async runSweep(announced, _opts?: { boot?: boolean }) {
       const entries = await deps.listRegistryEntries();
       const candidates: SweepCandidate[] = [];
       for (const entry of entries) {
@@ -166,8 +161,7 @@ export function wireGoalInterruptions(deps: GoalInterruptionWiringDeps): GoalInt
     },
 
     shutdown() {
-      void observers;
-      void deps.removeExtensionUiObserver;
+      // Correction 03: the live observer path is removed; nothing to detach.
     },
   };
 

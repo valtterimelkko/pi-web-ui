@@ -1500,6 +1500,10 @@
           "type": "GoalInterruptionInfo",
           "optional": true
         },
+        "autoContinued": {
+          "type": "boolean",
+          "optional": true
+        },
         "runtimeState": {
           "type": "unknown",
           "optional": true
