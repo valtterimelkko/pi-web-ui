@@ -110,18 +110,23 @@ def doubled_present(rendered, full):
 
 
 def console_baseline(errors, http_problems):
-    """The app's cold-load /api/auth/me probe returns 401 before login
-    (pre-existing behaviour at this build); Chromium logs it as one generic
-    resource-load console error. That pair is the known baseline; everything
-    else is a finding. Returns (unexpectedConsoleErrors, unexpectedHttpProblems)."""
+    """Baseline classes, all documented in the lane report:
+    1. the app's cold-load /api/auth/me probe returns 401 before login
+       (pre-existing at this build) — one generic resource-load console error
+       plus the matching >=400 response;
+    2. React DEV-build warnings (Warning: validateDOMNesting...) — emitted only
+       by the vite dev client's development React; stripped from production
+       bundles. Recorded as devOnlyWarnings, not findings.
+    Everything else is a finding. Returns (unexpectedConsoleErrors,
+    unexpectedHttpProblems, devOnlyWarnings)."""
     expected = [p for p in http_problems
                 if p['url'].split('?')[0].endswith('/api/auth/me') and p['status'] in (401, 404)]
     unexpected_problems = [p for p in http_problems if p not in expected]
-    if expected and not unexpected_problems:
-        unexpected_errors = [e for e in errors if not e.startswith('Failed to load resource')]
-    else:
-        unexpected_errors = list(errors)
-    return unexpected_errors, unexpected_problems
+    dev_only = [e for e in errors if e.startswith('Warning: validateDOMNesting')]
+    expected_errors = [e for e in errors
+                       if e.startswith('Failed to load resource') or e in dev_only]
+    unexpected_errors = [e for e in errors if e not in expected_errors]
+    return unexpected_errors, unexpected_problems, dev_only
 
 
 def dom_occurrences(page, needle):
@@ -132,6 +137,21 @@ def dom_occurrences(page, needle):
           const clone = root.cloneNode(true);
           clone.querySelectorAll('[data-testid="streaming-queue"]').forEach((n) => n.remove());
           return (clone.textContent || '').split(needle).length - 1;
+        }""", needle)
+
+
+def assistant_scoped_check(page, needle):
+    """hb2/hb6 oracle scoped to ASSISTANT bubbles: the user prompt echo
+    legitimately contains the marker, so chat-wide counting false-doubles.
+    Returns (bubblesContaining, lastBubbleText)."""
+    return page.evaluate(
+        """(needle) => {
+          const root = document.querySelector('[data-testid="chat-interface"]');
+          if (!root) return { bubbles: -1, lastText: null };
+          const bubbles = [...root.querySelectorAll('div.border-l-2')];
+          const containing = bubbles.filter((b) => (b.textContent || '').includes(needle));
+          const lastText = bubbles.length ? (bubbles[bubbles.length - 1].innerText || '') : null;
+          return { bubbles: containing.length, lastText };
         }""", needle)
 
 
@@ -169,7 +189,7 @@ def open_child_session(page, seed_needle):
     if CURRENT_VIEW != 'desktop':
         close_drawer(page)
     body = page.locator('body').inner_text()
-    assert seed_needle in body, f'child transcript not visible after open ({VIEW})'
+    assert seed_needle in body, f'child transcript not visible after open ({CURRENT_VIEW})'
 
 
 def close_drawer(page):
@@ -222,10 +242,14 @@ def run_viewport(pw, view, results):
     final_text = final_assistant_text(entries_after)
     assert final_text and live_marker in final_text, f'transcript missing live marker ({view}): {final_text!r}'
     chat_text = chat_last_assistant_text(page)
-    occurrences = chat_text.count(final_text)
+    scoped = assistant_scoped_check(page, final_text)
+    occurrences = scoped['bubbles']
+    last_assistant = (scoped['lastText'] or '').strip()
+    exact = last_assistant == final_text.strip()
     dbl = doubled_present(chat_text, final_text)
-    view_results['hb2'] = {'transcriptFinal': final_text, 'domOccurrences': occurrences, 'doubledFound': dbl,
-                           'ok': occurrences == 1 and not dbl}
+    view_results['hb2'] = {'transcriptFinal': final_text, 'assistantBubblesContaining': occurrences,
+                           'lastAssistantExact': exact, 'doubledFound': dbl,
+                           'ok': occurrences == 1 and exact and not dbl}
     shoot(page, f'{tag}-02-after-api-prompt.png')
 
     # ── 3.+4. two typed prompts + one queued chip (hb6 + correction 02) ─────
@@ -257,21 +281,23 @@ def run_viewport(pw, view, results):
     entries_final = transcript_entries(CHILD['sessionPath'])
     final2 = final_assistant_text(entries_final)
     chat_text2 = chat_last_assistant_text(page)
-    occ2 = chat_text2.count(final2) if final2 else -1
+    scoped2 = assistant_scoped_check(page, final2) if final2 else {'bubbles': -1, 'lastText': None}
+    occ2 = scoped2['bubbles']
+    last2_exact = ((scoped2['lastText'] or '').strip() == final2.strip()) if final2 else False
     dbl2 = doubled_present(chat_text2, final2) if final2 else True
     view_results['hb6'] = {
         'chipSeenDuringStreaming': chip_seen, 'chipsAtSettle': chips,
         'domT1': d1, 'domT2': d2, 'transcriptHasT1T2': f_ok,
-        'finalAssistant': {'domOccurrences': occ2, 'doubledFound': dbl2},
+        'finalAssistant': {'assistantBubblesContaining': occ2, 'lastAssistantExact': last2_exact, 'doubledFound': dbl2},
     }
     # Console-error baseline: the cold-load /api/auth/me 401 probe logs one
     # generic resource-load error on every page load (pre-existing at this
     # build); anything else — or any other >=400 response — is a finding.
-    view_results['consoleErrorsUnexpected'], view_results['httpProblemsUnexpected'] = \
+    view_results['consoleErrorsUnexpected'], view_results['httpProblemsUnexpected'], view_results['devOnlyWarnings'] = \
         console_baseline(view_results['consoleErrors'], view_results['httpProblems'])
     view_results['ok'] = bool(
         view_results['hb2']['ok'] and chip_seen and chips == 0 and d1 == 1 and d2 == 1
-        and f_ok and occ2 == 1 and not dbl2
+        and f_ok and occ2 == 1 and last2_exact and not dbl2
         and not view_results['pageErrors']
         and not view_results['consoleErrorsUnexpected']
         and not view_results['httpProblemsUnexpected']
@@ -318,7 +344,7 @@ def run_smoke(pw, view):
     while time.time() < deadline and page.locator('[role="listitem"]').count() == 0:
         time.sleep(1)
     vr['sessionRows'] = page.locator('[role="listitem"]').count()
-    vr['consoleErrorsUnexpected'], vr['httpProblemsUnexpected'] = console_baseline(vr['consoleErrors'], vr['httpProblems'])
+    vr['consoleErrorsUnexpected'], vr['httpProblemsUnexpected'], vr['devOnlyWarnings'] = console_baseline(vr['consoleErrors'], vr['httpProblems'])
     vr['ok'] = vr['sessionRows'] > 0 and not vr['consoleErrorsUnexpected'] and not vr['pageErrors'] and not vr['httpProblemsUnexpected']
     SCREENS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SCREENS / f'a5-smoke-{view}.png'), full_page=False)
