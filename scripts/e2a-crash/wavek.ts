@@ -13,12 +13,11 @@ import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync, appen
 import path from 'node:path';
 import { resolveRunPaths, type RunPaths } from './paths.ts';
 import { buildFixture, armObjective } from './fixture.ts';
-import { ARM_MODE, killServerUnit, waitForSystemdAutoRestart, waitForServerReadyViaApi, getUnitStatus, type StartedServer } from './server.ts';
+import { killServerUnit, waitForSystemdAutoRestart, waitForServerReadyViaApi, getUnitStatus, type StartedServer } from './server.ts';
 import { assertPlacementRootIsolated } from './server.ts';
 import { spawnGoalChild, registerObserverWatch, getChildStatus, getGoalProjection, snapshotChildToolProcesses, assertServedModel, type OrchTarget } from './dispatch.ts';
 import { parseRawSessionJsonl, detectInFlightToolCall, firstWorkingAfterReadiness, summariseWatchLedger, type CrashEventRecord } from './analysis.ts';
 
-const REPO_ROOT = '/root/.worktrees/orch-scaling/k-pi-web-ui';
 const OWNER = 'orch-0798cc10-waveK';
 const MODEL_SELECTOR = 'zai/glm-5.3-flash';
 const SAMPLE_INTERVAL_MS = 10_000;
