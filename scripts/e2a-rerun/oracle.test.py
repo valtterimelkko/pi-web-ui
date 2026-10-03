@@ -56,11 +56,14 @@ class TestHb2StreamVerdict(unittest.TestCase):
         v = oracle_lib.hb2_stream_verdict(samples, FINAL)
         self.assertTrue(v['ok'], v)
 
-    def test_live_full_text_before_completion_passes(self):
-        # a live sample already holding the full final text = pre-terminal
+    def test_live_full_text_only_does_not_establish_streaming(self):
+        # correction 08 precondition: a live sample holding the FULL final text
+        # does NOT count as streaming evidence (only a proper-prefix live
+        # observation does); failure checks still apply to it
         samples = [self.sample('live', FINAL, t_ms=100)]
         v = oracle_lib.hb2_stream_verdict(samples, FINAL)
-        self.assertTrue(v['ok'], v)
+        self.assertFalse(v['ok'], v)
+        self.assertEqual(v['reason'], 'streaming-not-observed')
 
     def test_short_prefix_below_four_chars_does_not_count(self):
         # a 3-char prefix is not response-specific enough
@@ -96,6 +99,32 @@ class TestHb2StreamVerdict(unittest.TestCase):
         ]
         v = oracle_lib.hb2_stream_verdict(samples, FINAL)
         self.assertFalse(v['ok'], v)
+
+
+class TestAssistantReplyRecorded(unittest.TestCase):
+    """Correction 08 precondition: the streaming loop must exit only when an
+    ASSISTANT record containing the marker is persisted — the user record
+    carries the marker too (it is in the prompt), so it must not count."""
+
+    def test_user_record_only_is_false(self):
+        entries = [{'type': 'message', 'message': {'role': 'user',
+                   'content': [{'type': 'text', 'text': 'Reply with exactly: M-1 followed by the numbers 1 to 60'}]}}]
+        self.assertFalse(oracle_lib.assistant_reply_recorded(entries, 'M-1'))
+
+    def test_assistant_record_with_marker_is_true(self):
+        entries = [{'type': 'message', 'message': {'role': 'user',
+                   'content': [{'type': 'text', 'text': 'Reply with exactly: M-1'}]}},
+                   {'type': 'message', 'message': {'role': 'assistant',
+                   'content': [{'type': 'text', 'text': 'M-1 1 2 3'}]}}]
+        self.assertTrue(oracle_lib.assistant_reply_recorded(entries, 'M-1'))
+
+    def test_empty_entries_is_false(self):
+        self.assertFalse(oracle_lib.assistant_reply_recorded([], 'M-1'))
+
+    def test_assistant_record_without_marker_is_false(self):
+        entries = [{'type': 'message', 'message': {'role': 'assistant',
+                   'content': [{'type': 'text', 'text': 'an unrelated reply'}]}}]
+        self.assertFalse(oracle_lib.assistant_reply_recorded(entries, 'M-1'))
 
 
 class TestHb2CombinedVerdict(unittest.TestCase):

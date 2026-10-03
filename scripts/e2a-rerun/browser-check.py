@@ -312,11 +312,20 @@ def run_viewport(pw, view, results):
     # while the detached prompt runs (cadence <= 100 ms); every sample is tagged
     # {t_ms, phase, texts}: loop samples are 'live', the post-settle sample is
     # 'settled'.
+    # correction 08: the loop exits only when an ASSISTANT record containing the
+    # marker is persisted — the USER record carries the marker too (it is in the
+    # prompt) and must not end the observation.
     deadline = time.time() + 120
-    while time.time() < deadline and live_marker not in Path(CHILD['sessionPath']).read_text():
+    loop_exit_reason = 'deadline'
+    while time.time() < deadline:
+        entries = transcript_entries(CHILD['sessionPath'])
+        if oracle_lib.assistant_reply_recorded(entries, live_marker):
+            loop_exit_reason = 'assistant-recorded'
+            break
         stream_samples.append({'t_ms': int((time.time() - t0) * 1000), 'phase': 'live',
                                'texts': sample_assistant_texts(page)})
         time.sleep(0.1)
+    loop_exit_at_ms = int((time.time() - t0) * 1000)
     try:
         prompt_proc.wait(timeout=60)
     except Exception:
@@ -347,6 +356,7 @@ def run_viewport(pw, view, results):
     view_results['hb2'] = {'transcriptFinal': final_text,
                            **oracle_lib.hb2_combined_verdict(True, occurrences, in_bubble, dbl, stream_v),
                            'streamSamples': len(stream_samples),
+                           'loopExit': {'atMs': loop_exit_at_ms, 'reason': loop_exit_reason},
                            'streamSampleLog': sample_log}
     shoot(page, f'{tag}-02-after-api-prompt.png')
 

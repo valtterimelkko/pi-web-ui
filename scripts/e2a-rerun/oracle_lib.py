@@ -35,6 +35,31 @@ def _contains_doubled_prefix(text, full):
     return False
 
 
+def assistant_text_of(entry):
+    """Joined text of a transcript entry's assistant message, or None."""
+    message = entry.get('message') or {}
+    if entry.get('type') != 'message' or message.get('role') != 'assistant':
+        return None
+    content = message.get('content')
+    if isinstance(content, list):
+        return ''.join(p.get('text', '') for p in content if isinstance(p, dict))
+    if isinstance(content, str):
+        return content
+    return None
+
+
+def assistant_reply_recorded(entries, marker):
+    """Correction 08 precondition: True only when an ASSISTANT transcript
+    record whose text contains the marker is persisted. The USER record also
+    carries the marker (it is in the prompt), so it must not count — the
+    streaming loop may not exit on it."""
+    for entry in entries:
+        text = assistant_text_of(entry)
+        if text and marker in text:
+            return True
+    return False
+
+
 def hb2_stream_verdict(samples, final_text):
     """hb2: the first streamed chunk must render exactly once, observed
     PRE-TERMINALLY — settled-only evidence is rejected.
@@ -87,14 +112,12 @@ def hb2_stream_verdict(samples, final_text):
         if len(partial_bubbles) >= 2 or (len(partial_bubbles) >= 1 and full_bubbles >= 1 and len(texts) >= 2):
             return {'ok': False, 'reason': 'duplicate-partial-across-bubbles',
                     'sample': [s[:80] for s in texts]}
-        # the pre-terminal rule (live samples only)
+        # the pre-terminal rule (correction 08: live samples only, and ONLY a
+        # proper-prefix observation establishes streaming — a live sample
+        # holding the full final text does not; it is still checked for every
+        # failure mode above)
         if phase == 'live':
             if any(is_proper_prefix(t) for t in texts):
-                pre_terminal_seen = True
-            if any(final_text in t for t in texts):
-                # a live sample holding the full text: the polling loop only
-                # exits once the transcript recorded the turn, so this sample
-                # was taken pre-terminal
                 pre_terminal_seen = True
             if any(final_text in t for t in texts):
                 seen_reply = True
