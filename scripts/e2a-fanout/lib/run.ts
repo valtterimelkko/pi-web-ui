@@ -360,6 +360,19 @@ export async function runArm(opts: ArmOptions): Promise<{ ok: boolean; summaryPa
           writeFileSync(join(runRoot, 'logs', `wait-${pass.step}.txt`), `# exit ${String(wait.code)}\n${wait.stdout}\n${wait.stderr}\n`);
           log(`PASS ${pass.step} wait exit ${String(wait.code)}`);
 
+          // Direct proof the tiny task ran: each child writes result.txt in its
+          // own fixture dir (read one file, write one line, end).
+          for (const spec of specs) {
+            const resultPath = join(spec.cwd, 'result.txt');
+            let content: string | null = null;
+            try {
+              content = readFileSync(resultPath, 'utf8').trim();
+            } catch {
+              content = null;
+            }
+            appendFileSync(join(runRoot, 'creates', `${spec.name}.task-result.json`), `${JSON.stringify({ atMs: Date.now(), resultTxtExists: content !== null, resultTxt: content })}\n`);
+          }
+
           for (const sid of sessionIds) {
             let cleanup = await run(cleanupArgv(sid, { piOrchBin: PI_ORCH_BIN, socketPath: conn.socketPath, tokenPath: conn.tokenPath }, OWNER), 120_000);
             if (cleanup.code === 2) cleanup = await run(cleanupArgv(sid, { piOrchBin: PI_ORCH_BIN, socketPath: conn.socketPath, tokenPath: conn.tokenPath }), 120_000);
