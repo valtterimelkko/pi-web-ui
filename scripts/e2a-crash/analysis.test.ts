@@ -497,8 +497,7 @@ test('classifyWindowEnd: goal running + idle + no qualifying work = silent stall
 // ---------------------------------------------------------------------------
 
 test('operation ledger is appended in all three phases of both arms', () => {
-  const { readFileSync: rf } = require('node:fs');
-  const src = rf('/root/.worktrees/orch-scaling/e2-a6c-pi-web-ui/scripts/e2a-crash/driver.ts', 'utf8');
+  const src = readFileSync('/root/.worktrees/orch-scaling/e2-a6c-pi-web-ui/scripts/e2a-crash/driver.ts', 'utf8');
   const count = (src.match(/appendOperationLedger\(paths, '/g) ?? []).length;
   assert.ok(count >= 3, `appendOperationLedger must be called in work + no-action + post-action loops (found ${count} arm-phase call sites)`);
   for (const arm of ['kill', 'drain-timeout']) {
