@@ -20,6 +20,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readF
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { assertSafeNpmCwd, fixtureInstallDecision } from './lib/fixtures.ts';
+import { checkRoutes, fetchSessionStatusLive, verifyCleanup, withFailClosedCleanup } from './lib/verify.ts';
 import { getCapacity } from './lib/httpclient.ts';
 import { readMemAvailableKb, readPressure } from './lib/hostsample.ts';
 import { GUARD_STATE_DIR, preflight, releaseLock, takeLock } from './lib/preflight.ts';
@@ -134,6 +135,22 @@ async function readDebt(): Promise<CapacityDebt | null> {
   };
 }
 
+interface CreatedOutcome {
+  child: string;
+  route: 'glm' | 'luna';
+  startedAtMs: number;
+  endedAtMs: number;
+  wallMs: number;
+  exitCode: number;
+  ok: boolean;
+  sessionId?: string;
+  resolvedModel: unknown;
+  createModelOk: boolean;
+  errorCode?: string;
+  retryAfterSeconds?: number;
+  stderrTail?: string;
+}
+
 async function main(): Promise<number> {
   const runRoot = process.argv[process.argv.indexOf('--run-root') + 1] ?? `/root/e2a-runs/a4/arm-b-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   for (const d of ['samples', 'fixtures', 'logs', 'creates']) mkdirSync(join(runRoot, d), { recursive: true });
@@ -154,21 +171,45 @@ async function main(): Promise<number> {
     return 2;
   }
 
-  /** Cleanup every owned session of this fan-out and verify none remain. */
-  const cleanupAll = async (outcomes: Array<{ sessionId?: string }>): Promise<boolean> => {
-    for (const rec of outcomes) {
-      if (!rec.sessionId) continue;
-      let cleanup = await run(cleanupArgv(rec.sessionId, PROD_CONN, OWNER), 180_000);
-      if (cleanup.code === 2) cleanup = await run(cleanupArgv(rec.sessionId, PROD_CONN), 180_000);
-      appendFileSync(join(runRoot, 'logs', 'cleanup.log'), `${rec.sessionId} exit ${String(cleanup.code)} ${cleanup.stderr.slice(0, 200)}\n`);
-      log(`cleanup ${rec.sessionId} exit ${String(cleanup.code)}`);
+  /**
+   * 08-correction item 1: cleanup verification FAILS CLOSED — exit 0 required,
+   * status JSON parsed, `children` empty, and every created session id must
+   * answer 404. One deletion retry round on failure; the outcome (possibly a
+   * failure) is always reported, never massaged into success.
+   */
+  const cleanupAll = async (createdIds: string[]): Promise<boolean> => {
+    const deleteOnce = async (id: string): Promise<void> => {
+      let cleanup = await run(cleanupArgv(id, PROD_CONN, OWNER), 180_000);
+      if (cleanup.code === 2) cleanup = await run(cleanupArgv(id, PROD_CONN), 180_000);
+      appendFileSync(join(runRoot, 'logs', 'cleanup.log'), `${id} exit ${String(cleanup.code)} ${cleanup.stderr.slice(0, 200)}\n`);
+      log(`cleanup ${id} exit ${String(cleanup.code)}`);
+    };
+    const verify = async (round: string) => {
+      const after = await run(statusByOwnerArgv(OWNER, PROD_CONN), 30_000);
+      writeFileSync(join(runRoot, `status-after-cleanup${round}.json`), `${after.stdout}\n${after.stderr}\n`);
+      return verifyCleanup({
+        statusExitCode: after.code,
+        statusStdout: after.stdout,
+        createdIds,
+        fetchSessionStatus: (id) => fetchSessionStatusLive(PROD_CONN, id),
+      });
+    };
+    for (const id of createdIds) await deleteOnce(id);
+    let verification = await verify('');
+    if (!verification.ok) {
+      log(`cleanup verification FAILED (${verification.failures.join('; ')}) — one deletion retry round`);
+      for (const id of createdIds) await deleteOnce(id);
+      verification = await verify('-retry');
     }
-    const after = await run(statusByOwnerArgv(OWNER, PROD_CONN), 30_000);
-    writeFileSync(join(runRoot, 'status-after-cleanup.json'), `${after.stdout}\n${after.stderr}\n`);
-    const remaining = (after.stdout.match(/"busy":\s*true/g) ?? []).length;
-    log(`cleanup verified: busy-remaining=${String(remaining)}`);
-    return remaining === 0;
+    writeFileSync(join(runRoot, 'cleanup-verification.json'), `${JSON.stringify(verification, null, 2)}\n`);
+    log(`cleanup verified fail-closed: ok=${String(verification.ok)}${verification.ok ? '' : ` failures: ${verification.failures.join('; ')}`}`);
+    return verification.ok;
   };
+
+  // 08-correction item 2: created-session state lives OUTSIDE the try so any
+  // exception path can run fail-closed cleanup before the lock release.
+  let outcomes: CreatedOutcome[] = [];
+  let createdSessionIds: string[] = [];
 
   try {
     // ── Dry pre-check 1: contract version ──
@@ -206,8 +247,10 @@ async function main(): Promise<number> {
 
     // 06-answer: prove the test script runs in ONE clone without an install,
     // with an explicit cwd. The script uses mktemp, so it must run inside the clone.
-    assertSafeNpmCwd(plan.children[0]!.cwd);
-    const testCheck = await run(['npm', 'test'], 300_000, { cwd: plan.children[0]!.cwd });
+    const firstChild = plan.children[0];
+    if (!firstChild) throw new Error('plan has no children');
+    assertSafeNpmCwd(firstChild.cwd);
+    const testCheck = await run(['npm', 'test'], 300_000, { cwd: firstChild.cwd });
     appendFileSync(join(runRoot, 'logs', 'clone-test-check.log'), `# exit ${String(testCheck.code)}\n${testCheck.stdout.slice(-2000)}\n${testCheck.stderr.slice(-800)}\n`);
     // 06-answer asks that the script RUNS without an install. A non-zero exit
     // is acceptable ONLY from the known host-state skills-alias scan (it reads
@@ -254,122 +297,154 @@ async function main(): Promise<number> {
 
     // ── THE fan-out: all 10 within ~30 s ──
     if (abortReasons.length === 0) {
-      const fanoutStart = Date.now();
-      const outcomes = await Promise.all(plan.children.map(async (child) => {
-        const startedAtMs = Date.now();
-        const res = await run(spawnArgv(child, PROD_CONN, true), 600_000);
-        let sessionId: string | undefined;
-        let resolvedModel: unknown = null;
-        if (res.code === 0) {
-          try {
-            const body = JSON.parse(res.stdout) as Record<string, unknown>;
-            sessionId = typeof body['sessionId'] === 'string' ? body['sessionId'] : undefined;
-            resolvedModel = body['resolvedModel'] ?? null;
-          } catch {
-            sessionId = undefined;
+      const safety = await withFailClosedCleanup({
+        createChildren: async () => {
+          const fanoutStart = Date.now();
+          outcomes = await Promise.all(plan.children.map(async (child) => {
+            const startedAtMs = Date.now();
+            const res = await run(spawnArgv(child, PROD_CONN, true), 600_000);
+            let sessionId: string | undefined;
+            let resolvedModel: unknown = null;
+            if (res.code === 0) {
+              try {
+                const body = JSON.parse(res.stdout) as Record<string, unknown>;
+                sessionId = typeof body['sessionId'] === 'string' ? body['sessionId'] : undefined;
+                resolvedModel = body['resolvedModel'] ?? null;
+              } catch {
+                sessionId = undefined;
+              }
+            }
+            if (sessionId) {
+              appendFileSync(OWNED_SESSIONS, `${sessionId}\n`);
+              appendFileSync(join(runRoot, 'logs', 'owned-sessions.txt'), `${sessionId}\n`);
+            }
+            const expectedModel = EXPECTED_MODEL[child.route];
+            const record: CreatedOutcome = {
+              child: child.name, route: child.route, startedAtMs, endedAtMs: Date.now(), wallMs: Date.now() - startedAtMs,
+              exitCode: res.code, ok: res.code === 0 && !!sessionId, sessionId, resolvedModel,
+              createModelOk: resolvedModel === expectedModel,
+              errorCode: /^pi-orch: ([A-Z_0-9]+):/m.exec(res.stderr)?.[1],
+              retryAfterSeconds: Number(/retry-after: (\d+)s/m.exec(res.stderr)?.[1] ?? NaN) || undefined,
+              stderrTail: res.stderr ? res.stderr.slice(-400) : undefined,
+            };
+            appendFileSync(join(runRoot, 'creates', `${child.name}.json`), `${JSON.stringify(record, null, 2)}\n`);
+            return record;
+          }));
+          createdSessionIds = outcomes.flatMap((o) => (o.sessionId !== undefined ? [o.sessionId] : []));
+          const fanoutWallMs = Date.now() - fanoutStart;
+          const created = outcomes.filter((o) => o.ok);
+          log(`fan-out done in ${String(fanoutWallMs)} ms; created ${String(created.length)}/${String(outcomes.length)}; refusals ${String(outcomes.length - created.length)}; create-model OK ${String(outcomes.filter((o) => o.createModelOk).length)}/${String(outcomes.length)}`);
+          const badModel = outcomes.find((o) => o.ok && !o.createModelOk);
+          if (badModel) {
+            abortReasons.push(`create-time resolvedModel mismatch on ${badModel.child}: ${String(badModel.resolvedModel)}`);
           }
-        }
-        if (sessionId) {
-          appendFileSync(OWNED_SESSIONS, `${sessionId}\n`);
-          appendFileSync(join(runRoot, 'logs', 'owned-sessions.txt'), `${sessionId}\n`);
-        }
-        const expectedModel = EXPECTED_MODEL[child.route];
-        const record = {
-          child: child.name, route: child.route, startedAtMs, endedAtMs: Date.now(), wallMs: Date.now() - startedAtMs,
-          exitCode: res.code, ok: res.code === 0 && !!sessionId, sessionId, resolvedModel,
-          createModelOk: resolvedModel === expectedModel,
-          errorCode: /^pi-orch: ([A-Z_0-9]+):/m.exec(res.stderr)?.[1],
-          retryAfterSeconds: Number(/retry-after: (\d+)s/m.exec(res.stderr)?.[1] ?? NaN) || undefined,
-          stderrTail: res.stderr ? res.stderr.slice(-400) : undefined,
-        };
-        appendFileSync(join(runRoot, 'creates', `${child.name}.json`), `${JSON.stringify(record, null, 2)}\n`);
-        return record;
-      }));
-      const fanoutWallMs = Date.now() - fanoutStart;
-      const created = outcomes.filter((o) => o.ok);
-      log(`fan-out done in ${String(fanoutWallMs)} ms; created ${String(created.length)}/${String(outcomes.length)}; refusals ${String(outcomes.length - created.length)}; create-model OK ${String(outcomes.filter((o) => o.createModelOk).length)}/${String(outcomes.length)}`);
-      const badModel = outcomes.find((o) => o.ok && !o.createModelOk);
-      if (badModel) {
-        abortReasons.push(`create-time resolvedModel mismatch on ${badModel.child}: ${String(badModel.resolvedModel)}`);
-      }
-
-      // Pre-prompt model check (fallbackApplied), then tasks — every attempt recorded.
-      let modelViolation: string | null = null;
-      const promptResults = await Promise.all(plan.children.map(async (child) => {
-        const rec = outcomes.find((o) => o.child === child.name);
-        if (!rec?.sessionId) return { child: child.name, exitCode: -1, runId: null, error: 'no session (create failed)' };
-        const status = await run([PI_ORCH_BIN, 'status', rec.sessionId, '--socket=' + PROD_CONN.socketPath, '--token-path=' + PROD_CONN.tokenPath, '--json'], 30_000);
-        if (status.code === 0 && /"fallbackApplied":\s*true/.test(status.stdout)) {
-          modelViolation = `fallbackApplied=true on ${child.name}`;
-          return { child: child.name, exitCode: -1, runId: null, error: modelViolation };
-        }
-        const prompt = await run(promptArgv(rec.sessionId, child.taskText, `e2a4-armb-${child.name}`, PROD_CONN), 120_000);
-        const outcome = { child: child.name, exitCode: prompt.code, runId: prompt.code === 0 ? prompt.stdout.trim().split('\n').pop() : null, error: prompt.code === 0 ? null : prompt.stderr.slice(-300) };
-        appendFileSync(join(runRoot, 'creates', `${child.name}.prompt.json`), `${JSON.stringify(outcome, null, 2)}\n`);
-        return outcome;
-      }));
-      if (modelViolation) {
-        abortReasons.push(modelViolation);
-        log(`MODEL VIOLATION: ${modelViolation} — aborting further dispatch`);
-      } else {
-        const promptRunIds = promptResults.filter((p): p is { child: string; exitCode: number; runId: string; error: string | null } => p !== null && p.exitCode === 0 && typeof p.runId === 'string');
-        writeFileSync(join(runRoot, 'prompt-runs.json'), `${JSON.stringify(promptRunIds, null, 2)}\n`);
-        log(`prompts dispatched: ${String(promptRunIds.length)}/${String(created.length)}`);
-        writeFileSync(join(runRoot, 'prompt-failures.json'), `${JSON.stringify(promptResults.filter((p) => p === null || p.exitCode !== 0), null, 2)}\n`);
-
-        // Observe at 5 s; abort instantly on a guard trip; hard-bounded.
-        const bound = Date.now() + BOUND_S * 1000;
-        let settled = false;
-        while (Date.now() < bound) {
-          const trip = guardViolated();
-          if (trip) { abortReasons.push(`guard violated during work window: ${trip}`); break; }
-          await sampleProduction(runRoot);
-          const status = await run(statusByOwnerArgv(OWNER, PROD_CONN), 30_000);
-          const busy = (status.stdout.match(/"busy":\s*true/g) ?? []).length;
-          if (busy === 0 && Date.now() > fanoutStart + 120_000) {
-            settled = true;
-            break;
+          return outcomes;
+        },
+        work: async () => {
+          // ── 08-correction item 3, Phase A: collect and validate EVERY
+          // child's status BEFORE dispatching anything — fail closed. ──
+          const statuses = await Promise.all(plan.children.flatMap((child) => {
+            const rec = outcomes.find((o) => o.child === child.name);
+            if (!rec?.sessionId) return [];
+            const sid = rec.sessionId;
+            return (async () => {
+              const status = await run([PI_ORCH_BIN, 'status', sid, '--socket=' + PROD_CONN.socketPath, '--token-path=' + PROD_CONN.tokenPath, '--json'], 30_000);
+              return { child: child.name, code: status.code, stdout: status.stdout };
+            })();
+          }));
+          const routes = checkRoutes(statuses);
+          writeFileSync(join(runRoot, 'route-check.json'), `${JSON.stringify({ ok: routes.ok, violations: routes.violations, checked: statuses.length }, null, 2)}\n`);
+          if (!routes.ok) {
+            abortReasons.push(`route check failed — ZERO prompts dispatched: ${routes.violations.join('; ')}`);
+            log(`ROUTE CHECK FAILED — zero prompts dispatched: ${routes.violations.join('; ')}`);
+            return;
           }
-          await new Promise((r) => setTimeout(r, 5000));
-        }
-        log(settled ? 'all owned children idle' : (abortReasons.length > 0 ? 'aborted by guard/model violation' : '20-minute bound hit — running children recorded and cleaned up'));
+          log(`route check OK for ${String(statuses.length)} children — dispatching prompts`);
 
-        if (abortReasons.length === 0) {
-          const postEnd = Date.now() + 5 * 60_000;
-          while (Date.now() < postEnd) {
+          // ── Phase B: every child passed — dispatch the tasks ──
+          const promptResults = await Promise.all(plan.children.map(async (child) => {
+            const rec = outcomes.find((o) => o.child === child.name);
+            if (!rec?.sessionId) return { child: child.name, exitCode: -1, runId: null, error: 'no session (create failed)' };
+            const prompt = await run(promptArgv(rec.sessionId, child.taskText, `e2a4-armb-${child.name}`, PROD_CONN), 120_000);
+            const outcome = { child: child.name, exitCode: prompt.code, runId: prompt.code === 0 ? prompt.stdout.trim().split('\n').pop() : null, error: prompt.code === 0 ? null : prompt.stderr.slice(-300) };
+            appendFileSync(join(runRoot, 'creates', `${child.name}.prompt.json`), `${JSON.stringify(outcome, null, 2)}\n`);
+            return outcome;
+          }));
+          const promptRunIds = promptResults.filter((p): p is { child: string; exitCode: number; runId: string; error: string | null } => p !== null && p.exitCode === 0 && typeof p.runId === 'string');
+          writeFileSync(join(runRoot, 'prompt-runs.json'), `${JSON.stringify(promptRunIds, null, 2)}\n`);
+          log(`prompts dispatched: ${String(promptRunIds.length)}/${String(outcomes.filter((o) => o.ok).length)}`);
+          writeFileSync(join(runRoot, 'prompt-failures.json'), `${JSON.stringify(promptResults.filter((p) => p === null || p.exitCode !== 0), null, 2)}\n`);
+
+          // Observe at 5 s; abort instantly on a guard trip; hard-bounded.
+          const bound = Date.now() + BOUND_S * 1000;
+          let settled = false;
+          while (Date.now() < bound) {
             const trip = guardViolated();
-            if (trip) { abortReasons.push(`guard violated during post-window: ${trip}`); break; }
+            if (trip) { abortReasons.push(`guard violated during work window: ${trip}`); break; }
             await sampleProduction(runRoot);
+            const status = await run(statusByOwnerArgv(OWNER, PROD_CONN), 30_000);
+            const busy = (status.stdout.match(/"busy":\s*true/g) ?? []).length;
+            if (busy === 0 && Date.now() > Date.now() - BOUND_S * 1000 + 120_000) {
+              settled = true;
+              break;
+            }
             await new Promise((r) => setTimeout(r, 5000));
           }
+          log(settled ? 'all owned children idle' : (abortReasons.length > 0 ? 'aborted by guard violation' : '20-minute bound hit — running children recorded and cleaned up'));
 
-          // servedModel assertion from each receipt (02-answer binding point).
-          const servedChecks: Array<Record<string, unknown>> = [];
-          for (const p of promptRunIds) {
-            const child = plan.children.find((c) => c.name === p.child);
-            const result = await run([PI_ORCH_BIN, 'result', p.runId, '--socket=' + PROD_CONN.socketPath, '--token-path=' + PROD_CONN.tokenPath, '--json'], 60_000);
-            let servedModel: unknown = null;
-            let runStatus: unknown = null;
-            try {
-              const body = JSON.parse(result.stdout) as Record<string, unknown>;
-              servedModel = body['servedModel'] ?? null;
-              runStatus = body['status'] ?? null;
-            } catch {
-              servedModel = `(unparsed: exit ${String(result.code)})`;
+          if (abortReasons.length === 0) {
+            const postEnd = Date.now() + 5 * 60_000;
+            while (Date.now() < postEnd) {
+              const trip = guardViolated();
+              if (trip) { abortReasons.push(`guard violated during post-window: ${trip}`); break; }
+              await sampleProduction(runRoot);
+              await new Promise((r) => setTimeout(r, 5000));
             }
-            const expected = EXPECTED_MODEL[child?.route ?? 'glm'];
-            const okModel = servedModel === expected;
-            servedChecks.push({ child: p.child, runId: p.runId, servedModel, expected, ok: okModel, runStatus });
-            if (!okModel) abortReasons.push(`servedModel mismatch on ${p.child}: got ${String(servedModel)}, expected ${expected}`);
-          }
-          writeFileSync(join(runRoot, 'served-models.json'), `${JSON.stringify(servedChecks, null, 2)}\n`);
-          log(`served-model assertions: ${String(servedChecks.filter((s) => s['ok'] === true).length)}/${String(servedChecks.length)} OK`);
-        }
-      }
 
-      // ── Cleanup: normal or abort path (always) ──
-      const clean = await cleanupAll(outcomes);
-      if (!clean) abortReasons.push('cleanup verification failed — owned sessions may remain');
+            // servedModel assertion from each receipt (02-answer binding point).
+            const servedChecks: Array<Record<string, unknown>> = [];
+            for (const p of promptRunIds) {
+              const child = plan.children.find((c) => c.name === p.child);
+              const result = await run([PI_ORCH_BIN, 'result', p.runId, '--socket=' + PROD_CONN.socketPath, '--token-path=' + PROD_CONN.tokenPath, '--json'], 60_000);
+              let servedModel: unknown = null;
+              let runStatus: unknown = null;
+              try {
+                const body = JSON.parse(result.stdout) as Record<string, unknown>;
+                servedModel = body['servedModel'] ?? null;
+                runStatus = body['status'] ?? null;
+              } catch {
+                servedModel = `(unparsed: exit ${String(result.code)})`;
+              }
+              const expected = EXPECTED_MODEL[child?.route ?? 'glm'];
+              const okModel = servedModel === expected;
+              servedChecks.push({ child: p.child, runId: p.runId, servedModel, expected, ok: okModel, runStatus });
+              if (!okModel) abortReasons.push(`servedModel mismatch on ${p.child}: got ${String(servedModel)}, expected ${expected}`);
+            }
+            writeFileSync(join(runRoot, 'served-models.json'), `${JSON.stringify(servedChecks, null, 2)}\n`);
+            log(`served-model assertions: ${String(servedChecks.filter((sv) => sv['ok'] === true).length)}/${String(servedChecks.length)} OK`);
+          }
+        },
+        cleanupAll: async (ids) => {
+          const clean = await cleanupAll(ids);
+          if (!clean) abortReasons.push('cleanup verification failed — owned sessions may remain');
+        },
+        verifyCleanupAfter: async (ids) => {
+          const after = await run(statusByOwnerArgv(OWNER, PROD_CONN), 30_000);
+          return verifyCleanup({
+            statusExitCode: after.code,
+            statusStdout: after.stdout,
+            createdIds: ids,
+            fetchSessionStatus: (id) => fetchSessionStatusLive(PROD_CONN, id),
+          });
+        },
+        releaseLock: () => releaseLock(lockOwner),
+      });
+      if (safety.error !== undefined) {
+        abortReasons.push(`work failed after creates — fail-closed cleanup ran for ${String(safety.cleanupIds.length)} session(s): ${String(safety.error)}`);
+      }
+      if (safety.verification && !safety.verification.ok) {
+        abortReasons.push(`post-cleanup verification failed: ${safety.verification.failures.join('; ')}`);
+      }
 
       const prodMainPidAfter = (await systemctlShow('pi-web-ui.service', ['MainPID']))['MainPID'];
       const prodNodeModulesAfter = readdirSync('/root/pi-web-ui/node_modules').length;
@@ -379,7 +454,6 @@ async function main(): Promise<number> {
       }
       log(`MainPID before=${prodMainPidBefore ?? '?'} after=${prodMainPidAfter ?? '?'}; node_modules ${String(prodNodeModulesBefore)} -> ${String(prodNodeModulesAfter)}`);
       copyFileSync(OWNED_SESSIONS, join(runRoot, 'owned-sessions-snapshot.txt'));
-      log(`MainPID before=${prodMainPidBefore ?? '?'} after=${prodMainPidAfter ?? '?'}`);
     } else {
       log(`pre-fan-out abort: ${abortReasons.join('; ')}`);
     }
@@ -397,7 +471,18 @@ async function main(): Promise<number> {
     log('done');
     return 0;
   } catch (err) {
+    // 08-correction item 2: ANY exception after the first create runs
+    // fail-closed cleanup + verification before the finally releases the lock.
     log(`ERROR: ${String(err)}`);
+    if (createdSessionIds.length > 0) {
+      try {
+        const clean = await cleanupAll(createdSessionIds);
+        log(`fail-closed cleanup after error: ok=${String(clean)}`);
+        if (!clean) log(`CLEANUP STILL FAILING: owned sessions may remain — see cleanup-verification.json`);
+      } catch (cleanupErr) {
+        log(`fail-closed cleanup itself threw: ${String(cleanupErr)}`);
+      }
+    }
     return 1;
   } finally {
     const rel = releaseLock(lockOwner);
