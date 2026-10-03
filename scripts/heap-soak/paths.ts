@@ -5,7 +5,7 @@
  */
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { serverUnitName as canonicalServerUnitName, supervisorUnitName as canonicalSupervisorUnitName } from '../../live-validation/heap-soak/unit-names.js';
+import { serverUnitName as canonicalServerUnitName, supervisorUnitName as canonicalSupervisorUnitName } from '../../server/src/live-validation/heap-soak/unit-names.js';
 
 export const HEAP_SOAK_ROOT = path.join(homedir(), '.pi-web-ui', 'validation', 'heap-soak');
 
