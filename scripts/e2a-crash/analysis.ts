@@ -483,8 +483,14 @@ export function buildChildRow(input: {
   };
 }
 
-/** Reconciling totals across the per-child rows (the parts must sum to these). */
+/**
+ * Reconciling totals across the per-child rows. Orphan snapshots are taken
+ * ANCHOR-WIDE (one snapshot per sample covers every child's placed processes),
+ * so per-child rows repeat the same pids — the total is the size of the UNION
+ * of distinct orphan pids, never the sum of rows (09 re-run correctness).
+ */
 export function totalsRows(rows: ChildOutcomeRow[]): TotalsRow {
+  const distinctOrphanPids = new Set(rows.flatMap((r) => r.orphans.orphanPids));
   return {
     children: rows.length,
     turnsLost: rows.reduce((a, r) => a + r.turnsLost, 0),
@@ -493,7 +499,7 @@ export function totalsRows(rows: ChildOutcomeRow[]): TotalsRow {
     silentStalls: rows.filter((r) => r.silentStall).length,
     duplicateCommits: rows.reduce((a, r) => a + r.duplicateByStep.totalDuplicateCommits, 0),
     buildRuns: rows.reduce((a, r) => Math.max(a, r.duplicateByStep.buildRuns), 0),
-    orphanProcesses: rows.reduce((a, r) => a + r.orphans.orphansAtKill, 0),
+    orphanProcesses: distinctOrphanPids.size,
     goalAchieved: rows.filter((r) => r.finalOutcome === 'goal_achieved').length,
     stuckOrFailed: rows.filter((r) => r.finalOutcome === 'stuck' || r.finalOutcome === 'failed').length,
   };

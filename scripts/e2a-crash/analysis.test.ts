@@ -15,6 +15,7 @@ function lastLine(lines: string[]): string {
 }
 import {
   diffTranscriptSnapshots,
+  type ChildOutcomeRow,
   summariseWatchLedger,
   diffProcessSnapshots,
   buildChildRow,
@@ -333,7 +334,22 @@ test('buildChildRow derives the per-child record and totalsRows reconciles', () 
   assert.equal(totals.neededParentAction, 1);
   assert.equal(totals.silentStalls, 1);
   assert.equal(totals.duplicateCommits, 1);
-  assert.equal(totals.orphanProcesses, 1);
+  assert.equal(totals.orphanProcesses, 1); // union of pids: rows may repeat the same anchor-wide snapshot
+});
+
+test('totalsRows: anchor-wide orphan snapshots are deduplicated by pid union, never summed', () => {
+  const mk = (id: string): ChildOutcomeRow => ({
+    childId: id, arm: 'kill',
+    turnsLost: 0, toolResultsLost: 0, editsLost: 0, newAfterRecovery: 0,
+    secondsToWorking: null, workedAfterReadiness: false, silentStall: false,
+    parentActionNeeded: false, parentAction: null,
+    duplicateByStep: summariseDuplicatesByStepId([], [], ['slugify', 'initials', 'maskEmail', 'build']),
+    orphans: { orphansAtKill: 2, orphanPids: [10, 11], gonePids: [] },
+    finalOutcome: 'unknown', receiptState: 'none',
+    watch: summariseWatchLedger({ firings: [] }),
+  });
+  const totals = totalsRows([mk('a'), mk('b')]);
+  assert.equal(totals.orphanProcesses, 2, 'same two pids repeated in both rows -> 2, not 4');
 });
 
 // ---------------------------------------------------------------------------

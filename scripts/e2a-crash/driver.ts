@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, append
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { resolveRunPaths, type RunPaths } from './paths.ts';
-import { buildFixtures, buildFixture, armObjective, smokeObjective } from './fixture.ts';
+import { buildFixture, armObjective, smokeObjective } from './fixture.ts';
 import { buildCrashAgentDir } from './agent-dir.ts';
 import { prepareServerEnv, startServerUnit, killServerUnit, stopServerUnits, assertPlacementRootIsolated, assertPlacementEnabledInJournal, waitForSystemdAutoRestart, waitForServerReadyViaApi, journalRestartEvidence, SMOKE_MODE, ARM_MODE, getUnitStatus, type StartedServer, type ServerMode } from './server.ts';
 import {
