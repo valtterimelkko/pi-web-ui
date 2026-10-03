@@ -288,25 +288,21 @@ def run_viewport(pw, view, results):
 
     # ── 2. API prompt → first streamed chunk exactly once (hb2) ─────────────
     live_marker = f'{MARKER}-API-{view.upper()}'
-    import threading
-    stop_sampling = threading.Event()
     stream_samples = []
-    def sampler():
-        # correction 04: observe the reply AS IT STREAMS (polling at <= 100 ms)
-        while not stop_sampling.is_set():
-            stream_samples.append(sample_assistant_texts(page))
-            stop_sampling.wait(0.1)
-    sampler_thread = threading.Thread(target=sampler, daemon=True)
-    sampler_thread.start()
     resp = api('POST', f"/api/v1/sessions/{CHILD['sessionId']}/prompt",
                {'message': f'Reply with exactly one line: {live_marker} and nothing else.'})
     print(f'api prompt sent ({view}): {resp[:80].strip()}', flush=True)
+    # correction 04: observe the reply AS IT STREAMS — poll from the MAIN thread
+    # (Playwright's sync API is not thread-safe; a sampler thread yields only
+    # swallowed exceptions). Sampling cadence <= 100 ms.
     deadline = time.time() + 120
     while time.time() < deadline and live_marker not in Path(CHILD['sessionPath']).read_text():
+        stream_samples.append(sample_assistant_texts(page))
         time.sleep(0.1)
     time.sleep(3)  # let the render settle
-    stop_sampling.set()
-    sampler_thread.join(timeout=2)
+    stream_samples.append(sample_assistant_texts(page))
+    non_empty = sum(1 for s in stream_samples if s)
+    print(f'stream samples: {len(stream_samples)} collected, {non_empty} non-empty', flush=True)
     entries_after = transcript_entries(CHILD['sessionPath'])
     final_text = final_assistant_text(entries_after)
     assert final_text and live_marker in final_text, f'transcript missing live marker ({view}): {final_text!r}'
