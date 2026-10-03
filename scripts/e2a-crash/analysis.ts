@@ -26,6 +26,8 @@ export interface CrashEventRecord {
   callId?: string;
   /** Stable-ish identity string for examples (kind + id/toolName). */
   label: string;
+  /** Entry timestamp (epoch ms) from the raw session — gates post-restart work. */
+  timestamp?: number;
 }
 
 export interface TranscriptDiff {
@@ -48,15 +50,6 @@ export interface DuplicateInputs {
   progressLines: string[];
   commits: CommitRecord[];
   buildRuns: Array<{ label: string }>;
-}
-
-export interface DuplicateReport {
-  duplicateProgressLines: number;
-  duplicateProgressExamples: string[];
-  duplicateCommitSubjects: number;
-  duplicateCommitExamples: string[];
-  buildRunCount: number;
-  totalDuplicateEvents: number;
 }
 
 export interface WatchLedgerSummary {
@@ -84,7 +77,7 @@ export type ArmName = 'smoke' | 'kill' | 'drain-timeout';
 export interface ChildOutcomeRow {
   childId: string;
   arm: ArmName;
-  /** Events recorded pre-crash that vanished or were rewritten (see module doc). */
+  /** 09 item 7: recorded transcript-event loss — NOT semantic/model turns, NOT unflushed generation. */
   turnsLost: number;
   /** Of which tool results. */
   toolResultsLost: number;
@@ -92,11 +85,15 @@ export interface ChildOutcomeRow {
   editsLost: number;
   /** Events that appeared after recovery at/after the divergence point. */
   newAfterRecovery: number;
-  /** Seconds from the crash/restart until the child's first NEW tool call; null if it never worked again. */
+  /** Seconds from API readiness until the first NEW (timestamp-gated) tool call; null if none. */
   secondsToWorking: number | null;
+  /** At least one new tool call/turn with a timestamp after readiness. */
+  workedAfterReadiness: boolean;
+  /** Goal running but idle with no post-readiness work — a silent stall (09 item 1). */
+  silentStall: boolean;
   parentActionNeeded: boolean;
   parentAction: string | null;
-  duplicateSideEffects: DuplicateReport;
+  duplicateByStep: DuplicateByStepReport;
   orphans: OrphanReport;
   finalOutcome: string;
   receiptState: string;
@@ -108,7 +105,9 @@ export interface TotalsRow {
   turnsLost: number;
   neededParentAction: number;
   workedWithoutParentAction: number;
-  duplicateSideEffectEvents: number;
+  silentStalls: number;
+  duplicateCommits: number;
+  buildRuns: number;
   orphanProcesses: number;
   goalAchieved: number;
   stuckOrFailed: number;
@@ -164,6 +163,73 @@ export function parseTranscriptEvents(payload: unknown): CrashEventRecord[] {
 }
 
 /**
+ * Parse a child's RAW session JSONL (the on-disk pi session file under the
+ * validation dir's pi-sessions/) into comparable records. This is the arm's
+ * primary evidence source: the Internal API transcript endpoint is a
+ * screen-like 10-item summary (visible_recent, user/assistant kinds only) and
+ * cannot show tool calls or their results.
+ *
+ * Message entries become: 'user' (one), 'assistant' (one per message with
+ * text/thinking), 'toolCall' (one per toolCall content item, with toolName and
+ * id), 'toolResult' (one per toolResult message, with toolCallId). Session
+ * header/model-change/custom entries are not comparable events.
+ */
+export function parseRawSessionJsonl(lines: string[]): CrashEventRecord[] {
+  const out: CrashEventRecord[] = [];
+  let assistantTextPending = false;
+  let assistantTextPendingTs: number | undefined;
+  const flushAssistant = () => {
+    if (assistantTextPending) {
+      out.push({ index: out.length, kind: 'assistant', label: `assistant#${out.length}`, timestamp: assistantTextPendingTs });
+      assistantTextPending = false;
+      assistantTextPendingTs = undefined;
+    }
+  };
+  for (const line of lines) {
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue; // junk line
+    }
+    if (entry.type !== 'message') continue;
+    const message = entry.message;
+    if (typeof message !== 'object' || message === null) continue;
+    const m = message as Record<string, unknown>;
+    const role = typeof m.role === 'string' ? m.role : '';
+    const ts = typeof m.timestamp === 'number' ? m.timestamp : undefined;
+    if (role === 'toolResult') {
+      flushAssistant();
+      const callId = typeof m.toolCallId === 'string' ? m.toolCallId : undefined;
+      const toolName = typeof m.toolName === 'string' ? m.toolName : undefined;
+      out.push({ index: out.length, kind: 'toolResult', toolName, callId, label: `toolResult:${toolName ?? 'unknown'}:${callId ?? 'noid'}`, timestamp: ts });
+      continue;
+    }
+    const content = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
+    if (role === 'user') {
+      flushAssistant();
+      out.push({ index: out.length, kind: 'user', label: `user#${out.length}`, timestamp: ts });
+      continue;
+    }
+    if (role === 'assistant') {
+      for (const item of content) {
+        if (typeof item === 'object' && item !== null && item.type === 'toolCall') {
+          flushAssistant();
+          const callId = typeof item.id === 'string' ? item.id : undefined;
+          const toolName = typeof item.name === 'string' ? item.name : undefined;
+          out.push({ index: out.length, kind: 'toolCall', toolName, callId, label: `toolCall:${toolName ?? 'unknown'}:${callId ?? 'noid'}`, timestamp: ts });
+        } else if (typeof item === 'object' && item !== null && (item.type === 'text' || item.type === 'thinking')) {
+          assistantTextPending = true;
+          assistantTextPendingTs = ts;
+        }
+      }
+    }
+  }
+  flushAssistant();
+  return out;
+}
+
+/**
  * True when the LAST comparable event is a tool call whose result has not
  * been recorded yet — i.e. a tool command is plausibly in flight right now.
  */
@@ -202,33 +268,115 @@ export function diffTranscriptSnapshots(before: CrashEventRecord[], after: Crash
   };
 }
 
-function duplicatesOf(values: string[]): { count: number; examples: string[] } {
-  const seen = new Map<string, number>();
-  for (const v of values) seen.set(v, (seen.get(v) ?? 0) + 1);
-  const examples: string[] = [];
-  let count = 0;
-  for (const [value, n] of seen) {
-    if (n > 1) {
-      count += 1;
-      if (examples.length < 5) examples.push(value);
+/**
+ * 09-correction item 1: is the child working AFTER the restarted API was
+ * ready? Only events with timestamps strictly after `readyAtMs` count — work
+ * recorded during a blocking drain, before the shutdown, is not recovery.
+ * A tool call after readiness sets firstNewToolCallAtMs; a text/thinking-only
+ * assistant message after readiness counts as a resumed turn without one.
+ */
+export function firstWorkingAfterReadiness(
+  events: CrashEventRecord[],
+  readyAtMs: number,
+): { working: boolean; firstNewToolCallAtMs: number | null } {
+  let working = false;
+  let firstNewToolCallAtMs: number | null = null;
+  for (const e of events) {
+    if (e.timestamp === undefined || e.timestamp <= readyAtMs) continue;
+    working = true;
+    if (e.kind === 'toolCall' && (firstNewToolCallAtMs === null || e.timestamp < firstNewToolCallAtMs)) {
+      firstNewToolCallAtMs = e.timestamp;
     }
   }
-  return { count, examples };
+  return { working, firstNewToolCallAtMs };
 }
 
-/** Count side effects that were done twice (repeated log lines, repeated commit subjects, re-run builds). */
-export function summariseDuplicates(inputs: DuplicateInputs): DuplicateReport {
-  const progress = duplicatesOf(inputs.progressLines.map((l) => l.trim()).filter((l) => l.length > 0));
-  const commits = duplicatesOf(inputs.commits.map((c) => c.subject.trim()).filter((s) => s.length > 0));
-  const total = progress.count + commits.count;
+/** One harness-owned observation for the append-only operation ledger (09 item 3). */
+export interface OperationLedgerObservation {
+  commitsSeen?: string[];
+  buildInfoHash?: string;
+}
+
+/** Build one ledger line's payload: written by the HARNESS, outside the child's cwd. */
+export function buildOperationLedgerEntry(
+  childId: string,
+  atMs: number,
+  observation: OperationLedgerObservation,
+): { childId: string; atMs: number; commitsSeen: string[]; buildInfoHash?: string } {
   return {
-    duplicateProgressLines: progress.count,
-    duplicateProgressExamples: progress.examples,
-    duplicateCommitSubjects: commits.count,
-    duplicateCommitExamples: commits.examples,
-    buildRunCount: inputs.buildRuns.length,
-    totalDuplicateEvents: total,
+    childId,
+    atMs,
+    commitsSeen: observation.commitsSeen ?? [],
+    ...(observation.buildInfoHash !== undefined ? { buildInfoHash: observation.buildInfoHash } : {}),
   };
+}
+
+export interface DuplicateByStepReport {
+  /** Per normalised step id (slugify/initials/maskEmail/build): re-executions beyond the first. */
+  byStepId: Record<string, number>;
+  totalDuplicateCommits: number;
+  /** Distinct build-info hashes observed across the harness ledger. */
+  buildRuns: number;
+  /** Effect classes this measure cannot see — reported as unmeasured, never as 0. */
+  unmeasuredClasses: string[];
+}
+
+const STEP_FILE_MAP: Array<{ step: string; files: string[] }> = [
+  { step: 'slugify', files: ['test/slug.test.ts', 'src/lib/slug.ts'] },
+  { step: 'initials', files: ['test/initials.test.ts', 'src/lib/initials.ts'] },
+  { step: 'maskEmail', files: ['test/mask-email.test.ts', 'src/lib/mask-email.ts'] },
+];
+
+function stepOfCommit(files: string[]): string | null {
+  for (const { step, files: stepFiles } of STEP_FILE_MAP) {
+    if (stepFiles.some((f) => files.includes(f))) return step;
+  }
+  return null;
+}
+
+/**
+ * 09-correction item 3: duplicates per normalised step id. Commits map to
+ * steps by FILES TOUCHED (tree evidence, not subject strings); a step with
+ * more than one commit was executed more than once. Build re-runs come from
+ * the harness-owned ledger (distinct build-info hashes per child). Classes the
+ * measure cannot see (child-writable progress text) are listed as unmeasured.
+ */
+export function summariseDuplicatesByStepId(
+  commits: Array<CommitRecord & { files: string[] }>,
+  ledger: Array<ReturnType<typeof buildOperationLedgerEntry>>,
+  stepIds: string[],
+): DuplicateByStepReport {
+  const byStepId: Record<string, number> = {};
+  for (const step of stepIds) byStepId[step] = 0;
+  let totalDuplicateCommits = 0;
+  const commitsPerStep: Record<string, number> = {};
+  for (const c of commits) {
+    const step = stepOfCommit(c.files ?? []);
+    if (step === null || !(step in byStepId)) continue;
+    commitsPerStep[step] = (commitsPerStep[step] ?? 0) + 1;
+  }
+  for (const [step, n] of Object.entries(commitsPerStep)) {
+    byStepId[step] = Math.max(0, n - 1);
+    totalDuplicateCommits += Math.max(0, n - 1);
+  }
+  const buildHashes = new Set(ledger.map((l) => l.buildInfoHash).filter((h): h is string => h !== undefined));
+  return {
+    byStepId,
+    totalDuplicateCommits,
+    buildRuns: buildHashes.size,
+    unmeasuredClasses: ['progress-log-lines', 'uncommitted-file-writes'],
+  };
+}
+
+/**
+ * Client request timeout for `POST /api/v1/drain`: the endpoint BLOCKS until
+ * its verdict (settled, or timed_out after `timeoutSeconds` — docs/INTERNAL-API.md,
+ * Drain-then-restart), so the client must wait LONGER than the server's drain
+ * timeout. (08-parent-note: a 30 s client timeout against a 45 s drain killed
+ * the request 15 s before the verdict.)
+ */
+export function drainRequestTimeoutMs(timeoutSeconds: number): number {
+  return (timeoutSeconds + 30) * 1000;
 }
 
 /**
@@ -302,8 +450,10 @@ export function buildChildRow(input: {
   arm: ArmName;
   transcriptDiff: TranscriptDiff;
   secondsToWorking: number | null;
+  workedAfterReadiness: boolean;
+  silentStall: boolean;
   parentAction: string | null;
-  duplicates: DuplicateReport;
+  duplicateByStep: DuplicateByStepReport;
   orphans: OrphanReport;
   finalOutcome: string;
   receiptState: string;
@@ -321,9 +471,11 @@ export function buildChildRow(input: {
     editsLost,
     newAfterRecovery: input.transcriptDiff.newCount,
     secondsToWorking: input.secondsToWorking,
+    workedAfterReadiness: input.workedAfterReadiness,
+    silentStall: input.silentStall,
     parentActionNeeded: input.parentAction !== null,
     parentAction: input.parentAction,
-    duplicateSideEffects: input.duplicates,
+    duplicateByStep: input.duplicateByStep,
     orphans: input.orphans,
     finalOutcome: input.finalOutcome,
     receiptState: input.receiptState,
@@ -337,8 +489,10 @@ export function totalsRows(rows: ChildOutcomeRow[]): TotalsRow {
     children: rows.length,
     turnsLost: rows.reduce((a, r) => a + r.turnsLost, 0),
     neededParentAction: rows.filter((r) => r.parentActionNeeded).length,
-    workedWithoutParentAction: rows.filter((r) => !r.parentActionNeeded && r.secondsToWorking !== null).length,
-    duplicateSideEffectEvents: rows.reduce((a, r) => a + r.duplicateSideEffects.totalDuplicateEvents, 0),
+    workedWithoutParentAction: rows.filter((r) => !r.parentActionNeeded && r.workedAfterReadiness).length,
+    silentStalls: rows.filter((r) => r.silentStall).length,
+    duplicateCommits: rows.reduce((a, r) => a + r.duplicateByStep.totalDuplicateCommits, 0),
+    buildRuns: rows.reduce((a, r) => Math.max(a, r.duplicateByStep.buildRuns), 0),
     orphanProcesses: rows.reduce((a, r) => a + r.orphans.orphansAtKill, 0),
     goalAchieved: rows.filter((r) => r.finalOutcome === 'goal_achieved').length,
     stuckOrFailed: rows.filter((r) => r.finalOutcome === 'stuck' || r.finalOutcome === 'failed').length,

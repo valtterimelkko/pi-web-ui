@@ -43,22 +43,37 @@ console.log('build ok at', builtAt, manifest.fileCount, 'files');
 
 const TASK_MD = `# Task (fixture)
 
-Implement the small library task below in this repository. This is a fixture
-for a crash-recovery measurement: do the work exactly as described so every
-step leaves an observable side effect.
+Implement the three small library functions below in this repository, one at a
+time and in order. This is a fixture for a crash-recovery measurement: do the
+work exactly as described so every step leaves an observable side effect.
 
-1. Add \`src/lib/slug.ts\` exporting \`slugify(input: string): string\`:
-   lowercase, replace every run of non-alphanumeric characters with a single
-   '-', trim leading/trailing '-'.
-2. Add \`test/slug.test.ts\` (node:test style, like the existing tests) covering
-   at least: plain words, multiple separators, leading/trailing separators,
-   empty input.
-3. Run \`npm test\` until green.
-4. Run \`npm run build\`.
-5. Commit in at least two commits: tests first, then the implementation.
-6. After EVERY completed step above (each file written, each test run, the
-   build, EACH commit), append exactly one line to \`PROGRESS.log\` in the repo
-   root, of the form \`<UTC timestamp> step <what> ok\`.
+For EACH of the three functions (do them strictly in this order):
+
+1. **slugify** — write \`test/slug.test.ts\` (node:test style, like the
+   existing tests; at least 4 cases: plain words, multiple separators,
+   leading/trailing separators, empty input), then \`src/lib/slug.ts\`
+   exporting \`slugify(input: string): string\` (lowercase, every run of
+   non-alphanumerics becomes a single '-', trim leading/trailing '-').
+2. **initials** — write \`test/initials.test.ts\` (at least 4 cases: single
+   word, multiple words, extra spaces, hyphenated names), then
+   \`src/lib/initials.ts\` exporting \`initials(fullName: string): string\`
+   (first letter of each whitespace-separated word, uppercase, joined).
+3. **maskEmail** — write \`test/mask-email.test.ts\` (at least 4 cases: normal
+   address, short local part, missing @, multiple @), then \`src/lib/mask-email.ts\`
+   exporting \`maskEmail(email: string): string\` (keep first two characters of
+   the local part, replace the rest with '\u00b7\u00b7\u00b7', keep '@domain' unchanged;
+   inputs without exactly one '@' return 'invalid').
+
+Per function, in this order: write the test file, write the implementation,
+run \`npm test\` (fix until green), append a PROGRESS.log line for the step,
+and commit THAT function's files as its own commit (message:
+\`feat: <function name> with tests\`). After the third function also run
+\`npm run build\`, append a final PROGRESS.log line for the build, and commit
+\`PROGRESS.log\` (message: \`chore: progress log\`).
+
+Append ONE line to \`PROGRESS.log\` after EVERY completed step (each file
+written, each test run, each build, EACH commit), of the form:
+\`<UTC timestamp> step <what> ok\`.
 `;
 
 export interface FixtureSpec {
@@ -103,9 +118,9 @@ export function buildFixtures(fixturesRoot: string, count: number): FixtureSpec[
 export function armObjective(repoDir: string, childLabel: string): string {
   return (
     `You are child ${childLabel}. Work only inside ${repoDir}: follow TASK.md exactly — ` +
-    'implement slugify with its tests, run npm test until green, run npm run build, commit tests first ' +
-    'then implementation, and append one PROGRESS.log line after every completed step. ' +
-    'Then end with the completion report block.'
+    'implement the three functions (slugify, initials, maskEmail) one at a time, each with its own test file, ' +
+    'its own commit, a green npm test, and one PROGRESS.log line per completed step; finish with the build, its ' +
+    'PROGRESS.log line, and the PROGRESS.log commit. Then end with the completion report block.'
   );
 }
 

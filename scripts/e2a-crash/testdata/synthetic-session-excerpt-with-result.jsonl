@@ -1,0 +1,5 @@
+{"type":"session","id":"synthetic-session"}
+{"type":"message","message":{"role":"user","timestamp":1800000000000,"content":[{"type":"text","text":"Goal: synthetic fixture for parser tests"}]}}
+{"type":"message","message":{"role":"assistant","timestamp":1800000001000,"content":[{"type":"text","text":"working"}]}}
+{"type":"message","message":{"role":"assistant","timestamp":1800000002000,"content":[{"type":"toolCall","id":"call_synthetic0001","name":"bash","arguments":{"command":"echo synthetic"}}]}}
+{"type":"message","message":{"role":"toolResult","toolCallId":"call_synthetic0001","toolName":"bash","timestamp":1800000003000,"content":[{"type":"text","text":"synthetic out"}]}}

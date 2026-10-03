@@ -5,18 +5,106 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+const TESTDATA = path.join(__dirname, 'testdata');
+
+function lastLine(lines: string[]): string {
+  return lines.filter((l) => l.trim().length > 0).slice(-1)[0] ?? '';
+}
 import {
   diffTranscriptSnapshots,
-  summariseDuplicates,
   summariseWatchLedger,
   diffProcessSnapshots,
   buildChildRow,
   totalsRows,
   parseTranscriptEvents,
+  parseRawSessionJsonl,
   detectInFlightToolCall,
+  drainRequestTimeoutMs,
+  firstWorkingAfterReadiness,
+  summariseDuplicatesByStepId,
+  buildOperationLedgerEntry,
   type CommitRecord,
 } from './analysis.ts';
 
+// ---------------------------------------------------------------------------
+// drainRequestTimeoutMs (08-parent-note): the Internal API POST /drain BLOCKS
+// until its verdict (settled | timed_out after timeoutSeconds) — the client's
+// request timeout must exceed the server's drain timeout by a healthy margin,
+// never the other way round.
+// ---------------------------------------------------------------------------
+
+test('drain request timeout exceeds the server drain timeout with margin', () => {
+  assert.equal(drainRequestTimeoutMs(45), 75_000);
+  assert.equal(drainRequestTimeoutMs(600), 630_000);
+  assert.ok(drainRequestTimeoutMs(45) > 45_000, 'client timeout must exceed the 45 s verdict window (run of 03:46Z failed at 30 s)');
+});
+
+// ---------------------------------------------------------------------------
+// parseRawSessionJsonl (the arm's primary evidence: the child's raw session file)
+// ---------------------------------------------------------------------------
+
+const RAW_SAMPLE = [
+  JSON.stringify({ type: 'session', id: 's1' }),
+  JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Goal: ...' }] } }),
+  JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'thinking' }, { type: 'text', text: 'plan' }, { type: 'toolCall', id: 'call_a', name: 'bash', arguments: { command: 'ls' } }] } }),
+  JSON.stringify({ type: 'message', message: { role: 'toolResult', toolCallId: 'call_a', toolName: 'bash', content: [{ type: 'text', text: 'out' }] } }),
+  JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call_b', name: 'write', arguments: {} }] } }),
+  'not json at all',
+].join('\n');
+
+test('parseRawSessionJsonl extracts tool calls/results with ids and tolerates junk lines', () => {
+  const events = parseRawSessionJsonl(RAW_SAMPLE.split('\n'));
+  // user, assistant (text flushed before its toolCall), toolCall_a, toolResult_a, toolCall_b
+  assert.equal(events.length, 5);
+  assert.equal(events[0].kind, 'user');
+  assert.equal(events[1].kind, 'assistant');
+  assert.equal(events[2].kind, 'toolCall');
+  assert.equal(events[2].toolName, 'bash');
+  assert.equal(events[2].callId, 'call_a');
+  assert.equal(events[3].kind, 'toolResult');
+  assert.equal(events[3].callId, 'call_a');
+  assert.equal(events[4].kind, 'toolCall');
+  assert.equal(events[4].toolName, 'write');
+  assert.equal(detectInFlightToolCall(events), true); // call_b has no result yet
+});
+
+test('parseRawSessionJsonl: empty and garbage inputs yield empty', () => {
+  assert.deepEqual(parseRawSessionJsonl([]), []);
+  assert.deepEqual(parseRawSessionJsonl(['{broken']), []);
+});
+
+// ---------------------------------------------------------------------------
+// 09-correction item 4: SYNTHETIC fixture (the raw run-4 excerpt was removed
+// from the branch). Same record shapes: a trailing in-flight toolCall (A), and
+// the same with its toolResult appended (B).
+// ---------------------------------------------------------------------------
+
+const EXCERPT_A = path.join(TESTDATA, 'synthetic-session-excerpt.jsonl');
+const EXCERPT_B = path.join(TESTDATA, 'synthetic-session-excerpt-with-result.jsonl');
+
+test('synthetic excerpt: trailing in-flight toolCall is detected', () => {
+  const lines = readFileSync(EXCERPT_A, 'utf8').split('\n');
+  const events = parseRawSessionJsonl(lines);
+  assert.ok(events.length > 0);
+  const last = JSON.parse(lastLine(lines));
+  const call = (last.message.content as Array<{ type: string; id?: string; name?: string }>).find((c) => c.type === 'toolCall');
+  assert.ok(call, 'excerpt must end at a toolCall line');
+  const tail = events[events.length - 1];
+  assert.equal(tail.kind, 'toolCall');
+  assert.equal(tail.callId, call.id);
+  assert.equal(tail.toolName, call.name);
+  assert.equal(detectInFlightToolCall(events), true);
+});
+
+test('synthetic excerpt + its toolResult: no longer in flight', () => {
+  const lines = readFileSync(EXCERPT_B, 'utf8').split('\n');
+  const events = parseRawSessionJsonl(lines);
+  assert.equal(detectInFlightToolCall(events), false);
+  assert.ok(events.some((e) => e.kind === 'toolResult' && e.callId === 'call_synthetic0001'));
+});
 // ---------------------------------------------------------------------------
 // parseTranscriptEvents
 // ---------------------------------------------------------------------------
@@ -132,40 +220,6 @@ test('events lost then re-done count as lost AND new (divergence point semantics
 });
 
 // ---------------------------------------------------------------------------
-// summariseDuplicates (side effects done twice)
-// ---------------------------------------------------------------------------
-
-test('duplicate progress lines and commit subjects are counted with examples', () => {
-  const commits: CommitRecord[] = [
-    { hash: 'h1', subject: 'feat: slugify' },
-    { hash: 'h2', subject: 'feat: slugify' },
-    { hash: 'h3', subject: 'test: slugify' },
-  ];
-  const report = summariseDuplicates({
-    progressLines: ['step: tests', 'step: tests', 'step: build'],
-    commits,
-    buildRuns: [{ label: 'build@t1' }, { label: 'build@t2' }],
-  });
-  assert.equal(report.duplicateProgressLines, 1); // 'step: tests' appears twice → 1 duplicated line text
-  assert.deepEqual(report.duplicateProgressExamples, ['step: tests']);
-  assert.equal(report.duplicateCommitSubjects, 1);
-  assert.deepEqual(report.duplicateCommitExamples, ['feat: slugify']);
-  assert.equal(report.buildRunCount, 2);
-  assert.equal(report.totalDuplicateEvents, 2); // 1 dup progress + 1 dup commit
-});
-
-test('all-unique side effects report zero duplicates', () => {
-  const report = summariseDuplicates({
-    progressLines: ['a', 'b', 'c'],
-    commits: [{ hash: 'h1', subject: 'one' }],
-    buildRuns: [{ label: 'build@t1' }],
-  });
-  assert.equal(report.duplicateProgressLines, 0);
-  assert.equal(report.duplicateCommitSubjects, 0);
-  assert.equal(report.totalDuplicateEvents, 0);
-});
-
-// ---------------------------------------------------------------------------
 // summariseWatchLedger (what the parent's watch saw)
 // ---------------------------------------------------------------------------
 
@@ -237,8 +291,14 @@ test('buildChildRow derives the per-child record and totalsRows reconciles', () 
       parseTranscriptEvents({ events: [{ type: 'message', id: 'a' }] }),
     ),
     secondsToWorking: 120,
+    workedAfterReadiness: true,
+    silentStall: false,
     parentAction: null,
-    duplicates: summariseDuplicates({ progressLines: ['x', 'x'], commits: [], buildRuns: [] }),
+    duplicateByStep: summariseDuplicatesByStepId(
+      [{ hash: 'h1', subject: 'feat: slugify', files: ['test/slug.test.ts'] }, { hash: 'h2', subject: 'redo', files: ['test/slug.test.ts'] }],
+      [],
+      ['slugify', 'initials', 'maskEmail', 'build'],
+    ),
     orphans: { orphansAtKill: 1, orphanPids: [201], gonePids: [201] },
     finalOutcome: 'goal_achieved',
     receiptState: 'success',
@@ -247,27 +307,119 @@ test('buildChildRow derives the per-child record and totalsRows reconciles', () 
   assert.equal(row.childId, 'c1');
   assert.equal(row.turnsLost, 1);
   assert.equal(row.parentActionNeeded, false);
-  assert.equal(row.duplicateSideEffects.totalDuplicateEvents, 1);
+  assert.equal(row.duplicateByStep.byStepId['slugify'], 1);
 
   const row2 = buildChildRow({
     childId: 'c2',
     arm: 'kill',
     transcriptDiff: { lostCount: 0, lostKinds: {}, retainedCount: 5, newCount: 3, newKinds: {}, lostExamples: [], lostToolCalls: [] },
     secondsToWorking: null,
+    workedAfterReadiness: false,
+    silentStall: true,
     parentAction: 'follow-up-prompt',
-    duplicates: summariseDuplicates({ progressLines: [], commits: [], buildRuns: [] }),
+    duplicateByStep: summariseDuplicatesByStepId([], [], ['slugify', 'initials', 'maskEmail', 'build']),
     orphans: { orphansAtKill: 0, orphanPids: [], gonePids: [] },
     finalOutcome: 'stuck',
     receiptState: 'RUN_TRANSPORT_LOST',
     watch: summariseWatchLedger({ firings: [] }),
   });
   assert.equal(row2.parentActionNeeded, true);
+  assert.equal(row2.silentStall, true);
 
   const totals = totalsRows([row, row2]);
   assert.equal(totals.children, 2);
   assert.equal(totals.turnsLost, 1);
   assert.equal(totals.workedWithoutParentAction, 1);
   assert.equal(totals.neededParentAction, 1);
-  assert.equal(totals.duplicateSideEffectEvents, 1);
+  assert.equal(totals.silentStalls, 1);
+  assert.equal(totals.duplicateCommits, 1);
   assert.equal(totals.orphanProcesses, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 09-correction item 1: readiness-gated "working after restart".
+// Work after the interruption counts ONLY when its timestamp is after the
+// restarted API was ready; the harness's own probe supplies that instant.
+// ---------------------------------------------------------------------------
+
+const T0 = 1_800_000_000_000;
+
+function rawLine(kind: 'user' | 'assistant' | 'toolResult', ts: number, tool?: { id: string; name: string }): string {
+  if (kind === 'assistant' && tool) {
+    return JSON.stringify({ type: 'message', message: { role: 'assistant', timestamp: ts, content: [{ type: 'text', text: 'x' }, { type: 'toolCall', id: tool.id, name: tool.name, arguments: {} }] } });
+  }
+  if (kind === 'toolResult' && tool) {
+    return JSON.stringify({ type: 'message', message: { role: 'toolResult', toolCallId: tool.id, toolName: tool.name, timestamp: ts, content: [{ type: 'text', text: 'out' }] } });
+  }
+  return JSON.stringify({ type: 'message', message: { role: kind, timestamp: ts, content: [{ type: 'text', text: 'x' }] } });
+}
+
+test('firstWorkingAfterReadiness: work recorded BEFORE readiness is not recovery (the drain-arm bug)', () => {
+  // All events happen during the drain, before the API was ready.
+  const events = parseRawSessionJsonl([
+    rawLine('user', T0),
+    rawLine('assistant', T0 + 20_000, { id: 'call_during', name: 'bash' }),
+    rawLine('toolResult', T0 + 30_000, { id: 'call_during', name: 'bash' }),
+  ]);
+  const r = firstWorkingAfterReadiness(events, T0 + 60_000);
+  assert.equal(r.working, false, 'work before readiness must NOT count as recovery (09 finding 1)');
+  assert.equal(r.firstNewToolCallAtMs, null);
+});
+
+test('firstWorkingAfterReadiness: a tool call after readiness is recovery, with its exact time', () => {
+  const events = parseRawSessionJsonl([
+    rawLine('user', T0),
+    rawLine('assistant', T0 + 20_000, { id: 'call_during', name: 'bash' }),
+    rawLine('toolResult', T0 + 30_000, { id: 'call_during', name: 'bash' }),
+    rawLine('assistant', T0 + 70_000, { id: 'call_after', name: 'bash' }),
+  ]);
+  const r = firstWorkingAfterReadiness(events, T0 + 60_000);
+  assert.equal(r.working, true);
+  assert.equal(r.firstNewToolCallAtMs, T0 + 70_000);
+});
+
+test('firstWorkingAfterReadiness: assistant text after readiness counts as a resumed turn, tool-less', () => {
+  const events = parseRawSessionJsonl([
+    rawLine('user', T0),
+    rawLine('assistant', T0 + 90_000),
+  ]);
+  const r = firstWorkingAfterReadiness(events, T0 + 60_000);
+  assert.equal(r.working, true);
+  assert.equal(r.firstNewToolCallAtMs, null);
+});
+
+// ---------------------------------------------------------------------------
+// 09-correction item 3: duplicates per normalised step id, measured from
+// evidence the harness owns (commits mapped to steps by FILES TOUCHED, and a
+// harness-owned append-only operation ledger) — not from child-writable
+// whole-line text or commit subjects.
+// ---------------------------------------------------------------------------
+
+test('duplicates by step id: repeated execution of a step (second commit touching its files) is counted', () => {
+  const commits: Array<CommitRecord & { files: string[] }> = [
+    { hash: 'a1', subject: 'feat: slugify with tests', files: ['test/slug.test.ts', 'src/lib/slug.ts'] },
+    { hash: 'a2', subject: 'feat: initials with tests', files: ['test/initials.test.ts', 'src/lib/initials.ts'] },
+    { hash: 'a3', subject: 'redo slugify after crash', files: ['test/slug.test.ts', 'src/lib/slug.ts'] },
+  ];
+  const r = summariseDuplicatesByStepId(commits, [], ['slugify', 'initials', 'maskEmail', 'build']);
+  assert.equal(r.byStepId['slugify'], 1, 'two slugify commits = 1 duplicated execution');
+  assert.equal(r.byStepId['initials'], 0);
+  assert.equal(r.byStepId['maskEmail'], 0);
+  assert.equal(r.totalDuplicateCommits, 1);
+});
+
+test('duplicates by step id: build re-runs are counted from the harness-owned ledger, not the child', () => {
+  const ledger = [
+    buildOperationLedgerEntry('c1', T0, { buildInfoHash: 'h1' }),
+    buildOperationLedgerEntry('c1', T0 + 5_000, { buildInfoHash: 'h1' }),
+    buildOperationLedgerEntry('c1', T0 + 9_000, { buildInfoHash: 'h2' }),
+  ];
+  const r = summariseDuplicatesByStepId([], ledger, ['slugify', 'initials', 'maskEmail', 'build']);
+  assert.equal(r.buildRuns, 2, 'h1 and h2 are two distinct observed builds; identical repeat is one build');
+});
+
+test('duplicates by step id: progress-log text is reported unmeasured, never as 0', () => {
+  const r = summariseDuplicatesByStepId([], [], ['slugify', 'initials', 'maskEmail', 'build']);
+  assert.equal(r.unmeasuredClasses.includes('progress-log-lines'), true, 'child-writable progress text is unmeasured by design');
+  assert.equal(r.totalDuplicateCommits, 0);
 });

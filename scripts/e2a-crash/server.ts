@@ -8,9 +8,9 @@
  * The server itself is the repo's own disposable validation server entrypoint
  * (isolated dirs, isolated socket/token, J6 placement-env strip + explicit
  * --env-file/--env-key channel), launched as a transient `e2a-6c-server`
- * unit. Restart=no: the DRIVER restarts it (the kill arm measures driver-
- * controlled restart; production's Restart=always difference is recorded in
- * the report).
+ * unit. Arm mode mirrors production's restart properties (Restart=always,
+ * RestartSec=10s, TimeoutStopSec=30s — 01-answer Q3): the SIGKILLed unit is
+ * restarted by systemd, not by the driver (smoke stays Restart=no).
  */
 import { execFile as execFileCb } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -25,9 +25,13 @@ const execFile = promisify(execFileCb);
 export interface ServerMode {
   memoryMax: string;
   runtimeMaxSec: number;
+  /** 01-answer Q3: the kill arm mirrors production — systemd restarts the
+   * SIGKILLed unit (Restart=always, RestartSec=10s, TimeoutStopSec=30s) and
+   * the driver must NOT start it by hand. Smoke stays Restart=no. */
+  restart: 'no' | 'always';
 }
 
-export const SMOKE_MODE: ServerMode = { memoryMax: '6G', runtimeMaxSec: 300 };
+export const SMOKE_MODE: ServerMode = { memoryMax: '6G', runtimeMaxSec: 300, restart: 'no' };
 // SMOKE_MODE deviation from STRESS-GATE's "MemoryMax=2G" smoke bound, measured
 // 2026-10-02: at 2G the server's own admission preflight refuses ALL model
 // turns (emergencyMode, memory_pressure: base RSS ~0.94G + 512M reserved/turn
@@ -35,7 +39,11 @@ export const SMOKE_MODE: ServerMode = { memoryMax: '6G', runtimeMaxSec: 300 };
 // report). 6G is the smallest practical cap that admits ≤2 small children,
 // still ≤ the binding 12G containment cap, with the same 300 s runtime,
 // ≤2 children, and no deliberate allocation/CPU burn. Flagged to the parent.
-export const ARM_MODE: ServerMode = { memoryMax: '12G', runtimeMaxSec: 7200 };
+export const ARM_MODE: ServerMode = { memoryMax: '8G', runtimeMaxSec: 7200, restart: 'always' };
+// ARM restart properties mirror production's unit verbatim (01-answer Q3):
+// Restart=always, RestartSec=10s, TimeoutStopSec=30s, KillMode=control-group.
+// MemoryMax=8G (not 12G) per 07-answer: the guard soft-alerts below 8 GiB
+// MemAvailable — the arm server must stay comfortably inside it.
 
 async function systemctl(...args: string[]): Promise<string> {
   const { stdout } = await execFile('systemctl', [...args, '--no-pager']);
@@ -122,6 +130,8 @@ export async function startAnchorUnit(anchorScriptPath: string): Promise<void> {
     '--slice', sliceName(),
     '--property', 'Restart=always',
     '--property', 'RestartSec=2',
+    '--property', 'MemoryMax=6G',
+    '--property', 'MemoryHigh=5G',
     '--property', 'Delegate=cpu memory pids',
     '--property', 'DelegateSubgroup=supervisor',
     '--property', 'OOMPolicy=continue',
@@ -170,6 +180,8 @@ export interface StartedServer {
   anchorCgroup: string;
   memoryMax: string;
   runtimeMaxSec: number;
+  /** ISO boot instant recorded by startServerForRun — journal assertions run from it. */
+  startedAt?: string;
 }
 
 /** Prepare the env file + stub bin dir the server unit needs. */
@@ -254,7 +266,9 @@ export async function startServerUnit(repoRoot: string, paths: RunPaths, mode: S
   await systemdRun([
     '--unit', unit,
     '--slice', sliceName(),
-    '--property', 'Restart=no',
+    '--property', `Restart=${mode.restart}`,
+    '--property', mode.restart === 'always' ? 'RestartSec=10s' : 'RestartSec=2',
+    '--property', mode.restart === 'always' ? 'TimeoutStopSec=30s' : 'TimeoutStopSec=10s',
     '--property', `MemoryMax=${mode.memoryMax}`,
     '--property', 'MemorySwapMax=1G',
     '--property', `RuntimeMaxSec=${mode.runtimeMaxSec}`,
@@ -315,6 +329,76 @@ export async function killServerUnit(): Promise<{ method: string }> {
       return { method: `cgroup.procs SIGKILL fallback (${procs.length} pids)` };
     }
     throw new Error(`Could not kill ${unit}: no fallback available`);
+  }
+}
+
+function nowIsoS(): string {
+  return new Date().toISOString();
+}
+
+/**
+ * Wait for systemd's AUTO-restart of the killed unit (01-answer Q3: the kill
+ * arm lets systemd restart it — Restart=always/RestartSec=10s). Resolves when
+ * the unit reports a NEW main pid; socket-ready is measured separately.
+ */
+export async function waitForSystemdAutoRestart(oldMainPid: number, timeoutMs = 120_000): Promise<{ unitActiveAgainAt: string; newMainPid: number; durationMs: number }> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const s = await getUnitStatus(serverUnitName());
+    if (s.activeState === 'active' && s.mainPid && s.mainPid !== oldMainPid) {
+      return { unitActiveAgainAt: nowIsoS(), newMainPid: s.mainPid, durationMs: Date.now() - t0 };
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`systemd did not auto-restart ${serverUnitName()} within ${timeoutMs / 1000}s (old pid ${oldMainPid})`);
+}
+
+/** Poll the Internal API until it answers — the server is READY after a restart. */
+export async function waitForServerReadyViaApi(socketPath: string, tokenPath: string, timeoutMs = 90_000): Promise<{ readyAt: string; durationMs: number }> {
+  const { internalApiRequest } = await import('./dispatch.ts');
+  const t0 = Date.now();
+  let lastErr = 'none';
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      await internalApiRequest<unknown>(socketPath, tokenPath, 'GET', '/api/v1/health', undefined, 3_000);
+      return { readyAt: nowIsoS(), durationMs: Date.now() - t0 };
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message.slice(0, 120) : String(err);
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  throw new Error(`server not ready via API within ${timeoutMs / 1000}s (last error: ${lastErr})`);
+}
+
+/**
+ * 09-correction item 2: placement must be really ENABLED. The 03:2xZ arms ran
+ * with `[Placement] DISABLED — tools root unavailable` because the anchor had
+ * no numeric memory.max. Fail closed: any DISABLED line after the boot time
+ * aborts; the placement journal lines are returned for the evidence record.
+ */
+export async function assertPlacementEnabledInJournal(sinceIso: string): Promise<{ placementLines: string[] }> {
+  const { stdout } = await execFile('journalctl', [
+    '-u', serverUnitName(), '--since', sinceIso, '--no-pager', '-n', '400',
+  ]);
+  const lines = stdout.split(/\r?\n/).filter((l) => /Placement/i.test(l));
+  const disabled = lines.filter((l) => /DISABLED/i.test(l));
+  if (disabled.length > 0) {
+    throw new Error(`Placement assertion FAILED: ${disabled.length} '[Placement] DISABLED' journal line(s) since ${sinceIso}: ${disabled[0].slice(0, 200)}`);
+  }
+  return { placementLines: lines.slice(-8) };
+}
+
+/** Journal evidence lines for a restart window (01-answer Q3: record systemd's restart time). */
+export async function journalRestartEvidence(sinceIso: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFile('journalctl', [
+      '-u', serverUnitName(), '--since', sinceIso, '--no-pager', '-n', '80',
+    ]);
+    return stdout.split(/\r?\n/).filter((l) =>
+      /Main process exited|Failed with result|Scheduled restart job|Started|Deactivated|Consumed/.test(l),
+    ).slice(-12);
+  } catch {
+    return ['(journalctl unavailable)'];
   }
 }
 

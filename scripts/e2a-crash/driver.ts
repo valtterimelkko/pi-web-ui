@@ -5,22 +5,25 @@
  * prepare → start-server → (smoke | kill-arm | drain-arm) → collect/analyse.
  * State lands under <run>/state/, raw samples under <run>/samples/.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { resolveRunPaths, type RunPaths } from './paths.ts';
 import { buildFixtures, buildFixture, armObjective, smokeObjective } from './fixture.ts';
 import { buildCrashAgentDir } from './agent-dir.ts';
-import { prepareServerEnv, startServerUnit, killServerUnit, stopServerUnits, assertPlacementRootIsolated, SMOKE_MODE, ARM_MODE, getUnitStatus, type StartedServer, type ServerMode } from './server.ts';
+import { prepareServerEnv, startServerUnit, killServerUnit, stopServerUnits, assertPlacementRootIsolated, assertPlacementEnabledInJournal, waitForSystemdAutoRestart, waitForServerReadyViaApi, journalRestartEvidence, SMOKE_MODE, ARM_MODE, getUnitStatus, type StartedServer, type ServerMode } from './server.ts';
 import {
-  spawnGoalChild, registerObserverWatch, getChildStatus, getTranscript, startDrain, getDrainStatus,
+  spawnGoalChild, registerObserverWatch, getChildStatus, startDrain, getDrainStatus,
   assertServedModel, snapshotChildToolProcesses, type OrchTarget, type ProcRecord,
 } from './dispatch.ts';
+import { unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import {
-  parseTranscriptEvents, detectInFlightToolCall, diffTranscriptSnapshots, summariseDuplicates,
-  summariseWatchLedger, diffProcessSnapshots, buildChildRow, totalsRows,
+  parseRawSessionJsonl, detectInFlightToolCall, diffTranscriptSnapshots, firstWorkingAfterReadiness,
+  summariseDuplicatesByStepId, buildOperationLedgerEntry, summariseWatchLedger, diffProcessSnapshots, buildChildRow, totalsRows,
   type CrashEventRecord, type ChildOutcomeRow,
 } from './analysis.ts';
+import { copyFileSync } from 'node:fs';
 
 const REPO_ROOT = '/root/.worktrees/orch-scaling/e2-a6c-pi-web-ui'; // lane-fixed: this harness runs from the E2a-6c execution worktree
 const OWNER = 'orch-e2-0798cc10-E2a-6c';
@@ -52,6 +55,8 @@ interface ArmState {
   children: Array<{ sessionId: string; watchId: string; repoDir: string; label: string; baselineCommit: string }>;
   interruptAt?: string;
   interruptCondition?: string;
+  interruptPartial?: string;
+  inFlightAtKill?: Record<string, boolean>;
   serverRestart?: { at: string; readyAt: string; durationMs: number; method?: string };
   parentActions?: Array<{ at: string; childId: string; action: string; reason: string }>;
   finishedAt?: string;
@@ -73,6 +78,44 @@ function saveJson(file: string, data: unknown): void {
 
 function logLine(paths: RunPaths, arm: string, event: string, detail: Record<string, unknown>): void {
   appendFileSync(statePath(paths, `${arm}-timeline.jsonl`), `${JSON.stringify({ t: nowIso(), event, ...detail })}\n`);
+}
+
+interface CommitWithFiles { hash: string; subject: string; files: string[] }
+
+/** Commits since a baseline, each mapped to the files it touched (tree evidence for step ids). */
+function collectCommitsWithFiles(repoDir: string, baseline: string): CommitWithFiles[] {
+  const out: CommitWithFiles[] = [];
+  let current: CommitWithFiles | undefined;
+  const log = execFileSync('git', ['-C', repoDir, 'log', '--format=%H|%s', '--name-only', `${baseline}..HEAD`], { encoding: 'utf8' });
+  for (const line of log.split('\n')) {
+    if (line.includes('|')) {
+      const [hash, ...subj] = line.split('|');
+      if (current) out.push(current);
+      current = { hash, subject: subj.join('|'), files: [] };
+    } else if (line.trim().length > 0 && current) {
+      current.files.push(line.trim());
+    }
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+function sha256Short(buf: Buffer): string {
+  return createHash('sha256').update(buf).digest('hex').slice(0, 16);
+}
+
+/** Append one harness-owned operation-ledger observation (child's cwd is never the source of truth). */
+function appendOperationLedger(paths: RunPaths, arm: string, childId: string, repoDir: string, baseline: string): void {
+  let commitsSeen: string[] = [];
+  let buildInfoHash: string | undefined;
+  try {
+    commitsSeen = execFileSync('git', ['-C', repoDir, 'log', '--format=%H', `${baseline}..HEAD`], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  } catch { /* repo absent */ }
+  try {
+    buildInfoHash = sha256Short(readFileSync(path.join(repoDir, 'dist', 'build-info.json')));
+  } catch { /* no build yet */ }
+  const entry = buildOperationLedgerEntry(childId, Date.now(), { commitsSeen, buildInfoHash });
+  appendFileSync(statePath(paths, `op-ledger-${arm}.jsonl`), `${JSON.stringify(entry)}\n`);
 }
 
 /** git HEAD hash of a fixture repo (baseline commit for later commit counting). */
@@ -116,9 +159,14 @@ export async function startServerForRun(runId: string, modeName: 'smoke' | 'arm'
 export async function stopServerForRun(runId: string): Promise<void> {
   const paths = resolveRunPaths(runId);
   await stopServerUnits();
-  const record = { stoppedAt: nowIso() };
+  // 09-correction item 5: dispose the disposable secrets and the internal API
+  // token whenever the server stops — never leave them on a stopped run.
+  for (const secret of [paths.serverEnvFile, path.join(paths.validationDir, 'internal-api-token')]) {
+    try { unlinkSync(secret); } catch { /* already absent */ }
+  }
+  const record = { stoppedAt: nowIso(), secretsDisposed: true };
   saveJson(statePath(paths, 'server-stopped.json'), record);
-  console.log('server + anchor stopped');
+  console.log('server + anchor stopped; secrets disposed');
 }
 
 // ---------------------------------------------------------------------------
@@ -134,33 +182,44 @@ interface ChildSample {
   goalState?: string;
 }
 
+/** Locate a child's raw session JSONL under the validation dir (written on first turn). */
+function findSessionFile(paths: RunPaths, sessionId: string): string | undefined {
+  const dir = path.join(paths.validationDir, 'pi-sessions');
+  if (!existsSync(dir)) return undefined;
+  for (const f of readdirSync(dir)) {
+    if (f.endsWith(`${sessionId}.jsonl`)) return path.join(dir, f);
+  }
+  return undefined;
+}
+
+/** Read + parse a child's raw session JSONL (empty when absent — first turn not yet written). */
+function readRawSession(paths: RunPaths, sessionId: string): { events: CrashEventRecord[]; file?: string } {
+  const file = findSessionFile(paths, sessionId);
+  if (!file) return { events: [] };
+  try {
+    return { events: parseRawSessionJsonl(readFileSync(file, 'utf8').split('\n')), file };
+  } catch {
+    return { events: [], file };
+  }
+}
+
 async function sampleChildren(
   target: OrchTarget,
+  paths: RunPaths,
   children: Array<{ sessionId: string }>,
-  sampleLog: Array<Record<string, unknown>>,
 ): Promise<{ samples: ChildSample[]; transcripts: Map<string, CrashEventRecord[]> }> {
   const samples: ChildSample[] = [];
   const transcripts = new Map<string, CrashEventRecord[]>();
   for (const child of children) {
     const status = await getChildStatus(target, child.sessionId);
-    let events: CrashEventRecord[] = [];
-    let count = 0;
-    let inFlight = false;
-    try {
-      const transcript = await getTranscript(target.socketPath, target.tokenPath, child.sessionId);
-      events = parseTranscriptEvents(transcript);
-      count = events.length;
-      inFlight = detectInFlightToolCall(events);
-      transcripts.set(child.sessionId, events);
-    } catch (err) {
-      sampleLog.push({ t: nowIso(), childId: child.sessionId, transcriptError: err instanceof Error ? err.message : String(err) });
-    }
+    const { events } = readRawSession(paths, child.sessionId);
+    transcripts.set(child.sessionId, events);
     samples.push({
       t: nowIso(),
       childId: child.sessionId,
       busy: status.busy === true,
-      inFlight,
-      transcriptEventCount: count,
+      inFlight: detectInFlightToolCall(events),
+      transcriptEventCount: events.length,
       goalState: status.goalState,
     });
   }
@@ -171,26 +230,78 @@ async function waitForChildrenReadyToInterrupt(
   target: OrchTarget,
   paths: RunPaths,
   armState: ArmState,
-  sampleLog: Array<Record<string, unknown>>,
-): Promise<{ transcripts: Map<string, CrashEventRecord[]>; condition: string }> {
+  anchorCg: string,
+): Promise<{ transcripts: Map<string, CrashEventRecord[]>; condition: string; inFlightAtKill: Record<string, boolean>; partial?: string }> {
   const startedAt = Date.now();
-  let last: { transcripts: Map<string, CrashEventRecord[]>; allBusy: boolean; inFlightCount: number } | undefined;
+  let allBusySince: number | null = null;
+  const wasBusy = new Set<string>();
+  let sawPlacedToolProcess = false;
+  let last: { allBusy: boolean; inFlightCount: number } | undefined;
   while (Date.now() - startedAt < MAX_WORK_WAIT_MS) {
-    const { samples, transcripts } = await sampleChildren(target, armState.children, sampleLog);
+    const { samples, transcripts } = await sampleChildren(target, paths, armState.children);
     const allBusy = samples.every((s) => s.busy);
     const inFlightCount = samples.filter((s) => s.inFlight).length;
-    last = { transcripts, allBusy, inFlightCount };
+    last = { allBusy, inFlightCount };
+    // 09-correction item 2: at least one child tool process must actually run
+    // under OUR anchor during the work phase, else placement is not real.
+    if (!sawPlacedToolProcess && snapshotChildToolProcesses(anchorCg).length > 0) {
+      sawPlacedToolProcess = true;
+      logLine(paths, armState.arm, 'placed-tool-process-observed', { anchorCg });
+    }
+    // Harness-owned operation ledger (09 item 3): commits + build hash per sample.
+    for (const child of armState.children) {
+      appendOperationLedger(paths, armState.arm, child.label, child.repoDir, child.baselineCommit);
+    }
     logLine(paths, armState.arm, 'sample', { samples });
+    for (const s of samples) {
+      if (s.busy) wasBusy.add(s.childId);
+    }
+    allBusySince = allBusy ? (allBusySince ?? Date.now()) : null;
     const elapsed = Date.now() - startedAt;
+    const inFlightAtKill = Object.fromEntries(samples.map((s) => [s.childId, s.inFlight]));
+
+    if (!sawPlacedToolProcess && startedAt + MIN_WORK_BEFORE_INTERRUPT_MS < Date.now()) {
+      throw new Error(`ABORT: no child tool process observed under the anchor cgroup ${anchorCg} by the earliest interrupt time — placement is not real (09-correction item 2)`);
+    }
+
+    // 04-parent-note rule C: a child FINISHED before the kill — do not wait;
+    // interrupt now and record the run as partial.
+    const finishedEarly = samples.filter((s) => !s.busy && wasBusy.has(s.childId) && (s.goalState === 'achieved' || s.goalState === 'failed' || s.goalState === 'paused'));
+    if (finishedEarly.length > 0 && elapsed >= MIN_WORK_BEFORE_INTERRUPT_MS) {
+      return {
+        transcripts,
+        condition: `child finished before kill: ${finishedEarly.map((s) => `${s.childId}=${s.goalState}`).join(', ')} after ${Math.round(elapsed / 1000)}s`,
+        inFlightAtKill,
+        partial: `${finishedEarly.length} child(ren) reached a terminal goal state before the interruption`,
+      };
+    }
+
+    // Rule A: the designed condition — everyone mid-turn, ≥2 with a tool command in flight.
     if (elapsed >= MIN_WORK_BEFORE_INTERRUPT_MS && allBusy && inFlightCount >= 2) {
-      return { transcripts, condition: `all busy (${samples.filter((s) => s.busy).length}/${samples.length}), ${inFlightCount} with in-flight tool command, after ${Math.round(elapsed / 1000)}s` };
+      return {
+        transcripts,
+        condition: `all busy (${samples.filter((s) => s.busy).length}/${samples.length}), ${inFlightCount} with in-flight tool command, after ${Math.round(elapsed / 1000)}s`,
+        inFlightAtKill,
+      };
     }
-    if (elapsed >= MIN_WORK_BEFORE_INTERRUPT_MS && elapsed >= 8 * 60_000 && samples.filter((s) => s.busy).length >= Math.max(2, samples.length - 1) && inFlightCount >= 2) {
-      return { transcripts, condition: `relaxed: ${samples.filter((s) => s.busy).length}/${samples.length} busy, ${inFlightCount} in-flight, after ${Math.round(elapsed / 1000)}s` };
+
+    // Rule B (04-parent-note): all busy for ≥120 s but in-flight never showed —
+    // kill anyway and record inFlightAtKill (do not wait out the clock blind).
+    if (elapsed >= MIN_WORK_BEFORE_INTERRUPT_MS && allBusySince !== null && Date.now() - allBusySince >= 120_000 && inFlightCount < 2) {
+      return {
+        transcripts,
+        condition: `all busy for ${Math.round((Date.now() - allBusySince) / 1000)}s with no in-flight signal — killing anyway per robustness rule`,
+        inFlightAtKill,
+        partial: 'in-flight tool detection did not fire before the kill',
+      };
     }
+
     await new Promise((r) => setTimeout(r, SAMPLE_INTERVAL_MS));
   }
-  throw new Error(`Children never reached the busy+in-flight interruption condition within ${MAX_WORK_WAIT_MS / 1000}s (last sample: ${JSON.stringify(last)})`);
+  if (!sawPlacedToolProcess) {
+    throw new Error(`ABORT: no child tool process was ever observed under the anchor cgroup ${anchorCg} — placement is not real (09-correction item 2)`);
+  }
+  throw new Error(`Children never reached any interruption condition within ${MAX_WORK_WAIT_MS / 1000}s (last sample: ${JSON.stringify(last)})`);
 }
 
 async function restartServer(paths: RunPaths, mode: ServerMode, method?: string): Promise<{ readyAt: string; durationMs: number }> {
@@ -209,9 +320,9 @@ async function collectChildEvidence(
   preInterruptTranscript: CrashEventRecord[],
 ): Promise<ChildOutcomeRow> {
   mkdirSync(paths.samplesDir, { recursive: true });
-  const finalTranscript = await getTranscript(target.socketPath, target.tokenPath, child.sessionId).catch(() => undefined);
-  const finalEvents = parseTranscriptEvents(finalTranscript);
-  writeFileSync(path.join(paths.samplesDir, `${armState.arm}-${child.label}-final-transcript.json`), JSON.stringify(finalTranscript ?? { error: 'unavailable' }));
+  // Raw session file is the authoritative evidence; archive a verbatim copy.
+  const { events: finalEvents, file: rawFile } = readRawSession(paths, child.sessionId);
+  if (rawFile) copyFileSync(rawFile, path.join(paths.samplesDir, `${armState.arm}-${child.label}-final-session.jsonl`));
   const diff = diffTranscriptSnapshots(preInterruptTranscript, finalEvents);
 
   // Watch ledger (the parent's pure-observer watch). The server names ledger
@@ -229,39 +340,50 @@ async function collectChildEvidence(
   const watch = summariseWatchLedger(ledger);
 
   // Side effects in the fixture repo.
-  const progressLines = existsSync(path.join(child.repoDir, 'PROGRESS.log'))
-    ? readFileSync(path.join(child.repoDir, 'PROGRESS.log'), 'utf8').split('\n').filter((l) => l.trim().length > 0)
-    : [];
   const gitLog = execFileSync('git', ['-C', child.repoDir, 'log', '--format=%H|%s', `${child.baselineCommit}..HEAD`], { encoding: 'utf8' }).trim();
   const commits = gitLog.length > 0 ? gitLog.split('\n').map((line) => ({ hash: line.split('|')[0], subject: line.split('|').slice(1).join('|') })) : [];
-  const buildRuns = [{ label: `final build-info: ${existsSync(path.join(child.repoDir, 'dist', 'build-info.json')) ? readFileSync(path.join(child.repoDir, 'dist', 'build-info.json'), 'utf8').slice(0, 120) : 'none'}` }];
-  const duplicates = summariseDuplicates({ progressLines, commits, buildRuns });
+  // 09-correction item 3: duplicates per normalised step id from evidence the
+  // harness owns (commits mapped by files touched + the append-only ledger).
+  const commitFiles = collectCommitsWithFiles(child.repoDir, child.baselineCommit);
+  const ledgerLines = existsSync(statePath(paths, `op-ledger-${armState.arm}.jsonl`))
+    ? readFileSync(statePath(paths, `op-ledger-${armState.arm}.jsonl`), 'utf8').split('\n').filter((l) => l.trim().length > 0).map((l) => JSON.parse(l))
+    : [];
+  const duplicates = summariseDuplicatesByStepId(commitFiles, ledgerLines, ['slugify', 'initials', 'maskEmail', 'build']);
+  void commits;
 
   // Orphans: processes under the anchor cgroup at the end vs at the kill.
-  const orphanSnap = loadJson<{ atKill: ProcRecord[]; afterKill: ProcRecord[] }>(statePath(paths, `${armState.arm}-orphans.json`));
+  // 09-correction item 2: MISSING orphan evidence is an error, never a zero.
+  const orphanFile = statePath(paths, `${armState.arm}-orphans.json`);
+  if (!existsSync(orphanFile)) {
+    throw new Error(`ABORT: orphan evidence missing at ${orphanFile} — refusing to report a silent zero (09-correction item 2)`);
+  }
+  const orphanSnap = loadJson<{ atKill: ProcRecord[]; afterKill: ProcRecord[] }>(orphanFile);
+  if (!orphanSnap) throw new Error(`Orphan evidence at ${orphanFile} is unparsable`);
   const anchorCg = (loadJson<StartedServer>(statePath(paths, 'server.json')) as StartedServer | undefined)?.anchorCgroup ?? '';
   const endSnap = snapshotChildToolProcesses(anchorCg);
-  let orphans = { orphansAtKill: 0, orphanPids: [] as number[], gonePids: [] as number[] };
-  if (orphanSnap) {
-    const first = diffProcessSnapshots(orphanSnap.atKill, orphanSnap.afterKill, new Set());
-    orphans = {
-      orphansAtKill: first.orphansAtKill,
-      orphanPids: first.orphanPids,
-      gonePids: first.orphanPids.filter((pid) => !endSnap.some((p) => p.pid === pid)),
-    };
-  }
+  const first = diffProcessSnapshots(orphanSnap.atKill, orphanSnap.afterKill, new Set());
+  const orphans = {
+    orphansAtKill: first.orphansAtKill,
+    orphanPids: first.orphanPids,
+    gonePids: first.orphanPids.filter((pid) => !endSnap.some((p) => p.pid === pid)),
+  };
 
   // Final status/receipt state.
   const status = await getChildStatus(target, child.sessionId);
   const finalOutcome = status.goalState ?? 'unknown';
+  const workedAfterReadiness = (armState as ArmState & { workedAfterReadiness?: Map<string, boolean> }).workedAfterReadiness?.get(child.sessionId) === true;
+  // 09-correction item 1: "goal running but idle" with no post-readiness work — a silent stall.
+  const silentStall = finalOutcome === 'running' && !workedAfterReadiness && status.busy !== true;
 
   return buildChildRow({
     childId: child.label,
     arm: armState.arm === 'smoke' ? 'smoke' : armState.arm === 'kill' ? 'kill' : 'drain-timeout',
     transcriptDiff: diff,
     secondsToWorking: (armState as ArmState & { secondsToWorking?: Map<string, number> }).secondsToWorking?.get(child.sessionId) ?? null,
+    workedAfterReadiness,
+    silentStall,
     parentAction: (armState.parentActions ?? []).find((a) => a.childId === child.label)?.action ?? null,
-    duplicates,
+    duplicateByStep: duplicates,
     orphans,
     finalOutcome,
     receiptState: status.lastRunState ?? 'none',
@@ -336,8 +458,7 @@ export async function runSmoke(runId: string): Promise<void> {
     }
     const preTranscripts = new Map<string, CrashEventRecord[]>();
     for (const child of armState.children) {
-      const t = await getTranscript(target.socketPath, target.tokenPath, child.sessionId).catch(() => undefined);
-      preTranscripts.set(child.sessionId, parseTranscriptEvents(t));
+      preTranscripts.set(child.sessionId, readRawSession(paths, child.sessionId).events);
     }
     await finishArm(target, paths, armState, preTranscripts, rows);
   } finally {
@@ -351,13 +472,15 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
   if (!server) throw new Error('server.json missing — run start-server first');
   const target: OrchTarget = { socketPath: server.socketPath, tokenPath: server.tokenPath, parentSession: process.env.PI_ORCH_PARENT ?? '' };
   await assertPlacementRootIsolated();
+  if (!server.startedAt) throw new Error('server.json lacks startedAt — cannot run the placement journal assertion');
+  const placement = await assertPlacementEnabledInJournal(server.startedAt).catch((err) => { throw err; });
+  saveJson(statePath(paths, 'kill-placement-evidence.json'), placement);
   const prepareRec = loadJson<{ fixtures: Array<{ name: string; repoDir: string; baselineCommit: string }> }>(statePath(paths, 'prepare.json'));
   if (!prepareRec || prepareRec.fixtures.length < childCount) throw new Error(`need ${childCount} prepared fixtures — run prepare first`);
-  const armState: ArmState & { secondsToWorking: Map<string, number> } = {
-    runId, arm: 'kill', startedAt: nowIso(), children: [], secondsToWorking: new Map(),
+  const armState: ArmState & { secondsToWorking: Map<string, number>; workedAfterReadiness: Map<string, boolean> } = {
+    runId, arm: 'kill', startedAt: nowIso(), children: [], secondsToWorking: new Map(), workedAfterReadiness: new Map(),
   };
   const rows: ChildOutcomeRow[] = [];
-  const sampleLog: Array<Record<string, unknown>> = [];
   try {
     const fixtures = freshFixtures(paths, Array.from({ length: childCount }, (_, i) => `fixture-${i + 1}`));
     for (let i = 0; i < childCount; i += 1) {
@@ -373,12 +496,15 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
     }
 
     // Work phase: wait until every child is mid-turn with tool commands running.
-    const { transcripts, condition } = await waitForChildrenReadyToInterrupt(target, paths, armState, sampleLog);
+    const anchorCgPre = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
+    const { transcripts, condition, inFlightAtKill, partial } = await waitForChildrenReadyToInterrupt(target, paths, armState, anchorCgPre);
     const anchorCg = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
     const procsAtKill = snapshotChildToolProcesses(anchorCg);
     armState.interruptAt = nowIso();
     armState.interruptCondition = condition;
-    logLine(paths, 'kill', 'interrupt', { condition, procsAtKill: procsAtKill.length });
+    armState.interruptPartial = partial;
+    armState.inFlightAtKill = inFlightAtKill;
+    logLine(paths, 'kill', 'interrupt', { condition, partial, inFlightAtKill, procsAtKill: procsAtKill.length });
 
     // THE KILL.
     const kill = await killServerUnit();
@@ -386,25 +512,38 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
     saveJson(statePath(paths, 'kill-orphans.json'), { atKill: procsAtKill, afterKill: procsAfterKill });
     logLine(paths, 'kill', 'killed', { method: kill.method, procsSurviving: procsAfterKill.length });
 
-    // Restart (driver-controlled; production's unit would auto-restart via Restart=always — recorded).
-    const restart = await restartServer(paths, ARM_MODE, kill.method);
-    armState.serverRestart = { at: armState.interruptAt, readyAt: restart.readyAt, durationMs: restart.durationMs, method: kill.method };
+    // 01-answer Q3: mirror production — systemd auto-restarts the killed unit
+    // (Restart=always, RestartSec=10s, TimeoutStopSec=30s); the driver must not
+    // start it by hand in the kill arm.
+    const beforeKill = await getUnitStatus('e2a-6c-server.service');
+    const auto = await waitForSystemdAutoRestart(beforeKill.mainPid ?? 0, 120_000);
+    const ready = await waitForServerReadyViaApi(server.socketPath, server.tokenPath, 90_000);
+    const journal = await journalRestartEvidence(armState.interruptAt);
+    const tRestart = Date.parse(ready.readyAt);
+    armState.serverRestart = {
+      at: armState.interruptAt,
+      readyAt: ready.readyAt,
+      durationMs: tRestart - Date.parse(armState.interruptAt),
+      method: `${kill.method}; systemd auto-restart (Restart=always, RestartSec=10s): unit active again after ${auto.durationMs} ms, new pid ${auto.newMainPid}`,
+    };
+    saveJson(statePath(paths, 'kill-restart-evidence.json'), { killAt: armState.interruptAt, auto, ready, journal });
+    logLine(paths, 'kill', 'server-restarted', { auto, ready, journalLines: journal.length });
 
-    // Observe 10 minutes WITHOUT parent action.
+    // Observe 10 minutes WITHOUT parent action (measured from API-ready).
     const observeStart = Date.now();
-    const tRestart = Date.now();
     while (Date.now() - observeStart < OBSERVE_NO_PARENT_ACTION_MS) {
-      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, armState.children, sampleLog);
+      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'kill', 'observe-no-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
-        const pre = transcripts.get(child.sessionId) ?? [];
         const now = nowTranscripts.get(child.sessionId) ?? [];
-        const diff = diffTranscriptSnapshots(pre, now);
-        const hasNewToolCall = now.slice(diff.retainedCount).some((e) => e.kind === 'toolCall');
-        if (hasNewToolCall) {
-          armState.secondsToWorking.set(child.sessionId, Math.round((Date.now() - tRestart) / 1000));
-          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: armState.secondsToWorking.get(child.sessionId) });
+        // 09-correction item 1: only events timestamped AFTER API readiness count.
+        const r = firstWorkingAfterReadiness(now, tRestart);
+        if (r.working) {
+          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+          armState.secondsToWorking.set(child.sessionId, secs);
+          armState.workedAfterReadiness.set(child.sessionId, true);
+          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness event' });
         }
       }
       await new Promise((r) => setTimeout(r, OBSERVE_INTERVAL_MS));
@@ -432,17 +571,17 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
     // Observe up to 20 more minutes with the parent action applied.
     const observeStart2 = Date.now();
     while (Date.now() - observeStart2 < OBSERVE_WITH_PARENT_ACTION_MS) {
-      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, armState.children, sampleLog);
+      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'kill', 'observe-parent-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
-        const pre = transcripts.get(child.sessionId) ?? [];
         const now = nowTranscripts.get(child.sessionId) ?? [];
-        const diff = diffTranscriptSnapshots(pre, now);
-        const hasNewToolCall = now.slice(diff.retainedCount).some((e) => e.kind === 'toolCall');
-        if (hasNewToolCall) {
-          armState.secondsToWorking.set(child.sessionId, Math.round((Date.now() - tRestart) / 1000));
-          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: armState.secondsToWorking.get(child.sessionId), afterParentAction: true });
+        const r = firstWorkingAfterReadiness(now, tRestart);
+        if (r.working) {
+          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+          armState.secondsToWorking.set(child.sessionId, secs);
+          armState.workedAfterReadiness.set(child.sessionId, true);
+          logLine(paths, 'kill', 'child-working-again', { childId: child.label, seconds: secs, afterParentAction: true, measuredFrom: 'first post-readiness event' });
         }
       }
       const allDone = armState.children.every((c) => armState.secondsToWorking.has(c.sessionId));
@@ -462,13 +601,15 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
   if (!server) throw new Error('server.json missing — run start-server first');
   const target: OrchTarget = { socketPath: server.socketPath, tokenPath: server.tokenPath, parentSession: process.env.PI_ORCH_PARENT ?? '' };
   await assertPlacementRootIsolated();
+  if (!server.startedAt) throw new Error('server.json lacks startedAt — cannot run the placement journal assertion');
+  const placement = await assertPlacementEnabledInJournal(server.startedAt).catch((err) => { throw err; });
+  saveJson(statePath(paths, 'drain-placement-evidence.json'), placement);
   const prepareRec = loadJson<{ fixtures: Array<{ name: string; repoDir: string; baselineCommit: string }> }>(statePath(paths, 'prepare.json'));
   if (!prepareRec || prepareRec.fixtures.length < childCount) throw new Error(`need ${childCount} prepared fixtures — run prepare first`);
-  const armState: ArmState & { secondsToWorking: Map<string, number> } = {
-    runId, arm: 'drain-timeout', startedAt: nowIso(), children: [], secondsToWorking: new Map(),
+  const armState: ArmState & { secondsToWorking: Map<string, number>; workedAfterReadiness: Map<string, boolean> } = {
+    runId, arm: 'drain-timeout', startedAt: nowIso(), children: [], secondsToWorking: new Map(), workedAfterReadiness: new Map(),
   };
   const rows: ChildOutcomeRow[] = [];
-  const sampleLog: Array<Record<string, unknown>> = [];
   try {
     // The drain arm runs after the kill arm and REBUILDS its fixtures, so it
     // can reuse the same names (fixture-1..N) with clean side-effect state.
@@ -485,12 +626,15 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
       logLine(paths, 'drain-timeout', 'child-spawned', { label, sessionId, watchId });
     }
 
-    const { transcripts, condition } = await waitForChildrenReadyToInterrupt(target, paths, armState, sampleLog);
+    const anchorCgPre = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
+    const { transcripts, condition, inFlightAtKill, partial } = await waitForChildrenReadyToInterrupt(target, paths, armState, anchorCgPre);
     const anchorCg = (await getUnitStatus('e2a-6c-tools-anchor.service')).controlGroup ?? '';
     const procsAtDrain = snapshotChildToolProcesses(anchorCg);
     armState.interruptAt = nowIso();
     armState.interruptCondition = condition;
-    logLine(paths, 'drain-timeout', 'drain-start', { condition });
+    armState.interruptPartial = partial;
+    armState.inFlightAtKill = inFlightAtKill;
+    logLine(paths, 'drain-timeout', 'drain-start', { condition, partial, inFlightAtKill });
 
     // Drain with a SHORT timeout: it waits for busy turns, times out, and the
     // driver proceeds (the deploy-script choice) — cutting the turns off.
@@ -516,25 +660,25 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
     // Proceed: graceful stop (SIGTERM → the server's own teardown), then start.
     await stopServerUnits();
     const procsAfterStop = snapshotChildToolProcesses(anchorCg);
-    saveJson(statePath(paths, 'drain-orphans.json'), { atKill: procsAtDrain, afterKill: procsAfterStop });
+    saveJson(statePath(paths, `${armState.arm}-orphans.json`), { atKill: procsAtDrain, afterKill: procsAfterStop });
     const restart = await restartServer(paths, ARM_MODE, 'drain timed out; graceful stop then start');
     armState.serverRestart = { at: armState.interruptAt, readyAt: restart.readyAt, durationMs: restart.durationMs };
 
-    // Observe 10 minutes WITHOUT parent action.
-    const tRestart = Date.now();
+    // Observe 10 minutes WITHOUT parent action — gated on API readiness (09 item 1).
+    const tRestart = Date.parse(restart.readyAt);
     const observeStart = Date.now();
     while (Date.now() - observeStart < OBSERVE_NO_PARENT_ACTION_MS) {
-      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, armState.children, sampleLog);
+      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'drain-timeout', 'observe-no-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
-        const pre = transcripts.get(child.sessionId) ?? [];
         const now = nowTranscripts.get(child.sessionId) ?? [];
-        const diff = diffTranscriptSnapshots(pre, now);
-        const hasNewToolCall = now.slice(diff.retainedCount).some((e) => e.kind === 'toolCall');
-        if (hasNewToolCall) {
-          armState.secondsToWorking.set(child.sessionId, Math.round((Date.now() - tRestart) / 1000));
-          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: armState.secondsToWorking.get(child.sessionId) });
+        const r = firstWorkingAfterReadiness(now, tRestart);
+        if (r.working) {
+          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+          armState.secondsToWorking.set(child.sessionId, secs);
+          armState.workedAfterReadiness.set(child.sessionId, true);
+          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, measuredFrom: 'first post-readiness event' });
         }
       }
       await new Promise((r) => setTimeout(r, OBSERVE_INTERVAL_MS));
@@ -561,17 +705,17 @@ export async function runDrainArm(runId: string, childCount: number): Promise<vo
 
     const observeStart2 = Date.now();
     while (Date.now() - observeStart2 < OBSERVE_WITH_PARENT_ACTION_MS) {
-      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, armState.children, sampleLog);
+      const { samples, transcripts: nowTranscripts } = await sampleChildren(target, paths, armState.children);
       logLine(paths, 'drain-timeout', 'observe-parent-action', { samples });
       for (const child of armState.children) {
         if (armState.secondsToWorking.has(child.sessionId)) continue;
-        const pre = transcripts.get(child.sessionId) ?? [];
         const now = nowTranscripts.get(child.sessionId) ?? [];
-        const diff = diffTranscriptSnapshots(pre, now);
-        const hasNewToolCall = now.slice(diff.retainedCount).some((e) => e.kind === 'toolCall');
-        if (hasNewToolCall) {
-          armState.secondsToWorking.set(child.sessionId, Math.round((Date.now() - tRestart) / 1000));
-          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: armState.secondsToWorking.get(child.sessionId), afterParentAction: true });
+        const r = firstWorkingAfterReadiness(now, tRestart);
+        if (r.working) {
+          const secs = r.firstNewToolCallAtMs !== null ? Math.max(0, Math.round((r.firstNewToolCallAtMs - tRestart) / 1000)) : Math.round((Date.now() - tRestart) / 1000);
+          armState.secondsToWorking.set(child.sessionId, secs);
+          armState.workedAfterReadiness.set(child.sessionId, true);
+          logLine(paths, 'drain-timeout', 'child-working-again', { childId: child.label, seconds: secs, afterParentAction: true, measuredFrom: 'first post-readiness event' });
         }
       }
       const allDone = armState.children.every((c) => armState.secondsToWorking.has(c.sessionId));
@@ -624,10 +768,11 @@ export function analyseArm(runId: string, arm: string): void {
   const results = loadJson<{ rows: ChildOutcomeRow[]; totals: Record<string, number> }>(resultsFile);
   if (!results) throw new Error(`no results at ${resultsFile}`);
   const lines: string[] = [];
-  lines.push(`| child | turns lost | tool results lost | edits lost | s to working | parent action | dup side effects | orphans | final goal | receipt | watch saw |`);
+  lines.push(`| child | recorded event loss | s to working (post-readiness) | parent action | dup commits by step | builds seen | silent stall | orphans | final goal | receipt | watch saw |`);
   lines.push('|---|---|---|---|---|---|---|---|---|---|---|');
   for (const r of results.rows) {
-    lines.push(`| ${r.childId} | ${r.turnsLost} | ${r.toolResultsLost} | ${r.editsLost} | ${r.secondsToWorking ?? 'never'} | ${r.parentAction ?? 'none'} | ${r.duplicateSideEffects.totalDuplicateEvents} | ${r.orphans.orphansAtKill} | ${r.finalOutcome} | ${r.receiptState} | ${r.watch.firingKinds.join(',')}${r.watch.sawInterruptedByRestart ? ' +interruptedByRestart' : ''} |`);
+    const stepDups = Object.entries(r.duplicateByStep.byStepId).filter(([, n]) => n > 0).map(([k, n]) => `${k}:${n}`).join(',') || 'none';
+    lines.push(`| ${r.childId} | ${r.turnsLost} | ${r.secondsToWorking ?? 'never'} | ${r.parentAction ?? 'none'} | ${stepDups} | ${r.duplicateByStep.buildRuns} | ${r.silentStall ? 'YES' : 'no'} | ${r.orphans.orphansAtKill} | ${r.finalOutcome} | ${r.receiptState} | ${r.watch.firingKinds.join(',')} |`);
   }
   lines.push('');
   lines.push(`Totals: ${JSON.stringify(results.totals)}`);

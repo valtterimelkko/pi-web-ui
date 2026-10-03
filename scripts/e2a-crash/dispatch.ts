@@ -64,11 +64,40 @@ export async function spawnGoalChild(
     '--parent-session', target.parentSession,
   ];
   const { stdout, exitCode, stderr } = await piOrch(args, 120_000);
+  if (exitCode === 22) {
+    // TEMPLATE_NOT_DELIVERED (observed 2026-10-02 23:04Z: the goal-template
+    // follow-up raced the busy objective turn). The remedy pi-orch names:
+    // re-send the template with `prompt --message <instructions>`.
+    const { applyGoalObjectiveTemplate } = await import('/root/pi-orch/src/completion-template.ts');
+    await new Promise((r) => setTimeout(r, 5_000));
+    let sessionId = parseSpawnSessionId(stdout) ?? parseSpawnSessionId(stderr);
+    if (!sessionId) {
+      // Last resort: the id is embedded in the TEMPLATE_NOT_DELIVERED message.
+      const m = stderr.match(/delivered to ([0-9a-f][0-9a-f-]{16,})/);
+      if (!m) throw new Error(`pi-orch spawn template failure and no session id recoverable: ${stderr.slice(0, 300)}`);
+      sessionId = m[1];
+    }
+    const resend = await piOrch([
+      'prompt', sessionId, '--message', applyGoalObjectiveTemplate(opts.objective),
+      '--socket', target.socketPath, '--token-path', target.tokenPath, '--parent-session', target.parentSession, '--id-only',
+    ], 60_000);
+    if (resend.exitCode !== 0) throw new Error(`template re-send failed (exit ${resend.exitCode}): ${resend.stderr.slice(0, 200)}`);
+    return sessionId;
+  }
   if (exitCode !== 0) throw new Error(`pi-orch spawn failed (exit ${exitCode}): ${stderr.slice(0, 300) || stdout.slice(0, 400)}`);
-  const parsed = JSON.parse(stdout) as Record<string, unknown>;
-  const sessionId = (parsed.sessionId ?? parsed.id) as string | undefined;
-  if (typeof sessionId !== 'string' || sessionId.length < 8) throw new Error(`pi-orch spawn: no session id in output: ${stdout.slice(0, 200)}`);
-  return sessionId;
+  const sessionId2 = parseSpawnSessionId(stdout) ?? parseSpawnSessionId(stderr);
+  if (!sessionId2) throw new Error(`pi-orch spawn: no session id in output: ${stdout.slice(0, 200)}`);
+  return sessionId2;
+}
+
+function parseSpawnSessionId(stdout: string): string | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    const id = (parsed.sessionId ?? parsed.id) as string | undefined;
+    return typeof id === 'string' && id.length >= 8 ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Register a pure-observer watch (agent_end + goal_end) on a child; returns the watch id. */
@@ -163,9 +192,10 @@ export async function getTranscript(socketPath: string, tokenPath: string, sessi
   return internalApiRequest<unknown>(socketPath, tokenPath, 'GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/transcript`);
 }
 
-/** Start a drain with a short timeout (drain-timeout arm). The drain never restarts anything itself. */
+/** Start a drain with a short timeout (drain-timeout arm). The endpoint BLOCKS until the verdict — the request timeout derives from it (08-parent-note). */
 export async function startDrain(socketPath: string, tokenPath: string, timeoutSeconds: number, reason: string): Promise<unknown> {
-  return internalApiRequest<unknown>(socketPath, tokenPath, 'POST', '/api/v1/drain', { reason, timeoutSeconds }, 30_000);
+  const { drainRequestTimeoutMs } = await import('./analysis.ts');
+  return internalApiRequest<unknown>(socketPath, tokenPath, 'POST', '/api/v1/drain', { reason, timeoutSeconds }, drainRequestTimeoutMs(timeoutSeconds));
 }
 
 export async function getDrainStatus(socketPath: string, tokenPath: string): Promise<unknown> {
