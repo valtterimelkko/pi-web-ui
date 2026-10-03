@@ -143,15 +143,16 @@ def dom_occurrences(page, needle):
 def assistant_scoped_check(page, needle):
     """hb2/hb6 oracle scoped to ASSISTANT bubbles: the user prompt echo
     legitimately contains the marker, so chat-wide counting false-doubles.
-    Returns (bubblesContaining, lastBubbleText)."""
+    Returns (bubblesContaining, replyBubbleText) where replyBubbleText is the
+    inner text of the bubble that CONTAINS the needle (the reply itself)."""
     return page.evaluate(
         """(needle) => {
           const root = document.querySelector('[data-testid="chat-interface"]');
           if (!root) return { bubbles: -1, lastText: null };
           const bubbles = [...root.querySelectorAll('div.border-l-2')];
           const containing = bubbles.filter((b) => (b.textContent || '').includes(needle));
-          const lastText = bubbles.length ? (bubbles[bubbles.length - 1].innerText || '') : null;
-          return { bubbles: containing.length, lastText };
+          const replyText = containing.length ? (containing[containing.length - 1].innerText || '') : null;
+          return { bubbles: containing.length, lastText: replyText };
         }""", needle)
 
 
