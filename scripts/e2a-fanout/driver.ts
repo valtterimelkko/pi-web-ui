@@ -7,10 +7,15 @@
  * Run the driver itself inside a bounded scope (containment rule):
  *   systemd-run --scope --quiet --collect --unit=e2a-4-<mode>-driver \
  *     -p MemoryMax=... -p MemorySwapMax=1G -- node --import tsx scripts/e2a-fanout/driver.ts ...
+ *
+ * SIGTERM/SIGINT trigger a best-effort teardown (units stopped, lock released)
+ * so an outer timeout can never strand either.
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { armOptionsFor, runArm } from './lib/run.ts';
+import { releaseLock } from './lib/preflight.ts';
+import { stopUnit } from './lib/procsystemd.ts';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -22,6 +27,28 @@ const runRoot = arg('run-root') ?? join('/root/e2a-runs/a4', `${mode}-${new Date
 mkdirSync(runRoot, { recursive: true });
 
 const opts = armOptionsFor(mode, runRoot);
+
+let signalSeen = false;
+const onSignal = (): void => {
+  if (signalSeen) return;
+  signalSeen = true;
+  const suffix = mode === 'smoke' ? 'smoke' : 'arm-a';
+  const stop = (unit: string): void => {
+    try {
+      void stopUnit(unit);
+    } catch {
+      /* best effort */
+    }
+  };
+  stop(`e2a-4-${suffix}-server`);
+  stop('e2a-4-tools-anchor.service');
+  releaseLock(`lane E2a-4 arm ${mode}`);
+  // Give the async stops a moment, then exit non-zero.
+  setTimeout(() => process.exit(130), 3000).unref();
+};
+process.on('SIGTERM', onSignal);
+process.on('SIGINT', onSignal);
+
 const result = await runArm(opts);
 if (!result.ok) {
   console.error(`DRIVER FAILED: ${result.error ?? 'unknown error'}`);

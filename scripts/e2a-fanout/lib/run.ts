@@ -5,7 +5,7 @@
  * through pi-orch with per-create records and 1 s samplers → teardown →
  * latch analysis.
  */
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -387,12 +387,17 @@ export async function runArm(opts: ArmOptions): Promise<{ ok: boolean; summaryPa
       writeFileSync(join(runRoot, 'creates', '_all.json'), `${JSON.stringify(creates, null, 2)}\n`);
     }
 
-    // 9. Teardown: server first, then anchor.
+    // 9. Teardown: server first, then anchor; token file removed (04:22Z hygiene).
     await stopUnit(serverUnitName);
     await stopUnit(anchorUnit);
     anchorStarted = false;
     serverUnit = null;
-    log('units stopped');
+    try {
+      rmSync(join(runRoot, 'server', 'internal-api-token'), { force: true });
+    } catch {
+      /* already gone */
+    }
+    log('units stopped; server token removed');
 
     // 10. A2 series + analysis.
     const metricsPath = join(runRoot, 'server', 'metrics', 'health-metrics.jsonl');
