@@ -18,6 +18,7 @@ describe('Command Code Internal API boundary', () => {
     expect(capabilities.commandcode).toBeDefined();
     // The deliberate version pin. Bumping the contract must be an act someone
     // chooses, and this is where that choice is felt — hence exact, not a floor.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.58.5');
+    // 1.59.0: L1 (R5 follow-up wave, 2026-10-03) — /capacity quarantinedOldestAgeMs.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.59.0');
   });
 });

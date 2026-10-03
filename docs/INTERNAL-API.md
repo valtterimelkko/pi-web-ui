@@ -1549,10 +1549,17 @@ interactive Web UI work, separate control/execution capacity, measured
 cgroup-v2 memory usage (or process RSS/host RAM fallback), optional PID/task and
 host-pressure/event evidence, conservative-knob provenance, and
 `retryAfterSeconds`. Additive fields such as `classes`, `control`,
-`stalledRuns`, `quarantinedRuns`, `oldestActiveRunStartedAt`, `disposalLane`
-and `disposalOwners` are process-local diagnostics. Contract `1.49.0` adds the
-V8 heap gate (`heap`), the sustained event-loop lag gate (`eventLoopLag`) and
-the drain state (`draining`).
+`stalledRuns`, `quarantinedRuns`, `quarantinedOldestAgeMs`,
+`oldestActiveRunStartedAt`, `disposalLane` and `disposalOwners` are
+process-local diagnostics. Contract `1.49.0` adds the V8 heap gate (`heap`),
+the sustained event-loop lag gate (`eventLoopLag`) and the drain state
+(`draining`). Contract `1.59.0` adds `quarantinedOldestAgeMs` — the age in
+milliseconds of the oldest quarantined admission lease (a terminal
+`cancelled`/`failed` run whose runtime cessation was never confirmed, so its
+slot is held as capacity debt; absent when nothing is quarantined). The L1
+reconciliation guard releases a quarantined slot once the run's whole session
+is confirmed quiescent, so a non-zero age that keeps growing across a settled
+session is the incident signal, not steady state.
 
 ```json
 {

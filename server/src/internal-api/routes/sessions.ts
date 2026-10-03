@@ -89,6 +89,8 @@ import {
   RunReceiptManager,
 } from '../run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../run-receipts/run-receipt-store.js';
+import { DeletedSessionCessation } from '../run-receipts/deletion-cessation.js';
+import { isPiSessionQuiescent } from '../runtime-quiescence.js';
 import { resolveExecutionInstanceId } from '../execution-instance.js';
 import { classifyPhase7PiShadow } from '../phase7-pi-shadow.js';
 // Contract 1.48.0 (B3a): the Pi runtime's streaming tool-argument budget.
@@ -457,6 +459,8 @@ export interface SessionRoutesDeps {
   runReceiptDir?: string;
   /** Idempotency replay window for a newly accepted run. */
   runReceiptIdempotencyTtlMs?: number;
+  /** Correction 01 (Luna r1 finding 2): deletion-cessation tracker consulted by the quiescence wiring when a registry entry is missing. Optional: absent in some direct route tests (no gating). */
+  deletedSessionCessation?: DeletedSessionCessation;
   /** Directory for the durable API-pin expiry ledger. Optional: when absent, pin
    * requests still pin in-memory but are not time-bounded/tracked (used by some unit tests). */
   pinDir?: string;
@@ -538,6 +542,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onBrowserMessage,
   } = deps;
   const commandCodeService = deps.commandCodeService;
+  // Correction 01 (Luna r1 finding 2): deletes record here so the quiescence
+  // wiring can gate the missing-session branch on awaited termination acks or
+  // the bounded deletion grace instead of raw registry absence.
+  const deletedSessionCessation = deps.deletedSessionCessation;
 
   // Contract 1.34.0 child surfacing: automatic parent linkage fallback fed by
   // the pi tool event stream (header-first linkage needs no correlation).
@@ -3179,6 +3187,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         if (pinExpiry) await pinExpiry.clear(commandCodeEntry.sessionId);
         await unpinSessionById(commandCodeEntry.sessionId).catch(() => false);
         await commandCodeService!.deleteSession(commandCodeEntry.sessionId);
+        // Correction 01 (Luna r1 finding 2): Command Code's delete awaits the
+        // session teardown — positive termination acknowledgement.
+        deletedSessionCessation?.record(commandCodeEntry.sessionId, 'commandcode', true);
         sendJson(res, 200, { success: true, nativeTranscriptRetained: true });
         return;
       }
@@ -3200,6 +3211,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // the canonical sessionId), so the broker's deletion fence covers Pi.
       // Idempotent; runs no handles unless a surface registered under the path.
       if (entry.path && entry.path !== sessionId) disposal.dispose(entry.path);
+
+      // Correction 02 (Luna r2, finding 2 remainder): record the deletion
+      // BEFORE the runtime abort — the abort of an abort-only runtime
+      // (OpenCode) clears isRunning() while the remote cessation is still
+      // unacknowledged, and the quiescence callback consults this tracker
+      // before any isRunning() truth, so the record must exist from the
+      // earliest moment of the deletion window. Pi's awaited dispose and
+      // Command Code's awaited delete are termination acknowledgements
+      // (released immediately); Claude, OpenCode and Antigravity hold through
+      // the bounded deletion grace.
+      deletedSessionCessation?.record(
+        sessionId,
+        entry.sdkType as SessionRuntime,
+        entry.sdkType === 'pi',
+      );
 
       if (entry.sdkType === 'claude') {
         claudeService.abort(sessionId);
@@ -3432,11 +3458,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    */
   function piLiveness(entry: RegistryEntry): { busy: boolean; liveTurn: boolean; compacting: boolean } {
     const statusInfo = multiSessionManager.getSessionStatus?.(entry.path);
-    const managerBusy = statusInfo?.status === 'busy' || statusInfo?.status === 'streaming';
+    // Correction 01 (Luna r1 finding 1): the busy truth is shared with the
+    // Internal API quiescence wiring via isPiSessionQuiescent — manager
+    // status, the SDK's own streaming truth and compaction, one predicate.
+    const busy = !isPiSessionQuiescent(statusInfo);
     const sdkStreaming = statusInfo?.sdkStreaming === true;
     const compacting = statusInfo?.compacting === true;
     return {
-      busy: managerBusy || sdkStreaming || compacting,
+      busy,
       // A LIVE runtime turn the queue can drain: a streaming status, or the
       // SDK's own streaming truth. The manager's pre-start `busy` limbo and
       // compaction are busy but NOT live turns (compaction is refused earlier).
@@ -8480,6 +8509,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ...admission.snapshot(),
       stalledRuns: runReceipts.getStalledRunCount(),
       quarantinedRuns: runReceipts.getQuarantinedCount(),
+      // L1 (contract 1.59.0): age in ms of the oldest quarantined admission
+      // lease — absent when nothing is quarantined. Makes quarantined capacity
+      // debt observable (the 2026-10-03 incident held 10 phantom turns for
+      // hours with no restart-visible signal beyond the bare count).
+      quarantinedOldestAgeMs: runReceipts.getQuarantinedOldestAgeMs(),
       oldestActiveRunStartedAt: runReceipts.getOldestActiveRunStartedAt(),
       control: { inFlight: controlLane.inFlight, queued: controlLane.queued },
       disposalLane: { inFlight: disposalLane.inFlight, queued: disposalLane.queued },
