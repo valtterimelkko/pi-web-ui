@@ -149,8 +149,11 @@ def assistant_scoped_check(page, needle):
         """(needle) => {
           const root = document.querySelector('[data-testid="chat-interface"]');
           if (!root) return { bubbles: -1, lastText: null };
-          const bubbles = [...root.querySelectorAll('div.border-l-2')];
-          const containing = bubbles.filter((b) => (b.textContent || '').includes(needle));
+          const bubbles = [...root.querySelectorAll('div.border-l-2.break-words')];
+          // innermost content wrapper containing the needle (collapsed-streaming
+          // wrappers and markdown blockquotes also carry border-l-2)
+          const containing = bubbles.filter((b) => (b.textContent || '').includes(needle)
+            && ![...b.querySelectorAll('div.border-l-2.break-words')].some((d) => d !== b && (d.textContent || '').includes(needle)));
           const replyText = containing.length ? (containing[containing.length - 1].innerText || '') : null;
           return { bubbles: containing.length, lastText: replyText };
         }""", needle)
@@ -170,7 +173,7 @@ def shoot(page, name):
     print(f'screenshot: {out}', flush=True)
 
 
-def open_child_session(page, seed_needle='GOAL_ACHIEVED'):
+def open_child_session(page, seed_needle='1 through 60'):
     page.goto(BASE)
     page.wait_for_load_state('networkidle')
     if page.locator('input[type="password"]').count() > 0:
