@@ -419,6 +419,8 @@ export function summariseWatchLedger(ledger: unknown): WatchLedgerSummary {
         interrupted = true;
       }
       if (typeof f.interruptedByRestart === 'boolean' && f.interruptedByRestart) interrupted = true;
+      // The ledger's firing evidence carries the interruption as text.
+      if (typeof f.evidence === 'string' && /interrupted by restart/i.test(f.evidence)) interrupted = true;
     }
     kinds.push(kind);
     if (kind === 'goal_end') summary.sawGoalEnd = true;

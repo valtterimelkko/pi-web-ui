@@ -197,6 +197,17 @@ export class ConditionEngine {
         if (data.runNeverStarted === true) {
           return truncate(`event ${event.type} (run never started: run ${String(data.runId ?? 'unknown')}, start window ${String(data.startWindowMs ?? 'unknown')}ms)`);
         }
+        // Wave K correction 03 (C6): the auto-continue goal_state payload goes
+        // into the firing evidence, so the ledger (the parent-visible record)
+        // carries autoContinued/cause/continueCount verbatim.
+        if (event.type === 'goal_state' && data.autoContinued === true) {
+          const interruption = (data.interruption ?? {}) as Record<string, unknown>;
+          return truncate(`event goal_state (autoContinued: true, cause: ${String(interruption.cause ?? 'unknown')}, continueCount: ${String(interruption.continueCount ?? 'unknown')})`);
+        }
+        if (event.type === 'goal_state' && data.pausedReason === 'interrupted') {
+          const interruption = (data.interruption ?? {}) as Record<string, unknown>;
+          return truncate(`event goal_state (interrupted: cause ${String(interruption.cause ?? 'unknown')}, continueCount: ${String(interruption.continueCount ?? 0)})`);
+        }
         return truncate(`event ${event.type}`);
       }
 

@@ -61,6 +61,8 @@ export function createPiGoalEventBridge(deps: CreatePiGoalEventBridgeDeps): PiGo
       deps.publish({ type: 'goal_state', timestamp, data: projection });
 
       if (isTerminalGoalStatus(projection.status) && lastEmittedTerminal !== projection.status) {
+        // Correction 03 scope cut: no interception. A provider failure ends
+        // exactly as before wave K — goal_state + goal_end, unchanged.
         lastEmittedTerminal = projection.status;
         deps.publish({ type: 'goal_end', timestamp, data: projection });
       } else if (!isTerminalGoalStatus(projection.status)) {

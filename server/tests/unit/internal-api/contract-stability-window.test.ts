@@ -89,6 +89,19 @@ const L1_1_59_0_ROW: StabilityExceptionRow = {
   version: '1.59.0',
 };
 
+/**
+ * The live table's third row (wave K, R5 2026-10-03): the owner's R5 decision
+ * "wave K GO, slimmed: continue once after a restart interruption, plus parent
+ * visibility". Its additive minor bump (1.60.0) re-based the snapshot baseline
+ * again (see BASELINE_SHAPE_SHA256).
+ */
+const K_1_60_0_ROW: StabilityExceptionRow = {
+  date: '2026-10-03',
+  decision: 'R5 (wave K GO, slimmed: continue once after a restart interruption, plus parent visibility)',
+  what: '1.60.0 (wave K): `SessionGoalProjection` gains the optional `interruption` object and top-level `autoContinued`; a non-continued stop projects as `status: "paused"`, `pausedReason: "interrupted"`; a verified auto-continue emits `goal_state` (never `goal_end`). Additive only.',
+  version: '1.60.0',
+};
+
 describe('contract stability window (C6)', () => {
   const doc = readFileSync(contractDocPath, 'utf8');
   const committed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as ClientContractSnapshot;
@@ -117,8 +130,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: the retroactive 1.58.5 row and the L1 1.59.0 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row and the wave K 1.60.0 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -137,12 +150,12 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version now that the 1.59.0 exception row names it', () => {
+    it('accepts the live contract version now that the 1.60.0 exception row names it', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
       expect(verdict.ok).toBe(true);
-      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.59');
+      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.60');
     });
 
     it('refuses the live contract version when the exception row is absent (the window rule still bites)', () => {

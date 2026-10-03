@@ -94,6 +94,18 @@ export interface RestartInterruptedBusySession {
 /** Completion-type event conditions eligible for `fireIfSettled`. */
 const SETTLED_COMPLETION_EVENT_TYPES = new Set(['agent_end', 'goal_end']);
 
+/**
+ * Wave K (R5): module-level fallback probe used when a WatchManager is
+ * constructed without `hasGoalContinueMarker`. Server wiring (server.ts, which
+ * owns the marker store) installs it at boot; unit tests that pass the dep are
+ * unaffected. Awaited by the restart reconciliation before a synthetic goal_end.
+ */
+let moduleGoalContinueProbe: ((sessionId: string) => boolean | Promise<boolean>) | undefined;
+
+export function setGoalContinueProbe(probe: ((sessionId: string) => boolean | Promise<boolean>) | undefined): void {
+  moduleGoalContinueProbe = probe;
+}
+
 export type WatchWakeDispatchResult =
   | { status: 'dispatched'; runId?: string; deliveryKind?: WatchWakeDeliveryKind }
   | { status: 'failed'; errorCode: string; detail?: string };
@@ -136,6 +148,15 @@ export interface WatchManagerDeps {
    * when a goal_end condition is pending) flagged `interruptedByRestart`.
    */
   getRestartInterruptedRuns?: () => RestartInterruptedRun[] | Promise<RestartInterruptedRun[]>;
+  /**
+   * Wave K (contract 1.59.0, R5): true when the interruption sweep holds a
+   * continue marker (reserved or committed) for the session — the synthetic
+   * `goal_end` would then be a FALSE end (the sweep continues the child), so
+   * only the `agent_end` interruption evidence fires. Awaited, so the boot
+   * sweep's classification phase can be ordered before reconciliation.
+   * Falls back to the module-level probe (`setGoalContinueProbe`) when absent.
+   */
+  hasGoalContinueMarker?: (sessionId: string) => boolean | Promise<boolean>;
   /**
    * B4.1: receipt-less busy sessions the previous process's drain announced as
    * cut off (extension-driven or browser turns). Same synthetic completion as
@@ -309,6 +330,7 @@ export class WatchManager {
   private readonly surface?: WatchManagerDeps['surface'];
   private readonly getSubjectSettlement?: WatchManagerDeps['getSubjectSettlement'];
   private readonly getRestartInterruptedRuns?: WatchManagerDeps['getRestartInterruptedRuns'];
+  private readonly hasGoalContinueMarker?: WatchManagerDeps['hasGoalContinueMarker'];
   private readonly getRestartInterruptedBusySessions?: WatchManagerDeps['getRestartInterruptedBusySessions'];
   /** Live watches keyed by sessionId. */
   private readonly active = new Map<string, ActiveWatch>();
@@ -334,6 +356,7 @@ export class WatchManager {
     this.surface = deps.surface;
     this.getSubjectSettlement = deps.getSubjectSettlement;
     this.getRestartInterruptedRuns = deps.getRestartInterruptedRuns;
+    this.hasGoalContinueMarker = deps.hasGoalContinueMarker;
     this.getRestartInterruptedBusySessions = deps.getRestartInterruptedBusySessions;
   }
 
@@ -554,7 +577,16 @@ export class WatchManager {
         const wakeBudget: WakeBudget = { remaining: 1 };
         this.handleEvent(sessionId, { type: 'agent_end', timestamp, data }, wakeBudget);
         if (waitsOnGoalEnd && this.active.get(sessionId) === live && live.record.status === 'active') {
-          this.handleEvent(sessionId, { type: 'goal_end', timestamp, data }, wakeBudget);
+          // Wave K (R5): a session the interruption sweep auto-continues gets
+          // NO synthetic goal_end — it would be a false end. The parent is
+          // woken once, at the real end (the sweep emits goal_state only).
+          const probe = this.hasGoalContinueMarker ?? moduleGoalContinueProbe;
+          const autoContinued = probe ? await probe(sessionId) : false;
+          if (autoContinued) {
+            logger.info(`restart reconciliation: suppressed synthetic goal_end for ${sessionId} (goal auto-continue marker present)`);
+          } else {
+            this.handleEvent(sessionId, { type: 'goal_end', timestamp, data }, wakeBudget);
+          }
         }
         logger.info(firedLine);
       } catch {

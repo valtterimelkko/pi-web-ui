@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.59.0",
+  "contractVersion": "1.60.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -72,9 +72,15 @@ Exception table (date, owner decision, what, version):
 | --- | --- | --- | --- |
 | 2026-10-02 | post-H-b review (owner accepted) | 1.58.5: /capacity memory.currentBytes and admission memory checks report working set (current − inactive_file), not total | 1.58.5 |
 | 2026-10-03 | R5 (owner accepted every recommendation; the C6 window closed at R5) | 1.59.0 (L1): /capacity gains `quarantinedOldestAgeMs` — age of the oldest quarantined admission lease; quarantined entries gained a reconciliation guard (release on confirmed session quiescence). Additive only. | 1.59.0 |
+| 2026-10-03 | R5 (wave K GO, slimmed: continue once after a restart interruption, plus parent visibility) | 1.60.0 (wave K): `SessionGoalProjection` gains the optional `interruption` object and top-level `autoContinued`; a non-continued stop projects as `status: "paused"`, `pausedReason: "interrupted"`; a verified auto-continue emits `goal_state` (never `goal_end`). Additive only. | 1.60.0 |
 
 ### Changelog
 
+- **1.60.0** (minor — wave K, durable runs; authorised by R5's owner decision "continue once after a restart interruption, plus parent visibility"; the C6 window closed at R5). Additive goal changes only:
+  - **Continue once after a restart interruption.** An Internal API Pi goal child whose run a restart cut off (a goal `running` on disk with no live turn at boot or at a drain timeout, or `paused` with `pausedReason: "restored_on_session_start"`) is continued ONCE by the server: a detached prompt with a marker-derived `idempotencyKey`, an exclusive per-goal claim under `<run-receipts dir>/goal-continue/`, ambiguous delivery counted as consumed and never replayed. `wrapping-up`, explicit pauses, questions, budget/turn limits and every other stop keep their pre-wave behaviour. **Provider aborts are not continued** (they end as before, with `goal_end`).
+  - **Visibility.** A stop the server does not continue projects as `status: "paused"`, `pausedReason: "interrupted"` with the optional `interruption` object (`cause` ∈ `restart_interruption`, `rehydrate_pause`, `second_transient`, `continue_failed`, `unsupported_runtime`; `source`, `detectedAt`, `continueCount`, `autoContinued?`, `continueNote?`, `inFlightToolCall?`) and emits `goal_state`. Claude, Antigravity and Command Code goals get this visibility only (cause `unsupported_runtime`, boot sweep only).
+  - **Auto-continue event.** A verified continue emits `goal_state` with `status: "running"`, **top-level `autoContinued: true`** and the nested `interruption` object, never a `goal_end`; the restart reconciliation's synthetic `goal_end` is suppressed only for a confirmed continue of the current goal in this boot. Watch with `dataMatch {"autoContinued": true}` (`dataMatch` is a shallow top-level match).
+  - No existing route, field, status or default changed; consumers that do not read the new optional fields are unaffected. Details: [`INTERNAL-API.md`](./INTERNAL-API.md) § Wave K.
 - **1.59.0** (minor — L1 admission-count leak: reconciliation guard + observability; the C6 window closed at R5, so the additive minor bump is authorised by R5's owner decisions). Two changes, both additive:
   - **Quarantine reconciliation guard** (`server/src/internal-api/run-receipts/run-receipt-manager.ts`). A terminal `cancelled`/`failed` run whose runtime cessation was never confirmed holds its admission lease through a bounded drain window and then quarantines (the §11 fence: no false capacity release). Quarantine used to be terminal — the slot was held until a restart. Production (2026-10-03) accumulated 8→10 such phantom turns: each reserved its per-turn memory budget against the admission projection, so the server refused new work (`memory_pressure`) while the host had ~19 GiB free; only the 08:14 drain-restart cleared them. The new reconciliation guard re-checks every quarantined entry at a slower cadence (default 60 s, `quarantineReconcileMs` seam) and releases the slot once the run's WHOLE session is confirmed quiescent — a session with nothing running cannot still be running that run's work, so the fence's no-false-release intent is preserved strictly. A busy/streaming session or a throwing status lookup keeps the entry held (fail-closed, unchanged).
   - **`GET /capacity` gains `quarantinedOldestAgeMs`** (additive; absent when nothing is quarantined): age in ms of the oldest quarantined admission lease, making quarantined capacity debt observable before it refuses work.

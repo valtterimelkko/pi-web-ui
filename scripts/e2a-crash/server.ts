@@ -7,7 +7,7 @@
  *
  * The server itself is the repo's own disposable validation server entrypoint
  * (isolated dirs, isolated socket/token, J6 placement-env strip + explicit
- * --env-file/--env-key channel), launched as a transient `e2a-6c-server`
+ * --env-file/--env-key channel), launched as a transient `k-K-arm-server`
  * unit. Arm mode mirrors production's restart properties (Restart=always,
  * RestartSec=10s, TimeoutStopSec=30s — 01-answer Q3): the SIGKILLed unit is
  * restarted by systemd, not by the driver (smoke stays Restart=no).
@@ -152,14 +152,14 @@ export async function startAnchorUnit(anchorScriptPath: string): Promise<void> {
 
 /**
  * Assert the resolved placement root is OURS, never production's: the anchor
- * unit's cgroup must live under the e2a-6c slice and must not be (or live
+ * unit's cgroup must live under the k-K-arm slice and must not be (or live
  * under) the production tools anchor.
  */
 export async function assertPlacementRootIsolated(): Promise<string> {
   const anchor = await getUnitStatus(anchorUnitName());
   const cg = anchor.controlGroup ?? '';
-  if (!cg.includes('e2a-6c')) {
-    throw new Error(`Placement assertion FAILED: anchor cgroup "${cg}" is not under the e2a-6c slice`);
+  if (!cg.includes('k-K-arm')) {
+    throw new Error(`Placement assertion FAILED: anchor cgroup "${cg}" is not under the k-K-arm slice`);
   }
   if (cg.includes('pi-web-ui-tools')) {
     throw new Error(`Placement assertion FAILED: anchor cgroup "${cg}" aliases the production tools anchor`);
@@ -247,6 +247,9 @@ export async function startServerUnit(repoRoot: string, paths: RunPaths, mode: S
   const httpPort = await findFreeTcpPort();
   mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
   writeFileSync(path.join(paths.stateDir, 'http-port'), String(httpPort));
+  // stop-server disposes the env file (secrets policy); a re-start in the same
+  // run dir must regenerate it — disposable per-run randoms, never copied.
+  if (!existsSync(paths.serverEnvFile)) prepareServerEnv(paths, repoRoot);
 
   const inheritedPath = process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
   const setenv: Array<[string, string]> = [
@@ -382,10 +385,19 @@ export async function waitForServerReadyViaApi(socketPath: string, tokenPath: st
  * aborts; the placement journal lines are returned for the evidence record.
  */
 export async function assertPlacementEnabledInJournal(sinceIso: string): Promise<{ placementLines: string[]; verifiedLine: string }> {
-  const { stdout } = await execFile('journalctl', [
-    '-u', serverUnitName(), '--since', sinceIso, '--no-pager', '-n', '400',
-  ]);
-  const lines = stdout.split(/\r?\n/).filter((l) => /\[Placement\]/.test(l));
+  // The placement verification logs from the validation server's DETACHED child
+  // process, which keeps its own syslog identifier and may escape the unit
+  // filter — query unfiltered (time-bounded) and fall back to the unit query.
+  const query = async (args: string[]): Promise<string> => {
+    const { stdout } = await execFile('journalctl', args);
+    return stdout;
+  };
+  let stdout = await query(['--since', sinceIso, '--no-pager', '-n', '8000']);
+  let lines = stdout.split(/\r?\n/).filter((l) => /\[Placement\]/.test(l));
+  if (lines.length === 0) {
+    stdout = await query(['-u', serverUnitName(), '--since', sinceIso, '--no-pager', '-n', '8000']);
+    lines = stdout.split(/\r?\n/).filter((l) => /\[Placement\]/.test(l));
+  }
   const disabled = lines.filter((l) => /DISABLED/.test(l));
   if (disabled.length > 0) {
     throw new Error(`Placement assertion FAILED: ${disabled.length} '[Placement] DISABLED' journal line(s) since ${sinceIso}: ${disabled[0].slice(0, 200)}`);

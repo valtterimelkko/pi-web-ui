@@ -722,3 +722,48 @@ describe('WatchManager — restart rehydration & downtime reconciliation (watch-
     expect(w.snapshot.eventCount).toBe(1);
   });
 });
+
+// Wave K correction 03 (C6): the verified auto-continue goal_state event carries
+// TOP-LEVEL `autoContinued: true` because the evaluator's dataMatch is a shallow
+// top-level match. This test exercises the REAL evaluator through the manager.
+describe('C6: dataMatch {autoContinued: true} fires through the real evaluator', () => {
+  let dir: string;
+  let broker: InternalApiEventBroker;
+  let manager: WatchManager;
+  const pin = vi.fn(() => true);
+  const unpin = vi.fn(() => true);
+
+  afterEach(async () => {
+    manager?.close();
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  it('fires on a goal_state event whose data carries top-level autoContinued: true', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-c6-'));
+    broker = new InternalApiEventBroker({ replayBufferSize: 10 });
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin });
+    await manager.register({
+      sessionId: 'c6-child', sessionPath: 'c6-child', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'goal_state', dataMatch: { autoContinued: true } }] },
+    });
+    broker.publish('c6-child', ev('goal_state', { status: 'running', autoContinued: true, interruption: { cause: 'restart_interruption', continueCount: 1 } }));
+    broker.publish('c6-child', ev('goal_state', { status: 'running' }));
+    await flush();
+    const w = manager.get('c6-child')!;
+    expect(w.firingCount).toBe(1);
+    expect(w.firings[0].eventType).toBe('goal_state');
+  });
+
+  it('does not fire when top-level autoContinued is absent', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-c6b-'));
+    broker = new InternalApiEventBroker({ replayBufferSize: 10 });
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin });
+    await manager.register({
+      sessionId: 'c6b-child', sessionPath: 'c6b-child', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'goal_state', dataMatch: { autoContinued: true } }] },
+    });
+    broker.publish('c6b-child', ev('goal_state', { status: 'paused', pausedReason: 'interrupted' }));
+    await flush();
+    expect(manager.get('c6b-child')?.firingCount).toBe(0);
+  });
+});

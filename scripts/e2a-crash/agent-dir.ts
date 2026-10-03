@@ -16,6 +16,13 @@ import { homedir } from 'node:os';
 
 export const PRODUCTION_AGENT_DIR = path.join(homedir(), '.pi', 'agent');
 
+/**
+ * Wave K: the goal-engine extension is overridden from the wave K execution
+ * worktree (branch orch/k-goal-resume) so the children run the branch's
+ * restore-reason and resume-note behaviour. Production keeps its own symlink.
+ */
+export const WAVE_K_GOAL_ENGINE_SOURCE = '/root/.worktrees/orch-scaling/k-pi-enhancement/goal-engine';
+
 /** Provider names that must NOT appear anywhere in the filtered credentials. */
 const NON_ZAI_PROVIDERS = [
   'github-copilot', 'anthropic', 'google-antigravity', 'openai-codex', 'deepseek',
@@ -88,6 +95,14 @@ export function buildCrashAgentDir(destDir: string, sourceDir: string = PRODUCTI
   materialiseCopy(extensionsSource, path.join(destDir, 'extensions'));
   assertNoSymlinks(path.join(destDir, 'extensions'));
 
+  // Wave K override: the goal engine comes from the wave K worktree branch.
+  if (existsSync(WAVE_K_GOAL_ENGINE_SOURCE)) {
+    rmSync(path.join(destDir, 'extensions', 'goal-engine'), { recursive: true, force: true });
+    materialiseCopy(WAVE_K_GOAL_ENGINE_SOURCE, path.join(destDir, 'extensions', 'goal-engine'));
+    assertNoSymlinks(path.join(destDir, 'extensions', 'goal-engine'));
+    assertions.push(`wave K goal-engine override from ${WAVE_K_GOAL_ENGINE_SOURCE}`);
+  }
+
   // Byte-identity sample: hash every file in both trees (they are small, ~1.4 MB).
   let fileCount = 0;
   let byteCount = 0;
@@ -98,6 +113,9 @@ export function buildCrashAgentDir(destDir: string, sourceDir: string = PRODUCTI
     for (const entry of readdirSync(dir)) {
       const src = path.join(dir, entry);
       const rel = path.relative(extensionsSource, src);
+      // Wave K: the goal-engine subtree is overridden from the wave K worktree
+      // (asserted against ITS source below), so skip it in the production check.
+      if (rel === 'goal-engine' || rel.startsWith(`goal-engine${path.sep}`) || rel.split(path.sep)[0] === 'goal-engine') continue;
       const dst = path.join(destDir, 'extensions', rel);
       if (statSync(src).isDirectory()) {
         stackSource.push(src);
@@ -110,7 +128,7 @@ export function buildCrashAgentDir(destDir: string, sourceDir: string = PRODUCTI
     }
   }
   if (mismatched !== 0) throw new Error(`${mismatched} extension copies are not byte-identical to production`);
-  assertions.push(`extensions byte-identical: ${fileCount} files, ${byteCount} bytes, 0 mismatches`);
+  assertions.push(`extensions byte-identical: ${fileCount} files, ${byteCount} bytes, 0 mismatches (goal-engine subtree excluded: wave K override)`);
 
   // 2. settings.json verbatim (defaultProvider zai / defaultModel glm-5.3 live here).
   const settingsSrc = path.join(sourceDir, 'settings.json');

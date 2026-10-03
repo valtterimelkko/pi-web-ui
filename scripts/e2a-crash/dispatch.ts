@@ -77,10 +77,23 @@ export async function spawnGoalChild(
       if (!m) throw new Error(`pi-orch spawn template failure and no session id recoverable: ${stderr.slice(0, 300)}`);
       sessionId = m[1];
     }
-    const resend = await piOrch([
+    // The child's own objective turn may hold the session for minutes — wait
+    // for idle (bounded), then re-send; a busy refusal retries a few times.
+    const idleDeadline = Date.now() + 5 * 60_000;
+    while (Date.now() < idleDeadline) {
+      const status = await getChildStatus(target, sessionId).catch(() => ({ busy: false }));
+      if (status.busy !== true) break;
+      await new Promise((r) => setTimeout(r, 10_000));
+    }
+    const sendOnce = (): Promise<{ stdout: string; stderr: string; exitCode: number }> => piOrch([
       'prompt', sessionId, '--message', applyGoalObjectiveTemplate(opts.objective),
       '--socket', target.socketPath, '--token-path', target.tokenPath, '--parent-session', target.parentSession, '--id-only',
     ], 60_000);
+    let resend = await sendOnce();
+    for (let attempt = 0; resend.exitCode !== 0 && attempt < 3; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 15_000));
+      resend = await sendOnce();
+    }
     if (resend.exitCode !== 0) throw new Error(`template re-send failed (exit ${resend.exitCode}): ${resend.stderr.slice(0, 200)}`);
     return sessionId;
   }
@@ -100,19 +113,30 @@ function parseSpawnSessionId(stdout: string): string | undefined {
   }
 }
 
-/** Register a pure-observer watch (agent_end + goal_end) on a child; returns the watch id. */
+/**
+ * Register a pure-observer watch (agent_end + goal_end + goal_state) on a
+ * child; returns the watch id. Registered through the raw Internal API:
+ * pi-orch's client-side condition set predates goal_state (wave K).
+ */
 export async function registerObserverWatch(target: OrchTarget, sessionId: string, label: string): Promise<string> {
-  const { stdout, exitCode } = await piOrch([
-    'watch', sessionId, 'register',
-    '--conditions', 'agent_end,goal_end',
-    '--label', label,
-    '--id-only',
-    '--socket', target.socketPath,
-    '--token-path', target.tokenPath,
-    '--parent-session', target.parentSession,
-  ], 30_000);
-  if (exitCode !== 0) throw new Error(`watch register failed (exit ${exitCode}): ${stdout.slice(0, 300)}`);
-  return stdout.trim().split('\n').pop() as string;
+  const response = await internalApiRequest<Record<string, unknown>>(
+    target.socketPath,
+    target.tokenPath,
+    'POST',
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`,
+    {
+      label,
+      conditions: [
+        { type: 'event_type', eventType: 'agent_end' },
+        { type: 'event_type', eventType: 'goal_end' },
+        { type: 'event_type', eventType: 'goal_state' },
+      ],
+    },
+    30_000,
+  );
+  const watchId = typeof response.watchId === 'string' ? response.watchId : (response.id as string | undefined);
+  if (!watchId) throw new Error(`watch register: no watch id in response: ${JSON.stringify(response).slice(0, 200)}`);
+  return watchId;
 }
 
 export interface ChildStatus {
@@ -251,4 +275,59 @@ export function processesUnderCgroup(cgroupPrefix: string): ProcRecord[] {
 /** Snapshot processes belonging to the children's tool commands: anything under the anchor cgroup EXCEPT the anchor's own sleeper. */
 export function snapshotChildToolProcesses(anchorCgroup: string): ProcRecord[] {
   return processesUnderCgroup(anchorCgroup).filter((p) => !p.cmd.includes('sleep infinity') && p.pid !== 1);
+}
+
+/** Full goal projection for a child (wave K: pausedReason + interruption evidence). */
+export async function getGoalProjection(target: OrchTarget, sessionId: string): Promise<Record<string, unknown>> {
+  return internalApiRequest<Record<string, unknown>>(target.socketPath, target.tokenPath, 'GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`);
+}
+
+/** Explicitly pause a child's goal through the raw goal endpoint (correction 02 negative child). */
+export async function registerAutoContinueWatch(target: OrchTarget, sessionId: string, label: string): Promise<string> {
+  const response = await internalApiRequest<Record<string, unknown>>(
+    target.socketPath,
+    target.tokenPath,
+    'POST',
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`,
+    {
+      label,
+      conditions: [
+        { type: 'event_type', eventType: 'goal_state', dataMatch: { autoContinued: true } },
+        { type: 'event_type', eventType: 'goal_state', dataMatch: { status: 'paused', pausedReason: 'interrupted' } },
+      ],
+    },
+    30_000,
+  );
+  const watchId = typeof response.watchId === 'string' ? response.watchId : (response.id as string | undefined);
+  if (!watchId) throw new Error(`auto-continue watch register: no watch id: ${JSON.stringify(response).slice(0, 200)}`);
+  return watchId;
+}
+
+/** Explicit goal pause: 'pause-now' (immediate paused) or 'pause' (wrapping-up while busy). */
+export async function pauseGoalChild(target: OrchTarget, sessionId: string, action: 'pause' | 'pause-now' = 'pause-now'): Promise<{ statusCode: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ action });
+    const req = http.request(
+      {
+        socketPath: target.socketPath,
+        method: 'POST',
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`,
+        headers: {
+          Authorization: `Bearer ${readFileSync(target.tokenPath, 'utf8').trim()}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+        timeout: 20_000,
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ statusCode: res.statusCode ?? 0, body: data.slice(0, 300) }));
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('goal pause timed out')));
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
 }
