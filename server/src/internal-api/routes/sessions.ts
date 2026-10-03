@@ -8480,6 +8480,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ...admission.snapshot(),
       stalledRuns: runReceipts.getStalledRunCount(),
       quarantinedRuns: runReceipts.getQuarantinedCount(),
+      // L1 (contract 1.59.0): age in ms of the oldest quarantined admission
+      // lease — absent when nothing is quarantined. Makes quarantined capacity
+      // debt observable (the 2026-10-03 incident held 10 phantom turns for
+      // hours with no restart-visible signal beyond the bare count).
+      quarantinedOldestAgeMs: runReceipts.getQuarantinedOldestAgeMs(),
       oldestActiveRunStartedAt: runReceipts.getOldestActiveRunStartedAt(),
       control: { inFlight: controlLane.inFlight, queued: controlLane.queued },
       disposalLane: { inFlight: disposalLane.inFlight, queued: disposalLane.queued },

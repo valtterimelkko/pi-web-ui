@@ -343,4 +343,34 @@ describe('B2 admission at the route level', () => {
       disposalLane: { inFlight: 0, queued: 0 },
     });
   });
+
+  it('GET /capacity reports quarantinedRuns with the oldest quarantined age (L1)', async () => {
+    const receipts = new RunReceiptManager({
+      store: new RunReceiptStore(path.join(dir, 'receipts-l1')),
+      drainPollMs: 5,
+      drainTimeoutMs: 50,
+      quarantineReconcileMs: 60_000, // slower than the test: the entry stays quarantined
+      isRuntimeQuiescent: async () => false,
+    });
+    await receipts.init();
+    const routes = makeRoutes(admissionWith(), { runReceiptManager: receipts });
+    try {
+      const begun = await receipts.beginRun({
+        sessionId: 'claude-1', runtime: 'claude', executionInstanceId: 'test',
+        message: 'm', mode: 'prompt', verbosity: 'answers', detach: false,
+      });
+      if (begun.kind !== 'created') throw new Error('expected a created run');
+      receipts.attachLease(begun.receipt.runId, { release: () => undefined });
+      await receipts.cancelRun(begun.receipt.runId);
+      await new Promise((r) => setTimeout(r, 150)); // past the drain timeout → quarantined
+      const res = createMockRes();
+      await routes.handleCapacity(createJsonReq('GET', '/api/v1/capacity'), res);
+      const body = json(res);
+      expect(body.quarantinedRuns).toBe(1);
+      expect(typeof body.quarantinedOldestAgeMs).toBe('number');
+      expect(body.quarantinedOldestAgeMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      await receipts.shutdown();
+    }
+  });
 });

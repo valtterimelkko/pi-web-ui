@@ -38,6 +38,15 @@ const DEFAULT_TURN_MAX_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RUN_START_WINDOW_MS = 120 * 1000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 const DEFAULT_DRAIN_POLL_MS = 1_000;
+/**
+ * L1 (contract 1.59.0): reconciliation cadence for quarantined admission
+ * leases. Quarantine used to be terminal — the slot was held until restart —
+ * which leaked phantom active turns in production (2026-10-03: 8→10
+ * quarantined P2 turns, each reserving memory, refusing new work as
+ * memory_pressure). The guard re-checks quarantined entries at this slower
+ * cadence and releases a slot once the WHOLE session is confirmed quiescent.
+ */
+const DEFAULT_QUARANTINE_RECONCILE_MS = 60_000;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
 const ACTIVITY_PERSIST_INTERVAL_MS = 1_000;
 
@@ -106,6 +115,8 @@ export interface RunReceiptManagerDeps {
   drainTimeoutMs?: number;
   /** Drain quiescence poll interval. Default 1000. */
   drainPollMs?: number;
+  /** L1: reconcile cadence for quarantined (never-confirmed) leases. Default 60000. */
+  quarantineReconcileMs?: number;
 }
 
 /** C3a (contract 1.58.0): one run's completion capture, fanned out to the per-session surface. */
@@ -189,7 +200,10 @@ export class RunReceiptManager {
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
   /** Draining runs: terminal but admission slot held pending runtime cessation. */
-  private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean }>();
+  private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean; quarantinedAtMs?: number; sessionId: string }>();
+  private readonly quarantineReconcileMs: number;
+  /** L1: one shared slow poll for every quarantined entry; running only while entries exist. */
+  private quarantineReconciler?: NodeJS.Timeout;
 
   constructor(deps: RunReceiptManagerDeps) {
     this.store = deps.store;
@@ -215,6 +229,7 @@ export class RunReceiptManager {
     this.isRuntimeQuiescent = deps.isRuntimeQuiescent;
     this.drainTimeoutMs = positiveTimeout(deps.drainTimeoutMs, undefined, DEFAULT_DRAIN_TIMEOUT_MS);
     this.drainPollMs = positiveTimeout(deps.drainPollMs, undefined, DEFAULT_DRAIN_POLL_MS);
+    this.quarantineReconcileMs = positiveTimeout(deps.quarantineReconcileMs, undefined, DEFAULT_QUARANTINE_RECONCILE_MS);
   }
 
   async init(): Promise<void> {
@@ -696,6 +711,7 @@ export class RunReceiptManager {
     if (!this.watchdogTimer) return;
     clearInterval(this.watchdogTimer);
     this.watchdogTimer = undefined;
+    this.stopQuarantineReconciler();
   }
 
   private async reconcileStalledRuns(): Promise<void> {
@@ -835,7 +851,7 @@ export class RunReceiptManager {
         .then((quiescent) => { if (quiescent) this.finishDrain(runId); else if (Date.now() >= deadline) this.quarantine(runId); })
         .catch(() => { if (Date.now() >= deadline) this.quarantine(runId); });
     }, this.drainPollMs);
-    this.draining.set(runId, { release: lease.release, timer, quarantined: false });
+    this.draining.set(runId, { release: lease.release, timer, quarantined: false, sessionId });
   }
 
   /** Cessation confirmed -> release the slot. */
@@ -849,14 +865,67 @@ export class RunReceiptManager {
 
   /**
    * Drain timeout elapsed without confirmed cessation: the admission slot is NOT
-   * released (no false capacity release). It is held as quarantined capacity-debt
-   * until restart/operator recovery, surfaced via getQuarantinedCount().
+   * released yet (no false capacity release). It is held as quarantined capacity-debt
+   * surfaced via getQuarantinedCount()/getQuarantinedOldestAgeMs().
+   *
+   * L1: quarantine is no longer terminal. The reconciliation guard re-checks
+   * every quarantined entry at the slower quarantineReconcileMs cadence and
+   * releases the slot once the WHOLE session is confirmed quiescent — a session
+   * with nothing running cannot still be running that run's work, so the
+   * §11 fence's no-false-release intent is preserved strictly.
    */
   private quarantine(runId: string): void {
     const entry = this.draining.get(runId);
     if (!entry || entry.quarantined) return;
     clearInterval(entry.timer);
     entry.quarantined = true;
+    entry.quarantinedAtMs = this.now();
+    this.ensureQuarantineReconciler();
+  }
+
+  private ensureQuarantineReconciler(): void {
+    if (this.quarantineReconciler) return;
+    const timer = setInterval(() => { void this.reconcileQuarantined(); }, this.quarantineReconcileMs);
+    timer.unref?.();
+    this.quarantineReconciler = timer;
+  }
+
+  private stopQuarantineReconciler(): void {
+    if (!this.quarantineReconciler) return;
+    clearInterval(this.quarantineReconciler);
+    this.quarantineReconciler = undefined;
+  }
+
+  /**
+   * L1 reconciliation guard: release quarantined slots whose session is
+   * confirmed quiescent. A quiescent session has no running work at all, so
+   * this can never release a slot whose runtime still runs that run's work.
+   * Lookup failure or a busy/streaming session keeps the entry held (fail-closed).
+   */
+  private async reconcileQuarantined(): Promise<void> {
+    for (const [runId, entry] of Array.from(this.draining)) {
+      if (!entry.quarantined) continue;
+      let releasable = false;
+      try {
+        releasable = await this.isRuntimeQuiescent?.(entry.sessionId) ?? false;
+      } catch {
+        releasable = false; // a throwing lookup is not positive cessation evidence
+      }
+      if (!releasable) continue;
+      // Persist positive resource-quiescence evidence on the terminal receipt
+      // (best-effort: the lease must release even if the store write fails,
+      // or a durable-store hiccup would recreate the production leak).
+      try {
+        await this.store.markResourceQuiescent(runId, new Date(this.now()).toISOString());
+      } catch (error) {
+        logger.warn(`reconciliation guard could not persist resource quiescence for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      this.finishDrain(runId);
+      logger.info(
+        `Reconciliation guard released quarantined run ${runId}: session confirmed quiescent after ${this.now() - (entry.quarantinedAtMs ?? this.now())}ms quarantined`,
+      );
+    }
+    if (![...this.draining.values()].some((e) => e.quarantined)) this.stopQuarantineReconciler();
   }
 
   /**
@@ -884,6 +953,16 @@ export class RunReceiptManager {
     let n = 0;
     for (const e of this.draining.values()) if (e.quarantined) n += 1;
     return n;
+  }
+
+  /** L1: age in ms of the oldest quarantined entry, or undefined when none. */
+  getQuarantinedOldestAgeMs(): number | undefined {
+    let oldest: number | undefined;
+    for (const e of this.draining.values()) {
+      if (!e.quarantined || e.quarantinedAtMs === undefined) continue;
+      if (oldest === undefined || e.quarantinedAtMs < oldest) oldest = e.quarantinedAtMs;
+    }
+    return oldest === undefined ? undefined : Math.max(0, this.now() - oldest);
   }
 
   private resolveTerminalWaiters(receipt: RunReceipt): void {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { Writable } from 'stream';
 import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from '../../../src/internal-api/routes/capabilities.js';
+import { INTERNAL_API_CONTRACT_VERSION } from '../../../src/internal-api/types.js';
 
 function createMockReq(url = '/api/v1/capabilities'): IncomingMessage {
   return {
@@ -65,7 +66,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.58.5',
+        contractVersion: INTERNAL_API_CONTRACT_VERSION,
       },
       features: {
         // Contract 1.34.0: child-orchestration surfacing (background subagents,
