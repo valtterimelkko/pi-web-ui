@@ -81,3 +81,24 @@ test('acquireLock still writes the owner file the release check reads', () => {
     fs.rmSync(path.dirname(dir), { recursive: true, force: true });
   }
 });
+
+// Parent FINAL correction 02 (Luna r2, R1-1 partly closed): a token must match the
+// owner's lane/arm identity at a word boundary — `lane E2a-6` must NOT release a lock
+// owned by `lane E2a-6c …` (prefix collision).
+test('evaluateRelease: a prefix-colliding token (lane E2a-6 vs owner lane E2a-6c) is refused', () => {
+  const v = evaluateRelease('lane E2a-6c arm 1 unit(s) e2a-6c-server start ...\n', 'lane E2a-6');
+  assert.equal(v.allowed, false);
+});
+
+test('evaluateRelease: the exact token followed by a space, or the whole owner line, is allowed', () => {
+  assert.equal(evaluateRelease('lane E2a-6c arm 1 unit(s) ...\n', 'lane E2a-6c').allowed, true);
+  assert.equal(evaluateRelease('lane E2a-6c\n', 'lane E2a-6c').allowed, true);
+});
+
+test('releaseLock: a prefix-colliding token leaves the lock in place', () => {
+  const dir = tmpLockDir('collision', 'lane E2a-6c arm 1 unit(s) ...\n');
+  const r = releaseLock('lane E2a-6', dir);
+  assert.equal(r.released, false);
+  assert.ok(fs.existsSync(path.join(dir, 'owner')), 'lock untouched');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

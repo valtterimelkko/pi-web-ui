@@ -134,8 +134,14 @@ export function evaluateRelease(ownerText, callerToken) {
   if (typeof callerToken !== 'string' || callerToken.trim() === '') {
     return { allowed: false, reason: 'no caller token given' };
   }
-  if (!ownerText.trimStart().startsWith(callerToken.trim())) {
-    return { allowed: false, reason: `caller token ${JSON.stringify(callerToken)} does not match lock owner ${JSON.stringify(ownerText.trim().slice(0, 60))}` };
+  // Word-boundary match (parent FINAL correction 02): the token must be followed by
+  // whitespace or the end of the owner text, so `lane E2a-6` cannot release a lock
+  // owned by `lane E2a-6c …`.
+  const owner = ownerText.trim();
+  const token = callerToken.trim();
+  const boundaryOk = owner === token || (owner.startsWith(token) && /\s/.test(owner.charAt(token.length)));
+  if (!boundaryOk) {
+    return { allowed: false, reason: `caller token ${JSON.stringify(callerToken)} does not match lock owner ${JSON.stringify(owner.slice(0, 60))}` };
   }
   return { allowed: true };
 }

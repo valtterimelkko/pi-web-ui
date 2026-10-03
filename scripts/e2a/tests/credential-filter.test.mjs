@@ -94,3 +94,13 @@ test('buildModelsJson: rejects a top-level apiKey and nested provider maps', () 
     /nested providers/i,
   );
 });
+
+// Parent FINAL correction 02 (Luna r2, R1-4 partly closed): an apiKey-named key in
+// any top-level field other than `providers` is an unknown credential-bearing shape
+// and must be REJECTED, not silently dropped. Sibling providers inside `providers`
+// (the real file carries apiKeys for glm-coding, kimi-subscription, clinepass) are
+// still dropped, so the real store keeps working.
+test("buildModelsJson: rejects an apiKey in a non-providers top-level field (reviewer r2 legacy.apiKey)", () => {
+  assert.throws(() => buildModelsJson({ providers: { zai: { baseUrl: 'x' } }, legacy: { apiKey: 'k' } }), /rejected/);
+  assert.throws(() => buildModelsJson({ providers: { zai: { baseUrl: 'x' } }, extra: { deep: { api_key: 'k' } } }), /rejected/);
+});

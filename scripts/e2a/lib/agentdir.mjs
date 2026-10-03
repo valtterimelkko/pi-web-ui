@@ -44,6 +44,12 @@ export function buildModelsJson(models) {
     throw new Error('models.json: not a credential-bearing object we can validate (no zai entry)');
   }
   if ('apiKey' in models) errors.push('top-level apiKey in models.json');
+  // Parent FINAL correction 02: any apiKey-named key in a top-level field other than
+  // `providers` is an unknown credential-bearing shape — reject, never drop silently.
+  // (Sibling providers inside `providers` legitimately carry apiKeys and are dropped.)
+  for (const [k, v] of Object.entries(models)) {
+    if (k !== 'providers') findApiKeyAnywhere(`$.${k}`, v, errors);
+  }
   findNestedProviders('$', models, errors);
   const zai = models.providers?.zai;
   if (!zai || typeof zai !== 'object') errors.push('no zai entry in providers');

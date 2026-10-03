@@ -34,7 +34,7 @@ stress lock, per `e2/STRESS-GATE.md` and `COMMON-BRIEF-e2.md` Host safety:
 ```sh
 node scripts/e2a/gate.mjs --check                    # verdict + reasons
 node scripts/e2a/gate.mjs --acquire --arm 2b         # gate + atomic lock in one step
-node scripts/e2a/gate.mjs --release                  # after the arm's units stopped
+node scripts/e2a/gate.mjs --release --token 'lane E2a-3'   # after the arm's units stopped; owner-checked (word-boundary match), refuses otherwise
 ```
 
 Unit names are always `e2a-3-*` (host guard's stop path). Containment: every unit
