@@ -5,6 +5,7 @@
  */
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { serverUnitName as canonicalServerUnitName, supervisorUnitName as canonicalSupervisorUnitName } from '../../server/src/live-validation/heap-soak/unit-names.js';
 
 export const HEAP_SOAK_ROOT = path.join(homedir(), '.pi-web-ui', 'validation', 'heap-soak');
 
@@ -65,10 +66,15 @@ export function resolveRunPaths(runId: string): RunPaths {
   };
 }
 
+/**
+ * Unit names delegate to the pure unit-names module (E2a-1: the prefix is
+ * env-overridable so an E2 arm's units are named `e2a-<lane>-*` inside the
+ * host guard's stop rail; default stays the historic `pi-web-ui-soak`).
+ */
 export function serverUnitName(runId: string): string {
-  return `pi-web-ui-soak-server-${runId}`;
+  return canonicalServerUnitName(runId);
 }
 
 export function supervisorUnitName(runId: string): string {
-  return `pi-web-ui-soak-supervisor-${runId}`;
+  return canonicalSupervisorUnitName(runId);
 }
