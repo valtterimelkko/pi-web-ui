@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { soakRuntimeMaxSec, supervisorEnvPassthrough, viewOnlySubscribeServerEnv } from '../../../src/live-validation/heap-soak/launch-env.js';
+import { soakRuntimeMaxSec, supervisorEnvPassthrough, viewOnlySubscribeServerEnv, redactEnvironmentForEvidence } from '../../../src/live-validation/heap-soak/launch-env.js';
 
 /**
  * E2a-1: two launcher switches the brief needs, both env-driven so the
@@ -73,5 +73,23 @@ describe('supervisorEnvPassthrough (runtime env the supervisor unit must inherit
   it('returns empty when none are set', () => {
     expect(supervisorEnvPassthrough({})).toEqual({});
     expect(supervisorEnvPassthrough({ HEAP_SOAK_UNIT_PREFIX: 'e2a-1' })).toEqual({});
+  });
+});
+
+describe('redactEnvironmentForEvidence (correction 02: capture BOTH units’ properties, secrets redacted)', () => {
+  it('redacts values of credential-ish keys in KEY=value and systemd Environment shapes', () => {
+    const text = 'FOO=bar API_TOKEN=abc123 PI_WEB_UI_WATCH_WAKE_TOKEN_FILE=/run/some/token JWT_SECRET=hush Path=/usr/bin';
+    const red = redactEnvironmentForEvidence(text);
+    expect(red).toContain('FOO=bar');
+    expect(red).toContain('API_TOKEN=REDACTED');
+    expect(red).toContain('JWT_SECRET=REDACTED');
+    expect(red).toContain('Path=/usr/bin');
+    expect(red).not.toContain('abc123');
+    expect(red).not.toContain('hush');
+  });
+
+  it('keeps non-credential path variables intact (token FILE paths are not secret values)', () => {
+    const text = 'PI_WEB_UI_WATCH_WAKE_TOKEN_FILE=/run/x/internal-api-token HOME=/root';
+    expect(redactEnvironmentForEvidence(text)).toContain('PI_WEB_UI_WATCH_WAKE_TOKEN_FILE=/run/x/internal-api-token');
   });
 });

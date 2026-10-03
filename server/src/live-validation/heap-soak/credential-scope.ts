@@ -46,11 +46,33 @@ export interface ScopedModelsResult {
   droppedCredentialProviders: string[];
 }
 
+/** True when any key named `apiKey`/`api_key` appears anywhere inside the value. */
+function carriesCredentialKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(carriesCredentialKey);
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).some(([k, v]) => k === 'apiKey' || k === 'api_key' || carriesCredentialKey(v));
+  }
+  return false;
+}
+
 /**
  * models.json reduced: provider entries carrying an `apiKey` survive only for
  * allowed providers; credential-free entries (model catalogue data) stay.
+ *
+ * Correction 02 (Luna r1 major): a credential hiding in any TOP-LEVEL field
+ * other than `providers` (e.g. `legacy.apiKey`, or nested `legacy.auth.api_key`)
+ * used to be spread through unchanged — fail-open. It is now REJECTED: scope
+ * refuses rather than silently dropping or spreading a credential-bearing
+ * field. Sibling provider entries INSIDE `providers` legitimately carry
+ * apiKeys in the real store and keep the drop-or-keep behaviour.
  */
 export function scopeModelsJson(models: Record<string, unknown>, allowed: readonly string[]): ScopedModelsResult {
+  for (const [field, value] of Object.entries(models)) {
+    if (field === 'providers') continue;
+    if (carriesCredentialKey(value)) {
+      throw new Error(`models.json carries a credential key (apiKey/api_key) in the top-level field "${field}" outside "providers" — refusing to scope it; remove the field from the source file or move it under providers`);
+    }
+  }
   const providers = models.providers;
   if (typeof providers !== 'object' || providers === null) {
     return { scoped: {}, droppedCredentialProviders: [] };

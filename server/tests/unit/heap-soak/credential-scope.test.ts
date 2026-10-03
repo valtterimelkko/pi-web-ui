@@ -88,6 +88,30 @@ describe('scopeModelsJson', () => {
     scopeModelsJson(models, ['zai']);
     expect(JSON.stringify(models)).toBe(before);
   });
+
+  // Correction 02 (Luna r1 major): scopeModelsJson used to spread every
+  // non-providers top-level field unchanged, so a credential hiding outside
+  // `providers` survived the scope. It must REJECT, never silently drop or spread.
+  it('rejects an apiKey in a non-providers top-level field (reviewer legacy.apiKey regression)', () => {
+    expect(() => scopeModelsJson({ providers: { zai: { baseUrl: 'x' } }, legacy: { apiKey: 'FAKE-LEGACY' } }, ['zai']))
+      .toThrow(/outside "providers"/);
+  });
+
+  it('rejects a nested api_key in a non-providers top-level field', () => {
+    expect(() => scopeModelsJson({ providers: { zai: {} }, legacy: { auth: { api_key: 'FAKE-NESTED' } } }, ['zai']))
+      .toThrow(/outside "providers"/);
+  });
+
+  it('rejects even when the offending field is unrelated to credentials by name', () => {
+    expect(() => scopeModelsJson({ providers: { zai: {} }, defaults: { openai: { apiKey: 'FAKE' } } }, ['zai']))
+      .toThrow(/outside "providers"/);
+  });
+
+  it('still drops sibling providers with apiKeys inside providers without rejecting (the real store shape)', () => {
+    const result = scopeModelsJson({ providers: { zai: { apiKey: 'FAKE-ZAI' }, openrouter: { apiKey: 'FAKE-OR' } } }, ['zai']);
+    expect(Object.keys(result.scoped.providers)).toEqual(['zai']);
+    expect(result.droppedCredentialProviders).toEqual(['openrouter']);
+  });
 });
 
 describe('assertAllowedProviderPresent', () => {

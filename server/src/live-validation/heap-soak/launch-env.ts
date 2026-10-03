@@ -60,6 +60,22 @@ export function supervisorEnvPassthrough(env: NodeJS.ProcessEnv = process.env): 
   return out;
 }
 
+const CREDENTIALISH_KEY = /(token|secret|password|credential|apikey|api_key|authorization)/i;
+
+/**
+ * Correction 02: unit evidence (systemctl show Environment lines) may be
+ * written into the retained run dir — credential-ish KEY=value pairs get their
+ * VALUE replaced with REDACTED (a token FILE path is not a secret value and
+ * survives; the file itself must not exist in evidence — see
+ * scripts/e2a-soak/assert-evidence-clean.ts).
+ */
+export function redactEnvironmentForEvidence(text: string): string {
+  return text.replace(/([A-Za-z_][A-Za-z0-9_]*)=(\S+)/g, (whole, key: string, value: string) => {
+    if (!CREDENTIALISH_KEY.test(key)) return whole;
+    return `${key}=${/path|file|dir/i.test(key) ? value : 'REDACTED'}`;
+  });
+}
+
 /**
  * `HEAP_SOAK_VIEW_ONLY_SUBSCRIBE`: when on/true/1, the disposable server is
  * booted with `PI_WEB_UI_VIEW_ONLY_SUBSCRIBE=on` — the production setting

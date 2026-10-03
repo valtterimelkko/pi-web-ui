@@ -32,6 +32,16 @@ interface AgentDirSummary {
   authProviders: string[];
   modelsProviders: string[];
   modelsProvidersWithApiKey: string[];
+  credentialFieldsOutsideProviders: string[];
+}
+
+/** True when any key named `apiKey`/`api_key` appears anywhere inside the value (same rule as credential-scope.ts). */
+function carriesCredentialKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(carriesCredentialKey);
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).some(([k, v]) => k === 'apiKey' || k === 'api_key' || carriesCredentialKey(v));
+  }
+  return false;
 }
 
 function summariseAgentDir(agentDir: string): AgentDirSummary {
@@ -40,12 +50,21 @@ function summariseAgentDir(agentDir: string): AgentDirSummary {
   const authProviders = existsSync(authPath) ? Object.keys(JSON.parse(readFileSync(authPath, 'utf8')) as Record<string, unknown>) : [];
   let modelsProviders: string[] = [];
   let modelsProvidersWithApiKey: string[] = [];
+  let credentialFieldsOutsideProviders: string[] = [];
   if (existsSync(modelsPath)) {
-    const models = JSON.parse(readFileSync(modelsPath, 'utf8')) as { providers?: Record<string, Record<string, unknown>> };
-    modelsProviders = Object.keys(models.providers ?? {});
-    modelsProvidersWithApiKey = Object.entries(models.providers ?? {}).filter(([, e]) => e && 'apiKey' in e).map(([name]) => name);
+    const models = JSON.parse(readFileSync(modelsPath, 'utf8')) as Record<string, unknown>;
+    // Correction 02: same fail-closed rule as scopeModelsJson — a credential
+    // outside `providers` must fail the assertion, never pass silently.
+    credentialFieldsOutsideProviders = Object.entries(models)
+      .filter(([field, value]) => field !== 'providers' && carriesCredentialKey(value))
+      .map(([field]) => field);
+    const providers = (typeof models.providers === 'object' && models.providers !== null)
+      ? models.providers as Record<string, Record<string, unknown>>
+      : {};
+    modelsProviders = Object.keys(providers);
+    modelsProvidersWithApiKey = Object.entries(providers).filter(([, e]) => e && ('apiKey' in e || 'api_key' in e)).map(([name]) => name);
   }
-  return { authProviders, modelsProviders, modelsProvidersWithApiKey };
+  return { authProviders, modelsProviders, modelsProvidersWithApiKey, credentialFieldsOutsideProviders };
 }
 
 function assertScoped(summary: AgentDirSummary, allowed: readonly string[]): void {
@@ -54,6 +73,7 @@ function assertScoped(summary: AgentDirSummary, allowed: readonly string[]): voi
   const apiKeyViolations = summary.modelsProvidersWithApiKey.filter((p) => !allowedSet.has(p));
   if (authViolations.length > 0) throw new Error(`auth.json carries credentials outside the scope: ${authViolations.join(', ')}`);
   if (apiKeyViolations.length > 0) throw new Error(`models.json carries apiKey entries outside the scope: ${apiKeyViolations.join(', ')}`);
+  if (summary.credentialFieldsOutsideProviders.length > 0) throw new Error(`models.json carries credential keys in top-level field(s) outside "providers": ${summary.credentialFieldsOutsideProviders.join(', ')}`);
   const missing = allowed.filter((p) => !summary.authProviders.includes(p) && !summary.modelsProvidersWithApiKey.includes(p));
   if (missing.length > 0) throw new Error(`allowed provider(s) have NO credential in the scoped agent dir: ${missing.join(', ')}`);
 }
@@ -80,31 +100,38 @@ function main(): void {
   const dryRun = process.argv.includes('--dry-run');
 
   const parts: Record<string, unknown> = { allowed };
-  if (dryRun) {
-    // Same code path the launcher uses; throwaway copy under this lane's analysis dir.
-    const dest = path.join(process.env.HOME ?? '/root', '.pi-web-ui', 'validation', 'heap-soak', `e2a-1-analysis`, `scope-dryrun-${randomUUID().slice(0, 8)}`);
-    try {
-      const built = buildIsolatedAgentDir(dest, undefined, { allowedCredentialProviders: allowed });
-      const summary = summariseAgentDir(dest);
+  try {
+    if (dryRun) {
+      // Same code path the launcher uses; throwaway copy under this lane's analysis dir.
+      const dest = path.join(process.env.HOME ?? '/root', '.pi-web-ui', 'validation', 'heap-soak', `e2a-1-analysis`, `scope-dryrun-${randomUUID().slice(0, 8)}`);
+      try {
+        const built = buildIsolatedAgentDir(dest, undefined, { allowedCredentialProviders: allowed });
+        const summary = summariseAgentDir(dest);
+        assertScoped(summary, allowed);
+        parts.mode = 'dry-run';
+        parts.built = { copied: built.copied, credentialScope: built.credentialScope, droppedCredentialProviders: built.droppedCredentialProviders ?? [] };
+        parts.agentDir = summary;
+        parts.pass = true;
+      } finally {
+        rmSync(dest, { recursive: true, force: true });
+      }
+    } else if (agentDir) {
+      if (!existsSync(agentDir)) { console.error(`agent dir not found: ${agentDir}`); process.exit(64); }
+      const summary = summariseAgentDir(agentDir);
       assertScoped(summary, allowed);
-      parts.mode = 'dry-run';
-      parts.built = { copied: built.copied, credentialScope: built.credentialScope, droppedCredentialProviders: built.droppedCredentialProviders ?? [] };
+      parts.mode = 'agent-dir';
+      parts.agentDirPath = agentDir;
       parts.agentDir = summary;
       parts.pass = true;
-    } finally {
-      rmSync(dest, { recursive: true, force: true });
+    } else {
+      console.error('give --dry-run or --agent-dir <path>');
+      process.exit(64);
     }
-  } else if (agentDir) {
-    if (!existsSync(agentDir)) { console.error(`agent dir not found: ${agentDir}`); process.exit(64); }
-    const summary = summariseAgentDir(agentDir);
-    assertScoped(summary, allowed);
-    parts.mode = 'agent-dir';
-    parts.agentDirPath = agentDir;
-    parts.agentDir = summary;
-    parts.pass = true;
-  } else {
-    console.error('give --dry-run or --agent-dir <path>');
-    process.exit(64);
+  } catch (error) {
+    parts.pass = false;
+    parts.error = error instanceof Error ? error.message : String(error);
+    console.log(JSON.stringify(parts, null, 1));
+    process.exit(1);
   }
 
   if (journalUnit) {

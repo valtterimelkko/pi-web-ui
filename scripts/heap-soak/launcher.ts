@@ -13,7 +13,7 @@ import { parseAllowedProviders } from '../../server/src/live-validation/heap-soa
 import { applyExtensionsOverlays, type AppliedExtensionOverlay } from '../../server/src/live-validation/heap-soak/extensions-overlay.js';
 import { resolveRunPaths, serverUnitName, supervisorUnitName, type RunPaths } from './paths.js';
 import { soakSliceName } from '../../server/src/live-validation/heap-soak/unit-names.js';
-import { soakRuntimeMaxSec, supervisorEnvPassthrough, viewOnlySubscribeServerEnv } from '../../server/src/live-validation/heap-soak/launch-env.js';
+import { soakRuntimeMaxSec, supervisorEnvPassthrough, viewOnlySubscribeServerEnv, redactEnvironmentForEvidence } from '../../server/src/live-validation/heap-soak/launch-env.js';
 import { startTransientUnit, waitForMainPid } from './systemd-units.js';
 import { InspectorClient } from './inspector.js';
 import { saveRunState } from './run-state-io.js';
@@ -340,4 +340,24 @@ export async function startSupervisorUnit(runId: string, paths: RunPaths, superv
     args: ['tsx', 'scripts/heap-soak/supervisor.ts', '--run-state', paths.runStatePath],
   });
   await waitForMainPid(supervisorUnit, 20_000);
+  await captureUnitEvidence(runId, [serverUnitName(runId), supervisorUnit], path.join(paths.runDir, 'unit-properties.txt'));
+}
+
+/** Correction 02: record BOTH units' containment properties + redacted env into the run dir (the E2a-1 run captured only the server, by hand). */
+async function captureUnitEvidence(runId: string, unitNames: string[], outFile: string): Promise<void> {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const exec = promisify(execFile);
+  const lines: string[] = [`# unit evidence for run ${runId} (captured ${new Date().toISOString()}); credential-ish env values redacted`];
+  for (const unit of unitNames) {
+    const props = ['MemoryMax', 'MemoryHigh', 'MemorySwapMax', 'TasksMax', 'RuntimeMaxUSec', 'MainPID', 'ActiveState', 'Environment'];
+    try {
+      const { stdout } = await exec('systemctl', ['show', unit, ...props.map((p) => `-p${p}`), '--no-pager']);
+      lines.push(`== ${unit} ==`, redactEnvironmentForEvidence(stdout.trim()));
+    } catch (error) {
+      lines.push(`== ${unit} == ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(outFile, `${lines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
 }
