@@ -19,7 +19,7 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { assertSafeNpmCwd } from './lib/fixtures.ts';
+import { assertSafeNpmCwd, fixtureInstallDecision } from './lib/fixtures.ts';
 import { getCapacity } from './lib/httpclient.ts';
 import { readMemAvailableKb, readPressure } from './lib/hostsample.ts';
 import { GUARD_STATE_DIR, preflight, releaseLock, takeLock } from './lib/preflight.ts';
@@ -186,20 +186,31 @@ async function main(): Promise<number> {
     for (const child of plan.children) {
       const clone = await run(['git', 'clone', '--quiet', '--local', '/root/pi-orch', child.cwd], 300_000);
       if (clone.code !== 0) throw new Error(`clone failed for ${child.name}: ${clone.stderr}`);
-      // pi-orch commits no package-lock.json: npm ci when one exists, plain
-      // install otherwise — ALWAYS behind the incident guard with the clone's
-      // explicit cwd (never an inherited one; never in a worktree/checkout).
-      assertSafeNpmCwd(child.cwd); // incident guard: never npm into an inherited/symlinked cwd (03-blocked.md)
-      const hasLock = existsSync(join(child.cwd, 'package-lock.json'));
-      const npmArgv = hasLock
-        ? ['npm', 'ci', '--no-audit', '--no-fund', '--ignore-scripts']
-        : ['npm', 'install', '--no-audit', '--no-fund', '--ignore-scripts', '--no-package-lock'];
-      const ci = await run(npmArgv, 300_000, { cwd: child.cwd });
-      appendFileSync(join(runRoot, 'logs', 'npm-ci.log'), `${child.cwd} ${hasLock ? 'ci' : 'install'} exit ${String(ci.code)}\n`);
-      if (ci.code !== 0) throw new Error(`npm ${hasLock ? 'ci' : 'install'} failed for ${child.name}: ${ci.stderr.slice(0, 300)}`);
+      // 06-answer: dep-free clones (pi-orch) get NO npm step at all.
+      const pkg = JSON.parse(readFileSync(join(child.cwd, 'package.json'), 'utf8')) as { dependencies?: unknown };
+      const decision = fixtureInstallDecision(pkg, { hasLockfile: existsSync(join(child.cwd, 'package-lock.json')) });
+      if (decision.install) {
+        assertSafeNpmCwd(child.cwd); // incident guard: never npm into an inherited/symlinked cwd (03-blocked.md)
+        const npmArgv = decision.command === 'ci'
+          ? ['npm', 'ci', '--no-audit', '--no-fund', '--ignore-scripts']
+          : ['npm', 'install', '--no-audit', '--no-fund', '--ignore-scripts', '--no-package-lock'];
+        const ci = await run(npmArgv, 300_000, { cwd: child.cwd });
+        appendFileSync(join(runRoot, 'logs', 'npm-ci.log'), `${child.cwd} ${decision.command} exit ${String(ci.code)}\n`);
+        if (ci.code !== 0) throw new Error(`npm ${decision.command} failed for ${child.name}: ${ci.stderr.slice(0, 300)}`);
+      } else {
+        appendFileSync(join(runRoot, 'logs', 'npm-ci.log'), `${child.cwd} skipped (${decision.reason})\n`);
+      }
     }
     for (const f of plan.fixtures) writeFileSync(join(f.dir, 'task.txt'), f.taskText);
-    log('fixtures ready (clones + npm ci + task files)');
+    log('fixtures ready (clones + task files; install only where the clone has runtime deps)');
+
+    // 06-answer: prove the test script runs in ONE clone without an install,
+    // with an explicit cwd. The script uses mktemp, so it must run inside the clone.
+    assertSafeNpmCwd(plan.children[0]!.cwd);
+    const testCheck = await run(['npm', 'test'], 300_000, { cwd: plan.children[0]!.cwd });
+    appendFileSync(join(runRoot, 'logs', 'clone-test-check.log'), `# exit ${String(testCheck.code)}\n${testCheck.stdout.slice(-800)}\n${testCheck.stderr.slice(-400)}\n`);
+    if (testCheck.code !== 0) throw new Error(`clone test-script check failed (exit ${String(testCheck.code)}) — see logs/clone-test-check.log`);
+    log(`clone test-script check OK (exit 0, no install)`);
 
     // ── Dry pre-check 2: capacity debt (5-minute re-checks, at most 3) ──
     let debt = await readDebt();

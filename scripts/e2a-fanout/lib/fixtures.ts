@@ -71,3 +71,25 @@ export async function materialiseFixtures(specs: FixtureSpec[]): Promise<void> {
     }
   }
 }
+
+export interface FixtureInstallDecision {
+  install: boolean;
+  reason?: string;
+  command?: 'ci' | 'install';
+}
+
+/**
+ * 06-answer: dep-free clones (pi-orch) get NO npm step at all — their test
+ * script is plain `node --test`, which runs on Node's type stripping without
+ * any install. Clones WITH runtime dependencies install behind
+ * `assertSafeNpmCwd`: `npm ci` with a committed lockfile, plain
+ * `npm install --no-package-lock` without one.
+ */
+export function fixtureInstallDecision(
+  pkg: { name?: string; dependencies?: unknown; devDependencies?: unknown },
+  opts: { hasLockfile?: boolean } = {},
+): FixtureInstallDecision {
+  const hasDeps = pkg.dependencies !== undefined && typeof pkg.dependencies === 'object' && Object.keys(pkg.dependencies as object).length > 0;
+  if (!hasDeps) return { install: false, reason: 'no runtime dependencies' };
+  return { install: true, command: opts.hasLockfile ? 'ci' : 'install' };
+}
