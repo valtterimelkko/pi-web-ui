@@ -19,14 +19,14 @@ describe('continue marker store — atomic claim (correction 02 F1)', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'k-marker2-')); });
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
-  it('claim exclusively creates the marker; a second claim for the same goal fails', async () => {
+  it('claim exclusively creates the marker; a second claim reports the goal consumed (C1: never replayed)', async () => {
     const store = createContinueMarkerStore(dir);
     const fp = goalFingerprint('obj', 1);
     const first = await store.claim('pi-a', fp, 'restart_interruption', 'boot_orphan');
     expect(first.claimed).toBe(true);
     const second = await store.claim('pi-a', fp, 'restart_interruption', 'boot_orphan');
     expect(second.claimed).toBe(false);
-    if (!second.claimed) expect(second.existing.count).toBe(0);
+    if (!second.claimed) expect(second.existing.count).toBe(1);
   });
 
   it('a committed marker blocks a new claim and reports the continue', async () => {
@@ -52,17 +52,17 @@ describe('continue marker store — atomic claim (correction 02 F1)', () => {
     expect(marker?.count).toBe(1);
   });
 
-  it('a stale count-0 claim is taken over atomically; a fresh one is not', async () => {
+  it('a stale count-0 claim is NOT taken over (correction 03 C1: consumed, visible)', async () => {
     const store = createContinueMarkerStore(dir);
     const fp = goalFingerprint('obj', 4);
     await store.claim('pi-a', fp, 'restart_interruption', 'boot_orphan');
     const fresh = await store.claim('pi-a', fp, 'restart_interruption', 'boot_orphan');
     expect(fresh.claimed).toBe(false);
 
-    // Age the claim past the takeover threshold (simulated clock).
     const store2 = createContinueMarkerStore(dir, { now: () => Date.now() + 20 * 60_000 });
-    const takeover = await store2.claim('pi-a', fp, 'restart_interruption', 'boot_orphan');
-    expect(takeover.claimed).toBe(true);
+    const stale = await store2.claim('pi-a', fp, 'restart_interruption', 'boot_orphan');
+    expect(stale.claimed).toBe(false);
+    if (!stale.claimed) expect(stale.existing.count).toBe(1);
   });
 
   it('commit keeps continuedAt stable across repeated commits and survives a new store instance', async () => {

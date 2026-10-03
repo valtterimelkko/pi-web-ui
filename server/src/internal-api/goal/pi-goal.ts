@@ -18,6 +18,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { homedirOverride } from './homedir.js';
 import { getInterruptionOverlayStore, applyInterruptionOverlay, readGoalFileIdentity } from './interruption-overlay.js';
+import { goalFingerprint as continueGoalFingerprint } from './continue-marker.js';
 import type { CanonicalGoalStatus, GoalVerificationStatus, SessionGoalProjection } from './types.js';
 
 /** Raw shape of the extension's persisted GoalState (subset we consume). */
@@ -188,7 +189,14 @@ export async function readProjectPiGoalState(sessionKey: string): Promise<Sessio
     const overlay = await store.get(sessionKey);
     if (!overlay) return projection;
     const identity = await readGoalFileIdentity(piGoalStatePath(sessionKey));
-    const applied = applyInterruptionOverlay(projection, overlay, identity);
+    const rawForFingerprint = await readPiGoalStateFile(sessionKey);
+    const currentFingerprint = rawForFingerprint && typeof rawForFingerprint === 'object'
+      ? continueGoalFingerprint(
+          typeof (rawForFingerprint as { objective?: unknown }).objective === 'string' ? (rawForFingerprint as { objective: string }).objective : undefined,
+          typeof (rawForFingerprint as { startedAt?: unknown }).startedAt === 'number' ? (rawForFingerprint as { startedAt: number }).startedAt : undefined,
+        )
+      : undefined;
+    const applied = applyInterruptionOverlay(projection, overlay, identity, { currentFingerprint });
     if (identity && applied.interruption === undefined) {
       await store.clear(sessionKey).catch(() => undefined);
     }

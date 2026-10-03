@@ -286,3 +286,57 @@ export async function getGoalProjection(target: OrchTarget, sessionId: string): 
 export async function pauseGoalChild(target: OrchTarget, sessionId: string): Promise<unknown> {
   return internalApiRequest<unknown>(target.socketPath, target.tokenPath, 'POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`, { action: 'pause' });
 }
+
+/**
+ * Correction 03 (C6): register a dedicated auto-continue watch whose ledger is
+ * the parent-visible record of the goal_state payload (dataMatch is shallow and
+ * top-level, exactly as documented).
+ */
+export async function registerAutoContinueWatch(target: OrchTarget, sessionId: string, label: string): Promise<string> {
+  const response = await internalApiRequest<Record<string, unknown>>(
+    target.socketPath,
+    target.tokenPath,
+    'POST',
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`,
+    {
+      label,
+      conditions: [
+        { type: 'event_type', eventType: 'goal_state', dataMatch: { autoContinued: true } },
+        { type: 'event_type', eventType: 'goal_state', dataMatch: { status: 'paused', pausedReason: 'interrupted' } },
+      ],
+    },
+    30_000,
+  );
+  const watchId = typeof response.watchId === 'string' ? response.watchId : (response.id as string | undefined);
+  if (!watchId) throw new Error(`auto-continue watch register: no watch id: ${JSON.stringify(response).slice(0, 200)}`);
+  return watchId;
+}
+
+/** Explicit goal pause: 'pause-now' (immediate paused) or 'pause' (wrapping-up while busy). */
+export async function pauseGoalChild(target: OrchTarget, sessionId: string, action: 'pause' | 'pause-now' = 'pause-now'): Promise<{ statusCode: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ action });
+    const req = http.request(
+      {
+        socketPath: target.socketPath,
+        method: 'POST',
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`,
+        headers: {
+          Authorization: `Bearer ${readFileSync(target.tokenPath, 'utf8').trim()}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+        timeout: 20_000,
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ statusCode: res.statusCode ?? 0, body: data.slice(0, 300) }));
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('goal pause timed out')));
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}

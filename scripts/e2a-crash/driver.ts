@@ -14,7 +14,7 @@ import { buildCrashAgentDir } from './agent-dir.ts';
 import { prepareServerEnv, startServerUnit, killServerUnit, stopServerUnits, assertPlacementRootIsolated, assertPlacementEnabledInJournal, waitForSystemdAutoRestart, waitForServerReadyViaApi, journalRestartEvidence, SMOKE_MODE, ARM_MODE, getUnitStatus, type StartedServer, type ServerMode } from './server.ts';
 import {
   spawnGoalChild, registerObserverWatch, getChildStatus, startDrain, getDrainStatus,
-  assertServedModel, snapshotChildToolProcesses, getGoalProjection, pauseGoalChild, type OrchTarget, type ProcRecord,
+  assertServedModel, snapshotChildToolProcesses, getGoalProjection, pauseGoalChild, registerAutoContinueWatch, type OrchTarget, type ProcRecord,
 } from './dispatch.ts';
 import { unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -578,9 +578,10 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
       logLine(paths, 'kill', 'child-spawned', { label, sessionId, watchId });
     }
 
-    // Correction 02: negative child — its parent explicitly pauses it BEFORE
-    // the kill. After the restart it must stay paused with no continue and no
-    // marker (F2: explicit intent wins over restart evidence).
+    // Correction 02/03: negative children — their parent pauses them BEFORE
+    // the kill. kill-paused gets pause-now (paused); kill-wrapping gets pause
+    // while busy (wrapping-up). After the restart neither may be continued,
+    // neither may gain a marker, and both keep their explicit state (F2).
     {
       const fixture = freshFixtures(paths, ['fixture-9'])[0];
       const label = 'kill-paused';
@@ -589,17 +590,41 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
         maxTurns: 25, budgetTokens: 20_000_000,
       });
       const watchId = await registerObserverWatch(target, sessionId, `k-K-${label}`);
-      logLine(paths, 'kill', 'negative-child-spawned', { label, sessionId, watchId });
+      const autoWatchId = await registerAutoContinueWatch(target, sessionId, `k-K-${label}-auto`);
+      logLine(paths, 'kill', 'negative-child-spawned', { label, sessionId, watchId, autoWatchId });
       const runningDeadline = Date.now() + 5 * 60_000;
       while (Date.now() < runningDeadline) {
         const st = await getChildStatus(target, sessionId).catch(() => ({ busy: false }));
         if (st.busy === true) break;
         await new Promise((r) => setTimeout(r, 5_000));
       }
-      await pauseGoalChild(target, sessionId);
+      const pauseResponse = await pauseGoalChild(target, sessionId, 'pause-now');
       const st = await getChildStatus(target, sessionId).catch(() => ({ goalState: 'unknown' }));
-      armState.pausedNegative = { sessionId, watchId, repoDir: fixture.repoDir, label, baselineCommit: gitHead(fixture.repoDir) };
-      logLine(paths, 'kill', 'negative-child-paused', { label, sessionId, goalState: st.goalState });
+      armState.pausedNegative = { sessionId, watchId, autoWatchId, repoDir: fixture.repoDir, label, baselineCommit: gitHead(fixture.repoDir) };
+      armState.pausedNegativeEvidence = { projection: {}, markerFiles: [], pauseResponse };
+      logLine(paths, 'kill', 'negative-child-paused', { label, sessionId, goalState: st.goalState, pauseResponse });
+    }
+    {
+      const fixture = freshFixtures(paths, ['fixture-10'])[0];
+      const label = 'kill-wrapping';
+      const sessionId = await spawnGoalChild(target, {
+        repoDir: fixture.repoDir, objective: armObjective(fixture.repoDir, label), label, owner: OWNER,
+        maxTurns: 25, budgetTokens: 20_000_000,
+      });
+      const watchId = await registerObserverWatch(target, sessionId, `k-K-${label}`);
+      const autoWatchId = await registerAutoContinueWatch(target, sessionId, `k-K-${label}-auto`);
+      logLine(paths, 'kill', 'wrapping-negative-child-spawned', { label, sessionId, watchId, autoWatchId });
+      const runningDeadline = Date.now() + 5 * 60_000;
+      while (Date.now() < runningDeadline) {
+        const st = await getChildStatus(target, sessionId).catch(() => ({ busy: false }));
+        if (st.busy === true) break;
+        await new Promise((r) => setTimeout(r, 5_000));
+      }
+      const pauseResponse = await pauseGoalChild(target, sessionId, 'pause');
+      const st = await getChildStatus(target, sessionId).catch(() => ({ goalState: 'unknown' }));
+      armState.wrappingNegative = { sessionId, watchId, autoWatchId, repoDir: fixture.repoDir, label, baselineCommit: gitHead(fixture.repoDir) };
+      armState.wrappingNegativeEvidence = { projection: {}, markerFiles: [], pauseResponse };
+      logLine(paths, 'kill', 'wrapping-negative-child-paused', { label, sessionId, goalState: st.goalState, pauseResponse });
     }
 
     // Work phase: wait until every child is mid-turn with tool commands running.
@@ -681,18 +706,33 @@ export async function runKillArm(runId: string, childCount: number): Promise<voi
       logLine(paths, 'kill', 'window-end-snapshot', { childId: child.label, goalState, busy, qualifyingWork, silentStall, projection });
     }
 
-    // Correction 02: negative-child evidence — projection must still read its
-    // explicit pause (never 'interrupted'), and no continue marker may exist.
-    if (armState.pausedNegative) {
-      const pn = armState.pausedNegative;
+    // Correction 02/03: negative-child evidence — projections must still read
+    // their explicit states (never 'interrupted'), no continue marker may
+    // exist, and the auto-continue watch ledger must show no firing.
+    const negativeEvidence = async (pn: { sessionId: string; watchId: string; autoWatchId: string }): Promise<{ projection: Record<string, unknown>; markerFiles: string[]; autoWatchLedger: unknown }> => {
       const projection = await getGoalProjection(target, pn.sessionId).catch(() => ({}));
       const markersDir = path.join(paths.validationDir, 'goal-continue', 'markers');
       let markerFiles: string[] = [];
       try {
         markerFiles = readdirSync(markersDir).filter((f) => f.startsWith(pn.sessionId)).map((f) => path.join(markersDir, f));
       } catch { /* no markers dir */ }
-      armState.pausedNegativeEvidence = { projection, markerFiles };
-      logLine(paths, 'kill', 'negative-child-evidence', { projection, markerFiles });
+      const watchesDir = path.join(paths.validationDir, 'watches');
+      let autoWatchLedger: unknown;
+      for (const candidate of [pn.autoWatchId, pn.autoWatchId.replace(/^watch-/, '')]) {
+        const file = path.join(watchesDir, `${candidate}.json`);
+        if (existsSync(file)) { autoWatchLedger = loadJson<unknown>(file); break; }
+      }
+      return { projection, markerFiles, autoWatchLedger };
+    };
+    if (armState.pausedNegative) {
+      const evidence = await negativeEvidence(armState.pausedNegative);
+      armState.pausedNegativeEvidence = evidence;
+      logLine(paths, 'kill', 'negative-child-evidence', { label: 'kill-paused', ...evidence });
+    }
+    if (armState.wrappingNegative) {
+      const evidence = await negativeEvidence(armState.wrappingNegative);
+      armState.wrappingNegativeEvidence = evidence;
+      logLine(paths, 'kill', 'wrapping-negative-child-evidence', { label: 'kill-wrapping', ...evidence });
     }
 
     // Parent action for children still not working (the skills' prescribed action).

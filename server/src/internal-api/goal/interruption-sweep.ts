@@ -1,40 +1,49 @@
 /**
- * Wave K (contract 1.59.0; correction 02) — interruption sweep (K2) and live
- * stop handler (R6/F4).
+ * Wave K (contract 1.59.0; correction 03 FINAL) — interruption sweep (K2).
  *
- * Guiding principle (correction 02): the goal's own recorded intent always
- * wins over restart or provider evidence. When in doubt, do not continue —
- * make the stop visible instead.
+ * Guiding principle: the goal's recorded intent always wins. When in doubt,
+ * do not continue — make the stop visible instead.
  *
- * F1 exactly-once: an exclusive claim (per sessionId + goal fingerprint) is
- * taken before any dispatch; an in-process single-flight keeps overlapping
- * sweeps and the live path from racing; the loopback prompt carries an
- * idempotency key derived from the claim; ambiguous delivery (accepted, timed
- * out, unknown) is CONSUMED (committed, never rolled back); a definite refusal
- * releases the claim and retries inside the R2 window; after the window the
- * stop is made visible.
+ * Correction 03 scope cut: the live provider-abort path is REMOVED (no live
+ * observers, no handleLiveStop, no bridge interception). Continueable states
+ * are exactly two: an orphan goal (`running` on disk, no live turn) and a
+ * restore pause (`restored_on_session_start`). A `wrapping-up` goal is NEVER
+ * continued (`/goal pause` writes it while a run is busy — explicit intent).
+ * Provider aborts end as before wave K; the K1 classifier keeps
+ * `provider_abort` as a documented, non-continued cause.
  *
- * F2 explicit intent: only three states may continue — an orphan goal
- * (running/wrapping_up on disk, no live turn), a restore pause
- * (restored_on_session_start), and a typed, fresh provider stop (live path,
- * F4). Every other pause (explicit pause/pause-now, question, budget/turn
- * limit, governor, environment fault) is never continued and never marked —
- * even when a receipt or drain announced the session.
+ * C1 exactly-once delivery: the loopback continue POSTs JSON
+ * `{message, mode:'prompt', verbosity:'answers', detach:true, idempotencyKey}`;
+ * 200/202 → accepted; 400/404/409 and 429/503-with-Retry-After → refused
+ * (claim released, retried inside the R2 window); everything else → unknown →
+ * CONSUMED. A count-0 claim or corrupt marker found later is never replayed:
+ * consumed, and the stop is made visible.
  *
- * F5: non-Pi candidates read the runtime's real projection (via the injected
- * reader); a silently active goal gets the visible interruption with the
- * runtime's own supported flag; terminal or explicitly paused goals get
- * nothing.
+ * F2 explicit intent: every other pause (explicit pause/pause-now, question,
+ * budget/turn limit, governor, environment fault) is never continued and never
+ * marked — even when a receipt or drain announced the session.
  *
- * F6: markers are keyed to the goal fingerprint; other-goal markers are
- * pruned; second-transient detection reads only the current goal's marker.
+ * C3: non-Pi candidates read the runtime's real projection; only the BOOT
+ * sweep makes a silently active non-Pi goal visible (with the runtime's own
+ * supported flag); canonical-terminal or explicitly paused goals get nothing.
  *
- * F7: the auto-continue event is published only with a VERIFIED post-dispatch
- * projection (status running). Unverified accepts count as consumed and make
- * the stop visible (cause continue_failed) — never a claimed auto-continue.
+ * F6/C4: markers are keyed to the goal fingerprint; other-goal markers are
+ * pruned; R5 suppression requires a CONFIRMED continue (this boot, current
+ * goal) — the wiring's probe enforces it.
+ *
+ * C5: verification is tied to the same goal — a pre-dispatch re-read must show
+ * the same fingerprint and a still-continueable state (else the claim is
+ * released and nothing is written); after acceptance, the same fingerprint
+ * reading `running` verifies, the same fingerprint already terminal verifies
+ * as a completed continue (no continue_failed, no overlay), and a different
+ * fingerprint writes NO overlay and no event.
+ *
+ * F7/C6: the verified auto-continue event carries top-level
+ * `autoContinued: true` (watch dataMatch is a shallow top-level match) plus
+ * the nested `interruption` object, and is published only after verification.
  */
-import { classifyGoalStop, type InterruptionSource, type TransientCause } from './transient-cause.js';
 import { goalFingerprint, type ContinueMarkerStore } from './continue-marker.js';
+import type { InterruptionSource } from './transient-cause.js';
 import type { InterruptionOverlayRecord, InterruptionOverlayStore, GoalFileIdentity } from './interruption-overlay.js';
 import { findInFlightToolCall, buildContinueNote, type InFlightToolCall } from './continue-note.js';
 import type { SessionGoalProjection } from './types.js';
@@ -76,14 +85,14 @@ export interface InterruptionSweepDeps {
   markerStore: ContinueMarkerStore;
   overlayStore: InterruptionOverlayStore;
   readGoalFileIdentity(sessionPath: string): Promise<GoalFileIdentity | null>;
-  /** F5: another runtime's real goal projection (loopback GET /goal). */
+  /** C3: another runtime's real goal projection (loopback GET /goal). */
   readRuntimeProjection?(sessionId: string, runtime: string): Promise<SessionGoalProjection | null>;
   now?(): number;
   sleep?(ms: number): Promise<void>;
   concurrency?: number;
   windowMs?: number;
   restartBoundMs?: number;
-  /** F7: how long a verified-running poll may wait after an accepted dispatch. */
+  /** C5: how long a verified-running poll may wait after an accepted dispatch. */
   verifyMs?: number;
   verifyIntervalMs?: number;
 }
@@ -105,10 +114,9 @@ export function withinPreviousLifetime(candidate: Pick<SweepCandidate, 'lastActi
   return candidate.lastActivityMs <= bootTimeMs && (bootTimeMs - candidate.lastActivityMs) <= boundMs;
 }
 
-const CAUSE_LABELS: Record<TransientCause, string> = {
+const CAUSE_LABELS: Record<string, string> = {
   restart_interruption: 'a server restart cut your run off',
   rehydrate_pause: 'your run was interrupted by a server restart and your goal was restored paused',
-  provider_abort: 'the model provider aborted your run (overloaded or unreachable)',
 };
 
 /** Compose the continue command: a single-line, quote-free note inside `/goal resume "<note>"`. */
@@ -116,34 +124,25 @@ export function composeContinueCommand(note: string): string {
   return `/goal resume "${note}"`;
 }
 
-function extractLastErrorMessage(projection: SessionGoalProjection): string | null {
-  const state = projection.runtimeState;
-  if (state && typeof state === 'object' && !Array.isArray(state)) {
-    const message = (state as Record<string, unknown>).lastErrorMessage;
-    if (typeof message === 'string' && message.trim()) return message;
-  }
-  return null;
-}
-
 interface ClassifiedStop {
   transient: true;
-  cause: TransientCause;
-  source: InterruptionSource;
+  cause: 'restart_interruption' | 'rehydrate_pause';
+  source: 'receipt' | 'drain' | 'boot_orphan' | 'rehydrate_pause';
 }
 
 /**
  * Classify one candidate from its announcement and raw disk projection (F2):
- * only an orphan goal, a restore pause, or an announced cut-off of a goal that
- * was live at the cut-off may continue. Terminal, explicitly paused, limited
- * and errored goals are never continued here — the provider abort is the LIVE
- * path's typed evidence (F4), never stale disk text.
+ * only an orphan goal or a restore pause may continue. Terminal, explicitly
+ * paused, limited and errored goals are never continued here.
  */
 async function classifyCandidate(candidate: SweepCandidate, deps: InterruptionSweepDeps): Promise<{ stop: ClassifiedStop | null; projection: SessionGoalProjection }> {
   const projection = await deps.readRawProjection(candidate.sessionPath);
   if (projection.status === 'achieved' || projection.status === 'cleared' || projection.status === 'idle') {
     return { stop: null, projection };
   }
-  if (projection.status === 'running' || projection.status === 'wrapping_up') {
+  // C2: `wrapping_up` is NEVER continueable — `/goal pause` writes it while a
+  // run is busy, so it is explicit intent, not an orphan signal.
+  if (projection.status === 'running') {
     return { stop: { transient: true, cause: 'restart_interruption', source: candidate.announced?.source ?? 'boot_orphan' }, projection };
   }
   if (projection.status === 'paused' && projection.pausedReason === 'restored_on_session_start') {
@@ -156,6 +155,8 @@ function interruptedProjection(projection: SessionGoalProjection, interruption: 
   return { ...projection, status: 'paused', pausedReason: 'interrupted', interruption: { ...interruption, autoContinued: false } };
 }
 
+const NON_PI_TERMINAL = new Set(['achieved', 'cleared', 'failed', 'idle', 'unknown']);
+
 export function createInterruptionSweep(deps: InterruptionSweepDeps) {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -164,7 +165,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
   const verifyMs = deps.verifyMs ?? DEFAULT_VERIFY_MS;
   const verifyIntervalMs = deps.verifyIntervalMs ?? DEFAULT_VERIFY_INTERVAL_MS;
 
-  /** F1: one continue decision at a time per session (sweep + live path). */
+  /** C1: one continue decision at a time per session (overlapping sweeps). */
   const inFlight = new Map<string, Promise<{ dispatched: boolean; verified: boolean }>>();
 
   function continueOnce(candidate: SweepCandidate, stop: ClassifiedStop, projection: SessionGoalProjection, report: SweepReport): Promise<{ dispatched: boolean; verified: boolean }> {
@@ -191,17 +192,36 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
       return { dispatched: false, verified: false };
     }
 
-    // F1: exclusive claim. A fresh held claim = another dispatch in flight.
+    // C1: exclusive claim. A found claim (count 0, any age) or a corrupt file
+    // is CONSUMED, never replayed: make the stop visible instead.
     const claim = await deps.markerStore.claim(candidate.sessionId, fingerprint, stop.cause, stop.source);
     if (!claim.claimed) {
+      await writeOverlay(candidate, fingerprint, 'continue_failed', stop.source, { continueCount: 1, autoContinued: false });
+      deps.publishGoalState(candidate.sessionId, interruptedProjection(projection, {
+        cause: 'continue_failed', source: stop.source, detectedAt: now(), continueCount: 1,
+      }));
+      report.interruptedVisible.push(candidate.sessionId);
+      report.skipReasons[candidate.sessionId] = 'a prior claim/marker for this goal exists: consumed, stop visible, no replay';
+      return { dispatched: false, verified: false };
+    }
+
+    // C5: re-read immediately before dispatch — same fingerprint, still
+    // continueable. Anything else: release the claim (nothing was dispatched)
+    // and write nothing.
+    const preDispatch = await deps.readRawProjection(candidate.sessionPath);
+    const preFingerprint = goalFingerprint(preDispatch.objective, preDispatch.startedAt);
+    const stillContinueable = preFingerprint === fingerprint
+      && (preDispatch.status === 'running' || (preDispatch.status === 'paused' && preDispatch.pausedReason === 'restored_on_session_start'));
+    if (!stillContinueable) {
+      await deps.markerStore.release(candidate.sessionId, fingerprint);
       report.skipped.push(candidate.sessionId);
-      report.skipReasons[candidate.sessionId] = `a ${claim.existing.count >= 1 ? 'committed' : 'fresh'} marker already holds this goal's continue`;
+      report.skipReasons[candidate.sessionId] = `goal changed before dispatch (fingerprint ${preFingerprint === fingerprint ? 'same' : 'differs'}, status '${preDispatch.status}') — nothing written`;
       return { dispatched: false, verified: false };
     }
 
     const transcriptLines = await deps.readTranscriptLines(candidate.sessionPath);
     const inFlightToolCall = findInFlightToolCall(transcriptLines);
-    const note = buildContinueNote({ causeLabel: CAUSE_LABELS[stop.cause], inFlightToolCall });
+    const note = buildContinueNote({ causeLabel: CAUSE_LABELS[stop.cause] ?? 'your run was interrupted', inFlightToolCall });
     const idempotencyKey = `goal-continue:${candidate.sessionId}:${fingerprint.slice(0, 12)}`;
 
     const deadline = now() + windowMs;
@@ -225,42 +245,82 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
       return { dispatched: false, verified: false };
     }
 
-    // Accepted or ambiguous: the once is CONSUMED — never rolled back (F1).
+    // C1: accepted or ambiguous — the once is CONSUMED, never rolled back.
     await deps.markerStore.commit(candidate.sessionId, fingerprint);
 
     if (result.outcome === 'unknown') {
-      // No verdict: do not claim an auto-continue. Make the stop visible; if
+      // No verdict: never claim an auto-continue. Make the stop visible; if
       // the resume did land, the engine's own write clears the overlay.
       await writeOverlay(candidate, fingerprint, 'continue_failed', stop.source, { continueCount: 1, autoContinued: false, continueNote: note, inFlightToolCall });
       deps.publishGoalState(candidate.sessionId, interruptedProjection(projection, {
         cause: 'continue_failed', source: stop.source, detectedAt: now(), continueCount: 1, continueNote: note,
       }));
       report.interruptedVisible.push(candidate.sessionId);
-      return { dispatched: false, verified: false };
+      return { dispatched: true, verified: false };
     }
 
-    // F7: publish the truthful event only when the resume verified (status
-    // running). The restore path flips the file to paused and the resume back
-    // to running, so the poll reads the post-dispatch truth.
+    // C5: poll for the SAME fingerprint. `running` verifies; the same
+    // fingerprint already terminal verifies as a completed continue (no
+    // continue_failed, no overlay); a different fingerprint stops the poll —
+    // no overlay, no event on the replacement goal.
     const verifyDeadline = now() + verifyMs;
     let verified = false;
+    let completedContinue = false;
+    let fingerprintChanged = false;
     let verifiedProjection = projection;
     while (now() < verifyDeadline) {
       await sleep(verifyIntervalMs);
       const latest = await deps.readRawProjection(candidate.sessionPath);
+      const latestFingerprint = goalFingerprint(latest.objective, latest.startedAt);
+      if (latestFingerprint !== fingerprint) {
+        fingerprintChanged = true;
+        break;
+      }
       if (latest.status === 'running') {
+        verified = true;
+        verifiedProjection = latest;
+        break;
+      }
+      if (latest.status === 'achieved' || latest.status === 'cleared' || latest.status === 'failed') {
+        completedContinue = true;
         verified = true;
         verifiedProjection = latest;
         break;
       }
     }
     if (!verified) {
-      await writeOverlay(candidate, fingerprint, 'continue_failed', stop.source, { continueCount: 1, autoContinued: false, continueNote: note, inFlightToolCall });
-      deps.publishGoalState(candidate.sessionId, interruptedProjection(verifiedProjection, {
-        cause: 'continue_failed', source: stop.source, detectedAt: now(), continueCount: 1, continueNote: note,
-      }));
-      report.interruptedVisible.push(candidate.sessionId);
+      if (!fingerprintChanged) {
+        await writeOverlay(candidate, fingerprint, 'continue_failed', stop.source, { continueCount: 1, autoContinued: false, continueNote: note, inFlightToolCall });
+        deps.publishGoalState(candidate.sessionId, interruptedProjection(verifiedProjection, {
+          cause: 'continue_failed', source: stop.source, detectedAt: now(), continueCount: 1, continueNote: note,
+        }));
+        report.interruptedVisible.push(candidate.sessionId);
+      }
       return { dispatched: true, verified: false };
+    }
+
+    // C4: only a verified continue is confirmed.
+    await deps.markerStore.confirm(candidate.sessionId, fingerprint);
+
+    if (completedContinue) {
+      // A completed continue: no overlay (nothing to expose), but the
+      // auto-continue is still published truthfully (achieved + autoContinued);
+      // the bridge reports the real end.
+      deps.publishGoalState(candidate.sessionId, {
+        ...verifiedProjection,
+        autoContinued: true,
+        interruption: {
+          cause: stop.cause,
+          source: stop.source,
+          detectedAt: now(),
+          continueCount: 1,
+          autoContinued: true,
+          continueNote: note,
+          inFlightToolCall: inFlightToolCall ?? null,
+        },
+      });
+      report.continued.push(candidate.sessionId);
+      return { dispatched: true, verified: true };
     }
 
     const identity = await deps.readGoalFileIdentity(candidate.sessionPath);
@@ -278,8 +338,11 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
         goalFile: identity,
       });
     }
+    // C6: top-level `autoContinued: true` — watch dataMatch is a shallow,
+    // top-level match; the nested interruption object rides along.
     deps.publishGoalState(candidate.sessionId, {
       ...verifiedProjection,
+      autoContinued: true,
       interruption: {
         cause: stop.cause,
         source: stop.source,
@@ -309,7 +372,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
     await deps.overlayStore.set(record);
   }
 
-  async function handleCandidate(candidate: SweepCandidate, bootTimeMs: number, report: SweepReport): Promise<void> {
+  async function handleCandidate(candidate: SweepCandidate, bootTimeMs: number, report: SweepReport, boot: boolean): Promise<void> {
     const skip = (reason: string): void => {
       report.skipped.push(candidate.sessionId);
       report.skipReasons[candidate.sessionId] = reason;
@@ -322,11 +385,16 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
     if (await deps.isSessionBusy(candidate.sessionId)) { skip('session is live (busy)'); return; }
 
     if (candidate.runtime !== 'pi') {
-      // F5: read the runtime's real projection; only a silently ACTIVE goal is
-      // made visible (with its own supported flag). Terminal or explicitly
-      // paused goals get nothing (no change).
+      // C3: read the runtime's real projection; only the BOOT sweep makes a
+      // silently active non-Pi goal visible (a fresh process has nothing
+      // busy). Every canonical terminal status and an explicit pause get
+      // nothing (no change).
+      if (!boot) {
+        skip('non-Pi visibility runs only in the boot sweep');
+        return;
+      }
       const projection = await deps.readRuntimeProjection?.(candidate.sessionId, candidate.runtime);
-      if (!projection || projection.status === 'achieved' || projection.status === 'cleared' || projection.status === 'idle' || projection.status === 'unknown' || projection.status === 'paused') {
+      if (!projection || NON_PI_TERMINAL.has(projection.status) || projection.status === 'paused') {
         skip(`non-Pi goal state '${projection?.status ?? 'unknown'}' is not a silent active stop`);
         return;
       }
@@ -349,8 +417,8 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
   }
 
   return {
-    /** Boot / drain-timeout sweep. `candidates` come from the server wiring. */
-    async run(candidates: SweepCandidate[], bootTimeMs: number): Promise<SweepReport> {
+    /** Boot / drain-timeout sweep. `candidates` come from the server wiring. `opts.boot` gates non-Pi visibility (C3). */
+    async run(candidates: SweepCandidate[], bootTimeMs: number, opts?: { boot?: boolean }): Promise<SweepReport> {
       const report: SweepReport = { continued: [], interruptedVisible: [], skipped: [], skipReasons: {} };
       const unique = new Map<string, SweepCandidate>();
       for (const candidate of candidates) {
@@ -363,7 +431,7 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
         while (index < list.length) {
           const candidate = list[index++];
           try {
-            await handleCandidate(candidate, bootTimeMs, report);
+            await handleCandidate(candidate, bootTimeMs, report, opts?.boot ?? false);
           } catch (error) {
             report.skipped.push(candidate.sessionId);
             report.skipReasons[candidate.sessionId] = `error: ${error instanceof Error ? error.message : String(error)}`;
@@ -372,27 +440,6 @@ export function createInterruptionSweep(deps: InterruptionSweepDeps) {
       };
       await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
       return report;
-    },
-
-    /**
-     * R6/F4: the live path. A Pi paused/failed goal_state event is classified
-     * here BEFORE the bridge emits terminal events; a positively
-     * auto-continuable provider stop is continued once and the caller suppresses
-     * the goal_end. Scope-gated like the boot sweep (F3): only API children,
-     * only Pi.
-     */
-    async handleLiveStop(sessionId: string, sessionPath: string, projection: SessionGoalProjection, scope: { apiChild: boolean; runtime: string }): Promise<{ intercepted: boolean }> {
-      if (!scope.apiChild || scope.runtime !== 'pi') return { intercepted: false };
-      if (projection.status !== 'failed' && projection.status !== 'paused') return { intercepted: false };
-      // The evidence is the stop itself: the projection read at the event
-      // moment, with positive provider text. Anything else (explicit pause
-      // reasons, bare aborts) is intent and never intercepted.
-      const verdict = classifyGoalStop({ source: 'provider_abort', status: projection.status === 'failed' ? 'failed' : 'paused', lastErrorMessage: extractLastErrorMessage(projection) });
-      if (!verdict.transient) return { intercepted: false };
-      const stop: ClassifiedStop = { transient: true, cause: 'provider_abort', source: 'provider_abort' };
-      const report: SweepReport = { continued: [], interruptedVisible: [], skipped: [], skipReasons: {} };
-      const outcome = await continueOnce({ sessionId, sessionPath, runtime: 'pi' }, stop, projection, report);
-      return { intercepted: outcome.dispatched && outcome.verified };
     },
   };
 }

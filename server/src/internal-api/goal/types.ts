@@ -65,6 +65,13 @@ export interface SessionGoalProjection {
   autoContinue?: boolean;
   /** Wave K (contract 1.59.0): interruption/auto-continue facts (Pi only). */
   interruption?: GoalInterruptionInfo;
+  /**
+   * Correction 03 C6: top-level flag on the VERIFIED auto-continue `goal_state`
+   * event data — watch `dataMatch` is a shallow top-level match, so the nested
+   * `interruption.autoContinued` can never fire a watch. Present only on the
+   * verified auto-continue event (never on plain projections).
+   */
+  autoContinued?: boolean;
   /** Verbatim native state, for consumers that want more than the projection. */
   runtimeState?: unknown;
 }

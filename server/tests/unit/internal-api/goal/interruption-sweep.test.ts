@@ -1,13 +1,14 @@
 /**
- * Wave K correction 02 — interruption sweep tests (F1, F2, F5, F6, F7).
+ * Wave K correction 03 — interruption sweep tests.
  *
- * F1: exactly-once is atomic (exclusive claim, single-flight, idempotency key,
- * ambiguous delivery consumed, definite refusal released and retried).
- * F2: explicit intent wins — only orphans, restores and typed fresh provider
- * stops (live path) may continue; an announced explicitly-paused child stays
- * untouched. F5: non-Pi candidates read the runtime's real projection.
- * F6: markers are fingerprint-keyed and pruned. F7: the auto-continue event is
- * published only with a verified post-dispatch running projection.
+ * Scope cut: the live provider-abort path is gone; provider failures end as
+ * before wave K. Continueable states are exactly: an orphan `running` goal and
+ * a `restored_on_session_start` pause. C1: the loopback body carries
+ * detach + idempotencyKey; a found claim (any age) is consumed-visible; corrupt
+ * markers are consumed-visible; 500-class responses are unknown (consumed).
+ * C2: `wrapping_up` is never continued. C3: non-Pi visibility is boot-only and
+ * excludes every terminal status. C5: verification is fingerprint-tied.
+ * C6: the verified event carries top-level `autoContinued: true`.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -43,18 +44,16 @@ function apiChild(overrides: Partial<SweepCandidate> = {}): SweepCandidate {
 
 interface Harness {
   deps: InterruptionSweepDeps;
-  dispatches: Array<{ sessionId: string; message: string; idempotencyKey: string }>;
+  dispatches: Array<{ sessionId: string; message: string; idempotencyKey: string; body?: unknown }>;
   events: Array<{ sessionId: string; projection: SessionGoalProjection }>;
   dispatchBehavior: (attempt: number, sessionId: string) => SweepDispatchResult | 'accept';
-  maxConcurrent: { value: number };
   markerDir: string;
   overlayDir: string;
   projection: SessionGoalProjection;
-  projectionReads: number;
 }
 
 function harness(overrides: Partial<InterruptionSweepDeps> = {}): Harness {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'k-sweep2-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'k-sweep3-'));
   const markerDir = path.join(dir, 'markers');
   const overlayDir = path.join(dir, 'overlay');
   const clock = { now: BOOT + 1000 };
@@ -62,29 +61,19 @@ function harness(overrides: Partial<InterruptionSweepDeps> = {}): Harness {
     dispatches: [],
     events: [],
     dispatchBehavior: () => 'accept',
-    maxConcurrent: { value: 0 },
     markerDir,
     overlayDir,
     projection: runningProjection(),
-    projectionReads: 0,
   };
-  let inFlight = 0;
   const attempts = new Map<string, number>();
   const deps: InterruptionSweepDeps = {
     isSessionBusy: () => false,
-    readRawProjection: async () => {
-      state.projectionReads += 1;
-      return state.projection;
-    },
+    readRawProjection: async () => state.projection,
     readTranscriptLines: async () => [],
     dispatchContinue: async (sessionId, message, idempotencyKey) => {
-      inFlight += 1;
-      state.maxConcurrent.value = Math.max(state.maxConcurrent.value, inFlight);
-      await new Promise((r) => setTimeout(r, 5));
       const attempt = (attempts.get(`${sessionId}:${idempotencyKey}`) ?? 0) + 1;
       attempts.set(`${sessionId}:${idempotencyKey}`, attempt);
       state.dispatches.push({ sessionId, message, idempotencyKey });
-      inFlight -= 1;
       const behaviour = state.dispatchBehavior(attempt, sessionId);
       return behaviour === 'accept' ? { outcome: 'accepted' } : behaviour;
     },
@@ -102,19 +91,18 @@ function harness(overrides: Partial<InterruptionSweepDeps> = {}): Harness {
   return state;
 }
 
-async function runSweep(h: Harness, candidates: SweepCandidate[]): Promise<ReturnType<ReturnType<typeof createInterruptionSweep>['run']>> {
+async function runSweep(h: Harness, candidates: SweepCandidate[], opts?: { boot?: boolean }): Promise<ReturnType<ReturnType<typeof createInterruptionSweep>['run']>> {
   const sweep = createInterruptionSweep(h.deps);
-  return sweep.run(candidates, BOOT);
+  return sweep.run(candidates, BOOT, opts);
 }
 
 describe('R1 scope (unchanged)', () => {
   it('an interactive-origin running goal is neither continued nor marked', async () => {
     const h = harness();
-    const report = await runSweep(h, [apiChild({ sessionId: 'pi-browser-1', origin: 'browser' })]);
+    const report = await runSweep(h, [apiChild({ sessionId: 'pi-browser-1', origin: 'browser' })], { boot: true });
     expect(h.dispatches).toHaveLength(0);
     expect(h.events).toHaveLength(0);
     expect(await h.deps.markerStore.hasActiveContinue('pi-browser-1')).toBe(false);
-    expect(report.continued).toHaveLength(0);
     expect(report.skipped).toContain('pi-browser-1');
   });
 
@@ -128,83 +116,87 @@ describe('R1 scope (unchanged)', () => {
 
   it('a live (busy) session is skipped', async () => {
     const h = harness({ isSessionBusy: (id) => id === 'pi-child-1' });
-    await runSweep(h, [apiChild()]);
+    await runSweep(h, [apiChild()], { boot: true });
     expect(h.dispatches).toHaveLength(0);
   });
 });
 
-describe('F1 — atomic exactly-once', () => {
-  it('carries an idempotency key derived from the session and goal', async () => {
+describe('C1 — exactly-once delivery', () => {
+  it('the dispatch carries an idempotency key derived from the session and goal', async () => {
     const h = harness();
-    await runSweep(h, [apiChild()]);
+    await runSweep(h, [apiChild()], { boot: true });
     expect(h.dispatches).toHaveLength(1);
     const key = h.dispatches[0].idempotencyKey;
     expect(key).toContain('pi-child-1');
     expect(key).toContain(goalFingerprint('finish the lane', BOOT - 3_600_000).slice(0, 12));
+    expect(key.length).toBeLessThanOrEqual(200);
   });
 
   it('two overlapping sweeps dispatch once (single-flight + exclusive claim)', async () => {
     const h = harness();
-    h.dispatchBehavior = () => { await0(200); return 'accept'; };
-    function await0(ms: number): void { const start = Date.now(); while (Date.now() - start < ms) { /* spin briefly */ } }
     const sweep = createInterruptionSweep(h.deps);
     const candidates = [apiChild()];
-    const [a, b] = await Promise.all([sweep.run(candidates, BOOT), sweep.run(candidates, BOOT)]);
+    const [a, b] = await Promise.all([sweep.run(candidates, BOOT, { boot: true }), sweep.run(candidates, BOOT, { boot: true })]);
     expect(h.dispatches).toHaveLength(1);
     expect(a.continued.length + b.continued.length).toBe(1);
-    expect(await h.deps.markerStore.hasActiveContinue('pi-child-1')).toBe(true);
   });
 
-  it('a crash after acceptance and before commit produces no second dispatch (the claim blocks)', async () => {
+  it('a found claim (fresh or stale, never committed) is consumed: no dispatch, visible stop', async () => {
+    const fp = goalFingerprint('finish the lane', BOOT - 3_600_000);
+    for (const claimedAt of [BOOT, BOOT - 60 * 60_000]) {
+      const h = harness();
+      const past = createContinueMarkerStore(h.markerDir, { now: () => claimedAt });
+      await past.claim('pi-child-1', fp, 'restart_interruption', 'boot_orphan');
+      const report = await runSweep(h, [apiChild()], { boot: true });
+      expect(h.dispatches).toHaveLength(0);
+      const event = h.events.find((e) => e.sessionId === 'pi-child-1');
+      expect(event?.projection.status).toBe('paused');
+      expect(event?.projection.interruption).toMatchObject({ cause: 'continue_failed', continueCount: 1 });
+      expect(report.interruptedVisible).toEqual(['pi-child-1']);
+    }
+  });
+
+  it('a corrupt marker file is consumed: visible, not silent', async () => {
     const fp = goalFingerprint('finish the lane', BOOT - 3_600_000);
     const h = harness();
-    // The first process claimed and accepted, then died before commit: the
-    // count-0 claim stays fresh on disk.
-    await h.deps.markerStore.claim('pi-child-1', fp, 'restart_interruption', 'boot_orphan');
-    const report = await runSweep(h, [apiChild()]);
+    fs.mkdirSync(h.markerDir, { recursive: true });
+    fs.writeFileSync(path.join(h.markerDir, `pi-child-1.${fp.slice(0, 16)}.json`), '{corrupt', 'utf8');
+    const report = await runSweep(h, [apiChild()], { boot: true });
     expect(h.dispatches).toHaveLength(0);
-    expect(report.skipped).toContain('pi-child-1');
+    const event = h.events.find((e) => e.sessionId === 'pi-child-1');
+    expect(event?.projection.interruption).toMatchObject({ cause: 'continue_failed', continueCount: 1 });
+    expect(report.interruptedVisible).toEqual(['pi-child-1']);
   });
 
-  it('a stale (abandoned) claim is taken over and the dispatch proceeds once', async () => {
-    const fp = goalFingerprint('finish the lane', BOOT - 3_600_000);
-    const h = harness();
-    const staleStore = createContinueMarkerStore(h.markerDir, { now: () => BOOT - 30 * 60_000 });
-    await staleStore.claim('pi-child-1', fp, 'restart_interruption', 'boot_orphan');
-    const report = await runSweep(h, [apiChild()]);
-    expect(h.dispatches).toHaveLength(1);
-    expect(report.continued).toEqual(['pi-child-1']);
-  });
-
-  it('an accepted dispatch whose response times out is consumed: no second dispatch, visible interruption', async () => {
-    const h = harness({ windowMs: 30_000 });
-    h.dispatchBehavior = () => ({ outcome: 'unknown', reason: 'loopback timed out' });
-    const report = await runSweep(h, [apiChild()]);
+  it('a 500 after dispatch counts as unknown: consumed, visible, no claimed auto-continue', async () => {
+    const h = harness({ windowMs: 10_000 });
+    h.dispatchBehavior = () => ({ outcome: 'unknown', reason: 'prompt endpoint answered 500' });
+    const report = await runSweep(h, [apiChild()], { boot: true });
     expect(h.dispatches).toHaveLength(1);
     expect(await h.deps.markerStore.hasActiveContinue('pi-child-1')).toBe(true);
     const event = h.events.find((e) => e.sessionId === 'pi-child-1');
-    expect(event?.projection.status).toBe('paused');
     expect(event?.projection.interruption).toMatchObject({ cause: 'continue_failed', autoContinued: false });
     expect(report.continued).toHaveLength(0);
     expect(report.interruptedVisible).toEqual(['pi-child-1']);
   });
 
-  it('a crash after acceptance and before commit produces no second dispatch on the next sweep (committed path)', async () => {
+  it('a second transient on the SAME goal is visible and not continued', async () => {
     const fp = goalFingerprint('finish the lane', BOOT - 3_600_000);
     const h = harness();
     await h.deps.markerStore.claim('pi-child-1', fp, 'restart_interruption', 'boot_orphan');
     await h.deps.markerStore.commit('pi-child-1', fp);
-    const report = await runSweep(h, [apiChild()]);
+    const report = await runSweep(h, [apiChild()], { boot: true });
     expect(h.dispatches).toHaveLength(0);
     const event = h.events.find((e) => e.sessionId === 'pi-child-1');
+    expect(event?.projection.status).toBe('paused');
     expect(event?.projection.interruption).toMatchObject({ cause: 'second_transient', continueCount: 1 });
     expect(report.interruptedVisible).toEqual(['pi-child-1']);
   });
 });
 
-describe('F2 — explicit intent wins', () => {
-  it('an announced, explicitly paused child gets no continue and no change', async () => {
-    const h = harness({ readRawProjection: async () => ({ supported: true, status: 'paused', pausedReason: 'owner-approved tmux restart' }) });
+describe('C2 — intent', () => {
+  it('an announced wrapping-up goal is NEVER continued and left as it is on disk', async () => {
+    const h = harness({ readRawProjection: async () => ({ supported: true, status: 'wrapping_up', objective: 'finish the lane', startedAt: BOOT - 3_600_000 }) });
     const report = await runSweep(h, [apiChild({ announced: { source: 'receipt', interruptionReason: 'server_restart' } })]);
     expect(h.dispatches).toHaveLength(0);
     expect(h.events).toHaveLength(0);
@@ -212,15 +204,15 @@ describe('F2 — explicit intent wins', () => {
     expect(report.skipped).toContain('pi-child-1');
   });
 
-  it('a paused goal with a stale provider error string is not a provider abort (sweep never reads stale text)', async () => {
-    const h = harness({ readRawProjection: async () => ({ supported: true, status: 'paused', pausedReason: 'pause-now', runtimeState: { lastErrorMessage: 'Provider overloaded (HTTP 429)' } }) });
-    const report = await runSweep(h, [apiChild({ announced: { source: 'receipt', interruptionReason: 'server_restart' } })]);
+  it('an announced, explicitly paused child gets no continue and no change', async () => {
+    const h = harness({ readRawProjection: async () => ({ supported: true, status: 'paused', pausedReason: 'owner-approved tmux restart' }) });
+    await runSweep(h, [apiChild({ announced: { source: 'receipt', interruptionReason: 'server_restart' } })]);
     expect(h.dispatches).toHaveLength(0);
     expect(h.events).toHaveLength(0);
-    expect(report.skipped).toContain('pi-child-1');
+    expect(await h.deps.markerStore.hasMarker('pi-child-1')).toBe(false);
   });
 
-  it('a question pause, a governor pause and a budget pause are never continued', async () => {
+  it('question/governor/budget/turn-limit pauses are never continued', async () => {
     for (const projection of [
       { supported: true, status: 'paused' as const, pausedReason: 'question' },
       { supported: true, status: 'paused' as const, pausedReason: 'paused by the continuation governor' },
@@ -234,116 +226,117 @@ describe('F2 — explicit intent wins', () => {
     }
   });
 
-  it('an announced wrapping-up orphan still continues (goal was live at the cut-off)', async () => {
-    const h = harness({ readRawProjection: async () => ({ supported: true, status: 'wrapping_up', objective: 'finish the lane', startedAt: BOOT - 3_600_000 }) });
+  it('a paused goal with a stale provider error string is not continued by the sweep', async () => {
+    const h = harness({ readRawProjection: async () => ({ supported: true, status: 'paused', pausedReason: 'pause-now', runtimeState: { lastErrorMessage: 'Provider overloaded (HTTP 429)' } }) });
     await runSweep(h, [apiChild()]);
-    expect(h.dispatches).toHaveLength(1);
+    expect(h.dispatches).toHaveLength(0);
+    expect(h.events).toHaveLength(0);
   });
 });
 
-describe('F7 — truthful auto-continue events', () => {
-  it('publishes goal_state running+autoContinued only after the resume is verified', async () => {
+describe('F7/C6 — verified, watchable auto-continue events', () => {
+  it('publishes goal_state running + top-level autoContinued only after verification', async () => {
     const h = harness();
-    const report = await runSweep(h, [apiChild()]);
+    const report = await runSweep(h, [apiChild()], { boot: true });
     expect(h.dispatches).toHaveLength(1);
     const event = h.events.find((e) => e.sessionId === 'pi-child-1');
     expect(event?.projection.status).toBe('running');
+    expect(event?.projection.autoContinued).toBe(true);
     expect(event?.projection.interruption).toMatchObject({ autoContinued: true, continueCount: 1 });
     expect(report.continued).toEqual(['pi-child-1']);
   });
 
-  it('an accepted dispatch that never verifies running is not published as auto-continued', async () => {
+  it('an accepted dispatch that never verifies is consumed and visible (continue_failed)', async () => {
     const h = harness({ readRawProjection: async () => ({ supported: true, status: 'paused', pausedReason: 'restored_on_session_start', objective: 'finish the lane', startedAt: BOOT - 3_600_000 }) });
-    const report = await runSweep(h, [apiChild()]);
+    const report = await runSweep(h, [apiChild()], { boot: true });
     expect(h.dispatches).toHaveLength(1);
     expect(await h.deps.markerStore.hasActiveContinue('pi-child-1')).toBe(true);
     const event = h.events.find((e) => e.sessionId === 'pi-child-1');
     expect(event?.projection.interruption).toMatchObject({ autoContinued: false, cause: 'continue_failed' });
-    expect(report.continued).toHaveLength(0);
     expect(report.interruptedVisible).toContain('pi-child-1');
   });
 });
 
-describe('F6 — fingerprint-keyed markers', () => {
-  it('a marker for an older goal is pruned and a new goal gets a fresh once', async () => {
+describe('C5 — verification tied to the same goal', () => {
+  it('a goal replaced before dispatch: no dispatch, nothing written', async () => {
     const h = harness();
-    const oldFp = goalFingerprint('an older goal', 1);
-    await h.deps.markerStore.claim('pi-child-1', oldFp, 'restart_interruption', 'boot_orphan');
-    await h.deps.markerStore.commit('pi-child-1', oldFp);
-    const report = await runSweep(h, [apiChild()]);
-    expect(h.dispatches).toHaveLength(1);
-    expect(report.continued).toEqual(['pi-child-1']);
-    const all = await h.deps.markerStore.listForSession('pi-child-1');
-    expect(all).toHaveLength(1);
-    expect(all[0].fingerprint).toBe(goalFingerprint('finish the lane', BOOT - 3_600_000));
+    let reads = 0;
+    h.deps.readRawProjection = async () => {
+      reads += 1;
+      // The sweep's classification read (first) sees the orphan; the
+      // pre-dispatch re-read (second) sees a replaced goal.
+      return reads <= 1 ? runningProjection() : { supported: true, status: 'running', objective: 'goal B', startedAt: 9000 };
+    };
+    const report = await runSweep(h, [apiChild()], { boot: true });
+    expect(h.dispatches).toHaveLength(0);
+    expect(await h.deps.markerStore.hasMarker('pi-child-1')).toBe(false);
+    expect(h.events).toHaveLength(0);
+    expect(report.skipped).toContain('pi-child-1');
   });
 
-  it('a second transient on the SAME goal is visible and not continued', async () => {
-    const fp = goalFingerprint('finish the lane', BOOT - 3_600_000);
+  it('a goal replaced after acceptance: consumed, no overlay, no event on goal B', async () => {
     const h = harness();
-    await h.deps.markerStore.claim('pi-child-1', fp, 'restart_interruption', 'boot_orphan');
-    await h.deps.markerStore.commit('pi-child-1', fp);
-    const report = await runSweep(h, [apiChild()]);
-    expect(h.dispatches).toHaveLength(0);
+    let polls = 0;
+    h.deps.readRawProjection = async () => {
+      polls += 1;
+      if (polls <= 2) return runningProjection(); // classification + pre-dispatch
+      return { supported: true, status: 'running', objective: 'goal B', startedAt: 9000 }; // replaced during the verify poll
+    };
+    const report = await runSweep(h, [apiChild()], { boot: true });
+    expect(h.dispatches).toHaveLength(1);
+    expect(await h.deps.markerStore.hasActiveContinue('pi-child-1')).toBe(true);
+    expect(h.events).toHaveLength(0);
+    expect(report.continued).toHaveLength(0);
+  });
+
+  it('the same goal achieved before the first poll verifies as a completed continue (no continue_failed)', async () => {
+    const h = harness();
+    let polls = 0;
+    h.deps.readRawProjection = async () => {
+      polls += 1;
+      if (polls <= 2) return runningProjection();
+      return { supported: true, status: 'achieved', objective: 'finish the lane', startedAt: BOOT - 3_600_000, completedAt: 123 };
+    };
+    const report = await runSweep(h, [apiChild()], { boot: true });
+    expect(h.dispatches).toHaveLength(1);
     const event = h.events.find((e) => e.sessionId === 'pi-child-1');
-    expect(event?.projection.status).toBe('paused');
-    expect(event?.projection.interruption).toMatchObject({ cause: 'second_transient', continueCount: 1 });
-    expect(report.interruptedVisible).toEqual(['pi-child-1']);
+    expect(event?.projection.status).toBe('achieved');
+    expect(event?.projection.autoContinued).toBe(true);
+    expect(await h.deps.markerStore.get('pi-child-1', goalFingerprint('finish the lane', BOOT - 3_600_000))?.then?.(undefined) ?? undefined);
+    const marker = await h.deps.markerStore.get('pi-child-1', goalFingerprint('finish the lane', BOOT - 3_600_000));
+    expect(marker?.state).toBe('confirmed');
+    expect(report.continued).toEqual(['pi-child-1']);
   });
 });
 
-describe('F5 — non-Pi candidates read the real projection', () => {
-  it('an active non-Pi goal (unannounced) gets the visible interruption with the real supported flag', async () => {
-    const h = harness({
-      readRuntimeProjection: async () => ({ supported: false, status: 'running', objective: 'claude goal' }),
-    });
-    const report = await runSweep(h, [apiChild({ sessionId: 'cl-1', runtime: 'claude' })]);
-    expect(h.dispatches).toHaveLength(0);
-    const event = h.events.find((e) => e.sessionId === 'cl-1');
-    expect(event?.projection.status).toBe('paused');
-    expect(event?.projection.pausedReason).toBe('interrupted');
-    expect(event?.projection.supported).toBe(false);
-    expect(event?.projection.interruption).toMatchObject({ cause: 'restart_interruption' });
-    expect(report.interruptedVisible).toEqual(['cl-1']);
-  });
-
-  it('a terminal non-Pi goal gets nothing', async () => {
-    const h = harness({ readRuntimeProjection: async () => ({ supported: false, status: 'achieved', completedAt: 5 }) });
-    const report = await runSweep(h, [apiChild({ sessionId: 'cl-1', runtime: 'claude' })]);
+describe('C3 — non-Pi visibility is boot-only and terminal-excluded', () => {
+  it('a failed non-Pi goal gets nothing', async () => {
+    const h = harness({ readRuntimeProjection: async () => ({ supported: false, status: 'failed', pausedReason: 'error' }) });
+    const report = await runSweep(h, [apiChild({ sessionId: 'cl-1', runtime: 'claude' })], { boot: true });
     expect(h.events).toHaveLength(0);
     expect(report.skipped).toContain('cl-1');
   });
 
-  it('an explicitly paused non-Pi goal gets nothing (no change)', async () => {
+  it('an active non-Pi goal is visible in the BOOT sweep with the real supported flag', async () => {
+    const h = harness({ readRuntimeProjection: async () => ({ supported: false, status: 'running', objective: 'claude goal' }) });
+    const report = await runSweep(h, [apiChild({ sessionId: 'cl-1', runtime: 'claude' })], { boot: true });
+    const event = h.events.find((e) => e.sessionId === 'cl-1');
+    expect(event?.projection.status).toBe('paused');
+    expect(event?.projection.supported).toBe(false);
+    expect(report.interruptedVisible).toEqual(['cl-1']);
+  });
+
+  it('an active non-Pi goal gets NOTHING in the in-process drain-timeout sweep', async () => {
+    const h = harness({ readRuntimeProjection: async () => ({ supported: false, status: 'running', objective: 'claude goal' }) });
+    const report = await runSweep(h, [apiChild({ sessionId: 'cl-1', runtime: 'claude', announced: { source: 'drain', interruptionReason: 'drain_timeout' } })]);
+    expect(h.events).toHaveLength(0);
+    expect(report.skipped).toContain('cl-1');
+  });
+
+  it('an explicitly paused non-Pi goal gets nothing', async () => {
     const h = harness({ readRuntimeProjection: async () => ({ supported: false, status: 'paused', pausedReason: 'owner pause' }) });
-    await runSweep(h, [apiChild({ sessionId: 'cl-1', runtime: 'claude' })]);
+    await runSweep(h, [apiChild({ sessionId: 'cl-1', runtime: 'claude' })], { boot: true });
     expect(h.events).toHaveLength(0);
-  });
-});
-
-describe('F3 — live path gating', () => {
-  it('a provider stop on a non-API child is not continued', async () => {
-    const h = harness();
-    const sweep = createInterruptionSweep(h.deps);
-    await sweep.handleLiveStop('pi-browser-9', '/tmp/x.jsonl', { supported: true, status: 'failed', pausedReason: 'error', runtimeState: { lastErrorMessage: 'Provider overloaded (HTTP 429)' } }, { apiChild: false, runtime: 'pi' });
-    expect(h.dispatches).toHaveLength(0);
-    expect(h.events).toHaveLength(0);
-  });
-
-  it('a typed fresh provider stop on an API child continues once and reports interception', async () => {
-    const h = harness();
-    const sweep = createInterruptionSweep(h.deps);
-    const result = await sweep.handleLiveStop('pi-child-1', '/tmp/sessions/pi-child-1.jsonl', { supported: true, status: 'failed', pausedReason: 'error', runtimeState: { lastErrorMessage: 'Provider overloaded (HTTP 429)' } }, { apiChild: true, runtime: 'pi' });
-    expect(h.dispatches).toHaveLength(1);
-    expect(result.intercepted).toBe(true);
-  });
-
-  it('an ambiguous bare abort on an API child is not continued and not intercepted', async () => {
-    const h = harness();
-    const sweep = createInterruptionSweep(h.deps);
-    const result = await sweep.handleLiveStop('pi-child-1', '/tmp/sessions/pi-child-1.jsonl', { supported: true, status: 'paused', pausedReason: 'error', runtimeState: { lastErrorMessage: 'aborted' } }, { apiChild: true, runtime: 'pi' });
-    expect(h.dispatches).toHaveLength(0);
-    expect(result.intercepted).toBe(false);
   });
 });
 

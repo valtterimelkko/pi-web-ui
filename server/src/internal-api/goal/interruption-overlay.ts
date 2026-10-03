@@ -95,7 +95,9 @@ function sameIdentity(a: GoalFileIdentity, b: GoalFileIdentity): boolean {
 }
 
 export interface AutoContinueAnnotation {
-  autoContinued: boolean;
+  autoContinued?: boolean;
+  /** C5: the goal file's CURRENT fingerprint; the overlay applies only on a match. */
+  currentFingerprint?: string;
 }
 
 /**
@@ -113,6 +115,12 @@ export function applyInterruptionOverlay(
 ): SessionGoalProjection {
   if (!currentGoalFile || !sameIdentity(currentGoalFile, overlay.goalFile)) {
     return projection; // the engine has spoken since; disk truth wins
+  }
+  // C5: when the caller supplies fingerprint context, the overlay is bound to
+  // its goal's fingerprint — never anchor it to a goal file whose fingerprint
+  // differs from the marker's (a missing value counts as a mismatch).
+  if (annotation && annotation.currentFingerprint !== overlay.fingerprint) {
+    return projection;
   }
   const interruption = {
     cause: overlay.cause,

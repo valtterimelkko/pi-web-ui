@@ -18,7 +18,6 @@ import type { SessionGoalProjection } from '../../../../src/internal-api/goal/ty
 
 describe('goal interruption wiring (correction 02)', () => {
   let dir: string;
-  let observersAttached: string[];
   let dispatches: number;
   let goalProjection: SessionGoalProjection | Record<string, unknown>;
   let wiring: GoalInterruptionWiring;
@@ -42,7 +41,7 @@ describe('goal interruption wiring (correction 02)', () => {
         return { outcome: 'accepted' };
       },
       brokerPublish: () => undefined,
-      addExtensionUiObserver: (sessionPath) => { observersAttached.push(sessionPath); },
+      addExtensionUiObserver: () => undefined,
       removeExtensionUiObserver: () => undefined,
       markerDir: path.join(runReceiptsRoot, 'goal-continue', 'markers'),
       overlayDir: path.join(runReceiptsRoot, 'goal-continue', 'overlay'),
@@ -59,7 +58,6 @@ describe('goal interruption wiring (correction 02)', () => {
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'k-wiring-'));
-    observersAttached = [];
     dispatches = 0;
     // The Pi read path resolves the goal file under PI_WEB_UI_GOAL_HOME; point
     // it at the temp dir and materialise the goal file for the session key.
@@ -80,14 +78,13 @@ describe('goal interruption wiring (correction 02)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('F3: observers attach only to Internal API children', async () => {
-    build([
-      entry,
-      { id: 'pi-browser-1', path: '/tmp/sessions/pi-browser-1.jsonl', sdkType: 'pi', origin: 'browser' },
-      { id: 'cl-1', path: '/tmp/sessions/cl-1.jsonl', sdkType: 'claude', origin: 'internal-api' },
-    ]);
-    await wiring.attachLiveObservers();
-    expect(observersAttached).toEqual(['/tmp/sessions/pi-child-1.jsonl']);
+  it('C4: a delivered-but-unconfirmed continue does not suppress', async () => {
+    build([entry], orphanRunning);
+    const fpA = (await import('node:crypto')).createHash('sha256').update('goal A\n1000').digest('hex');
+    await wiring.markerStore.claim('pi-child-1', fpA, 'restart_interruption', 'boot_orphan');
+    await wiring.markerStore.commit('pi-child-1', fpA); // delivered this boot, NOT confirmed
+    await wiring.runSweep(new Map());
+    expect(await wiring.hasGoalContinueMarker('pi-child-1')).toBe(false);
   });
 
   it('F6: a continue confirmed this boot for the CURRENT goal suppresses; an older goal and a reservation do not', async () => {

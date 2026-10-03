@@ -17,6 +17,7 @@ import { createInterruptionOverlayStore, applyInterruptionOverlay } from '../../
 import { readProjectPiGoalState, piGoalStatePath } from '../../../../src/internal-api/goal/pi-goal.js';
 import { configureInterruptionOverlayForTests, resetInterruptionOverlayForTests } from '../../../../src/internal-api/goal/interruption-overlay.js';
 import { evaluatePiGoalActionTransition } from '../../../../src/internal-api/goal/goal-actions.js';
+import { goalFingerprint } from '../../../../src/internal-api/goal/continue-marker.js';
 import type { SessionGoalProjection } from '../../../../src/internal-api/goal/types.js';
 
 const SESSION = '/tmp/fake-pi-sessions/s1.jsonl';
@@ -85,8 +86,8 @@ describe('applyInterruptionOverlay (pure)', () => {
   });
 
   it('a second-transient overlay (past continue, not continued now) reads paused/interrupted on re-application', () => {
-    const second = { ...overlay, continueCount: 1, cause: 'second_transient' as const };
-    const out = applyInterruptionOverlay(running, second, { mtimeMs: 10, size: 20 });
+    const second = { ...overlay, continueCount: 1, autoContinued: false, cause: 'second_transient' as const };
+    const out = applyInterruptionOverlay(running, second, { mtimeMs: 10, size: 20 }, { currentFingerprint: 'fp' });
     expect(out.status).toBe('paused');
     expect(out.pausedReason).toBe('interrupted');
     expect(out.interruption).toMatchObject({ cause: 'second_transient', autoContinued: false, continueCount: 1 });
@@ -94,9 +95,33 @@ describe('applyInterruptionOverlay (pure)', () => {
 
   it('annotates an auto-continued projection without changing its running status', () => {
     const continued = { ...overlay, continueCount: 1, autoContinued: true, continueNote: '[auto-continue] restarted' };
-    const out = applyInterruptionOverlay(running, continued, { mtimeMs: 10, size: 20 }, { autoContinued: true });
+    const out = applyInterruptionOverlay(running, continued, { mtimeMs: 10, size: 20 }, { autoContinued: true, currentFingerprint: 'fp' });
     expect(out.status).toBe('running');
     expect(out.interruption).toMatchObject({ autoContinued: true, continueCount: 1, cause: 'restart_interruption' });
+  });
+});
+
+describe('applyInterruptionOverlay — correction 03 C5 fingerprint binding', () => {
+  const running: SessionGoalProjection = { supported: true, status: 'running', objective: 'goal A', startedAt: 1000 };
+  const overlay = {
+    sessionId: 'pi-a', fingerprint: 'fp-A', cause: 'restart_interruption' as const, source: 'boot_orphan' as const,
+    detectedAt: 42, continueCount: 1, autoContinued: true, goalFile: { mtimeMs: 10, size: 20 },
+  };
+
+  it('never anchors to a goal whose fingerprint differs from the marker (goal B running)', () => {
+    const out = applyInterruptionOverlay(running, overlay, { mtimeMs: 10, size: 20 }, { currentFingerprint: 'fp-B' });
+    expect(out.status).toBe('running');
+    expect(out.interruption).toBeUndefined();
+  });
+
+  it('applies when the current fingerprint matches, regardless of mtime-only equality', () => {
+    const out = applyInterruptionOverlay(running, overlay, { mtimeMs: 10, size: 20 }, { currentFingerprint: 'fp-A' });
+    expect(out.interruption?.autoContinued).toBe(true);
+  });
+
+  it('a missing current fingerprint (unreadable goal) is treated as a mismatch', () => {
+    const out = applyInterruptionOverlay(running, overlay, { mtimeMs: 10, size: 20 }, { currentFingerprint: undefined });
+    expect(out.interruption).toBeUndefined();
   });
 });
 
@@ -123,7 +148,8 @@ describe('readProjectPiGoalState integration', () => {
 
     const store = createInterruptionOverlayStore(path.join(overlayDir, 'overlay'));
     const stat = await fsp.stat(piGoalStatePath(SESSION));
-    await store.set({ sessionId: SESSION, fingerprint: 'fp', cause: 'restart_interruption', source: 'boot_orphan', detectedAt: 7, goalFile: { mtimeMs: stat.mtimeMs, size: stat.size } });
+    const fp = goalFingerprint(RUNNING_STATE.objective, RUNNING_STATE.startedAt);
+    await store.set({ sessionId: SESSION, fingerprint: fp, cause: 'restart_interruption', source: 'boot_orphan', detectedAt: 7, goalFile: { mtimeMs: stat.mtimeMs, size: stat.size } });
 
     const overlaid = await readProjectPiGoalState(SESSION);
     expect(overlaid.status).toBe('paused');
@@ -144,7 +170,8 @@ describe('readProjectPiGoalState integration', () => {
     await writeGoalState(RUNNING_STATE);
     const store = createInterruptionOverlayStore(path.join(overlayDir, 'overlay'));
     const stat = await fsp.stat(piGoalStatePath(SESSION));
-    await store.set({ sessionId: SESSION, fingerprint: 'fp', cause: 'restart_interruption', source: 'boot_orphan', detectedAt: 7, goalFile: { mtimeMs: stat.mtimeMs, size: stat.size } });
+    const fpResume = goalFingerprint(RUNNING_STATE.objective, RUNNING_STATE.startedAt);
+    await store.set({ sessionId: SESSION, fingerprint: fpResume, cause: 'restart_interruption', source: 'boot_orphan', detectedAt: 7, goalFile: { mtimeMs: stat.mtimeMs, size: stat.size } });
 
     const before = await readProjectPiGoalState(SESSION);
     expect(before.status).toBe('paused'); // overlay view
