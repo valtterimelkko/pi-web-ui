@@ -2925,7 +2925,15 @@ attempts are kept in the ledger.
 **Errors:**
 - `400` — empty `conditions`, an invalid regex `pattern`, a malformed
   `onFire` action, or an `onFire.targetSessionId` that targets the watched
-  session itself
+  session itself. Also (2026-10-04 fix) any condition that could never match:
+  an **unknown condition `type`** (valid types are exactly `event_type`,
+  `tool`, `text`, `deadline` — an event name such as `goal_end`/`goal_state`/
+  `agent_end` is the `eventType` **field** of an `event_type` condition, never
+  the `type` itself; likewise `text_match` is not a type — use `text`), an
+  `event_type` condition without a non-empty `eventType`, or a `text`
+  condition with neither `contains` nor `pattern`. Before this fix such
+  conditions registered silently (201) and never fired; a ledger persisted by
+  an older server rehydrates them as `detached`, visible via GET.
 - `409 WATCH_GENERATION_MISMATCH` — conditional mutation did not match the current generation
 - `404 WATCH_NOT_FOUND` — no watch registered (GET/legacy DELETE)
 - `404 SESSION_NOT_FOUND` — session does not exist (POST), or the

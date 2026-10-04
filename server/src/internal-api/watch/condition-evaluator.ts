@@ -41,6 +41,37 @@ const EVIDENCE_MAX = 200;
 export const DEADLINE_MIN_SECONDS = 1;
 export const DEADLINE_MAX_SECONDS = 86_400;
 
+/** The complete set of condition types `matchOne` can ever match. */
+export const KNOWN_CONDITION_TYPES = ['event_type', 'tool', 'text', 'deadline'] as const;
+
+/**
+ * Registration-time validation (2026-10-04 defect fix): a condition whose
+ * shape can NEVER match must fail the registration with a 400, not register
+ * silently and strand the watcher. Observed live: a parent registered
+ * `{ "type": "goal_end" }` / `{ "type": "goal_state", "dataMatch": … }` /
+ * `{ "type": "text_match", … }` — event names used AS the type — and the
+ * watch accepted them (201) with firingCount 0 forever while the goal
+ * achieved. The error text deliberately spells out the correct shape.
+ */
+export function validateConditionSpec(spec: WatchConditionSpec): void {
+  if (!(KNOWN_CONDITION_TYPES as readonly string[]).includes(spec.type)) {
+    throw new Error(
+      `unknown condition type "${String(spec.type)}" — valid types are ${KNOWN_CONDITION_TYPES.join(', ')}. ` +
+        `To watch an event, use { "type": "event_type", "eventType": "goal_end" } (the event name goal_end / goal_state / agent_end is the eventType field, not the type). ` +
+        `To watch text, use { "type": "text", "pattern": "…" } or contains.`,
+    );
+  }
+  if (spec.type === 'event_type'
+    && (typeof spec.eventType !== 'string' || spec.eventType.trim().length === 0)) {
+    throw new Error(
+      'event_type conditions require a non-empty string eventType (e.g. "agent_end", "goal_end", "goal_state")',
+    );
+  }
+  if (spec.type === 'text' && spec.contains === undefined && spec.pattern === undefined) {
+    throw new Error('text conditions require contains or pattern — without one the condition can never match');
+  }
+}
+
 function validateDeadlineSpec(spec: WatchConditionSpec): void {
   const n = spec.afterSeconds;
   if (typeof n !== 'number' || !Number.isInteger(n) || n < DEADLINE_MIN_SECONDS || n > DEADLINE_MAX_SECONDS) {
@@ -53,6 +84,7 @@ function validateDeadlineSpec(spec: WatchConditionSpec): void {
 
 /** Assign a stable id, normalize defaults, and pre-compile any regex. */
 export function resolveCondition(spec: WatchConditionSpec, index: number): ResolvedCondition {
+  validateConditionSpec(spec);
   const id = spec.id && spec.id.trim() ? spec.id.trim() : `c${index}`;
   let regex: RegExp | undefined;
   if (spec.type === 'deadline') validateDeadlineSpec(spec);

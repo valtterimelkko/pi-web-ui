@@ -645,6 +645,41 @@ describe('WatchManager — restart rehydration & downtime reconciliation (watch-
     expect(mustGet(manager2, 'rehy-bad').status).toBe('detached');
   });
 
+  it('demotes a legacy persisted watch whose conditions are of an unknown type (2026-10-04 defect: goal_end used as a type)', async () => {
+    // Seed the ledger directly with the shape a real parent registered: active,
+    // every condition an unknown type — accepted by the pre-fix server, able to
+    // never fire. Post-fix rehydration must not keep it looking alive.
+    const legacy = {
+      watchId: 'watch-rehy-legacy',
+      sessionId: 'rehy-legacy',
+      sessionPath: '/sessions/rehy-legacy.jsonl',
+      runtime: 'pi',
+      label: 'legacy-dead-conditions',
+      status: 'active',
+      pinned: false,
+      targetPinned: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      conditions: [
+        {
+          id: 'done',
+          type: 'goal_end',
+          spec: { id: 'done', type: 'goal_end', once: false },
+          fired: false,
+          fireCount: 0,
+        },
+      ],
+      wakeAttempts: [],
+      firings: [],
+      snapshot: { status: 'idle', eventCount: 0, toolCallCount: 0, sawAgentEnd: false, lastEventType: null, lastEventAt: null },
+    };
+    await fs.writeFile(path.join(dir, 'rehy-legacy.json'), JSON.stringify(legacy));
+
+    const manager2 = new WatchManager({ broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin });
+    await manager2.init();
+    expect(mustGet(manager2, 'rehy-legacy').status).toBe('detached');
+  });
+
   it('records a reconciled firing when the session settled during restart downtime', async () => {
     const registeredAt = Date.now();
     await manager.register({

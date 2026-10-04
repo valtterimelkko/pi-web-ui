@@ -139,6 +139,25 @@ describe('watch routes — POST/GET/DELETE /sessions/:id/watch', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('rejects an unknown condition type with 400 instead of registering a never-firing watch (2026-10-04 defect)', async () => {
+    const res = createMockRes();
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/pi-1/watch', {
+        conditions: [
+          { id: 'done', type: 'goal_end', once: false },
+          { id: 'paused', type: 'goal_state', dataMatch: { status: 'paused' }, once: false },
+        ],
+      }),
+      res,
+      'pi-1',
+    );
+    expect(res.statusCode).toBe(400);
+    const body = JSON.parse(res.body);
+    expect(body.code).toBe('INVALID_REQUEST');
+    expect(body.error).toMatch(/unknown condition type "goal_end"/);
+    expect(body.error).toMatch(/eventType/);
+  });
+
   it('404s when the session does not exist', async () => {
     registry.get.mockResolvedValueOnce(null);
     const res = createMockRes();

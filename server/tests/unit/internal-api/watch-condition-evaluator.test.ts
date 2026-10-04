@@ -105,6 +105,41 @@ describe('ConditionEngine — generic, function-agnostic matching', () => {
     expect(() => resolveConditions([{ type: 'text', pattern: '(' }])).toThrow();
   });
 
+  describe('registration-time validation — a silently dead condition must not register (2026-10-04 goal_end-as-type defect)', () => {
+    it('rejects an unknown condition type instead of registering a condition that can never fire', () => {
+      // Real shapes observed from a live parent: event names used AS the type.
+      expect(() => resolveConditions([{ type: 'goal_end' as unknown as WatchConditionSpec['type'] }])).toThrow(/unknown condition type "goal_end"/);
+      expect(() => resolveConditions([{ type: 'goal_state' as unknown as WatchConditionSpec['type'] }])).toThrow(/unknown condition type/);
+      expect(() => resolveConditions([{ type: 'text_match' as unknown as WatchConditionSpec['type'] }])).toThrow(/unknown condition type/);
+    });
+
+    it('names the fix in the error: the event name is the eventType field', () => {
+      expect(() => resolveConditions([{ type: 'goal_end' as unknown as WatchConditionSpec['type'] }])).toThrow(/"type": "event_type", "eventType": "goal_end"/);
+    });
+
+    it('rejects an event_type condition without a non-empty eventType', () => {
+      expect(() => resolveConditions([{ type: 'event_type' }])).toThrow(/eventType/);
+      expect(() => resolveConditions([{ type: 'event_type', eventType: '  ' }])).toThrow(/eventType/);
+    });
+
+    it('rejects a text condition with neither contains nor pattern', () => {
+      expect(() => resolveConditions([{ type: 'text' }])).toThrow(/contains or pattern/);
+    });
+
+    it('accepts every live condition shape unchanged', () => {
+      const resolved = resolveConditions([
+        { type: 'event_type', eventType: 'goal_end', once: false },
+        { type: 'event_type', eventType: 'goal_state', dataMatch: { status: 'paused' }, once: false },
+        { type: 'tool', toolName: 'Bash' },
+        { type: 'tool', phase: 'end', argIncludes: 'ok' },
+        { type: 'text', pattern: 'PARENT-QUESTION' },
+        { type: 'text', contains: 'done' },
+        { type: 'deadline', afterSeconds: 60 },
+      ]);
+      expect(resolved).toHaveLength(7);
+    });
+  });
+
   it('assigns stable auto ids and preserves caller ids', () => {
     const resolved = resolveConditions([
       { type: 'event_type', eventType: 'agent_end' },
