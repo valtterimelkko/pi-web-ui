@@ -710,29 +710,34 @@ export interface OpenAiTtsOptions {
 }
 
 /**
- * OpenAI `tts-1`, voice `alloy`, `response_format: 'pcm'` — 24 kHz raw s16le,
- * the reference player's native rate.
+ * OpenAI-shaped speech synthesis returning the reference player's native
+ * pcm format (24 kHz s16le mono). Defaults target OpenRouter
+ * `google/gemini-3.8-flash-lite-tts` (Elo 1240; the Gemini provider on
+ * OpenRouter rejects mp3, pcm is the only format); the OpenAI endpoint
+ * stays reachable via explicit options — its legacy TTS family (tts-1,
+ * tts-1-hd, gpt-4o-mini-tts) is removed from the API on 2027-01-06.
  */
 export function createOpenAiTts(options: OpenAiTtsOptions = {}): BaselineTts {
-  const apiKey = options.apiKey ?? process.env.TTS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? '';
-  const model = options.model ?? process.env.TTS_MODEL ?? 'tts-1';
-  const voice = options.voice ?? 'alloy';
-  const baseUrl = (options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
+  const apiKey = options.apiKey ?? process.env.OPENROUTER_API_KEY ?? process.env.TTS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? '';
+  const model = options.model ?? process.env.TTS_MODEL ?? 'google/gemini-3.8-flash-lite-tts';
+  const voice = options.voice ?? 'Kore';
+  const baseUrl = (options.baseUrl ?? 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+  const provider = baseUrl.includes('openrouter.ai') ? 'openrouter' : 'openai';
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
     async synthesise(text: string): Promise<TtsOutcome> {
       const started = nowMs();
-      if (!apiKey) throw new Error('tts failed: no TTS_OPENAI_API_KEY / OPENAI_API_KEY configured');
+      if (!apiKey) throw new Error('tts failed: no OPENROUTER_API_KEY / TTS_OPENAI_API_KEY / OPENAI_API_KEY configured');
       const response = await fetchImpl(`${baseUrl}/audio/speech`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, voice, input: text, response_format: 'pcm' }),
       });
       if (!response.ok) {
-        throw new Error(`tts failed: openai ${model} responded ${response.status}`);
+        throw new Error(`tts failed: ${provider} ${model} responded ${response.status}`);
       }
       const pcm = Buffer.from(await response.arrayBuffer());
-      return { pcm, provider: 'openai', model, voice, ms: nowMs() - started, usage: {} };
+      return { pcm, provider, model, voice, ms: nowMs() - started, usage: {} };
     },
   };
 }

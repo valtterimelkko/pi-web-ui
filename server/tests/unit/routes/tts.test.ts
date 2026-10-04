@@ -5,11 +5,21 @@ vi.mock('../../../src/middleware/auth.js', () => ({
   cookieAuthMiddleware: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
 }));
 
-vi.mock('../../../src/config.js', () => ({
-  config: {
-    ttsOpenaiApiKey: 'sk-test-key',
-    ttsModel: 'tts-1',
-  },
+const { synthesizeSpeechMock, notConfiguredClass } = vi.hoisted(() => {
+  class TtsNotConfiguredError extends Error {}
+  return {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    synthesizeSpeechMock: vi.fn() as any,
+    notConfiguredClass: TtsNotConfiguredError,
+  };
+});
+
+vi.mock('../../../src/tts/speech.js', () => ({
+  synthesizeSpeech: synthesizeSpeechMock,
+  resolveVoice: (v: unknown) => (typeof v === 'string' ? v : 'Kore'),
+  GEMINI_VOICES: ['Kore', 'Puck'],
+  DEFAULT_VOICE: 'Kore',
+  TtsNotConfiguredError: notConfiguredClass,
 }));
 
 import ttsRoutes from '../../../src/routes/tts.js';
@@ -21,134 +31,50 @@ describe('TTS Routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     app = express();
-    app.use(express.json());
+    app.use(express.json({ limit: '1mb' }));
     app.use('/api/tts', ttsRoutes);
   });
 
-  describe('POST /api/tts', () => {
-    it('should return audio/mp3 for valid text', async () => {
-      const fakeAudio = Buffer.from('fake-mp3-data');
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-        ok: true,
-        arrayBuffer: async () => fakeAudio.buffer.slice(fakeAudio.byteOffset, fakeAudio.byteOffset + fakeAudio.byteLength),
-      }));
-
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: 'Hello world', voice: 'alloy' });
-
-      expect(res.status).toBe(200);
-      expect(res.headers['content-type']).toBe('audio/mpeg');
-      expect(res.body).toEqual(fakeAudio);
+  it('returns the synthesised audio with the service content type', async () => {
+    synthesizeSpeechMock.mockResolvedValue({
+      audio: Buffer.from([0x01, 0x02, 0x03]),
+      contentType: 'audio/wav',
+      model: 'google/gemini-3.8-flash-lite-tts',
+      usedFallback: false,
     });
+    const res = await request(app).post('/api/tts').send({ text: 'Hello there.', voice: 'Kore' });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/audio\/wav/);
+    expect(res.headers['content-length']).toBe('3');
+    expect(res.headers['cache-control']).toBe('private, max-age=300');
+    expect(synthesizeSpeechMock).toHaveBeenCalledWith('Hello there.', 'Kore');
+  });
 
-    it('should use configured TTS model', async () => {
-      const fakeAudio = Buffer.from('fake-mp3-data');
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        arrayBuffer: async () => fakeAudio.buffer.slice(fakeAudio.byteOffset, fakeAudio.byteOffset + fakeAudio.byteLength),
-      });
-      vi.stubGlobal('fetch', mockFetch);
+  it('rejects missing or empty text with 400', async () => {
+    const res = await request(app).post('/api/tts').send({ voice: 'Kore' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Missing or empty text/i);
+    expect(synthesizeSpeechMock).not.toHaveBeenCalled();
+  });
 
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: 'Hello world' });
+  it('rejects text over the maximum length with 400', async () => {
+    const res = await request(app).post('/api/tts').send({ text: 'x'.repeat(4001) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/maximum length/i);
+  });
 
-      expect(res.status).toBe(200);
-      const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(fetchBody.model).toBe('tts-1');
-    });
+  it('maps a missing key configuration to 503', async () => {
+    synthesizeSpeechMock.mockRejectedValue(new notConfiguredClass('TTS not configured'));
+    const res = await request(app).post('/api/tts').send({ text: 'Hello' });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/not configured/i);
+  });
 
-    it('should use default voice when voice is omitted', async () => {
-      const fakeAudio = Buffer.from('fake-mp3-data');
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        arrayBuffer: async () => fakeAudio.buffer.slice(fakeAudio.byteOffset, fakeAudio.byteOffset + fakeAudio.byteLength),
-      });
-      vi.stubGlobal('fetch', mockFetch);
-
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: 'Hello world' });
-
-      expect(res.status).toBe(200);
-      const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(fetchBody.voice).toBe('alloy');
-    });
-
-    it('should reject invalid voice names', async () => {
-      const fakeAudio = Buffer.from('fake-mp3-data');
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        arrayBuffer: async () => fakeAudio.buffer.slice(fakeAudio.byteOffset, fakeAudio.byteOffset + fakeAudio.byteLength),
-      });
-      vi.stubGlobal('fetch', mockFetch);
-
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: 'Hello world', voice: 'invalid-voice' });
-
-      expect(res.status).toBe(200);
-      const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(fetchBody.voice).toBe('alloy');
-    });
-
-    it('should return 400 for missing text', async () => {
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ voice: 'alloy' });
-
-      expect(res.status).toBe(400);
-      expect(res.body).toEqual({ error: 'Missing or empty text field' });
-    });
-
-    it('should return 400 for empty text', async () => {
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: '   ' });
-
-      expect(res.status).toBe(400);
-      expect(res.body).toEqual({ error: 'Missing or empty text field' });
-    });
-
-    it('should return 400 for text exceeding max length', async () => {
-      const longText = 'a'.repeat(4001);
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: longText });
-
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain('exceeds maximum length');
-    });
-
-    it('should return 502 when OpenAI returns an error', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-        ok: false,
-        status: 429,
-        json: async () => ({ error: { message: 'OpenAI rate limit' } }),
-      }));
-
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: 'Hello world' });
-
-      expect(res.status).toBe(502);
-      expect(res.body).toEqual({
-        error: 'Failed to generate speech',
-        detail: 'OpenAI rate limit',
-      });
-    });
-
-    it('should return 502 when fetch throws', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
-
-      const res = await request(app)
-        .post('/api/tts')
-        .send({ text: 'Hello world' });
-
-      expect(res.status).toBe(502);
-      expect(res.body.error).toBe('Failed to generate speech');
-      expect(res.body.detail).toBe('Network error');
-    });
+  it('maps a synthesis failure to 502 with detail', async () => {
+    synthesizeSpeechMock.mockRejectedValue(new Error('OpenRouter TTS HTTP 500'));
+    const res = await request(app).post('/api/tts').send({ text: 'Hello' });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('Failed to generate speech');
+    expect(res.body.detail).toBe('OpenRouter TTS HTTP 500');
   });
 });

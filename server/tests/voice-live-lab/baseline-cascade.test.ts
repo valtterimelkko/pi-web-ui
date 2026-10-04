@@ -491,7 +491,7 @@ describe('baseline cascade real adapters (stubbed fetch)', () => {
     await expect(stt.transcribe(tonePcm(100))).rejects.toThrow(/stt failed/i);
   });
 
-  it('OpenAI TTS requests tts-1 alloy pcm and returns the raw PCM', async () => {
+  it('default TTS requests OpenRouter Gemini Flash-Lite Kore pcm and returns the raw PCM', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const pcmBytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
     const fetchImpl: typeof fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -500,13 +500,34 @@ describe('baseline cascade real adapters (stubbed fetch)', () => {
     }) as unknown as typeof fetch;
     const tts = createOpenAiTts({ apiKey: 'key-test', fetchImpl });
     const outcome = await tts.synthesise('sending that now');
-    expect(outcome.provider).toBe('openai');
-    expect(outcome.model).toBe('tts-1');
-    expect(outcome.voice).toBe('alloy');
+    expect(outcome.provider).toBe('openrouter');
+    expect(outcome.model).toBe('google/gemini-3.8-flash-lite-tts');
+    expect(outcome.voice).toBe('Kore');
     expect(outcome.pcm.byteLength).toBe(6);
+    expect(calls[0].url).toBe('https://openrouter.ai/api/v1/audio/speech');
+    const body = JSON.parse(String(calls[0].init.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({ model: 'google/gemini-3.8-flash-lite-tts', voice: 'Kore', response_format: 'pcm', input: 'sending that now' });
+  });
+
+  it('TTS can still target the legacy OpenAI endpoint via explicit options', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(new Uint8Array([9, 9]), { status: 200 });
+    }) as unknown as typeof fetch;
+    const tts = createOpenAiTts({
+      apiKey: 'key-test',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      fetchImpl,
+    });
+    const outcome = await tts.synthesise('legacy leg');
+    expect(outcome.provider).toBe('openai');
+    expect(outcome.model).toBe('gpt-4o-mini-tts');
     expect(calls[0].url).toBe('https://api.openai.com/v1/audio/speech');
     const body = JSON.parse(String(calls[0].init.body)) as Record<string, unknown>;
-    expect(body).toMatchObject({ model: 'tts-1', voice: 'alloy', response_format: 'pcm', input: 'sending that now' });
+    expect(body).toMatchObject({ model: 'gpt-4o-mini-tts', voice: 'alloy', response_format: 'pcm' });
   });
 
   it('the cascade refuses to build when a required receipt ack shape is wrong', async () => {

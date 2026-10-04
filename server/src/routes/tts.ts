@@ -1,26 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
-import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
+import { synthesizeSpeech, TtsNotConfiguredError } from '../tts/speech.js';
 
 const logger = createLogger('Tts');
 
-
 const router = Router();
 
-const ALLOWED_VOICES = [
-  'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable',
-  'nova', 'onyx', 'sage', 'shimmer', 'verse', 'marin', 'cedar',
-] as const;
-
-type AllowedVoice = typeof ALLOWED_VOICES[number];
-
-const DEFAULT_VOICE: AllowedVoice = 'alloy';
 const MAX_TEXT_LENGTH = 4000;
-
-function isAllowedVoice(v: unknown): v is AllowedVoice {
-  return typeof v === 'string' && ALLOWED_VOICES.includes(v as AllowedVoice);
-}
 
 router.use(cookieAuthMiddleware);
 
@@ -38,41 +25,17 @@ router.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  const selectedVoice: AllowedVoice = isAllowedVoice(voice) ? voice : DEFAULT_VOICE;
-
-  if (!config.ttsOpenaiApiKey) {
-    res.status(503).json({ error: 'TTS service not configured' });
-    return;
-  }
-
   try {
-    const openaiRes = await fetch('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.ttsOpenaiApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: config.ttsModel,
-        voice: selectedVoice,
-        input: trimmedText,
-        response_format: 'mp3',
-      }),
-    });
-
-    if (!openaiRes.ok) {
-      const body = await openaiRes.json().catch(() => ({})) as Record<string, unknown>;
-      throw new Error((body.error as { message?: string } | undefined)?.message ?? `OpenAI HTTP ${openaiRes.status}`);
-    }
-
-    const arrayBuffer = await openaiRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Length', buffer.length.toString());
+    const result = await synthesizeSpeech(trimmedText, voice);
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Length', result.audio.length.toString());
     res.setHeader('Cache-Control', 'private, max-age=300');
-    res.send(buffer);
+    res.send(result.audio);
   } catch (err: unknown) {
+    if (err instanceof TtsNotConfiguredError) {
+      res.status(503).json({ error: err.message });
+      return;
+    }
     const message = err instanceof Error ? err.message : 'TTS generation failed';
     logger.error('TTS error:', message);
     res.status(502).json({ error: 'Failed to generate speech', detail: message });
