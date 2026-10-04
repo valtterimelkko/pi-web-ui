@@ -177,7 +177,13 @@ describe('readProjectPiGoalState integration', () => {
     expect(before.status).toBe('paused'); // overlay view
 
     // Parent resumes: engine writes running (file changes → overlay clears).
-    await writeGoalState({ ...RUNNING_STATE, status: 'running', turnCount: 4 });
+    // turnCount must change the file SIZE (3 → 44), not just a same-width
+    // digit: the overlay treats |Δmtime| < 1ms && equal size as "no engine
+    // write", and on a fast CI runner back-to-back same-size writes can share
+    // an mtime millisecond, which surfaced as the 2026-10-04 CI flake
+    // (applied:false, reason:'stayed_paused'). A size change clears the
+    // overlay deterministically regardless of mtime granularity.
+    await writeGoalState({ ...RUNNING_STATE, status: 'running', turnCount: 44 });
     const after = await readProjectPiGoalState(SESSION);
     const outcome = evaluatePiGoalActionTransition({ action: 'resume', before, after });
     expect(outcome).toEqual({ applied: true, failure: false });
