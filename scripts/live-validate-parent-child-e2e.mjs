@@ -36,7 +36,7 @@
  *
  * Usage:
  *   node scripts/live-validate-parent-child-e2e.mjs [--port 3588] [--keep]
- *        [--model zai/glm-5.3-flash] [--env-file .env.production]
+ *        [--model zai/glm-5.3-flash] [--env-file /root/.pi-web-ui/production.env]
  *        [--skip-browser]
  *
  * Exits 0 on PASS, 1 on FAIL.
@@ -64,7 +64,7 @@ function hasFlag(name) {
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(arg('port', '3588'));
 const MODEL = arg('model', 'zai/glm-5.3-flash');
-const ENV_FILE = arg('env-file', path.join(REPO, '.env.production'));
+const ENV_FILE = arg('env-file', path.join('/root/.pi-web-ui', 'production.env'));
 const GLM_BASE_URL = arg('glm-base-url', 'https://api.z.ai/api/anthropic');
 const KEEP = hasFlag('keep');
 const SKIP_BROWSER = hasFlag('skip-browser');

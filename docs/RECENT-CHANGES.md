@@ -4,6 +4,9 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Production env moved fully outside the repo (2026-10-03)**
+  - The public repo never tracked secrets (audited: every value in `/root/.pi-web-ui/secrets.env` is absent from the tracked tree and full git history), and `.env.production` itself held only non-secret ops config — but it sat inside the repo directory. It now lives at `/root/.pi-web-ui/production.env`; the systemd unit loads it alongside `/root/.pi-web-ui/secrets.env`, so **nothing env-like is read from inside the repo at runtime**. The old in-repo file was removed; `.gitignore` keeps ignoring the legacy name for local leftovers. `scripts/live-validate-parent-child-e2e.mjs` `--env-file` default follows the new path.
+
 - **Streamed-byte budget default re-sized from measurement (B3c, contract `1.56.0`)**
   - `PI_RUN_BUDGET_MAX_STREAMED_BYTES` default changed **16 MiB → 4 MiB (`4194304`)** from live measurement: 12 pristine-harness `bytes`-scenario runs at the 1 s A2 cadence (5× 8 MiB, 5× 4 MiB, 2× 16 MiB positive control; every per-run verdict and A2 sample preserved with the B3c evidence) showed the end-of-run finalisation stall scaling with the finalised message size — worst single-sample stall 209 ms at 8 MiB (over the frozen <200 ms sizing rule), 132 ms at 4 MiB (under), 180/187 ms at the 16 MiB controls. 4 MiB is 3.99× the measured real merged-run maximum (1,050,331 bytes; ≥2× rule; 0/2,382 measured merged runs breach it — a future legitimate run above 4 MiB would still be aborted, so real-run growth stays a watched residual); a runaway is now bounded at a quarter of the volume before the upstream stall can approach the B2 lag threshold. Env override, `0`-disable and warn-and-fallback semantics unchanged. See [`OBSERVABILITY.md`](./OBSERVABILITY.md#run-budgets).
 
