@@ -39,7 +39,9 @@ export interface AgyTurnOutcome {
 
 interface PendingTurn {
   resolve: (outcome: AgyTurnOutcome) => void;
-  hardTimer: ReturnType<typeof setTimeout>;
+  /** Hard-ceiling timer. Armed only while the turn is the HEAD of the queue, so
+   *  a queued follow-up is never charged for the time it spent waiting. */
+  hardTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface AgyStreamProcessOptions {
@@ -51,8 +53,15 @@ export interface AgyStreamProcessOptions {
    *  (an empty string resumes an unrelated recent conversation — live-validated). */
   conversationId?: string | null;
   extraArgs?: string[];
+  /** Per-turn hard ceiling (a runaway backstop, not a work limit). */
   timeoutMs: number;
+  /** Max silence on the wire while the model is thinking/answering. */
   stallTimeoutMs: number;
+  /** Max silence while a tool step is in flight. agy emits NOTHING between a
+   *  tool's ACTIVE and DONE updates (live-measured: a `sleep 150` is one 151 s
+   *  gap), so a healthy long build/test needs a window longer than the model-
+   *  silence one. Defaults to `stallTimeoutMs` (the pre-fix behaviour). */
+  toolStallTimeoutMs?: number;
   idleTimeoutMs: number;
   /** Every parsed stdout line (the service feeds its AgyEventNormalizer). */
   onEvent: (parsed: ParsedAgyLine) => void;
@@ -75,7 +84,13 @@ export class AgyStreamProcess {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private abortGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private abortRequested = false;
+  /** step_index of tool steps reported ACTIVE and not yet finished. */
+  private activeToolSteps = new Set<number>();
   private exited = false;
+  /** A SIGTERM has been sent (stall, ceiling or abort) but the child has not closed yet.
+   *  Its closing `result` ("interrupted") must never be matched to a NEW turn, so the
+   *  process is unusable from this instant and the service respawns. */
+  private terminating = false;
   private stderrSampleCount = 0;
   private _conversationId: string | null = null;
   private _permissionMode: string | null = null;
@@ -98,7 +113,7 @@ export class AgyStreamProcess {
   }
 
   get hasExited(): boolean {
-    return this.exited;
+    return this.exited || this.terminating;
   }
 
   private buildArgs(): string[] {
@@ -134,6 +149,7 @@ export class AgyStreamProcess {
     });
     this.child = child;
     this.exited = false;
+    this.terminating = false;
     this.abortRequested = false;
     this.stderrSampleCount = 0;
 
@@ -158,6 +174,7 @@ export class AgyStreamProcess {
       this.buffer = this.buffer.slice(idx + 1);
       if (!line.trim()) continue;
       const parsed = parseAgyLine(line);
+      this.trackToolSteps(parsed);
       this.onActivity();
       if (parsed.kind === 'init') {
         this._conversationId = parsed.conversationId;
@@ -196,7 +213,7 @@ export class AgyStreamProcess {
     this.placementLaunch = undefined;
     const reason: AgyTurnOutcome['reason'] = this.abortRequested ? 'aborted' : 'process-exited';
     for (const turn of this.pending) {
-      clearTimeout(turn.hardTimer);
+      if (turn.hardTimer) clearTimeout(turn.hardTimer);
       turn.resolve({ reason });
     }
     this.pending = [];
@@ -205,7 +222,8 @@ export class AgyStreamProcess {
 
   private resolveHeadFromResult(parsed: Extract<ParsedAgyLine, { kind: 'result' }>): void {
     const head = this.pending.shift();
-    clearTimeout(head?.hardTimer ?? undefined);
+    if (head?.hardTimer) clearTimeout(head.hardTimer);
+    this.activeToolSteps.clear();
     if (!head) return;
     const result = parsed.result;
     head.resolve({
@@ -226,7 +244,7 @@ export class AgyStreamProcess {
    *  are fire-and-forget into stdin — agy buffers mid-turn writes itself. */
   writeTurn(prompt: string): Promise<AgyTurnOutcome> {
     const stdin = this.child?.stdin;
-    if (this.exited || !this.child || !stdin || stdin.destroyed) {
+    if (this.exited || this.terminating || !this.child || !stdin || stdin.destroyed) {
       return Promise.reject(new Error('agy stream process has exited; respawn required'));
     }
     if (this.idleTimer) {
@@ -234,16 +252,13 @@ export class AgyStreamProcess {
       this.idleTimer = null;
     }
     return new Promise<AgyTurnOutcome>((resolve) => {
-      const hardTimer = setTimeout(() => {
-        logger.warn('turn exceeded hard ceiling (%dms); SIGTERM', this.opts.timeoutMs);
-        this.child?.kill('SIGTERM');
-        this.resolveAllPendingWithReason('timeout');
-      }, this.opts.timeoutMs);
-      if (typeof hardTimer.unref === 'function') hardTimer.unref();
-      const turn: PendingTurn = { resolve, hardTimer };
+      const turn: PendingTurn = { resolve, hardTimer: null };
       this.pending.push(turn);
       stdin.write(JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n');
-      if (this.pending.length === 1) this.armStallTimer();
+      if (this.pending.length === 1) {
+        this.armHardTimer(turn);
+        this.armStallTimer();
+      }
     });
   }
 
@@ -252,6 +267,7 @@ export class AgyStreamProcess {
   abort(): void {
     if (this.exited || this.pending.length === 0) return;
     this.abortRequested = true;
+    this.terminating = true;
     this.child?.kill('SIGTERM');
     this.abortGraceTimer = setTimeout(() => {
       if (!this.exited) this.child?.kill('SIGKILL');
@@ -261,27 +277,53 @@ export class AgyStreamProcess {
 
   private resolveAllPendingWithReason(reason: NonNullable<AgyTurnOutcome['reason']>): void {
     for (const turn of this.pending) {
-      clearTimeout(turn.hardTimer);
+      if (turn.hardTimer) clearTimeout(turn.hardTimer);
       turn.resolve({ reason });
     }
     this.pending = [];
   }
 
-  private armTurnTimer(_turn: PendingTurn): void {
-    // Hard ceilings are armed per-turn at write time; nothing extra to do here
-    // beyond restarting the stall clock for the new head.
+  private armTurnTimer(turn: PendingTurn): void {
+    // A queued turn becomes the head: its own ceiling and stall clock start now.
+    this.armHardTimer(turn);
     this.armStallTimer();
+  }
+
+  private armHardTimer(turn: PendingTurn): void {
+    if (turn.hardTimer) clearTimeout(turn.hardTimer);
+    const timer = setTimeout(() => {
+      logger.warn('turn exceeded hard ceiling (%dms); SIGTERM', this.opts.timeoutMs);
+      this.terminating = true;
+      this.child?.kill('SIGTERM');
+      this.resolveAllPendingWithReason('timeout');
+    }, this.opts.timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    turn.hardTimer = timer;
+  }
+
+  /** agy is silent for a tool's whole run, so remember which tool steps are open. */
+  private trackToolSteps(parsed: ParsedAgyLine): void {
+    if (parsed.kind !== 'step' || parsed.step.step_type !== 'tool') return;
+    if (parsed.step.state === 'ACTIVE') this.activeToolSteps.add(parsed.step.step_index);
+    else this.activeToolSteps.delete(parsed.step.step_index);
+  }
+
+  private currentStallWindowMs(): number {
+    const tool = this.opts.toolStallTimeoutMs;
+    return this.activeToolSteps.size > 0 && tool !== undefined ? Math.max(tool, this.opts.stallTimeoutMs) : this.opts.stallTimeoutMs;
   }
 
   private armStallTimer(): void {
     if (this.stallTimer) clearTimeout(this.stallTimer);
     if (this.pending.length === 0) return;
+    const windowMs = this.currentStallWindowMs();
     this.stallTimer = setTimeout(() => {
       if (this.pending.length === 0 || this.exited) return;
-      logger.warn('no stream events for %dms; SIGTERM (stall)', this.opts.stallTimeoutMs);
+      logger.warn('no stream events for %dms%s; SIGTERM (stall)', windowMs, this.activeToolSteps.size > 0 ? ' with a tool in flight' : '');
+      this.terminating = true;
       this.child?.kill('SIGTERM');
       this.resolveAllPendingWithReason('stall');
-    }, this.opts.stallTimeoutMs);
+    }, windowMs);
     if (typeof this.stallTimer.unref === 'function') this.stallTimer.unref();
   }
 

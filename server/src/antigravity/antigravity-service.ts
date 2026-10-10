@@ -235,6 +235,7 @@ export class AntigravityService {
   private readonly cleanupIntervalMs: number;
   private readonly promptTimeoutMs: number;
   private readonly stallTimeoutMs: number;
+  private readonly toolStallTimeoutMs: number;
   private readonly maxAttempts: number;
   private modelCache: { expiresAt: number; models: AgyModelEntry[] } | null = null;
   private modelRequest: Promise<AgyModelEntry[]> | null = null;
@@ -251,6 +252,7 @@ export class AntigravityService {
     this.cleanupIntervalMs = config.antigravityCleanupIntervalMs;
     this.promptTimeoutMs = config.antigravityPromptTimeoutMs;
     this.stallTimeoutMs = config.antigravityStallTimeoutMs;
+    this.toolStallTimeoutMs = config.antigravityToolStallTimeoutMs;
     this.maxAttempts = config.antigravityMaxAttempts;
     this.backgroundWatchIntervalMs = config.antigravityBackgroundWatchIntervalMs;
     this.backgroundWatchMaxMs = config.antigravityBackgroundWatchMaxMs;
@@ -527,6 +529,7 @@ export class AntigravityService {
           conversationId,
           timeoutMs: this.promptTimeoutMs,
           stallTimeoutMs: this.stallTimeoutMs,
+          toolStallTimeoutMs: this.toolStallTimeoutMs,
           idleTimeoutMs: this.idleTimeoutMs,
           onEvent: (parsed) => {
             for (const ev of norm.onParsed(parsed, Date.now())) emit(ev);

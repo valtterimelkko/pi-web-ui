@@ -142,10 +142,12 @@ conversation, invalid ids silently start a fresh one (the service warns and
 persists the actual id).
 
 ### Stall retries are bounded and abortable
-`ANTIGRAVITY_STALL_TIMEOUT_MS` (no parsed stream events) and
-`ANTIGRAVITY_PROMPT_TIMEOUT_MS` (per-turn ceiling) each SIGTERM the child;
-`ANTIGRAVITY_MAX_ATTEMPTS` bounds retries, and the retry respawns with
-`--conversation` to preserve continuity. Aborting a session must cancel pending
+`ANTIGRAVITY_STALL_TIMEOUT_MS` (no parsed stream events; `ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS`
+instead while a tool step is open — agy is silent for a tool's whole run) and
+`ANTIGRAVITY_PROMPT_TIMEOUT_MS` (per-turn ceiling) each SIGTERM the child. Only
+an unexpected process exit retries (`ANTIGRAVITY_MAX_ATTEMPTS`, respawning with
+`--conversation` to preserve continuity); a stall/ceiling cut-off is final for
+that turn and a goal's continuation carries on. Aborting a session must cancel pending
 retry work; if a supposedly aborted turn starts again, inspect retry cancellation
 in `antigravity-service.ts` before changing timeout values.
 

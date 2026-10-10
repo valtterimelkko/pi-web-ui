@@ -225,7 +225,8 @@ If you enable notifications, make sure `NOTIFICATIONS_PUBLIC_BASE_URL` resolves 
 | `ANTIGRAVITY_SESSION_DIR` | `~/.pi-web-ui/antigravity-sessions` | Pi-owned Antigravity JSONL turn log directory |
 | `ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR` | `~/.gemini/antigravity-cli/conversations` | native agy conversation DBs read read-only by `GET /api/v1/sessions/native` |
 | `ANTIGRAVITY_DEFAULT_MODEL` | `Gemini 3.5 Flash (Medium)` | default `agy` model |
-| `ANTIGRAVITY_PROMPT_TIMEOUT_MS` | `600000` | max prompt duration before timeout |
+| `ANTIGRAVITY_PROMPT_TIMEOUT_MS` | `3600000` | per-turn hard ceiling (runaway backstop; was 10 min until the 2026-10 ceiling fix) |
+| `ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS` | `1800000` | max silence while an agy tool step is in flight (agy emits nothing during a tool run) |
 | `ANTIGRAVITY_IDLE_TIMEOUT_MS` | `1800000` | idle timeout for unpinned inactive sessions |
 | `ANTIGRAVITY_HEARTBEAT_INTERVAL_MS` | `5000` | synthetic liveness heartbeat interval while a subprocess runs |
 | `ANTIGRAVITY_STALL_TIMEOUT_MS` | `300000` | kill a silent `agy -p` turn if the per-turn log file mtime stops advancing (default 5 min) |

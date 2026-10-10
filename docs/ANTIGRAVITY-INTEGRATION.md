@@ -194,13 +194,14 @@ All config lives in `server/src/config.ts`:
 | `antigravityStreamMode` | `true` | `ANTIGRAVITY_STREAM_MODE` (`false` = legacy text mode) |
 | `antigravitySessionDir` | `~/.pi-web-ui/antigravity-sessions` | `ANTIGRAVITY_SESSION_DIR` |
 | `antigravityDefaultModel` | `'Gemini 3.5 Flash (Medium)'` | `ANTIGRAVITY_DEFAULT_MODEL` |
-| `antigravityPromptTimeoutMs` | `600000` (10m) | `ANTIGRAVITY_PROMPT_TIMEOUT_MS` |
+| `antigravityPromptTimeoutMs` | `3600000` (60m; runaway backstop) | `ANTIGRAVITY_PROMPT_TIMEOUT_MS` |
 | `antigravityIdleTimeoutMs` | `1800000` (30m) | `ANTIGRAVITY_IDLE_TIMEOUT_MS` |
 | `antigravityMaxSessions` | `4` | `ANTIGRAVITY_MAX_SESSIONS` |
 | `antigravityMaxPinnedSessions` | `5` | `ANTIGRAVITY_MAX_PINNED_SESSIONS` |
 | `antigravityCleanupIntervalMs` | `60000` (1m) | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` |
 | `antigravityHeartbeatIntervalMs` | `5000` (5s; legacy mode only) | `ANTIGRAVITY_HEARTBEAT_INTERVAL_MS` |
 | `antigravityStallTimeoutMs` | `300000` (5m; stream mode = no-events gap) | `ANTIGRAVITY_STALL_TIMEOUT_MS` |
+| `antigravityToolStallTimeoutMs` | `1800000` (30m; no-events gap while a tool step is in flight) | `ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS` |
 | `antigravityMaxAttempts` | `2` | `ANTIGRAVITY_MAX_ATTEMPTS` |
 
 ## Capabilities
@@ -277,13 +278,38 @@ terminal path emits `agent_end`, so failures are visible on replay and can
 trigger opted-in notifications.
 
 Watchdogs (stream mode):
-- **Hard ceiling** per turn: `antigravityPromptTimeoutMs` → SIGTERM.
+- **Hard ceiling** per turn: `antigravityPromptTimeoutMs` → SIGTERM. A runaway
+  backstop (60 min), not a work limit; it starts when the turn becomes the head
+  of the agy queue, so a queued follow-up is not charged for its wait. (It was
+  10 min until 2026-10: 7 of ~39 live turns hit it, always mid-work.)
 - **Stall**: no parsed stream events for `antigravityStallTimeoutMs` → SIGTERM.
+  agy emits **nothing** between a tool step's `ACTIVE` and `DONE` updates
+  (live-measured: `sleep 150` = one 151 s gap), so while a tool step is open the
+  longer `antigravityToolStallTimeoutMs` applies instead; the short window still
+  guards model silence.
 - **Abort**: SIGTERM, consume agy's closing `result`, escalate to SIGKILL after
   a 5 s grace window. Reason comes from what WE sent (agy reports the same
   "timeout waiting for response" string for signals and print-timeout expiry).
-- A stall/timeout retries within `antigravityMaxAttempts` after a respawn with
-  `--conversation`; plain agy ERROR results never retry.
+- Only a process that dies on its own (`process-exited`) retries within
+  `antigravityMaxAttempts`, respawning with `--conversation`. A stall or ceiling
+  timeout finalises the turn as an error and does **not** retry (a retry would
+  double a 10–60 min wait); under a goal the sweeper's continuation is the
+  retry, and it tells the model it was cut off.
+
+## Turn-limit live validation (2026-10-10)
+
+`scripts/live-validate-agy-ceiling.ts` drives the real `AntigravityService` and the
+real `agy` with scaled-down windows (`tool-silence`, `hung-resume`, `goal-build`).
+Results: with the old single window a healthy 60 s silent tool was killed as a stall
+at 27 s; with the tool window it completed (75 s). A tool silent past the tool window
+is still killed (46 s at a 40 s window). A prompt sent right after a cut-off used to
+inherit the dying child's closing `interrupted` result (race, now closed: the process
+is unusable from the SIGTERM) and now resumes the same conversation (`RESUMED-OK`).
+A goal whose build step was cut twice recovered on the third continuation and
+achieved; the cut-off note alone did not stop the model re-running the silent build,
+so a cut-off still costs a provider-error strike (three pause the goal).
+Live data behind the change (journal 28 Sep–10 Oct): 7 ceiling timeouts and 3 stalls
+against 29 successful turns, successes ending at 6–8 min.
 
 ## Live Validation
 

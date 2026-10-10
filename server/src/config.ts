@@ -568,6 +568,8 @@ export interface ServerConfig {
   antigravityCleanupIntervalMs: number;
   antigravityHeartbeatIntervalMs: number;
   antigravityStallTimeoutMs: number;
+  /** Max no-event gap while an agy tool step is in flight (agy is silent for a tool's whole run). */
+  antigravityToolStallTimeoutMs: number;
   antigravityMaxAttempts: number;
   /** Background-task completion poll cadence (0 disables the watcher). */
   antigravityBackgroundWatchIntervalMs: number;
@@ -793,7 +795,7 @@ export const config: ServerConfig = {
   antigravityNativeConversationsDir: process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR || path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations'),
   antigravityNativeDesktopConversationsDir: process.env.ANTIGRAVITY_NATIVE_DESKTOP_CONVERSATIONS_DIR || path.join(os.homedir(), '.gemini', 'antigravity', 'conversations'),
   antigravityDefaultModel: process.env.ANTIGRAVITY_DEFAULT_MODEL || 'Gemini 3.8 Flash (Medium)',
-  antigravityPromptTimeoutMs: parseInt(process.env.ANTIGRAVITY_PROMPT_TIMEOUT_MS || '600000', 10),
+  antigravityPromptTimeoutMs: parseInt(process.env.ANTIGRAVITY_PROMPT_TIMEOUT_MS || '3600000', 10),
   antigravityIdleTimeoutMs: parseInt(process.env.ANTIGRAVITY_IDLE_TIMEOUT_MS || '1800000', 10),
   antigravityMaxSessions: parseInt(process.env.ANTIGRAVITY_MAX_SESSIONS || '4', 10),
   antigravityMaxPinnedSessions: parseInt(process.env.ANTIGRAVITY_MAX_PINNED_SESSIONS || String(MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME), 10),
@@ -817,6 +819,7 @@ export const config: ServerConfig = {
   // instead of waiting out the full print-timeout. Must stay below
   // antigravityPromptTimeoutMs for the watchdog to ever preempt it.
   antigravityStallTimeoutMs: parseInt(process.env.ANTIGRAVITY_STALL_TIMEOUT_MS || '300000', 10),
+  antigravityToolStallTimeoutMs: parseInt(process.env.ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS || '1800000', 10),
   // Bounded attempt count (including the first try) for a turn that stalls or
   // times out. A retry reuses whatever conversation state agy already
   // resolved (or starts fresh on a first turn) — see runPromptAsync().

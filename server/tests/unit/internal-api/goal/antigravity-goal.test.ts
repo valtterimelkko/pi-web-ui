@@ -476,6 +476,33 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
 
 // ─── config ──────────────────────────────────────────────────────────────────
 
+describe('createAgyGoalSweeper — server cut-off turns (ceiling fix)', () => {
+  it.each(['timeout', 'stall'])('a %s cut-off still counts as a strike, but its continuation tells the model it was cut off', async (cut) => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: cut, status: 'error', error: cut });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    expect(await h.store.get('s1')).toMatchObject({ status: 'running', consecutiveErrors: 1 });
+    expect(h.dispatched).toHaveLength(1);
+    const msg = h.dispatched[0].message;
+    expect(msg).toContain('Ship it');
+    expect(msg).toMatch(/cut off/i);
+    expect(msg).toMatch(/commit|save/i);
+  });
+
+  it('an ordinary provider error does not claim a cut-off', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched[0].message).not.toMatch(/cut off/i);
+  });
+
+  it('buildAgyGoalContinuationPrompt adds the cut-off note only when asked', () => {
+    expect(buildAgyGoalContinuationPrompt('Ship it', true, { cutOff: true })).toMatch(/cut off/i);
+    expect(buildAgyGoalContinuationPrompt('Ship it', true)).not.toMatch(/cut off/i);
+  });
+});
+
 describe('createAgyGoalSweeper — resume continuation that could not dispatch (contract 1.58.3 review)', () => {
   it('dispatches a pending continuation for an already-verified turn and clears the flag only once accepted', async () => {
     const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });

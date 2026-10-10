@@ -203,11 +203,21 @@ export function buildAgyGoalStartPrompt(objective: string, hasVerifyCommand: boo
 }
 
 /** Continuation prompt sent by the sweeper after each unmet completed turn. */
-export function buildAgyGoalContinuationPrompt(objective: string, hasVerifyCommand: boolean): string {
+export function buildAgyGoalContinuationPrompt(
+  objective: string,
+  hasVerifyCommand: boolean,
+  options: { cutOff?: boolean } = {},
+): string {
   const lines = [
     `Continue working toward your active goal: ${objective}`,
     'Re-check the goal against current reality, make further progress, and report the current state.',
   ];
+  if (options.cutOff) {
+    lines.push(
+      'Your previous turn was cut off by the server before it could finish (time or inactivity limit); any command it was running was stopped and its reply was lost. '
+      + 'Files already written are intact. Check the working tree and what is already done, then work in smaller steps: commit or save after each step, and run long commands in the background with their output sent to a file.',
+    );
+  }
   if (!hasVerifyCommand) lines.push(SENTINEL_INSTRUCTION);
   return lines.join('\n');
 }
@@ -386,7 +396,8 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
         if (requirePending && !fresh.pendingContinuation) return null;
         return deps.isRunning(sessionId) ? null : fresh;
       };
-      const continuationFor = (rec: AntigravityGoalRecord) => buildAgyGoalContinuationPrompt(rec.objective, rec.verifyCommand !== undefined);
+      const continuationFor = (rec: AntigravityGoalRecord, cutOff = false) =>
+        buildAgyGoalContinuationPrompt(rec.objective, rec.verifyCommand !== undefined, { cutOff });
       for (const sessionId of sessionIds) {
         try {
           const record = await deps.getStore().get(sessionId);
@@ -444,7 +455,7 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             // the next sweep re-processes the same turn and retries the dispatch.
             const armedForRetry = await stillArmed(sessionId, record.lastVerifiedTurnAt, turn.completedAt);
             if (!armedForRetry) continue;
-            await deps.dispatch(sessionId, continuationFor(armedForRetry));
+            await deps.dispatch(sessionId, continuationFor(armedForRetry, turn.error === 'timeout' || turn.error === 'stall'));
             const patched = await deps.getStore().patch(sessionId, {
               consecutiveErrors: strikes,
               lastReason: `provider error (strike ${strikes}/${AGY_GOAL_MAX_CONSECUTIVE_ERRORS}): ${errorText}`,
