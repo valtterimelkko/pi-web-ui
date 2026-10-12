@@ -11,6 +11,13 @@ vi.mock('../../../src/config.js', () => ({
   }),
 }));
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../../../src/logging/logger.js', () => ({
+  createLogger: () => mockLogger,
+}));
+
 vi.mock('../../../src/dictation/connectionPool.js', () => ({
   getSharedOpenAIClient: vi.fn(),
 }));
@@ -64,6 +71,41 @@ function fakeSttServer(status: number, responseBody: object) {
   );
 }
 
+type Step = { status: number; body: object } | 'hang';
+
+/** Serves the given steps in order (the last step repeats); 'hang' never answers. */
+function sequenceSttServer(steps: Step[]) {
+  const requests: CapturedRequest[] = [];
+  const sockets = new Set<import('node:net').Socket>();
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      requests.push({
+        auth: req.headers.authorization ?? '',
+        body: Buffer.concat(chunks),
+        contentType: String(req.headers['content-type'] ?? ''),
+      });
+      const step = steps[Math.min(requests.length - 1, steps.length - 1)];
+      if (step === 'hang') return;
+      res.writeHead(step.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(step.body));
+    });
+  });
+  server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+  return new Promise<{ url: string; requests: CapturedRequest[]; close: () => void }>((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      resolve({
+        url: `http://127.0.0.1:${port}/x`,
+        requests,
+        close: () => { for (const s of sockets) s.destroy(); server.close(); },
+      });
+    });
+  });
+}
+
 const savedEnv: Record<string, string | undefined> = {};
 function setEnv(name: string, value: string | undefined) {
   savedEnv[name] = process.env[name];
@@ -84,6 +126,8 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
     configState.openrouterApiKey = 'test-or-key';
     setEnv('OPENROUTER_STT_URL', undefined);
     setEnv('LOCAL_ASR_URL', undefined);
+    setEnv('STT_REQUEST_TIMEOUT_MS', undefined);
+    setEnv('STT_RETRY_DELAY_MS', '10');
   });
 
   it('uses the OpenRouter whisper-turbo tier first (DeepInfra pin, webm body)', async () => {
@@ -179,5 +223,115 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
     expect(shouldUseSpeculative(spec, 10)).toBe(true);
     expect(shouldUseSpeculative(spec, 11)).toBe(true);   // 1/11 new < 0.3
     expect(shouldUseSpeculative(spec, 20)).toBe(false);  // 10/20 new >= 0.3
+  });
+
+  it('retries the OpenRouter tier once on a transient 5xx and stays on the primary tier', async () => {
+    const or = await sequenceSttServer([{ status: 503, body: { error: 'busy' } }, { status: 200, body: { text: 'second try' } }]);
+    setEnv('OPENROUTER_STT_URL', or.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.text).toBe('second try');
+      expect(result.usedFallback).toBe(false);
+      expect(or.requests).toHaveLength(2);
+    } finally {
+      or.close();
+    }
+  });
+
+  it('does not retry a non-transient 4xx and falls through to the local tier', async () => {
+    const or = await sequenceSttServer([{ status: 401, body: { error: 'bad key' } }]);
+    const local = await fakeSttServer(200, { text: 'local text' });
+    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.text).toBe('local text');
+      expect(or.requests).toHaveLength(1);
+    } finally {
+      or.close(); local.close();
+    }
+  });
+
+  it('does not retry an empty transcript but logs enough to diagnose it', async () => {
+    const or = await sequenceSttServer([{ status: 200, body: { text: '   ', usage: { seconds: 3 } } }]);
+    const local = await fakeSttServer(200, { text: 'local text' });
+    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.alloc(1234)]);
+      expect(result.text).toBe('local text');
+      expect(or.requests).toHaveLength(1);
+      const lines = mockLogger.error.mock.calls.map((c) => c.map(String).join(' '));
+      const line = lines.find((l) => l.includes('tier=openrouter') && l.includes('outcome=empty'));
+      expect(line).toBeDefined();
+      expect(line).toContain('bytes=1234');
+      expect(line).toContain('seconds');
+    } finally {
+      or.close(); local.close();
+    }
+  });
+
+  it('times out a hung OpenRouter request, retries once, then uses the local tier', async () => {
+    setEnv('STT_REQUEST_TIMEOUT_MS', '150');
+    const or = await sequenceSttServer(['hang']);
+    const local = await fakeSttServer(200, { text: 'local text' });
+    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    try {
+      const started = Date.now();
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.text).toBe('local text');
+      expect(or.requests).toHaveLength(2);
+      expect(Date.now() - started).toBeLessThan(3000);
+      const lines = mockLogger.error.mock.calls.map((c) => c.map(String).join(' '));
+      expect(lines.some((l) => l.includes('tier=openrouter') && l.includes('outcome=timeout'))).toBe(true);
+    } finally {
+      or.close(); local.close();
+    }
+  });
+
+  it('times out a hung local tier and reaches OpenAI', async () => {
+    setEnv('STT_REQUEST_TIMEOUT_MS', '150');
+    const or = await sequenceSttServer([{ status: 401, body: {} }]);
+    const local = await sequenceSttServer(['hang']);
+    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    vi.mocked(getSharedOpenAIClient).mockReturnValue(mockOpenAIClient('openai text') as never);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.text).toBe('openai text');
+    } finally {
+      or.close(); local.close();
+    }
+  });
+
+  it('logs one structured info line per successful attempt so tier usage can be counted', async () => {
+    const fake = await fakeSttServer(200, { text: 'Hello world' });
+    setEnv('OPENROUTER_STT_URL', fake.url);
+    try {
+      await transcribeWithFallback([Buffer.from('audio')]);
+      const lines = mockLogger.info.mock.calls.map((c) => c.map(String).join(' '));
+      const line = lines.find((l) => l.includes('tier=openrouter') && l.includes('outcome=ok'));
+      expect(line).toBeDefined();
+      expect(line).toMatch(/ms=\d+/);
+      expect(line).toContain('bytes=5');
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('logs the final failure when every tier fails', async () => {
+    const or = await sequenceSttServer([{ status: 401, body: {} }]);
+    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr');
+    const client = { audio: { transcriptions: { create: vi.fn().mockRejectedValue(new Error('openai down')) } } };
+    vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
+    try {
+      await expect(transcribeWithFallback([Buffer.from('audio')])).rejects.toThrow('openai down');
+      const lines = mockLogger.error.mock.calls.map((c) => c.map(String).join(' '));
+      expect(lines.some((l) => l.includes('tier=openai') && l.includes('outcome=error'))).toBe(true);
+    } finally {
+      or.close();
+    }
   });
 });
