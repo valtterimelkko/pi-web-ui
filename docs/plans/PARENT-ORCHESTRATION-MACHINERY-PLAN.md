@@ -228,3 +228,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 | R0: plan written; owner decisions O1–O5 recorded; execution not started |
 | 2026-10-13 | Global AGENTS.md conflict resolved (codex `1137142`); only restart authority still waits |
 | 2026-10-13 17:22Z | Execution started (`claude:f998b213`): W0 dispatched — W0a, W0b (DeepSeek, host), W0c, SK1 (cloud Sonnet) |
+| 2026-10-13 17:36Z | RV-A: W0-a merged (pi-orch 7f460fe; scope widened to the raw-vs-stored objective dead watch found by the parent), W0-b merged and deployed (claude-enhancement 084976a, pi-enhancement 4c0570a; deadline kept one-shot under max_wakes) |
