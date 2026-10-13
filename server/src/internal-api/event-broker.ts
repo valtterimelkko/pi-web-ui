@@ -79,6 +79,13 @@ export interface EventBrokerOptions {
    * re-fire the tap (replayed events were already observed when published).
    */
   onPublish?: (sessionKey: string, event: NormalizedEvent) => void;
+  /**
+   * Contract 1.62.0: pure transform applied at `publish()` entry (before the
+   * tap, buffering and delivery) so every consumer sees the enriched event —
+   * used to stamp the top-level `goalId` on goal_state / goal_end. A throwing
+   * enricher leaves the event unchanged.
+   */
+  eventEnricher?: (sessionKey: string, event: NormalizedEvent) => NormalizedEvent;
 }
 
 const DEFAULT_REPLAY_BUFFER_SIZE = 50;
@@ -112,6 +119,7 @@ export class InternalApiEventBroker {
   private readonly metrics: OperationalMetrics;
   private readonly disposedCheck?: (sessionId: string) => boolean;
   private readonly onPublish?: (sessionKey: string, event: NormalizedEvent) => void;
+  private readonly eventEnricher?: (sessionKey: string, event: NormalizedEvent) => NormalizedEvent;
 
   constructor(options: EventBrokerOptions = {}) {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
@@ -126,6 +134,7 @@ export class InternalApiEventBroker {
     this.metrics = options.metrics ?? getOperationalMetrics();
     this.disposedCheck = options.isSessionDisposed;
     this.onPublish = options.onPublish;
+    this.eventEnricher = options.eventEnricher;
   }
 
   /**
@@ -175,6 +184,13 @@ export class InternalApiEventBroker {
   /** Publish an event to all subscribers for a session. */
   publish(sessionId: string, event: NormalizedEvent): void {
     if (this.disposedCheck?.(sessionId)) return;
+    if (this.eventEnricher) {
+      try {
+        event = this.eventEnricher(sessionId, event);
+      } catch {
+        /* enrichment must never break publishing */
+      }
+    }
     // C3a observation tap: pre-rate-limit, so the tap always sees the full
     // delta stream (coalescing drops intermediate text). Best-effort.
     if (this.onPublish) {

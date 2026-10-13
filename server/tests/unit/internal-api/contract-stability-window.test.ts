@@ -114,6 +114,18 @@ const W0C_1_61_0_ROW: StabilityExceptionRow = {
   version: '1.61.0',
 };
 
+/**
+ * The live table's fifth row (W2, parent-machinery programme plan): stable
+ * goalId, stalled goal_state, no NEVER_STARTED goal_end, quarantined_debt
+ * refusals. Its additive minor bump (1.62.0) re-based the snapshot baseline.
+ */
+const W2_1_62_0_ROW: StabilityExceptionRow = {
+  date: '2026-10-13',
+  decision: 'PARENT-ORCHESTRATION-MACHINERY-PLAN W2 (owner plan of record)',
+  what: '1.62.0 (W2): `SessionGoalProjection` gains optional top-level `goalId` (stamped on every `goal_state`/`goal_end` and on `GET`/`POST /goal`), and `stalled` / `stalledForMs` on a stall `goal_state`; a NEVER_STARTED receipt no longer fires `goal_end`; an admission refusal tipped over by quarantined leases carries body `reason: "quarantined_debt"` (+ `admissionReason`, `quarantinedRuns`, `quarantinedOldestAgeMs`) with the same status/code. Additive only.',
+  version: '1.62.0',
+};
+
 describe('contract stability window (C6)', () => {
   const doc = readFileSync(contractDocPath, 'utf8');
   const committed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as ClientContractSnapshot;
@@ -142,8 +154,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row and the W0-c 1.61.0 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row and the W2 1.62.0 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -162,12 +174,12 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version now that the 1.61.0 exception row names it', () => {
+    it('accepts the live contract version now that the 1.62.0 exception row names it', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
       expect(verdict.ok).toBe(true);
-      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.61');
+      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.62');
     });
 
     it('refuses the live contract version when the exception row is absent (the window rule still bites)', () => {

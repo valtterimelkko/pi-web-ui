@@ -32,14 +32,16 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * the additive `GoalInterruptionInfo` type and `SessionGoalProjection`
  * `interruption` / `autoContinued` fields; re-based again at **1.61.0**
  * (2026-10-13, W0-c) — the additive `PROFILE_CAPACITY_EXHAUSTED` code,
- * `CapacityResponse.claudeProfiles` and `ModelInfo.maxConcurrent`. The ENFORCED fingerprint is
+ * `CapacityResponse.claudeProfiles` and `ModelInfo.maxConcurrent`; re-based again at
+ * **1.62.0** (2026-10-13, W2) — the additive `SessionGoalProjection` `goalId` /
+ * `stalled` / `stalledForMs` fields. The ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
  * sorted keys (so patch-bump regenerations that only move the version string
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '3722ea3cd90028310ea01362903280a2bcd27c8ecc85651bb5f0b82042dadc90';
+export const BASELINE_SHAPE_SHA256 = '702a35b553c5a1aad364f41da5c4a0f4a48cce641bba5e76cae10cfd7d050d1f';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */

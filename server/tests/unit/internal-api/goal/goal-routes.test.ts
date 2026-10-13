@@ -952,4 +952,137 @@ describe('goal function (contract 1.27.0)', () => {
       expect(JSON.parse(res.body).goal).toBeUndefined();
     });
   });
+
+  describe('contract 1.62.0 (W2-a) — stable goalId', () => {
+    const post = async (body: Record<string, unknown>) => {
+      const res = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', body), res, 'session-1');
+      expect(res.statusCode, res.body).toBe(200);
+      return JSON.parse(res.body).goal as Record<string, unknown>;
+    };
+
+    it('a new goal on a reused session gets a new goalId; the old goal\'s clear carries the OLD id (events + GET)', async () => {
+      registry.get.mockResolvedValue(entry({ sdkType: 'antigravity' }));
+      const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+      routes.broker.subscribe('session-1', (event: any) => events.push(event));
+
+      const first = await post({ action: 'start', objective: 'Ship it' });
+      expect(first.goalId).toMatch(/^goal_/);
+      await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+
+      const cleared = await post({ action: 'clear' });
+      expect(cleared.status).toBe('cleared');
+      expect(cleared.goalId).toBe(first.goalId);
+
+      const second = await post({ action: 'start', objective: 'Ship it' });
+      expect(second.goalId).toMatch(/^goal_/);
+      expect(second.goalId).not.toBe(first.goalId);
+
+      const get = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/session-1/goal'), get, 'session-1');
+      expect(JSON.parse(get.body).goalId).toBe(second.goalId);
+
+      // Any goal event published for the OLD goal carries the old id (top-level).
+      routes.broker.publish('session-1', { type: 'goal_end', timestamp: 1, data: { supported: true, status: 'cleared', objective: 'Ship it' } } as any);
+      const published = events.filter((e) => e.type === 'goal_end');
+      expect(published).toHaveLength(1);
+      // cleared AFTER a fresh start of the same objective is the new goal's id (rotate fenced the old one)
+      expect(published[0].data.goalId).toBe(second.goalId);
+    });
+  });
+
+  describe('correction 01 — Pi goalId on POST /goal and cleanup on delete', () => {
+    it('Pi start/pause/clear responses carry goalId; a second start after a clear gets a different id', async () => {
+      const prevHome = process.env.HOME;
+      process.env.HOME = dir;
+      try {
+        const statePath = piGoalStatePath('/tmp/sessions/session-1.jsonl');
+        await fs.mkdir(path.dirname(statePath), { recursive: true });
+        let startedAt = 1_000;
+        agentSession.prompt.mockImplementation(async (message: string) => {
+          if (message.startsWith('/goal "')) {
+            startedAt += 1_000;
+            await fs.writeFile(statePath, JSON.stringify({ objective: 'same objective', status: 'running', turnCount: 0, startedAt }));
+          } else if (message.startsWith('/goal clear')) {
+            await fs.writeFile(statePath, JSON.stringify({ objective: '', status: 'idle', turnCount: 0 }));
+          }
+        });
+        const post = async (body: Record<string, unknown>) => {
+          const res = mockRes();
+          await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', body), res, 'session-1');
+          return { status: res.statusCode, body: JSON.parse(res.body) };
+        };
+        const a = await post({ action: 'start', objective: 'same objective' });
+        expect(a.status, JSON.stringify(a.body)).toBe(200);
+        expect(a.body.goal.goalId).toMatch(/^goal_/);
+        await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+        const cleared = await post({ action: 'clear' });
+        expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+        expect(cleared.body.goal.goalId).toBe(a.body.goal.goalId);
+        await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+        const b = await post({ action: 'start', objective: 'same objective' });
+        expect(b.body.goal.goalId).toMatch(/^goal_/);
+        expect(b.body.goal.goalId).not.toBe(a.body.goal.goalId);
+      } finally {
+        process.env.HOME = prevHome;
+      }
+    });
+
+    it('deleting a session drops its goal id (id and Pi path keys) so a reused key carries no old goalId', async () => {
+      const { getGoalIdStore } = await import('../../../../src/internal-api/goal/goal-id.js');
+      getGoalIdStore().stamp('session-1', { supported: true, status: 'running', objective: 'o', startedAt: 1 });
+      getGoalIdStore().stamp('/tmp/sessions/session-1.jsonl', { supported: true, status: 'running', objective: 'o', startedAt: 1 });
+      registry.delete = vi.fn().mockResolvedValue(true);
+      multiSessionManager.disposeLoadedSession = vi.fn().mockResolvedValue(undefined);
+      const res = mockRes();
+      await routes.handleDeleteSession(jsonReq('DELETE', '/api/v1/sessions/session-1'), res, 'session-1');
+      expect(res.statusCode, res.body).toBeLessThan(500);
+      expect(getGoalIdStore().get('session-1')).toBeUndefined();
+      expect(getGoalIdStore().get('/tmp/sessions/session-1.jsonl')).toBeUndefined();
+    });
+  });
+
+  describe('contract 1.62.0 (W2-b) — stalled goal event through the route wiring', () => {
+    it('a running Antigravity goal on an idle session emits goal_state {stalled:true} after GOAL_STALL_MINUTES, once', async () => {
+      await routes.shutdown();
+      const prev = process.env.GOAL_STALL_MINUTES;
+      process.env.GOAL_STALL_MINUTES = '2';
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+      let stallRoutes: ReturnType<typeof createSessionRoutes> | undefined;
+      try {
+        stallRoutes = createSessionRoutes({
+          claudeService, opencodeService, antigravityService, multiSessionManager,
+          sessionRegistry: registry, piService, internalClientId: 'test-client',
+          watchDir: path.join(dir, 'watches2'), pinDir: path.join(dir, 'pins2'),
+          claudeSessionDir: path.join(dir, 'claude-sessions2'),
+          antigravitySessionDir: path.join(dir, 'antigravity-sessions2'),
+          claudeProjectsDir: path.join(dir, '.claude', 'projects'),
+          pinExpiryIntervalMs: 60_000, runReceiptManager: manager,
+        });
+        registry.get.mockResolvedValue(entry({ sdkType: 'antigravity' }));
+        registry.getByPath = vi.fn(async () => undefined);
+        const events: Array<{ type: string; data: Record<string, any> }> = [];
+        stallRoutes.broker.subscribe('session-1', (event: any) => events.push(event));
+
+        const res = mockRes();
+        await stallRoutes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' }), res, 'session-1');
+        expect(res.statusCode, res.body).toBe(200);
+        stallRoutes.broker.publish('session-1', { type: 'goal_state', timestamp: Date.now(), data: JSON.parse(res.body).goal } as any);
+
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(events.filter((e) => e.data?.stalled === true)).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(60_000);
+        const stalled = events.filter((e) => e.type === 'goal_state' && e.data?.stalled === true);
+        expect(stalled).toHaveLength(1);
+        expect(stalled[0].data).toMatchObject({ status: 'running', stalled: true, goalId: expect.stringMatching(/^goal_/) });
+        expect(stalled[0].data.stalledForMs).toBeGreaterThanOrEqual(120_000);
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(events.filter((e) => e.data?.stalled === true)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        await stallRoutes?.shutdown();
+        if (prev === undefined) delete process.env.GOAL_STALL_MINUTES; else process.env.GOAL_STALL_MINUTES = prev;
+      }
+    });
+  });
 });

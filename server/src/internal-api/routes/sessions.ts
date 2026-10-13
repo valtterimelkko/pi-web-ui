@@ -69,6 +69,8 @@ import { isThinkingLevel } from '../types.js';
 import { composePiGoalCommand, evaluatePiGoalActionTransition, type GoalAction, type GoalTransitionOutcome, type SessionGoalControlRequest } from '../goal/goal-actions.js';
 import { decidePiOwnershipAction, readPiLeaseRecord, readPiOwnershipStatus } from '../../pi/session-ownership-status.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
+import { getGoalIdStore, stampGoalEventData } from '../goal/goal-id.js';
+import { createGoalStallMonitor, loadGoalStallConfig, type GoalStallMonitor } from '../goal/goal-stall.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
 import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildChildDispatchedCard, brokerKeyFor, type ParentLink, type LinkageRegistry } from '../child-linkage.js';
@@ -142,7 +144,7 @@ import {
   resolveNativeSessionArtifact,
   type NativeRuntime,
 } from '../native-sessions.js';
-import { AdmissionCapacityError, AdmissionController, admissionRefusalHttpStatus } from '../admission-controller.js';
+import { AdmissionCapacityError, AdmissionController, admissionRefusalFields, admissionRefusalHttpStatus } from '../admission-controller.js';
 import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
 import { SessionDisposalRegistry } from '../session-disposal.js';
 import { RuntimeOpError } from './batch-helpers.js';
@@ -700,6 +702,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // loop, memory, sockets) caused by in-flight P2 turns — that requires process
   // isolation (Phase 6 per-session cgroups).
   const admission = deps.admissionController ?? new AdmissionController();
+  // Contract 1.62.0 (W2-f): let admission refusals name quarantined lease debt.
+  if (typeof admission.setQuarantineSource === 'function' && typeof runReceipts.getQuarantinedByRuntime === 'function') {
+    admission.setQuarantineSource(() => ({
+      byRuntime: runReceipts.getQuarantinedByRuntime(),
+      oldestAgeMs: runReceipts.getQuarantinedOldestAgeMs(),
+    }));
+  }
   // B4 (contract 1.51.0): a `draining` admission refusal is not capacity
   // throttling. It gets its own code and a Retry-After sized to a restart, so
   // callers (and goal control / wakes, which reuse this pipeline) can tell
@@ -740,7 +749,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res.setHeader('Retry-After', String(retryAfterSeconds));
     sendJson(res, admissionRefusalHttpStatus(capacityError.reason), {
       ...enrichedErrorBody(refusalCode(capacityError), capacityError.message),
-      reason: capacityError.reason,
+      ...admissionRefusalFields(capacityError),
       retryAfterSeconds,
       ...extra,
     });
@@ -833,6 +842,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     };
   }
 
+  // W2-b (contract 1.62.0): stalled-goal monitor, assigned once the route helpers it needs exist.
+  const goalStall: { monitor?: GoalStallMonitor } = {};
+
   /**
    * Per-session event broker. Long-lived: subscribers added via
    * `GET /sessions/:id/events` persist across prompts and across clients.
@@ -847,6 +859,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // API, browser, goal-engine and other extension continuations) and every
     // runtime that publishes here.
     onPublish: (key, event) => completionTap.observe(key, event),
+    // Contract 1.62.0 (W2-a): stamp the stable top-level goalId on every
+    // goal_state / goal_end, whichever runtime path published it.
+    eventEnricher: (key, event) => {
+      if (event.type !== 'goal_state' && event.type !== 'goal_end') {
+        goalStall.monitor?.observe(key, event.type, undefined); // W2-b: any event is session activity
+        return event;
+      }
+      const data = (event as { data?: unknown }).data;
+      const stamped = stampGoalEventData(getGoalIdStore(), key, event.type, data);
+      goalStall.monitor?.observe(key, event.type, stamped);
+      return stamped === data ? event : ({ ...event, data: stamped } as NormalizedEvent);
+    },
     // Deletion fence: once a session is tombstoned in the disposal registry,
     // a late runtime event cannot recreate the broker replay buffer or notify
     // subscribers. The predicate is keyed on the broker key, which for Pi is
@@ -1397,6 +1421,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     pinExpiry?.stop();
     claudeGoalNudger?.stop();
     agyGoalSweeper?.stop();
+    goalStall.monitor?.stop();
     await runReceipts.shutdown();
     disposal.disposeAll();
   }
@@ -3203,6 +3228,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  function forgetGoalTracking(key: string): void {
+    try {
+      getGoalIdStore().delete(key);
+      goalStall.monitor?.forget(key);
+    } catch { /* cleanup is best-effort */ }
+  }
+
   async function handleDeleteSession(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -3213,6 +3245,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (commandCodeEntry) {
         await runReceipts.cancelSession(commandCodeEntry.sessionId);
         disposal.dispose(commandCodeEntry.sessionId);
+        forgetGoalTracking(commandCodeEntry.sessionId);
         broker.clear(commandCodeEntry.sessionId);
         // Release every source-owned claim while the Command Code record is
         // still resolvable. Deleting first would make unpinSessionById unable
@@ -3245,6 +3278,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // the canonical sessionId), so the broker's deletion fence covers Pi.
       // Idempotent; runs no handles unless a surface registered under the path.
       if (entry.path && entry.path !== sessionId) disposal.dispose(entry.path);
+      // Correction 01: a deleted session drops its goal id and stall tracking
+      // (id and, for Pi, the path broker key) so a reused key inherits nothing.
+      forgetGoalTracking(sessionId);
+      if (entry.path && entry.path !== sessionId) forgetGoalTracking(entry.path);
 
       // Correction 02 (Luna r2, finding 2 remainder): record the deletion
       // BEFORE the runtime abort — the abort of an abort-only runtime
@@ -5217,9 +5254,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function readGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
-    if (entry.sdkType === 'pi') return readProjectPiGoalState(entry.path);
+    // Contract 1.62.0 (W2-a): responses carry the same goalId the events do.
+    // Keys match the broker keys (Pi: sessionPath; others: the registry id).
+    if (entry.sdkType === 'pi') return getGoalIdStore().stamp(entry.path, await readProjectPiGoalState(entry.path));
     if (entry.sdkType === 'claude') return readClaudeGoalProjection(entry);
-    if (entry.sdkType === 'antigravity') return projectAgyGoal(await agyGoalStore.get(entry.id));
+    if (entry.sdkType === 'antigravity') return getGoalIdStore().stamp(entry.id, projectAgyGoal(await agyGoalStore.get(entry.id)));
     // Command Code gains its mod-state channel in Phase 3. OpenCode
     // is out of scope (plan D1).
     return unsupportedGoalProjection();
@@ -5284,6 +5323,31 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     },
   });
   agyGoalSweeper.start();
+
+  // Contract 1.62.0 (W2-b): a goal that reads `running` while its session has
+  // been idle GOAL_STALL_MINUTES emits goal_state {stalled:true, stalledForMs}.
+  goalStall.monitor = createGoalStallMonitor({
+    config: loadGoalStallConfig(),
+    resolve: async (key) => {
+      // Broker keys: Pi = sessionPath; every other runtime = the registry id.
+      const commandCodeEntry = await commandCodeService?.findSession(key);
+      if (commandCodeEntry) {
+        return {
+          busy: Boolean(commandCodeService?.isRunning(key) || activeDirectDispatchTokens.has(key)),
+          projection: await readCommandCodeGoalProjection(commandCodeEntry),
+        };
+      }
+      const entry = (await sessionRegistry.getByPath(key)) ?? (await getNonCommandCodeRegistryEntry(key));
+      if (!entry) return null;
+      return { busy: isSessionBusy(entry), projection: await readGoalProjection(entry) };
+    },
+    publish: (key, event) => {
+      try {
+        broker.publish(key, event as NormalizedEvent);
+      } catch { /* non-fatal */ }
+    },
+  });
+  goalStall.monitor.start();
 
   /**
    * Bridge a canonical goal projection to the browser: synthesizes the
@@ -5361,6 +5425,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         ? Math.min(Math.floor(raw.maxTurns), 100)
         : 100;
       const previous = await agyGoalStore.get(sessionId);
+      getGoalIdStore().rotate(sessionId); // W2-a: a start is a new goal (new goalId)
       await agyGoalStore.patch(sessionId, {
         objective,
         verifyCommand,
@@ -5479,6 +5544,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return { armed: true, note: 'goal dispatched detached; the goal loop owns subsequent turns' };
       }
       if (runtime === 'claude') {
+        getGoalIdStore().rotate(sessionId);
         await claudeGoalStore.patch(sessionId, { autoContinue: goal.autoContinue !== false, nudges: 0, exhaustedAt: undefined, clearedAt: undefined });
         const dispatched = await dispatchDetachedInternal(sessionId, `/goal ${goal.objective}`);
         if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
@@ -5488,6 +5554,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const verifyCommand = typeof goal.verifyCommand === 'string' && goal.verifyCommand.trim() !== '' ? goal.verifyCommand.trim() : undefined;
         const maxRuns = typeof goal.maxTurns === 'number' && goal.maxTurns > 0 ? Math.min(Math.floor(goal.maxTurns), 100) : 100;
         const previous = await agyGoalStore.get(sessionId);
+        getGoalIdStore().rotate(sessionId);
         await agyGoalStore.patch(sessionId, {
           objective: goal.objective,
           verifyCommand,
@@ -5512,6 +5579,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (runtime === 'commandcode') {
         const record = await commandCodeService?.findSession(sessionId);
         if (!record || !commandCodeService?.isGoalReady?.()) return { armed: false, error: 'goal-runner mod unavailable' };
+        getGoalIdStore().rotate(sessionId);
         await commandCodeService.goalStore.arm(sessionId, {
           objective: goal.objective,
           maxTurns: goal.maxTurns ?? 100,
@@ -5555,7 +5623,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   async function readClaudeGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
     // User-triggered reads (routes, control responses) are always fresh.
-    return readClaudeGoalProjectionUncached(entry);
+    return getGoalIdStore().stamp(entry.id, await readClaudeGoalProjectionUncached(entry));
   }
 
   /**
@@ -5629,7 +5697,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       commandCodeService?.goalStore.get(entry.sessionId) ?? null,
       commandCodeService?.readGoalModState(entry.sessionId) ?? null,
     ]);
-    return projectCommandCodeGoal(record as Parameters<typeof projectCommandCodeGoal>[0], modState, modAvailable);
+    return getGoalIdStore().stamp(entry.sessionId, projectCommandCodeGoal(record as Parameters<typeof projectCommandCodeGoal>[0], modState, modAvailable));
   }
 
   async function handleSessionGoalControlClaude(
@@ -5677,6 +5745,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     if (composed.action === 'start') {
+      getGoalIdStore().rotate(sessionId); // W2-a: a start is a new goal (new goalId)
       await claudeGoalStore.patch(sessionId, { autoContinue: true, nudges: 0, lastNudgeAt: undefined, exhaustedAt: undefined, clearedAt: undefined });
     }
     if (composed.action === 'clear') {
@@ -5731,6 +5800,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
       const verifier = raw.verifyCommand ? 'command' : 'model';
+      getGoalIdStore().rotate(sessionId);
       await commandCodeService.goalStore.arm(sessionId, {
         objective,
         maxTurns: typeof raw.maxTurns === 'number' && raw.maxTurns > 0 ? Math.min(Math.floor(raw.maxTurns), 100) : 100,
@@ -5999,7 +6069,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           sendJson(res, capture.statusCode || 500, refusalBody);
           return;
         }
-        const after = await readProjectPiGoalState(entry.path);
+        const after = getGoalIdStore().stamp(entry.path, await readProjectPiGoalState(entry.path));
         sendJson(res, 200, {
           sessionId,
           runtime: 'pi',
@@ -6019,7 +6089,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       let inner: Record<string, unknown> = {};
       try { inner = JSON.parse(innerRes.body) as Record<string, unknown>; } catch { /* non-JSON body forwarded below */ }
 
-      const after = await readProjectPiGoalState(entry.path);
+      const afterRaw = await readProjectPiGoalState(entry.path);
+      const after = getGoalIdStore().stamp(entry.path, afterRaw);
 
       if (inspection?.outcome?.evaluation.failure) {
         // The receipt already ended failed (GOAL_ACTION_NOT_APPLIED); answer
@@ -7684,7 +7755,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           runtime: entry.runtime,
           error: {
             code: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED,
-            reason: error.reason,
+            ...admissionRefusalFields(error),
             message: error.message,
             retryAfterSeconds: error.retryAfterSeconds,
           },
@@ -8075,7 +8146,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             runId,
             error: {
               code,
-              reason: capacityError.reason,
+              ...admissionRefusalFields(capacityError),
               message: capacityError.message,
               retryAfterSeconds: refusalRetryAfter(capacityError),
             },

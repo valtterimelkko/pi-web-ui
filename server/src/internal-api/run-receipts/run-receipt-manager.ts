@@ -200,7 +200,7 @@ export class RunReceiptManager {
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
   /** Draining runs: terminal but admission slot held pending runtime cessation. */
-  private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean; quarantinedAtMs?: number; sessionId: string }>();
+  private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean; quarantinedAtMs?: number; sessionId: string; runtime?: SessionRuntime }>();
   private readonly quarantineReconcileMs: number;
   /** L1: one shared slow poll for every quarantined entry; running only while entries exist. */
   private quarantineReconciler?: NodeJS.Timeout;
@@ -833,7 +833,7 @@ export class RunReceiptManager {
     // (agent_end) already confirms cessation, so it releases immediately.
     const cessationUnconfirmed = record.liveness?.cessation.state !== 'confirmed';
     if (lease && this.isRuntimeQuiescent && cessationUnconfirmed && (record.status === 'cancelled' || record.status === 'failed')) {
-      this.drainAndRelease(record.runId, record.sessionId, lease);
+      this.drainAndRelease(record.runId, record.sessionId, lease, record.runtime);
     } else {
       lease?.release();
     }
@@ -844,14 +844,14 @@ export class RunReceiptManager {
    * soon as quiescence is confirmed, or at drainTimeoutMs (real-time, bounded
    * quarantine so a missing acknowledgement can never leak a slot permanently).
    */
-  private drainAndRelease(runId: string, sessionId: string, lease: { release: () => void }): void {
+  private drainAndRelease(runId: string, sessionId: string, lease: { release: () => void }, runtime?: SessionRuntime): void {
     const deadline = Date.now() + this.drainTimeoutMs;
     const timer = setInterval(() => {
       Promise.resolve(this.isRuntimeQuiescent!(sessionId))
         .then((quiescent) => { if (quiescent) this.finishDrain(runId); else if (Date.now() >= deadline) this.quarantine(runId); })
         .catch(() => { if (Date.now() >= deadline) this.quarantine(runId); });
     }, this.drainPollMs);
-    this.draining.set(runId, { release: lease.release, timer, quarantined: false, sessionId });
+    this.draining.set(runId, { release: lease.release, timer, quarantined: false, sessionId, runtime });
   }
 
   /** Cessation confirmed -> release the slot. */
@@ -967,6 +967,22 @@ export class RunReceiptManager {
   }
 
   /** L1: age in ms of the oldest quarantined entry, or undefined when none. */
+  /**
+   * W2-f (contract 1.62.0): quarantined admission leases per runtime, so an
+   * admission refusal can say whether quarantined debt is what tips it over.
+   * Entries whose runtime is unknown are counted under `pi` only when the
+   * record carried none — they still hold a P2 slot.
+   */
+  getQuarantinedByRuntime(): Partial<Record<SessionRuntime, number>> {
+    const counts: Partial<Record<SessionRuntime, number>> = {};
+    for (const e of this.draining.values()) {
+      if (!e.quarantined) continue;
+      const runtime = e.runtime ?? 'pi';
+      counts[runtime] = (counts[runtime] ?? 0) + 1;
+    }
+    return counts;
+  }
+
   getQuarantinedOldestAgeMs(): number | undefined {
     let oldest: number | undefined;
     for (const e of this.draining.values()) {

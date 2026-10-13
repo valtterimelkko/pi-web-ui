@@ -1785,6 +1785,38 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(claudeService.sendPrompt).not.toHaveBeenCalled();
     });
 
+    it('W2-f: a batch refusal tipped over by quarantined leases carries reason quarantined_debt + counts, same code (no dispatch)', async () => {
+      const refusing = new AdmissionController({
+        maxActiveTurns: 1,
+        memory: () => ({ currentBytes: 100, limitBytes: 10_000_000 }),
+        minimumHeadroomBytes: 100,
+        reservedBytesPerTurn: 1,
+      });
+      const receipts = new RunReceiptManager({ store: new RunReceiptStore(path.join(tempDir, 'quarantine-batch-receipts')) });
+      vi.spyOn(receipts, 'getQuarantinedByRuntime').mockReturnValue({ claude: 1 });
+      vi.spyOn(receipts, 'getQuarantinedOldestAgeMs').mockReturnValue(90_000);
+      const routes = makeRoutes(receipts, refusing);
+      // Two active turns hold the whole budget; one of them is quarantined debt.
+      const a = await refusing.acquire('claude');
+      registry.get.mockResolvedValue(claudeEntry('claude-q'));
+      claudeService.isRunning.mockReturnValue(false);
+
+      const res = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+        prompts: [{ sessionId: 'claude-q', message: 'hi' }],
+      }), res);
+      const body = JSON.parse(res.body);
+      expect(body.results[0].error).toMatchObject({
+        code: 'ADMISSION_CAPACITY_EXHAUSTED',
+        reason: 'quarantined_debt',
+        admissionReason: 'global_limit',
+        quarantinedRuns: 1,
+        quarantinedOldestAgeMs: 90_000,
+      });
+      expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+      a.release();
+    });
+
     it('runs prompts with independent structured correlation and returns per-session content', async () => {
       registry.get.mockImplementation(async (id: string) => {
         if (id === 'c1') return claudeEntry('c1');
