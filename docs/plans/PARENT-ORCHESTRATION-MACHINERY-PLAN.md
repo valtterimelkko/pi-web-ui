@@ -1,6 +1,7 @@
 # Parent orchestration machinery — silent wake failures, missing verbs, capacity honesty, lighter skills, a lane-runner pilot (plan)
 
-Status: READY — written 2026-10-13 by the planning parent; owner decisions in §3. Not yet executing.
+Status: EXECUTING — since 2026-10-13 17:19Z, executing parent Claude Code RC session `claude:f998b213` (Opus);
+ops dir `/root/orch-ops/parent-machinery-20261013/` (`STRATEGY.md` = how, `STATE.md` = live state). Owner decisions in §3.
 
 Planning parent: Claude Code RC session `claude:fcb7ddb1` (Opus) — open it with
 `npm --prefix /root/agent-os run -s agent-os -- worklog handoff claude:fcb7ddb1`.
@@ -187,7 +188,24 @@ GLM 5.3 Flash); server lanes (W0-c, W2-a/b/f/g) Class 2 (Claude Sonnet 5.5 or GL
 skill lanes (S-1…S-5) Claude Sonnet 5.5 (writing-quality work). The skills and mod lanes are independent of the server
 lanes and can run in parallel. Concurrent writers each get an isolated worktree; never `npm ci` in a lane worktree.
 
-Review points: **R1** after W0 + W1 (P1, P5, P6, P7); **R2** after W2 (P2, P3); **R3** after W4-d (P4, P8) — close.
+Review points (amended 2026-10-13 at execution start; at every point the parent evaluates the last work and its
+findings and amends the rows still ahead, recording changes in §11):
+
+| Point | When | Reads | Decides |
+|---|---|---|---|
+| RV-A | W0-a + W0-b merged | lane reviews, gate re-runs, P1 | mod deploy timing (no waiting parent under it); W0-d brief |
+| RV-B | W0-c + skills W0-e/f, S-2/3/5 merged | P1, P7 evidence on a disposable server | restart ask for W0-c; SK2 (S-1, S-4) brief |
+| **R1** | W0 + W1 done | P1, P5, P6, P7; fresh-parent dry dispatch from the card | W2 scope/order amendments |
+| **R2** | W2 merged + live-proved | P2, P3 | restart ask for W2; W3 correction or none; W4 amendments |
+| R2b | W4-b live trial done | runner exits, journal resume | go/no-go for the real pilot; which lane |
+| **R3** | W4-d keep/kill | P4, P8 | close the programme |
+
+Execution routing (owner, 2026-10-13, supersedes the suggested routes above for this execution): complex lanes on
+Claude Sonnet 5.5 — Claude Code cloud children first, `pi` · `anthropic` · `anthropic/claude-sonnet-5-5` second
+(owner-authorised PAYG for this programme), Gemini 3.8 Flash if Sonnet runs short; simpler lanes on DeepSeek v4.1
+Flash (`commandcode` first, then `opencode-go`); reviews Sonnet, except Sonnet-built lanes, which get a
+different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family verification. Lane grouping:
+`STRATEGY.md` §2.
 
 ## 10. Waiting on the owner
 
@@ -201,6 +219,7 @@ Review points: **R1** after W0 + W1 (P1, P5, P6, P7); **R2** after W2 (P2, P3); 
 |---|---|---|
 | 2026-10-13 | Plan written; PMR M15, M16, D4 and the Agent-tool half of S2 dropped | owner direction O4 |
 | 2026-10-13 | Global `AGENTS.md` de-conflicted at the owner's request (canonical `/root/.codex/AGENTS.md` commit `1137142`, mirrored to every harness): Internal API first for all child sizes; own-harness subagents only when it is unavailable or the operator asks. Waiting row removed | owner request in `claude:fcb7ddb1` |
+| 2026-10-13 | Review points RV-A, RV-B, R2b added; execution routing recorded in §9 (cloud Sonnet + PAYG Sonnet authorised by the owner for this execution); lanes grouped per repo (STRATEGY §2) | owner request at execution start (`claude:f998b213`) |
 
 ## 12. Status ledger
 
@@ -208,3 +227,4 @@ Review points: **R1** after W0 + W1 (P1, P5, P6, P7); **R2** after W2 (P2, P3); 
 |---|---|
 | 2026-10-13 | R0: plan written; owner decisions O1–O5 recorded; execution not started |
 | 2026-10-13 | Global AGENTS.md conflict resolved (codex `1137142`); only restart authority still waits |
+| 2026-10-13 17:22Z | Execution started (`claude:f998b213`): W0 dispatched — W0a, W0b (DeepSeek, host), W0c, SK1 (cloud Sonnet) |
