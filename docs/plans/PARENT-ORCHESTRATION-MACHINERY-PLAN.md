@@ -227,7 +227,7 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 
 | Item | Since | Ref |
 |---|---|---|
-| Production restart for W0-c (merged 89bd9cb2, contract 1.61.0): parent recommends bundling it into the single W2 drain-restart; asked by Telegram 18:04Z | 2026-10-13 | §6 W0-c, W2; STATE |
+| ONE production drain-restart to ship contract 1.61.0 (W0-c, 89bd9cb2) + 1.62.0 (W2s, 58757808); asked by Telegram 18:04Z and 19:36Z | 2026-10-13 | §6 W0-c, W2; STATE |
 
 ## 11. Amendments
 
@@ -248,3 +248,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 17:36Z | RV-A: W0-a merged (pi-orch 7f460fe; scope widened to the raw-vs-stored objective dead watch found by the parent), W0-b merged and deployed (claude-enhancement 084976a, pi-enhancement 4c0570a; deadline kept one-shot under max_wakes) |
 | 2026-10-13 18:15Z | RV-B: W0-c merged (pi-web-ui 89bd9cb2, contract 1.61.0; live-proved on a disposable server; Agent OS mirror e8d98ab9) — not yet deployed; skills W0-e/W0-f/S-2/S-3/S-5 merged (8fd0dc1); parent card + kit S-1/S-4 merged (070f3b8, card 1,432 words, Tier 1 in both skills — the Agent OS plan's W1-d can inject `references/parent-card.md`); W0-d and W2s in flight; R1 card acceptance test running |
 | 2026-10-13 18:33Z | **R1**: W0 + W1 complete (W0-a/b/c/d, S-1…S-5 merged; card acceptance PASS); W2s and W2c dispatched; W2 split recorded (R1 evaluation above) |
+| 2026-10-13 19:36Z | W2 merged except W2h (in flight): W2s (pi-web-ui 58757808, contract 1.62.0, Agent OS mirror 7549ce15), W2c (pi-orch fbb5bb6), W2g (pi-orch 52c3934; the ledger JSON file kept as a frozen interface because the measurement plan reads it), skills SK3 (37738bb; raw-curl goal pause/resume exception deleted). Restart asked |
