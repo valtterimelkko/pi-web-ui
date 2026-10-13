@@ -66,7 +66,7 @@ describe('ClaudeProfileSchema', () => {
     expect(profile.modelMode).toBe('claude-alias');
     expect(profile.settingSources).toEqual(['user', 'project']);
     expect(profile.permissionMode).toBe('dontAsk');
-    expect(profile.maxConcurrent).toBe(2);
+    expect(profile.maxConcurrent).toBe(8);
     expect(profile.enabled).toBe(true);
   });
 

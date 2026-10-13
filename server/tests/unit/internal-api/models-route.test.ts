@@ -690,8 +690,8 @@ describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect
       claudeService: {
         isAvailable: vi.fn().mockResolvedValue(true),
         getProfiles: vi.fn(() => [
-          { id: 'glm53-claude-sdk-native-profile', label: 'GLM 5.3 SDK', model: 'glm-5.3', backend: 'sdk-subscription', baseUrl: 'https://z.ai/api' },
-          { id: 'claude-sonnet-sdk-subscription', label: 'Sonnet SDK', model: 'sonnet', backend: 'sdk-subscription' },
+          { id: 'glm53-claude-sdk-native-profile', label: 'GLM 5.3 SDK', model: 'glm-5.3', backend: 'sdk-subscription', baseUrl: 'https://z.ai/api', maxConcurrent: 3 },
+          { id: 'claude-sonnet-sdk-subscription', label: 'Sonnet SDK', model: 'sonnet', backend: 'sdk-subscription', maxConcurrent: 8 },
         ]),
       } as any,
       opencodeService: {
@@ -727,6 +727,9 @@ describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect
     expect(models.claude.find((m: any) => m.id === 'sonnet').selector).toBe('sonnet');
     const profileEntry = models.claude.find((m: any) => m.id.startsWith('profile:'));
     expect(profileEntry.selector).toBe('profile:glm53-claude-sdk-native-profile');
+    // Contract 1.61.0: each profile entry advertises its concurrency cap.
+    expect(profileEntry.maxConcurrent).toBe(3);
+    expect(models.claude.find((m: any) => m.id === 'profile:claude-sonnet-sdk-subscription').maxConcurrent).toBe(8);
     expect(models.opencode[0].selector).toBe('moonshotai/kimi-k2.5');
     expect(models.antigravity[0].selector).toBe('gemini-3.6-flash-low');
     expect(models.antigravity[0].thinkingLevels).toEqual(['low', 'medium', 'high']);

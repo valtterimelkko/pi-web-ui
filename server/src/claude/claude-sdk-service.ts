@@ -27,7 +27,9 @@ import {
   ClaudeProfileManager,
   resolveProfile,
   mapThinkingLevelToEffort,
+  DEFAULT_PROFILE_MAX_CONCURRENT,
   type ClaudeProfile,
+  type ClaudeProfileCapacity,
   type ResolvedClaudeLaunch,
 } from './claude-profiles.js';
 import { resolveClaudeSessionPath } from './claude-process-pool.js';
@@ -281,7 +283,7 @@ export class ClaudeSdkService {
       resolved = resolveProfile(profile);
 
       // ── Concurrency limit enforcement ──────────────────────────────────
-      const max = profile.maxConcurrent ?? 2;
+      const max = profile.maxConcurrent ?? DEFAULT_PROFILE_MAX_CONCURRENT;
       const active = this.activePerProfile.get(profileId) ?? 0;
       if (active >= max) {
         throw new Error(
@@ -543,6 +545,26 @@ export class ClaudeSdkService {
         }
       }
     }
+  }
+
+  // ── Profile capacity (read-only) ────────────────────────────────────────
+
+  /** Current concurrency use of one enabled profile; undefined when unknown. */
+  getProfileCapacity(profileId: string): ClaudeProfileCapacity | undefined {
+    const profile = this.profileManager.getProfile(profileId);
+    if (!profile) return undefined;
+    return {
+      profileId,
+      maxConcurrent: profile.maxConcurrent ?? DEFAULT_PROFILE_MAX_CONCURRENT,
+      active: this.activePerProfile.get(profileId) ?? 0,
+    };
+  }
+
+  /** Concurrency use of every enabled profile (advertised via GET /capacity). */
+  getProfileCapacities(): ClaudeProfileCapacity[] {
+    return this.profileManager.listEnabledProfiles()
+      .map((profile) => this.getProfileCapacity(profile.id))
+      .filter((capacity): capacity is ClaudeProfileCapacity => capacity !== undefined);
   }
 
   // ── Abort ───────────────────────────────────────────────────────────────

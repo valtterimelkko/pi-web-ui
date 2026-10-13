@@ -38,6 +38,9 @@ export const CLAUDE_AUTH_MODES = [
 ] as const;
 export type ClaudeAuthMode = (typeof CLAUDE_AUTH_MODES)[number];
 
+/** Default per-profile concurrent-turn cap (contract 1.61.0: raised from 2). */
+export const DEFAULT_PROFILE_MAX_CONCURRENT = 8;
+
 export const ClaudeProfileSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -71,12 +74,19 @@ export const ClaudeProfileSchema = z.object({
   permissionMode: z.string().default('dontAsk'),
   allowedTools: z.array(z.string()).optional(),
   disallowedTools: z.array(z.string()).optional(),
-  maxConcurrent: z.number().int().positive().default(2),
+  maxConcurrent: z.number().int().positive().default(DEFAULT_PROFILE_MAX_CONCURRENT),
   enabled: z.boolean().default(true),
   notes: z.string().optional(),
 });
 
 export type ClaudeProfile = z.infer<typeof ClaudeProfileSchema>;
+
+/** Read-only view of a profile's concurrency cap and current use. */
+export interface ClaudeProfileCapacity {
+  profileId: string;
+  maxConcurrent: number;
+  active: number;
+}
 
 export const ClaudeProfilesFileSchema = z.object({
   profiles: z.array(ClaudeProfileSchema),

@@ -21,6 +21,7 @@ import {
   resolveProfile,
   mapThinkingLevelToEffort,
   type ClaudeProfile,
+  type ClaudeProfileCapacity,
   type ResolvedClaudeLaunch,
 } from './claude-profiles.js';
 import {
@@ -725,6 +726,16 @@ export class ClaudeService {
   }
 
   // ── Queries ───────────────────────────────────────────────────────────────
+
+  /** Concurrency cap and current use of a profile; undefined unless it is an SDK profile with a live service. */
+  getProfileCapacity(profileId: string | undefined): ClaudeProfileCapacity | undefined {
+    return profileId ? this.sdkService?.getProfileCapacity(profileId) : undefined;
+  }
+
+  /** Concurrency cap and current use of every enabled SDK profile. */
+  getProfileCapacities(): ClaudeProfileCapacity[] {
+    return this.sdkService?.getProfileCapacities() ?? [];
+  }
 
   /** Return available profiles for model selector / API. */
   getProfiles(): ClaudeProfile[] {

@@ -746,6 +746,35 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     });
   }
 
+  /**
+   * Contract 1.61.0: a Claude SDK profile at its maxConcurrent cap refuses a
+   * NEW turn up front. Returns the capacity row when the session's profile is
+   * full. Callers invoke it before a run receipt is created; steer (joins a
+   * live turn) never calls it. The in-service throw stays as the last line.
+   */
+  function profileCapacityFull(entry: { sdkType?: string; claudeProfileId?: string }) {
+    if (entry.sdkType !== 'claude' || !entry.claudeProfileId) return undefined;
+    if (typeof claudeService.getProfileCapacity !== 'function') return undefined;
+    const capacity = claudeService.getProfileCapacity(entry.claudeProfileId);
+    return capacity && capacity.active >= capacity.maxConcurrent ? capacity : undefined;
+  }
+
+  function profileCapacityMessage(capacity: { profileId: string; maxConcurrent: number; active: number }): string {
+    return `Claude profile '${capacity.profileId}' is at its maxConcurrent cap (${capacity.active}/${capacity.maxConcurrent} active turns)`;
+  }
+
+  function sendProfileCapacityRefusal(res: ServerResponse, capacity: { profileId: string; maxConcurrent: number; active: number }): void {
+    const retryAfterSeconds = admission.snapshot().retryAfterSeconds;
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    sendJson(res, 429, {
+      ...enrichedErrorBody(ErrorCode.PROFILE_CAPACITY_EXHAUSTED, profileCapacityMessage(capacity)),
+      profileId: capacity.profileId,
+      maxConcurrent: capacity.maxConcurrent,
+      active: capacity.active,
+      retryAfterSeconds,
+    });
+  }
+
   /** Run a short control-side operation without consuming an execution permit.
    * Joined steering only owns delivery into an existing runtime turn; the
    * control lane bounds that delivery but is released before the joined turn
@@ -1257,6 +1286,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }): Promise<WatchWakeDispatchResult> {
     const { targetSessionId, runtime, message, mode, dispatchMode, idempotencyKey } = run;
     const deliveryKind = run.deliveryKind ?? 'turn';
+    // Contract 1.61.0: refuse a wake turn on a capped profile before a receipt exists (transient: the watch retries).
+    if (dispatchMode === 'prompt' && run.entry) {
+      const full = profileCapacityFull(run.entry);
+      if (full) return { status: 'failed', errorCode: ErrorCode.PROFILE_CAPACITY_EXHAUSTED, detail: profileCapacityMessage(full) };
+    }
     const beginInput = {
       sessionId: targetSessionId,
       runtime,
@@ -3930,6 +3964,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         logger.errorObject('Failed to inspect session state', error);
         sendJson(res, 500, { error: 'Failed to inspect session state', code: ErrorCode.INTERNAL_ERROR });
         return;
+      }
+
+      // Contract 1.61.0: a new turn on a profile at its cap is refused before
+      // any run receipt exists. Steer / queued follow-up join a live turn and
+      // are exempt.
+      if (dispatchMode === 'prompt' && !piSlashPassThrough) {
+        const full = profileCapacityFull(entry);
+        if (full) {
+          sendProfileCapacityRefusal(res, full);
+          return;
+        }
       }
 
       const beginInput = {
@@ -7921,6 +7966,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           };
         }
 
+        // Contract 1.61.0: a capped Claude profile refuses before a receipt exists.
+        const fullProfile = profileCapacityFull(reg);
+        if (fullProfile) {
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            error: { code: ErrorCode.PROFILE_CAPACITY_EXHAUSTED, message: profileCapacityMessage(fullProfile) },
+          };
+        }
+
         let reservation;
         try {
           reservation = await runReceipts.beginRun(beginInput);
@@ -8518,6 +8574,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       control: { inFlight: controlLane.inFlight, queued: controlLane.queued },
       disposalLane: { inFlight: disposalLane.inFlight, queued: disposalLane.queued },
       disposalOwners: disposal.getCounts(),
+      // Contract 1.61.0: per Claude SDK profile cap and current use.
+      claudeProfiles: typeof claudeService.getProfileCapacities === 'function' ? claudeService.getProfileCapacities() : [],
     });
   }
 
