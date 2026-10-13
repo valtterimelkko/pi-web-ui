@@ -990,4 +990,48 @@ describe('goal function (contract 1.27.0)', () => {
       expect(published[0].data.goalId).toBe(second.goalId);
     });
   });
+
+  describe('contract 1.62.0 (W2-b) — stalled goal event through the route wiring', () => {
+    it('a running Antigravity goal on an idle session emits goal_state {stalled:true} after GOAL_STALL_MINUTES, once', async () => {
+      await routes.shutdown();
+      const prev = process.env.GOAL_STALL_MINUTES;
+      process.env.GOAL_STALL_MINUTES = '2';
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+      let stallRoutes: ReturnType<typeof createSessionRoutes> | undefined;
+      try {
+        stallRoutes = createSessionRoutes({
+          claudeService, opencodeService, antigravityService, multiSessionManager,
+          sessionRegistry: registry, piService, internalClientId: 'test-client',
+          watchDir: path.join(dir, 'watches2'), pinDir: path.join(dir, 'pins2'),
+          claudeSessionDir: path.join(dir, 'claude-sessions2'),
+          antigravitySessionDir: path.join(dir, 'antigravity-sessions2'),
+          claudeProjectsDir: path.join(dir, '.claude', 'projects'),
+          pinExpiryIntervalMs: 60_000, runReceiptManager: manager,
+        });
+        registry.get.mockResolvedValue(entry({ sdkType: 'antigravity' }));
+        registry.getByPath = vi.fn(async () => undefined);
+        const events: Array<{ type: string; data: Record<string, any> }> = [];
+        stallRoutes.broker.subscribe('session-1', (event: any) => events.push(event));
+
+        const res = mockRes();
+        await stallRoutes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' }), res, 'session-1');
+        expect(res.statusCode, res.body).toBe(200);
+        stallRoutes.broker.publish('session-1', { type: 'goal_state', timestamp: Date.now(), data: JSON.parse(res.body).goal } as any);
+
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(events.filter((e) => e.data?.stalled === true)).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(60_000);
+        const stalled = events.filter((e) => e.type === 'goal_state' && e.data?.stalled === true);
+        expect(stalled).toHaveLength(1);
+        expect(stalled[0].data).toMatchObject({ status: 'running', stalled: true, goalId: expect.stringMatching(/^goal_/) });
+        expect(stalled[0].data.stalledForMs).toBeGreaterThanOrEqual(120_000);
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(events.filter((e) => e.data?.stalled === true)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        await stallRoutes?.shutdown();
+        if (prev === undefined) delete process.env.GOAL_STALL_MINUTES; else process.env.GOAL_STALL_MINUTES = prev;
+      }
+    });
+  });
 });

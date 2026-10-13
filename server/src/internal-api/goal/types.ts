@@ -72,6 +72,20 @@ export interface SessionGoalProjection {
    * verified auto-continue event (never on plain projections).
    */
   autoContinued?: boolean;
+  /**
+   * Contract 1.62.0 (W2-a): stable id minted once per goal start. Stamped
+   * top-level on every goal_state / goal_end event and on GET/POST /goal, so a
+   * watch `dataMatch {"goalId":"<id>"}` is not woken by another goal's clear.
+   */
+  goalId?: string;
+  /**
+   * Contract 1.62.0 (W2-b): present (true) only on the stall `goal_state`
+   * event — a `running` goal whose session has been idle `GOAL_STALL_MINUTES`.
+   * The status stays `running`; never on plain projections.
+   */
+  stalled?: boolean;
+  /** Contract 1.62.0 (W2-b): how long the session has been idle (ms), with `stalled`. */
+  stalledForMs?: number;
   /** Verbatim native state, for consumers that want more than the projection. */
   runtimeState?: unknown;
 }

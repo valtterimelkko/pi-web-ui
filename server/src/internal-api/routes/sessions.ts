@@ -70,6 +70,7 @@ import { composePiGoalCommand, evaluatePiGoalActionTransition, type GoalAction, 
 import { decidePiOwnershipAction, readPiLeaseRecord, readPiOwnershipStatus } from '../../pi/session-ownership-status.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { getGoalIdStore, stampGoalEventData } from '../goal/goal-id.js';
+import { createGoalStallMonitor, loadGoalStallConfig, type GoalStallMonitor } from '../goal/goal-stall.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
 import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildChildDispatchedCard, brokerKeyFor, type ParentLink, type LinkageRegistry } from '../child-linkage.js';
@@ -834,6 +835,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     };
   }
 
+  // W2-b (contract 1.62.0): stalled-goal monitor, assigned once the route helpers it needs exist.
+  let goalStallMonitor: GoalStallMonitor | undefined;
+
   /**
    * Per-session event broker. Long-lived: subscribers added via
    * `GET /sessions/:id/events` persist across prompts and across clients.
@@ -851,9 +855,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // Contract 1.62.0 (W2-a): stamp the stable top-level goalId on every
     // goal_state / goal_end, whichever runtime path published it.
     eventEnricher: (key, event) => {
-      if (event.type !== 'goal_state' && event.type !== 'goal_end') return event;
+      if (event.type !== 'goal_state' && event.type !== 'goal_end') {
+        goalStallMonitor?.observe(key, event.type, undefined); // W2-b: any event is session activity
+        return event;
+      }
       const data = (event as { data?: unknown }).data;
       const stamped = stampGoalEventData(getGoalIdStore(), key, event.type, data);
+      goalStallMonitor?.observe(key, event.type, stamped);
       return stamped === data ? event : ({ ...event, data: stamped } as NormalizedEvent);
     },
     // Deletion fence: once a session is tombstoned in the disposal registry,
@@ -1406,6 +1414,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     pinExpiry?.stop();
     claudeGoalNudger?.stop();
     agyGoalSweeper?.stop();
+    goalStallMonitor?.stop();
     await runReceipts.shutdown();
     disposal.disposeAll();
   }
@@ -5295,6 +5304,31 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     },
   });
   agyGoalSweeper.start();
+
+  // Contract 1.62.0 (W2-b): a goal that reads `running` while its session has
+  // been idle GOAL_STALL_MINUTES emits goal_state {stalled:true, stalledForMs}.
+  goalStallMonitor = createGoalStallMonitor({
+    config: loadGoalStallConfig(),
+    resolve: async (key) => {
+      // Broker keys: Pi = sessionPath; every other runtime = the registry id.
+      const commandCodeEntry = await commandCodeService?.findSession(key);
+      if (commandCodeEntry) {
+        return {
+          busy: Boolean(commandCodeService?.isRunning(key) || activeDirectDispatchTokens.has(key)),
+          projection: await readCommandCodeGoalProjection(commandCodeEntry),
+        };
+      }
+      const entry = (await sessionRegistry.getByPath(key)) ?? (await getNonCommandCodeRegistryEntry(key));
+      if (!entry) return null;
+      return { busy: isSessionBusy(entry), projection: await readGoalProjection(entry) };
+    },
+    publish: (key, event) => {
+      try {
+        broker.publish(key, event as NormalizedEvent);
+      } catch { /* non-fatal */ }
+    },
+  });
+  goalStallMonitor.start();
 
   /**
    * Bridge a canonical goal projection to the browser: synthesizes the
