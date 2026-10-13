@@ -1636,6 +1636,20 @@ resource-pressure reasons) with code `ADMISSION_CAPACITY_EXHAUSTED`, stable
 `runtime_limit` are `429`; every other reason is `503`. Capacity limits active
 turns, not durable sessions or retention leases; no hidden queue is created.
 
+**Claude profile concurrency (contract 1.61.0, W0-c).** Each Claude SDK profile
+has its own `maxConcurrent` cap (default **8**; override per profile in the
+profiles file). `GET /capacity` carries `claudeProfiles: [{ profileId,
+maxConcurrent, active }]` and each `profile:<id>` entry of `GET /models` carries
+`maxConcurrent`, so a conductor can see the cap before fan-out. A `prompt` /
+`follow_up` that would start a new turn on a session whose profile is at its cap
+is refused up front — HTTP `429`, code `PROFILE_CAPACITY_EXHAUSTED`, body
+`profileId`, `maxConcurrent`, `active`, `retryAfterSeconds`, and a `Retry-After`
+header — **before a run receipt is created**; it is never accepted and then
+failed as `RUNTIME_ERROR`. Batch prompt entries report the same code per item and
+a watch wake treats it as transient. `steer` joins an already-live turn and is
+exempt. The in-service throw remains as the last-line guard against a race
+between this check and the turn starting.
+
 **Heap and lag gates (contract 1.49.0, B2).** Both refuse P2/P3 only; P0/P1
 control is never refused by them.
 
@@ -3508,6 +3522,7 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 | `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required resident claim could not be acquired; create is rolled back |
 | `RETENTION_STORE_UNAVAILABLE` | 503 | Required lease persistence/renewal/release was not durable |
 | `ADMISSION_CAPACITY_EXHAUSTED` | 429 / 503 | Prompt- or create-time admission refused: `429` for global/runtime turn budget, `503` for memory/PID/host/heap/event-loop-lag pressure or draining; respect `Retry-After` |
+| `PROFILE_CAPACITY_EXHAUSTED` | 429 | A Claude SDK profile is at its `maxConcurrent` cap; refused before any run receipt. Body names `profileId`, `maxConcurrent`, `active`; respect `Retry-After`, read `claudeProfiles` in `GET /capacity` (1.61.0) |
 | `PROVIDER_NOT_ALLOWED` | 403 | Pi provider is disabled for Internal API agent execution |
 | `MODEL_NOT_APPLIED` | 422 | Explicit Pi model selector was refused or not applied; the session was not created (1.21.0). Use the exact `provider/model` selector. |
 

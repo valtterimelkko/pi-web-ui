@@ -82,6 +82,8 @@ export const ErrorCode = {
   RETENTION_RESIDENT_CAPACITY_EXHAUSTED: 'RETENTION_RESIDENT_CAPACITY_EXHAUSTED',
   RETENTION_STORE_UNAVAILABLE: 'RETENTION_STORE_UNAVAILABLE',
   ADMISSION_CAPACITY_EXHAUSTED: 'ADMISSION_CAPACITY_EXHAUSTED',
+  // Contract 1.61.0: a Claude SDK profile is at its maxConcurrent cap; refused before any run receipt.
+  PROFILE_CAPACITY_EXHAUSTED: 'PROFILE_CAPACITY_EXHAUSTED',
   PROVIDER_NOT_ALLOWED: 'PROVIDER_NOT_ALLOWED',
   // Contract 1.46.0: only the Claude Agent SDK backend may execute through the
   // Internal API; direct CLI (`claude -p`) and channel-backed Claude are refused.
@@ -403,6 +405,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     description: 'Runtime execution admission is temporarily exhausted.',
     cause: 'A runtime/global turn cap or memory-headroom guard refused new work.',
     hint: 'Respect Retry-After, inspect GET /api/v1/capacity, and retry later.',
+    docs: 'docs/INTERNAL-API.md#execution-admission-and-capacity',
+  },
+  [ErrorCode.PROFILE_CAPACITY_EXHAUSTED]: {
+    httpStatus: 429,
+    description: 'The Claude SDK profile bound to the session is at its maxConcurrent cap.',
+    cause: 'The profile already runs as many concurrent turns as its maxConcurrent allows (default 8), so a new turn was refused before a run was created.',
+    hint: 'Respect Retry-After, read claudeProfiles in GET /api/v1/capacity (profileId, maxConcurrent, active), and retry later or use a session on another profile.',
     docs: 'docs/INTERNAL-API.md#execution-admission-and-capacity',
   },
   [ErrorCode.PROVIDER_NOT_ALLOWED]: {

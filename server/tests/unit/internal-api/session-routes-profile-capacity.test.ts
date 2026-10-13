@@ -161,9 +161,10 @@ describe('Internal API Claude profile capacity admission (contract 1.61.0)', () 
   it('still steers a busy session at the cap (steer joins a live turn)', async () => {
     claudeService.isRunning.mockReturnValue(true);
     const res = mockRes();
-    await routes.handleSendPrompt(jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'nudge', mode: 'steer' }), res, 'session-1');
-    expect(res.statusCode).not.toBe(429);
-    expect(claudeService.steer).toHaveBeenCalledTimes(1);
+    await routes.handleSendPrompt(jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'nudge', mode: 'steer', detach: true }), res, 'session-1');
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ status: 'accepted', mode: 'steer', dispatchMode: 'steer' });
+    await vi.waitFor(() => expect(claudeService.steer).toHaveBeenCalledTimes(1));
   });
 
   it('refuses a batch prompt entry at the cap without creating a run receipt', async () => {

@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.60.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.61.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
@@ -941,6 +941,8 @@ export interface CapacityResponse {
     projectedHeadroomBytes: number;
   };
   runtimes: Record<string, { activeTurns: number; maxActiveTurns: number; stalledRuns?: number }>;
+  /** Contract 1.61.0: per Claude SDK profile concurrency cap and current use. */
+  claudeProfiles?: Array<{ profileId: string; maxConcurrent: number; active: number }>;
   classes?: Record<string, { active: number }>;
   pids?: { current?: number; max?: number; source?: 'service' | 'root' | 'process-rss'; pressure?: boolean; reservedPidsPerTurn?: number };
   host?: {
@@ -1289,6 +1291,8 @@ export interface ModelInfo {
   defaultEffort?: string;
   /** Runtime catalogue freshness/source, shared by all Command Code projections. */
   catalogue?: CommandCodeCatalogueMetadata;
+  /** Contract 1.61.0: for Claude profile entries, the profile's concurrent-turn cap. */
+  maxConcurrent?: number;
   /** For Claude profile entries: the backend that drives this profile. */
   backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
   /** For Claude profile entries: the underlying model alias (sonnet/opus/haiku). */

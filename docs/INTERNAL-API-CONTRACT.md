@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.60.0",
+  "contractVersion": "1.61.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -73,9 +73,15 @@ Exception table (date, owner decision, what, version):
 | 2026-10-02 | post-H-b review (owner accepted) | 1.58.5: /capacity memory.currentBytes and admission memory checks report working set (current − inactive_file), not total | 1.58.5 |
 | 2026-10-03 | R5 (owner accepted every recommendation; the C6 window closed at R5) | 1.59.0 (L1): /capacity gains `quarantinedOldestAgeMs` — age of the oldest quarantined admission lease; quarantined entries gained a reconciliation guard (release on confirmed session quiescence). Additive only. | 1.59.0 |
 | 2026-10-03 | R5 (wave K GO, slimmed: continue once after a restart interruption, plus parent visibility) | 1.60.0 (wave K): `SessionGoalProjection` gains the optional `interruption` object and top-level `autoContinued`; a non-continued stop projects as `status: "paused"`, `pausedReason: "interrupted"`; a verified auto-continue emits `goal_state` (never `goal_end`). Additive only. | 1.60.0 |
+| 2026-10-13 | PARENT-ORCHESTRATION-MACHINERY-PLAN W0-c (finding F8; owner plan of record) | 1.61.0 (W0-c): new typed refusal `PROFILE_CAPACITY_EXHAUSTED` (429, before any run receipt); `GET /capacity` gains `claudeProfiles[{profileId,maxConcurrent,active}]`; `/models` Claude profile entries gain `maxConcurrent`; the profile `maxConcurrent` default rises from 2 to 8. Additive only. | 1.61.0 |
 
 ### Changelog
 
+- **1.61.0** (minor — W0-c, Claude profile concurrency: refuse before the run, advertise the cap; authorised by the parent-machinery programme plan, finding F8). Additive, plus one default change:
+  - **Typed refusal before the run.** A `prompt` / `follow_up` that would start a NEW turn on a Claude SDK session whose profile is at its `maxConcurrent` cap is refused `429` with the new code `PROFILE_CAPACITY_EXHAUSTED` (body: `profileId`, `maxConcurrent`, `active`, `retryAfterSeconds`; `Retry-After` set) **before a run receipt exists** — it was previously accepted and then died as `RUNTIME_ERROR` inside the runtime. The same check covers batch prompt entries (per-item `error.code`) and watch wakes (a transient wake error, retried). `steer` joins a live turn and is exempt. The in-service throw stays as the last-line guard.
+  - **Advertised.** `GET /capacity` gains `claudeProfiles: [{ profileId, maxConcurrent, active }]`; `GET /models` Claude `profile:<id>` entries gain `maxConcurrent`.
+  - **Default raised.** A profile without an explicit `maxConcurrent` now allows **8** concurrent turns (was 2); per-profile overrides are unchanged.
+  - Consumers adapt by: treating `PROFILE_CAPACITY_EXHAUSTED` like a retryable 429 (respect `Retry-After`, or pick a session on another profile) and reading `claudeProfiles` before fan-out. Details: [`INTERNAL-API.md`](./INTERNAL-API.md) § Execution admission and capacity.
 - **1.60.0** (minor — wave K, durable runs; authorised by R5's owner decision "continue once after a restart interruption, plus parent visibility"; the C6 window closed at R5). Additive goal changes only:
   - **Continue once after a restart interruption.** An Internal API Pi goal child whose run a restart cut off (a goal `running` on disk with no live turn at boot or at a drain timeout, or `paused` with `pausedReason: "restored_on_session_start"`) is continued ONCE by the server: a detached prompt with a marker-derived `idempotencyKey`, an exclusive per-goal claim under `<run-receipts dir>/goal-continue/`, ambiguous delivery counted as consumed and never replayed. `wrapping-up`, explicit pauses, questions, budget/turn limits and every other stop keep their pre-wave behaviour. **Provider aborts are not continued** (they end as before, with `goal_end`).
   - **Visibility.** A stop the server does not continue projects as `status: "paused"`, `pausedReason: "interrupted"` with the optional `interruption` object (`cause` ∈ `restart_interruption`, `rehydrate_pause`, `second_transient`, `continue_failed`, `unsupported_runtime`; `source`, `detectedAt`, `continueCount`, `autoContinued?`, `continueNote?`, `inFlightToolCall?`) and emits `goal_state`. Claude, Antigravity and Command Code goals get this visibility only (cause `unsupported_runtime`, boot sweep only).

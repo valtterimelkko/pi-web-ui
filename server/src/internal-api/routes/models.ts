@@ -121,6 +121,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
               thinkingLevels: claudeThinkingLevels(profile.model, provider),
               backend: profile.backend,
               claudeModel: profile.model,
+              maxConcurrent: profile.maxConcurrent,
             };
             result.claude.push(profileModel);
           }
