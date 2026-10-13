@@ -21,6 +21,7 @@ describe('Command Code Internal API boundary', () => {
     // 1.59.0: L1 (R5 follow-up wave, 2026-10-03) — /capacity quarantinedOldestAgeMs.
     // 1.60.0: wave K (R5, 2026-10-03) — additive goal interruption surface and
     // one continue after a restart interruption (docs/INTERNAL-API-CONTRACT.md).
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.60.0');
+    // 1.61.0: W0-c (2026-10-13) — PROFILE_CAPACITY_EXHAUSTED, /capacity claudeProfiles, /models maxConcurrent.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.61.0');
   });
 });
