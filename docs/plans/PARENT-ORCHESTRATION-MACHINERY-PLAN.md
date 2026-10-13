@@ -155,6 +155,26 @@ Amendments from R1 (rows ahead):
 - **One production restart** for W0-c + W2 (owner asked 18:04Z; default bundle).
 - pi-orch: a `PROFILE_CAPACITY_EXHAUSTED` 429 is surfaced at once (exit 25), never sat out as a silent Retry-After.
 
+### R2 evaluation (2026-10-13 19:50Z, executing parent)
+
+Production restarted once (owner-authorised 19:34Z; drain-restart 19:46Z, new MainPID 1475325) and serves contract
+**1.62.0**: `/capacity` advertises `claudeProfiles[].maxConcurrent` 8 for all profiles; a production Pi goal child
+carries `goalId` (`goal_05b596cf…`). The drain timed out after 600 s and cut off one run — this programme's own W2h
+child (plain prompt, not auto-continued); it was re-dispatched with a continue note.
+
+| KPI | Result | Evidence |
+|---|---|---|
+| P2 missed-wake minutes from F1/F2 classes | **structurally 0**: dead watches refused at registration (mod, Pi extension, pi-orch); objective forms matched; goal ids on events so a reused child cannot be woken by an old goal. F3 stalls now surface as `goal_state {stalled:true}` after 10 min (default) | W0a/W0b/W2s; disposable-server goalId proof `W2s/live/proof2.log` |
+| P3 raw curl per long parent | **verbs exist for every hand-curl class in PMR F6** (goal pause/resume/show, reroute, deliver, status/result, bulk cleanup, template, verify gates); the skills' raw-curl exception is deleted; the audit log (`~/.pi-orch/audit.jsonl`) now records verb use so the measurement plan can count curl-vs-verb. This parent's own production orchestration used curl only for notification-status reads and post-cleanup 404 checks | pi-orch fbb5bb6, 52c3934; skills 37738bb |
+
+Findings that changed the plan ahead:
+- The pi-orch spawn-ledger **file format is an interface** (the measurement plan reads it): history moved to a
+  separate append-only file; noted in the skills.
+- A production restart needs `npm run build` in the live checkout first (the restart script's checkout guard); the
+  600 s drain does not wait for a long plain-prompt child — dispatch such children after a planned restart, or give
+  them goals (goal children auto-continue once).
+- **W3: nothing to correct** (no defect left open). **W4 proceeds**: W4a (lane runner) dispatches after W2h merges.
+
 ### W3 — (reserved; nothing planned)
 
 Kept empty on purpose: if R2 finds a defect, a bounded correction goes here. No other wave is added.
@@ -227,7 +247,6 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 
 | Item | Since | Ref |
 |---|---|---|
-| ONE production drain-restart to ship contract 1.61.0 (W0-c, 89bd9cb2) + 1.62.0 (W2s, 58757808); asked by Telegram 18:04Z and 19:36Z | 2026-10-13 | §6 W0-c, W2; STATE |
 
 ## 11. Amendments
 
@@ -249,3 +268,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 18:15Z | RV-B: W0-c merged (pi-web-ui 89bd9cb2, contract 1.61.0; live-proved on a disposable server; Agent OS mirror e8d98ab9) — not yet deployed; skills W0-e/W0-f/S-2/S-3/S-5 merged (8fd0dc1); parent card + kit S-1/S-4 merged (070f3b8, card 1,432 words, Tier 1 in both skills — the Agent OS plan's W1-d can inject `references/parent-card.md`); W0-d and W2s in flight; R1 card acceptance test running |
 | 2026-10-13 18:33Z | **R1**: W0 + W1 complete (W0-a/b/c/d, S-1…S-5 merged; card acceptance PASS); W2s and W2c dispatched; W2 split recorded (R1 evaluation above) |
 | 2026-10-13 19:36Z | W2 merged except W2h (in flight): W2s (pi-web-ui 58757808, contract 1.62.0, Agent OS mirror 7549ce15), W2c (pi-orch fbb5bb6), W2g (pi-orch 52c3934; the ledger JSON file kept as a frozen interface because the measurement plan reads it), skills SK3 (37738bb; raw-curl goal pause/resume exception deleted). Restart asked |
+| 2026-10-13 19:50Z | **R2**: one owner-authorised drain-restart; production on contract 1.62.0; P2/P3 evaluation recorded; W3 empty; W4 next |
