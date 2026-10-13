@@ -57,4 +57,19 @@ RESIDUAL RISKS:
 - Quarantine runtime for entries lacking a recorded runtime is counted as `pi`.
 - npm test in this container ran before the last (refactor-only) commit; see gates caveat.
 
+## Correction 01
+
+STATUS: complete. Each fix RED-first (`cd server && npx vitest run <file>`; RED = exit 1 with 5 failing tests across 3 files, before any source edit), then GREEN (`vitest run tests/unit/internal-api/goal tests/unit/internal-api/watch-never-started.test.ts` → exit 0, 291 passed).
+
+1. Stall-monitor leak on deleted sessions — `server/src/internal-api/goal/goal-stall.ts`: `sweepOnce` now `tracked.delete(key)` when `resolve` returns null (≈L93–99); new `forget(key)` on the monitor (interface + impl), called on session deletion from `routes/sessions.ts` `forgetGoalTracking()` (invoked in both branches of `handleDeleteSession`: Command Code branch and the main branch for the session id and, when different, the Pi path key).
+   Tests (goal-stall.test.ts): "correction 01: a session that no longer resolves (deleted) is dropped and never re-resolved" (RED: resolve called 2×, expected 1); "forget(key) drops a tracked goal directly" (RED: `monitor.forget is not a function`).
+2. Pi POST /goal had no goalId — `routes/sessions.ts`: both Pi response paths now `getGoalIdStore().stamp(entry.path, await readProjectPiGoalState(entry.path))` — the detached/busy-accepted 200 (`goal: after`, ≈L6060) and the main 200/409 path (`const after = stamp(...)`, ≈L6080). The 409 `observedGoal` stays the raw inspection value (internal).
+   Test (goal-routes.test.ts 'correction 01 — Pi goalId on POST /goal…'): start → `goal.goalId` matches /^goal_/; clear returns the SAME id; second start (new startedAt, same objective) returns a DIFFERENT id. RED: `.toMatch() … got undefined`. Real route path with the Pi goal-state file; no mocks of the store.
+3. Goal-id store cleanup on delete — `goal/goal-id.ts`: `GoalIdStore.delete(key)` (cache + backing file, best-effort); called from `forgetGoalTracking()` (see 1) for the session id and the Pi path.
+   Tests: goal-id.test.ts "correction 01: delete(key) removes cache + backing file; a re-created key carries no old goalId" (RED: `store.delete is not a function`; also checks a fresh store over the same dir stamps no old id); goal-routes.test.ts 'deleting a session drops its goal id (id and Pi path keys)…' via the real `handleDeleteSession` (RED: delete 500 from my harness lacking `disposeLoadedSession`, then assertion on the store; GREEN after the mock was completed and the cleanup added).
+
+Gates after the fixes (container, base 8bc93e3e17e3c5e013f3568b406a4cae3ba67967):
+- npm run lint → exit 0 (0 errors); typecheck → 0; build → 0; lint:ratchet → exit 0 ("violations": [], checkedChangedFiles 25).
+- npm test → server "Tests 4 failed | 7559 passed | 37 skipped (7600)"; the 4th failure vs baseline's 3 is `claude-sdk-signature-pin … object-signature query() does not trigger the misuse abort` — the brief's known load-flaky test. Evidence it is environmental, not mine: it fails identically alone (3/3 runs) AND on an untouched worktree of base 8bc93e3 (same assertion, "Cannot read properties of undefined (reading 'Symbol(Symbol.asyncIterator)')"); the test imports only `@anthropic-ai/claude-agent-sdk`. It passed in my earlier full run, so it varies by container state. Remaining 3 failures = baseline-failures.txt, identical. Other workspace 249/249. New tests since 27b8799: +5 (7595→7600), all passing.
+
 FROZEN
