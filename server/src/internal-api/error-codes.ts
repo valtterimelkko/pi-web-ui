@@ -403,8 +403,8 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
   [ErrorCode.ADMISSION_CAPACITY_EXHAUSTED]: {
     httpStatus: 429,
     description: 'Runtime execution admission is temporarily exhausted.',
-    cause: 'A runtime/global turn cap or memory-headroom guard refused new work.',
-    hint: 'Respect Retry-After, inspect GET /api/v1/capacity, and retry later.',
+    cause: 'A runtime/global turn cap or memory-headroom guard refused new work. Body reason "quarantined_debt" (contract 1.62.0) means quarantined admission leases (never confirmed quiescent) are what tipped it over; admissionReason names the underlying limit.',
+    hint: 'Respect Retry-After, inspect GET /api/v1/capacity (quarantinedRuns, quarantinedOldestAgeMs), and retry later. For reason "quarantined_debt" the debt clears when the reconciliation guard confirms the session quiescent.',
     docs: 'docs/INTERNAL-API.md#execution-admission-and-capacity',
   },
   [ErrorCode.PROFILE_CAPACITY_EXHAUSTED]: {

@@ -22,6 +22,7 @@ describe('Command Code Internal API boundary', () => {
     // 1.60.0: wave K (R5, 2026-10-03) — additive goal interruption surface and
     // one continue after a restart interruption (docs/INTERNAL-API-CONTRACT.md).
     // 1.61.0: W0-c (2026-10-13) — PROFILE_CAPACITY_EXHAUSTED, /capacity claudeProfiles, /models maxConcurrent.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.61.0');
+    // 1.62.0: W2 (2026-10-13) — goalId, stalled goal_state, no NEVER_STARTED goal_end, quarantined_debt.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.62.0');
   });
 });

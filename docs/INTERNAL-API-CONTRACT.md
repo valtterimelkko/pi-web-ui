@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.61.0",
+  "contractVersion": "1.62.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -74,9 +74,16 @@ Exception table (date, owner decision, what, version):
 | 2026-10-03 | R5 (owner accepted every recommendation; the C6 window closed at R5) | 1.59.0 (L1): /capacity gains `quarantinedOldestAgeMs` — age of the oldest quarantined admission lease; quarantined entries gained a reconciliation guard (release on confirmed session quiescence). Additive only. | 1.59.0 |
 | 2026-10-03 | R5 (wave K GO, slimmed: continue once after a restart interruption, plus parent visibility) | 1.60.0 (wave K): `SessionGoalProjection` gains the optional `interruption` object and top-level `autoContinued`; a non-continued stop projects as `status: "paused"`, `pausedReason: "interrupted"`; a verified auto-continue emits `goal_state` (never `goal_end`). Additive only. | 1.60.0 |
 | 2026-10-13 | PARENT-ORCHESTRATION-MACHINERY-PLAN W0-c (finding F8; owner plan of record) | 1.61.0 (W0-c): new typed refusal `PROFILE_CAPACITY_EXHAUSTED` (429, before any run receipt); `GET /capacity` gains `claudeProfiles[{profileId,maxConcurrent,active}]`; `/models` Claude profile entries gain `maxConcurrent`; the profile `maxConcurrent` default rises from 2 to 8. Additive only. | 1.61.0 |
+| 2026-10-13 | PARENT-ORCHESTRATION-MACHINERY-PLAN W2 (owner plan of record) | 1.62.0 (W2): `SessionGoalProjection` gains optional top-level `goalId` (stamped on every `goal_state`/`goal_end` and on `GET`/`POST /goal`), and `stalled` / `stalledForMs` on a stall `goal_state`; a NEVER_STARTED receipt no longer fires `goal_end`; an admission refusal tipped over by quarantined leases carries body `reason: "quarantined_debt"` (+ `admissionReason`, `quarantinedRuns`, `quarantinedOldestAgeMs`) with the same status/code. Additive only. | 1.62.0 |
 
 ### Changelog
 
+- **1.62.0** (minor — W2, parent-machinery goal semantics and admission honesty; authorised by the parent-machinery programme plan, findings F3/F4/F9). Additive only, plus one behaviour fix:
+  - **Stable `goalId` (W2-a).** `SessionGoalProjection` gains optional `goalId`, minted once when a goal starts (all runtimes), persisted across restarts, and stamped **top-level** on every `goal_state` and `goal_end` event's `data` and on `GET`/`POST /sessions/:id/goal` (a start returns the new id). A new goal on a reused session gets a new id; the clear of an old goal carries the OLD id. Watch with `dataMatch {"goalId":"<id>"}` so another goal's clear never wakes you.
+  - **No `goal_end` from a receipt that never started (W2-a).** A run the start watchdog terminalised `NEVER_STARTED` fires its `agent_end` condition (flagged `runNeverStarted`) as before, but no longer a synthetic `goal_end`: a run that never started is not the end of the goal, and the `goal_end` condition stays armed for the real end.
+  - **Stalled goal (W2-b).** A goal that reads `running` while its session has shown no activity for `GOAL_STALL_MINUTES` (default 10, never below 2) emits ONE `goal_state` per stall episode carrying top-level `stalled: true` and `stalledForMs`; the status stays `running` and is re-armed when the session is active again. Watch with `dataMatch {"stalled":true}`.
+  - **Quarantine named (W2-f).** When quarantined admission leases are what tips an admission refusal over (it would clear without them), the refusal body carries `reason: "quarantined_debt"`, `admissionReason` (the underlying `global_limit` / `runtime_limit` / `memory_pressure`), `quarantinedRuns` and `quarantinedOldestAgeMs`. Status (`429`/`503`) and code (`ADMISSION_CAPACITY_EXHAUSTED`) are unchanged.
+  - Consumers adapt by: matching `dataMatch {"goalId":…}` instead of the objective, treating `stalled:true` as a wake-worthy signal (inspect, nudge or abort the child), and reading `quarantinedRuns`/`quarantinedOldestAgeMs` to wait out (or reconcile) quarantine instead of retrying blindly. Details: [`INTERNAL-API.md`](./INTERNAL-API.md) § Goal events + watches and § Execution admission and capacity.
 - **1.61.0** (minor — W0-c, Claude profile concurrency: refuse before the run, advertise the cap; authorised by the parent-machinery programme plan, finding F8). Additive, plus one default change:
   - **Typed refusal before the run.** A `prompt` / `follow_up` that would start a NEW turn on a Claude SDK session whose profile is at its `maxConcurrent` cap is refused `429` with the new code `PROFILE_CAPACITY_EXHAUSTED` (body: `profileId`, `maxConcurrent`, `active`, `retryAfterSeconds`; `Retry-After` set) **before a run receipt exists** — it was previously accepted and then died as `RUNTIME_ERROR` inside the runtime. The same check covers batch prompt entries (per-item `error.code`) and watch wakes (a transient wake error, retried). `steer` joins a live turn and is exempt. The in-service throw stays as the last-line guard.
   - **Advertised.** `GET /capacity` gains `claudeProfiles: [{ profileId, maxConcurrent, active }]`; `GET /models` Claude `profile:<id>` entries gain `maxConcurrent`.

@@ -1631,10 +1631,23 @@ should preflight, but the prompt route remains the atomic authority because
 capacity can change between reads. A refusal is HTTP `429` (or `503` for
 resource-pressure reasons) with code `ADMISSION_CAPACITY_EXHAUSTED`, stable
 `reason` (`global_limit`, `runtime_limit`, `memory_pressure`, `pid_pressure`,
-`host_memory_pressure`, `heap_pressure`, `event_loop_lag` or `draining`), body
+`host_memory_pressure`, `heap_pressure`, `event_loop_lag`, `draining` or — since
+1.62.0 — `quarantined_debt`), body
 `retryAfterSeconds`, and a `Retry-After` header. Only `global_limit` and
 `runtime_limit` are `429`; every other reason is `503`. Capacity limits active
 turns, not durable sessions or retention leases; no hidden queue is created.
+
+**Quarantined debt (contract 1.62.0, W2-f).** Admission leases whose runtime
+never confirmed quiescence stay held ("quarantined") until the reconciliation
+guard releases them, and they consume turn slots and memory reservation while
+`GET /capacity` memory looks free. When such leases are what tips a refusal over
+(it would clear without them) the body carries `reason: "quarantined_debt"`,
+`admissionReason` (the underlying `global_limit`, `runtime_limit` or
+`memory_pressure`), `quarantinedRuns` and `quarantinedOldestAgeMs`; the HTTP
+status (`429`/`503`) and code are unchanged. `runtime_limit` is attributed only
+to quarantined leases of the same runtime. A refusal that would persist without
+the quarantined leases keeps its plain reason. `GET /capacity` still carries
+`quarantinedRuns` / `quarantinedOldestAgeMs` for preflight.
 
 **Claude profile concurrency (contract 1.61.0, W0-c).** Each Claude SDK profile
 has its own `maxConcurrent` cap (default **8**; override per profile in the
@@ -3147,9 +3160,15 @@ never a guess.
   "startedAt": 1787837689128, "completedAt": null,
   "pausedReason": null,
   "autoContinue": true,
+  "goalId": "goal_3f9a1c0b7d2e4a68",
   "runtimeState": { }
 }
 ```
+
+`goalId` (contract 1.62.0) is the stable identity of the current goal: minted
+once at goal start (every runtime), persisted across restarts, and returned by
+`POST /goal {"action":"start"}`. After a clear/achieve it keeps naming the goal
+that just ended until the next start mints a new one.
 
 `runtimeState` is the verbatim native state (Pi goal JSON, the last Claude
 `goal_status` attachments, or the Command Code goal-runner mod state) for
@@ -3284,6 +3303,33 @@ Every goal state transition publishes normalized events to the broker:
 
 - `goal_state` — the full projection after each change;
 - `goal_end` — once per transition into `achieved`/`failed`/`cleared`.
+
+**Goal identity (contract 1.62.0).** Every `goal_state` and `goal_end` carries a
+top-level `goalId` in `data`. A new goal on a reused session gets a new id; the
+clear of an old goal carries the OLD id, so a watch on the new goal is not woken
+by it (`dataMatch` is shallow and top-level):
+
+```json
+{"conditions":[{"type":"event_type","eventType":"goal_end","dataMatch":{"goalId":"goal_3f9a1c0b7d2e4a68"}}]}
+```
+
+A run that terminalised `NEVER_STARTED` (including a steer that never joined a
+turn) produces **no** `goal_end`; only the run-level `agent_end` flagged
+`runNeverStarted` fires, and a pending `goal_end` condition stays armed.
+
+**Stalled goals (contract 1.62.0).** A goal whose status is `running` while its
+session has shown no activity for `GOAL_STALL_MINUTES` (default `10`; values
+below `2` are raised to `2`) emits one `goal_state` per stall episode with
+top-level `stalled: true` and `stalledForMs` (the status stays `running`; no new
+status value). The episode is re-armed when the session is active again. Watch
+for it with:
+
+```json
+{"conditions":[{"type":"event_type","eventType":"goal_state","dataMatch":{"stalled":true}}]}
+```
+
+Detection arms once a `running` goal has been observed since boot (a goal state
+event or a goal read); a stalled event is never itself counted as activity.
 
 Both appear on `/events` (stream and `?mode=snapshot`), are bridged to the
 browser goal surface, and are watchable:
@@ -3521,7 +3567,7 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 | `RETENTION_CLAIM_OWNER_MISMATCH` | 409 | Supplied cooperative owner does not match the lease |
 | `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required resident claim could not be acquired; create is rolled back |
 | `RETENTION_STORE_UNAVAILABLE` | 503 | Required lease persistence/renewal/release was not durable |
-| `ADMISSION_CAPACITY_EXHAUSTED` | 429 / 503 | Prompt- or create-time admission refused: `429` for global/runtime turn budget, `503` for memory/PID/host/heap/event-loop-lag pressure or draining; respect `Retry-After` |
+| `ADMISSION_CAPACITY_EXHAUSTED` | 429 / 503 | Prompt- or create-time admission refused: `429` for global/runtime turn budget, `503` for memory/PID/host/heap/event-loop-lag pressure or draining; respect `Retry-After`. Body `reason` is `"quarantined_debt"` (with `admissionReason`, `quarantinedRuns`, `quarantinedOldestAgeMs`) when quarantined leases tip it over (1.62.0) |
 | `PROFILE_CAPACITY_EXHAUSTED` | 429 | A Claude SDK profile is at its `maxConcurrent` cap; refused before any run receipt. Body names `profileId`, `maxConcurrent`, `active`; respect `Retry-After`, read `claudeProfiles` in `GET /capacity` (1.61.0) |
 | `PROVIDER_NOT_ALLOWED` | 403 | Pi provider is disabled for Internal API agent execution |
 | `MODEL_NOT_APPLIED` | 422 | Explicit Pi model selector was refused or not applied; the session was not created (1.21.0). Use the exact `provider/model` selector. |
