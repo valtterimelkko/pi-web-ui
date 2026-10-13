@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import {
@@ -85,12 +85,14 @@ describe('B1.2b SDK alias map', () => {
     expect(pkg.name).toBe('@earendil-works/pi-coding-agent');
   });
 
-  it('prefers the SDK-nested companion copies (the ones import.meta.resolve from the SDK finds)', () => {
+  it('resolves companions to the copy the SDK scope finds (nested when one exists, else hoisted)', () => {
     const aliases = resolveSdkAliasMap();
-    const nestedRoot = realpathSync(join(sdkRoot, 'node_modules'));
-    expect(realpathSync(aliases['@earendil-works/pi-tui']).startsWith(nestedRoot)).toBe(true);
-    expect(realpathSync(aliases['@earendil-works/pi-agent-core']).startsWith(nestedRoot)).toBe(true);
-    expect(realpathSync(aliases['@earendil-works/pi-ai']).startsWith(nestedRoot)).toBe(true);
+    for (const name of ['pi-tui', 'pi-agent-core', 'pi-ai'] as const) {
+      const nested = join(sdkRoot, 'node_modules', '@earendil-works', name);
+      const hoisted = join(dirname(sdkRoot), name);
+      const expectedRoot = realpathSync(existsSync(nested) ? nested : hoisted);
+      expect(realpathSync(aliases[`@earendil-works/${name}`]).startsWith(expectedRoot)).toBe(true);
+    }
   });
 
   it('resolves typebox exactly as the SDK does (require.resolve from the SDK scope)', () => {
@@ -121,11 +123,12 @@ describe('B1.2b SDK alias map', () => {
     expect(after).toEqual(before);
   });
 
-  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 1.0.1 included)', () => {
+  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 1.2.1 included)', () => {
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.87.1' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.99.2' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.0.1' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.0.0' })).not.toThrow();
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.0.0' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.2.1' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.2.0' })).not.toThrow();
   });
 
   it('degrades as a typed error when an alias target cannot be resolved', () => {
