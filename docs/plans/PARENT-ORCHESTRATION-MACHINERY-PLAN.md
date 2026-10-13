@@ -1,6 +1,6 @@
 # Parent orchestration machinery — silent wake failures, missing verbs, capacity honesty, lighter skills, a lane-runner pilot (plan)
 
-Status: COMPLETE except the owner's W4-d keep/kill decision (due 2026-10-20) — executed 2026-10-13 17:19–21:00Z, executing parent Claude Code RC session `claude:f998b213` (Opus);
+Status: COMPLETE — executed 2026-10-13 17:19–21:00Z; W4-d decided KEEP by the owner 2026-10-13, executing parent Claude Code RC session `claude:f998b213` (Opus);
 ops dir `/root/orch-ops/parent-machinery-20261013/` (`STRATEGY.md` = how, `STATE.md` = live state). Owner decisions in §3.
 
 Planning parent: Claude Code RC session `claude:fcb7ddb1` (Opus) — open it with
@@ -211,7 +211,7 @@ run 1 20:47–20:55Z → gates green → review ACCEPT WITH FIXES → **exit 42*
 | Wall-clock | 11 min | 10–60 min |
 | Missed wakes | 0 (process exit is the wake) | 0 (watch-wake + backstops) |
 
-**W4-d keep/kill — recommendation: KEEP** (runner ≤ 50 % of hand-run parent turns, no rise in owner interventions,
+**W4-d keep/kill — owner decided KEEP (2026-10-13, after the pilot; no wait to 2026-10-20 needed)** (runner ≤ 50 % of hand-run parent turns, no rise in owner interventions,
 no missed wake). Owner decision by **2026-10-20**; the measurement plan's M2 scorecard can add other programmes' lanes
 before then. If kept, make it the default for single-repo lanes with a machine-checkable `GATES:` block.
 
@@ -296,7 +296,6 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 
 | Item | Since | Ref |
 |---|---|---|
-| W4-d keep/kill of the lane runner (`pi-orch lane run`): parent recommends KEEP on the pilot numbers; decide by 2026-10-20 | 2026-10-13 | §6 W4-d, W4-c result |
 
 ## 11. Amendments
 
@@ -321,3 +320,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 19:50Z | **R2**: one owner-authorised drain-restart; production on contract 1.62.0; P2/P3 evaluation recorded; W3 empty; W4 next |
 | 2026-10-13 20:47Z | **R2b**: W4-a merged, W4-b live trial passed (3 toy lanes incl. kill+resume and the correction path); GO for the W4-c pilot (SK4 via `lane run`); keep/kill by 2026-10-20 |
 | 2026-10-13 21:00Z | **W4-c pilot done** (SK4 via `lane run`: exit 42 → `--continue correction` → exit 0; 3 parent turns, 11 min). **R3 close-out** written; only W4-d (owner keep/kill, recommendation KEEP) remains |
+| 2026-10-13 21:20Z | **W4-d: owner decided KEEP.** `pi-orch lane run` is the default for single-repo lanes with a machine-checkable `GATES:` block (skills d5f4028); hand-run anything else. Plan COMPLETE; nothing waits on the owner |
