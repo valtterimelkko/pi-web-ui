@@ -194,16 +194,17 @@ Review points: **R1** after W0 + W1 (P1, P5, P6, P7); **R2** after W2 (P2, P3); 
 | Item | Since | Ref |
 |---|---|---|
 | Production restart authority for the W0-c server change and the W2 server lanes (drain-restart, one per wave) | 2026-10-13 | §6 W0-c, W2 |
-| Align line 56 of the global `AGENTS.md` (`/root/.pi/agent/AGENTS.md` = `/root/.claude/CLAUDE.md`), which still says "Use built-in background subagents for short same-harness work", with line 58 "Internal API first" — owner's own file | 2026-10-13 | §3 O4 |
 
 ## 11. Amendments
 
 | When (UTC) | Change | Why |
 |---|---|---|
 | 2026-10-13 | Plan written; PMR M15, M16, D4 and the Agent-tool half of S2 dropped | owner direction O4 |
+| 2026-10-13 | Global `AGENTS.md` de-conflicted at the owner's request (canonical `/root/.codex/AGENTS.md` commit `1137142`, mirrored to every harness): Internal API first for all child sizes; own-harness subagents only when it is unavailable or the operator asks. Waiting row removed | owner request in `claude:fcb7ddb1` |
 
 ## 12. Status ledger
 
 | When (UTC) | Milestone |
 |---|---|
 | 2026-10-13 | R0: plan written; owner decisions O1–O5 recorded; execution not started |
+| 2026-10-13 | Global AGENTS.md conflict resolved (codex `1137142`); only restart authority still waits |
