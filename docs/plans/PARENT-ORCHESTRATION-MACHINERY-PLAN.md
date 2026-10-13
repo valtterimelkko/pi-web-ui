@@ -211,7 +211,7 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 
 | Item | Since | Ref |
 |---|---|---|
-| Production restart authority for the W0-c server change and the W2 server lanes (drain-restart, one per wave) | 2026-10-13 | §6 W0-c, W2 |
+| Production restart for W0-c (merged 89bd9cb2, contract 1.61.0): parent recommends bundling it into the single W2 drain-restart; asked by Telegram 18:04Z | 2026-10-13 | §6 W0-c, W2; STATE |
 
 ## 11. Amendments
 
@@ -219,6 +219,7 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 |---|---|---|
 | 2026-10-13 | Plan written; PMR M15, M16, D4 and the Agent-tool half of S2 dropped | owner direction O4 |
 | 2026-10-13 | Global `AGENTS.md` de-conflicted at the owner's request (canonical `/root/.codex/AGENTS.md` commit `1137142`, mirrored to every harness): Internal API first for all child sizes; own-harness subagents only when it is unavailable or the operator asks. Waiting row removed | owner request in `claude:fcb7ddb1` |
+| 2026-10-13 18:15Z | RV-B: SK2 (S-1, S-4) pulled ahead of RV-B and W2s dispatched early (no dependency); production `claude-profiles.json` raised 2→8 for all 11 profiles (O1, hot-reload, no restart needed for the cap itself); W0-c code deploy proposed to ride the W2 restart | RV-B findings: the cap fix is live via config; one restart saves other parents a disruption |
 | 2026-10-13 | Review points RV-A, RV-B, R2b added; execution routing recorded in §9 (cloud Sonnet + PAYG Sonnet authorised by the owner for this execution); lanes grouped per repo (STRATEGY §2) | owner request at execution start (`claude:f998b213`) |
 
 ## 12. Status ledger
@@ -229,3 +230,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 | Global AGENTS.md conflict resolved (codex `1137142`); only restart authority still waits |
 | 2026-10-13 17:22Z | Execution started (`claude:f998b213`): W0 dispatched — W0a, W0b (DeepSeek, host), W0c, SK1 (cloud Sonnet) |
 | 2026-10-13 17:36Z | RV-A: W0-a merged (pi-orch 7f460fe; scope widened to the raw-vs-stored objective dead watch found by the parent), W0-b merged and deployed (claude-enhancement 084976a, pi-enhancement 4c0570a; deadline kept one-shot under max_wakes) |
+| 2026-10-13 18:15Z | RV-B: W0-c merged (pi-web-ui 89bd9cb2, contract 1.61.0; live-proved on a disposable server; Agent OS mirror e8d98ab9) — not yet deployed; skills W0-e/W0-f/S-2/S-3/S-5 merged (8fd0dc1); parent card + kit S-1/S-4 merged (070f3b8, card 1,432 words, Tier 1 in both skills — the Agent OS plan's W1-d can inject `references/parent-card.md`); W0-d and W2s in flight; R1 card acceptance test running |
