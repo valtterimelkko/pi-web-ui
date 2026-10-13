@@ -952,4 +952,42 @@ describe('goal function (contract 1.27.0)', () => {
       expect(JSON.parse(res.body).goal).toBeUndefined();
     });
   });
+
+  describe('contract 1.62.0 (W2-a) — stable goalId', () => {
+    const post = async (body: Record<string, unknown>) => {
+      const res = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', body), res, 'session-1');
+      expect(res.statusCode, res.body).toBe(200);
+      return JSON.parse(res.body).goal as Record<string, unknown>;
+    };
+
+    it('a new goal on a reused session gets a new goalId; the old goal\'s clear carries the OLD id (events + GET)', async () => {
+      registry.get.mockResolvedValue(entry({ sdkType: 'antigravity' }));
+      const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+      routes.broker.subscribe('session-1', (event: any) => events.push(event));
+
+      const first = await post({ action: 'start', objective: 'Ship it' });
+      expect(first.goalId).toMatch(/^goal_/);
+      await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+
+      const cleared = await post({ action: 'clear' });
+      expect(cleared.status).toBe('cleared');
+      expect(cleared.goalId).toBe(first.goalId);
+
+      const second = await post({ action: 'start', objective: 'Ship it' });
+      expect(second.goalId).toMatch(/^goal_/);
+      expect(second.goalId).not.toBe(first.goalId);
+
+      const get = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/session-1/goal'), get, 'session-1');
+      expect(JSON.parse(get.body).goalId).toBe(second.goalId);
+
+      // Any goal event published for the OLD goal carries the old id (top-level).
+      routes.broker.publish('session-1', { type: 'goal_end', timestamp: 1, data: { supported: true, status: 'cleared', objective: 'Ship it' } } as any);
+      const published = events.filter((e) => e.type === 'goal_end');
+      expect(published).toHaveLength(1);
+      // cleared AFTER a fresh start of the same objective is the new goal's id (rotate fenced the old one)
+      expect(published[0].data.goalId).toBe(second.goalId);
+    });
+  });
 });

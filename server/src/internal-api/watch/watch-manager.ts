@@ -604,7 +604,9 @@ export class WatchManager {
    * type conditions fire through the ordinary event path (once-semantics,
    * wake dispatch, surfacing and ledger persistence), flagged
    * `runNeverStarted` so parents can tell it from a real finish (and
-   * dataMatch it, exactly like `interruptedByRestart`).
+   * dataMatch it, exactly like `interruptedByRestart`). Contract 1.62.0:
+   * `goal_end` conditions are NOT fired from here — a receipt that never
+   * started is not the goal's end.
    */
   async notifyRunNeverStarted(info: {
     sessionId: string;
@@ -628,14 +630,12 @@ export class WatchManager {
         acceptedAt: info.acceptedAt,
         startWindowMs: info.startWindowMs,
       };
-      const waitsOnGoalEnd = live.record.conditions.some(
-        (c) => !c.fired && (c.spec as { eventType?: string }).eventType === 'goal_end',
-      );
+      // W2-a (contract 1.62.0): a run/steer that never started is NOT the
+      // end of the goal. No synthetic goal_end — it woke parents on the wrong
+      // goal (F4). Only the run-level agent_end (flagged runNeverStarted)
+      // fires; a pending goal_end condition stays armed for the real end.
       const wakeBudget: WakeBudget = { remaining: 1 };
       this.handleEvent(info.sessionId, { type: 'agent_end', timestamp, data }, wakeBudget);
-      if (waitsOnGoalEnd && this.active.get(info.sessionId) === live && live.record.status === 'active') {
-        this.handleEvent(info.sessionId, { type: 'goal_end', timestamp, data }, wakeBudget);
-      }
       logger.info(`never-started reconciliation: fired watch ${live.record.watchId} for run ${info.runId} on ${info.sessionId} (NEVER_STARTED, start window ${info.startWindowMs}ms)`);
     } catch {
       /* watch reconciliation is best-effort; the receipt is already terminal */

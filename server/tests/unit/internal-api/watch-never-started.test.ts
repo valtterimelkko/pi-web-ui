@@ -94,7 +94,7 @@ describe('WatchManager — never-started run notification (in-flight reconciliat
     expect(manager.get('child-match')?.firingCount).toBe(1);
   });
 
-  it('also fires a pending goal_end condition, and coalesces both into a single wake', async () => {
+  it('W2-a: a NEVER_STARTED receipt produces NO goal_end — a pending goal_end condition stays armed, agent_end still fires', async () => {
     const dispatchWake = vi.fn(async (_input: { message: string }) => ({ status: 'dispatched' as const, deliveryKind: 'prompt' as const }));
     await arm('child-goal', {
       conditions: [{ type: 'event_type', eventType: 'agent_end' }, { type: 'event_type', eventType: 'goal_end' }],
@@ -116,7 +116,10 @@ describe('WatchManager — never-started run notification (in-flight reconciliat
     await flush();
 
     const w = manager.get('child-goal');
-    expect(w?.firingCount).toBe(2);
+    // Only the agent_end condition fired; the goal_end condition (the goal's
+    // real end) was NOT consumed by a steer/run that never started.
+    expect(w?.firingCount).toBe(1);
+    expect(w?.conditions.filter((c: { fired?: boolean }) => c.fired)).toHaveLength(1);
     expect(dispatchWake).toHaveBeenCalledTimes(1);
   });
 

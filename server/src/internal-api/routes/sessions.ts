@@ -69,6 +69,7 @@ import { isThinkingLevel } from '../types.js';
 import { composePiGoalCommand, evaluatePiGoalActionTransition, type GoalAction, type GoalTransitionOutcome, type SessionGoalControlRequest } from '../goal/goal-actions.js';
 import { decidePiOwnershipAction, readPiLeaseRecord, readPiOwnershipStatus } from '../../pi/session-ownership-status.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
+import { getGoalIdStore, stampGoalEventData } from '../goal/goal-id.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
 import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildChildDispatchedCard, brokerKeyFor, type ParentLink, type LinkageRegistry } from '../child-linkage.js';
@@ -847,6 +848,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // API, browser, goal-engine and other extension continuations) and every
     // runtime that publishes here.
     onPublish: (key, event) => completionTap.observe(key, event),
+    // Contract 1.62.0 (W2-a): stamp the stable top-level goalId on every
+    // goal_state / goal_end, whichever runtime path published it.
+    eventEnricher: (key, event) => {
+      if (event.type !== 'goal_state' && event.type !== 'goal_end') return event;
+      const data = (event as { data?: unknown }).data;
+      const stamped = stampGoalEventData(getGoalIdStore(), key, event.type, data);
+      return stamped === data ? event : ({ ...event, data: stamped } as NormalizedEvent);
+    },
     // Deletion fence: once a session is tombstoned in the disposal registry,
     // a late runtime event cannot recreate the broker replay buffer or notify
     // subscribers. The predicate is keyed on the broker key, which for Pi is
@@ -5217,9 +5226,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function readGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
-    if (entry.sdkType === 'pi') return readProjectPiGoalState(entry.path);
+    // Contract 1.62.0 (W2-a): responses carry the same goalId the events do.
+    // Keys match the broker keys (Pi: sessionPath; others: the registry id).
+    if (entry.sdkType === 'pi') return getGoalIdStore().stamp(entry.path, await readProjectPiGoalState(entry.path));
     if (entry.sdkType === 'claude') return readClaudeGoalProjection(entry);
-    if (entry.sdkType === 'antigravity') return projectAgyGoal(await agyGoalStore.get(entry.id));
+    if (entry.sdkType === 'antigravity') return getGoalIdStore().stamp(entry.id, projectAgyGoal(await agyGoalStore.get(entry.id)));
     // Command Code gains its mod-state channel in Phase 3. OpenCode
     // is out of scope (plan D1).
     return unsupportedGoalProjection();
@@ -5361,6 +5372,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         ? Math.min(Math.floor(raw.maxTurns), 100)
         : 100;
       const previous = await agyGoalStore.get(sessionId);
+      getGoalIdStore().rotate(sessionId); // W2-a: a start is a new goal (new goalId)
       await agyGoalStore.patch(sessionId, {
         objective,
         verifyCommand,
@@ -5479,6 +5491,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return { armed: true, note: 'goal dispatched detached; the goal loop owns subsequent turns' };
       }
       if (runtime === 'claude') {
+        getGoalIdStore().rotate(sessionId);
         await claudeGoalStore.patch(sessionId, { autoContinue: goal.autoContinue !== false, nudges: 0, exhaustedAt: undefined, clearedAt: undefined });
         const dispatched = await dispatchDetachedInternal(sessionId, `/goal ${goal.objective}`);
         if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
@@ -5488,6 +5501,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const verifyCommand = typeof goal.verifyCommand === 'string' && goal.verifyCommand.trim() !== '' ? goal.verifyCommand.trim() : undefined;
         const maxRuns = typeof goal.maxTurns === 'number' && goal.maxTurns > 0 ? Math.min(Math.floor(goal.maxTurns), 100) : 100;
         const previous = await agyGoalStore.get(sessionId);
+        getGoalIdStore().rotate(sessionId);
         await agyGoalStore.patch(sessionId, {
           objective: goal.objective,
           verifyCommand,
@@ -5512,6 +5526,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (runtime === 'commandcode') {
         const record = await commandCodeService?.findSession(sessionId);
         if (!record || !commandCodeService?.isGoalReady?.()) return { armed: false, error: 'goal-runner mod unavailable' };
+        getGoalIdStore().rotate(sessionId);
         await commandCodeService.goalStore.arm(sessionId, {
           objective: goal.objective,
           maxTurns: goal.maxTurns ?? 100,
@@ -5555,7 +5570,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   async function readClaudeGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
     // User-triggered reads (routes, control responses) are always fresh.
-    return readClaudeGoalProjectionUncached(entry);
+    return getGoalIdStore().stamp(entry.id, await readClaudeGoalProjectionUncached(entry));
   }
 
   /**
@@ -5629,7 +5644,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       commandCodeService?.goalStore.get(entry.sessionId) ?? null,
       commandCodeService?.readGoalModState(entry.sessionId) ?? null,
     ]);
-    return projectCommandCodeGoal(record as Parameters<typeof projectCommandCodeGoal>[0], modState, modAvailable);
+    return getGoalIdStore().stamp(entry.sessionId, projectCommandCodeGoal(record as Parameters<typeof projectCommandCodeGoal>[0], modState, modAvailable));
   }
 
   async function handleSessionGoalControlClaude(
@@ -5677,6 +5692,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     if (composed.action === 'start') {
+      getGoalIdStore().rotate(sessionId); // W2-a: a start is a new goal (new goalId)
       await claudeGoalStore.patch(sessionId, { autoContinue: true, nudges: 0, lastNudgeAt: undefined, exhaustedAt: undefined, clearedAt: undefined });
     }
     if (composed.action === 'clear') {
@@ -5731,6 +5747,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
       const verifier = raw.verifyCommand ? 'command' : 'model';
+      getGoalIdStore().rotate(sessionId);
       await commandCodeService.goalStore.arm(sessionId, {
         objective,
         maxTurns: typeof raw.maxTurns === 'number' && raw.maxTurns > 0 ? Math.min(Math.floor(raw.maxTurns), 100) : 100,

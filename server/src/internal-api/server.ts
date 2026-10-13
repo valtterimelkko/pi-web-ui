@@ -43,6 +43,7 @@ import { readPreferences, deriveLegacyArrays } from '../routes/preferences.js';
 import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
 import { setLogTap } from '../logging/logger.js';
+import { configureGoalIdStore, createGoalIdStore } from './goal/goal-id.js';
 import { wireGoalInterruptions, type GoalInterruptionWiring, type AnnouncedInterruption } from './goal/interruption-wiring.js';
 import { setGoalContinueProbe } from './watch/watch-manager.js';
 import type { ClaudeService } from '../claude/claude-service.js';
@@ -535,6 +536,9 @@ export class InternalApiServer {
     const drainRoutes = createDrainRoutes({ drain: drainController, onBeforeStart: () => busySource.refresh() });
 
     // Create routes
+    // Contract 1.62.0 (W2-a): persisted goalId store, configured BEFORE the
+    // routes publish anything so a restart rehydrates every goal's id.
+    configureGoalIdStore(createGoalIdStore({ dir: path.join(path.dirname(runReceiptDir), 'goal-continue', 'goal-ids') }));
     const sessionRoutes = createSessionRoutes({
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
