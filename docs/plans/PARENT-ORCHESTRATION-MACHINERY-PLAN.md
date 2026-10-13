@@ -175,6 +175,28 @@ Findings that changed the plan ahead:
   them goals (goal children auto-continue once).
 - **W3: nothing to correct** (no defect left open). **W4 proceeds**: W4a (lane runner) dispatches after W2h merges.
 
+### R2b evaluation (2026-10-13 20:47Z, executing parent) — W4-a/W4-b done; GO for the pilot
+
+`pi-orch lane run` merged (pi-orch 05f8617; 544 tests incl. resume after a kill at every step boundary). Live trial on
+production with throwaway children (DeepSeek implementer, Sonnet reviewer), each lane started as one background
+process whose exit was the parent's only wake:
+
+| Lane | Path exercised | Exit | Wall-clock | Parent turns |
+|---|---|---|---|---|
+| A | happy path; runner **killed mid-wait** and re-run: same child reused (1 spawn, 1 dispatch in the journal) | 0 ACCEPT | ~1 min | 2 (start, exit) + 1 resume |
+| B | happy path (the child also satisfied an unstated gate) | 0 ACCEPT | ~1.3 min | 2 |
+| C | hidden gate red → ONE correction to the same implementer → green → review | 0 ACCEPT | ~2.5 min | 2 |
+
+For comparison, the hand-run W0/W2 lanes in this programme took 5–9 parent turns each (dispatch, wake, gate re-run,
+reviewer dispatch, wake, correction, wake, closure, merge). Findings fixed before merge: Antigravity routes need no
+`thinking`; the sentinel is an end-anchored line; an answered sentinel question no longer re-exits 40; the canonical
+`agent-os-child` directive with session/parent ids rides in every prompt.
+
+**Decision: GO.** W4-c pilot on a real lane now: **SK4** (document `lane run` in the orchestration skills and the
+programme kit — real work this programme needs), run end to end by the runner. Keep/kill (W4-d) by **2026-10-20**,
+using P8 from the runner journal + `~/.pi-orch/audit.jsonl` vs the hand-run lanes; the other active programmes may
+add side-by-side lanes before then.
+
 ### W3 — (reserved; nothing planned)
 
 Kept empty on purpose: if R2 finds a defect, a bounded correction goes here. No other wave is added.
@@ -269,3 +291,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 18:33Z | **R1**: W0 + W1 complete (W0-a/b/c/d, S-1…S-5 merged; card acceptance PASS); W2s and W2c dispatched; W2 split recorded (R1 evaluation above) |
 | 2026-10-13 19:36Z | W2 merged except W2h (in flight): W2s (pi-web-ui 58757808, contract 1.62.0, Agent OS mirror 7549ce15), W2c (pi-orch fbb5bb6), W2g (pi-orch 52c3934; the ledger JSON file kept as a frozen interface because the measurement plan reads it), skills SK3 (37738bb; raw-curl goal pause/resume exception deleted). Restart asked |
 | 2026-10-13 19:50Z | **R2**: one owner-authorised drain-restart; production on contract 1.62.0; P2/P3 evaluation recorded; W3 empty; W4 next |
+| 2026-10-13 20:47Z | **R2b**: W4-a merged, W4-b live trial passed (3 toy lanes incl. kill+resume and the correction path); GO for the W4-c pilot (SK4 via `lane run`); keep/kill by 2026-10-20 |
