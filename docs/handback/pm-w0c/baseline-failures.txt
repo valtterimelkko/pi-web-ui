@@ -1,3 +1,0 @@
- FAIL  tests/unit/build-identity/build-hooks.test.ts > build identity hooks > does not write generated manifests merely by importing generator helpers
- FAIL  tests/unit/internal-api/parent-resolver.test.ts > runSs (explicit maxBuffer) > collects small output intact
- FAIL  tests/unit/pi/extension-factory-cache.test.ts > B1.2b correction 02 — per-loader factory snapshots > rewrites <inline:> labels in error paths AND messages, with conflict diagnostics included in the parity projection
