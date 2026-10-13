@@ -1,6 +1,6 @@
 # Parent orchestration machinery — silent wake failures, missing verbs, capacity honesty, lighter skills, a lane-runner pilot (plan)
 
-Status: EXECUTING — since 2026-10-13 17:19Z, executing parent Claude Code RC session `claude:f998b213` (Opus);
+Status: COMPLETE except the owner's W4-d keep/kill decision (due 2026-10-20) — executed 2026-10-13 17:19–21:00Z, executing parent Claude Code RC session `claude:f998b213` (Opus);
 ops dir `/root/orch-ops/parent-machinery-20261013/` (`STRATEGY.md` = how, `STATE.md` = live state). Owner decisions in §3.
 
 Planning parent: Claude Code RC session `claude:fcb7ddb1` (Opus) — open it with
@@ -197,6 +197,33 @@ programme kit — real work this programme needs), run end to end by the runner.
 using P8 from the runner journal + `~/.pi-orch/audit.jsonl` vs the hand-run lanes; the other active programmes may
 add side-by-side lanes before then.
 
+### W4-c pilot result and R3 close-out (2026-10-13 21:00Z, executing parent)
+
+**Pilot lane SK4** (real work: document `lane run` in the skills; skills e86d24d), run by `pi-orch lane run`:
+implementer Sonnet 5.5 (`pi`·`anthropic`, owner-authorised PAYG), reviewer Gemini 3.8 Flash (antigravity).
+run 1 20:47–20:55Z → gates green → review ACCEPT WITH FIXES → **exit 42** (judgement); the parent upheld the 3 findings
+→ `--continue correction` 20:55–20:58Z → fix → gates green → closure on the same reviewer ACCEPT → **exit 0**.
+
+| P8 measure | Runner pilot (SK4) | Hand-run lanes in this programme (W0a…W2h) |
+|---|---|---|
+| Parent turns per lane | **3** (start; adjudicate at 42; verify + merge at 0) | 5–9 |
+| Owner interventions per lane | 0 | 0 |
+| Wall-clock | 11 min | 10–60 min |
+| Missed wakes | 0 (process exit is the wake) | 0 (watch-wake + backstops) |
+
+**W4-d keep/kill — recommendation: KEEP** (runner ≤ 50 % of hand-run parent turns, no rise in owner interventions,
+no missed wake). Owner decision by **2026-10-20**; the measurement plan's M2 scorecard can add other programmes' lanes
+before then. If kept, make it the default for single-repo lanes with a machine-checkable `GATES:` block.
+
+**R3 (programme close-out).** P1 met; P2 structurally met (F1/F2 classes refused; F3 stalls surface); P3 verbs exist
+for every hand-curl class and use is now audited; P5/P6 Tier 1 ≈ 9k tokens (card + routing) vs 61–77k, card proven by
+a fresh parent; P7 met in production (caps 8, refusal before the run, advertised); P4 for this parent: owner
+interventions about orchestration = 1 (the contract-mirror reminder) + the planned restart authority; P8 above.
+Open follow-ups (not blocking): pi-enhancement has 2 test files failing on master before this programme
+(`bg-run-sync-tool`, `goal-engine-web-ui-runtime`); systemd reported the `pi-web-ui` unit file changed on disk
+(daemon-reload pending, not from this programme); the stall case could not be reproduced live (fake-timer tests are
+the evidence).
+
 ### W3 — (reserved; nothing planned)
 
 Kept empty on purpose: if R2 finds a defect, a bounded correction goes here. No other wave is added.
@@ -269,6 +296,7 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 
 | Item | Since | Ref |
 |---|---|---|
+| W4-d keep/kill of the lane runner (`pi-orch lane run`): parent recommends KEEP on the pilot numbers; decide by 2026-10-20 | 2026-10-13 | §6 W4-d, W4-c result |
 
 ## 11. Amendments
 
@@ -292,3 +320,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 19:36Z | W2 merged except W2h (in flight): W2s (pi-web-ui 58757808, contract 1.62.0, Agent OS mirror 7549ce15), W2c (pi-orch fbb5bb6), W2g (pi-orch 52c3934; the ledger JSON file kept as a frozen interface because the measurement plan reads it), skills SK3 (37738bb; raw-curl goal pause/resume exception deleted). Restart asked |
 | 2026-10-13 19:50Z | **R2**: one owner-authorised drain-restart; production on contract 1.62.0; P2/P3 evaluation recorded; W3 empty; W4 next |
 | 2026-10-13 20:47Z | **R2b**: W4-a merged, W4-b live trial passed (3 toy lanes incl. kill+resume and the correction path); GO for the W4-c pilot (SK4 via `lane run`); keep/kill by 2026-10-20 |
+| 2026-10-13 21:00Z | **W4-c pilot done** (SK4 via `lane run`: exit 42 → `--continue correction` → exit 0; 3 parent turns, 11 min). **R3 close-out** written; only W4-d (owner keep/kill, recommendation KEEP) remains |
