@@ -270,4 +270,23 @@ describe('ClaudeSdkService integration with mocked SDK', () => {
     resolveFirst!();
     await Promise.all([p1, p2]);
   });
+
+  it('reports per-profile capacity and active turns (read-only accessor)', async () => {
+    const { sessionId } = await svc.createSession(join(tmpDir, 'cwd-cap'), 'sonnet', undefined, 'test-sdk-profile');
+    let release: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    mockQuery.mockImplementation(() => (async function* () {
+      yield { type: 'system', subtype: 'init', model: 'sonnet', session_id: 'x', apiKeySource: 'none' };
+      await gate;
+    })());
+
+    expect(svc.getProfileCapacity('test-sdk-profile')).toEqual({ profileId: 'test-sdk-profile', maxConcurrent: 2, active: 0 });
+    const p = svc.sendPrompt(sessionId, 'test', () => {}, () => {}).catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    expect(svc.getProfileCapacity('test-sdk-profile')?.active).toBe(1);
+    expect(svc.getProfileCapacities().find((c) => c.profileId === 'test-sdk-profile')).toEqual({ profileId: 'test-sdk-profile', maxConcurrent: 2, active: 1 });
+    expect(svc.getProfileCapacity('missing')).toBeUndefined();
+    release!();
+    await p;
+  });
 });
