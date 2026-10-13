@@ -162,10 +162,45 @@ const CONTROL_CLASSES = new Set<AdmissionClass>(['P0', 'P1']);
 const ADMISSION_CLASSES: AdmissionClass[] = ['P0', 'P1', 'P2', 'P3'];
 
 export class AdmissionCapacityError extends Error {
+  /**
+   * Contract 1.62.0 (W2-f): set when quarantined admission leases are what tips
+   * this refusal over (it would clear without them). `reason` stays the
+   * underlying reason so status/code mapping is unchanged; the response body
+   * names the debt via {@link admissionRefusalFields}.
+   */
+  quarantine?: { runs: number; oldestAgeMs?: number };
+
   constructor(public readonly reason: AdmissionRefusalReason, public readonly retryAfterSeconds = 2, detail?: string) {
     super(`Internal API admission refused: ${reason}${detail ? ` (${detail})` : ''}`);
     this.name = 'AdmissionCapacityError';
   }
+}
+
+/** Contract 1.62.0 (W2-f): source of the quarantined (never-confirmed-quiescent) admission leases. */
+export type AdmissionQuarantineSource = () => {
+  byRuntime: Partial<Record<SessionRuntime, number>>;
+  oldestAgeMs?: number;
+};
+
+/**
+ * Contract 1.62.0 (W2-f): the refusal-body fields shared by every admission
+ * refusal builder. Without quarantine attribution it is just `{ reason }`;
+ * with it, `reason` is `"quarantined_debt"` and the underlying reason moves to
+ * `admissionReason` alongside the debt counts. Status/code are NOT affected.
+ */
+export function admissionRefusalFields(error: AdmissionCapacityError): {
+  reason: AdmissionRefusalReason | 'quarantined_debt';
+  admissionReason?: AdmissionRefusalReason;
+  quarantinedRuns?: number;
+  quarantinedOldestAgeMs?: number;
+} {
+  if (!error.quarantine) return { reason: error.reason };
+  return {
+    reason: 'quarantined_debt',
+    admissionReason: error.reason,
+    quarantinedRuns: error.quarantine.runs,
+    ...(error.quarantine.oldestAgeMs !== undefined ? { quarantinedOldestAgeMs: error.quarantine.oldestAgeMs } : {}),
+  };
 }
 
 export interface MemoryCapacity {
@@ -647,14 +682,64 @@ export class AdmissionController {
    */
   assertCreateAdmissible(runtime: SessionRuntime, cls: AdmissionClass = 'P2'): void {
     const reason = this.refusalReason(runtime, cls, this.evaluatePressure());
-    if (reason && !SLOT_REFUSALS.has(reason)) throw this.refusal(reason);
+    if (reason && !SLOT_REFUSALS.has(reason)) throw this.refusal(reason, undefined, { runtime, cls });
   }
 
-  private refusal(reason: AdmissionRefusalReason, detail?: string): AdmissionCapacityError {
+  private quarantineSource?: AdmissionQuarantineSource;
+
+  /** W2-f: wire the run-receipt manager's quarantined-lease view (optional; absent = no attribution). */
+  setQuarantineSource(source: AdmissionQuarantineSource | undefined): void {
+    this.quarantineSource = source;
+  }
+
+  private refusal(reason: AdmissionRefusalReason, detail?: string, ctx?: { runtime: SessionRuntime; cls: AdmissionClass }): AdmissionCapacityError {
     const retryAfter = reason === 'heap_pressure' || reason === 'event_loop_lag'
       ? this.heapLagRetryAfterSeconds
       : this.retryAfterSeconds;
-    return new AdmissionCapacityError(reason, retryAfter, detail);
+    const error = new AdmissionCapacityError(reason, retryAfter, detail);
+    if (ctx) {
+      try {
+        const attributed = this.quarantineAttribution(reason, ctx.runtime, ctx.cls);
+        if (attributed) error.quarantine = attributed;
+      } catch { /* attribution is diagnostic only; never changes the refusal */ }
+    }
+    return error;
+  }
+
+  /**
+   * W2-f: would this refusal clear if the quarantined leases were returned?
+   * Only slot saturation and memory-reservation pressure can be tipped over by
+   * held leases; every other reason (draining, heap, lag, PIDs, host) is not
+   * quarantine's doing. Pure arithmetic over the counters — no hysteresis state
+   * is touched.
+   */
+  private quarantineAttribution(
+    reason: AdmissionRefusalReason,
+    runtime: SessionRuntime,
+    cls: AdmissionClass,
+  ): { runs: number; oldestAgeMs?: number } | undefined {
+    const source = this.quarantineSource?.();
+    if (!source) return undefined;
+    const q = (rt: SessionRuntime): number => Math.max(0, source.byRuntime[rt] ?? 0);
+    const total = RUNTIMES.reduce((sum, rt) => sum + q(rt), 0);
+    if (total <= 0 || CONTROL_CLASSES.has(cls)) return undefined;
+    const executionActive = this.activeByClass.P2 + this.activeByClass.P3;
+    const runtimeFree = this.activeByRuntime[runtime] - q(runtime) < this.runtimeLimits[runtime];
+    let clears = false;
+    if (reason === 'global_limit') {
+      clears = executionActive - total < this.executionCapacity && runtimeFree;
+    } else if (reason === 'runtime_limit') {
+      clears = q(runtime) > 0 && runtimeFree;
+    } else if (reason === 'memory_pressure') {
+      const memory = this.memory();
+      const highPressure = memory.highBytes !== undefined && memory.currentBytes >= memory.highBytes;
+      const headroomBytes = Math.max(0, memory.limitBytes - memory.currentBytes);
+      const projected = Math.max(0, headroomBytes - (Math.max(0, this.activeTurns - total) + 1) * this.reservedBytesPerTurn);
+      clears = !highPressure && projected >= this.minimumHeadroomBytes
+        && executionActive - total < this.executionCapacity && runtimeFree;
+    }
+    if (!clears) return undefined;
+    return { runs: total, ...(source.oldestAgeMs !== undefined ? { oldestAgeMs: source.oldestAgeMs } : {}) };
   }
 
   private resetLag(): void {
@@ -682,7 +767,7 @@ export class AdmissionController {
         ? `projectedHeapBytes=${pressure.heap.projectedBytes} pressureBytes=${pressure.heap.pressureBytes} heapLimitBytes=${pressure.heap.limitBytes}`
         : reason === 'event_loop_lag'
           ? `lagP99Ms=${this.lastLag?.p99Ms} thresholdMs=${this.lagThresholdMs} recoveryMs=${this.lagRecoveryMs}`
-          : undefined));
+          : undefined), { runtime, cls });
     }
     // JavaScript's run-to-completion makes this check+increment atomic within
     // one server process (there is no await between them).

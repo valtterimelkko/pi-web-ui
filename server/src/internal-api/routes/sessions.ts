@@ -144,7 +144,7 @@ import {
   resolveNativeSessionArtifact,
   type NativeRuntime,
 } from '../native-sessions.js';
-import { AdmissionCapacityError, AdmissionController, admissionRefusalHttpStatus } from '../admission-controller.js';
+import { AdmissionCapacityError, AdmissionController, admissionRefusalFields, admissionRefusalHttpStatus } from '../admission-controller.js';
 import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
 import { SessionDisposalRegistry } from '../session-disposal.js';
 import { RuntimeOpError } from './batch-helpers.js';
@@ -702,6 +702,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // loop, memory, sockets) caused by in-flight P2 turns — that requires process
   // isolation (Phase 6 per-session cgroups).
   const admission = deps.admissionController ?? new AdmissionController();
+  // Contract 1.62.0 (W2-f): let admission refusals name quarantined lease debt.
+  if (typeof admission.setQuarantineSource === 'function' && typeof runReceipts.getQuarantinedByRuntime === 'function') {
+    admission.setQuarantineSource(() => ({
+      byRuntime: runReceipts.getQuarantinedByRuntime(),
+      oldestAgeMs: runReceipts.getQuarantinedOldestAgeMs(),
+    }));
+  }
   // B4 (contract 1.51.0): a `draining` admission refusal is not capacity
   // throttling. It gets its own code and a Retry-After sized to a restart, so
   // callers (and goal control / wakes, which reuse this pipeline) can tell
@@ -742,7 +749,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res.setHeader('Retry-After', String(retryAfterSeconds));
     sendJson(res, admissionRefusalHttpStatus(capacityError.reason), {
       ...enrichedErrorBody(refusalCode(capacityError), capacityError.message),
-      reason: capacityError.reason,
+      ...admissionRefusalFields(capacityError),
       retryAfterSeconds,
       ...extra,
     });
@@ -7735,7 +7742,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           runtime: entry.runtime,
           error: {
             code: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED,
-            reason: error.reason,
+            ...admissionRefusalFields(error),
             message: error.message,
             retryAfterSeconds: error.retryAfterSeconds,
           },
@@ -8126,7 +8133,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             runId,
             error: {
               code,
-              reason: capacityError.reason,
+              ...admissionRefusalFields(capacityError),
               message: capacityError.message,
               retryAfterSeconds: refusalRetryAfter(capacityError),
             },
