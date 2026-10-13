@@ -47,6 +47,8 @@ export interface GoalStallMonitorDeps {
 export interface GoalStallMonitor {
   /** Feed every broker event (key, event type, event data). Cheap and synchronous. */
   observe(key: string, eventType: string, data: unknown): void;
+  /** Drop a tracked goal (session deleted). */
+  forget(key: string): void;
   sweepOnce(): Promise<void>;
   start(): void;
   stop(): void;
@@ -81,6 +83,10 @@ export function createGoalStallMonitor(deps: GoalStallMonitorDeps): GoalStallMon
       }
     },
 
+    forget(key) {
+      tracked.delete(key);
+    },
+
     async sweepOnce() {
       for (const key of [...tracked.keys()]) {
         try {
@@ -90,7 +96,11 @@ export function createGoalStallMonitor(deps: GoalStallMonitorDeps): GoalStallMon
           // a stall episode, to detect re-arming) cost a re-read.
           if (!before.stalledEmitted && now() - before.lastActivityAt < deps.config.thresholdMs) continue;
           const resolved = await deps.resolve(key);
-          if (!resolved) continue;
+          if (!resolved) {
+            // The session no longer resolves (deleted while its goal ran): stop tracking it.
+            tracked.delete(key);
+            continue;
+          }
           if (!resolved.projection || resolved.projection.status !== 'running') {
             tracked.delete(key);
             continue;

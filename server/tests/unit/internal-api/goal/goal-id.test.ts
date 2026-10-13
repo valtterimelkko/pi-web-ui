@@ -67,6 +67,21 @@ describe('goal id store', () => {
     expect(reloaded.stamp('s1', ended('achieved', 'x')).goalId).toBe(id);
   });
 
+  it('correction 01: delete(key) removes cache + backing file; a re-created key carries no old goalId', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-id-del-'));
+    dirs.push(dir);
+    const store = createGoalIdStore({ dir });
+    const old = store.stamp('s1', running('x', 5)).goalId;
+    store.delete('s1');
+    expect(store.get('s1')).toBeUndefined();
+    expect(fs.readdirSync(dir).filter((f) => f.endsWith('.json'))).toHaveLength(0);
+    // idle / terminal observation of the reused key must not resurrect the dead id
+    expect(store.stamp('s1', { supported: true, status: 'idle' }).goalId).toBeUndefined();
+    expect(createGoalIdStore({ dir }).stamp('s1', { supported: true, status: 'idle' }).goalId).toBeUndefined();
+    const fresh = store.stamp('s1', running('x', 5)).goalId;
+    expect(fresh).not.toBe(old);
+  });
+
   it('stampGoalEventData leaves non-object data alone', () => {
     const store = createGoalIdStore();
     expect(stampGoalEventData(store, 's1', 'goal_state', null)).toBeNull();

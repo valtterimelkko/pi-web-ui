@@ -38,6 +38,8 @@ export interface GoalIdStore {
   /** A goal start is about to happen: the next observed goal is a new one. */
   rotate(key: string): void;
   get(key: string): GoalIdRecord | undefined;
+  /** Session deleted: drop the cache entry and its backing file so a reused key never inherits the id. */
+  delete(key: string): void;
 }
 
 export interface GoalIdStoreOptions {
@@ -122,6 +124,14 @@ export function createGoalIdStore(options: GoalIdStoreOptions = {}): GoalIdStore
       if (record && !record.rotated) save(key, { ...record, rotated: true });
     },
     get: load,
+    delete(key) {
+      cache.delete(key);
+      const file = fileFor(key);
+      if (!file) return;
+      try {
+        fs.rmSync(file, { force: true });
+      } catch { /* best-effort */ }
+    },
   };
 }
 

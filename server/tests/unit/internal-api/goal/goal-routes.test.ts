@@ -991,6 +991,57 @@ describe('goal function (contract 1.27.0)', () => {
     });
   });
 
+  describe('correction 01 — Pi goalId on POST /goal and cleanup on delete', () => {
+    it('Pi start/pause/clear responses carry goalId; a second start after a clear gets a different id', async () => {
+      const prevHome = process.env.HOME;
+      process.env.HOME = dir;
+      try {
+        const statePath = piGoalStatePath('/tmp/sessions/session-1.jsonl');
+        await fs.mkdir(path.dirname(statePath), { recursive: true });
+        let startedAt = 1_000;
+        agentSession.prompt.mockImplementation(async (message: string) => {
+          if (message.startsWith('/goal "')) {
+            startedAt += 1_000;
+            await fs.writeFile(statePath, JSON.stringify({ objective: 'same objective', status: 'running', turnCount: 0, startedAt }));
+          } else if (message.startsWith('/goal clear')) {
+            await fs.writeFile(statePath, JSON.stringify({ objective: '', status: 'idle', turnCount: 0 }));
+          }
+        });
+        const post = async (body: Record<string, unknown>) => {
+          const res = mockRes();
+          await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', body), res, 'session-1');
+          return { status: res.statusCode, body: JSON.parse(res.body) };
+        };
+        const a = await post({ action: 'start', objective: 'same objective' });
+        expect(a.status, JSON.stringify(a.body)).toBe(200);
+        expect(a.body.goal.goalId).toMatch(/^goal_/);
+        await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+        const cleared = await post({ action: 'clear' });
+        expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+        expect(cleared.body.goal.goalId).toBe(a.body.goal.goalId);
+        await vi.waitFor(() => expect(manager.hasActiveRun('session-1')).toBe(false));
+        const b = await post({ action: 'start', objective: 'same objective' });
+        expect(b.body.goal.goalId).toMatch(/^goal_/);
+        expect(b.body.goal.goalId).not.toBe(a.body.goal.goalId);
+      } finally {
+        process.env.HOME = prevHome;
+      }
+    });
+
+    it('deleting a session drops its goal id (id and Pi path keys) so a reused key carries no old goalId', async () => {
+      const { getGoalIdStore } = await import('../../../../src/internal-api/goal/goal-id.js');
+      getGoalIdStore().stamp('session-1', { supported: true, status: 'running', objective: 'o', startedAt: 1 });
+      getGoalIdStore().stamp('/tmp/sessions/session-1.jsonl', { supported: true, status: 'running', objective: 'o', startedAt: 1 });
+      registry.delete = vi.fn().mockResolvedValue(true);
+      multiSessionManager.disposeLoadedSession = vi.fn().mockResolvedValue(undefined);
+      const res = mockRes();
+      await routes.handleDeleteSession(jsonReq('DELETE', '/api/v1/sessions/session-1'), res, 'session-1');
+      expect(res.statusCode, res.body).toBeLessThan(500);
+      expect(getGoalIdStore().get('session-1')).toBeUndefined();
+      expect(getGoalIdStore().get('/tmp/sessions/session-1.jsonl')).toBeUndefined();
+    });
+  });
+
   describe('contract 1.62.0 (W2-b) — stalled goal event through the route wiring', () => {
     it('a running Antigravity goal on an idle session emits goal_state {stalled:true} after GOAL_STALL_MINUTES, once', async () => {
       await routes.shutdown();

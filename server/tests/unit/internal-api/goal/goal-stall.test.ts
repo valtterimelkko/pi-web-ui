@@ -143,4 +143,37 @@ describe('goal stall monitor', () => {
     await monitor.sweepOnce();
     expect(published.map((p) => p.key)).toEqual(['good']);
   });
+
+  it('correction 01: a session that no longer resolves (deleted) is dropped and never re-resolved', async () => {
+    let calls = 0;
+    const monitor = createGoalStallMonitor({
+      config: { thresholdMs: 2 * MIN, sweepIntervalMs: 30_000 },
+      now: () => clock,
+      resolve: async () => { calls += 1; return null; },
+      publish: (key, event) => published.push({ key, type: event.type, data: event.data as Record<string, unknown> }),
+    });
+    monitor.observe('gone', 'goal_state', running);
+    clock += 3 * MIN;
+    await monitor.sweepOnce();
+    expect(calls).toBe(1);
+    await monitor.sweepOnce();
+    expect(calls).toBe(1); // dropped: not resolved again
+    expect(published).toHaveLength(0);
+  });
+
+  it('correction 01: forget(key) drops a tracked goal directly (session deletion hook)', async () => {
+    let calls = 0;
+    const monitor = createGoalStallMonitor({
+      config: { thresholdMs: 2 * MIN, sweepIntervalMs: 30_000 },
+      now: () => clock,
+      resolve: async () => { calls += 1; return { busy: false, projection: running }; },
+      publish: (key, event) => published.push({ key, type: event.type, data: event.data as Record<string, unknown> }),
+    });
+    monitor.observe('s1', 'goal_state', running);
+    monitor.forget('s1');
+    clock += 5 * MIN;
+    await monitor.sweepOnce();
+    expect(calls).toBe(0);
+    expect(published).toHaveLength(0);
+  });
 });

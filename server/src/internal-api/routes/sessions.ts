@@ -3228,6 +3228,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  function forgetGoalTracking(key: string): void {
+    try {
+      getGoalIdStore().delete(key);
+      goalStall.monitor?.forget(key);
+    } catch { /* cleanup is best-effort */ }
+  }
+
   async function handleDeleteSession(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -3238,6 +3245,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (commandCodeEntry) {
         await runReceipts.cancelSession(commandCodeEntry.sessionId);
         disposal.dispose(commandCodeEntry.sessionId);
+        forgetGoalTracking(commandCodeEntry.sessionId);
         broker.clear(commandCodeEntry.sessionId);
         // Release every source-owned claim while the Command Code record is
         // still resolvable. Deleting first would make unpinSessionById unable
@@ -3270,6 +3278,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // the canonical sessionId), so the broker's deletion fence covers Pi.
       // Idempotent; runs no handles unless a surface registered under the path.
       if (entry.path && entry.path !== sessionId) disposal.dispose(entry.path);
+      // Correction 01: a deleted session drops its goal id and stall tracking
+      // (id and, for Pi, the path broker key) so a reused key inherits nothing.
+      forgetGoalTracking(sessionId);
+      if (entry.path && entry.path !== sessionId) forgetGoalTracking(entry.path);
 
       // Correction 02 (Luna r2, finding 2 remainder): record the deletion
       // BEFORE the runtime abort — the abort of an abort-only runtime
@@ -6057,7 +6069,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           sendJson(res, capture.statusCode || 500, refusalBody);
           return;
         }
-        const after = await readProjectPiGoalState(entry.path);
+        const after = getGoalIdStore().stamp(entry.path, await readProjectPiGoalState(entry.path));
         sendJson(res, 200, {
           sessionId,
           runtime: 'pi',
@@ -6077,7 +6089,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       let inner: Record<string, unknown> = {};
       try { inner = JSON.parse(innerRes.body) as Record<string, unknown>; } catch { /* non-JSON body forwarded below */ }
 
-      const after = await readProjectPiGoalState(entry.path);
+      const afterRaw = await readProjectPiGoalState(entry.path);
+      const after = getGoalIdStore().stamp(entry.path, afterRaw);
 
       if (inspection?.outcome?.evaluation.failure) {
         // The receipt already ended failed (GOAL_ACTION_NOT_APPLIED); answer
