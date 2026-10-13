@@ -139,6 +139,22 @@ Agent-tool children only when the Internal API is unavailable or the owner says 
 Contract bumps in W2 ship together where possible (one minor version), with the Agent OS mirror updated in the same
 wave. Production restart authority for W0-c (server part) and W2 is requested in §10.
 
+### R1 evaluation (2026-10-13 18:33Z, executing parent)
+
+| KPI | Result | Evidence |
+|---|---|---|
+| P1 dead watches refused at registration | **met** (mod + Pi extension deployed; pi-orch merged; server already 400s unknown types). A second dead-watch class found and fixed: `watch register --objective` matched only the raw objective while templated goals store another string | claude-enhancement 084976a, pi-enhancement 4c0570a, pi-orch 7f460fe |
+| P5/P6 mandatory reading | **met on paper**: Tier 1 is now the card (1,500 words) + `routing.md` (~4,900 words) ≈ 9k tokens vs 61–77k. The behavioural KPI (owner "re-read" prompts) is measured by the measurement plan | skills 070f3b8, f6ef63d |
+| Card works alone | **met**: a fresh Sonnet parent dispatched, waited (idle), verified and cleaned one child from the card + routing only, 0 curl, 118 s; its 7 gaps were fixed in the card | ops `R1/card-test/report.md` |
+| P7 capacity surprises | **met in production via config** (all 11 profiles 2→8, hot-reloaded); refusal-before-run + advertising merged (contract 1.61.0) and live-proved on a disposable server, **deploys with the next restart**; pi-orch reads the advertised cap (dbb7993) | pi-web-ui 89bd9cb2, Agent OS mirror e8d98ab9 |
+
+Amendments from R1 (rows ahead):
+- **W2 split into three lanes** so no two writers share a repo: W2s (server: W2-a, W2-b, W2-f; contract 1.62.0), W2c
+  (pi-orch: W2-c, W2-d, plus the `status --owner` empty-listing bug found by the card test), then **W2g** (pi-orch:
+  W2-g, W2-e, and the client side of W2-a goalId conditions and W2-f `--wait-admission`) after W2s and W2c merge.
+- **One production restart** for W0-c + W2 (owner asked 18:04Z; default bundle).
+- pi-orch: a `PROFILE_CAPACITY_EXHAUSTED` 429 is surfaced at once (exit 25), never sat out as a silent Retry-After.
+
 ### W3 — (reserved; nothing planned)
 
 Kept empty on purpose: if R2 finds a defect, a bounded correction goes here. No other wave is added.
@@ -231,3 +247,4 @@ different-family reviewer (Gemini 3.8 Flash) plus the parent's own Claude-family
 | 2026-10-13 17:22Z | Execution started (`claude:f998b213`): W0 dispatched — W0a, W0b (DeepSeek, host), W0c, SK1 (cloud Sonnet) |
 | 2026-10-13 17:36Z | RV-A: W0-a merged (pi-orch 7f460fe; scope widened to the raw-vs-stored objective dead watch found by the parent), W0-b merged and deployed (claude-enhancement 084976a, pi-enhancement 4c0570a; deadline kept one-shot under max_wakes) |
 | 2026-10-13 18:15Z | RV-B: W0-c merged (pi-web-ui 89bd9cb2, contract 1.61.0; live-proved on a disposable server; Agent OS mirror e8d98ab9) — not yet deployed; skills W0-e/W0-f/S-2/S-3/S-5 merged (8fd0dc1); parent card + kit S-1/S-4 merged (070f3b8, card 1,432 words, Tier 1 in both skills — the Agent OS plan's W1-d can inject `references/parent-card.md`); W0-d and W2s in flight; R1 card acceptance test running |
+| 2026-10-13 18:33Z | **R1**: W0 + W1 complete (W0-a/b/c/d, S-1…S-5 merged; card acceptance PASS); W2s and W2c dispatched; W2 split recorded (R1 evaluation above) |
