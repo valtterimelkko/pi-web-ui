@@ -843,7 +843,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   // W2-b (contract 1.62.0): stalled-goal monitor, assigned once the route helpers it needs exist.
-  let goalStallMonitor: GoalStallMonitor | undefined;
+  const goalStall: { monitor?: GoalStallMonitor } = {};
 
   /**
    * Per-session event broker. Long-lived: subscribers added via
@@ -863,12 +863,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // goal_state / goal_end, whichever runtime path published it.
     eventEnricher: (key, event) => {
       if (event.type !== 'goal_state' && event.type !== 'goal_end') {
-        goalStallMonitor?.observe(key, event.type, undefined); // W2-b: any event is session activity
+        goalStall.monitor?.observe(key, event.type, undefined); // W2-b: any event is session activity
         return event;
       }
       const data = (event as { data?: unknown }).data;
       const stamped = stampGoalEventData(getGoalIdStore(), key, event.type, data);
-      goalStallMonitor?.observe(key, event.type, stamped);
+      goalStall.monitor?.observe(key, event.type, stamped);
       return stamped === data ? event : ({ ...event, data: stamped } as NormalizedEvent);
     },
     // Deletion fence: once a session is tombstoned in the disposal registry,
@@ -1421,7 +1421,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     pinExpiry?.stop();
     claudeGoalNudger?.stop();
     agyGoalSweeper?.stop();
-    goalStallMonitor?.stop();
+    goalStall.monitor?.stop();
     await runReceipts.shutdown();
     disposal.disposeAll();
   }
@@ -5314,7 +5314,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   // Contract 1.62.0 (W2-b): a goal that reads `running` while its session has
   // been idle GOAL_STALL_MINUTES emits goal_state {stalled:true, stalledForMs}.
-  goalStallMonitor = createGoalStallMonitor({
+  goalStall.monitor = createGoalStallMonitor({
     config: loadGoalStallConfig(),
     resolve: async (key) => {
       // Broker keys: Pi = sessionPath; every other runtime = the registry id.
@@ -5335,7 +5335,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       } catch { /* non-fatal */ }
     },
   });
-  goalStallMonitor.start();
+  goalStall.monitor.start();
 
   /**
    * Bridge a canonical goal projection to the browser: synthesizes the
