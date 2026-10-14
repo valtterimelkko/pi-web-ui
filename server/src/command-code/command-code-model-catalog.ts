@@ -33,6 +33,11 @@ export const COMMAND_CODE_EXCLUDED_MODELS = [
   'meta/muse-spark-1.1',
   'claude-fable-5-1',
   'gpt-6-astra',
+  'claude-opus-5-5',
+  'gpt-6.1-sol',
+  'gpt-6-sol',
+  'google/gemini-4-argon',
+  'meta/muse-wonder-1.0',
 ] as const;
 
 export function isCommandCodeEligible(model: CommandCodeRuntimeModel): boolean {
