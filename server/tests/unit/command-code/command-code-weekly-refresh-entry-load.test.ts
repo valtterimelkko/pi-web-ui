@@ -54,3 +54,16 @@ describe('weekly refresh entry loads in its npm-script module context (J1 correc
     expect(result.status, `stderr: ${result.stderr.slice(-400)}`).toBe(0);
   }, 180_000);
 });
+
+describe('effort-table generator entry stays ESM (.mts), same defect class', () => {
+  it('points `commandcode:refresh-models` at an .mts entry that exists', async () => {
+    const { readFileSync, existsSync } = await import('node:fs');
+    const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+    const script: string = pkg.scripts['commandcode:refresh-models'];
+    const entry = /scripts\/[\w.-]+\.\w+/.exec(script)?.[0] ?? '';
+    // The weekly job spawns this script; a .ts entry loads as CJS under tsx and
+    // dies with ERR_PACKAGE_PATH_NOT_EXPORTED on the ESM-only Pi SDK export.
+    expect(entry, script).toMatch(/\.mts$/);
+    expect(existsSync(path.join(REPO_ROOT, entry))).toBe(true);
+  });
+});
