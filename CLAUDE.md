@@ -1,166 +1,62 @@
-# Agent Instructions for Pi Web UI
+# AGENTS.md — pi-web-ui
 
-> Root quick guide for agents working on Pi Web UI itself. Keep this file concise and follow the canonical docs it links to.
+> `AGENTS.md` and `CLAUDE.md` are byte-identical. Edit `AGENTS.md`, then `cp AGENTS.md CLAUDE.md`.
 
-## Sync rule
+## Purpose
 
-AGENTS.md and CLAUDE.md are byte-identical — same file for different harnesses. Edit AGENTS.md and copy to CLAUDE.md (or run the repo's sync script if one exists). Keep them in sync on every change.
+Pi Web UI is a **runtime-agnostic browser UI** over five runtime families — Pi Coding Agent, Claude Code, OpenCode,
+Antigravity and Command Code (behind the `COMMAND_CODE_ENABLED` gate). It is the production control plane on this
+host, and the repo is treated as permanently public. Core themes: a mostly runtime-neutral frontend, runtime-specific
+complexity on the server, sessions unified through one registry and replay model, and the Internal API as a
+first-class backend boundary.
 
-- Treat `AGENTS.md` as the maintainer source in normal workflow.
-- After editing this file, regenerate/check with:
-  - `npm run docs:sync-agent-guides`
-  - `npm run docs:check-agent-guides`
+## Binding rules
 
-## Session-ID troubleshooting first stop
-
-When troubleshooting starts from a session ID, runtime-native ID, registry path,
-or “this session is broken” report, do not begin with a repository-wide grep:
-
-1. Run `npm run debug:where -- --json <id-or-path>` to resolve aliases and the canonical internal ID.
-2. Use the authenticated `GET /api/v1/sessions/:id/evidence` bundle first; it returns bounded diagnostics, receipts, and runtime locators in one read.
-3. Keep the canonical ID, `runId`, and `requestId`; use screen transcript/diagnostics next, and raw JSONL or tool payloads only when the evidence ladder requires them.
-
-Canonical runbook: [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md#session-id-evidence-ladder).
+1. **Session-ID troubleshooting.** When troubleshooting starts from a session ID, runtime-native ID, registry path, or "this session is broken" report, do not begin with a repository-wide grep: run `npm run debug:where -- --json <id-or-path>` first, then use the authenticated `GET /api/v1/sessions/:id/evidence` bundle.
+2. **Required workflow.** Use TDD for code changes. Keep diffs minimal. Prefer canonical docs over duplicating repo knowledge here.
+3. **Localhost UI changes:** use `webapp-testing`.
+4. **Live/external browser validation only:** use `playwright-cli`.
+5. **Talker gate.** Voice Mode's talker harness is a mechanical confirm-gated relay: **never widen the gate's reachability**.
+6. **Internal API contract bump:** keep the downstream Agent OS mirror in step before merging — see `docs/INTERNAL-API-CONTRACT.md` → "Downstream mirrors" (the version source of truth, the three mirror files, and the cross-repo sync test that catches drift).
+7. **Non-negotiable security and correctness rules:**
+   - Add `cookieAuthMiddleware` to protected REST routes.
+   - Validate request/input shapes with Zod or equivalent.
+   - Validate file paths before file access.
+   - Run prompt-injection detection before forwarding user text to any runtime.
+   - Preserve auth, origin, and CSRF protections when changing WebSocket or auth code.
+   - Treat the repo as permanently public; never commit live env files, real tokens, cookies, or transcript/session dumps.
+8. **Runtime-aware validation.** Use production only with explicit user permission plus `--allow-production`; Antigravity needs a separately authorised workflow because it is disabled in disposable mode, and Command Code is outside disposable `all`.
+9. **Final rule.** If a topic is already documented deeply elsewhere, **link to the canonical doc instead of expanding this file**.
 
 ## Start here
 
-- **2-minute orientation for agents:** [`docs/AGENT-ORIENTATION.md`](./docs/AGENT-ORIENTATION.md)
-- **Maintainer index:** [`docs/MAINTAINER-INDEX.md`](./docs/MAINTAINER-INDEX.md)
-- **Public overview:** [`README.md`](./README.md)
-- **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
-- **Codebase map:** [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
-- **Event pipeline:** [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md)
-- **Protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
-- **Security:** [`SECURITY.md`](./SECURITY.md)
-- **Deployment:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
-- **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) — start with its session-ID evidence ladder, not a repository-wide grep
-- **Observability (logging/diagnostics/errors):** [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md)
-- **Sharp edges:** [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
-
-## Cross-repo strategic context
-
-Pi Web UI and `/root/agent-os` are separate systems with a shared scaling story:
-Agent OS drives increasingly substantial orchestration through this runtime
-control plane, while Pi Web UI capacity, lifecycle and containment determine how
-safely that conductor can scale. For strategic work involving Internal API
-capacity, long-running sessions, dispatch, supervision, admission, retention,
-worker isolation or production rollout, read both sides before deciding:
-
-- this repo: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md), [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md), and the [resource scaling plan](./docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md) — **its Phases 8–9 are paused as of 2026-08-20; Phases 0–7 stay complete and in service. Read its "Programme pause" section before treating any of it as open work;**
-- orchestration scale-up (2026-09-26 onward): [`docs/plans/ORCHESTRATION-SCALING-READINESS-PLAN.md`](./docs/plans/ORCHESTRATION-SCALING-READINESS-PLAN.md) — staged plan with owner review moments; read before Internal API capacity, admission, lifecycle or isolation work;
-- Agent OS: `/root/agent-os/docs/CURRENT-STATE.md`, `/root/agent-os/docs/ARCHITECTURE-BOUNDARIES.md`, and its canonical roadmap/status docs linked there.
-
-Do not copy the sibling repo's current step/phase status here; follow those
-canonical files so cross-references do not become stale. Agent OS maturity is
-needed for representative Agent OS workload/product evidence, not deterministic
-platform fixture validation; Pi Web UI resource truth and control availability
-constrain Agent OS scaling claims. Neither repo may self-certify the other's
-readiness.
-
-## What this repo is now
-
-Pi Web UI is a **runtime-agnostic browser UI** over five runtime families:
-
-- **Pi Coding Agent**
-- **Claude Code**
-- **OpenCode**
-- **Antigravity**
-- **Command Code** (`cmd`; full runtime path behind the `COMMAND_CODE_ENABLED` gate — see [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md))
-
-Core architectural themes:
-
-- keep the **frontend mostly runtime-neutral**
-- keep **runtime-specific complexity on the server**
-- unify sessions through a **shared registry** and **common replay/event model**
-- treat the **Internal API / orchestration surface** as a first-class backend boundary, not a side utility
-- preserve cross-runtime product surfaces such as **session transfer** and **Drive Mode**
-- distinguish **core repo behavior** from companion-powered behavior; see [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
-
-## If you need to change X, read Y
-
-| Task | Read first |
+| If you need … | Read … |
 |---|---|
-| WebSocket message / protocol change | `shared/src/protocol-types.ts`, `server/src/websocket/protocol.ts`, `client/src/store/sessionStore.ts`, [`docs/PROTOCOL.md`](./docs/PROTOCOL.md) |
-| Runtime-specific replay / event normalization | `server/src/<runtime>/<runtime>-event-*.ts`, `server/src/<runtime>/<runtime>-history-replay.ts`, [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md) |
-| Pi session lifecycle / cleanup / pinning | `server/src/pi/multi-session-manager.ts`, [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md) |
-| Claude backend behavior | `server/src/claude/*`, [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) |
-| Claude provider profiles / backend switching | `server/src/claude/claude-profiles.ts`, `server/src/claude/claude-sdk-service.ts`, [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md) |
-| OpenCode integration / model automation | `server/src/opencode/*`, [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md), [`docs/OPENCODE-MODEL-AUTOMATION.md`](./docs/OPENCODE-MODEL-AUTOMATION.md) |
-| Command Code integration / catalogue refresh | `server/src/command-code/*`, [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md) |
-| Pi runtime: OpenRouter model automation | `server/src/pi/pi-openrouter-refresh.ts`, `server/src/pi/pi-service.ts`, [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md) |
-| Antigravity integration | `server/src/antigravity/*`, [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md) |
-| Session transfer | `server/src/session-transfer/*`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
-| Voice Mode (talker harness, voice surface, and its document corpus) | `server/src/talker/*`, `client/src/components/DriveMode/*`, [`docs/VOICE-MODE-INDEX.md`](./docs/VOICE-MODE-INDEX.md) (start here), [`docs/VOICE-MODE-INTENT.md`](./docs/VOICE-MODE-INTENT.md) |
-| Drive Mode | `client/src/components/DriveMode/*`, `client/src/store/driveModeStore.ts`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
-| Internal API / orchestration / live validation | `server/src/internal-api/*`, `scripts/live-validate.ts`, [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md), [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md), [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) |
-| Long-horizon validation / durable watches | `server/src/internal-api/watch/*`, `server/src/live-validation/long-horizon-runner.ts`, `scripts/long-horizon-validate.ts`, [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md) |
-| Notifications (Telegram on `agent_end`) | `server/src/notifications/*`, `server/src/internal-api/routes/notifications.ts`, `server/src/live-validation/scenarios.ts`, [`docs/NOTIFICATIONS.md`](./docs/NOTIFICATIONS.md) |
-| Add a REST route | `server/src/routes/*.ts` and `cookieAuthMiddleware`; then read [`SECURITY.md`](./SECURITY.md) |
-| Auth / CSRF / prompt-injection / path validation | `server/src/security/*`, `server/src/middleware/auth.ts`, [`SECURITY.md`](./SECURITY.md) |
-| Config / env vars / ops | `server/src/config.ts`, `.env.example`, [`DEPLOYMENT.md`](./DEPLOYMENT.md) |
-| CI workflows, triggers, or which paths skip the suite | `.github/workflows/application.yml`, `.github/workflows/docs.yml`, `server/tests/unit/ci-workflow-paths.test.ts`, [`docs/CI-PIPELINE.md`](./docs/CI-PIPELINE.md) |
-| Fast session diagnosis / log or session-file lookup | [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md), first run `npm run debug:where -- <id-or-path>`, then use the printed canonical paths/API filters |
-| Logging / levels / namespaces / correlation / diagnostics / error codes | `server/src/logging/*`, `server/src/internal-api/error-codes.ts`, `server/src/internal-api/diagnostics-buffer.ts`, [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md) |
+| A 2-minute orientation | `docs/AGENT-ORIENTATION.md` |
+| The maintainer index | `docs/MAINTAINER-INDEX.md` |
+| To change a specific area (task → files → doc) | `AGENT-REFERENCE.md` (`## If you need to change X, read Y`) |
+| The architecture, codebase map or event pipeline | `docs/ARCHITECTURE.md`, `docs/CODEBASE-MAP.md`, `docs/EVENT-PIPELINE.md` |
+| The protocol (WebSocket / runtime) | `docs/PROTOCOL.md` |
+| Security musts | `SECURITY.md` |
+| Deployment and ops | `DEPLOYMENT.md` |
+| To diagnose a session or read logs | `docs/TROUBLESHOOTING.md` (its session-ID evidence ladder first) |
+| Observability: logging, diagnostics, error codes | `docs/OBSERVABILITY.md` |
+| Known sharp edges | `docs/SHARP-EDGES.md` |
+| Internal API, orchestration or live validation | `docs/INTERNAL-API.md`, `docs/INTERNAL-API-ORCHESTRATION.md`, `docs/LIVE-VALIDATION.md` |
+| Voice Mode | `docs/VOICE-MODE-INDEX.md` |
+| Cross-repo strategic context and current status | `AGENT-REFERENCE.md` (`## Cross-repo strategic context`) |
+| The high-signal file map and runtime validation shortcuts | `AGENT-REFERENCE.md` (`## High-signal file map`, `## Runtime-aware validation shortcuts`) |
+| The public overview | `README.md` |
 
-## High-signal file map
+## Validate & commit
 
-- `client/src/store/sessionStore.ts` — main session state and replay handling
-- `client/src/store/filesStore.ts` + `components/Files/MarkdownEditor.tsx` — Files tab: file tree + Markdown source editor with GFM live preview (explicit Save via `/api/files/write`; truncated files read-only)
-- `client/src/hooks/useWebSocket.ts` — browser WebSocket actions
-- `server/src/websocket/connection.ts` — main runtime-aware router
-- `server/src/session-registry.ts` — unified cross-runtime session index
-- `server/src/pi/multi-session-manager.ts` — Pi lifecycle / pinning / cleanup
-- `server/src/claude/claude-service.ts` — Claude lifecycle and backend selection
-- `server/src/claude/claude-profiles.ts` — provider profile schema, validation, and launch resolution
-- `server/src/claude/claude-sdk-service.ts` — SDK backend (preferred for profiles)
-- `server/src/opencode/opencode-service.ts` — OpenCode lifecycle / replay / permissions
-- `server/src/antigravity/antigravity-service.ts` — Antigravity lifecycle, stream-json turn execution, follow-up queue, model/thinking-level changes
-- `server/src/antigravity/agy-stream-process.ts` + `agy-event-normalizer.ts` + `agy-models.ts` — persistent agy child, NDJSON→NormalizedEvent translation, model catalogue/thinking levels
-- `server/src/session-transfer/*` — cross-runtime transcript transfer
-- `server/src/talker/*` — Voice Mode talker harness (mechanical confirm-gated relay; **never widen the gate's reachability**); start at `talker/policy-core.ts`, and orient with [`docs/VOICE-MODE-INDEX.md`](./docs/VOICE-MODE-INDEX.md)
-- For broader discovery, use [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
+- Docs: `npm run docs:check-agent-guides`, `npm run docs:check-links`; `npm run docs:check-status` after touching a Voice Mode document.
+- Code: `npm run lint`, `npm run typecheck`, `npm run build`, relevant tests (`npm test`, workspace tests, E2E or runtime validation as appropriate).
+- Runtime validation: read `docs/LIVE-VALIDATION.md` and run the relevant scenario(s); disposable/local only unless the owner gives explicit permission plus `--allow-production`.
+- Guide edits: `guide-check repo .` before committing; keep `AGENTS.md` and `CLAUDE.md` byte-identical.
+- Deploy/restart: follow `DEPLOYMENT.md`; a live production change needs the owner's approval.
+- Push rule: commit and push completed changes on the current branch; stage explicit paths, never a dirty tree wholesale.
 
-## Required workflow
+## Current state
 
-1. **Use TDD for code changes.**
-2. **Keep diffs minimal.**
-3. **Prefer canonical docs over duplicating repo knowledge here.**
-4. **Run relevant validation before finishing:**
-   - `npm run docs:check-agent-guides`
-   - `npm run docs:check-links`
-   - `npm run docs:check-status` (after touching any Voice Mode document)
-   - `npm run lint`
-   - `npm run typecheck`
-   - `npm run build`
-   - relevant tests (`npm test`, workspace tests, E2E, or runtime validation as appropriate)
-5. **For localhost UI changes:** use `webapp-testing`.
-6. **For live/external browser validation only:** use `playwright-cli`.
-7. **Before commit/push:** inspect `git status --short`, `git diff --stat`, and `git diff --cached --stat`.
-8. **Before commit/push:** explicitly verify no secrets, tokens, cookies, auth dumps, session artifacts, or local machine files are being added.
-9. **On an Internal API contract bump:** keep the downstream Agent OS mirror in step before merging — see [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) → "Downstream mirrors" (the version source of truth, the three mirror files, and the cross-repo sync test that catches drift).
-
-## Non-negotiable security and correctness rules
-
-- Add `cookieAuthMiddleware` to protected REST routes.
-- Validate request/input shapes with Zod or equivalent.
-- Validate file paths before file access.
-- Run prompt-injection detection before forwarding user text to any runtime.
-- Preserve auth, origin, and CSRF protections when changing WebSocket or auth code.
-- Treat the repo as permanently public; never commit live env files, real tokens, cookies, or transcript/session dumps.
-
-## Runtime-aware validation shortcuts
-
-- General checks: `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`
-- Browserless runtime validation: start `npm run validate:server`, then run `npm run validate:live -- --socket <validation.sock> --token-path <validation-token> --runtime <pi|claude|opencode|all> --scenario <id>`; disposable `all` currently covers Pi/Claude/OpenCode, while Antigravity needs a separately authorised workflow because it is disabled in disposable mode. Command Code is likewise outside disposable `all`: validate it with the fixture (`--command-code-fixture`, scenario `commandcode-fixture-smoke`) or a real backend (`--command-code-real`) — see [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md). Use production only with explicit user permission plus `--allow-production`.
-- Claude provider profile validation: start a profiles-enabled validation server, then run `npm run validate:claude-profiles -- --socket <sock> --token-path <token> --glm-profile <id> --native-profile <id>`; see [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md).
-- Long-horizon validation: the watch ledger preserves already-recorded evidence across restarts, but a reloaded watch is detached and must be registered again to resume observation; start `npm run validate:server`, then run `npm run validate:long-horizon -- --socket <validation.sock> --token-path <validation-token> --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
-- Fast runtime/session lookup: first run `npm run debug:where -- <session-id-or-runtime-id-or-path>`; it resolves the registry/native identity and prints runtime-specific evidence paths. Prefer the Internal API `transcript?view=screen` and scoped diagnostics before raw-file or global-log searches.
-- OpenCode model catalogue refresh: `npm run opencode:refresh-models`
-- Command Code catalogue refresh: `npm run commandcode:refresh-models` (effort table) and `npm run commandcode:weekly-refresh` (weekly new-model detection, GOAT eligibility probes, commit+push+idle-aware restart; see [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md))
-- Pi runtime OpenRouter catalogue refresh: `npm run pi:refresh-models` (see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md))
-
-If you touch runtime behavior, read [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) and run the relevant scenario(s).
-
-## Final rule
-
-If a topic is already documented deeply elsewhere, **link to the canonical doc instead of expanding this file**.
+Current status and cross-repo strategic context: `AGENT-REFERENCE.md` (`## Cross-repo strategic context`) and the canonical plans it names (`docs/plans/ORCHESTRATION-SCALING-READINESS-PLAN.md`, `docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`).
