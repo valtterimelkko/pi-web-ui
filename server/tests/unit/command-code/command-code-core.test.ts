@@ -31,7 +31,13 @@ describe('Command Code model discovery', () => {
     // not a historical count that would reject a valid automated refresh.
     expect(COMMAND_CODE_EXCLUDED_MODELS).toEqual(expect.arrayContaining([
       'claude-sonnet-5', 'claude-fable-5-1', 'gpt-6-astra',
+      // 14 Oct 2026 GOAT page: Opus 5.5 / GPT-6 Sol / GPT-6.1 Sol need Pro or Max;
+      // Jev is a headless decision model, not selectable in /model.
+      'claude-opus-5-5', 'gpt-6-sol', 'gpt-6.1-sol', 'typesafe/jev',
     ]));
+    // GOAT premium models that DO carry GOAT credits stay eligible.
+    expect(isCommandCodeEligible('claude-sonnet-5-5')).toBe(true);
+    expect(isCommandCodeEligible('claude-haiku-5-5')).toBe(true);
     expect(new Set(COMMAND_CODE_EXCLUDED_MODELS).size).toBe(COMMAND_CODE_EXCLUDED_MODELS.length);
     for (const id of COMMAND_CODE_EXCLUDED_MODELS) {
       expect(id).toMatch(/^\S+$/);

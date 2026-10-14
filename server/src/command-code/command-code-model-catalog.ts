@@ -38,6 +38,8 @@ export const COMMAND_CODE_EXCLUDED_MODELS = [
   'gpt-6-sol',
   'google/gemini-4-argon',
   'meta/muse-wonder-1.0',
+  // Headless-only decision model (GOAT page): not selectable in /model, never a chat model.
+  'typesafe/jev',
 ] as const;
 
 export function isCommandCodeEligible(model: CommandCodeRuntimeModel): boolean {
