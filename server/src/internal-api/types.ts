@@ -860,9 +860,10 @@ export interface AdoptSessionResponse {
   success: boolean;
   childSessionId: string;
   parentSessionId: string;
-  /** Contract 1.63.0 (step 1i.2 B): "declared" when the parent was adopted as
-   *  native-marked; absent for managed adoption (unchanged since 1.40.0). */
-  parentSource?: 'declared';
+  /** Contract 1.63.0 (step 1i.2 B, correction round 1): "declared" when the
+   *  parent was adopted as native-marked, "header" for a header-sourced
+   *  managed adoption; absent otherwise (managed adoption as on 1.40.0). */
+  parentSource?: 'header' | 'declared';
   runtime: string;
   alias?: string;
   role?: string;
@@ -897,6 +898,10 @@ export interface SessionControlResponse {
   parentSessionId?: string;
   /** Contract 1.40.0 `adopt`: the child's runtime. */
   runtime?: string;
+  /** Contract 1.63.0 (correction round 1): the `adopt` linkage source —
+   *  "declared" for a native-marked parent, "header" for a header-sourced
+   *  managed adoption; absent otherwise. */
+  parentSource?: 'header' | 'declared';
   /** Contract 1.40.0 `adopt`: echo of the caller-provided display label. */
   alias?: string;
   /** Contract 1.40.0 `adopt`: echo of the caller-provided advisory role. */

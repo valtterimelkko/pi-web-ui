@@ -118,6 +118,7 @@ import {
   sessionControlBodySchema,
   adoptSessionBodySchema,
   adoptNativeBodySchema,
+  nativeParentIdSchema,
 } from '../session-validation.js';
 import { withCorrelation, newRequestId, getCorrelationContext } from '../../logging/correlation.js';
 import { TransferService } from '../../session-transfer/transfer-service.js';
@@ -635,6 +636,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // subscription — the native parent is not a Pi Web UI session, so it
         // has no broker key to publish to.
         const declaredParentId = bodyParentId.trim();
+        // Belt and braces (correction round 1): the route schemas already
+        // reject non-opaque values, but no unvalidated string may ever reach
+        // patchSessionMeta as a declared parent — fail safe (unlinked), never
+        // fatal, mirroring linkage's display-only contract.
+        if (!nativeParentIdSchema.safeParse(declaredParentId).success) {
+          logger.warn(`native parent linkage refused a non-opaque parent id (${declaredParentId.length} chars); child left unlinked`);
+          return null;
+        }
         await sessionRegistry.patchSessionMeta(child.sessionId, { parentSessionId: declaredParentId, parentSource: 'declared' });
         return { parentSessionId: declaredParentId, parentSource: 'declared' };
       }
@@ -2411,10 +2420,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const parentEntry = (await sessionRegistry.get(parentParam)) ?? (await sessionRegistry.getByPath(parentParam));
         if (!parentEntry) {
           // Contract 1.63.0 (step 1i.2 B): a native-declared parent is not a
-          // registry session. When children carry the value as their declared
-          // parentSessionId, filter by the raw id; an unknown id with no
-          // children keeps the 404 (a typo never masquerades as an empty list).
-          const hasDeclaredChildren = (await sessionRegistry.listAll()).some((e) => e.parentSessionId === parentParam);
+          // registry session. When children carry the value as their DECLARED
+          // parentSessionId (parentSource "declared"), filter by the raw id;
+          // any other unresolvable value keeps the 404 (a typo never
+          // masquerades as an empty list, and a deleted managed parent's
+          // orphaned children do not silently widen the filter).
+          const hasDeclaredChildren = (await sessionRegistry.listAll()).some((e) => e.parentSessionId === parentParam && e.parentSource === 'declared');
           if (!hasDeclaredChildren) {
             sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Parent session not found: ${parentParam}`));
             return;
@@ -4472,6 +4483,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     childSessionId: string;
     parentSessionId: string;
     runtime: string;
+    /** Contract 1.63.0 (correction round 1): echo of the linkage source on the
+     *  adopt responses — "declared" for a native-marked parent, "header" for
+     *  a header-sourced managed adoption. */
+    parentSource?: 'header' | 'declared';
   }
 
   /** Resolve a session by id or, failing that, by session path (parents may be
@@ -4486,11 +4501,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    *  Contract 1.63.0 (step 1i.2 B): with `parentKind: "native"` the parent is
    *  an opaque native session id that must NOT resolve to a registry session —
    *  it is persisted as parentSource "declared" with no fan-out (a native
-   *  parent has no broker key). */
+   *  parent has no broker key). Correction round 1: the native branch
+   *  re-validates the id with nativeParentIdSchema (defence in depth — the
+   *  route schemas reject non-opaque values first), and a header-sourced
+   *  managed adoption (`opts.parentSource: "header"`) persists and echoes its
+   *  source. */
   async function adoptRegisteredSession(
     childId: string,
     parentIdOrPath: string,
-    opts: { alias?: string; role?: string; parentKind?: 'native' } = {},
+    opts: { alias?: string; role?: string; parentKind?: 'native'; parentSource?: 'header' } = {},
   ): Promise<{ ok: true; result: AdoptionLinkResult } | { ok: false; status: 400 | 404; body: Record<string, unknown> }> {
     const child = await resolveRegistrySession(childId);
     if (!child) {
@@ -4498,6 +4517,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     if (opts.parentKind === 'native') {
       const nativeParentId = parentIdOrPath.trim();
+      // Belt and braces (correction round 1, review finding 1): no unvalidated
+      // string may ever reach patchSessionMeta as a declared parent. The
+      // route schemas reject non-opaque body values first; this guard makes
+      // the native branch safe regardless of how it is reached.
+      if (!nativeParentIdSchema.safeParse(nativeParentId).success) {
+        return { ok: false, status: 400, body: enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId must be a bare opaque native id (no path separators) when parentKind is "native"') };
+      }
       if (child.id === nativeParentId) {
         return { ok: false, status: 400, body: enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'A session cannot adopt itself as a child') };
       }
@@ -4511,6 +4537,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           childSessionId: child.id,
           parentSessionId: nativeParentId,
           runtime: child.sdkType,
+          parentSource: 'declared',
         },
       };
     }
@@ -4533,7 +4560,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ancestor = next;
     }
 
-    await sessionRegistry.patchSessionMeta(child.id, { parentSessionId: parent.id });
+    await sessionRegistry.patchSessionMeta(child.id, { parentSessionId: parent.id, ...(opts.parentSource ? { parentSource: opts.parentSource } : {}) });
 
     const card = buildChildDispatchedCard({
       childSessionId: child.id,
@@ -4564,8 +4591,39 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         childSessionId: child.id,
         parentSessionId: parent.id,
         runtime: child.sdkType,
+        ...(opts.parentSource ? { parentSource: opts.parentSource } : {}),
       },
     };
+  }
+
+  /** Contract 1.63.0 (correction round 1): adopt-parent precedence mirroring
+   *  the create path (linkChildFromRequest). The native marker is BODY-scoped:
+   *  a resolvable X-Parent-Session wins as a managed, header-sourced adoption
+   *  (full child_dispatched fan-out, native mark ignored); an unresolvable
+   *  header falls through to the native-marked BODY value; an unresolvable
+   *  explicit value with no native-marked body keeps the 1.40.0 404. */
+  async function resolveAdoptParent(
+    req: IncomingMessage,
+    body: { parentSessionId?: string; parentKind?: 'native' },
+  ): Promise<
+    | { kind: 'managed'; parentId: string; parentSource?: 'header' }
+    | { kind: 'native'; parentId: string }
+    | { kind: 'error'; status: 400 | 404; body: Record<string, unknown> }
+  > {
+    const headerValue = (req.headers['x-parent-session'] as string | undefined)?.trim();
+    const bodyParentId = body.parentSessionId?.trim();
+    if (headerValue) {
+      const viaHeader = await resolveRegistrySession(headerValue);
+      if (viaHeader) return { kind: 'managed', parentId: viaHeader.id, parentSource: 'header' };
+      if (bodyParentId && body.parentKind === 'native') return { kind: 'native', parentId: bodyParentId };
+      // 1.40.0 behaviour: an unresolvable explicit value is a 404 (the
+      // unmarked body value is never tried — header wins).
+      return { kind: 'error', status: 404, body: enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Parent session not found: ${headerValue}`) };
+    }
+    if (bodyParentId) {
+      return body.parentKind === 'native' ? { kind: 'native', parentId: bodyParentId } : { kind: 'managed', parentId: bodyParentId };
+    }
+    return { kind: 'error', status: 400, body: enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required') };
   }
 
   /** POST /api/v1/sessions/:id/adopt — link an existing registered session under
@@ -4591,12 +4649,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     const body = parsed.data;
-    const parentId = pickExplicitParentId(req.headers['x-parent-session'] as string | undefined, body.parentSessionId);
-    if (!parentId) {
-      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required'));
+    // Correction round 1: create-path precedence — the native marker is
+    // body-scoped and a resolvable header wins as a managed adoption.
+    const resolved = await resolveAdoptParent(req, body);
+    if (resolved.kind === 'error') {
+      sendJson(res, resolved.status, resolved.body);
       return;
     }
-    const outcome = await adoptRegisteredSession(childId, parentId, { alias: body.alias, role: body.role, ...(body.parentKind ? { parentKind: body.parentKind } : {}) });
+    const outcome = await adoptRegisteredSession(childId, resolved.parentId, {
+      alias: body.alias,
+      role: body.role,
+      ...(resolved.kind === 'native' ? { parentKind: 'native' } : {}),
+      ...(resolved.kind === 'managed' && resolved.parentSource ? { parentSource: resolved.parentSource } : {}),
+    });
     if (!outcome.ok) {
       sendJson(res, outcome.status, outcome.body);
       return;
@@ -4622,10 +4687,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const response: AdoptSessionResponse = {
       success: true,
       ...outcome.result,
-      // Contract 1.63.0 (step 1i.2 B): which source produced the linkage
-      //  (declared for a native-marked parent; absent for managed adoption,
-      //  which never carried a parentSource).
-      ...(body.parentKind === 'native' ? { parentSource: 'declared' as const } : {}),
+      // Contract 1.63.0: the linkage source is carried in outcome.result —
+      //  "declared" for a native-marked parent, "header" for a header-sourced
+      //  managed adoption; absent otherwise (managed adoption as on 1.40.0).
       ...(body.alias ? { alias: body.alias } : {}),
       ...(body.role ? { role: body.role } : {}),
       ...(ownership ? { ownership } : {}),
@@ -4775,12 +4839,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // Contract 1.40.0: adoption is runtime-agnostic registry linkage — handle it
     // before the per-runtime control branches (works for Command Code too).
     if (body.action === 'adopt') {
-      const parentId = pickExplicitParentId(req.headers['x-parent-session'] as string | undefined, body.parentSessionId);
-      if (!parentId) {
-        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required for adopt'));
+      // Correction round 1: create-path precedence — the native marker is
+      // body-scoped and a resolvable header wins as a managed adoption.
+      const resolved = await resolveAdoptParent(req, body);
+      if (resolved.kind === 'error') {
+        // The control lane's own wording for a missing parent identity.
+        if (resolved.status === 400) {
+          sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required for adopt'));
+        } else {
+          sendJson(res, resolved.status, resolved.body);
+        }
         return;
       }
-      const outcome = await adoptRegisteredSession(sessionId, parentId, { alias: body.alias, role: body.role, ...(body.parentKind ? { parentKind: body.parentKind } : {}) });
+      const outcome = await adoptRegisteredSession(sessionId, resolved.parentId, {
+        alias: body.alias,
+        role: body.role,
+        ...(resolved.kind === 'native' ? { parentKind: 'native' } : {}),
+        ...(resolved.kind === 'managed' && resolved.parentSource ? { parentSource: resolved.parentSource } : {}),
+      });
       if (!outcome.ok) {
         sendJson(res, outcome.status, outcome.body);
         return;
@@ -4791,6 +4867,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         childSessionId: outcome.result.childSessionId,
         parentSessionId: outcome.result.parentSessionId,
         runtime: outcome.result.runtime,
+        // Contract 1.63.0 (correction round 1): echo the linkage source
+        //  ("declared" / "header"), matching the /:id/adopt response.
+        ...(outcome.result.parentSource ? { parentSource: outcome.result.parentSource } : {}),
         ...(body.alias ? { alias: body.alias } : {}),
         ...(body.role ? { role: body.role } : {}),
       };

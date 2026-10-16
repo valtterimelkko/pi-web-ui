@@ -831,12 +831,19 @@ POST /api/v1/sessions/:id/adopt
 - The parent may also arrive via the `X-Parent-Session` header (header wins,
   same precedence as create; a registry id or session path is accepted).
 - Since contract 1.63.0 the parent may be **native** — a session Pi Web UI does
-  not host: send `parentKind: "native"` beside `parentSessionId` and the value
-  is taken as an opaque native id (bare token, no paths), persisted as
-  `parentSource: "declared"` with no `child_dispatched` fan-out.
+  not host: send `parentKind: "native"` beside the BODY `parentSessionId` and
+  the value is taken as an opaque native id (bare token, no paths), persisted
+  as `parentSource: "declared"` with no `child_dispatched` fan-out. The marker
+  is body-scoped with create-path precedence: a resolvable `X-Parent-Session`
+  still produces a managed header adoption (mark ignored, full fan-out,
+  response `parentSource: "header"`); an unresolvable header falls through to
+  the marked body value; an unresolvable parent with no marked body keeps the
+  `404 SESSION_NOT_FOUND`.
 - `alias` becomes the child-card label; `role` is an advisory echo.
 - Response: `{success, childSessionId, parentSessionId, runtime}` (plus
-  `parentSource: "declared"` for a native-marked adoption).
+  `parentSource: "declared"` for a native-marked adoption or
+  `parentSource: "header"` when the parent came from a resolvable header —
+  the control-lane adopt response echoes the same field).
 - The same operation is available as `POST /sessions/:id/control` with
   `{action: "adopt", parentSessionId}` (P1 control lane).
 - Errors: `404 SESSION_NOT_FOUND` (child or parent unknown), `400
@@ -3313,7 +3320,10 @@ curl --unix-socket $SOCK -X POST /api/v1/sessions \
   `POST /sessions/:id/adopt` and the `action: "adopt"` control lane. The
   marked `parentSessionId` must be a bare opaque id (≤ 128 chars, no
   separators, no `..` — never a path); `parentKind` without `parentSessionId`
-  is a `400 INVALID_REQUEST`.
+  is a `400 INVALID_REQUEST` on every surface. The marker is **body-scoped**:
+  it names the body `parentSessionId`, and a resolvable `X-Parent-Session`
+  header wins as a managed, header-sourced link with the full
+  `child_dispatched` fan-out (the mark is ignored).
 - The value is **not** resolved against the registry. It is persisted as
   `parentSessionId` + `parentSource: "declared"` (a fifth enum member) and
   surfaces on every lineage surface: the create response, `GET /sessions`
@@ -3324,9 +3334,10 @@ curl --unix-socket $SOCK -X POST /api/v1/sessions \
   for a declared parent — it has no broker key; the linkage is display-only
   metadata, exactly like managed linkage.
 - Unchanged: an **unmarked** unresolvable `X-Parent-Session` or body
-  `parentSessionId` is still silently ignored (1.34.0 semantics), and a
-  resolvable `X-Parent-Session` header still wins over a native-marked body
-  value.
+  `parentSessionId` is still silently ignored on create/batch (1.34.0
+  semantics) and still a 404 on adopt (1.40.0 semantics), and a resolvable
+  `X-Parent-Session` header still wins over a native-marked body value on
+  every surface.
 - Advertised on `GET /capabilities` as `features.nativeParentLinkage`.
 
 ### Pi goal truth (contract 1.45.0)

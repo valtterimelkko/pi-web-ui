@@ -1392,6 +1392,10 @@
           "type": "string",
           "optional": true
         },
+        "parentSource": {
+          "type": "'header' | 'declared'",
+          "optional": true
+        },
         "alias": {
           "type": "string",
           "optional": true

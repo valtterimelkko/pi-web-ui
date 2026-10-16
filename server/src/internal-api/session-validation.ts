@@ -86,7 +86,7 @@ export const agentOsCaptureSchema = z.enum(['enabled', 'disabled']);
 // as parentSource "declared". Bare opaque token only: no separators, no '..',
 // bounded length — never a path.
 export const parentKindSchema = z.enum(['native']);
-const nativeParentIdSchema = z.string().regex(
+export const nativeParentIdSchema = z.string().regex(
   /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/,
   'parentSessionId must be a bare opaque native id (no path separators) when parentKind is "native"',
 );
@@ -205,7 +205,10 @@ export const sessionControlBodySchema = z.object({
   nativeId: z.string().min(1).max(128).optional(),
   cwd: cwdSchema.optional(),
 }).strict().superRefine((body, ctx) => {
-  if (body.action === 'adopt') refineParentKind(body, ctx);
+  // Correction round 1 (review finding 3): the marker is body-scoped on every
+  // action — `parentKind` names the body `parentSessionId`, so it is a 400
+  // whenever it appears without one, on any control action.
+  refineParentKind(body, ctx);
 });
 
 /** Contract 1.40.0: POST /api/v1/sessions/:id/adopt body. Parent may also arrive

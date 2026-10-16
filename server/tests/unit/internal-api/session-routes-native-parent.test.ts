@@ -68,6 +68,7 @@ describe('Native parent linkage (contract 1.63.0)', () => {
   let registry: SessionRegistryManager;
   let antigravityService: any;
   let peerResolve: { resolve: ReturnType<typeof vi.fn> };
+  let onBrowserMessage: ReturnType<typeof vi.fn>;
   let routes: ReturnType<typeof createSessionRoutes>;
   let createdCount: number;
 
@@ -99,6 +100,7 @@ describe('Native parent linkage (contract 1.63.0)', () => {
     // Peer resolution refuses by default so unmarked cases stay deterministically
     // unlinked (the tests that want it linked say so).
     peerResolve = { resolve: vi.fn(async () => null) };
+    onBrowserMessage = vi.fn();
     routes = createSessionRoutes({
       claudeService: { isRunning: vi.fn(() => false) } as any,
       opencodeService: { isRunning: vi.fn(() => false) } as any,
@@ -111,6 +113,7 @@ describe('Native parent linkage (contract 1.63.0)', () => {
       preferencesPath: path.join(dir, 'prefs.json'),
       watchDir: path.join(dir, 'watches'),
       peerParentResolver: peerResolve as unknown as SessionRoutesDeps['peerParentResolver'],
+      onBrowserMessage: onBrowserMessage as SessionRoutesDeps['onBrowserMessage'],
     });
   });
 
@@ -327,6 +330,140 @@ describe('Native parent linkage (contract 1.63.0)', () => {
       const out = await getList(`/api/v1/sessions?parent=${NATIVE_PARENT_ID}`);
       expect(out.status).toBe(200);
       expect(out.body.sessions.map((s: any) => s.sessionId)).toContain(childId);
+    });
+
+    // Correction round 1, blocker 1: an unvalidated X-Parent-Session header must
+    // never be persisted as a declared native parent. The marker is body-scoped:
+    // an unresolvable header falls through to the native-marked BODY value.
+    it('adopt: a path-shaped unresolvable header is never persisted; the native-marked body value links instead', async () => {
+      const res = mockRes();
+      await routes.handleAdoptSession(
+        jsonReq('POST', `/api/v1/sessions/${childId}/adopt`, {
+          parentSessionId: NATIVE_PARENT_ID,
+          parentKind: 'native',
+        }, { 'x-parent-session': '../../etc/passwd' }),
+        res,
+        childId,
+      );
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.parentSessionId).toBe(NATIVE_PARENT_ID);
+      expect(body.parentSource).toBe('declared');
+      const entry = await registry.get(childId);
+      expect(entry?.parentSessionId).toBe(NATIVE_PARENT_ID);
+      expect(entry?.parentSource).toBe('declared');
+    });
+
+    it('control-adopt: a path-shaped unresolvable header is never persisted; the native-marked body value links instead', async () => {
+      const res = mockRes();
+      await routes.handleSessionControl(
+        jsonReq('POST', `/api/v1/sessions/${childId}/control`, {
+          action: 'adopt',
+          parentSessionId: NATIVE_PARENT_ID,
+          parentKind: 'native',
+        }, { 'x-parent-session': '../../etc/passwd' }),
+        res,
+        childId,
+      );
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.parentSessionId).toBe(NATIVE_PARENT_ID);
+      expect(body.parentSource).toBe('declared');
+      const entry = await registry.get(childId);
+      expect(entry?.parentSessionId).toBe(NATIVE_PARENT_ID);
+      expect(entry?.parentSource).toBe('declared');
+    });
+
+    it('adopt: an over-long unresolvable header is never persisted; the native-marked body value links instead', async () => {
+      const overLong = `x${'a'.repeat(200)}`;
+      const res = mockRes();
+      await routes.handleAdoptSession(
+        jsonReq('POST', `/api/v1/sessions/${childId}/adopt`, {
+          parentSessionId: NATIVE_PARENT_ID,
+          parentKind: 'native',
+        }, { 'x-parent-session': overLong }),
+        res,
+        childId,
+      );
+      expect(res.statusCode).toBe(200);
+      const entry = await registry.get(childId);
+      expect(entry?.parentSessionId).toBe(NATIVE_PARENT_ID);
+      expect(entry?.parentSource).toBe('declared');
+    });
+
+    // Correction round 1, blocker 2: a resolvable header must produce a managed
+    // adoption (child_dispatched fan-out) even when the body carries a native
+    // marker — mirroring the create path.
+    it('adopt: a resolvable X-Parent-Session wins as a managed header adoption (native mark ignored, fan-out fires)', async () => {
+      const res = mockRes();
+      await routes.handleAdoptSession(
+        jsonReq('POST', `/api/v1/sessions/${childId}/adopt`, {
+          parentSessionId: NATIVE_PARENT_ID,
+          parentKind: 'native',
+        }, { 'x-parent-session': MANAGED_PARENT_ID }),
+        res,
+        childId,
+      );
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.parentSessionId).toBe(MANAGED_PARENT_ID);
+      expect(body.parentSource).toBe('header');
+      const entry = await registry.get(childId);
+      expect(entry?.parentSessionId).toBe(MANAGED_PARENT_ID);
+      expect(entry?.parentSource).toBe('header');
+      // Managed side effect fired: the browser surface saw the child card.
+      expect(onBrowserMessage).toHaveBeenCalledTimes(1);
+      expect(onBrowserMessage.mock.calls[0][0]).toMatchObject({
+        type: 'child_dispatched',
+        sessionId: MANAGED_PARENT_ID,
+        child: { childSessionId: childId },
+      });
+    });
+
+    it('control-adopt: a resolvable X-Parent-Session wins as a managed header adoption (native mark ignored, fan-out fires)', async () => {
+      const res = mockRes();
+      await routes.handleSessionControl(
+        jsonReq('POST', `/api/v1/sessions/${childId}/control`, {
+          action: 'adopt',
+          parentSessionId: NATIVE_PARENT_ID,
+          parentKind: 'native',
+        }, { 'x-parent-session': MANAGED_PARENT_ID }),
+        res,
+        childId,
+      );
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.parentSessionId).toBe(MANAGED_PARENT_ID);
+      expect(body.parentSource).toBe('header');
+      expect(onBrowserMessage).toHaveBeenCalledTimes(1);
+      expect(onBrowserMessage.mock.calls[0][0]).toMatchObject({ type: 'child_dispatched' });
+    });
+
+    // Master (1.40.0) behaviour preserved: an unresolvable explicit value with
+    // no native-marked body stays a 404, never a silent fallback.
+    it('adopt: an unresolvable header with no native-marked body keeps the 404', async () => {
+      const res = mockRes();
+      await routes.handleAdoptSession(
+        jsonReq('POST', `/api/v1/sessions/${childId}/adopt`, {}, { 'x-parent-session': 'does-not-resolve' }),
+        res,
+        childId,
+      );
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).code).toBe('SESSION_NOT_FOUND');
+      expect((await registry.get(childId))?.parentSessionId).toBeUndefined();
+    });
+
+    it('adopt: an unresolvable header with an UNMARKED body value keeps the 404 (header wins, body not tried)', async () => {
+      const res = mockRes();
+      await routes.handleAdoptSession(
+        jsonReq('POST', `/api/v1/sessions/${childId}/adopt`, {
+          parentSessionId: 'also-does-not-resolve',
+        }, { 'x-parent-session': 'does-not-resolve' }),
+        res,
+        childId,
+      );
+      expect(res.statusCode).toBe(404);
+      expect((await registry.get(childId))?.parentSessionId).toBeUndefined();
     });
   });
 
