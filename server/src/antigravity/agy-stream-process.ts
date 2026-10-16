@@ -263,12 +263,24 @@ export class AgyStreamProcess {
   }
 
   /** Abort the in-flight work: SIGTERM, consume the closing result with a
-   *  grace window, then escalate to SIGKILL. */
+   *  grace window, then escalate to SIGKILL. Idempotent.
+   *
+   *  An IDLE process (no pending turn) is terminated too: it owns no in-flight
+   *  work, but it does own a live `agy` process, and the session it belongs to
+   *  may be being deleted (DELETE /sessions/:id → AntigravityService.abort) or
+   *  the whole server stopped (AntigravityService.shutdown). Before this, the
+   *  early return on `pending.length === 0` left such a child running until its
+   *  own idle stdin-close timer, `idleTimeoutMs` later — census 2026-10-16: six
+   *  of them exhausted the host's inotify limit. */
   abort(): void {
-    if (this.exited || this.pending.length === 0) return;
+    if (this.exited || this.terminating) return;
     this.abortRequested = true;
     this.terminating = true;
     this.child?.kill('SIGTERM');
+    // Graceful half, so a child that honours EOF exits even where the SIGKILL
+    // escalation cannot run (the grace timer is unref'd and does not hold the
+    // event loop open during server shutdown).
+    this.stop();
     this.abortGraceTimer = setTimeout(() => {
       if (!this.exited) this.child?.kill('SIGKILL');
     }, ABORT_GRACE_MS);
