@@ -1,0 +1,84 @@
+[
+  {
+    "type": "message_start",
+    "message": {
+      "id": "cc-u1",
+      "role": "user",
+      "content": "First question."
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "cc-u1"
+    }
+  },
+  {
+    "type": "message_start",
+    "message": {
+      "id": "commandcode-message-1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "message": {
+      "id": "commandcode-message-1"
+    },
+    "assistantMessageEvent": {
+      "type": "text_delta",
+      "delta": "First answer, turn one."
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "commandcode-message-1"
+    }
+  },
+  {
+    "type": "message_start",
+    "message": {
+      "id": "cc-u2",
+      "role": "user",
+      "content": "Second question."
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "cc-u2"
+    }
+  },
+  {
+    "type": "message_start",
+    "message": {
+      "id": "commandcode-message-1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "message": {
+      "id": "commandcode-message-1"
+    },
+    "assistantMessageEvent": {
+      "type": "text_delta",
+      "delta": "Second answer, turn two."
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "commandcode-message-1"
+    }
+  },
+  {
+    "type": "message_update",
+    "message": {},
+    "assistantMessageEvent": {
+      "type": "text_delta",
+      "delta": " (id-less delta)"
+    }
+  }
+]

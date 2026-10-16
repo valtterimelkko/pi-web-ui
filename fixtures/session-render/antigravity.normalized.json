@@ -1,0 +1,167 @@
+[
+  {
+    "type": "message_start",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000049000,
+    "data": {
+      "id": "agy-u1",
+      "role": "user",
+      "content": "List the sample directory and print a line count."
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000050000,
+    "data": {
+      "id": "agy-u1"
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000051000,
+    "data": {
+      "id": "agy-a1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000052000,
+    "data": {
+      "id": "agy-a1",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Listing first."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000053000,
+    "data": {
+      "id": "agy-a1"
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000054000,
+    "data": {
+      "toolCallId": "agy-t1",
+      "toolName": "list_dir"
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000055000,
+    "data": {
+      "toolCallId": "agy-t1",
+      "result": "a.txt\nb.txt",
+      "isError": false,
+      "args": {
+        "DirectoryPath": "sample"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000056000,
+    "data": {
+      "toolCallId": "agy-t2",
+      "toolName": "run_command",
+      "args": {
+        "CommandLine": "wc -l sample/a.txt",
+        "Cwd": "sample"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000057000,
+    "data": {
+      "toolCallId": "agy-t2",
+      "result": "3 sample/a.txt",
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000058000,
+    "data": {
+      "toolCallId": "agy-t3",
+      "toolName": "view_file",
+      "args": {
+        "AbsolutePath": "sample/b.txt"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000059000,
+    "data": {
+      "toolCallId": "agy-t3",
+      "result": "line one",
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000060000,
+    "data": {
+      "toolCallId": "agy-t4",
+      "toolName": "invoke_subagent",
+      "args": {
+        "Task": "Summarise b.txt"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000061000,
+    "data": {
+      "toolCallId": "agy-t4",
+      "result": "",
+      "isError": false
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000062000,
+    "data": {
+      "id": "agy-a2",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000063000,
+    "data": {
+      "id": "agy-a2",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "a.txt has 3 lines."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-agy-session",
+    "timestamp": 1700000064000,
+    "data": {
+      "id": "agy-a2"
+    }
+  }
+]

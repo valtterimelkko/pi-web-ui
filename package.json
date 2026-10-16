@@ -18,6 +18,7 @@
     "test": "node scripts/test-workspaces.mjs",
     "test:coverage": "node scripts/test-workspaces.mjs --coverage",
     "test:e2e": "playwright test",
+    "test:visual:session-render": "playwright test --config playwright.session-render.config.ts",
     "benchmark": "vitest bench --run --config tests/benchmarks/vitest.bench.config.ts",
     "benchmark:quick": "tsx tests/benchmarks/index.ts",
     "validate:live": "npx tsx scripts/live-validate.ts",

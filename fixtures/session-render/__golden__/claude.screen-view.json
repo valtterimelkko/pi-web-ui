@@ -1,0 +1,103 @@
+{
+  "collapsed": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "Find where the sample greeting is defined.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Searching the sample project.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool_group",
+        "text": "(3 tools)",
+        "collapsedByDefault": true,
+        "groupSize": 3,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "The greeting is defined in `sample/greet.ts`.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 4,
+    "estimatedTotalLines": 4,
+    "expanded": {
+      "tools": false,
+      "thinking": false
+    }
+  },
+  "expanded": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "Find where the sample greeting is defined.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Searching the sample project.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "Grep: sample",
+        "collapsedByDefault": true,
+        "toolName": "Grep",
+        "toolPrimaryArg": "sample",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "sample/greet.ts:1:export const greeting = \"hello\";"
+      },
+      {
+        "kind": "tool",
+        "text": "Read: sample/greet.ts",
+        "collapsedByDefault": true,
+        "toolName": "Read",
+        "toolPrimaryArg": "sample/greet.ts",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "export const greeting = \"hello\";\n"
+      },
+      {
+        "kind": "tool",
+        "text": "Agent: Check usages",
+        "collapsedByDefault": true,
+        "toolName": "Agent",
+        "toolPrimaryArg": "Check usages",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "greeting is used in sample/main.ts only."
+      },
+      {
+        "kind": "assistant",
+        "text": "The greeting is defined in `sample/greet.ts`.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 6,
+    "estimatedTotalLines": 6,
+    "expanded": {
+      "tools": true,
+      "thinking": true
+    }
+  },
+  "markdown": "# Screen view\n\nItems: 4\nEstimated lines: 4\nExpanded: tools=false, thinking=false\n\n---\n\n## 👤 User\n\nFind where the sample greeting is defined.\n\n## 🤖 Assistant\n\nSearching the sample project.\n\n### 🗂 (3 tools) (collapsed)\n\n## 🤖 Assistant\n\nThe greeting is defined in `sample/greet.ts`."
+}

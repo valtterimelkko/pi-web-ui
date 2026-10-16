@@ -1,0 +1,79 @@
+{
+  "collapsed": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "First question.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "First answer, turn one.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "user",
+        "text": "Second question.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Second answer, turn two.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 4,
+    "estimatedTotalLines": 4,
+    "expanded": {
+      "tools": false,
+      "thinking": false
+    }
+  },
+  "expanded": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "First question.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "First answer, turn one.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "user",
+        "text": "Second question.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Second answer, turn two.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 4,
+    "estimatedTotalLines": 4,
+    "expanded": {
+      "tools": true,
+      "thinking": true
+    }
+  },
+  "markdown": "# Screen view\n\nItems: 4\nEstimated lines: 4\nExpanded: tools=false, thinking=false\n\n---\n\n## 👤 User\n\nFirst question.\n\n## 🤖 Assistant\n\nFirst answer, turn one.\n\n## 👤 User\n\nSecond question.\n\n## 🤖 Assistant\n\nSecond answer, turn two."
+}

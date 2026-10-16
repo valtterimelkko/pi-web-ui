@@ -1,0 +1,88 @@
+{
+  "messages": [
+    {
+      "id": "cc-u1",
+      "role": "user",
+      "content": "First question.",
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "commandcode-message-1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "First answer, turn one."
+        }
+      ],
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "cc-u2",
+      "role": "user",
+      "content": "Second question.",
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "commandcode-message-1#2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Second answer, turn two. (id-less delta)"
+        }
+      ],
+      "timestamp": 1700000000000
+    }
+  ],
+  "live": [
+    {
+      "id": "cc-u1",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "First question."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "commandcode-message-1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "First answer, turn one."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "cc-u2",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Second question."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "commandcode-message-1#2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Second answer, turn two. (id-less delta)"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    }
+  ]
+}

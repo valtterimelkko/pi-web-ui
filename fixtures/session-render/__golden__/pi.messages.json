@@ -1,0 +1,376 @@
+{
+  "messages": [
+    {
+      "id": "pi-u1",
+      "role": "user",
+      "content": "Please tidy the demo widget module and show the todo list.",
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "pi-a1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The request is a small tidy-up of an invented module.\nPlan: read the files, run the tests, then edit."
+        },
+        {
+          "type": "text",
+          "text": "I'll start by **reading** the module and its test."
+        }
+      ],
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "pi-t1",
+      "role": "tool",
+      "content": "export const demoWidget = 1;\n",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "pi-t1",
+        "name": "read",
+        "args": {
+          "path": "src/demo-widget.ts"
+        }
+      },
+      "toolResult": {
+        "output": "export const demoWidget = 1;\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-t2",
+      "role": "tool",
+      "content": "it('works', () => {});\n",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "pi-t2",
+        "name": "read",
+        "args": {
+          "path": "src/demo-widget.test.ts"
+        }
+      },
+      "toolResult": {
+        "output": "it('works', () => {});\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-t3",
+      "role": "tool",
+      "content": "PASS demo-widget.test.ts\n  2 passed\n",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "pi-t3",
+        "name": "bash",
+        "args": {
+          "command": "npm test -- demo-widget"
+        }
+      },
+      "toolResult": {
+        "output": "PASS demo-widget.test.ts\n  2 passed\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-a2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Tests pass. Applying the edit now."
+        }
+      ],
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "pi-t4",
+      "role": "tool",
+      "content": "Successfully replaced 1 block in src/demo-widget.ts.",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "pi-t4",
+        "name": "edit",
+        "args": {
+          "path": "src/demo-widget.ts",
+          "edits": [
+            {
+              "oldText": "demoWidget = 1",
+              "newText": "demoWidget = 2"
+            }
+          ]
+        }
+      },
+      "toolResult": {
+        "output": "Successfully replaced 1 block in src/demo-widget.ts.",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-a2b",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Edit applied. Checking the todo list and the failing probe."
+        }
+      ],
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "pi-t5",
+      "role": "tool",
+      "content": "[x] #1: Rename the demo widget\n[ ] #2: Document the demo widget",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "pi-t5",
+        "name": "todo",
+        "args": {
+          "action": "list"
+        }
+      },
+      "toolResult": {
+        "output": "[x] #1: Rename the demo widget\n[ ] #2: Document the demo widget",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-t6",
+      "role": "tool",
+      "content": "Command exited with code 1",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "pi-t6",
+        "name": "bash",
+        "args": {
+          "command": "false"
+        }
+      },
+      "toolResult": {
+        "output": "Command exited with code 1",
+        "isError": true
+      }
+    },
+    {
+      "id": "pi-a3",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done. Summary:\n\n- renamed the value\n- tests pass\n\n```ts\nexport const demoWidget = 2;\n```\n\n| file | change |\n|---|---|\n| demo-widget.ts | value |\n"
+        }
+      ],
+      "timestamp": 1700000000000
+    }
+  ],
+  "live": [
+    {
+      "id": "pi-u1",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Please tidy the demo widget module and show the todo list."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "pi-a1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The request is a small tidy-up of an invented module.\nPlan: read the files, run the tests, then edit."
+        },
+        {
+          "type": "text",
+          "text": "I'll start by **reading** the module and its test."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "pi-t1",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "export const demoWidget = 1;\n"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "pi-t1",
+        "name": "read",
+        "args": {
+          "path": "src/demo-widget.ts"
+        }
+      },
+      "toolResult": {
+        "output": "export const demoWidget = 1;\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-t2",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "it('works', () => {});\n"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "pi-t2",
+        "name": "read",
+        "args": {
+          "path": "src/demo-widget.test.ts"
+        }
+      },
+      "toolResult": {
+        "output": "it('works', () => {});\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-t3",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "PASS demo-widget.test.ts\n  2 passed\n"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "pi-t3",
+        "name": "bash",
+        "args": {
+          "command": "npm test -- demo-widget"
+        }
+      },
+      "toolResult": {
+        "output": "PASS demo-widget.test.ts\n  2 passed\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-a2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Tests pass. Applying the edit now."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "pi-t4",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "Successfully replaced 1 block in src/demo-widget.ts."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "pi-t4",
+        "name": "edit",
+        "args": {
+          "path": "src/demo-widget.ts",
+          "edits": [
+            {
+              "oldText": "demoWidget = 1",
+              "newText": "demoWidget = 2"
+            }
+          ]
+        }
+      },
+      "toolResult": {
+        "output": "Successfully replaced 1 block in src/demo-widget.ts.",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-a2b",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Edit applied. Checking the todo list and the failing probe."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "pi-t5",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "[x] #1: Rename the demo widget\n[ ] #2: Document the demo widget"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "pi-t5",
+        "name": "todo",
+        "args": {
+          "action": "list"
+        }
+      },
+      "toolResult": {
+        "output": "[x] #1: Rename the demo widget\n[ ] #2: Document the demo widget",
+        "isError": false
+      }
+    },
+    {
+      "id": "pi-t6",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "Command exited with code 1"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "pi-t6",
+        "name": "bash",
+        "args": {
+          "command": "false"
+        }
+      },
+      "toolResult": {
+        "output": "Command exited with code 1",
+        "isError": true
+      }
+    },
+    {
+      "id": "pi-a3",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done. Summary:\n\n- renamed the value\n- tests pass\n\n```ts\nexport const demoWidget = 2;\n```\n\n| file | change |\n|---|---|\n| demo-widget.ts | value |\n"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    }
+  ]
+}

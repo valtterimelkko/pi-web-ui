@@ -1,0 +1,112 @@
+{
+  "collapsed": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "List the sample directory and print a line count.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Listing first.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool_group",
+        "text": "(4 tools)",
+        "collapsedByDefault": true,
+        "groupSize": 4,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "a.txt has 3 lines.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 4,
+    "estimatedTotalLines": 4,
+    "expanded": {
+      "tools": false,
+      "thinking": false
+    }
+  },
+  "expanded": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "List the sample directory and print a line count.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Listing first.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "list_dir",
+        "collapsedByDefault": true,
+        "toolName": "list_dir",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "a.txt\nb.txt"
+      },
+      {
+        "kind": "tool",
+        "text": "run_command: wc -l sample/a.txt",
+        "collapsedByDefault": true,
+        "toolName": "run_command",
+        "toolPrimaryArg": "wc -l sample/a.txt",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "3 sample/a.txt"
+      },
+      {
+        "kind": "tool",
+        "text": "view_file: sample/b.txt",
+        "collapsedByDefault": true,
+        "toolName": "view_file",
+        "toolPrimaryArg": "sample/b.txt",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "line one"
+      },
+      {
+        "kind": "tool",
+        "text": "invoke_subagent: Summarise b.txt",
+        "collapsedByDefault": true,
+        "toolName": "invoke_subagent",
+        "toolPrimaryArg": "Summarise b.txt",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": ""
+      },
+      {
+        "kind": "assistant",
+        "text": "a.txt has 3 lines.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 7,
+    "estimatedTotalLines": 7,
+    "expanded": {
+      "tools": true,
+      "thinking": true
+    }
+  },
+  "markdown": "# Screen view\n\nItems: 4\nEstimated lines: 4\nExpanded: tools=false, thinking=false\n\n---\n\n## 👤 User\n\nList the sample directory and print a line count.\n\n## 🤖 Assistant\n\nListing first.\n\n### 🗂 (4 tools) (collapsed)\n\n## 🤖 Assistant\n\na.txt has 3 lines."
+}

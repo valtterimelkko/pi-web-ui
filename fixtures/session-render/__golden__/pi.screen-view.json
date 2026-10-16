@@ -1,0 +1,203 @@
+{
+  "collapsed": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "Please tidy the demo widget module and show the todo list.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "thinking",
+        "text": "The request is a small tidy-up of an invented module",
+        "collapsedByDefault": true,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "I'll start by **reading** the module and its test.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool_group",
+        "text": "(3 tools)",
+        "collapsedByDefault": true,
+        "groupSize": 3,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Tests pass. Applying the edit now.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "edit: src/demo-widget.ts",
+        "collapsedByDefault": true,
+        "toolName": "edit",
+        "toolPrimaryArg": "src/demo-widget.ts",
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Edit applied. Checking the todo list and the failing probe.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "todo: list",
+        "collapsedByDefault": true,
+        "toolName": "todo",
+        "toolPrimaryArg": "list",
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "bash: false",
+        "collapsedByDefault": true,
+        "toolName": "bash",
+        "toolPrimaryArg": "false",
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "assistant",
+        "text": "Done. Summary:\n\n- renamed the value\n- tests pass\n\n```ts\nexport const demoWidget = 2;\n```\n\n| file | change |\n|---|---|\n| demo-widget.ts | value |\n",
+        "collapsedByDefault": false,
+        "estimatedLines": 13,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 10,
+    "estimatedTotalLines": 22,
+    "expanded": {
+      "tools": false,
+      "thinking": false
+    }
+  },
+  "expanded": {
+    "items": [
+      {
+        "kind": "user",
+        "text": "Please tidy the demo widget module and show the todo list.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "thinking",
+        "text": "The request is a small tidy-up of an invented module",
+        "collapsedByDefault": true,
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "The request is a small tidy-up of an invented module.\nPlan: read the files, run the tests, then edit."
+      },
+      {
+        "kind": "assistant",
+        "text": "I'll start by **reading** the module and its test.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "read: src/demo-widget.ts",
+        "collapsedByDefault": true,
+        "toolName": "read",
+        "toolPrimaryArg": "src/demo-widget.ts",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "export const demoWidget = 1;\n"
+      },
+      {
+        "kind": "tool",
+        "text": "read: src/demo-widget.test.ts",
+        "collapsedByDefault": true,
+        "toolName": "read",
+        "toolPrimaryArg": "src/demo-widget.test.ts",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "it('works', () => {});\n"
+      },
+      {
+        "kind": "tool",
+        "text": "bash: npm test -- demo-widget",
+        "collapsedByDefault": true,
+        "toolName": "bash",
+        "toolPrimaryArg": "npm test -- demo-widget",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "PASS demo-widget.test.ts\n  2 passed\n"
+      },
+      {
+        "kind": "assistant",
+        "text": "Tests pass. Applying the edit now.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "edit: src/demo-widget.ts",
+        "collapsedByDefault": true,
+        "toolName": "edit",
+        "toolPrimaryArg": "src/demo-widget.ts",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "Successfully replaced 1 block in src/demo-widget.ts."
+      },
+      {
+        "kind": "assistant",
+        "text": "Edit applied. Checking the todo list and the failing probe.",
+        "collapsedByDefault": false,
+        "estimatedLines": 1,
+        "timestamp": 0
+      },
+      {
+        "kind": "tool",
+        "text": "todo: list",
+        "collapsedByDefault": true,
+        "toolName": "todo",
+        "toolPrimaryArg": "list",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "[x] #1: Rename the demo widget\n[ ] #2: Document the demo widget"
+      },
+      {
+        "kind": "tool",
+        "text": "bash: false",
+        "collapsedByDefault": true,
+        "toolName": "bash",
+        "toolPrimaryArg": "false",
+        "estimatedLines": 1,
+        "timestamp": 0,
+        "expandedText": "Command exited with code 1"
+      },
+      {
+        "kind": "assistant",
+        "text": "Done. Summary:\n\n- renamed the value\n- tests pass\n\n```ts\nexport const demoWidget = 2;\n```\n\n| file | change |\n|---|---|\n| demo-widget.ts | value |\n",
+        "collapsedByDefault": false,
+        "estimatedLines": 13,
+        "timestamp": 0
+      }
+    ],
+    "itemCount": 12,
+    "estimatedTotalLines": 24,
+    "expanded": {
+      "tools": true,
+      "thinking": true
+    }
+  },
+  "markdown": "# Screen view\n\nItems: 10\nEstimated lines: 22\nExpanded: tools=false, thinking=false\n\n---\n\n## 👤 User\n\nPlease tidy the demo widget module and show the todo list.\n\n### 💭 Thinking (collapsed)\n\nThe request is a small tidy-up of an invented module\n\n## 🤖 Assistant\n\nI'll start by **reading** the module and its test.\n\n### 🗂 (3 tools) (collapsed)\n\n## 🤖 Assistant\n\nTests pass. Applying the edit now.\n\n### 🔧 edit: src/demo-widget.ts (collapsed)\n\n## 🤖 Assistant\n\nEdit applied. Checking the todo list and the failing probe.\n\n### 🔧 todo: list (collapsed)\n\n### 🔧 bash: false (collapsed)\n\n## 🤖 Assistant\n\nDone. Summary:\n\n- renamed the value\n- tests pass\n\n```ts\nexport const demoWidget = 2;\n```\n\n| file | change |\n|---|---|\n| demo-widget.ts | value |\n"
+}
