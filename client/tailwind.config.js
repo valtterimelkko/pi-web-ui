@@ -5,6 +5,8 @@ export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
+    // Session cards and list live in the session-ui workspace (step 1a).
+    "../packages/session-ui/src/**/*.{ts,tsx}",
   ],
   darkMode: 'class',
   theme: {

@@ -8,6 +8,7 @@
     "client",
     "shared",
     "packages/session-core",
+    "packages/session-ui",
     "packages/internal-api-mcp"
   ],
   "scripts": {
@@ -41,7 +42,7 @@
     "docs:check-status": "node scripts/check-doc-status.mjs",
     "lint": "eslint . --ext .ts,.tsx && eslint scripts/notify-client.mjs scripts/wait-for-internal-api.mjs scripts/command-code-weekly-refresh.mts scripts/command-code-refresh-models.mts",
     "lint:ratchet": "node scripts/check-lint-ratchet.mjs",
-    "typecheck": "npm run build --workspace=@pi-web-ui/session-core && npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared && npm run typecheck --workspace=@pi-web-ui/session-core && npm run typecheck --workspace=@pi-web-ui/internal-api-mcp",
+    "typecheck": "npm run build --workspace=@pi-web-ui/session-core && npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared && npm run typecheck --workspace=@pi-web-ui/session-core && npm run typecheck --workspace=@pi-web-ui/session-ui && npm run typecheck --workspace=@pi-web-ui/internal-api-mcp",
     "validate:proxy": "npx tsx scripts/validation-logging-proxy.ts",
     "mcp:start": "npm run start --workspace=@pi-web-ui/internal-api-mcp",
     "validate:mcp:wire": "npm run build --workspace=@pi-web-ui/internal-api-mcp && npm run validate:wire --workspace=@pi-web-ui/internal-api-mcp",

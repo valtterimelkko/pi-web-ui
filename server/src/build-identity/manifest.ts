@@ -53,6 +53,7 @@ export const BUILD_INPUT_POLICY = Object.freeze({
     'client/public',
     'shared/src',
     'packages/session-core/src',
+    'packages/session-ui/src',
     'packages/internal-api-mcp/src',
   ],
   configFiles: [
@@ -61,6 +62,7 @@ export const BUILD_INPUT_POLICY = Object.freeze({
     'client/package.json',
     'shared/package.json',
     'packages/session-core/package.json',
+    'packages/session-ui/package.json',
     'packages/internal-api-mcp/package.json',
     'tsconfig.json',
     'server/tsconfig.json',
@@ -68,6 +70,7 @@ export const BUILD_INPUT_POLICY = Object.freeze({
     'client/tsconfig.node.json',
     'shared/tsconfig.json',
     'packages/session-core/tsconfig.json',
+    'packages/session-ui/tsconfig.json',
     'packages/internal-api-mcp/tsconfig.json',
     'client/vite.config.ts',
     'client/index.html',
