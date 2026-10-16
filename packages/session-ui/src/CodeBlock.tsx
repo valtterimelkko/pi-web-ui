@@ -57,7 +57,7 @@ export function CodeBlock({ children }: CodeBlockProps) {
         className={`
           absolute top-2 right-2 p-1.5 rounded-lg border border-outline-subtle dark:border-outline-subtle-dark transition-all duration-200 touch-manipulation
           ${copied
-            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+            ? 'bg-sv-ok-500/15 text-sv-ok-600 dark:text-sv-ok-400'
             : 'bg-surface dark:bg-surface-dark text-content-muted dark:text-content-muted-dark hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle hover:text-content-primary dark:hover:text-content-primary-dark opacity-80 hover:opacity-100 shadow-2xs'
           }
         `}

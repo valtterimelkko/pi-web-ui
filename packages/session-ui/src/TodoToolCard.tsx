@@ -173,8 +173,8 @@ export const TodoToolCard = memo(function TodoToolCard({
         <ChevronRight strokeWidth={1.75} className={`w-4 h-4 text-content-muted dark:text-content-muted-dark transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
 
         {/* Todo icon */}
-        <div className={`p-1 rounded-md ${isError ? 'bg-red-50 dark:bg-red-950/30' : isPending ? 'bg-amber-50 dark:bg-amber-950/30' : 'bg-emerald-50 dark:bg-emerald-950/30'}`}>
-          <ListTodo strokeWidth={1.75} className={`w-4 h-4 ${isError ? 'text-red-500' : isPending ? 'text-amber-500' : 'text-emerald-500'}`} />
+        <div className={`p-1 rounded-md ${isError ? 'bg-sv-error-50 dark:bg-sv-error-950/30' : isPending ? 'bg-sv-warn-50 dark:bg-sv-warn-950/30' : 'bg-sv-ok-50 dark:bg-sv-ok-950/30'}`}>
+          <ListTodo strokeWidth={1.75} className={`w-4 h-4 ${isError ? 'text-sv-error-500' : isPending ? 'text-sv-warn-500' : 'text-sv-ok-500'}`} />
         </div>
 
         {/* Action description */}
@@ -191,7 +191,7 @@ export const TodoToolCard = memo(function TodoToolCard({
             </span>
           )}
           {action === 'toggle' && todoId !== null && (
-            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">
+            <span className="text-xs text-sv-ok-600 dark:text-sv-ok-400 font-mono">
               #{todoId}
             </span>
           )}
@@ -205,7 +205,7 @@ export const TodoToolCard = memo(function TodoToolCard({
             </span>
           )}
           {isPending ? (
-            <span className="text-xs text-amber-500 flex items-center gap-1">
+            <span className="text-xs text-sv-warn-500 flex items-center gap-1">
               <Clock strokeWidth={1.75} className="w-3 h-3" />
               Running
               {elapsedSeconds > 0 && (
@@ -214,9 +214,9 @@ export const TodoToolCard = memo(function TodoToolCard({
               …
             </span>
           ) : isError ? (
-            <XCircle strokeWidth={1.75} className="w-4 h-4 text-red-500" />
+            <XCircle strokeWidth={1.75} className="w-4 h-4 text-sv-error-500" />
           ) : (
-            <CheckCircle strokeWidth={1.75} className="w-4 h-4 text-emerald-500" />
+            <CheckCircle strokeWidth={1.75} className="w-4 h-4 text-sv-ok-500" />
           )}
         </div>
       </button>
@@ -242,7 +242,7 @@ export const TodoToolCard = memo(function TodoToolCard({
                   {/* Checkbox */}
                   <span className="shrink-0">
                     {todo.done ? (
-                      <Check strokeWidth={1.75} className="w-4 h-4 text-emerald-500" />
+                      <Check strokeWidth={1.75} className="w-4 h-4 text-sv-ok-500" />
                     ) : (
                       <Circle strokeWidth={1.75} className="w-4 h-4 text-content-muted dark:text-content-muted-dark" />
                     )}
@@ -250,14 +250,14 @@ export const TodoToolCard = memo(function TodoToolCard({
                   
                   {/* Todo ID */}
                   <span className={`text-xs font-mono shrink-0 ${
-                    todo.done ? 'text-content-muted dark:text-content-muted-dark' : 'text-emerald-600 dark:text-emerald-400'
+                    todo.done ? 'text-content-muted dark:text-content-muted-dark' : 'text-sv-ok-600 dark:text-sv-ok-400'
                   }`}>
                     #{todo.id}
                   </span>
                   
                   {/* Todo text */}
                   <span className={`text-sm ${
-                    todo.done ? 'text-gray-400 line-through' : 'text-gray-700'
+                    todo.done ? 'text-sv-neutral-400 line-through' : 'text-sv-neutral-700'
                   }`}>
                     {todo.text}
                   </span>
@@ -268,19 +268,19 @@ export const TodoToolCard = memo(function TodoToolCard({
 
           {/* Empty state */}
           {todos.length === 0 && hasResult && !isError && (
-            <div className="text-sm text-gray-400 italic py-2">
+            <div className="text-sm text-sv-neutral-400 italic py-2">
               No todos
             </div>
           )}
 
           {/* Progress footer */}
           {totalCount > 0 && (
-            <div className="flex items-center gap-3 text-[10px] text-gray-400 pt-1 border-t border-gray-100">
+            <div className="flex items-center gap-3 text-[10px] text-sv-neutral-400 pt-1 border-t border-sv-neutral-100">
               <span>{completedCount} of {totalCount} completed</span>
               {totalCount > 0 && (
-                <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
+                <div className="flex-1 h-1 bg-sv-neutral-100 rounded-full overflow-hidden">
                   <div 
-                    className="h-full bg-emerald-500 rounded-full"
+                    className="h-full bg-sv-ok-500 rounded-full"
                     style={{ width: `${(completedCount / totalCount) * 100}%` }}
                   />
                 </div>
@@ -292,10 +292,10 @@ export const TodoToolCard = memo(function TodoToolCard({
           {result?.output && (
             <div className="pt-1">
               <details className="text-[10px]">
-                <summary className="text-gray-400 hover:text-gray-600 cursor-pointer">
+                <summary className="text-sv-neutral-400 hover:text-sv-neutral-600 cursor-pointer">
                   Show raw output
                 </summary>
-                <pre className="mt-1 p-2 bg-gray-50 rounded text-[10px] font-mono text-gray-600 overflow-x-auto max-h-40 overflow-y-auto">
+                <pre className="mt-1 p-2 bg-sv-neutral-50 rounded text-[10px] font-mono text-sv-neutral-600 overflow-x-auto max-h-40 overflow-y-auto">
                   {result.output}
                 </pre>
               </details>
@@ -306,13 +306,13 @@ export const TodoToolCard = memo(function TodoToolCard({
 
       {/* Collapsed summary */}
       {!isExpanded && hasResult && todos.length > 0 && (
-        <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100">
-          <div className="flex items-center gap-3 text-xs text-gray-500">
+        <div className="px-3 py-1.5 bg-sv-neutral-50 border-t border-sv-neutral-100">
+          <div className="flex items-center gap-3 text-xs text-sv-neutral-500">
             <span>{completedCount}/{totalCount} completed</span>
             {totalCount > 0 && (
-              <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden max-w-[100px]">
+              <div className="flex-1 h-1 bg-sv-neutral-200 rounded-full overflow-hidden max-w-[100px]">
                 <div 
-                  className="h-full bg-emerald-500 rounded-full"
+                  className="h-full bg-sv-ok-500 rounded-full"
                   style={{ width: `${(completedCount / totalCount) * 100}%` }}
                 />
               </div>

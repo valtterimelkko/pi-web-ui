@@ -157,7 +157,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       className={`
         p-1.5 rounded-lg transition-all duration-200 touch-manipulation
         ${copied
-          ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400'
+          ? 'bg-sv-ok-100 dark:bg-sv-ok-950/40 text-sv-ok-600 dark:text-sv-ok-400'
           : 'bg-surface dark:bg-surface-dark border border-outline-subtle dark:border-outline-subtle-dark text-content-muted dark:text-content-muted-dark sm:opacity-0 sm:group-hover:opacity-100 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle hover:text-content-primary dark:hover:text-content-primary-dark'
         }
       `}
@@ -270,14 +270,14 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
 
       {/* Error message rendering */}
       {isAssistant && message.error && (
-        <div className="api-error-message pl-3 pr-8 border-l-2 border-red-400 bg-red-50 dark:bg-red-950/30 rounded-r-lg py-2 px-3">
+        <div className="api-error-message pl-3 pr-8 border-l-2 border-sv-error-400 bg-sv-error-50 dark:bg-sv-error-950/30 rounded-r-lg py-2 px-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" strokeWidth={1.75} />
+            <AlertTriangle className="w-4 h-4 text-sv-error-500 shrink-0 mt-0.5" strokeWidth={1.75} />
             <div className="min-w-0">
-              <p className="text-sm text-red-700 dark:text-red-400 font-medium">API Error</p>
-              <p className="text-sm text-red-600 dark:text-red-300 mt-0.5">{message.error.message}</p>
+              <p className="text-sm text-sv-error-700 dark:text-sv-error-400 font-medium">API Error</p>
+              <p className="text-sm text-sv-error-600 dark:text-sv-error-300 mt-0.5">{message.error.message}</p>
               {(message.error.provider || message.error.model) && (
-                <p className="text-xs text-red-400 mt-1">
+                <p className="text-xs text-sv-error-400 mt-1">
                   {[message.error.provider, message.error.model].filter(Boolean).join(' / ')}
                 </p>
               )}
@@ -288,7 +288,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
 
       {/* Activity indicator for messages with no visible content */}
       {isAssistant && !hasVisibleContent && !hasThinking && (
-        <div className="pl-4 pr-8 border-l-2 border-gray-200">
+        <div className="pl-4 pr-8 border-l-2 border-sv-neutral-200">
           <ActivityIndicator thinking={null} isStreaming={isStreamingThis} />
         </div>
       )}
@@ -296,7 +296,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       {/* Goal-driven continuations arrive as ordinary user messages; without a
           label the transcript reads as if the operator typed them. */}
       {isUser && isGoalContinuation && (
-        <div className="mb-1 text-[10px] uppercase tracking-wide text-gray-400" data-testid="goal-continuation-label">
+        <div className="mb-1 text-[10px] uppercase tracking-wide text-sv-neutral-400" data-testid="goal-continuation-label">
           🎯 Goal continuation · sent automatically
         </div>
       )}
@@ -307,7 +307,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
           className={`
             relative group break-words overflow-hidden
             ${isUser
-              ? 'bg-gray-100 dark:bg-neutral-800 rounded-2xl px-4 py-3 text-content-primary dark:text-content-primary-dark text-sm shadow-xs'
+              ? 'bg-sv-neutral-100 dark:bg-sv-neutral-plain-800 rounded-2xl px-4 py-3 text-content-primary dark:text-content-primary-dark text-sm shadow-xs'
               : isTool
                 ? 'bg-surface-subtle dark:bg-surface-dark-subtle border border-outline-default dark:border-outline-default-dark rounded-lg p-3'
                 : 'pl-3 pr-8 border-l-2 border-transparent text-content-primary dark:text-content-primary-dark text-sm leading-relaxed'
@@ -344,27 +344,27 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                   // Table components - compact Kimi-style
                   table: ({ children }) => (
                     <div className="overflow-x-auto my-1.5">
-                      <table className="w-full border-collapse border border-gray-200 text-xs">
+                      <table className="w-full border-collapse border border-sv-neutral-200 text-xs">
                         {children}
                       </table>
                     </div>
                   ),
                   thead: ({ children }) => (
-                    <thead className="bg-gray-50">{children}</thead>
+                    <thead className="bg-sv-neutral-50">{children}</thead>
                   ),
                   tbody: ({ children }) => (
-                    <tbody className="divide-y divide-gray-200">{children}</tbody>
+                    <tbody className="divide-y divide-sv-neutral-200">{children}</tbody>
                   ),
                   tr: ({ children }) => (
-                    <tr className="border-b border-gray-200 even:bg-gray-50/50">{children}</tr>
+                    <tr className="border-b border-sv-neutral-200 even:bg-sv-neutral-50/50">{children}</tr>
                   ),
                   th: ({ children }) => (
-                    <th className="border border-gray-200 px-2 py-1 text-left text-xs font-semibold text-gray-700">
+                    <th className="border border-sv-neutral-200 px-2 py-1 text-left text-xs font-semibold text-sv-neutral-700">
                       {children}
                     </th>
                   ),
                   td: ({ children }) => (
-                    <td className="border border-gray-200 px-2 py-1 text-xs text-gray-700">
+                    <td className="border border-sv-neutral-200 px-2 py-1 text-xs text-sv-neutral-700">
                       {children}
                     </td>
                   ),
@@ -377,13 +377,13 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                   h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-0.5">{children}</h3>,
                   h4: ({ children }) => <h4 className="text-sm font-semibold mt-1.5 mb-0.5">{children}</h4>,
                   blockquote: ({ children }) => (
-                    <blockquote className="border-l-2 border-gray-300 pl-3 my-1.5 text-gray-600 text-sm italic">
+                    <blockquote className="border-l-2 border-sv-neutral-300 pl-3 my-1.5 text-sv-neutral-600 text-sm italic">
                       {children}
                     </blockquote>
                   ),
-                  hr: () => <hr className="my-2 border-gray-200" />,
+                  hr: () => <hr className="my-2 border-sv-neutral-200" />,
                   a: ({ children, href }) => (
-                    <a href={href} className="text-blue-600 hover:text-blue-700 underline" target="_blank" rel="noopener noreferrer">
+                    <a href={href} className="text-sv-info-600 hover:text-sv-info-700 underline" target="_blank" rel="noopener noreferrer">
                       {children}
                     </a>
                   ),
@@ -397,7 +397,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                 <div className="h-6 -mt-6 collapse-fade-gradient pointer-events-none" />
                 <button
                   onClick={() => setManuallyExpanded(true)}
-                  className="text-xs text-blue-600 hover:text-blue-700 mt-0.5"
+                  className="text-xs text-sv-info-600 hover:text-sv-info-700 mt-0.5"
                   type="button"
                   aria-expanded={false}
                   aria-controls={`msg-content-${message.id}`}
@@ -409,7 +409,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
             {!shouldCollapse && manuallyExpanded && isStreaming && !isLast && isCurrentRun && isLongContent && (
               <button
                 onClick={() => setManuallyExpanded(false)}
-                className="text-xs text-blue-600 hover:text-blue-700 mt-0.5"
+                className="text-xs text-sv-info-600 hover:text-sv-info-700 mt-0.5"
                 type="button"
                 aria-expanded={true}
                 aria-controls={`msg-content-${message.id}`}

@@ -111,9 +111,9 @@ export function GoalPanel({
   const toneClass = finished
     ? 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark'
     : paused
-      ? 'border-amber-300 dark:border-amber-700/60 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-      : 'border-emerald-300 dark:border-emerald-700/60 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
-  const dotClass = finished ? 'bg-gray-400' : paused ? 'bg-amber-500' : 'bg-emerald-500';
+      ? 'border-sv-warn-300 dark:border-sv-warn-700/60 bg-sv-warn-500/10 text-sv-warn-700 dark:text-sv-warn-300'
+      : 'border-sv-ok-300 dark:border-sv-ok-700/60 bg-sv-ok-500/10 text-sv-ok-700 dark:text-sv-ok-300';
+  const dotClass = finished ? 'bg-sv-neutral-400' : paused ? 'bg-sv-warn-500' : 'bg-sv-ok-500';
 
   return (
     <div className="mb-2" data-testid="goal-panel">
@@ -148,7 +148,7 @@ export function GoalPanel({
               <button
                 type="button"
                 onClick={() => onControl('resume')}
-                className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                className="rounded px-1.5 py-0.5 text-xs font-medium text-sv-ok-600 dark:text-sv-ok-400 hover:bg-sv-ok-500/10"
                 title="Resume goal"
                 data-testid="goal-resume"
               >
@@ -158,7 +158,7 @@ export function GoalPanel({
               <button
                 type="button"
                 onClick={() => onControl('pause')}
-                className="rounded px-1.5 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                className="rounded px-1.5 py-0.5 text-xs font-medium text-sv-warn-600 dark:text-sv-warn-400 hover:bg-sv-warn-500/10"
                 title="Pause goal (stops the current run and halts auto-continuation)"
                 data-testid="goal-pause"
               >
@@ -169,7 +169,7 @@ export function GoalPanel({
               <button
                 type="button"
                 onClick={() => { onControl('clear'); setConfirmClear(false); }}
-                className="rounded px-1.5 py-0.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600"
+                className="rounded px-1.5 py-0.5 text-xs font-medium text-sv-white bg-sv-error-500 hover:bg-sv-error-600"
                 title="Confirm: clear this goal"
                 data-testid="goal-clear-confirm"
               >
@@ -233,7 +233,7 @@ function GoalDetails({ record, finished }: { record: GoalRecord; finished: boole
       <div className="font-semibold break-words">{model.objective || 'Goal'}</div>
 
       {model.question && (
-        <div className="rounded-lg bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20 px-2.5 py-1.5">
+        <div className="rounded-lg bg-sv-warn-500/10 text-sv-warn-800 dark:text-sv-warn-300 border border-sv-warn-500/20 px-2.5 py-1.5">
           <span className="font-medium">Waiting on you: </span>{model.question}
         </div>
       )}

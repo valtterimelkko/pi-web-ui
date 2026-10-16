@@ -223,10 +223,10 @@ const ToolInputSection = memo(function ToolInputSection({ args }: { args: unknow
         <span className="text-xs text-content-muted dark:text-content-muted-dark font-mono">Arguments</span>
         <button
           onClick={handleCopy}
-          className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark transition-colors"
+          className="p-1 rounded hover:bg-sv-neutral-plain-100 dark:hover:bg-sv-neutral-plain-800 text-content-muted dark:text-content-muted-dark hover:text-content-primary dark:hover:text-content-primary-dark transition-colors"
           title="Copy arguments"
         >
-          {copied ? <Check className="w-3 h-3 text-emerald-500" strokeWidth={1.75} /> : <Copy className="w-3 h-3" strokeWidth={1.75} />}
+          {copied ? <Check className="w-3 h-3 text-sv-ok-500" strokeWidth={1.75} /> : <Copy className="w-3 h-3" strokeWidth={1.75} />}
         </button>
       </div>
       {entries.map(([key, value]) => {
@@ -379,7 +379,7 @@ const ToolOutput = memo(function ToolOutput({
         className="flex items-center justify-between w-full text-xs font-mono group"
         type="button"
       >
-        <span className={`flex items-center gap-1 ${isError ? 'text-red-500' : 'text-emerald-600'}`}>
+        <span className={`flex items-center gap-1 ${isError ? 'text-sv-error-500' : 'text-sv-ok-600'}`}>
           <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
           {isError ? 'Error' : 'Result'}
         </span>
@@ -388,25 +388,25 @@ const ToolOutput = memo(function ToolOutput({
             e.stopPropagation();
             handleCopy();
           }}
-          className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+          className="p-1 rounded hover:bg-sv-neutral-100 text-sv-neutral-400 hover:text-sv-neutral-600 transition-colors"
           title="Copy result"
         >
-          {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+          {copied ? <Check className="w-3 h-3 text-sv-ok-500" /> : <Copy className="w-3 h-3" />}
         </button>
       </button>
       
       {isExpanded && (
         <div className={`ml-4 rounded-lg overflow-hidden border ${
           isError
-            ? 'bg-red-50/50 dark:bg-red-950/20 border-red-200 dark:border-red-900/40'
+            ? 'bg-sv-error-50/50 dark:bg-sv-error-950/20 border-sv-error-200 dark:border-sv-error-900/40'
             : 'bg-surface-subtle dark:bg-surface-dark-subtle border-outline-subtle dark:border-outline-subtle-dark'
         }`}>
           {/* Special display for todo tool results */}
           {todoInfo && (
             <div className={`px-3 py-2 text-sm border-b ${
-              todoInfo.isToggle ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/40' : 'bg-surface dark:bg-surface-dark border-outline-subtle dark:border-outline-subtle-dark'
+              todoInfo.isToggle ? 'bg-sv-ok-50 dark:bg-sv-ok-950/20 border-sv-ok-200 dark:border-sv-ok-900/40' : 'bg-surface dark:bg-surface-dark border-outline-subtle dark:border-outline-subtle-dark'
             }`}>
-              <span className={todoInfo.isToggle ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-content-secondary dark:text-content-secondary-dark'}>
+              <span className={todoInfo.isToggle ? 'text-sv-ok-700 dark:text-sv-ok-400 font-medium' : 'text-content-secondary dark:text-content-secondary-dark'}>
                 {todoInfo.isToggle && '✓ '}
                 {todoInfo.message}
               </span>
@@ -415,8 +415,8 @@ const ToolOutput = memo(function ToolOutput({
           
           {/* Special display for brief-only tools - summary only, no raw output */}
           {isBriefOnly && briefInfo && (
-            <div className="px-3 py-2 text-sm bg-emerald-50 dark:bg-emerald-950/20 border-b border-emerald-200 dark:border-emerald-900/40">
-              <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+            <div className="px-3 py-2 text-sm bg-sv-ok-50 dark:bg-sv-ok-950/20 border-b border-sv-ok-200 dark:border-sv-ok-900/40">
+              <span className="text-sv-ok-700 dark:text-sv-ok-400 font-medium">
                 {getBriefSummary()}
               </span>
             </div>
@@ -425,7 +425,7 @@ const ToolOutput = memo(function ToolOutput({
           {/* Full output - hidden for brief-only tools to reduce verbosity */}
           {!(isBriefOnly && briefInfo) && (
             <pre className={`p-3 overflow-x-auto text-xs font-mono max-h-80 leading-relaxed ${
-              isError ? 'text-red-700 dark:text-red-400' : 'text-content-secondary dark:text-content-secondary-dark'
+              isError ? 'text-sv-error-700 dark:text-sv-error-400' : 'text-content-secondary dark:text-content-secondary-dark'
             }`}>
               <code>{formattedOutput}</code>
             </pre>
@@ -462,7 +462,7 @@ const BriefStatus = memo(function BriefStatus({
 }) {
   if (isPending) {
     return (
-      <span className="text-xs text-amber-500 flex items-center gap-1">
+      <span className="text-xs text-sv-warn-500 flex items-center gap-1">
         <Clock className="w-3 h-3" strokeWidth={1.75} />
         Running
         {elapsedSeconds !== undefined && elapsedSeconds > 0 && (
@@ -481,7 +481,7 @@ const BriefStatus = memo(function BriefStatus({
 
   if (isError) {
     return (
-      <span className="text-xs text-red-500">
+      <span className="text-xs text-sv-error-500">
         Error • {lines} lines
       </span>
     );
@@ -491,7 +491,7 @@ const BriefStatus = memo(function BriefStatus({
   if (toolName === 'read') {
     const truncated = output.endsWith('…') || output.includes('[Output truncated');
     return (
-      <span className="text-xs text-emerald-600">
+      <span className="text-xs text-sv-ok-600">
         ✓ Loaded • {lines} lines • {chars.toLocaleString()} chars
         {truncated && ' (truncated)'}
       </span>
@@ -503,7 +503,7 @@ const BriefStatus = memo(function BriefStatus({
     const searchInfo = parseWebSearchOutput(output);
     if (searchInfo) {
       return (
-        <span className="text-xs text-emerald-600">
+        <span className="text-xs text-sv-ok-600">
           ✓ Found {searchInfo.results} result{searchInfo.results !== 1 ? 's' : ''}
         </span>
       );
@@ -515,7 +515,7 @@ const BriefStatus = memo(function BriefStatus({
     const fetchInfo = parseWebFetchOutput(output);
     if (fetchInfo) {
       return (
-        <span className="text-xs text-emerald-600">
+        <span className="text-xs text-sv-ok-600">
           ✓ Fetched • {fetchInfo.chars.toLocaleString()} chars
           {fetchInfo.truncated && ' (truncated)'}
         </span>
@@ -524,7 +524,7 @@ const BriefStatus = memo(function BriefStatus({
   }
 
   return (
-    <span className="text-xs text-gray-400">
+    <span className="text-xs text-sv-neutral-400">
       {lines} lines • {chars} chars
     </span>
   );
@@ -608,8 +608,8 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
       >
         {/* Tool icon – spinner (blue) when pending, red on error */}
         <span className={`shrink-0 ${
-          isPending ? 'text-blue-500' :
-          isError   ? 'text-red-500' :
+          isPending ? 'text-sv-info-500' :
+          isError   ? 'text-sv-error-500' :
           'text-content-muted dark:text-content-muted-dark group-hover:text-content-primary dark:group-hover:text-content-primary-dark transition-colors'
         }`}>
           {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : icon}

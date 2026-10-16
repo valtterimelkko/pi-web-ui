@@ -19,7 +19,7 @@ export const ChildrenStrip = memo(function ChildrenStrip({ childCards: children 
 
   return (
     <div
-      className="mb-2 rounded-xl border border-amber-300/70 dark:border-amber-800/50 bg-amber-50/70 dark:bg-amber-950/20 px-3.5 py-2 text-xs text-amber-950 dark:text-amber-200 shadow-xs transition-colors"
+      className="mb-2 rounded-xl border border-sv-warn-300/70 dark:border-sv-warn-800/50 bg-sv-warn-50/70 dark:bg-sv-warn-950/20 px-3.5 py-2 text-xs text-sv-warn-950 dark:text-sv-warn-200 shadow-xs transition-colors"
       data-testid="children-strip"
     >
       <div className="flex items-center gap-1.5 font-medium">
@@ -29,10 +29,10 @@ export const ChildrenStrip = memo(function ChildrenStrip({ childCards: children 
       <div className="mt-1 space-y-0.5">
         {running.map((c: ChildCardProjection) => (
           <div key={c.id} className="flex items-center gap-2 truncate" title={c.task ?? c.id}>
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-sv-warn-400 animate-pulse shrink-0" />
             <span className="font-medium truncate">{c.label}</span>
-            {c.model && <span className="font-mono text-[10px] text-amber-700/80 dark:text-amber-300/80 truncate">{c.model}</span>}
-            <span className="text-[10px] text-amber-700/60 dark:text-amber-400/60 shrink-0">
+            {c.model && <span className="font-mono text-[10px] text-sv-warn-700/80 dark:text-sv-warn-300/80 truncate">{c.model}</span>}
+            <span className="text-[10px] text-sv-warn-700/60 dark:text-sv-warn-400/60 shrink-0">
               {c.kind === 'internal_api_child'
                 ? `dispatched via API${c.runtime ? ` · ${c.runtime}` : ''}`
                 : c.kind === 'antigravity_task'

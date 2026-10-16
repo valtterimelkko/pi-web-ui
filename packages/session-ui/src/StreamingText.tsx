@@ -14,40 +14,40 @@ export function StreamingText({ text }: StreamingTextProps) {
           code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
             const match = /language-(\w+)/.exec(className || '');
             return !inline ? (
-              <pre className="bg-slate-100 border border-slate-200 rounded-md p-2 overflow-x-auto my-1.5 text-xs">
-                <code className={`text-slate-800 ${match ? `language-${match[1]}` : ''}`} {...props}>
+              <pre className="bg-sv-neutral-slate-100 border border-sv-neutral-slate-200 rounded-md p-2 overflow-x-auto my-1.5 text-xs">
+                <code className={`text-sv-neutral-slate-800 ${match ? `language-${match[1]}` : ''}`} {...props}>
                   {children}
                 </code>
               </pre>
             ) : (
-              <code className="bg-slate-200 text-slate-900 px-1 py-0.5 rounded text-xs font-mono font-medium" {...props}>
+              <code className="bg-sv-neutral-slate-200 text-sv-neutral-slate-900 px-1 py-0.5 rounded text-xs font-mono font-medium" {...props}>
                 {children}
               </code>
             );
           },
           table: ({ children }) => (
             <div className="overflow-x-auto my-1.5">
-              <table className="w-full border-collapse border border-gray-200 text-xs">
+              <table className="w-full border-collapse border border-sv-neutral-200 text-xs">
                 {children}
               </table>
             </div>
           ),
           thead: ({ children }) => (
-            <thead className="bg-gray-50">{children}</thead>
+            <thead className="bg-sv-neutral-50">{children}</thead>
           ),
           tbody: ({ children }) => (
-            <tbody className="divide-y divide-gray-200">{children}</tbody>
+            <tbody className="divide-y divide-sv-neutral-200">{children}</tbody>
           ),
           tr: ({ children }) => (
-            <tr className="border-b border-gray-200 even:bg-gray-50/50">{children}</tr>
+            <tr className="border-b border-sv-neutral-200 even:bg-sv-neutral-50/50">{children}</tr>
           ),
           th: ({ children }) => (
-            <th className="border border-gray-200 px-2 py-1 text-left text-xs font-semibold text-gray-700">
+            <th className="border border-sv-neutral-200 px-2 py-1 text-left text-xs font-semibold text-sv-neutral-700">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="border border-gray-200 px-2 py-1 text-xs text-gray-700">
+            <td className="border border-sv-neutral-200 px-2 py-1 text-xs text-sv-neutral-700">
               {children}
             </td>
           ),
@@ -60,13 +60,13 @@ export function StreamingText({ text }: StreamingTextProps) {
           h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-0.5">{children}</h3>,
           h4: ({ children }) => <h4 className="text-sm font-semibold mt-1.5 mb-0.5">{children}</h4>,
           blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-gray-300 pl-3 my-1.5 text-gray-600 text-sm italic">
+            <blockquote className="border-l-2 border-sv-neutral-300 pl-3 my-1.5 text-sv-neutral-600 text-sm italic">
               {children}
             </blockquote>
           ),
-          hr: () => <hr className="my-2 border-gray-200" />,
+          hr: () => <hr className="my-2 border-sv-neutral-200" />,
           a: ({ children, href }) => (
-            <a href={href} className="text-blue-600 hover:text-blue-700 underline" target="_blank" rel="noopener noreferrer">
+            <a href={href} className="text-sv-info-600 hover:text-sv-info-700 underline" target="_blank" rel="noopener noreferrer">
               {children}
             </a>
           ),
@@ -74,7 +74,7 @@ export function StreamingText({ text }: StreamingTextProps) {
       >
         {text}
       </ReactMarkdown>
-      <span className="inline-block w-2 h-4 ml-0.5 bg-blue-500 animate-pulse align-middle" />
+      <span className="inline-block w-2 h-4 ml-0.5 bg-sv-info-500 animate-pulse align-middle" />
     </div>
   );
 }

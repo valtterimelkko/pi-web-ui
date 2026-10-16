@@ -38,10 +38,11 @@ describe('session-ui tokens', () => {
   });
 
   it('preset colours all resolve through --sv-* variables', () => {
-    const colours = preset.theme.extend.colors as Record<string, Record<string, string>>;
-    const values = Object.values(colours).flatMap((family) => Object.values(family));
-    expect(values.length).toBe(16);
-    for (const value of values) expect(value).toMatch(/var\(--sv-[a-z-]+\)/);
+    const colours = preset.theme.extend.colors as Record<string, Record<string, string> | string>;
+    const semantic = ['canvas', 'surface', 'content', 'outline'].flatMap((family) => Object.values(colours[family] as Record<string, string>));
+    expect(semantic.length).toBe(16);
+    const values = Object.values(colours).flatMap((entry) => (typeof entry === 'string' ? [entry] : Object.values(entry)));
+    for (const value of values) expect(value).toMatch(/var\(--sv-[a-z0-9-]+\)/);
   });
 
   it('preset exposes an absolute content glob for the host config', () => {

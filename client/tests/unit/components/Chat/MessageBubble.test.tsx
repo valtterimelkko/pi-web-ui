@@ -70,7 +70,7 @@ describe('MessageBubble', () => {
   it('renders user message with correct styling', () => {
     const { container } = render(<MessageBubble message={mockUserMessage} />);
     // User messages have gray background
-    const messageElement = container.querySelector('.bg-gray-100');
+    const messageElement = container.querySelector('.bg-sv-neutral-100');
     expect(messageElement).toBeTruthy();
   });
 

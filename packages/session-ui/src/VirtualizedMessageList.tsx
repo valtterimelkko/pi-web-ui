@@ -89,43 +89,43 @@ function WorkerStatusIndicator({ status }: { status: WorkerStatus }) {
     spawning: {
       icon: Loader2,
       text: 'Connecting...',
-      className: 'text-blue-600 bg-blue-50 border-blue-200',
+      className: 'text-sv-info-600 bg-sv-info-50 border-sv-info-200',
       animate: 'animate-spin',
     },
     ready: {
       icon: Loader2,
       text: 'Ready',
-      className: 'text-green-600 bg-green-50 border-green-200',
+      className: 'text-sv-ok-green-600 bg-sv-ok-green-50 border-sv-ok-green-200',
       animate: '',
     },
     streaming: {
       icon: Loader2,
       text: 'Streaming...',
-      className: 'text-blue-600 bg-blue-50 border-blue-200',
+      className: 'text-sv-info-600 bg-sv-info-50 border-sv-info-200',
       animate: 'animate-spin',
     },
     idle: {
       icon: Loader2,
       text: 'Idle',
-      className: 'text-gray-600 bg-gray-50 border-gray-200',
+      className: 'text-sv-neutral-600 bg-sv-neutral-50 border-sv-neutral-200',
       animate: '',
     },
     terminated: {
       icon: AlertCircle,
       text: 'Disconnected',
-      className: 'text-gray-600 bg-gray-50 border-gray-200',
+      className: 'text-sv-neutral-600 bg-sv-neutral-50 border-sv-neutral-200',
       animate: '',
     },
     disconnected: {
       icon: AlertCircle,
       text: 'Disconnected',
-      className: 'text-gray-600 bg-gray-50 border-gray-200',
+      className: 'text-sv-neutral-600 bg-sv-neutral-50 border-sv-neutral-200',
       animate: '',
     },
     error: {
       icon: AlertCircle,
       text: 'Error',
-      className: 'text-red-600 bg-red-50 border-red-200',
+      className: 'text-sv-error-600 bg-sv-error-50 border-sv-error-200',
       animate: '',
     },
   };
@@ -145,32 +145,32 @@ function WorkerStatusIndicator({ status }: { status: WorkerStatus }) {
 function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCreateSession?: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center h-full p-8 text-center">
-      <div className="flex size-16 items-center justify-center rounded-2xl bg-gray-100 mb-4">
-        <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="flex size-16 items-center justify-center rounded-2xl bg-sv-neutral-100 mb-4">
+        <svg className="w-8 h-8 text-sv-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
         </svg>
       </div>
       {hasSession ? (
         <>
-          <h2 className="text-lg font-medium text-gray-900 mb-2">
+          <h2 className="text-lg font-medium text-sv-neutral-900 mb-2">
             Ready to help
           </h2>
-          <p className="text-gray-500 max-w-md text-sm">
+          <p className="text-sv-neutral-500 max-w-md text-sm">
             Start a conversation by typing a message below. I can help you with coding, analysis, and more.
           </p>
         </>
       ) : (
         <>
-          <h2 className="text-lg font-medium text-gray-900 mb-2">
+          <h2 className="text-lg font-medium text-sv-neutral-900 mb-2">
             Create a session to begin
           </h2>
-          <p className="text-gray-500 max-w-md text-sm mb-6">
+          <p className="text-sv-neutral-500 max-w-md text-sm mb-6">
             Start a new coding session to interact with the AI assistant.
           </p>
           {onCreateSession && (
             <button
               onClick={onCreateSession}
-              className="px-6 py-2.5 bg-gray-900 hover:bg-gray-800 rounded-full text-white text-sm font-medium transition-colors"
+              className="px-6 py-2.5 bg-sv-neutral-900 hover:bg-sv-neutral-800 rounded-full text-sv-white text-sm font-medium transition-colors"
             >
               Create new session
             </button>
@@ -413,7 +413,7 @@ export const VirtualizedMessageList = memo(forwardRef<
       role="status"
       aria-live="polite"
       data-testid="transfer-ready-banner"
-      className="flex-shrink-0 border-b border-emerald-200 bg-emerald-50 px-4 py-2.5 text-center text-sm font-medium text-emerald-800"
+      className="flex-shrink-0 border-b border-sv-ok-200 bg-sv-ok-50 px-4 py-2.5 text-center text-sm font-medium text-sv-ok-800"
     >
       {view.transferReadyMessage}
     </div>
@@ -500,7 +500,7 @@ export const VirtualizedMessageList = memo(forwardRef<
       </div>
       {/* Worker status indicator - shown at bottom when active */}
       {showWorkerStatus && (
-        <div className="flex-shrink-0 px-4 py-2 bg-white border-t border-gray-100">
+        <div className="flex-shrink-0 px-4 py-2 bg-sv-white border-t border-sv-neutral-100">
           <WorkerStatusIndicator status={workerStatus} />
         </div>
       )}

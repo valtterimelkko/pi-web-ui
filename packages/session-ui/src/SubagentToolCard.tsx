@@ -204,50 +204,50 @@ const ToolExecutionItem = memo(function ToolExecutionItem({
     <div className={`flex items-start gap-1.5 py-0.5 ${isLast ? '' : ''}`}>
       {/* Tree connector */}
       <div className="flex flex-col items-center self-stretch">
-        <div className="w-px h-full bg-gray-200" />
+        <div className="w-px h-full bg-sv-neutral-200" />
       </div>
       
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-xs">
           {/* Arrow */}
-          <span className="text-gray-400">→</span>
+          <span className="text-sv-neutral-400">→</span>
           
           {/* Icon */}
-          <span className={`shrink-0 ${isError ? 'text-red-500' : 'text-gray-500'}`}>
+          <span className={`shrink-0 ${isError ? 'text-sv-error-500' : 'text-sv-neutral-500'}`}>
             {icon}
           </span>
           
           {/* Tool name */}
-          <span className={`font-mono ${isError ? 'text-red-600' : 'text-gray-600'}`}>
+          <span className={`font-mono ${isError ? 'text-sv-error-600' : 'text-sv-neutral-600'}`}>
             {name}
           </span>
           
           {/* Primary parameter */}
           {primaryParam && (
-            <span className="text-gray-400 truncate font-mono" title={primaryParam}>
+            <span className="text-sv-neutral-400 truncate font-mono" title={primaryParam}>
               {primaryParam}
             </span>
           )}
           
           {/* Edit line count */}
           {editLines && (
-            <span className="text-gray-400 text-[10px]">
+            <span className="text-sv-neutral-400 text-[10px]">
               ({editLines})
             </span>
           )}
           
           {/* Status indicator */}
           {isError ? (
-            <XCircle className="w-3 h-3 text-red-500 shrink-0" />
+            <XCircle className="w-3 h-3 text-sv-error-500 shrink-0" />
           ) : (
-            <CheckCircle className="w-3 h-3 text-emerald-500 shrink-0" />
+            <CheckCircle className="w-3 h-3 text-sv-ok-500 shrink-0" />
           )}
         </div>
         
         {/* Read tool line info */}
         {name === 'read' && lineInfo && (
-          <div className="ml-4 text-[10px] text-gray-400">
+          <div className="ml-4 text-[10px] text-sv-neutral-400">
             {lineInfo}
           </div>
         )}
@@ -297,9 +297,9 @@ const TaskSection = memo(function TaskSection({
         <span className="text-xs font-medium text-content-primary dark:text-content-primary-dark">{task.agent}</span>
         <span className="text-xs text-content-muted dark:text-content-muted-dark truncate flex-1">{task.task}</span>
         {isComplete ? (
-          <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" strokeWidth={1.75} />
+          <CheckCircle className="w-3.5 h-3.5 text-sv-ok-500 shrink-0" strokeWidth={1.75} />
         ) : (
-          <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin shrink-0" strokeWidth={1.75} />
+          <Loader2 className="w-3.5 h-3.5 text-sv-warn-500 animate-spin shrink-0" strokeWidth={1.75} />
         )}
       </button>
 
@@ -514,9 +514,9 @@ export const SubagentToolCard = memo(function SubagentToolCard({
         {/* Subagent icon */}
         <div className={`p-1 rounded-md border ${
           isError
-            ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900/40 text-red-500'
+            ? 'bg-sv-error-50 dark:bg-sv-error-950/30 border-sv-error-200 dark:border-sv-error-900/40 text-sv-error-500'
             : isPending
-            ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/40 text-amber-500'
+            ? 'bg-sv-warn-50 dark:bg-sv-warn-950/30 border-sv-warn-200 dark:border-sv-warn-900/40 text-sv-warn-500'
             : 'bg-surface-subtle dark:bg-surface-dark-subtle border-outline-subtle dark:border-outline-subtle-dark text-content-secondary dark:text-content-secondary-dark'
         }`}>
           <Bot className="w-3.5 h-3.5" strokeWidth={1.75} />
@@ -535,7 +535,7 @@ export const SubagentToolCard = memo(function SubagentToolCard({
         {/* Status */}
         <div className="ml-auto flex items-center gap-2">
           {childStatus === 'running' ? (
-            <span className="text-xs text-amber-500 flex items-center gap-1">
+            <span className="text-xs text-sv-warn-500 flex items-center gap-1">
               <Clock className="w-3 h-3" strokeWidth={1.75} />
               Child running
               {elapsedSeconds > 0 && (
@@ -543,11 +543,11 @@ export const SubagentToolCard = memo(function SubagentToolCard({
               )}
             </span>
           ) : childStatus === 'completed' ? (
-            <CheckCircle className="w-4 h-4 text-emerald-500" strokeWidth={1.75} />
+            <CheckCircle className="w-4 h-4 text-sv-ok-500" strokeWidth={1.75} />
           ) : childStatus ? (
-            <XCircle className="w-4 h-4 text-red-500" strokeWidth={1.75} />
+            <XCircle className="w-4 h-4 text-sv-error-500" strokeWidth={1.75} />
           ) : isPending ? (
-            <span className="text-xs text-amber-500 flex items-center gap-1">
+            <span className="text-xs text-sv-warn-500 flex items-center gap-1">
               <Clock className="w-3 h-3" strokeWidth={1.75} />
               Running
               {elapsedSeconds > 0 && (
@@ -556,9 +556,9 @@ export const SubagentToolCard = memo(function SubagentToolCard({
               ...
             </span>
           ) : isError ? (
-            <XCircle className="w-4 h-4 text-red-500" strokeWidth={1.75} />
+            <XCircle className="w-4 h-4 text-sv-error-500" strokeWidth={1.75} />
           ) : (
-            <CheckCircle className="w-4 h-4 text-emerald-500" strokeWidth={1.75} />
+            <CheckCircle className="w-4 h-4 text-sv-ok-500" strokeWidth={1.75} />
           )}
         </div>
       </button>
@@ -569,7 +569,7 @@ export const SubagentToolCard = memo(function SubagentToolCard({
           {/* Mode indicator */}
           {effectiveMode && (
             <div className="text-xs text-content-muted dark:text-content-muted-dark">
-              Mode: <span className="font-mono text-gray-700 dark:text-content-primary-dark">{effectiveMode}</span>
+              Mode: <span className="font-mono text-sv-neutral-700 dark:text-content-primary-dark">{effectiveMode}</span>
               {effectiveAgentCount > 0 && (
                 <span className="ml-2">
                   • {effectiveAgentCount} {summary
@@ -654,7 +654,7 @@ export const SubagentToolCard = memo(function SubagentToolCard({
             )}
             <span>{childStatus === 'completed' ? '✓ completed' : childStatus === 'running' ? 'running' : childStatus}</span>
             {childDuration && <span className="font-mono text-[10px] text-content-muted dark:text-content-muted-dark">{childDuration}</span>}
-            {childState?.error && <span className="text-[10px] text-red-500 truncate">{childState.error}</span>}
+            {childState?.error && <span className="text-[10px] text-sv-error-500 truncate">{childState.error}</span>}
           </div>
         </div>
       )}

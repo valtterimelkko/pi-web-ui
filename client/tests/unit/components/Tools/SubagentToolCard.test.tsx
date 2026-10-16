@@ -159,7 +159,7 @@ describe('SubagentToolCard', () => {
     // Should show chain mode in the mode label
     expect(screen.getByText('Mode:')).toBeInTheDocument();
     // Mode value is in a span with font-mono class
-    const modeValue = document.querySelector('.font-mono.text-gray-700');
+    const modeValue = document.querySelector('.font-mono.text-sv-neutral-700');
     expect(modeValue?.textContent).toBe('chain');
   });
 
@@ -209,7 +209,7 @@ describe('SubagentToolCard', () => {
     );
 
     // Should show error state (red styling)
-    const container = document.querySelector('.text-red-500, .text-red-600');
+    const container = document.querySelector('.text-sv-error-500, .text-sv-error-600');
     expect(container).toBeInTheDocument();
   });
 
