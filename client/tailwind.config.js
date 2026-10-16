@@ -1,12 +1,15 @@
 /** @type {import('tailwindcss').Config} */
 import typography from '@tailwindcss/typography';
+import sessionUiPreset from '@pi-web-ui/session-ui/tailwind-preset';
 
 export default {
+  presets: [sessionUiPreset],
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
-    // Session cards and list live in the session-ui workspace (step 1a).
-    "../packages/session-ui/src/**/*.{ts,tsx}",
+    // Session cards and list live in the session-ui workspace (step 1a);
+    // Tailwind does not merge a preset's content, so list it here.
+    ...sessionUiPreset.sessionUiContent,
   ],
   darkMode: 'class',
   theme: {
@@ -23,35 +26,8 @@ export default {
           border: '#E5E7EB',     // gray-200
           code: '#F9FAFB',       // gray-50
         },
-        // Claude Code inspired session canvas tokens
-        canvas: {
-          DEFAULT: '#fcfcfb',       // Warm light paper
-          dark: '#18181b',          // Dark zinc canvas
-        },
-        surface: {
-          DEFAULT: '#ffffff',       // Pure white card surface
-          subtle: '#fafaf9',        // Inset code / tool output background
-          dark: '#27272a',
-          'dark-subtle': '#202023',
-        },
-        content: {
-          primary: '#0b0b0b',       // Soft deep charcoal
-          secondary: '#52514e',     // Warm neutral text
-          muted: '#898781',         // Dim helper text
-          'primary-dark': '#f4f4f5',
-          'secondary-dark': '#a1a1aa',
-          'muted-dark': '#71717a',
-        },
-        outline: {
-          subtle: 'rgba(11, 11, 11, 0.08)',
-          default: 'rgba(11, 11, 11, 0.12)',
-          'subtle-dark': 'rgba(255, 255, 255, 0.08)',
-          'default-dark': 'rgba(255, 255, 255, 0.12)',
-        },
-      },
-      fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
+        // canvas / surface / content / outline and the sans/mono fonts come
+        // from the session-ui preset (CSS-variable tokens, src/tokens.css).
       },
       typography: {
         DEFAULT: {

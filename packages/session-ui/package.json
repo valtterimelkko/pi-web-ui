@@ -4,7 +4,9 @@
   "private": true,
   "description": "Session cards and transcript list (React), styled through tokens; source-exported for the consumer's Vite",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "*.css"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./ChildrenStrip": "./src/ChildrenStrip.tsx",
@@ -21,7 +23,9 @@
     "./VirtualizedMessageList": "./src/VirtualizedMessageList.tsx",
     "./WatchStrip": "./src/WatchStrip.tsx",
     "./goalModel": "./src/goalModel.ts",
-    "./piExtensionControls": "./src/piExtensionControls.ts"
+    "./piExtensionControls": "./src/piExtensionControls.ts",
+    "./tokens.css": "./src/tokens.css",
+    "./tailwind-preset": "./tailwind-preset.cjs"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

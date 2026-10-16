@@ -76,6 +76,7 @@ export const BUILD_INPUT_POLICY = Object.freeze({
     'client/index.html',
     'client/tailwind.config.js',
     'client/postcss.config.js',
+    'packages/session-ui/tailwind-preset.cjs',
   ],
   scriptFiles: [
     'scripts/live-validate.ts',

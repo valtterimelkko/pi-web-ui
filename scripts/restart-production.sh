@@ -242,6 +242,7 @@ BUILD_INPUT_PATHS=(
   "client/index.html"
   "client/tailwind.config.js"
   "client/postcss.config.js"
+  "packages/session-ui/tailwind-preset.cjs"
   "scripts/live-validate.ts"
   "scripts/long-horizon-validate.ts"
   "scripts/validation-server.ts"

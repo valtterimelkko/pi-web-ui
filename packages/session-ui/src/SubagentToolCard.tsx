@@ -279,8 +279,9 @@ const TaskSection = memo(function TaskSection({
   isExpanded: boolean;
   onToggle: () => void;
 }) {
-  const hasToolCalls = task.toolCalls && task.toolCalls.length > 0;
-  const toolCount = hasToolCalls ? task.toolCalls!.length : 0;
+  const toolCalls = task.toolCalls ?? [];
+  const hasToolCalls = toolCalls.length > 0;
+  const toolCount = toolCalls.length;
   const isComplete = !!task.result;
 
   return (
@@ -305,12 +306,12 @@ const TaskSection = memo(function TaskSection({
       {/* Expanded tool calls */}
       {isExpanded && hasToolCalls && (
         <div className="mt-1 ml-3 space-y-0.5">
-          {task.toolCalls!.map((toolResult, idx) => (
+          {toolCalls.map((toolResult, idx) => (
             <ToolExecutionItem
               key={idx}
               toolResult={toolResult}
               index={idx}
-              isLast={idx === task.toolCalls!.length - 1}
+              isLast={idx === toolCalls.length - 1}
             />
           ))}
         </div>

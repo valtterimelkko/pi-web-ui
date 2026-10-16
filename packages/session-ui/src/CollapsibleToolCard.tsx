@@ -120,48 +120,6 @@ function getPrimaryParam(args: unknown): string | null {
   return null;
 }
 
-// Format natural action and target for Claude Code-like tool headers
-function formatToolActionSummary(name: string, args: unknown): { action: string; target?: string } {
-  const norm = normalizeToolName(name).toLowerCase();
-  const record = (args && typeof args === 'object') ? (args as Record<string, unknown>) : {};
-
-  if (norm === 'bash' || norm === 'run_command') {
-    const cmd = (record.command || record.CommandLine || record.cmd || '') as string;
-    return { action: 'Run', target: cmd ? (cmd.length > 60 ? `${cmd.slice(0, 60)}…` : cmd) : undefined };
-  }
-  if (norm === 'read' || norm === 'view_file') {
-    const path = (record.path || record.AbsolutePath || record.file_path || '') as string;
-    const basename = path.split('/').filter(Boolean).pop() || path;
-    return { action: 'Read', target: basename || path };
-  }
-  if (norm === 'write' || norm === 'write_to_file') {
-    const path = (record.path || record.TargetFile || record.file_path || '') as string;
-    const basename = path.split('/').filter(Boolean).pop() || path;
-    return { action: 'Write', target: basename || path };
-  }
-  if (norm === 'edit' || norm === 'replace_file_content') {
-    const path = (record.path || record.TargetFile || record.file_path || '') as string;
-    const basename = path.split('/').filter(Boolean).pop() || path;
-    return { action: 'Edit', target: basename || path };
-  }
-  if (norm === 'glob' || norm === 'find_by_name') {
-    const pat = (record.pattern || record.Pattern || '') as string;
-    return { action: 'Find files', target: pat ? `"${pat}"` : undefined };
-  }
-  if (norm === 'grep' || norm === 'grep_search') {
-    const q = (record.pattern || record.query || record.Query || '') as string;
-    return { action: 'Search', target: q ? `"${q}"` : undefined };
-  }
-  if (norm.includes('skill')) {
-    const skillName = (record.skill || record.name || '') as string;
-    return { action: 'Ran skill', target: skillName ? `/${skillName}` : undefined };
-  }
-
-  const displayName = TOOL_DISPLAY_NAMES[normalizeToolName(name)] ?? TOOL_DISPLAY_NAMES[name] ?? name;
-  const primary = getPrimaryParam(args);
-  return { action: displayName, target: primary ?? undefined };
-}
-
 // Format args for display
 function formatArgs(args: unknown): string {
   try {
