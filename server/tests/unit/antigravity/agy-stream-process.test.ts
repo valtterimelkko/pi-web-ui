@@ -341,6 +341,46 @@ describe('AgyStreamProcess', () => {
     expect(outcome.reason).toBe('aborted');
   });
 
+  it('delete-path: abort() on an IDLE process (no pending turn) still SIGTERMs the child and makes it unusable', async () => {
+    // A keep-warm process owns no in-flight turn, but it DOES own a live agy
+    // process. Deleting the session (or stopping the server) must end it now,
+    // not wait for the idle stdin-close timer (ANTIGRAVITY_IDLE_TIMEOUT_MS,
+    // 30 min by default).
+    const { proc, child } = makeHarness({ idleTimeoutMs: 3_600_000 });
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const done = proc.writeTurn('one quick turn');
+    child.writeStdout(resultLine());
+    await done;
+    expect(child.signals).toEqual([]);
+    proc.abort();
+    expect(child.signals).toContain('SIGTERM');
+    expect(proc.hasExited).toBe(true);
+    await expect(proc.writeTurn('follow-up')).rejects.toThrow(/respawn required/);
+  });
+
+  it('delete-path: an idle abort that is never acked ends stdin and escalates to SIGKILL', async () => {
+    const { proc, child } = makeHarness({ idleTimeoutMs: 3_600_000 });
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const done = proc.writeTurn('one quick turn');
+    child.writeStdout(resultLine());
+    await done;
+    proc.abort();
+    expect(child.stdinWrites).toContain('__END__'); // graceful half of the termination
+    expect(child.signals).not.toContain('SIGKILL');
+    await vi.advanceTimersByTimeAsync(6_000); // past the abort grace window
+    expect(child.signals).toContain('SIGKILL');
+  });
+
+  it('delete-path: abort() is idempotent — the same child is never SIGTERMed twice', async () => {
+    const { proc, child } = makeHarness({ idleTimeoutMs: 3_600_000 });
+    await proc.start();
+    proc.abort();
+    proc.abort();
+    expect(child.signals.filter((s) => s === 'SIGTERM')).toHaveLength(1);
+  });
+
   it('T3.3: process death with pending turns resolves them with reason process-exited', async () => {
     const { proc, child } = makeHarness();
     await proc.start();

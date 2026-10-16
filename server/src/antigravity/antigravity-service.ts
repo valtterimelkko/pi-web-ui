@@ -901,9 +901,18 @@ export class AntigravityService {
     // Legacy text path: keep the session marked running until the exact
     // in-flight invocation observes the abort and finalises.
     this.promptAbortControllers.get(sessionId)?.abort();
-    // Stream path: SIGTERM the child; the closing result / exit resolves the
-    // pending turn(s) with reason 'aborted'.
-    this.streamProcesses.get(sessionId)?.abort();
+    // Stream path: SIGTERM the child — mid-turn OR idle; the closing result /
+    // exit resolves the pending turn(s) with reason 'aborted'. This is the path
+    // DELETE /sessions/:id takes (routes/sessions.ts), so it must end the
+    // process even when no turn is in flight (the census 2026-10-16 leak).
+    const proc = this.streamProcesses.get(sessionId);
+    if (proc) {
+      try { proc.abort(); } catch { /* non-fatal */ }
+      // The process is terminating and unusable; forget it so a later turn
+      // respawns instead of writing into a dying child.
+      this.streamProcesses.delete(sessionId);
+      this.streamNormalizers.delete(sessionId);
+    }
   }
 
   // ── Background-task tracking (plan Phase 1) ─────────────────────────────
@@ -1328,6 +1337,14 @@ export class AntigravityService {
       clearInterval(this.backgroundWatchTimer);
       this.backgroundWatchTimer = null;
     }
+    // A live agy child outlives the server unless it is ended here: leaving it
+    // to the child's stdin pipe closing on parent exit is not a guarantee, and
+    // a mid-turn child would then run on unattended. Census 2026-10-16.
+    for (const [, proc] of this.streamProcesses) {
+      try { proc.abort(); } catch { /* shutdown is best-effort per child */ }
+    }
+    this.streamProcesses.clear();
+    this.streamNormalizers.clear();
   }
 }
 
