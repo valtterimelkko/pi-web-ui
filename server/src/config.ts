@@ -538,6 +538,7 @@ export interface ServerConfig {
   ttsModel: string;
   ttsOpenaiFallbackModel: string;
   openrouterApiKey: string;
+  xaiApiKey: string;
   claudeChannelEnabled: boolean;
   claudeChannelPluginDir: string;
   claudeChannelWsPort: number;
@@ -773,6 +774,7 @@ export const config: ServerConfig = {
   dictationVocabularyDbPath: process.env.DICTATION_VOCABULARY_DB_PATH || '/root/voicenotebot/streaming-dictation/backend/data/transcripts.db',
   ttsOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.TTS_OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+  xaiApiKey: process.env.XAI_API_KEY || '',
   ttsModel: process.env.TTS_MODEL || 'google/gemini-3.8-flash-lite-tts',
   ttsOpenaiFallbackModel: process.env.TTS_OPENAI_FALLBACK_MODEL || 'gpt-4o-mini-tts',
   claudeChannelEnabled: process.env.CLAUDE_CHANNEL_ENABLED === 'true',

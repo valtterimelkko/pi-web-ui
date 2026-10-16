@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import http from 'node:http';
 
 const { configState } = vi.hoisted(() => ({
-  configState: { openrouterApiKey: 'test-or-key' as string | undefined },
+  configState: { xaiApiKey: 'test-xai-key' as string | undefined },
 }));
 
 vi.mock('../../../src/config.js', () => ({
@@ -120,59 +120,75 @@ afterAll(() => {
   }
 });
 
-describe('STT Service (three-tier, Benchmark 6 selection)', () => {
+describe('STT Service (three-tier, xAI primary since 2026-10-16)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    configState.openrouterApiKey = 'test-or-key';
-    setEnv('OPENROUTER_STT_URL', undefined);
+    configState.xaiApiKey = 'test-xai-key';
+    setEnv('XAI_STT_URL', undefined);
     setEnv('LOCAL_ASR_URL', undefined);
     setEnv('STT_REQUEST_TIMEOUT_MS', undefined);
     setEnv('STT_RETRY_DELAY_MS', '10');
   });
 
-  it('uses the OpenRouter whisper-turbo tier first (DeepInfra pin, webm body)', async () => {
+  it('uses the xAI Grok tier first (multipart, language pin, key terms, file last)', async () => {
     const fake = await fakeSttServer(200, { text: 'Hello world' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
       const result = await transcribeWithFallback([Buffer.from('audio')], 'Claude, Anthropic');
       expect(result.text).toBe('Hello world');
-      expect(result.model).toBe('openai/whisper-large-v3-turbo');
+      expect(result.model).toBe('grok-voice-transcribe-2.0');
       expect(result.usedFallback).toBe(false);
       expect(fake.requests).toHaveLength(1);
-      expect(fake.requests[0].auth).toBe('Bearer test-or-key');
-      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
-      expect(payload.model).toBe('openai/whisper-large-v3-turbo');
-      expect(payload.provider).toEqual({ order: ['DeepInfra'], allow_fallbacks: false });
-      expect(payload.input_audio.format).toBe('webm');
-      expect(Buffer.from(payload.input_audio.data, 'base64').toString()).toBe('audio');
-      expect(payload.prompt).toBe('Claude, Anthropic');
+      expect(fake.requests[0].auth).toBe('Bearer test-xai-key');
+      expect(fake.requests[0].contentType).toContain('multipart/form-data');
+      const body = fake.requests[0].body.toString('utf8');
+      expect(body).toMatch(/name="model"\r\n\r\ngrok-voice-transcribe-2.0\r\n/);
+      expect(body).toMatch(/name="language"\r\n\r\nen\r\n/);
+      expect(body).toMatch(/name="keyterm"\r\n\r\nClaude\r\n/);
+      expect(body).toMatch(/name="keyterm"\r\n\r\nAnthropic\r\n/);
+      expect(body).toContain('audio');
+      expect(body.lastIndexOf('name="file"')).toBeGreaterThan(body.lastIndexOf('name="keyterm"'));
       expect(getSharedOpenAIClient).not.toHaveBeenCalled();
     } finally {
       fake.close();
     }
   });
 
-  it('falls back to the local Parakeet service when OpenRouter fails', async () => {
-    const orFail = await fakeSttServer(500, { error: 'down' });
+  it('caps key terms at 100 terms of 50 characters', async () => {
+    const fake = await fakeSttServer(200, { text: 'ok' });
+    setEnv('XAI_STT_URL', fake.url);
+    try {
+      const many = Array.from({ length: 130 }, (_, i) => `term${i}`).join(', ') + ', ' + 'x'.repeat(80);
+      await transcribeWithFallback([Buffer.from('a')], many);
+      const body = fake.requests[0].body.toString('utf8');
+      expect((body.match(/name="keyterm"/g) ?? []).length).toBe(100);
+      expect(body).not.toMatch(/x{51}/);
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('falls back to the local ASR service when xAI fails', async () => {
+    const xaiFail = await fakeSttServer(500, { error: 'down' });
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       const result = await transcribeWithFallback([Buffer.from('audio')]);
       expect(result.text).toBe('local text');
       expect(result.usedFallback).toBe(true);
-      expect(result.model).toContain('parakeet');
+      expect(result.model).toBe('local-asr');
       expect(local.requests[0].contentType).toContain('multipart/form-data');
       expect(local.requests[0].body.toString('utf8')).toContain('name="audio_file"');
       expect(getSharedOpenAIClient).not.toHaveBeenCalled();
     } finally {
-      orFail.close(); local.close();
+      xaiFail.close(); local.close();
     }
   });
 
   it('uses OpenAI gpt-transcribe as the last resort when both tiers fail', async () => {
-    const orFail = await fakeSttServer(500, { error: 'down' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    const xaiFail = await fakeSttServer(500, { error: 'down' });
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr');
     const client = mockOpenAIClient('openai last resort');
     vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
@@ -185,28 +201,28 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
         expect.objectContaining({ model: 'gpt-transcribe', prompt: 'vocab' }),
       );
     } finally {
-      orFail.close();
+      xaiFail.close();
     }
   });
 
-  it('skips the OpenRouter tier entirely when no key is configured', async () => {
-    configState.openrouterApiKey = undefined;
-    const orFail = await fakeSttServer(200, { text: 'should not be reached' });
+  it('skips the xAI tier entirely when no key is configured', async () => {
+    configState.xaiApiKey = undefined;
+    const xaiFail = await fakeSttServer(200, { text: 'should not be reached' });
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       const result = await transcribeWithFallback([Buffer.from('audio')]);
       expect(result.text).toBe('local text');
-      expect(orFail.requests).toHaveLength(0);
+      expect(xaiFail.requests).toHaveLength(0);
     } finally {
-      orFail.close(); local.close();
+      xaiFail.close(); local.close();
     }
   });
 
   it('startSpeculativeTranscription snapshots chunks and resolves via the tiers', async () => {
     const fake = await fakeSttServer(200, { text: 'speculative text' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
       const spec = startSpeculativeTranscription([Buffer.from('a'), Buffer.from('b')]);
       expect(spec.chunkCount).toBe(2);
@@ -225,9 +241,9 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
     expect(shouldUseSpeculative(spec, 20)).toBe(false);  // 10/20 new >= 0.3
   });
 
-  it('retries the OpenRouter tier once on a transient 5xx and stays on the primary tier', async () => {
+  it('retries the xAI tier once on a transient 5xx and stays on the primary tier', async () => {
     const or = await sequenceSttServer([{ status: 503, body: { error: 'busy' } }, { status: 200, body: { text: 'second try' } }]);
-    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('XAI_STT_URL', or.url);
     try {
       const result = await transcribeWithFallback([Buffer.from('audio')]);
       expect(result.text).toBe('second try');
@@ -241,7 +257,7 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
   it('does not retry a non-transient 4xx and falls through to the local tier', async () => {
     const or = await sequenceSttServer([{ status: 401, body: { error: 'bad key' } }]);
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('XAI_STT_URL', or.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       const result = await transcribeWithFallback([Buffer.from('audio')]);
@@ -255,14 +271,14 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
   it('does not retry an empty transcript but logs enough to diagnose it', async () => {
     const or = await sequenceSttServer([{ status: 200, body: { text: '   ', usage: { seconds: 3 } } }]);
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('XAI_STT_URL', or.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       const result = await transcribeWithFallback([Buffer.alloc(1234)]);
       expect(result.text).toBe('local text');
       expect(or.requests).toHaveLength(1);
       const lines = mockLogger.error.mock.calls.map((c) => c.map(String).join(' '));
-      const line = lines.find((l) => l.includes('tier=openrouter') && l.includes('outcome=empty'));
+      const line = lines.find((l) => l.includes('tier=xai') && l.includes('outcome=empty'));
       expect(line).toBeDefined();
       expect(line).toContain('bytes=1234');
       expect(line).toContain('seconds');
@@ -271,11 +287,11 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
     }
   });
 
-  it('times out a hung OpenRouter request, retries once, then uses the local tier', async () => {
+  it('times out a hung xAI request, retries once, then uses the local tier', async () => {
     setEnv('STT_REQUEST_TIMEOUT_MS', '150');
     const or = await sequenceSttServer(['hang']);
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('XAI_STT_URL', or.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       const started = Date.now();
@@ -284,7 +300,7 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
       expect(or.requests).toHaveLength(2);
       expect(Date.now() - started).toBeLessThan(3000);
       const lines = mockLogger.error.mock.calls.map((c) => c.map(String).join(' '));
-      expect(lines.some((l) => l.includes('tier=openrouter') && l.includes('outcome=timeout'))).toBe(true);
+      expect(lines.some((l) => l.includes('tier=xai') && l.includes('outcome=timeout'))).toBe(true);
     } finally {
       or.close(); local.close();
     }
@@ -294,7 +310,7 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
     setEnv('STT_REQUEST_TIMEOUT_MS', '150');
     const or = await sequenceSttServer([{ status: 401, body: {} }]);
     const local = await sequenceSttServer(['hang']);
-    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('XAI_STT_URL', or.url);
     setEnv('LOCAL_ASR_URL', local.url);
     vi.mocked(getSharedOpenAIClient).mockReturnValue(mockOpenAIClient('openai text') as never);
     try {
@@ -307,11 +323,11 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
 
   it('logs one structured info line per successful attempt so tier usage can be counted', async () => {
     const fake = await fakeSttServer(200, { text: 'Hello world' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
       await transcribeWithFallback([Buffer.from('audio')]);
       const lines = mockLogger.info.mock.calls.map((c) => c.map(String).join(' '));
-      const line = lines.find((l) => l.includes('tier=openrouter') && l.includes('outcome=ok'));
+      const line = lines.find((l) => l.includes('tier=xai') && l.includes('outcome=ok'));
       expect(line).toBeDefined();
       expect(line).toMatch(/ms=\d+/);
       expect(line).toContain('bytes=5');
@@ -322,7 +338,7 @@ describe('STT Service (three-tier, Benchmark 6 selection)', () => {
 
   it('logs the final failure when every tier fails', async () => {
     const or = await sequenceSttServer([{ status: 401, body: {} }]);
-    setEnv('OPENROUTER_STT_URL', or.url);
+    setEnv('XAI_STT_URL', or.url);
     setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr');
     const client = { audio: { transcriptions: { create: vi.fn().mockRejectedValue(new Error('openai down')) } } };
     vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);

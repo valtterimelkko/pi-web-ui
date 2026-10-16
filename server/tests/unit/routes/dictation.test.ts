@@ -8,7 +8,7 @@ vi.mock('../../../src/middleware/auth.js', () => ({
 vi.mock('../../../src/dictation/stt.js', () => ({
   transcribeWithFallback: vi.fn().mockResolvedValue({
     text: 'Hello world this is a test',
-    model: 'openai/whisper-large-v3-turbo',
+    model: 'grok-voice-transcribe-2.0',
     usedFallback: false,
   }),
   startSpeculativeTranscription: vi.fn().mockReturnValue(null),

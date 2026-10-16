@@ -192,7 +192,7 @@ degrade; Antigravity **queues** follow-ups as a first-class outcome.
 | Client surface | `client/src/components/DriveMode/DriveModeDictate.tsx`, `useVoiceTurn.ts`, `client/src/lib/voiceFloor.ts`, `speechArbiter.ts`, `speechTelemetry.ts` | Voice UI states, capture, playback scheduling |
 
 Current model configuration (code defaults, not a read of deployed environment):
-dictation via OpenRouter whisper-large-v3-turbo (DeepInfra) with local Parakeet + gpt-transcribe fallbacks; talker model `google/gemma-4-26b-a4b-it`
+dictation via xAI Grok STT (grok-voice-transcribe-2.0, primary since 2026-10-16) with local ASR + gpt-transcribe fallbacks; talker model `google/gemma-4-26b-a4b-it`
 via OpenRouter; text-to-speech `tts-1`.
 
 ## 8. The mechanical gate (non-negotiable)
