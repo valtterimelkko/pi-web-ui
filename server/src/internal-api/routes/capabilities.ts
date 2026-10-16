@@ -123,6 +123,15 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           values: ['enabled', 'disabled'],
           env: PI_WEB_UI_AGENT_OS_CAPTURE_ENV,
         },
+        // Contract 1.63.0 (step 1i.2 B): a caller may name a parent that is not
+        // a Pi Web UI session (e.g. a native Claude Code session id) by marking
+        // the body parentSessionId native; it is persisted and surfaced as
+        // parentSource "declared" without registry resolution.
+        nativeParentLinkage: {
+          parentKind: 'native',
+          parentSource: 'declared',
+          surfaces: ['POST /sessions', 'POST /sessions/batch', 'POST /sessions/:id/adopt', 'POST /sessions/:id/control'],
+        },
       },
       runtimes: {
         pi: {

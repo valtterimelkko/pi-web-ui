@@ -34,14 +34,18 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * (2026-10-13, W0-c) — the additive `PROFILE_CAPACITY_EXHAUSTED` code,
  * `CapacityResponse.claudeProfiles` and `ModelInfo.maxConcurrent`; re-based again at
  * **1.62.0** (2026-10-13, W2) — the additive `SessionGoalProjection` `goalId` /
- * `stalled` / `stalledForMs` fields. The ENFORCED fingerprint is
+ * `stalled` / `stalledForMs` fields; re-based again at **1.63.0** (2026-10-16,
+ * step 1i.2 B) — the additive `parentKind`/`parentSource: "declared"` native
+ * parent linkage fields and `features.nativeParentLinkage`, re-based within
+ * 1.63.0 by correction round 1 — the additive `SessionControlResponse`
+ * `parentSource` field. The ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
  * sorted keys (so patch-bump regenerations that only move the version string
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '702a35b553c5a1aad364f41da5c4a0f4a48cce641bba5e76cae10cfd7d050d1f';
+export const BASELINE_SHAPE_SHA256 = 'ee33fa670ce61bafd26a2e8b03ee527ef5922121cab0e569b8ef5a626281f2b0';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */
