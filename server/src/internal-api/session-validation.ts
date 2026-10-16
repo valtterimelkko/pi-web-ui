@@ -80,6 +80,35 @@ const goalRuntimeRefine = (body: { runtime: string; goal?: unknown }, ctx: z.Ref
 /** Contract 1.47.0 (Amendment 1): absent = unspecified (Agent OS decides by origin). */
 export const agentOsCaptureSchema = z.enum(['enabled', 'disabled']);
 
+// Contract 1.63.0 (step 1i.2 B): an explicitly native parent. The caller marks
+// the body parentSessionId as naming a native session id (e.g. a Claude Code
+// session uuid) that must NOT resolve to a registry session; it is persisted
+// as parentSource "declared". Bare opaque token only: no separators, no '..',
+// bounded length — never a path.
+export const parentKindSchema = z.enum(['native']);
+const nativeParentIdSchema = z.string().regex(
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/,
+  'parentSessionId must be a bare opaque native id (no path separators) when parentKind is "native"',
+);
+
+/** Shared cross-field rules for parentKind (contract 1.63.0): the marker
+ *  requires a parentSessionId, and a native-marked value must be a bare
+ *  opaque id (never a path). */
+function refineParentKind(body: { parentKind?: unknown; parentSessionId?: unknown }, ctx: z.RefinementCtx): void {
+  if (body.parentKind === undefined) return;
+  if (typeof body.parentSessionId !== 'string' || !body.parentSessionId.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['parentKind'], message: 'parentKind requires parentSessionId' });
+    return;
+  }
+  if (body.parentKind === 'native' && !nativeParentIdSchema.safeParse(body.parentSessionId).success) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['parentSessionId'],
+      message: 'parentSessionId must be a bare opaque native id (no path separators) when parentKind is "native"',
+    });
+  }
+}
+
 export const createSessionBodySchema = z.object({
   runtime: sessionRuntimeSchema,
   cwd: cwdSchema.optional(),
@@ -94,6 +123,9 @@ export const createSessionBodySchema = z.object({
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
   // Contract 1.34.0 child surfacing: explicit parent linkage (header wins).
   parentSessionId: z.string().min(1).max(200).optional(),
+  // Contract 1.63.0 (step 1i.2 B): mark the body parentSessionId as a native
+  // parent id (opaque, never resolved against the registry).
+  parentKind: parentKindSchema.optional(),
   // Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in.
   agentOsCapture: agentOsCaptureSchema.optional(),
   // Contract 1.53.0 (C4): dispatch preflight spec; the effective cwd is always
@@ -106,6 +138,7 @@ export const createSessionBodySchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['retention'], message: 'Use either legacy pin or retention, not both' });
   }
   goalRuntimeRefine(body, ctx);
+  refineParentKind(body, ctx);
   if (body.profileId !== undefined && body.runtime !== 'claude') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -138,6 +171,8 @@ const batchCreateEntrySchema = z.object({
   // Contract 1.54.0 (C5, correction 01): per-entry parent linkage, same
   // semantics as the single-create body field (header wins).
   parentSessionId: z.string().min(1).max(200).optional(),
+  // Contract 1.63.0 (step 1i.2 B): per-entry native parent marking.
+  parentKind: parentKindSchema.optional(),
 }).strict().superRefine((body, ctx) => {
   if (body.runtime === 'claude' && body.model?.startsWith('profile:') && !body.model.slice('profile:'.length).trim()) {
     ctx.addIssue({
@@ -147,6 +182,7 @@ const batchCreateEntrySchema = z.object({
     });
   }
   goalRuntimeRefine(body, ctx);
+  refineParentKind(body, ctx);
 });
 
 export const sessionControlBodySchema = z.object({
@@ -160,21 +196,30 @@ export const sessionControlBodySchema = z.object({
   retention: retentionSchema.optional(),
   // Contract 1.40.0 `adopt`: link this session under a parent (display-only).
   parentSessionId: sessionIdSchema.optional(),
+  // Contract 1.63.0 (step 1i.2 B): mark the parent as a native session id.
+  parentKind: parentKindSchema.optional(),
   alias: z.string().min(1).max(120).optional(),
   role: z.string().min(1).max(120).optional(),
   // Contract 1.40.0 `adopt-native` shares the control schema surface via types.
   runtime: z.enum(['claude', 'commandcode', 'opencode', 'antigravity']).optional(),
   nativeId: z.string().min(1).max(128).optional(),
   cwd: cwdSchema.optional(),
-}).strict();
+}).strict().superRefine((body, ctx) => {
+  if (body.action === 'adopt') refineParentKind(body, ctx);
+});
 
 /** Contract 1.40.0: POST /api/v1/sessions/:id/adopt body. Parent may also arrive
  *  via the X-Parent-Session header (header wins, same precedence as create). */
 export const adoptSessionBodySchema = z.object({
   parentSessionId: sessionIdSchema.optional(),
+  // Contract 1.63.0 (step 1i.2 B): mark the parent as a native session id —
+  // an opaque id that must not resolve to a registry session.
+  parentKind: parentKindSchema.optional(),
   alias: z.string().min(1).max(120).optional(),
   role: z.string().min(1).max(120).optional(),
-}).strict();
+}).strict().superRefine((body, ctx) => {
+  refineParentKind(body, ctx);
+});
 
 /** Native session artefact base names: UUIDs (claude/commandcode/antigravity),
  *  ses_* ids (opencode). No separators, no `..` — the value is joined into a

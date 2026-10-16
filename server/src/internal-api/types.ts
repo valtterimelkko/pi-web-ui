@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.62.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.63.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
@@ -246,6 +246,11 @@ export interface CreateSessionRequest {
   };
   /** Contract 1.34.0 child surfacing: parent linkage (X-Parent-Session header wins over this). */
   parentSessionId?: string;
+  /** Contract 1.63.0 (step 1i.2 B): mark the body parentSessionId as a native
+   *  parent id — an opaque native session id (e.g. a Claude Code session uuid)
+   *  that must NOT resolve to a registry session; persisted (and surfaced) as
+   *  parentSource "declared". */
+  parentKind?: 'native';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** Contract 1.53.0 (C4): dispatch preflight spec (referenced paths + tools). The
@@ -343,6 +348,9 @@ export interface BatchCreateEntry {
   /** Contract 1.54.0 (C5, correction 01): per-entry parent linkage, same semantics
    *  as the single-create body field (header wins). */
   parentSessionId?: string;
+  /** Contract 1.63.0 (step 1i.2 B): per-entry native parent marking — see
+   *  CreateSessionRequest.parentKind. */
+  parentKind?: 'native';
 }
 
 export interface BatchCreateRequest {
@@ -367,7 +375,7 @@ export interface BatchCreateResultItem {
   /** Contract 1.54.0 (C5, correction 01): lineage when the caller (or the entry)
    *  named a parent. Absent when unlinked. */
   parentSessionId?: string;
-  parentSource?: 'header' | 'body' | 'bash' | 'peer';
+  parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** Contract 1.49.0: admission refusals (ADMISSION_CAPACITY_EXHAUSTED) carry reason + retryAfterSeconds. */
@@ -653,6 +661,9 @@ export interface SessionControlRequest {
   effort?: CommandCodeEffort;
   /** Contract 1.40.0 `adopt`: parent session id (or path) to link the session under. */
   parentSessionId?: string;
+  /** Contract 1.63.0 (step 1i.2 B): mark the adopt parent as a native session
+   *  id (opaque, never resolved against the registry). */
+  parentKind?: 'native';
   /** Contract 1.40.0 `adopt`/`adopt-native`: optional display label for the child card. */
   alias?: string;
   /** Contract 1.40.0 `adopt`/`adopt-native`: advisory caller-assigned role echoed in the response. */
@@ -712,8 +723,10 @@ export interface CreateSessionResponse {
   createdAt: string;
   /** Parent session linkage when the caller identified itself (contract 1.34.0). */
   parentSessionId?: string;
-  /** Contract 1.54.0 (C5): which source produced the linkage. Absent when unlinked. */
-  parentSource?: 'header' | 'body' | 'bash' | 'peer';
+  /** Contract 1.54.0 (C5): which source produced the linkage. Absent when unlinked.
+   *  Contract 1.63.0 (step 1i.2 B) adds "declared": the caller explicitly
+   *  marked the parent native (an opaque native session id). */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
   /** True when the session was pinned at creation (pin:true requested). */
@@ -763,8 +776,9 @@ export interface SessionInfo {
   source?: 'browser' | 'internal-api' | 'native-discovered' | 'unknown';
   /** Parent session linkage when known (display-only). Additive since 1.54.0 (C5). */
   parentSessionId?: string;
-  /** Which source produced the linkage. Additive since 1.54.0 (C5). */
-  parentSource?: 'header' | 'body' | 'bash' | 'peer';
+  /** Which source produced the linkage. Additive since 1.54.0 (C5); "declared"
+   *  (a native-marked parent, contract 1.63.0 step 1i.2 B) since 1.63.0. */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared';
 }
 
 /** One natively-discovered (direct-CLI) session returned by the bounded
@@ -846,6 +860,9 @@ export interface AdoptSessionResponse {
   success: boolean;
   childSessionId: string;
   parentSessionId: string;
+  /** Contract 1.63.0 (step 1i.2 B): "declared" when the parent was adopted as
+   *  native-marked; absent for managed adoption (unchanged since 1.40.0). */
+  parentSource?: 'declared';
   runtime: string;
   alias?: string;
   role?: string;
@@ -1441,6 +1458,15 @@ export interface CapabilitiesResponse {
       createField: 'agentOsCapture';
       values: Array<'enabled' | 'disabled'>;
       env: 'PI_WEB_UI_AGENT_OS_CAPTURE';
+    };
+    /** Contract 1.63.0 (step 1i.2 B): an explicitly native parent may be named on
+     *  create/batch/adopt — body `parentSessionId` + `parentKind: "native"` links
+     *  the child to an opaque native session id, persisted and surfaced as
+     *  parentSource "declared" (no registry resolution, no fan-out). */
+    nativeParentLinkage: {
+      parentKind: 'native';
+      parentSource: 'declared';
+      surfaces: string[];
     };
   };
   runtimes: {

@@ -160,7 +160,10 @@ WebSocket-only surface.
   (contract 1.34.0, extended by 1.54.0) and every managed caller is attributed —
   but a caller with no header, no correlatable bash call, and no session
   identity in its process ancestry (e.g. an external cron script) stays
-  unlinked by design: linkage fails safe rather than guessing.
+  unlinked by design: linkage fails safe rather than guessing. A caller whose
+  parent is a native CLI session outside Pi Web UI (e.g. a Claude Code parent)
+  can name it explicitly since 1.63.0 — see [Native parent linkage (contract
+  1.63.0)](#native-parent-linkage-contract-1630).
 - **Run receipts are dispatch-scoped, not a queue:** every accepted Internal-API
   prompt has a durable `runId` and receipt, but Pi Web UI still does not expose
   a general-purpose job queue or scheduler. Use `GET /runs/:runId` for a
@@ -827,8 +830,13 @@ POST /api/v1/sessions/:id/adopt
 
 - The parent may also arrive via the `X-Parent-Session` header (header wins,
   same precedence as create; a registry id or session path is accepted).
+- Since contract 1.63.0 the parent may be **native** — a session Pi Web UI does
+  not host: send `parentKind: "native"` beside `parentSessionId` and the value
+  is taken as an opaque native id (bare token, no paths), persisted as
+  `parentSource: "declared"` with no `child_dispatched` fan-out.
 - `alias` becomes the child-card label; `role` is an advisory echo.
-- Response: `{success, childSessionId, parentSessionId, runtime}`.
+- Response: `{success, childSessionId, parentSessionId, runtime}` (plus
+  `parentSource: "declared"` for a native-marked adoption).
 - The same operation is available as `POST /sessions/:id/control` with
   `{action: "adopt", parentSessionId}` (P1 control lane).
 - Errors: `404 SESSION_NOT_FOUND` (child or parent unknown), `400
@@ -3258,7 +3266,8 @@ Command Code records carry their registry lineage on `GET /sessions` and in
 "bash" | "peer"` (create and adopt-native responses, `GET /sessions` items,
 and the session detail endpoints). `GET /sessions?parent=<id-or-path>` returns
 exactly that parent's children (`404 SESSION_NOT_FOUND` for an unresolvable
-parent value, so a typo never masquerades as an empty list).
+parent value, so a typo never masquerades as an empty list — except for a
+declared native parent, see below).
 
 **Events** (all on `/events`, watchable, and bridged to the browser):
 
@@ -3283,6 +3292,42 @@ curl --unix-socket $SOCK -X POST /api/v1/sessions \
 The Pi `watch-wake` extension sends the header automatically, and Pi bash
 tools expose `PI_SESSION_ID`/`PI_PROVIDER`/`PI_MODEL` so skill-taught curl
 calls can do the same.
+
+#### Native parent linkage (contract 1.63.0)
+
+A parent that is **not** a Pi Web UI session — a native Claude Code CLI
+session, a Remote Control parent, any harness outside this server — could
+never be named: an `X-Parent-Session` value that does not resolve to a
+registry id or path is silently ignored, so its Internal-API children carried
+no server-side link at all. Since 1.63.0 the caller can declare the parent
+explicitly:
+
+```bash
+curl --unix-socket $SOCK -X POST /api/v1/sessions \
+  -H "Authorization: Bearer $TOK" -H 'content-type: application/json' \
+  -d '{"runtime":"pi","model":"zai/glm-5.3-flash","cwd":"/tmp/work",\
+"parentSessionId":"<native-session-uuid>","parentKind":"native"}'
+```
+
+- Accepted on `POST /sessions`, each `POST /sessions/batch` entry,
+  `POST /sessions/:id/adopt` and the `action: "adopt"` control lane. The
+  marked `parentSessionId` must be a bare opaque id (≤ 128 chars, no
+  separators, no `..` — never a path); `parentKind` without `parentSessionId`
+  is a `400 INVALID_REQUEST`.
+- The value is **not** resolved against the registry. It is persisted as
+  `parentSessionId` + `parentSource: "declared"` (a fifth enum member) and
+  surfaces on every lineage surface: the create response, `GET /sessions`
+  items, `GET /sessions/:id` and `/info`.
+- `GET /sessions?parent=<native id>` returns the declared children (the value
+  matches by identity). An unknown value that no child declares still 404s.
+- No `child_dispatched` fan-out and no `child_turn_ended` subscription fire
+  for a declared parent — it has no broker key; the linkage is display-only
+  metadata, exactly like managed linkage.
+- Unchanged: an **unmarked** unresolvable `X-Parent-Session` or body
+  `parentSessionId` is still silently ignored (1.34.0 semantics), and a
+  resolvable `X-Parent-Session` header still wins over a native-marked body
+  value.
+- Advertised on `GET /capabilities` as `features.nativeParentLinkage`.
 
 ### Pi goal truth (contract 1.45.0)
 

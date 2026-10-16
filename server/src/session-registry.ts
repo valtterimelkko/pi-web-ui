@@ -39,8 +39,10 @@ export interface RegistryEntry {
   parentSessionId?: string;
   /** Contract 1.54.0 (C5): which source produced the linkage — X-Parent-Session
    *  header, body parentSessionId, in-flight bash correlation, or
-   *  peer-credential caller resolution (parent-resolver.ts). */
-  parentSource?: 'header' | 'body' | 'bash' | 'peer';
+   *  peer-credential caller resolution (parent-resolver.ts). Contract 1.63.0
+   *  adds "declared": the caller explicitly marked the parent native (an
+   *  opaque native session id, never resolved against the registry). */
+  parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared';
   /** Claude-specific: provider id (anthropic, zai, etc.) — never a secret */
   claudeProviderId?: string;
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
@@ -396,7 +398,7 @@ export class SessionRegistryManager {
    */
   async patchSessionMeta(
     id: string,
-    patch: { model?: string; thinkingLevel?: string; parentSessionId?: string; parentSource?: 'header' | 'body' | 'bash' | 'peer' },
+    patch: { model?: string; thinkingLevel?: string; parentSessionId?: string; parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared' },
   ): Promise<RegistryEntry | undefined> {
     await this.load();
     const entry = this.indexById.get(id);

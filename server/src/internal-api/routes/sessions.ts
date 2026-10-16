@@ -564,30 +564,80 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       warn: (message) => logger.warn(message),
     });
 
-  type ParentLinkSource = 'header' | 'body' | 'bash' | 'peer';
+  type ParentLinkSource = 'header' | 'body' | 'bash' | 'peer' | 'declared';
 
-  /** Contract 1.34.0/1.54.0 child linkage, shared by single create and batch
-   *  create (correction 01): header, then body parentSessionId, then in-flight
-   *  bash correlation, then peer-credential caller resolution. Persists the
-   *  linkage, fans out `child_dispatched`, and registers the terminal-turn
-   *  fan-out. Returns null (silently unlinked, display-only) when nothing
-   *  attributes the caller; an explicit value that fails to resolve stays
-   *  unlinked — the peer walk never overrides what the caller named. */
+  /** A child eligible for parent linkage (single create, batch create). */
+  interface LinkChildTarget {
+    sessionId: string;
+    sessionPath: string;
+    runtime: SessionRuntime;
+    model?: string;
+    modelSelector?: string;
+    resolvedModel?: string;
+    cwd: string;
+  }
+
+  /** Persist a resolved (managed) parent link and fan out `child_dispatched`
+   *  to the parent's broker key and the browser surface. */
+  async function persistManagedLink(child: LinkChildTarget, parentLink: ParentLink, parentSource: ParentLinkSource): Promise<{ parentSessionId: string; parentSource: ParentLinkSource }> {
+    await sessionRegistry.patchSessionMeta(child.sessionId, { parentSessionId: parentLink.parentSessionId, parentSource });
+    const card = buildChildDispatchedCard({
+      childSessionId: child.sessionId,
+      runtime: child.runtime,
+      model: child.model,
+      modelSelector: child.modelSelector,
+      resolvedModel: child.resolvedModel,
+      cwd: child.cwd,
+      parentSessionId: parentLink.parentSessionId,
+    });
+    const timestamp = Date.now();
+    try {
+      broker.publish(parentLink.parentBrokerKey, { type: 'child_dispatched', timestamp, data: { sessionId: parentLink.parentSessionId, child: card } } as NormalizedEvent);
+    } catch { /* non-fatal */ }
+    try {
+      onBrowserMessage?.({ type: 'child_dispatched', sessionId: parentLink.parentSessionId, child: card });
+    } catch { /* non-fatal */ }
+    try {
+      await childLinks.linkChild(
+        { sessionId: child.sessionId, sessionPath: child.sessionPath, runtime: child.runtime, model: card.model },
+        parentLink,
+      );
+    } catch { /* non-fatal */ }
+    return { parentSessionId: parentLink.parentSessionId, parentSource };
+  }
+
+  /** Contract 1.34.0/1.54.0/1.63.0 child linkage, shared by single create and
+   *  batch create (correction 01): header, then body parentSessionId, then
+   *  in-flight bash correlation, then peer-credential caller resolution.
+   *  Contract 1.63.0 (step 1i.2 B): a body value explicitly marked
+   *  `parentKind: "native"` is an opaque native session id — it is persisted
+   *  as parentSource "declared" without registry resolution (the header still
+   *  wins when it resolves). Persists the linkage, fans out `child_dispatched`
+   *  (managed parents only), and registers the terminal-turn fan-out. Returns
+   *  null (silently unlinked, display-only) when nothing attributes the
+   *  caller; an unmarked explicit value that fails to resolve stays unlinked
+   *  — the peer walk never overrides what the caller named. */
   async function linkChildFromRequest(
     req: IncomingMessage,
-    child: {
-      sessionId: string;
-      sessionPath: string;
-      runtime: SessionRuntime;
-      model?: string;
-      modelSelector?: string;
-      resolvedModel?: string;
-      cwd: string;
-    },
+    child: LinkChildTarget,
     bodyParentId?: string,
+    parentKind?: 'native',
   ): Promise<{ parentSessionId: string; parentSource: ParentLinkSource } | null> {
     try {
       const headerValue = req.headers['x-parent-session'] as string | undefined;
+      if (parentKind === 'native' && bodyParentId?.trim()) {
+        // A resolvable header keeps its header precedence; an unresolvable one
+        // does not shadow the explicit native declaration.
+        const viaHeader = headerValue?.trim() ? await childLinks.resolveParent(headerValue, undefined) : null;
+        if (viaHeader) return await persistManagedLink(child, viaHeader, 'header');
+        // Declared native parent: opaque id, persisted as parentSource
+        // "declared". No broker/browser fan-out and no child_turn_ended
+        // subscription — the native parent is not a Pi Web UI session, so it
+        // has no broker key to publish to.
+        const declaredParentId = bodyParentId.trim();
+        await sessionRegistry.patchSessionMeta(child.sessionId, { parentSessionId: declaredParentId, parentSource: 'declared' });
+        return { parentSessionId: declaredParentId, parentSource: 'declared' };
+      }
       const explicit = pickExplicitParentId(headerValue, bodyParentId);
       let parentLink: ParentLink | null = null;
       let parentSource: ParentLinkSource | undefined;
@@ -609,30 +659,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       }
       if (!parentLink || !parentSource) return null;
-      await sessionRegistry.patchSessionMeta(child.sessionId, { parentSessionId: parentLink.parentSessionId, parentSource });
-      const card = buildChildDispatchedCard({
-        childSessionId: child.sessionId,
-        runtime: child.runtime,
-        model: child.model,
-        modelSelector: child.modelSelector,
-        resolvedModel: child.resolvedModel,
-        cwd: child.cwd,
-        parentSessionId: parentLink.parentSessionId,
-      });
-      const timestamp = Date.now();
-      try {
-        broker.publish(parentLink.parentBrokerKey, { type: 'child_dispatched', timestamp, data: { sessionId: parentLink.parentSessionId, child: card } } as NormalizedEvent);
-      } catch { /* non-fatal */ }
-      try {
-        onBrowserMessage?.({ type: 'child_dispatched', sessionId: parentLink.parentSessionId, child: card });
-      } catch { /* non-fatal */ }
-      try {
-        await childLinks.linkChild(
-          { sessionId: child.sessionId, sessionPath: child.sessionPath, runtime: child.runtime, model: card.model },
-          parentLink,
-        );
-      } catch { /* non-fatal */ }
-      return { parentSessionId: parentLink.parentSessionId, parentSource };
+      return await persistManagedLink(child, parentLink, parentSource);
     } catch (linkError) {
       logger.warn('child linkage failed (non-fatal):', linkError instanceof Error ? linkError.message : String(linkError));
       return null;
@@ -2195,9 +2222,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         logger.warn('Failed to tag session origin:', originError);
       }
 
-      // Contract 1.34.0 child surfacing, extended by 1.54.0 (C5): link the
-      // child to its parent. Sources in strict order: X-Parent-Session header,
-      // body parentSessionId, in-flight bash correlation, and finally
+      // Contract 1.34.0 child surfacing, extended by 1.54.0 (C5) and 1.63.0
+      // (step 1i.2 B): link the child to its parent. Sources in strict order:
+      // X-Parent-Session header, body parentSessionId (native-marked values
+      // persist as declared), in-flight bash correlation, and finally
       // peer-credential caller resolution (see linkChildFromRequest).
       const link = await linkChildFromRequest(req, {
         sessionId: base.sessionId,
@@ -2207,7 +2235,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         modelSelector: base.modelSelector,
         resolvedModel: base.resolvedModel,
         cwd: base.cwd,
-      }, body.parentSessionId);
+      }, body.parentSessionId, body.parentKind);
       if (link) {
         (base as unknown as Record<string, unknown>).parentSessionId = link.parentSessionId;
         (base as unknown as Record<string, unknown>).parentSource = link.parentSource;
@@ -2382,10 +2410,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         const parentEntry = (await sessionRegistry.get(parentParam)) ?? (await sessionRegistry.getByPath(parentParam));
         if (!parentEntry) {
-          sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Parent session not found: ${parentParam}`));
-          return;
+          // Contract 1.63.0 (step 1i.2 B): a native-declared parent is not a
+          // registry session. When children carry the value as their declared
+          // parentSessionId, filter by the raw id; an unknown id with no
+          // children keeps the 404 (a typo never masquerades as an empty list).
+          const hasDeclaredChildren = (await sessionRegistry.listAll()).some((e) => e.parentSessionId === parentParam);
+          if (!hasDeclaredChildren) {
+            sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Parent session not found: ${parentParam}`));
+            return;
+          }
+          parentFilterId = parentParam;
+        } else {
+          parentFilterId = parentEntry.id;
         }
-        parentFilterId = parentEntry.id;
       }
 
       const [archivedIndex, resolver] = await Promise.all([
@@ -4445,15 +4482,37 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** Shared adoption core: validate child+parent, guard cycles, patch the
    *  registry linkage, fan out `child_dispatched` to the parent's broker key
-   *  and browser surface. Returns either the link result or the error to send. */
+   *  and browser surface. Returns either the link result or the error to send.
+   *  Contract 1.63.0 (step 1i.2 B): with `parentKind: "native"` the parent is
+   *  an opaque native session id that must NOT resolve to a registry session —
+   *  it is persisted as parentSource "declared" with no fan-out (a native
+   *  parent has no broker key). */
   async function adoptRegisteredSession(
     childId: string,
     parentIdOrPath: string,
-    opts: { alias?: string; role?: string } = {},
+    opts: { alias?: string; role?: string; parentKind?: 'native' } = {},
   ): Promise<{ ok: true; result: AdoptionLinkResult } | { ok: false; status: 400 | 404; body: Record<string, unknown> }> {
     const child = await resolveRegistrySession(childId);
     if (!child) {
       return { ok: false, status: 404, body: enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Child session not found: ${childId}`) };
+    }
+    if (opts.parentKind === 'native') {
+      const nativeParentId = parentIdOrPath.trim();
+      if (child.id === nativeParentId) {
+        return { ok: false, status: 400, body: enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'A session cannot adopt itself as a child') };
+      }
+      // No ancestor cycle walk is possible through a native-declared parent:
+      // it is not a registry entry, so no chain can pass through it.
+      await sessionRegistry.patchSessionMeta(child.id, { parentSessionId: nativeParentId, parentSource: 'declared' });
+      logger.info(`[SessionAdoption] ${child.id} (${child.sdkType}) adopted under native parent ${nativeParentId}${opts.alias ? ` as '${opts.alias}'` : ''}`);
+      return {
+        ok: true,
+        result: {
+          childSessionId: child.id,
+          parentSessionId: nativeParentId,
+          runtime: child.sdkType,
+        },
+      };
     }
     const parent = await resolveRegistrySession(parentIdOrPath);
     if (!parent) {
@@ -4537,7 +4596,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required'));
       return;
     }
-    const outcome = await adoptRegisteredSession(childId, parentId, { alias: body.alias, role: body.role });
+    const outcome = await adoptRegisteredSession(childId, parentId, { alias: body.alias, role: body.role, ...(body.parentKind ? { parentKind: body.parentKind } : {}) });
     if (!outcome.ok) {
       sendJson(res, outcome.status, outcome.body);
       return;
@@ -4563,6 +4622,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const response: AdoptSessionResponse = {
       success: true,
       ...outcome.result,
+      // Contract 1.63.0 (step 1i.2 B): which source produced the linkage
+      //  (declared for a native-marked parent; absent for managed adoption,
+      //  which never carried a parentSource).
+      ...(body.parentKind === 'native' ? { parentSource: 'declared' as const } : {}),
       ...(body.alias ? { alias: body.alias } : {}),
       ...(body.role ? { role: body.role } : {}),
       ...(ownership ? { ownership } : {}),
@@ -4717,7 +4780,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'parentSessionId (body) or X-Parent-Session (header) is required for adopt'));
         return;
       }
-      const outcome = await adoptRegisteredSession(sessionId, parentId, { alias: body.alias, role: body.role });
+      const outcome = await adoptRegisteredSession(sessionId, parentId, { alias: body.alias, role: body.role, ...(body.parentKind ? { parentKind: body.parentKind } : {}) });
       if (!outcome.ok) {
         sendJson(res, outcome.status, outcome.body);
         return;
@@ -7819,10 +7882,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         onSessionCreated?.(created.sessionId, created.sessionPath, created.runtime);
         // Contract 1.54.0 (C5, correction 01): batch children get the same
-        // lineage as single creates — header, per-entry body parentSessionId,
-        // then peer-credential caller resolution. Best-effort, like origin
-        // tagging; a linkage failure never fails the batch entry.
-        let batchLink: { parentSessionId: string; parentSource: 'header' | 'body' | 'bash' | 'peer' } | null = null;
+        // lineage as single creates — header, per-entry body parentSessionId
+        // (native-marked since 1.63.0), then peer-credential caller
+        // resolution. Best-effort, like origin tagging; a linkage failure
+        // never fails the batch entry.
+        let batchLink: { parentSessionId: string; parentSource: ParentLinkSource } | null = null;
         try {
           batchLink = await linkChildFromRequest(req, {
             sessionId: created.sessionId,
@@ -7831,7 +7895,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             model: created.model,
             modelSelector: created.modelSelector,
             cwd: created.cwd,
-          }, entry.parentSessionId);
+          }, entry.parentSessionId, entry.parentKind);
         } catch (linkError) {
           logger.warn('batch child linkage failed (non-fatal):', linkError instanceof Error ? linkError.message : String(linkError));
         }
