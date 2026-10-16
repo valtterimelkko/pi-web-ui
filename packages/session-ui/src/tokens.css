@@ -1,0 +1,176 @@
+/*
+ * Session view tokens (@pi-web-ui/session-ui, command-centre step 1a).
+ *
+ * The cards' semantic colours and fonts resolve through these variables (see
+ * tailwind-preset.cjs). The defaults reproduce Pi Web UI's look exactly; a
+ * host restyles the cards by overriding the variables, with no code change.
+ * Colours that take Tailwind opacity modifiers (`bg-surface-subtle/40`) are
+ * space-separated RGB channels; outlines (never modified) are full colours.
+ */
+:root {
+  --sv-canvas: 252 252 251;               /* #fcfcfb */
+  --sv-canvas-dark: 24 24 27;             /* #18181b */
+  --sv-surface: 255 255 255;              /* #ffffff */
+  --sv-surface-subtle: 250 250 249;       /* #fafaf9 */
+  --sv-surface-dark: 39 39 42;            /* #27272a */
+  --sv-surface-dark-subtle: 32 32 35;     /* #202023 */
+  --sv-content-primary: 11 11 11;         /* #0b0b0b */
+  --sv-content-secondary: 82 81 78;       /* #52514e */
+  --sv-content-muted: 137 135 129;        /* #898781 */
+  --sv-content-primary-dark: 244 244 245; /* #f4f4f5 */
+  --sv-content-secondary-dark: 161 161 170; /* #a1a1aa */
+  --sv-content-muted-dark: 113 113 122;   /* #71717a */
+  --sv-outline-subtle: rgba(11, 11, 11, 0.08);
+  --sv-outline-default: rgba(11, 11, 11, 0.12);
+  --sv-outline-subtle-dark: rgba(255, 255, 255, 0.08);
+  --sv-outline-default-dark: rgba(255, 255, 255, 0.12);
+  --sv-font-sans: Inter, system-ui, sans-serif;
+  --sv-font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+
+/*
+ * Palette tokens (step 1a.5b): the status and neutral shades the cards use.
+ * Families: neutral (gray), neutral-slate, neutral-plain, ok (emerald),
+ * ok-green, warn (amber), error (red), info (blue), info-sky, white. Defaults
+ * are the Tailwind shades the cards hard-coded before the extraction.
+ */
+:root {
+  --sv-white:             255 255 255; /* white */
+  --sv-neutral-slate-100: 241 245 249; /* slate-100 #f1f5f9 */
+  --sv-neutral-slate-200: 226 232 240; /* slate-200 #e2e8f0 */
+  --sv-neutral-slate-800: 30 41 59; /* slate-800 #1e293b */
+  --sv-neutral-slate-900: 15 23 42; /* slate-900 #0f172a */
+  --sv-neutral-50:        249 250 251; /* gray-50 #f9fafb */
+  --sv-neutral-100:       243 244 246; /* gray-100 #f3f4f6 */
+  --sv-neutral-200:       229 231 235; /* gray-200 #e5e7eb */
+  --sv-neutral-300:       209 213 219; /* gray-300 #d1d5db */
+  --sv-neutral-400:       156 163 175; /* gray-400 #9ca3af */
+  --sv-neutral-500:       107 114 128; /* gray-500 #6b7280 */
+  --sv-neutral-600:       75 85 99; /* gray-600 #4b5563 */
+  --sv-neutral-700:       55 65 81; /* gray-700 #374151 */
+  --sv-neutral-800:       31 41 55; /* gray-800 #1f2937 */
+  --sv-neutral-900:       17 24 39; /* gray-900 #111827 */
+  --sv-neutral-plain-100: 245 245 245; /* neutral-100 #f5f5f5 */
+  --sv-neutral-plain-800: 38 38 38; /* neutral-800 #262626 */
+  --sv-error-50:          254 242 242; /* red-50 #fef2f2 */
+  --sv-error-200:         254 202 202; /* red-200 #fecaca */
+  --sv-error-300:         252 165 165; /* red-300 #fca5a5 */
+  --sv-error-400:         248 113 113; /* red-400 #f87171 */
+  --sv-error-500:         239 68 68; /* red-500 #ef4444 */
+  --sv-error-600:         220 38 38; /* red-600 #dc2626 */
+  --sv-error-700:         185 28 28; /* red-700 #b91c1c */
+  --sv-error-900:         127 29 29; /* red-900 #7f1d1d */
+  --sv-error-950:         69 10 10; /* red-950 #450a0a */
+  --sv-warn-50:           255 251 235; /* amber-50 #fffbeb */
+  --sv-warn-200:          253 230 138; /* amber-200 #fde68a */
+  --sv-warn-300:          252 211 77; /* amber-300 #fcd34d */
+  --sv-warn-400:          251 191 36; /* amber-400 #fbbf24 */
+  --sv-warn-500:          245 158 11; /* amber-500 #f59e0b */
+  --sv-warn-600:          217 119 6; /* amber-600 #d97706 */
+  --sv-warn-700:          180 83 9; /* amber-700 #b45309 */
+  --sv-warn-800:          146 64 14; /* amber-800 #92400e */
+  --sv-warn-900:          120 53 15; /* amber-900 #78350f */
+  --sv-warn-950:          69 26 3; /* amber-950 #451a03 */
+  --sv-ok-green-50:       240 253 244; /* green-50 #f0fdf4 */
+  --sv-ok-green-200:      187 247 208; /* green-200 #bbf7d0 */
+  --sv-ok-green-600:      22 163 74; /* green-600 #16a34a */
+  --sv-ok-50:             236 253 245; /* emerald-50 #ecfdf5 */
+  --sv-ok-100:            209 250 229; /* emerald-100 #d1fae5 */
+  --sv-ok-200:            167 243 208; /* emerald-200 #a7f3d0 */
+  --sv-ok-300:            110 231 183; /* emerald-300 #6ee7b7 */
+  --sv-ok-400:            52 211 153; /* emerald-400 #34d399 */
+  --sv-ok-500:            16 185 129; /* emerald-500 #10b981 */
+  --sv-ok-600:            5 150 105; /* emerald-600 #059669 */
+  --sv-ok-700:            4 120 87; /* emerald-700 #047857 */
+  --sv-ok-800:            6 95 70; /* emerald-800 #065f46 */
+  --sv-ok-900:            6 78 59; /* emerald-900 #064e3b */
+  --sv-ok-950:            2 44 34; /* emerald-950 #022c22 */
+  --sv-info-sky-50:       240 249 255; /* sky-50 #f0f9ff */
+  --sv-info-sky-200:      186 230 253; /* sky-200 #bae6fd */
+  --sv-info-sky-300:      125 211 252; /* sky-300 #7dd3fc */
+  --sv-info-sky-400:      56 189 248; /* sky-400 #38bdf8 */
+  --sv-info-sky-700:      3 105 161; /* sky-700 #0369a1 */
+  --sv-info-sky-800:      7 89 133; /* sky-800 #075985 */
+  --sv-info-sky-950:      8 47 73; /* sky-950 #082f49 */
+  --sv-info-50:           239 246 255; /* blue-50 #eff6ff */
+  --sv-info-200:          191 219 254; /* blue-200 #bfdbfe */
+  --sv-info-500:          59 130 246; /* blue-500 #3b82f6 */
+  --sv-info-600:          37 99 235; /* blue-600 #2563eb */
+  --sv-info-700:          29 78 216; /* blue-700 #1d4ed8 */
+}
+
+/*
+ * Dark remaps. Pi Web UI's legacy `.dark … !important` block (client
+ * index.css) recolours some raw palette classes in dark mode, overriding even
+ * their `dark:` partners. The cards keep exactly that behaviour on their token
+ * classes (same selectors' shape, same order); a host restyles it through the
+ * --sv-dark-* variables.
+ */
+:root {
+  --sv-dark-bg-white:                 #0f172a; /* was .dark .bg-white */
+  --sv-dark-bg-neutral-50:            #1e293b; /* was .dark .bg-gray-50 */
+  --sv-dark-bg-neutral-100:           #334155; /* was .dark .bg-gray-100 */
+  --sv-dark-bg-neutral-200:           #475569; /* was .dark .bg-gray-200 */
+  --sv-dark-text-neutral-900:         #f1f5f9; /* was .dark .text-gray-900 */
+  --sv-dark-text-neutral-700:         #cbd5e1; /* was .dark .text-gray-700 */
+  --sv-dark-text-neutral-600:         #94a3b8; /* was .dark .text-gray-600 */
+  --sv-dark-text-neutral-500:         #94a3b8; /* was .dark .text-gray-500 */
+  --sv-dark-text-neutral-400:         #64748b; /* was .dark .text-gray-400 */
+  --sv-dark-border-neutral-200:       #334155; /* was .dark .border-gray-200 */
+  --sv-dark-border-neutral-300:       #475569; /* was .dark .border-gray-300 */
+  --sv-dark-text-info-600:            #60a5fa; /* was .dark .text-blue-600 */
+  --sv-dark-bg-neutral-slate-100:     #1e293b; /* was .dark .bg-slate-100 */
+  --sv-dark-bg-neutral-slate-200:     #334155; /* was .dark .bg-slate-200 */
+  --sv-dark-text-neutral-slate-800:   #e2e8f0; /* was .dark .text-slate-800 */
+  --sv-dark-text-neutral-slate-900:   #f1f5f9; /* was .dark .text-slate-900 */
+  --sv-dark-border-neutral-slate-200: #334155; /* was .dark .border-slate-200 */
+  --sv-dark-bg-info-50:               rgba(59, 130, 246, 0.2); /* was .dark .bg-blue-50 */
+  --sv-dark-bg-ok-green-50:           rgba(34, 197, 94, 0.2); /* was .dark .bg-green-50 */
+  --sv-dark-bg-warn-50:               rgba(245, 158, 11, 0.2); /* was .dark .bg-amber-50 */
+  --sv-dark-bg-error-50:              rgba(239, 68, 68, 0.2); /* was .dark .bg-red-50 */
+  --sv-dark-text-warn-800:            #fcd34d; /* was .dark .text-amber-800 */
+  --sv-dark-text-error-700:           #fca5a5; /* was .dark .text-red-700 */
+  --sv-dark-text-error-500:           #f87171; /* was .dark .text-red-500 */
+  --sv-dark-text-error-600:           #f87171; /* was .dark .text-red-600 */
+  --sv-dark-border-info-200:          rgba(59, 130, 246, 0.3); /* was .dark .border-blue-200 */
+  --sv-dark-border-ok-green-200:      rgba(34, 197, 94, 0.3); /* was .dark .border-green-200 */
+  --sv-dark-border-warn-200:          rgba(245, 158, 11, 0.3); /* was .dark .border-amber-200 */
+  --sv-dark-border-error-200:         rgba(239, 68, 68, 0.3); /* was .dark .border-red-200 */
+  --sv-dark-hover-bg-neutral-100:     #334155; /* was .dark .bg-gray-100 */
+  --sv-dark-bg-ok-50:                 rgba(16, 185, 129, 0.15); /* was .dark .bg-emerald-50 */
+  --sv-dark-border-ok-200:            rgba(16, 185, 129, 0.3); /* was .dark .border-emerald-200 */
+  --sv-dark-text-ok-700:              #34d399; /* was .dark .text-emerald-700 */
+}
+.dark .bg-sv-white { background-color: var(--sv-dark-bg-white) !important; }
+.dark .bg-sv-neutral-50 { background-color: var(--sv-dark-bg-neutral-50) !important; }
+.dark .bg-sv-neutral-100 { background-color: var(--sv-dark-bg-neutral-100) !important; }
+.dark .bg-sv-neutral-200 { background-color: var(--sv-dark-bg-neutral-200) !important; }
+.dark .text-sv-neutral-900 { color: var(--sv-dark-text-neutral-900) !important; }
+.dark .text-sv-neutral-700 { color: var(--sv-dark-text-neutral-700) !important; }
+.dark .text-sv-neutral-600 { color: var(--sv-dark-text-neutral-600) !important; }
+.dark .text-sv-neutral-500 { color: var(--sv-dark-text-neutral-500) !important; }
+.dark .text-sv-neutral-400 { color: var(--sv-dark-text-neutral-400) !important; }
+.dark .border-sv-neutral-200 { border-color: var(--sv-dark-border-neutral-200) !important; }
+.dark .border-sv-neutral-300 { border-color: var(--sv-dark-border-neutral-300) !important; }
+.dark .text-sv-info-600 { color: var(--sv-dark-text-info-600) !important; }
+.dark .bg-sv-neutral-slate-100 { background-color: var(--sv-dark-bg-neutral-slate-100) !important; }
+.dark .bg-sv-neutral-slate-200 { background-color: var(--sv-dark-bg-neutral-slate-200) !important; }
+.dark .text-sv-neutral-slate-800 { color: var(--sv-dark-text-neutral-slate-800) !important; }
+.dark .text-sv-neutral-slate-900 { color: var(--sv-dark-text-neutral-slate-900) !important; }
+.dark .border-sv-neutral-slate-200 { border-color: var(--sv-dark-border-neutral-slate-200) !important; }
+.dark .bg-sv-info-50 { background-color: var(--sv-dark-bg-info-50) !important; }
+.dark .bg-sv-ok-green-50 { background-color: var(--sv-dark-bg-ok-green-50) !important; }
+.dark .bg-sv-warn-50 { background-color: var(--sv-dark-bg-warn-50) !important; }
+.dark .bg-sv-error-50 { background-color: var(--sv-dark-bg-error-50) !important; }
+.dark .text-sv-warn-800 { color: var(--sv-dark-text-warn-800) !important; }
+.dark .text-sv-error-700 { color: var(--sv-dark-text-error-700) !important; }
+.dark .text-sv-error-500 { color: var(--sv-dark-text-error-500) !important; }
+.dark .text-sv-error-600 { color: var(--sv-dark-text-error-600) !important; }
+.dark .border-sv-info-200 { border-color: var(--sv-dark-border-info-200) !important; }
+.dark .border-sv-ok-green-200 { border-color: var(--sv-dark-border-ok-green-200) !important; }
+.dark .border-sv-warn-200 { border-color: var(--sv-dark-border-warn-200) !important; }
+.dark .border-sv-error-200 { border-color: var(--sv-dark-border-error-200) !important; }
+.dark .hover\:bg-sv-neutral-100:hover { background-color: var(--sv-dark-hover-bg-neutral-100) !important; }
+.dark .bg-sv-ok-50 { background-color: var(--sv-dark-bg-ok-50) !important; }
+.dark .border-sv-ok-200 { border-color: var(--sv-dark-border-ok-200) !important; }
+.dark .text-sv-ok-700 { color: var(--sv-dark-text-ok-700) !important; }

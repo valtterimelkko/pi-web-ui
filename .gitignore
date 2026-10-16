@@ -44,9 +44,13 @@ coverage/
 /server/test-results.json
 /client/test-results.json
 /shared/test-results.json
+/packages/session-core/test-results.json
+/packages/session-ui/test-results.json
 /packages/internal-api-mcp/test-results.json
 # Filesystem-derived required inventory joined to Vitest execution results
 /shared/test-inventory.json
+/packages/session-core/test-inventory.json
+/packages/session-ui/test-inventory.json
 /server/test-inventory.json
 /client/test-inventory.json
 /packages/internal-api-mcp/test-inventory.json

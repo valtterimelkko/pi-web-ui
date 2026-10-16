@@ -1,0 +1,60 @@
+{
+  "name": "@pi-web-ui/session-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure, Node- and browser-safe session rendering rules: screen view, events to messages, readers",
+  "type": "module",
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./screen-view": {
+      "types": "./dist/screen-view.d.ts",
+      "import": "./dist/screen-view.js"
+    },
+    "./subagent-summary": {
+      "types": "./dist/subagent-summary.d.ts",
+      "import": "./dist/subagent-summary.js"
+    },
+    "./child-surfacing": {
+      "types": "./dist/child-surfacing.d.ts",
+      "import": "./dist/child-surfacing.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js"
+    },
+    "./model": {
+      "types": "./dist/model.d.ts",
+      "import": "./dist/model.js"
+    },
+    "./fold": {
+      "types": "./dist/fold.d.ts",
+      "import": "./dist/fold.js"
+    },
+    "./message-adapter": {
+      "types": "./dist/message-adapter.d.ts",
+      "import": "./dist/message-adapter.js"
+    },
+    "./readers": {
+      "types": "./dist/readers/index.d.ts",
+      "import": "./dist/readers/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^1.6.1",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  }
+}

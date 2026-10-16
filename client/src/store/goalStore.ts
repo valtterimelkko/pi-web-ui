@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { parseGoalWidget, type GoalModel } from '../lib/goalModel';
+import { parseGoalWidget } from '../lib/goalModel';
 
 /**
  * Per-session goal history.
@@ -27,29 +27,10 @@ export const GOAL_SESSION_LIMIT = 25;
 /** A completion notification only labels a goal archived in this window. */
 const OUTCOME_MATCH_WINDOW_MS = 60_000;
 
-export type GoalOutcome = 'achieved' | 'cleared' | 'ended';
-
-export interface GoalRecord {
-  /** Last parsed projection of the extension's widget payload. */
-  model: GoalModel;
-  /** Raw widget lines, kept so the panel can always fall back to the source. */
-  lines: string[];
-  /** Latest `extension_status` text, when the goal is live. */
-  statusText: string | null;
-  /** Whether the extension currently wants its widget shown. */
-  widgetVisible: boolean;
-  firstSeenAt: number;
-  /** When the last widget payload arrived — i.e. the last run boundary. */
-  updatedAt: number;
-  endedAt: number | null;
-  outcome: GoalOutcome | null;
-  outcomeRuns: number | null;
-}
-
-export interface GoalSessionState {
-  current: GoalRecord | null;
-  history: GoalRecord[];
-}
+// GoalOutcome, GoalRecord and GoalSessionState moved to @pi-web-ui/session-ui
+// (goalModel) with the panel (command-centre step 1a); re-exported here.
+import type { GoalOutcome, GoalRecord, GoalSessionState } from '../lib/goalModel';
+export type { GoalOutcome, GoalRecord, GoalSessionState };
 
 interface GoalStoreState {
   bySession: Record<string, GoalSessionState>;

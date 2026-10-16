@@ -7,24 +7,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-export interface ClaudeMessageEntry {
-  type: 'meta' | 'user' | 'assistant' | 'tool' | 'tool_result' | 'error';
-  sessionId: string;
-  claudeSessionId?: string;
-  cwd?: string;
-  model?: string;
-  createdAt?: string;
-  content?: string;
-  toolName?: string;
-  toolCallId?: string;
-  toolInput?: unknown;
-  toolOutput?: string;
-  isError?: boolean;
-  usage?: unknown;
-  code?: string;
-  reauthRequired?: boolean;
-  timestamp: number;
-}
+// ClaudeMessageEntry moved to @pi-web-ui/session-core (command-centre step 1a).
+import type { ClaudeMessageEntry } from '@pi-web-ui/session-core/readers';
+export type { ClaudeMessageEntry };
 
 export class ClaudeSessionStore {
   private storeDir: string;

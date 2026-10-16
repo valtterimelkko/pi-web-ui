@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const implementation = /^(server|client|shared|packages\/internal-api-mcp)\/src\/.*\.(?:[cm]?[jt]s|[jt]sx)$/;
+const implementation = /^(server|client|shared|packages\/(?:internal-api-mcp|session-core|session-ui))\/src\/.*\.(?:[cm]?[jt]s|[jt]sx)$/;
 const testFile = /\.(?:test|spec)\.[^.]+$/;
 function parseArgs(args) {
   // RE-BASELINED 2026-09-14 (was 1738). Test files and utility scripts are now

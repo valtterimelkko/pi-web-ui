@@ -33,7 +33,7 @@ const GROUND_TRUTH = path.join(
 );
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const FIXTURES = join(__dirname, '..', '..', '..', 'shared', 'src', '__fixtures__', 'subagent-details');
+const FIXTURES = join(__dirname, '..', '..', '..', 'packages', 'session-core', 'src', '__fixtures__', 'subagent-details');
 
 interface DetailsEntry {
   toolName: string;

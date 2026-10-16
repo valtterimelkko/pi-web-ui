@@ -1,0 +1,226 @@
+[
+  {
+    "type": "agent_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000029000,
+    "data": {}
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000030000,
+    "data": {
+      "id": "cl-u1",
+      "role": "user",
+      "content": "Find where the sample greeting is defined."
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000031000,
+    "data": {
+      "id": "cl-u1"
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000032000,
+    "data": {
+      "id": "cl-a1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000033000,
+    "data": {
+      "id": "cl-a1",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Searching the sample project."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000034000,
+    "data": {
+      "id": "cl-a1"
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000035000,
+    "data": {
+      "id": "cl-t1",
+      "name": "Grep",
+      "input": {
+        "pattern": "greeting",
+        "path": "sample"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_update",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000036000,
+    "data": {
+      "id": "cl-t1",
+      "partialResult": "sample/greet.ts"
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000037000,
+    "data": {
+      "id": "cl-t1",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "sample/greet.ts:1:export const greeting = \"hello\";"
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000038000,
+    "data": {
+      "id": "cl-t2",
+      "name": "Read",
+      "input": {
+        "file_path": "sample/greet.ts"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000039000,
+    "data": {
+      "id": "cl-t2",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "export const greeting = \"hello\";\n"
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000040000,
+    "data": {
+      "id": "cl-t3",
+      "name": "Agent",
+      "input": {
+        "description": "Check usages",
+        "prompt": "List usages of greeting",
+        "subagent_type": "general-purpose"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000041000,
+    "data": {
+      "id": "cl-t3",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "greeting is used in sample/main.ts only."
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000042000,
+    "data": {
+      "id": "cl-t4",
+      "name": "TaskCreate",
+      "input": {
+        "subject": "Hidden task tool"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000043000,
+    "data": {
+      "id": "cl-t4",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Task #1 created"
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000044000,
+    "data": {
+      "id": "cl-a2",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000045000,
+    "data": {
+      "id": "cl-a2",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "The greeting is defined in `sample/greet.ts`."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000046000,
+    "data": {
+      "id": "cl-a2"
+    }
+  },
+  {
+    "type": "session_init",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000047000,
+    "data": {
+      "model": "fixture-model"
+    }
+  },
+  {
+    "type": "agent_end",
+    "sessionId": "fixture-claude-session",
+    "timestamp": 1700000048000,
+    "data": {}
+  }
+]

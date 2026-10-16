@@ -23,7 +23,6 @@ import type {
   ToolResultEvent,
   Attachment,
   StatusEvent,
-  SubagentToolSummary,
 } from '@pi-web-ui/shared';
 
 // Use Vite proxy in development, or direct URL in production
@@ -33,63 +32,10 @@ const WS_URL = import.meta.env.VITE_WS_URL || '/ws';
 // Types
 // ============================================================================
 
-/**
- * Content part types for live messages
- */
-export type ContentPartType = 'text' | 'thinking';
-
-/**
- * A content part in a live message
- */
-export interface ContentPart {
-  type: ContentPartType;
-  text?: string;
-  thinking?: string;
-}
-
-/**
- * Tool call state during streaming
- */
-export interface ToolCallState {
-  id: string;
-  name: string;
-  args: unknown;
-  result?: unknown;
-  status: 'pending' | 'success' | 'error';
-}
-
-/**
- * A live message being streamed or completed
- */
-export interface LiveMessage {
-  id: string;
-  // 'custom' is an extension-injected message (e.g. the marked Agent OS capture
-  // lane). Rendered lists filter it out by role exactly as before; the field is
-  // widened so the store's marker can pass through type-honestly.
-  role: 'user' | 'assistant' | 'tool' | 'custom';
-  /** Structural extension marker (customType), carried additively. */
-  customType?: string;
-  content: ContentPart[];
-  toolCall?: {
-    id: string;
-    name: string;
-    args: unknown;
-  };
-  toolResult?: {
-    output: string;
-    isError: boolean;
-    summary?: SubagentToolSummary;
-    /** Contract 1.34.0: bounded background-child identity for background launches. */
-    background?: { taskId: string; runId?: string; kind?: string; model?: string };
-  };
-  timestamp: number;
-  isComplete: boolean;
-  error?: {
-    message: string;
-    provider?: string;
-    model?: string;
-  };
-}
+// ContentPartType, ContentPart, ToolCallState and LiveMessage moved to
+// @pi-web-ui/session-core (command-centre step 1a); re-exported unchanged.
+import type { ContentPart, ToolCallState, LiveMessage } from '@pi-web-ui/session-core/model';
+export type { ContentPartType, ContentPart, ToolCallState, LiveMessage } from '@pi-web-ui/session-core/model';
 
 /**
  * Chat status for the session

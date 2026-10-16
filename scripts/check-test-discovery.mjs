@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { resolve, relative, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const workspaces = ['shared', 'server', 'client', 'packages/internal-api-mcp'];
+const workspaces = ['shared', 'packages/session-core', 'packages/session-ui', 'server', 'client', 'packages/internal-api-mcp'];
 const testName = /\.(test|spec)\.(js|mjs|cjs|ts|mts|cts|jsx|tsx)$/;
 const excludedDirectories = new Set(['node_modules', 'dist', 'coverage', '.git']);
 

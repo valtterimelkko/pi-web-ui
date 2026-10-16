@@ -1,0 +1,227 @@
+{
+  "messages": [
+    {
+      "id": "agy-u1",
+      "role": "user",
+      "content": "List the sample directory and print a line count.",
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "agy-a1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Listing first."
+        }
+      ],
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "agy-t1",
+      "role": "tool",
+      "content": "a.txt\nb.txt",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "agy-t1",
+        "name": "list_dir",
+        "args": {
+          "DirectoryPath": "sample"
+        }
+      },
+      "toolResult": {
+        "output": "a.txt\nb.txt",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-t2",
+      "role": "tool",
+      "content": "3 sample/a.txt",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "agy-t2",
+        "name": "run_command",
+        "args": {
+          "CommandLine": "wc -l sample/a.txt",
+          "Cwd": "sample"
+        }
+      },
+      "toolResult": {
+        "output": "3 sample/a.txt",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-t3",
+      "role": "tool",
+      "content": "line one",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "agy-t3",
+        "name": "view_file",
+        "args": {
+          "AbsolutePath": "sample/b.txt"
+        }
+      },
+      "toolResult": {
+        "output": "line one",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-t4",
+      "role": "tool",
+      "content": "",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "agy-t4",
+        "name": "invoke_subagent",
+        "args": {
+          "Task": "Summarise b.txt"
+        }
+      },
+      "toolResult": {
+        "output": "",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-a2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "a.txt has 3 lines."
+        }
+      ],
+      "timestamp": 1700000000000
+    }
+  ],
+  "live": [
+    {
+      "id": "agy-u1",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "List the sample directory and print a line count."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "agy-a1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Listing first."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "agy-t1",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "a.txt\nb.txt"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "agy-t1",
+        "name": "list_dir",
+        "args": {
+          "DirectoryPath": "sample"
+        }
+      },
+      "toolResult": {
+        "output": "a.txt\nb.txt",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-t2",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "3 sample/a.txt"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "agy-t2",
+        "name": "run_command",
+        "args": {
+          "CommandLine": "wc -l sample/a.txt",
+          "Cwd": "sample"
+        }
+      },
+      "toolResult": {
+        "output": "3 sample/a.txt",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-t3",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "line one"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "agy-t3",
+        "name": "view_file",
+        "args": {
+          "AbsolutePath": "sample/b.txt"
+        }
+      },
+      "toolResult": {
+        "output": "line one",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-t4",
+      "role": "tool",
+      "content": [],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "agy-t4",
+        "name": "invoke_subagent",
+        "args": {
+          "Task": "Summarise b.txt"
+        }
+      },
+      "toolResult": {
+        "output": "",
+        "isError": false
+      }
+    },
+    {
+      "id": "agy-a2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "a.txt has 3 lines."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    }
+  ]
+}

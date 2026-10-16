@@ -1,0 +1,164 @@
+[
+  {
+    "type": "agent_start"
+  },
+  {
+    "type": "message_start",
+    "message": {
+      "id": "cl-u1",
+      "role": "user",
+      "content": "Find where the sample greeting is defined."
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "cl-u1"
+    }
+  },
+  {
+    "type": "message_start",
+    "message": {
+      "id": "cl-a1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "message": {
+      "id": "cl-a1"
+    },
+    "assistantMessageEvent": {
+      "type": "text_delta",
+      "delta": "Searching the sample project."
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "cl-a1"
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "toolCallId": "cl-t1",
+    "toolName": "Grep",
+    "args": {
+      "pattern": "greeting",
+      "path": "sample"
+    }
+  },
+  {
+    "type": "tool_execution_update",
+    "toolCallId": "cl-t1",
+    "partialResult": "sample/greet.ts"
+  },
+  {
+    "type": "tool_execution_end",
+    "toolCallId": "cl-t1",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "sample/greet.ts:1:export const greeting = \"hello\";"
+        }
+      ]
+    },
+    "isError": false
+  },
+  {
+    "type": "tool_execution_start",
+    "toolCallId": "cl-t2",
+    "toolName": "Read",
+    "args": {
+      "file_path": "sample/greet.ts"
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "toolCallId": "cl-t2",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "export const greeting = \"hello\";\n"
+        }
+      ]
+    },
+    "isError": false
+  },
+  {
+    "type": "tool_execution_start",
+    "toolCallId": "cl-t3",
+    "toolName": "Agent",
+    "args": {
+      "description": "Check usages",
+      "prompt": "List usages of greeting",
+      "subagent_type": "general-purpose"
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "toolCallId": "cl-t3",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "greeting is used in sample/main.ts only."
+        }
+      ]
+    },
+    "isError": false
+  },
+  {
+    "type": "tool_execution_start",
+    "toolCallId": "cl-t4",
+    "toolName": "TaskCreate",
+    "args": {
+      "subject": "Hidden task tool"
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "toolCallId": "cl-t4",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Task #1 created"
+        }
+      ]
+    },
+    "isError": false
+  },
+  {
+    "type": "message_start",
+    "message": {
+      "id": "cl-a2",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "message": {
+      "id": "cl-a2"
+    },
+    "assistantMessageEvent": {
+      "type": "text_delta",
+      "delta": "The greeting is defined in `sample/greet.ts`."
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "cl-a2"
+    }
+  },
+  {
+    "type": "session_init",
+    "model": "fixture-model"
+  },
+  {
+    "type": "agent_end"
+  }
+]

@@ -1,0 +1,107 @@
+[
+  {
+    "type": "message_start",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000065000,
+    "data": {
+      "id": "cc-u1",
+      "role": "user",
+      "content": "First question."
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000066000,
+    "data": {
+      "id": "cc-u1"
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000067000,
+    "data": {
+      "id": "commandcode-message-1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000068000,
+    "data": {
+      "id": "commandcode-message-1",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "First answer, turn one."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000069000,
+    "data": {
+      "id": "commandcode-message-1"
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000070000,
+    "data": {
+      "id": "cc-u2",
+      "role": "user",
+      "content": "Second question."
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000071000,
+    "data": {
+      "id": "cc-u2"
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000072000,
+    "data": {
+      "id": "commandcode-message-1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000073000,
+    "data": {
+      "id": "commandcode-message-1",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Second answer, turn two."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000074000,
+    "data": {
+      "id": "commandcode-message-1"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-commandcode-session",
+    "timestamp": 1700000075000,
+    "data": {
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": " (id-less delta)"
+      }
+    }
+  }
+]

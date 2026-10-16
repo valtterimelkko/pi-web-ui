@@ -1,0 +1,366 @@
+[
+  {
+    "type": "agent_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000001000,
+    "data": {}
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000002000,
+    "data": {
+      "id": "pi-u1",
+      "role": "user",
+      "content": "Please tidy the demo widget module and show the todo list."
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000003000,
+    "data": {
+      "id": "pi-u1"
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000004000,
+    "data": {
+      "id": "pi-a1",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000005000,
+    "data": {
+      "id": "pi-a1",
+      "assistantMessageEvent": {
+        "type": "thinking_delta",
+        "delta": "The request is a small tidy-up of an invented module.\n"
+      }
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000006000,
+    "data": {
+      "id": "pi-a1",
+      "assistantMessageEvent": {
+        "type": "thinking_delta",
+        "delta": "Plan: read the files, run the tests, then edit."
+      }
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000007000,
+    "data": {
+      "id": "pi-a1",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "I'll start by **reading** the module "
+      }
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000008000,
+    "data": {
+      "id": "pi-a1",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "and its test."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000009000,
+    "data": {
+      "id": "pi-a1"
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000010000,
+    "data": {
+      "toolCallId": "pi-t1",
+      "toolName": "read",
+      "args": {
+        "path": "src/demo-widget.ts"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000011000,
+    "data": {
+      "toolCallId": "pi-t1",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "export const demoWidget = 1;\n"
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000012000,
+    "data": {
+      "toolCallId": "pi-t2",
+      "toolName": "read",
+      "args": {
+        "path": "src/demo-widget.test.ts"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000013000,
+    "data": {
+      "toolCallId": "pi-t2",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "it('works', () => {});\n"
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000014000,
+    "data": {
+      "toolCallId": "pi-t3",
+      "toolName": "bash",
+      "args": {
+        "command": "npm test -- demo-widget"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000015000,
+    "data": {
+      "toolCallId": "pi-t3",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "PASS demo-widget.test.ts\n  2 passed\n"
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000016000,
+    "data": {
+      "id": "pi-a2",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000017000,
+    "data": {
+      "id": "pi-a2",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Tests pass. Applying the edit now."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000018000,
+    "data": {
+      "id": "pi-a2"
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000019000,
+    "data": {
+      "toolCallId": "pi-t4",
+      "toolName": "edit",
+      "args": {
+        "path": "src/demo-widget.ts",
+        "edits": [
+          {
+            "oldText": "demoWidget = 1",
+            "newText": "demoWidget = 2"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000020000,
+    "data": {
+      "toolCallId": "pi-t4",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Successfully replaced 1 block in src/demo-widget.ts."
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000020100,
+    "data": {
+      "id": "pi-a2b",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000020200,
+    "data": {
+      "id": "pi-a2b",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Edit applied. Checking the todo list and the failing probe."
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000020300,
+    "data": {
+      "id": "pi-a2b"
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000021000,
+    "data": {
+      "toolCallId": "pi-t5",
+      "toolName": "todo",
+      "args": {
+        "action": "list"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000022000,
+    "data": {
+      "toolCallId": "pi-t5",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "[x] #1: Rename the demo widget\n[ ] #2: Document the demo widget"
+          }
+        ]
+      },
+      "isError": false
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000023000,
+    "data": {
+      "toolCallId": "pi-t6",
+      "toolName": "bash",
+      "args": {
+        "command": "false"
+      }
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000024000,
+    "data": {
+      "toolCallId": "pi-t6",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Command exited with code 1"
+          }
+        ]
+      },
+      "isError": true
+    }
+  },
+  {
+    "type": "message_start",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000025000,
+    "data": {
+      "id": "pi-a3",
+      "role": "assistant"
+    }
+  },
+  {
+    "type": "message_update",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000026000,
+    "data": {
+      "id": "pi-a3",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Done. Summary:\n\n- renamed the value\n- tests pass\n\n```ts\nexport const demoWidget = 2;\n```\n\n| file | change |\n|---|---|\n| demo-widget.ts | value |\n"
+      }
+    }
+  },
+  {
+    "type": "message_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000027000,
+    "data": {
+      "id": "pi-a3"
+    }
+  },
+  {
+    "type": "agent_end",
+    "sessionId": "fixture-pi-session",
+    "timestamp": 1700000028000,
+    "data": {
+      "result": "ok"
+    }
+  }
+]

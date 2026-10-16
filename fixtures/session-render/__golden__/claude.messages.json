@@ -1,0 +1,236 @@
+{
+  "messages": [
+    {
+      "id": "cl-u1",
+      "role": "user",
+      "content": "Find where the sample greeting is defined.",
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "cl-a1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Searching the sample project."
+        }
+      ],
+      "timestamp": 1700000000000
+    },
+    {
+      "id": "cl-t1",
+      "role": "tool",
+      "content": "sample/greet.ts:1:export const greeting = \"hello\";",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "cl-t1",
+        "name": "Grep",
+        "args": {
+          "pattern": "greeting",
+          "path": "sample"
+        }
+      },
+      "toolResult": {
+        "output": "sample/greet.ts:1:export const greeting = \"hello\";",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-t2",
+      "role": "tool",
+      "content": "export const greeting = \"hello\";\n",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "cl-t2",
+        "name": "Read",
+        "args": {
+          "file_path": "sample/greet.ts"
+        }
+      },
+      "toolResult": {
+        "output": "export const greeting = \"hello\";\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-t3",
+      "role": "tool",
+      "content": "greeting is used in sample/main.ts only.",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "cl-t3",
+        "name": "Agent",
+        "args": {
+          "description": "Check usages",
+          "prompt": "List usages of greeting",
+          "subagent_type": "general-purpose"
+        }
+      },
+      "toolResult": {
+        "output": "greeting is used in sample/main.ts only.",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-t4",
+      "role": "tool",
+      "content": "Task #1 created",
+      "timestamp": 1700000000000,
+      "toolCall": {
+        "id": "cl-t4",
+        "name": "TaskCreate",
+        "args": {
+          "subject": "Hidden task tool"
+        }
+      },
+      "toolResult": {
+        "output": "Task #1 created",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-a2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "The greeting is defined in `sample/greet.ts`."
+        }
+      ],
+      "timestamp": 1700000000000
+    }
+  ],
+  "live": [
+    {
+      "id": "cl-u1",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Find where the sample greeting is defined."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "cl-a1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Searching the sample project."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    },
+    {
+      "id": "cl-t1",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "sample/greet.ts:1:export const greeting = \"hello\";"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "cl-t1",
+        "name": "Grep",
+        "args": {
+          "pattern": "greeting",
+          "path": "sample"
+        }
+      },
+      "toolResult": {
+        "output": "sample/greet.ts:1:export const greeting = \"hello\";",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-t2",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "export const greeting = \"hello\";\n"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "cl-t2",
+        "name": "Read",
+        "args": {
+          "file_path": "sample/greet.ts"
+        }
+      },
+      "toolResult": {
+        "output": "export const greeting = \"hello\";\n",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-t3",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "greeting is used in sample/main.ts only."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "cl-t3",
+        "name": "Agent",
+        "args": {
+          "description": "Check usages",
+          "prompt": "List usages of greeting",
+          "subagent_type": "general-purpose"
+        }
+      },
+      "toolResult": {
+        "output": "greeting is used in sample/main.ts only.",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-t4",
+      "role": "tool",
+      "content": [
+        {
+          "type": "text",
+          "text": "Task #1 created"
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true,
+      "toolCall": {
+        "id": "cl-t4",
+        "name": "TaskCreate",
+        "args": {
+          "subject": "Hidden task tool"
+        }
+      },
+      "toolResult": {
+        "output": "Task #1 created",
+        "isError": false
+      }
+    },
+    {
+      "id": "cl-a2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "The greeting is defined in `sample/greet.ts`."
+        }
+      ],
+      "timestamp": 1700000000000,
+      "isComplete": true
+    }
+  ]
+}
