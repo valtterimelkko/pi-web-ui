@@ -18,7 +18,7 @@ export function runWorkspaces(root, coverage = false) {
   };
   for (const path of [env.PI_AGENT_DIR, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.TMPDIR]) mkdirSync(path, { recursive: true });
   try {
-    for (const workspace of ['shared', 'server', 'client', 'packages/internal-api-mcp']) {
+    for (const workspace of ['shared', 'packages/session-core', 'server', 'client', 'packages/internal-api-mcp']) {
       // Workspace Vitest configs disable Vite env loading; the server's
       // setup-env fixture also disables dotenv.config, preserving parse().
       for (const name of ['test-results.json', 'test-inventory.json']) rmSync(join(root, workspace, name), { force: true });

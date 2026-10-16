@@ -38,25 +38,9 @@ export type InternalCommand =
   | { type: 'set_thinking_level'; level: ThinkingLevel }
   | { type: 'compact'; customInstructions?: string };
 
-/**
- * Common event shape produced by all runtime adapters (Pi SDK, Claude Direct, OpenCode Direct)
- * before being converted to the frontend-compatible format in connection.ts.
- *
- * This is the normalization contract: every runtime must emit events in this shape.
- */
-export interface NormalizedEvent {
-  type: string;
-  sessionId?: string;
-  timestamp: number;
-  data: unknown;
-}
-
-/** Wrapper sent over WebSocket to route a NormalizedEvent to the correct client session. */
-export interface SessionEventEnvelope {
-  type: 'session_event';
-  sessionId: string;
-  event: NormalizedEvent;
-}
+// NormalizedEvent and SessionEventEnvelope moved to @pi-web-ui/session-core
+// (command-centre step 1a); re-exported for compatibility.
+export type { NormalizedEvent, SessionEventEnvelope } from '@pi-web-ui/session-core/events';
 
 // --- Git types ---
 

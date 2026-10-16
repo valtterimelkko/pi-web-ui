@@ -11,7 +11,7 @@ import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import { summarizeSubagentDetails, type JSONRPCNotification, type SubagentToolSummary } from '@pi-web-ui/shared';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const FIX = join(__dirname, '..', '..', '..', '..', 'shared', 'src', '__fixtures__', 'subagent-details');
+const FIX = join(__dirname, '..', '..', '..', '..', 'packages', 'session-core', 'src', '__fixtures__', 'subagent-details');
 function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FIX, name), 'utf-8'));
 }
