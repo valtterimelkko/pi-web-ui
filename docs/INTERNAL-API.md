@@ -563,6 +563,7 @@ POST /api/v1/sessions
 | `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
 | `agentOsCapture` | `"enabled"` \| `"disabled"` | No | unspecified | Contract 1.47.0: per-session Agent OS capture opt-in. Stored on the registry entry, echoed in the create response (and in batch-create result items) and on `GET /sessions/:id`, and exported to per-session runtime subprocesses as `PI_WEB_UI_AGENT_OS_CAPTURE` — each only when set. Any other value is `400`. Omitted = unspecified: Agent OS then decides by origin (it skips capture for unspecified `internal-api` sessions unless its host-wide `AGENT_OS_CAPTURE_API_SESSIONS=1` is set). Pi Web UI only records and exports it; it never acts on it. Also accepted per entry by `POST /sessions/batch`. |
+| `sessionClass` | `"validation"` | No | absent | Contract 1.65.0: the session's class, **recorded once at creation**. `"validation"` is the only storable value (any other value, including `"child"`/`"mine"`, is a `400` whose message names the rule); the server also derives `"validation"` from its own validation marker (`PI_WEB_UI_VALIDATION_MODE=true`). Absent = not validation. Never clearable or changeable after creation; `"child"` is derived from `parentSessionId` by readers. Echoed in the create response and on the list/detail/native surfaces. Also accepted per entry by `POST /sessions/batch` and by `POST /sessions/adopt-native` (where a registry entry is created). |
 | `preflight` | object | No | — | Contract 1.53.0: dispatch preflight spec, `{paths?: string[], tools?: string[]}` (≤ 32 each). `paths` are absolute paths that must **exist**; `tools` are bare executable names that must be on the server `PATH`. On any failure the create is refused `400 PREFLIGHT_FAILED` with `failures[]` before a session exists or a model token is spent. The effective `cwd` is always preflighted (exists + directory + server-user writable) whether or not this field is sent. See [Dispatch preflight](#dispatch-preflight-contract-1530). |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. Only SDK-backed profiles are accepted (contract 1.46.0). |
 | `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role machinery. Raw flags, environment, executable paths, and native ids are never accepted. |
@@ -704,14 +705,22 @@ plus the two additive fields below).
 
 **Additive per-entry fields (since contract 1.30.0):**
 
-- `archived` (boolean) — true when the web UI has archived this session;
-  derived server-side from the same preferences the sidebar uses.
+- `archived` (boolean) — true when this session is archived (the web UI
+  sidebar or the Internal API archive route; both write the same preferences
+  store). See [Archive / Unarchive a session](#archive--unarchive-a-session-contract-1650).
 - `source` — where the session came from, when known: `browser` (web UI
   WebSocket creation), `internal-api` (Internal API single/batch create),
   `native-discovered` (a pi CLI session found on disk by the SessionWatcher),
   or `unknown` (created before origin tracking existed — all pre-1.30.0
   entries). Use it to separate real work from smoke/validation sessions going
   forward.
+
+**Additive per-entry field `sessionClass` (since contract 1.65.0):** the
+session's class, recorded once at creation — `"validation"` when the caller
+declared it or the server's validation marker derived it; absent = not
+validation. `"child"` is never a stored or echoed value: derive it yourself
+from the additive `parentSessionId` field. `GET /sessions/native` echoes
+`sessionClass` on registry-known rows only.
 
 **Additive per-entry field `nativeSessionId` (since contract 1.64.0):** the id
 the runtime's OWN process and transcript run under, once the runtime has
@@ -884,6 +893,57 @@ POST /api/v1/sessions/adopt-native
 - The browser UI exposes the same capability via `GET /api/sessions/native`
   and `POST /api/sessions/import-native` (Resume CLI Session modal); the
   Internal API remains the canonical contract surface.
+
+---
+
+### Archive / Unarchive a session (contract 1.65.0)
+
+```
+POST /api/v1/sessions/:id/archive
+POST /api/v1/sessions/:id/unarchive
+```
+
+Archives or restores a session through the SAME web-UI preferences store the
+browser sidebar writes (prefs-lock + last-writer-wins), so the existing
+`archived` flag on `GET /sessions` items reflects the change immediately —
+there is one archive state, not two. This is the verb the upcoming session
+sweeper calls; until 1.65.0 only the cookie-authenticated browser path could
+archive.
+
+**Request body** (both routes): optional JSON object
+`{ "updatedAt": <epoch-ms> }`. Absent, the server stamps `Date.now()`.
+A caller-supplied `updatedAt` plays the browser LWW semantics: a stale
+unarchive (older than the stored record) is rejected server-side and changes
+nothing.
+
+**Archive response (200):**
+```json
+{
+  "ok": true,
+  "sessionId": "a1b2c3d4-…",
+  "archived": true,
+  "archivedAt": 1760714000000
+}
+```
+
+`archivedAt` is the epoch-ms dwell stamp the retention funnel keys on.
+Idempotent: re-archiving an already-archived session succeeds and **keeps the
+original stamp** (the grace clock never resets). Unarchiving clears both
+`archived` and `archivedAt` (also idempotent) and returns
+`{ ok, sessionId, archived: false }`.
+
+**Guards (archive only; unarchive only restores visibility):**
+
+- A **pinned** session refuses archive with `409 SESSION_PINNED` — a web-UI
+  preferences pin or a live Internal API pin/retention lease. A pin is a
+  deliberate protection an archive must never silently consume (the browser
+  sidebar auto-unpins because a human clicked; an API caller gets the refusal
+  and decides). Unpin first if the archive is intended.
+- A session with a **live turn** refuses archive with `409 SESSION_BUSY`
+  (same liveness predicate the sessions list uses). Retry once the turn ends.
+
+**Errors:** `404 SESSION_NOT_FOUND`, `400 INVALID_REQUEST` (malformed body),
+`409 SESSION_PINNED`, `409 SESSION_BUSY`.
 
 ---
 

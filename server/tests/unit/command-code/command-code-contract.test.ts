@@ -25,6 +25,7 @@ describe('Command Code Internal API boundary', () => {
     // 1.62.0: W2 (2026-10-13) — goalId, stalled goal_state, no NEVER_STARTED goal_end, quarantined_debt.
     // 1.63.0: step 1i.2 B (2026-10-16) — native parent linkage (parentKind "native", parentSource "declared").
     // 1.64.0: step 1i.3 (2026-10-16) — nativeSessionId on the sessions list/detail, features.nativeSessionIds.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.64.0');
+    // 1.65.0: step 1k (2026-10-17) — sessionClass + Internal API archive/unarchive, features.sessionClass/sessionArchive.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.65.0');
   });
 });

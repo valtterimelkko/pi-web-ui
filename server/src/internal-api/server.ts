@@ -1215,6 +1215,27 @@ export class InternalApiServer {
           return;
         }
 
+        // Contract 1.65.0 (command-centre step 1k): archive lifecycle — the
+        // same prefs-lock + LWW store the browser route writes, surfaced by
+        // the existing list `archived` flag.
+        if (action === 'archive') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleArchiveSession(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+
+        if (action === 'unarchive') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleUnarchiveSession(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+
         if (action === 'goal') {
           if (req.method === 'GET') {
             // Read endpoints skip the bounded control lane (pure observer).

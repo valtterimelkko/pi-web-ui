@@ -80,6 +80,44 @@ const goalRuntimeRefine = (body: { runtime: string; goal?: unknown }, ctx: z.Ref
 /** Contract 1.47.0 (Amendment 1): absent = unspecified (Agent OS decides by origin). */
 export const agentOsCaptureSchema = z.enum(['enabled', 'disabled']);
 
+// ── Contract 1.65.0 (command-centre step 1k): session class ───────────────────
+
+/** The only storable session class. "child" is deliberately absent: readers
+ *  derive it from the existing parentSessionId link, so the registry never
+ *  stores a second vocabulary that could drift from the parent link. */
+export type SessionClass = 'validation';
+
+/** `sessionClass` request field: only "validation" is accepted. Any other
+ *  value (including "child"/"mine") is a 400 whose message names the rule —
+ *  a clear code rather than a generic literal mismatch. */
+export const sessionClassSchema = z.literal('validation', {
+  errorMap: () => ({
+    message: 'sessionClass must be "validation" — the only storable class. "child" is derived from parentSessionId by readers; omit the field for every other session.',
+  }),
+});
+
+/** True when THIS server process runs as a disposable validation server —
+ *  the same marker the existing validation mode reads (config.validationMode,
+ *  `PI_WEB_UI_VALIDATION_MODE === 'true'`, set by the validation-server
+ *  launcher). Read per call (not cached at import) so route tests can stub
+ *  the environment and the marker stays identical to config's. */
+export function processRunsAsValidationServer(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PI_WEB_UI_VALIDATION_MODE === 'true';
+}
+
+/** Resolve the class to record at creation (contract 1.65.0): a caller
+ *  declaration of "validation" OR the server's own validation marker derives
+ *  "validation"; otherwise nothing is stored. `ephemeral`/`scenarioId`
+ *  deliberately do NOT derive a class: they are accepted-but-unused body
+ *  fields server-side today (not test markers), and the validation harness
+ *  runs against a server that carries the marker anyway. */
+export function resolveCreateSessionClass(
+  declared: SessionClass | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): SessionClass | undefined {
+  return declared === 'validation' || processRunsAsValidationServer(env) ? 'validation' : undefined;
+}
+
 // Contract 1.63.0 (step 1i.2 B): an explicitly native parent. The caller marks
 // the body parentSessionId as naming a native session id (e.g. a Claude Code
 // session uuid) that must NOT resolve to a registry session; it is persisted
@@ -128,6 +166,9 @@ export const createSessionBodySchema = z.object({
   parentKind: parentKindSchema.optional(),
   // Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in.
   agentOsCapture: agentOsCaptureSchema.optional(),
+  // Contract 1.65.0 (command-centre step 1k): caller-declared class; only
+  // "validation" is storable, recorded once at creation.
+  sessionClass: sessionClassSchema.optional(),
   // Contract 1.53.0 (C4): dispatch preflight spec; the effective cwd is always
   // checked at the route regardless of this field.
   preflight: preflightSpecSchema.optional(),
@@ -164,6 +205,8 @@ const batchCreateEntrySchema = z.object({
   invocationRole: invocationRoleSchema.optional(),
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
   agentOsCapture: agentOsCaptureSchema.optional(),
+  // Contract 1.65.0 (command-centre step 1k): per-entry caller-declared class.
+  sessionClass: sessionClassSchema.optional(),
   // Contract 1.53.0 (C4): dispatch preflight spec (per batch entry).
   preflight: preflightSpecSchema.optional(),
   ...pinFields,
@@ -239,10 +282,23 @@ export const adoptNativeBodySchema = z.object({
   parentSessionId: sessionIdSchema.optional(),
   alias: z.string().min(1).max(120).optional(),
   role: z.string().min(1).max(120).optional(),
+  // Contract 1.65.0 (command-centre step 1k): class for the registry entry this
+  // adoption CREATES. Refused when the native session is already known — its
+  // class was recorded at its own creation and is immutable (enforced at the
+  // route, which knows whether the entry exists).
+  sessionClass: sessionClassSchema.optional(),
 }).strict();
 
 export const batchCreateBodySchema = z.object({
   sessions: z.array(batchCreateEntrySchema).min(1).max(MAX_BATCH_ITEMS),
+}).strict();
+
+/** Contract 1.65.0 (command-centre step 1k): archive/unarchive body — an
+ *  empty object, or an optional epoch-ms `updatedAt` so a caller can play the
+ *  browser route's last-writer-wins semantics (a stale unarchive is rejected
+ *  server-side and changes nothing). */
+export const sessionArchiveBodySchema = z.object({
+  updatedAt: z.number().int().finite().min(0).optional(),
 }).strict();
 
 const batchPromptEntrySchema = z.object({

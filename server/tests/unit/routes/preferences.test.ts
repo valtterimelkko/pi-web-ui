@@ -308,3 +308,23 @@ describe('Preferences Robustness (v2)', () => {
     expect(result.sessions).toEqual({});
   });
 });
+
+// ── Contract 1.65.0 regression: empty-file reads never share state ──────────
+
+describe('Preferences empty-read aliasing (contract 1.65.0 regression)', () => {
+  it('readPreferences on a missing file returns a FRESH object every time', async () => {
+    vi.resetModules();
+    vi.doMock('../../../src/config.js', () => ({ config: { piAgentDir: '/tmp', webUiPrefsPath: '/tmp/does-not-exist-prefs.json' } }));
+    const { readPreferences, emptyPreferences } = await import('../../../src/routes/preferences.js');
+    const a = await readPreferences('/tmp/definitely-missing-a.json');
+    const b = await readPreferences('/tmp/definitely-missing-b.json');
+    expect(a).toEqual(emptyPreferences());
+    expect(b).toEqual(emptyPreferences());
+    expect(a).not.toBe(b);
+    // Mutating one result (as the locked writers do in place) must not leak
+    // into any later empty-file read.
+    a.sessions['claude:x'] = { archived: true, updatedAt: 1 };
+    expect((await readPreferences('/tmp/definitely-missing-c.json')).sessions).toEqual({});
+    vi.doUnmock('../../../src/config.js');
+  });
+});

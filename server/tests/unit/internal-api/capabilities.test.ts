@@ -424,6 +424,36 @@ describe('createCapabilitiesRoutes', () => {
     expect(body.runtimes.antigravity.enabled).toBe(true);
   });
 
+  it('advertises the contract 1.65.0 sessionClass and sessionArchive features', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(false),
+        getBackendMode: vi.fn().mockResolvedValue('direct'),
+        getProfiles: vi.fn().mockReturnValue([]),
+      } as unknown as CapabilitiesRoutesDeps['claudeService'],
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as unknown as CapabilitiesRoutesDeps['opencodeService'],
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as unknown as CapabilitiesRoutesDeps['antigravityService'],
+    });
+
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+
+    expect(res.statusCode).toBe(200);
+    const features = JSON.parse(res.body).features;
+    expect(features.sessionClass).toEqual({
+      field: 'sessionClass',
+      values: ['validation'],
+      createSurfaces: ['POST /sessions', 'POST /sessions/batch', 'POST /sessions/adopt-native'],
+      echoSurfaces: ['create/batch/adopt-native responses', 'GET /sessions', 'GET /sessions/:id', 'GET /sessions/native'],
+      derivation: 'caller-declared "validation" OR PI_WEB_UI_VALIDATION_MODE=true on this server',
+      immutable: true,
+    });
+    expect(features.sessionArchive.endpoints).toEqual(['POST /sessions/:id/archive', 'POST /sessions/:id/unarchive']);
+    expect(features.sessionArchive.idempotent).toBe(true);
+    expect(features.sessionArchive.guards.pinned).toContain('SESSION_PINNED');
+    expect(features.sessionArchive.guards.liveTurn).toContain('SESSION_BUSY');
+  });
+
   it('advertises the shipped default provider policy with no blocked providers', async () => {
     // No explicit blockedPiProviders: exercises the config default
     // (openai and openrouter liberated 2026-09-11; the env override still re-blocks).

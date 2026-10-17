@@ -43,15 +43,23 @@ export interface NativeScanRoots {
   antigravityDesktopConversationsDir?: string;
 }
 
+export interface NativeKnownSetEntry {
+  /** Registry entry id for the native artefact. */
+  id: string;
+  /** Contract 1.65.0 (command-centre step 1k): the class recorded on the
+   *  registry entry at its creation; absent = not validation. */
+  sessionClass?: 'validation';
+}
+
 export interface NativeKnownSets {
-  /** native claude session id (file base name) → registry entry id */
-  claudeSessionIds: Map<string, string>;
-  /** native commandcode session id → registry entry id */
-  commandCodeNativeSessionIds: Map<string, string>;
-  /** native opencode session id → registry entry id */
-  opencodeSessionIds: Map<string, string>;
-  /** native antigravity conversation id → registry entry id */
-  antigravityConversationIds: Map<string, string>;
+  /** native claude session id (file base name) → registry entry */
+  claudeSessionIds: Map<string, NativeKnownSetEntry>;
+  /** native commandcode session id → registry entry */
+  commandCodeNativeSessionIds: Map<string, NativeKnownSetEntry>;
+  /** native opencode session id → registry entry */
+  opencodeSessionIds: Map<string, NativeKnownSetEntry>;
+  /** native antigravity conversation id → registry entry */
+  antigravityConversationIds: Map<string, NativeKnownSetEntry>;
 }
 
 export interface NativeScanInput {
@@ -603,29 +611,22 @@ export async function scanNativeSessions(input: NativeScanInput): Promise<Native
 
   const items: NativeSessionItem[] = page.map((item) => {
     const knownId = item.knownId ?? '';
-    let knownInRegistry = false;
-    let registrySessionId: string | undefined;
-    if (item.runtime === 'claude' && known.claudeSessionIds.has(knownId)) {
-      knownInRegistry = true;
-      registrySessionId = known.claudeSessionIds.get(knownId);
-    } else if (item.runtime === 'commandcode' && known.commandCodeNativeSessionIds.has(knownId)) {
-      knownInRegistry = true;
-      registrySessionId = known.commandCodeNativeSessionIds.get(knownId);
-    } else if (item.runtime === 'opencode' && known.opencodeSessionIds.has(knownId)) {
-      knownInRegistry = true;
-      registrySessionId = known.opencodeSessionIds.get(knownId);
-    } else if (item.runtime === 'antigravity' && known.antigravityConversationIds.has(knownId)) {
-      knownInRegistry = true;
-      registrySessionId = known.antigravityConversationIds.get(knownId);
-    }
+    let knownEntry: NativeKnownSetEntry | undefined;
+    if (item.runtime === 'claude') knownEntry = known.claudeSessionIds.get(knownId);
+    else if (item.runtime === 'commandcode') knownEntry = known.commandCodeNativeSessionIds.get(knownId);
+    else if (item.runtime === 'opencode') knownEntry = known.opencodeSessionIds.get(knownId);
+    else knownEntry = known.antigravityConversationIds.get(knownId);
     return {
       runtime: item.runtime,
       nativePath: item.nativePath,
       mtime: new Date(item.mtimeMs).toISOString(),
       size: item.size,
       ...(item.cwd ? { cwd: item.cwd } : {}),
-      knownInRegistry,
-      ...(registrySessionId ? { registrySessionId } : {}),
+      knownInRegistry: Boolean(knownEntry),
+      ...(knownEntry ? { registrySessionId: knownEntry.id } : {}),
+      // Contract 1.65.0 (command-centre step 1k): additive class echo for
+      // registry-known native sessions; unknown ones carry no class.
+      ...(knownEntry?.sessionClass ? { sessionClass: knownEntry.sessionClass } : {}),
       ...(item.preview ? { preview: item.preview } : {}),
     };
   });

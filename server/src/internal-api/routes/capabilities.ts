@@ -142,6 +142,31 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           runtimes: ['claude', 'antigravity', 'opencode', 'commandcode', 'pi (detail, when resident)'],
           registryFields: ['nativeSessionId', 'claudeSessionId (resume target)', 'antigravityConversationId', 'opencodeSessionId', 'commandCodeNativeSessionId'],
         },
+        // Contract 1.65.0 (command-centre step 1k): the session class, recorded
+        // once at creation. Only "validation" is storable (caller-declared, or
+        // derived from this server's validation marker); "child" is never
+        // stored — readers derive it from parentSessionId. Absent = not
+        // validation.
+        sessionClass: {
+          field: 'sessionClass',
+          values: ['validation'],
+          createSurfaces: ['POST /sessions', 'POST /sessions/batch', 'POST /sessions/adopt-native'],
+          echoSurfaces: ['create/batch/adopt-native responses', 'GET /sessions', 'GET /sessions/:id', 'GET /sessions/native'],
+          derivation: 'caller-declared "validation" OR PI_WEB_UI_VALIDATION_MODE=true on this server',
+          immutable: true,
+        },
+        // Contract 1.65.0 (command-centre step 1k): archive lifecycle over the
+        // same prefs-lock + LWW store the browser route writes; the sessions
+        // list's existing `archived` flag reflects it.
+        sessionArchive: {
+          endpoints: ['POST /sessions/:id/archive', 'POST /sessions/:id/unarchive'],
+          guards: {
+            pinned: '409 SESSION_PINNED (web-UI prefs pin or a live Internal API pin/retention lease)',
+            liveTurn: '409 SESSION_BUSY',
+          },
+          idempotent: true,
+          body: { updatedAt: 'optional epoch-ms, last-writer-wins (a stale unarchive changes nothing)' },
+        },
       },
       runtimes: {
         pi: {

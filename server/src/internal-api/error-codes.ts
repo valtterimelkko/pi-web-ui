@@ -31,6 +31,10 @@ export const ErrorCode = {
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   NATIVE_SESSION_NOT_FOUND: 'NATIVE_SESSION_NOT_FOUND',
   SESSION_BUSY: 'SESSION_BUSY',
+  // Contract 1.65.0 (command-centre step 1k): archive refused because the
+  // session is pinned (web-UI prefs pin or a live Internal API pin/retention
+  // lease) — a deliberate protection, never silently consumed by an archive.
+  SESSION_PINNED: 'SESSION_PINNED',
   SESSION_CREATE_FAILED: 'SESSION_CREATE_FAILED',
   RUNTIME_UNAVAILABLE: 'RUNTIME_UNAVAILABLE',
   OPENCODE_UNAVAILABLE: 'OPENCODE_UNAVAILABLE',
@@ -203,6 +207,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'A session handles one prompt at a time; a second caller arrived mid-turn.',
     hint: 'Wait for the running turn to finish (GET /sessions/:id/wait?status=idle) then retry.',
     docs: 'docs/INTERNAL-API.md#send-prompt',
+  },
+  [ErrorCode.SESSION_PINNED]: {
+    httpStatus: 409,
+    description: 'The session is pinned and refuses archive.',
+    cause: 'A web-UI preferences pin or a live Internal API pin/retention lease protects this session; archiving would silently consume that protection.',
+    hint: 'Unpin first (POST /sessions/:id/control {"action":"unpin"} or the browser UI), or leave the session unarchived.',
+    docs: 'docs/INTERNAL-API.md#archive-session',
   },
   [ErrorCode.SESSION_CREATE_FAILED]: {
     httpStatus: 500,
