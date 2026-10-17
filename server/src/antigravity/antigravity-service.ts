@@ -946,9 +946,15 @@ export class AntigravityService {
       // ceiling with an unknown exit code. Keep the normalizer while tasks are
       // still running; the poll loop drops it once they settle (or the watch
       // ceiling times them out).
+      // Step 1j item 1 (m-piweb review finding 2): that safety relies on
+      // pollBackgroundCompletions running. With the receipt watcher disabled
+      // (ANTIGRAVITY_BACKGROUND_WATCH_INTERVAL_MS=0) its timer is never
+      // started, so an abort-kept normalizer would stay for the process
+      // lifetime (pre-1.64.0 it was dropped here). Drop it at abort too
+      // when the watcher is disabled; unchanged when the watcher runs.
       const hasRunningTasks = [...(this.sessionMeta.get(sessionId)?.backgroundTasks.values() ?? [])]
         .some((c) => c.status === 'running');
-      if (!hasRunningTasks) this.streamNormalizers.delete(sessionId);
+      if (!hasRunningTasks || this.backgroundWatchIntervalMs <= 0) this.streamNormalizers.delete(sessionId);
     }
   }
 
