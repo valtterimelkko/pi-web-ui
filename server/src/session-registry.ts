@@ -56,6 +56,13 @@ export interface RegistryEntry {
   claudeProviderId?: string;
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
+  /** Contract 1.65.0 (command-centre step 1k): the session's class, recorded
+   *  ONCE at creation. The only stored value is "validation" (a disposable
+   *  validation-server or caller-declared validation session); absence means
+   *  "not validation". "child" is deliberately NOT stored — readers derive it
+   *  from parentSessionId — and once recorded the value is immutable: no
+   *  upsert can clear or change it. */
+  sessionClass?: 'validation';
 }
 
 export interface SessionRegistry {
@@ -103,6 +110,17 @@ export class SessionRegistryUnavailableError extends Error {
 }
 
 const REGISTRY_VERSION = 1;
+
+/** Contract 1.65.0: the merge-time sessionClass rule — a recorded class is
+ *  immutable, an unclassed entry stays unclassed unless "validation" arrives. */
+function sessionClassPreserved(
+  existing: RegistryEntry,
+  incoming: Partial<RegistryEntry> & { sdkType: SdkType; cwd: string },
+): { sessionClass?: 'validation' } {
+  if (existing.sessionClass === 'validation') return { sessionClass: 'validation' };
+  if (incoming.sessionClass === 'validation') return { sessionClass: 'validation' };
+  return {};
+}
 
 export class SessionRegistryManager {
   private registryPath: string;
@@ -357,6 +375,11 @@ export class SessionRegistryManager {
         id: existing.id, // preserve original ID
         updatedAt: now,
         lastActivity: entry.lastActivity ?? now,
+        // Contract 1.65.0: sessionClass is recorded once at creation — a later
+        // upsert can never clear or change it (an explicit `undefined` in the
+        // spread above would otherwise wipe the key). Only "validation" is
+        // storable, so once set the value cannot move.
+        ...sessionClassPreserved(existing, entry),
       } as RegistryEntry;
       this.removeEntryFromIndexes(existing);
       const existingIndex = registry.entries.indexOf(existing);
@@ -393,6 +416,9 @@ export class SessionRegistryManager {
         claudeProfileBackend: entry.claudeProfileBackend,
         claudeProviderId: entry.claudeProviderId,
         ...(entry.agentOsCapture ? { agentOsCapture: entry.agentOsCapture } : {}),
+        // Contract 1.65.0: recorded once at creation; only "validation" is
+        // storable and absence stays absence.
+        ...(entry.sessionClass === 'validation' ? { sessionClass: 'validation' as const } : {}),
       };
       registry.entries.push(newEntry);
       this.addEntryToIndexes(newEntry);

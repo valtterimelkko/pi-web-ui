@@ -134,6 +134,17 @@ export async function buildRegistryResolver(
   return (id: string) => (map.get(id) as SessionRuntime | undefined) ?? null;
 }
 
+/** Fresh empty preferences per call (contract 1.65.0 regression): the locked
+ *  writers mutate the object `readPreferences` returns IN PLACE, so a shared
+ *  constant here let one prefs-file write pollute every later empty-file read
+ *  (aliasing across different prefs paths — e.g. the Internal API archive
+ *  route and its tests). Never hand out the same object twice. */
+export function emptyPreferences(): Preferences {
+  return { version: 2, sessions: {} };
+}
+
+/** @deprecated shared mutable instance — use emptyPreferences(); kept only for
+ *  existing imports. Never mutate the object received from readPreferences. */
 export const EMPTY_PREFERENCES: Preferences = { version: 2, sessions: {} };
 
 export async function readPreferences(filePath = PREFS_FILE): Promise<Preferences> {
@@ -142,12 +153,12 @@ export async function readPreferences(filePath = PREFS_FILE): Promise<Preference
     content = await fs.readFile(filePath, 'utf-8');
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return EMPTY_PREFERENCES;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return emptyPreferences();
     logger.error(
       `[Preferences] Corrupt prefs file (${filePath}), treating as empty:`,
       err instanceof Error ? err.message : String(err),
     );
-    return EMPTY_PREFERENCES;
+    return emptyPreferences();
   }
 
   let parsed: unknown;
@@ -155,7 +166,7 @@ export async function readPreferences(filePath = PREFS_FILE): Promise<Preference
     parsed = JSON.parse(content);
   } catch (err) {
     logger.error(`[Preferences] Unparseable prefs (${filePath}), treating as empty:`, err instanceof Error ? err.message : String(err));
-    return EMPTY_PREFERENCES;
+    return emptyPreferences();
   }
 
   if (isV2(parsed)) {
@@ -163,7 +174,7 @@ export async function readPreferences(filePath = PREFS_FILE): Promise<Preference
       return V2Schema.parse(parsed) as Preferences;
     } catch (err) {
       logger.error(`[Preferences] Invalid v2 prefs (${filePath}), treating as empty:`, err instanceof Error ? err.message : String(err));
-      return EMPTY_PREFERENCES;
+      return emptyPreferences();
     }
   }
 
@@ -187,7 +198,7 @@ export async function readPreferences(filePath = PREFS_FILE): Promise<Preference
     return v2;
   } catch (err) {
     logger.error(`[Preferences] v1→v2 migration failed (${filePath}), treating as empty:`, err instanceof Error ? err.message : String(err));
-    return EMPTY_PREFERENCES;
+    return emptyPreferences();
   }
 }
 

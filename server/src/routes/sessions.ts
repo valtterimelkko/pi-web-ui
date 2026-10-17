@@ -14,6 +14,7 @@ import {
   NATIVE_RUNTIMES,
   type NativeRuntime,
   type NativeScanRoots,
+  type NativeKnownSetEntry,
   type NativeKnownSets,
 } from '../internal-api/native-sessions.js';
 import { resolveClaudeProjectsRoot } from '../internal-api/goal/claude-goal.js';
@@ -120,16 +121,20 @@ router.get('/native', async (req: Request, res: Response) => {
 
     const registry = getSessionRegistry(config.sessionRegistryPath);
     const known: NativeKnownSets = {
-      claudeSessionIds: new Map<string, string>(),
-      commandCodeNativeSessionIds: new Map<string, string>(),
-      opencodeSessionIds: new Map<string, string>(),
-      antigravityConversationIds: new Map<string, string>(),
+      claudeSessionIds: new Map<string, NativeKnownSetEntry>(),
+      commandCodeNativeSessionIds: new Map<string, NativeKnownSetEntry>(),
+      opencodeSessionIds: new Map<string, NativeKnownSetEntry>(),
+      antigravityConversationIds: new Map<string, NativeKnownSetEntry>(),
     };
     for (const entry of await registry.listAll()) {
-      if (entry.claudeSessionId) known.claudeSessionIds.set(entry.claudeSessionId, entry.id);
-      if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, entry.id);
-      if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, entry.id);
-      if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, entry.id);
+      // Contract 1.65.0: carry the recorded session class (if any) alongside
+      // the id so the scan can echo it additively on known sessions.
+      const withClass = (id: string): NativeKnownSetEntry =>
+        entry.sessionClass === 'validation' ? { id, sessionClass: 'validation' } : { id };
+      if (entry.claudeSessionId) known.claudeSessionIds.set(entry.claudeSessionId, withClass(entry.id));
+      if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, withClass(entry.id));
+      if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, withClass(entry.id));
+      if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, withClass(entry.id));
     }
 
     const result = await scanNativeSessions({ runtimes, limit, since, before, roots: nativeRoots, known });

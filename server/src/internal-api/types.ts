@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.64.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.65.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
@@ -253,6 +253,11 @@ export interface CreateSessionRequest {
   parentKind?: 'native';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
+  /** Contract 1.65.0 (command-centre step 1k): caller-declared class; only
+   *  "validation" is storable (any other value is a 400 with a clear code) and
+   *  the server may derive the same value from its own validation marker.
+   *  Recorded once at creation; never clearable or changeable afterwards. */
+  sessionClass?: 'validation';
   /** Contract 1.53.0 (C4): dispatch preflight spec (referenced paths + tools). The
    *  effective cwd is always preflighted on create regardless of this field. */
   preflight?: PreflightSpec;
@@ -351,6 +356,9 @@ export interface BatchCreateEntry {
   /** Contract 1.63.0 (step 1i.2 B): per-entry native parent marking — see
    *  CreateSessionRequest.parentKind. */
   parentKind?: 'native';
+  /** Contract 1.65.0 (command-centre step 1k): per-entry caller-declared class;
+   *  only "validation" is storable. */
+  sessionClass?: 'validation';
 }
 
 export interface BatchCreateRequest {
@@ -378,6 +386,9 @@ export interface BatchCreateResultItem {
   parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
+  /** Contract 1.65.0 (command-centre step 1k): the class recorded at creation
+   *  for this entry (declared or server-derived); absent = not validation. */
+  sessionClass?: 'validation';
   /** Contract 1.49.0: admission refusals (ADMISSION_CAPACITY_EXHAUSTED) carry reason + retryAfterSeconds. */
   /** Contract 1.53.0 (C4): preflight refusals (PREFLIGHT_FAILED) additionally carry failures[] ({kind,item,problem}). */
   error?: { code: string; message: string; reason?: string; retryAfterSeconds?: number; failures?: PreflightFailure[] };
@@ -729,6 +740,11 @@ export interface CreateSessionResponse {
   parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared';
   /** Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in; absent = unspecified. */
   agentOsCapture?: 'enabled' | 'disabled';
+  /** Contract 1.65.0 (command-centre step 1k): the class recorded at creation
+   *  (caller-declared "validation" or server-derived from the validation
+   *  marker); absent = not validation. "child" is never stored or echoed —
+   *  readers derive it from parentSessionId. */
+  sessionClass?: 'validation';
   /** True when the session was pinned at creation (pin:true requested). */
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
@@ -787,6 +803,11 @@ export interface SessionInfo {
    *  this corrects the pre-1.64.0 Claude behaviour of echoing the Pi Web UI
    *  registry session id, which duplicated `sessionId`. */
   nativeSessionId?: string;
+  /** Contract 1.65.0 (command-centre step 1k): the session's class, recorded
+   *  once at creation. "validation" is the only value; absence = not
+   *  validation. "child" is derived from parentSessionId by readers, never
+   *  stored. */
+  sessionClass?: 'validation';
 }
 
 /** One natively-discovered (direct-CLI) session returned by the bounded
@@ -805,6 +826,10 @@ export interface NativeSessionItem {
   knownInRegistry: boolean;
   /** Registry session id when knownInRegistry is true. */
   registrySessionId?: string;
+  /** Contract 1.65.0: the registry-recorded class when knownInRegistry is true
+   *  and the registry entry carries one ("validation"; absent = not
+   *  validation). Unknown native sessions carry no class. */
+  sessionClass?: 'validation';
   /** Best-effort bounded first-message/title preview extracted from the
    *  native artefact. Absent when the format carries no readable preview
    *  (e.g. antigravity conversation databases). */
@@ -890,6 +915,9 @@ export interface AdoptNativeSessionResponse {
   cwd?: string;
   alias?: string;
   role?: string;
+  /** Contract 1.65.0 (command-centre step 1k): the class recorded for the
+   *  CREATED registry entry (declared or server-derived); absent otherwise. */
+  sessionClass?: 'validation';
 }
 
 export interface SessionControlResponse {
@@ -1491,6 +1519,26 @@ export interface CapabilitiesResponse {
       surfaces: string[];
       runtimes: string[];
       registryFields: string[];
+    };
+    /** Contract 1.65.0 (command-centre step 1k): the session class, recorded
+     *  once at creation. Only "validation" is storable; "child" is derived
+     *  from parentSessionId by readers; absent = not validation. */
+    sessionClass: {
+      field: 'sessionClass';
+      values: string[];
+      createSurfaces: string[];
+      echoSurfaces: string[];
+      derivation: string;
+      immutable: boolean;
+    };
+    /** Contract 1.65.0 (command-centre step 1k): archive lifecycle over the
+     *  shared web-UI preferences store (prefs-lock + LWW); pinned and
+     *  live-turn sessions refuse archive with documented 409 codes. */
+    sessionArchive: {
+      endpoints: string[];
+      guards: { pinned: string; liveTurn: string };
+      idempotent: boolean;
+      body: { updatedAt: string };
     };
   };
   runtimes: {

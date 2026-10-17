@@ -118,6 +118,8 @@ import {
   sessionControlBodySchema,
   adoptSessionBodySchema,
   adoptNativeBodySchema,
+  sessionArchiveBodySchema,
+  resolveCreateSessionClass,
   nativeParentIdSchema,
 } from '../session-validation.js';
 import { withCorrelation, newRequestId, getCorrelationContext } from '../../logging/correlation.js';
@@ -137,7 +139,7 @@ import os from 'os';
 import { config } from '../../config.js';
 import { createLogger, type LogRecord } from '../../logging/logger.js';
 import { getRecentLogs } from '../diagnostics-buffer.js';
-import { readPreferences, buildRegistryResolver, PREFS_FILE } from '../../routes/preferences.js';
+import { readPreferences, buildRegistryResolver, addArchivedKey, removeArchivedKey, PREFS_FILE } from '../../routes/preferences.js';
 import { toV2Key } from '../../routes/session-meta.js';
 import {
   NATIVE_RUNTIMES,
@@ -1597,6 +1599,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   async function commandCodeSessionDetail(record: CommandCodeInternalSessionRecord): Promise<SessionDetail> {
     await runReceipts.init();
+    // Contract 1.65.0: the class lives on the registry row stamped at create —
+    // the service record never carries it. Best-effort: an unreadable
+    // registry simply means no class echo.
+    let commandCodeSessionClass: 'validation' | undefined;
+    try {
+      commandCodeSessionClass = (await sessionRegistry.get(record.sessionId))?.sessionClass;
+    } catch { /* non-fatal */ }
+    await runReceipts.init();
     const latest = runReceipts.listBySession(record.sessionId)
       .sort((a, b) => Date.parse(b.terminalAt ?? b.acceptedAt) - Date.parse(a.terminalAt ?? a.acceptedAt))[0];
     // C3a (contract 1.58.0): Command Code sessions publish under their session
@@ -1610,6 +1620,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       backendMode: 'subprocess',
       nativeSessionId: record.nativeSessionId,
       status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
+      ...(commandCodeSessionClass ? { sessionClass: commandCodeSessionClass } : {}),
       ...(latest?.tokenUsage ? { tokenUsage: latest.tokenUsage } : {}),
       ...(latestCompletion ? { latestCompletion } : {}),
     };
@@ -1721,6 +1732,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // Contract 1.47.0 (Amendment 1): per-session Agent OS capture opt-in.
     if (entry.agentOsCapture === 'enabled' || entry.agentOsCapture === 'disabled') {
       detail.agentOsCapture = entry.agentOsCapture;
+    }
+    // Contract 1.65.0 (command-centre step 1k): additive class echo on the
+    // detail; absence = not validation ("child" stays reader-derived).
+    if (entry.sessionClass === 'validation') {
+      detail.sessionClass = 'validation';
     }
     // C3a (contract 1.58.0): latest completion (or parse error) captured for
     // this session, from a run receipt or a receipt-less session turn.
@@ -2234,6 +2250,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // Contract 1.30.0 origin provenance: mark Internal-API-created sessions
       // so the list response can report source 'internal-api'. Best-effort —
       // a tagging failure must never fail the creation itself.
+      // Contract 1.65.0 (command-centre step 1k): resolve the class ONCE here —
+      // caller-declared "validation" or the server's own validation marker.
+      const sessionClass = resolveCreateSessionClass(body.sessionClass);
       try {
         await sessionRegistry.upsert({
           id: base.sessionId,
@@ -2242,8 +2261,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           origin: 'internal-api',
           // Contract 1.47.0 (Amendment 1): stored only when the caller set it.
           ...(body.agentOsCapture ? { agentOsCapture: body.agentOsCapture } : {}),
+          ...(sessionClass ? { sessionClass } : {}),
         });
         if (body.agentOsCapture) base.agentOsCapture = body.agentOsCapture;
+        if (sessionClass) base.sessionClass = sessionClass;
       } catch (originError) {
         logger.warn('Failed to tag session origin:', originError);
       }
@@ -2469,6 +2490,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           .filter((entry) => entry.sdkType === 'commandcode' && entry.parentSessionId)
           .map((entry) => [entry.id, entry] as const),
       );
+      // Contract 1.65.0: the same command-code registry rows also carry the
+      // recorded session class (stamped at create like every other runtime).
+      const commandCodeClass = new Map(
+        registryAll
+          .filter((entry) => entry.sdkType === 'commandcode' && entry.sessionClass === 'validation')
+          .map((entry) => [entry.id, entry.sessionClass] as const),
+      );
       const sessions: SessionInfo[] = all.map((entry) => {
         // §6: surface live liveness, not stale registry status.
         const liveStatus = evidenceStatus(entry);
@@ -2493,6 +2521,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           // token for supervisors. Absent before the first confirmed turn
           // (a minted placeholder is never surfaced as native).
           ...(nativeSessionIdForEntry(entry) ? { nativeSessionId: nativeSessionIdForEntry(entry) } : {}),
+          // Contract 1.65.0 (command-centre step 1k): additive class echo;
+          // absence = not validation ("child" is derived from parentSessionId).
+          ...(entry.sessionClass === 'validation' ? { sessionClass: 'validation' as const } : {}),
           // Contract 1.54.0 (C5): additive lineage surfacing so callers can
           // count unlinked children (C1's coverage check) without N detail reads.
           ...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
@@ -2508,6 +2539,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             ...info,
             archived: archivedFor(info.sessionPath),
             source: 'unknown' as const,
+            ...(commandCodeClass.get(info.sessionId) ? { sessionClass: commandCodeClass.get(info.sessionId) } : {}),
             ...(lineage?.parentSessionId ? { parentSessionId: lineage.parentSessionId } : {}),
             ...(lineage?.parentSessionId && lineage.parentSource ? { parentSource: lineage.parentSource } : {}),
           };
@@ -2599,16 +2631,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
 
       const known = {
-        claudeSessionIds: new Map<string, string>(),
-        commandCodeNativeSessionIds: new Map<string, string>(),
-        opencodeSessionIds: new Map<string, string>(),
-        antigravityConversationIds: new Map<string, string>(),
+        claudeSessionIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
+        commandCodeNativeSessionIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
+        opencodeSessionIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
+        antigravityConversationIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
       };
       for (const entry of await sessionRegistry.listAll()) {
-        if (entry.claudeSessionId) known.claudeSessionIds.set(entry.claudeSessionId, entry.id);
-        if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, entry.id);
-        if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, entry.id);
-        if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, entry.id);
+        // Contract 1.65.0: carry the recorded class (if any) alongside the id
+        // so the scan can echo it additively on known sessions.
+        const withClass = (id: string): { id: string; sessionClass?: 'validation' } =>
+          entry.sessionClass === 'validation' ? { id, sessionClass: 'validation' } : { id };
+        if (entry.claudeSessionId) known.claudeSessionIds.set(entry.claudeSessionId, withClass(entry.id));
+        if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, withClass(entry.id));
+        if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, withClass(entry.id));
+        if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, withClass(entry.id));
       }
 
       const result = await scanNativeSessions({ runtimes, limit, since, before, roots: nativeRoots, known });
@@ -4784,6 +4820,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // Already known in the registry → adopt the existing entry (no duplicate).
     const known = (await sessionRegistry.listAll()).find((entry) => entry[nativeIdField] === body.nativeId);
     if (known) {
+      // Contract 1.65.0 (command-centre step 1k): the class is recorded once at
+      // creation. An already-known entry's class was recorded at ITS creation;
+      // an adopt-native that carries sessionClass for it is a 400, not a
+      // silent ignore (the caller believes it recorded something).
+      if (body.sessionClass) {
+        sendJson(res, 400, enrichedErrorBody(
+          ErrorCode.INVALID_REQUEST,
+          'sessionClass cannot be set on an existing session: it is recorded once at creation and never changeable afterwards',
+        ));
+        return;
+      }
       if (parentId) {
         const outcome = await adoptRegisteredSession(known.id, parentId, { alias: body.alias, role: body.role });
         if (!outcome.ok) {
@@ -4817,6 +4864,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
 
     const mtimeIso = new Date(resolved.mtimeMs).toISOString();
+    // Contract 1.65.0 (command-centre step 1k): this adoption CREATES the
+    // registry entry, so the class is resolved here (declared or server-
+    // derived validation marker) exactly like the create paths.
+    const adoptSessionClass = resolveCreateSessionClass(body.sessionClass);
     const created = await sessionRegistry.upsert({
       sdkType: body.runtime,
       path: resolved.nativePath,
@@ -4829,6 +4880,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       status: 'idle',
       origin: 'native-discovered',
       ...(parentId ? { parentSessionId: parentId } : {}),
+      ...(adoptSessionClass ? { sessionClass: adoptSessionClass } : {}),
     } as Parameters<typeof sessionRegistry.upsert>[0]);
 
     if (parentId) {
@@ -4845,8 +4897,142 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ...(created.cwd ? { cwd: created.cwd } : {}),
       ...(body.alias ? { alias: body.alias } : {}),
       ...(body.role ? { role: body.role } : {}),
+      ...(adoptSessionClass ? { sessionClass: adoptSessionClass } : {}),
     };
     sendJson(res, 200, response);
+  }
+
+  // ── Contract 1.65.0 (command-centre step 1k): archive / unarchive ──────────
+
+  /** Resolve a session to the prefs identity the list uses for `archived`
+   *  (`entry.path || entry.id`, or the Command Code service record's session
+   *  id), plus the registry entry when one exists (for the liveness guard). */
+  async function resolveArchiveTarget(sessionId: string): Promise<
+    { identity: string; entry?: RegistryEntry; commandCodeRunning?: boolean } | undefined
+  > {
+    const entry = await getNonCommandCodeRegistryEntry(sessionId);
+    if (entry) return { identity: entry.path || entry.id, entry };
+    const record = await commandCodeService?.getSession(sessionId);
+    if (record) {
+      return {
+        identity: record.sessionId,
+        commandCodeRunning: Boolean(commandCodeService?.isRunning(sessionId)),
+      };
+    }
+    return undefined;
+  }
+
+  /** Parse the optional archive/unarchive body ({ updatedAt?: epoch-ms }).
+   *  An absent or empty body is fine; a malformed one is a 400. */
+  async function parseArchiveBody(req: IncomingMessage): Promise<{ updatedAt?: number } | null> {
+    let raw: unknown = {};
+    try {
+      raw = (await readJsonBody<unknown>(req)) ?? {};
+    } catch (err) {
+      if (err instanceof RequestBodyTooLargeError) throw err;
+      raw = {};
+    }
+    const parsed = sessionArchiveBodySchema.safeParse(raw);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /** POST /api/v1/sessions/:id/archive — stamp `archived` + `archivedAt` in
+   *  the shared web-UI preferences (the same prefs-lock + LWW store the
+   *  browser route writes), so the existing list `archived` flag reflects it.
+   *  Guards: a pinned session (prefs pin or a live API pin/retention lease)
+   *  refuses with 409 SESSION_PINNED — a pin is a deliberate protection an
+   *  archive must never silently consume — and a session with a live turn
+   *  refuses with 409 SESSION_BUSY. Idempotent: re-archiving keeps the
+   *  original archivedAt stamp (the retention dwell clock never resets). */
+  async function handleArchiveSession(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      const body = await parseArchiveBody(req);
+      if (body === null) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'archive body must be an empty object or { updatedAt: <epoch-ms> }'));
+        return;
+      }
+      const target = await resolveArchiveTarget(sessionId);
+      if (!target) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
+      // Pinned guard: the browser-visible prefs pin first, then any live
+      // Internal API pin/retention lease (both surfaces report `pinned`).
+      const resolver = await buildRegistryResolver(sessionRegistry);
+      const key = toV2Key(target.identity, resolver).key;
+      let prefsPinned = false;
+      try {
+        const prefs = await readPreferences(preferencesPath);
+        prefsPinned = prefs.sessions[key]?.pinned === true;
+      } catch { /* unreadable prefs = nothing pinned */ }
+      if (prefsPinned || retentionProtection(sessionId).protected) {
+        sendJson(res, 409, enrichedErrorBody(
+          ErrorCode.SESSION_PINNED,
+          'Session is pinned and refuses archive (unpin first if the archive is intended)',
+        ));
+        return;
+      }
+      // Live-turn guard: same liveness predicate the list uses.
+      const live = target.entry
+        ? evidenceStatus(target.entry) === 'running'
+        : Boolean(target.commandCodeRunning);
+      if (live) {
+        sendJson(res, 409, enrichedErrorBody(
+          ErrorCode.SESSION_BUSY,
+          'Session has a live turn and refuses archive; retry once the turn ends',
+        ));
+        return;
+      }
+      // Key-based write: the key is resolved exactly as the list resolves its
+      // `archived` flag (same registry, same toV2Key), so route and list can
+      // never disagree — the path-based helper re-resolves through the
+      // process-wide registry singleton instead of this route's registry.
+      const prefs = await addArchivedKey(key, preferencesPath, body.updatedAt);
+      sendJson(res, 200, {
+        ok: true,
+        sessionId,
+        archived: true,
+        archivedAt: prefs.sessions[key]?.archivedAt,
+      });
+    } catch (err) {
+      logger.errorObject('Failed to archive session', err);
+      sendJson(res, 500, { error: 'Failed to archive session', code: ErrorCode.INTERNAL_ERROR });
+    }
+  }
+
+  /** POST /api/v1/sessions/:id/unarchive — clear `archived` + `archivedAt`.
+   *  LWW-aware through the shared helper: a stale `updatedAt` is rejected and
+   *  changes nothing. Idempotent. No pin/liveness guard: unarchiving only
+   *  restores visibility and never consumes a protection. */
+  async function handleUnarchiveSession(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      const body = await parseArchiveBody(req);
+      if (body === null) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'unarchive body must be an empty object or { updatedAt: <epoch-ms> }'));
+        return;
+      }
+      const target = await resolveArchiveTarget(sessionId);
+      if (!target) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
+      // Key-based clear, same key rule as the archive write (see above).
+      const resolver = await buildRegistryResolver(sessionRegistry);
+      const key = toV2Key(target.identity, resolver).key;
+      await removeArchivedKey(key, preferencesPath, body.updatedAt);
+      sendJson(res, 200, { ok: true, sessionId, archived: false });
+    } catch (err) {
+      logger.errorObject('Failed to unarchive session', err);
+      sendJson(res, 500, { error: 'Failed to unarchive session', code: ErrorCode.INTERNAL_ERROR });
+    }
   }
 
   async function handleSessionControl(
@@ -7977,6 +8163,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // Contract 1.30.0 origin provenance: best-effort tag mirroring the
         // single-session create path.
         let agentOsCaptureStored: 'enabled' | 'disabled' | undefined;
+        // Contract 1.65.0 (command-centre step 1k): per-entry class, resolved
+        // exactly like the single-create path (declared or server-derived).
+        const entrySessionClass = resolveCreateSessionClass(entry.sessionClass);
         try {
           await sessionRegistry.upsert({
             id: created.sessionId,
@@ -7984,6 +8173,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             cwd: created.cwd,
             origin: 'internal-api',
             ...(entry.agentOsCapture ? { agentOsCapture: entry.agentOsCapture } : {}),
+            ...(entrySessionClass ? { sessionClass: entrySessionClass } : {}),
           });
           if (entry.agentOsCapture) agentOsCaptureStored = entry.agentOsCapture;
         } catch (originError) {
@@ -8021,6 +8211,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           defaultEffort: created.defaultEffort,
           cwd: created.cwd,
           ...(agentOsCaptureStored ? { agentOsCapture: agentOsCaptureStored } : {}),
+          ...(entrySessionClass ? { sessionClass: entrySessionClass } : {}),
           ...(batchLink ? { parentSessionId: batchLink.parentSessionId, parentSource: batchLink.parentSource } : {}),
         };
         // Optional per-entry create-time pin (see POST /sessions pin field).
@@ -8903,6 +9094,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // Contract 1.40.0: session adoption (P1 control-lane bounded).
     handleAdoptSession: wrapControl(handleAdoptSession),
     handleAdoptNativeSession: wrapControl(handleAdoptNativeSession),
+    // Contract 1.65.0 (command-centre step 1k): archive lifecycle.
+    handleArchiveSession: wrapControl(handleArchiveSession),
+    handleUnarchiveSession: wrapControl(handleUnarchiveSession),
     // Orchestration endpoints
     handleSessionEvents,
     handleSessionWait,

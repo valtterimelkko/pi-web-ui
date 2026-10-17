@@ -48,7 +48,7 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '9d167754a2a0c6ab2df6b31b8f0f3f7935a738c51e18fc018ebf333f1ee9e486';
+export const BASELINE_SHAPE_SHA256 = 'dbdcdc377860dc1ce37b714fb5f95d9d3e9833c20fe817284585fbccf115061e';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */

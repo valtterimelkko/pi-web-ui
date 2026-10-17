@@ -153,7 +153,13 @@ export function applyLWW(
   }
   const merged: SessionMeta = { ...base };
   let changed = false;
-  for (const f of ['archived', 'pinned', 'displayName', 'legacyKey'] as const) {
+  // `archivedAt` joins the field set (contract 1.65.0 regression): the archive
+  // delta paths stamp it when a record ENTERS the archived state (the
+  // retention funnel's dwell gate), but the previous allowlist silently
+  // dropped it in the merge, so it never persisted — even on the browser
+  // path. It merges like any other field: present only while archived
+  // (unarchive deletes it, so it never needs clearing here).
+  for (const f of ['archived', 'archivedAt', 'pinned', 'displayName', 'legacyKey'] as const) {
     if (incoming[f] !== undefined && incoming[f] !== base[f]) {
       merged[f] = incoming[f] as never;
       changed = true;
