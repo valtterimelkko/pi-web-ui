@@ -83,11 +83,11 @@ describe('MessageBubble — code-block copy button wiring', () => {
     ).toHaveLength(1);
   });
 
-  it('still renders the two whole-message copy buttons', () => {
+  it('renders exactly one whole-message copy affordance (contract 1.64.0 step 1i: the bottom action row is gone — one copy affordance per message at every width)', () => {
     render(<MessageBubble message={makeMessage(MD_WITH_BLOCK_AND_INLINE)} />);
     expect(
       screen.getAllByRole('button', { name: /copy message/i }),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 
   it('clicking the code-block button copies only the block, not the intro/outro', async () => {
