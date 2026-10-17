@@ -540,6 +540,13 @@ export class AntigravityService {
             // join token instead of no conversation id at all.
             if (parsed.kind === 'init' && parsed.conversationId && parsed.conversationId !== storedConversationId) {
               storedConversationId = parsed.conversationId;
+              // Mirror the confirmed id onto the turn's registry snapshot: the
+              // end-of-turn upserts spread this snapshot over the fresh record
+              // (and the snapshot was read BEFORE this write), so a
+              // present-undefined nativeSessionId on it would wipe the
+              // init-written value from the saved registry. ClaudeService does
+              // the same on its confirmed-id path.
+              entry.nativeSessionId = parsed.conversationId;
               void this.registry.upsert({
                 id: sessionId,
                 sdkType: 'antigravity',
@@ -547,6 +554,10 @@ export class AntigravityService {
                 antigravityConversationId: parsed.conversationId,
                 nativeSessionId: parsed.conversationId,
               }).catch((err) => tlog.warn('failed to persist init conversation id: %s', err instanceof Error ? err.message : String(err)));
+            } else if (parsed.kind === 'init' && parsed.conversationId) {
+              // Same conversation id as the snapshot (resumed conversation):
+              // still backfill the snapshot so no later spread drops the field.
+              entry.nativeSessionId = parsed.conversationId;
             }
             for (const ev of norm.onParsed(parsed, Date.now())) emit(ev);
           },
