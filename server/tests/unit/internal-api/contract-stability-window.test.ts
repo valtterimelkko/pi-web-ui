@@ -139,6 +139,19 @@ const STEP1I2B_1_63_0_ROW: StabilityExceptionRow = {
   version: '1.63.0',
 };
 
+/**
+ * The live table's seventh row (step 1i.3, command-centre programme PLAN
+ * step 1i, census Q1 recommendation): the owner-approved additive minor bump
+ * surfacing the runtime-native session id. Its additive minor bump (1.64.0)
+ * re-based the snapshot baseline.
+ */
+const STEP1I3_1_64_0_ROW: StabilityExceptionRow = {
+  date: '2026-10-16',
+  decision: 'COMMAND-CENTRE PLAN step 1i.3 (owner plan of record; census Q1 recommendation, BUGS.md rows 2/18)',
+  what: '1.64.0 (step 1i.3): `GET /sessions` items and `GET /sessions/:id` gain additive `nativeSessionId` — the id the runtime\'s own process/transcript runs under, recorded the moment the runtime reports it (Claude: CLI session id mid-turn; Antigravity: conversation id at init); `features.nativeSessionIds` advertises it; the Claude detail\'s `nativeSessionId` is corrected to the native id (it previously echoed the Pi Web UI registry session id, duplicating `sessionId`). Additive apart from that correction.',
+  version: '1.64.0',
+};
+
 describe('contract stability window (C6)', () => {
   const doc = readFileSync(contractDocPath, 'utf8');
   const committed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as ClientContractSnapshot;
@@ -167,8 +180,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row and the step 1i.2 B 1.63.0 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row and the step 1i.3 1.64.0 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -187,12 +200,12 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version now that the 1.63.0 exception row names it', () => {
+    it('accepts the live contract version now that the 1.64.0 exception row names it', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
       expect(verdict.ok).toBe(true);
-      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.63');
+      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.64');
     });
 
     it('refuses the live contract version when the exception row is absent (the window rule still bites)', () => {

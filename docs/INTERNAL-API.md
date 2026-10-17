@@ -713,6 +713,17 @@ plus the two additive fields below).
   entries). Use it to separate real work from smoke/validation sessions going
   forward.
 
+**Additive per-entry field `nativeSessionId` (since contract 1.64.0):** the id
+the runtime's OWN process and transcript run under, once the runtime has
+reported it. Claude: the CLI session id (also the transcript filename under
+`~/.claude/projects/…`) — present only after the first confirmed sighting,
+because a freshly created session's registry `claudeSessionId` is still a Pi
+Web UI-minted resume hint. Antigravity: the agy conversation id. OpenCode and
+Command Code: their server-side session ids. Pi list items carry none (a pi
+session's registry id IS its session id; the detail endpoint surfaces the
+loaded agent session's id when resident). Use it as an exact join token to a
+process or transcript row; absence means "first turn not yet confirmed".
+
 **Response (200):**
 ```json
 {
@@ -731,7 +742,8 @@ plus the two additive fields below).
       "createdAt": "2026-04-28T12:00:00.000Z",
       "lastActivity": "2026-04-28T12:05:00.000Z",
       "archived": false,
-      "source": "internal-api"
+      "source": "internal-api",
+      "nativeSessionId": "16226315-… (Claude CLI transcript id)"
     }
   ]
 }
@@ -909,6 +921,15 @@ GET /api/v1/sessions/:sessionId/info
 
 `/info` is the preferred endpoint for live validation and local automation.
 Both endpoints now return enriched runtime metadata where available. For a profile-backed Claude session, session info/list `model` is the effective runtime model (for example `sonnet`) and `modelSelector` is the exact creation selector (`profile:<id>`); do not compare those as if they were the same identity category. The create response alone retains its historical selector echo in `model` for backwards compatibility.
+
+**`nativeSessionId` semantics (since contract 1.64.0, correction).** The field
+reports the id the runtime's OWN process and transcript run under. For a
+Claude session it previously echoed the Pi Web UI registry session id
+(duplicating `sessionId` — never the id the Claude process runs under); it is
+now the CLI-confirmed session id, recorded mid-turn as soon as the runtime
+reports it, and absent until then. Antigravity: the agy conversation id
+(known from the init event). Treat absence as "first turn not yet confirmed",
+not as an error.
 
 **Pi create responses are truthful about the applied model (since contract 1.21.0, 2026-08-19; bare-id resolution since contract 1.26.0, 2026-08-25).** For `runtime: "pi"`, the create response's `model` is the model the session actually resolved to (`provider/model`), and `modelSelector` echoes the exact requested selector. Since 1.26.0 a bare id that matches exactly one advertised, unblocked model is resolved to its qualified selector and binds (with `fallbackApplied: false`); a bare id matching several advertised models fails with `422 MODEL_NOT_APPLIED` listing every candidate. Any other selector the runtime refuses or cannot apply fails with `MODEL_NOT_APPLIED` after cleaning up the half-created session — it never returns a session silently running a different model. Prefer copying the `selector` field from `/models` entries rather than constructing selectors.
 

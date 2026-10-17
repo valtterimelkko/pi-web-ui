@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.63.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.64.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
@@ -779,6 +779,14 @@ export interface SessionInfo {
   /** Which source produced the linkage. Additive since 1.54.0 (C5); "declared"
    *  (a native-marked parent, contract 1.63.0 step 1i.2 B) since 1.63.0. */
   parentSource?: 'header' | 'body' | 'bash' | 'peer' | 'declared';
+  /** Contract 1.64.0 (census Q1): the id the runtime's OWN process/transcript
+   *  runs under, once the runtime has reported it (Claude: the CLI session id;
+   *  Antigravity: the agy conversation id; OpenCode/Command Code: their
+   *  server-side ids). Absent before the first confirmed turn — a Pi Web UI
+   *  minted placeholder is never surfaced as native. On `GET /sessions/:id`
+   *  this corrects the pre-1.64.0 Claude behaviour of echoing the Pi Web UI
+   *  registry session id, which duplicated `sessionId`. */
+  nativeSessionId?: string;
 }
 
 /** One natively-discovered (direct-CLI) session returned by the bounded
@@ -826,7 +834,6 @@ export interface SessionDetail extends SessionInfo {
   latestCompletion?: SessionCompletionSurface;
   /** Latest run-scoped usage observed from a terminal result, when available. */
   tokenUsage?: RunTokenUsage;
-  nativeSessionId?: string;
   sessionFile?: string;
   tokens?: {
     input: number;
@@ -1472,6 +1479,18 @@ export interface CapabilitiesResponse {
       parentKind: 'native';
       parentSource: 'declared';
       surfaces: string[];
+    };
+    /** Contract 1.64.0 (census Q1): the runtime-native session id (the id the
+     *  runtime's own process/transcript runs under) is surfaced additively as
+     *  `nativeSessionId` on the sessions list and session detail, recorded the
+     *  moment the runtime reports it (Claude: CLI session id mid-turn;
+     *  Antigravity: conversation id at init). Absent before the first
+     *  confirmed turn. */
+    nativeSessionIds: {
+      field: 'nativeSessionId';
+      surfaces: string[];
+      runtimes: string[];
+      registryFields: string[];
     };
   };
   runtimes: {

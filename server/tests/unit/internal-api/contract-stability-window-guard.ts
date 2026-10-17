@@ -38,14 +38,17 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * step 1i.2 B) — the additive `parentKind`/`parentSource: "declared"` native
  * parent linkage fields and `features.nativeParentLinkage`, re-based within
  * 1.63.0 by correction round 1 — the additive `SessionControlResponse`
- * `parentSource` field. The ENFORCED fingerprint is
+ * `parentSource` field; re-based again at **1.64.0** (2026-10-16, step 1i.3)
+ * — the additive `SessionInfo.nativeSessionId` field (moved onto the list
+ * item; `SessionDetail` inherits it) and `features.nativeSessionIds`. The
+ * ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
  * sorted keys (so patch-bump regenerations that only move the version string
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = 'ee33fa670ce61bafd26a2e8b03ee527ef5922121cab0e569b8ef5a626281f2b0';
+export const BASELINE_SHAPE_SHA256 = '9d167754a2a0c6ab2df6b31b8f0f3f7935a738c51e18fc018ebf333f1ee9e486';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */

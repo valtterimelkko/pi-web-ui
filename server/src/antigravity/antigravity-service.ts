@@ -286,6 +286,7 @@ export class AntigravityService {
       if ([...meta.backgroundTasks.values()].some((c) => c.status === 'running')) continue;
       if (now - meta.lastActivity > this.idleTimeoutMs) {
         this.sessionMeta.delete(sessionId);
+        this.dropOrphanedNormalizer(sessionId);
       }
     }
   }
@@ -532,6 +533,21 @@ export class AntigravityService {
           toolStallTimeoutMs: this.toolStallTimeoutMs,
           idleTimeoutMs: this.idleTimeoutMs,
           onEvent: (parsed) => {
+            // Contract 1.64.0 (census bug 18): agy reports the conversation id
+            // in the init event at process start. Persist it to the registry
+            // THE MOMENT it arrives — not only when the turn finalises — so a
+            // supervisor reading the registry mid-first-turn finds an exact
+            // join token instead of no conversation id at all.
+            if (parsed.kind === 'init' && parsed.conversationId && parsed.conversationId !== storedConversationId) {
+              storedConversationId = parsed.conversationId;
+              void this.registry.upsert({
+                id: sessionId,
+                sdkType: 'antigravity',
+                cwd: entry.cwd,
+                antigravityConversationId: parsed.conversationId,
+                nativeSessionId: parsed.conversationId,
+              }).catch((err) => tlog.warn('failed to persist init conversation id: %s', err instanceof Error ? err.message : String(err)));
+            }
             for (const ev of norm.onParsed(parsed, Date.now())) emit(ev);
           },
           ...(this.streamSpawnFn ? { spawnFn: this.streamSpawnFn } : {}),
@@ -911,7 +927,17 @@ export class AntigravityService {
       // The process is terminating and unusable; forget it so a later turn
       // respawns instead of writing into a dying child.
       this.streamProcesses.delete(sessionId);
-      this.streamNormalizers.delete(sessionId);
+      // Step 1i item 3 (census): the stream normalizer owns the background-task
+      // receipt watch dirs, and pollBackgroundCompletions resolves them through
+      // it. A user Stop must still end the process — but dropping the
+      // normalizer here stopped receipt polling for every running task, which
+      // then never saw its completion receipt and only ever ended at the watch
+      // ceiling with an unknown exit code. Keep the normalizer while tasks are
+      // still running; the poll loop drops it once they settle (or the watch
+      // ceiling times them out).
+      const hasRunningTasks = [...(this.sessionMeta.get(sessionId)?.backgroundTasks.values() ?? [])]
+        .some((c) => c.status === 'running');
+      if (!hasRunningTasks) this.streamNormalizers.delete(sessionId);
     }
   }
 
@@ -941,7 +967,13 @@ export class AntigravityService {
     const now = Date.now();
     for (const [sessionId, meta] of this.sessionMeta) {
       const running = [...meta.backgroundTasks.values()].filter((c) => c.status === 'running');
-      if (running.length === 0) continue;
+      if (running.length === 0) {
+        // Item 3: an abort-kept normalizer (receipt watch dirs for tasks that
+        // have now all settled) is dropped here — a live process still owns
+        // its own normalizer and is never touched.
+        this.dropOrphanedNormalizer(sessionId);
+        continue;
+      }
       const normalizer = this.streamNormalizers.get(sessionId);
       for (const child of running) {
         const startedAt = child.startedAt ?? now;
@@ -959,6 +991,13 @@ export class AntigravityService {
         }
       }
     }
+  }
+
+  /** Item 3: drop a normalizer left behind by an abort once nothing needs it
+   *  (no live process, no running background tasks). */
+  private dropOrphanedNormalizer(sessionId: string): void {
+    if (this.streamProcesses.has(sessionId)) return;
+    this.streamNormalizers.delete(sessionId);
   }
 
   /** Scan the conversation's messages dir for the task's completion receipt.

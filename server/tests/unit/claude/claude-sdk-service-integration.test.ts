@@ -13,6 +13,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 import { ClaudeSdkService } from '../../../src/claude/claude-sdk-service.js';
+import { getSessionRegistry } from '../../../src/session-registry.js';
 
 function makeAsyncGenerator(messages: any[]) {
   return async function* () {
@@ -288,5 +289,41 @@ describe('ClaudeSdkService integration with mocked SDK', () => {
     expect(svc.getProfileCapacity('missing')).toBeUndefined();
     release!();
     await p;
+  });
+
+  it('persists the runtime-reported session id to the registry MID-TURN (census bug: registry id never matched the transcript id during the first turn)', async () => {
+    const registryPath = join(tmpDir, 'registry.json');
+    const { sessionId } = await svc.createSession(join(tmpDir, 'cwd-native-id'), 'sonnet', undefined, 'test-sdk-profile');
+    // The id the Claude CLI actually mints for the first turn: the Pi Web UI
+    // createSession value is only a resume hint — the SDK backend passes no
+    // --session-id on a first turn, so the CLI generates its own id, which is
+    // also the transcript filename under ~/.claude/projects.
+    const runtimeSessionId = '16226315-census-style-transcript-id';
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    mockQuery.mockImplementation(() => (async function* () {
+      yield { type: 'system', subtype: 'init', model: 'sonnet', session_id: runtimeSessionId, tools: [], apiKeySource: 'none' };
+      // Hold the turn open: the census caught the registry mid-first-turn.
+      await gate;
+      yield { type: 'result', subtype: 'success', is_error: false, result: 'Done', usage: { input_tokens: 1, output_tokens: 1 }, session_id: runtimeSessionId };
+    })());
+
+    const completion = new Promise<void>((resolve) => {
+      void svc.sendPrompt(sessionId, 'hello', () => {}, () => resolve()).catch(() => resolve());
+    });
+
+    // While the first turn is still in flight, the registry must already hold
+    // the runtime's real id (claudeSessionId as the resume target AND the new
+    // nativeSessionId contract field).
+    const registry = getSessionRegistry(registryPath);
+    await vi.waitFor(async () => {
+      const entry = await registry.get(sessionId);
+      expect(entry?.claudeSessionId).toBe(runtimeSessionId);
+      expect(entry?.nativeSessionId).toBe(runtimeSessionId);
+    }, { timeout: 3000 });
+
+    release();
+    await completion;
   });
 });

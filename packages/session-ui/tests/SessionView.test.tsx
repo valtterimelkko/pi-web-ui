@@ -28,6 +28,21 @@ describe('session-ui without a host store', () => {
     await waitFor(() => expect(copy).toHaveBeenCalledWith('Hello from an invented session.', 'Message copied to clipboard'));
   });
 
+  it('renders exactly ONE copy affordance per message at every width (census: two on phones)', () => {
+    // The bubble used to draw two action rows (a top-right overlay and a
+    // bottom row), each with its own copy button. Below Tailwind's sm
+    // breakpoint (640px) neither is hover-hidden, so phones showed both at
+    // once — the command centre had to hide one with local CSS. The shared
+    // package now renders a single copy affordance structurally, so every
+    // width has exactly one.
+    render(
+      <SessionViewProvider value={staticSessionView({})}>
+        <MessageBubble message={assistant} isLast />
+      </SessionViewProvider>,
+    );
+    expect(screen.getAllByLabelText(/Copy message to clipboard|Copied to clipboard/)).toHaveLength(1);
+  });
+
   it('routes tool rows to the tool card', () => {
     render(
       <MessageBubble

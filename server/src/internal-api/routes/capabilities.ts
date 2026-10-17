@@ -132,6 +132,16 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           parentSource: 'declared',
           surfaces: ['POST /sessions', 'POST /sessions/batch', 'POST /sessions/:id/adopt', 'POST /sessions/:id/control'],
         },
+        // Contract 1.64.0 (census Q1): the runtime-native session id surfaced
+        // additively on the sessions list and detail — an exact join token for
+        // supervisors pairing registry sessions with process/transcript rows
+        // (previously heuristics: folder + start time).
+        nativeSessionIds: {
+          field: 'nativeSessionId',
+          surfaces: ['GET /sessions', 'GET /sessions/:id', 'GET /sessions/:id/info'],
+          runtimes: ['claude', 'antigravity', 'opencode', 'commandcode', 'pi (detail, when resident)'],
+          registryFields: ['nativeSessionId', 'claudeSessionId (resume target)', 'antigravityConversationId', 'opencodeSessionId', 'commandCodeNativeSessionId'],
+        },
       },
       runtimes: {
         pi: {

@@ -1559,6 +1559,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : undefined;
   }
 
+  /** Contract 1.64.0 (census Q1): the runtime-native id for a registry entry,
+   *  when the runtime has reported one. Claude: the registry's
+   *  `nativeSessionId` marker (written the moment the CLI confirms its id —
+   *  the minted claudeSessionId placeholder is never surfaced). Antigravity:
+   *  the agy conversation id (known from the init event). OpenCode: the
+   *  server-side session id (native from creation). Pi list items expose
+   *  none — a pi entry's own id IS its session id, and detail surfaces the
+   *  loaded agent session's id when resident. */
+  function nativeSessionIdForEntry(entry: RegistryEntry): string | undefined {
+    if (entry.nativeSessionId) return entry.nativeSessionId;
+    if (entry.sdkType === 'antigravity') return entry.antigravityConversationId;
+    if (entry.sdkType === 'opencode') return entry.opencodeSessionId;
+    return undefined;
+  }
+
   function commandCodeSessionInfo(record: CommandCodeInternalSessionRecord): SessionInfo {
     return {
       sessionId: record.sessionId,
@@ -1575,6 +1590,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       firstMessage: record.firstMessage,
       createdAt: record.createdAt,
       lastActivity: record.updatedAt,
+      // Contract 1.64.0: runtime-native id when the cmdc runtime reported one.
+      ...(record.nativeSessionId ? { nativeSessionId: record.nativeSessionId } : {}),
     };
   }
 
@@ -2471,6 +2488,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           lastActivity: entry.lastActivity,
           archived: archivedFor(entry.path || entry.id),
           source: entry.origin ?? 'unknown',
+          // Contract 1.64.0 (census Q1): the id the runtime's own
+          // process/transcript runs under, once reported — an exact join
+          // token for supervisors. Absent before the first confirmed turn
+          // (a minted placeholder is never surfaced as native).
+          ...(nativeSessionIdForEntry(entry) ? { nativeSessionId: nativeSessionIdForEntry(entry) } : {}),
           // Contract 1.54.0 (C5): additive lineage surfacing so callers can
           // count unlinked children (C1's coverage check) without N detail reads.
           ...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
@@ -2641,7 +2663,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         (detail as SessionDetail & { claudeProviderId?: string }).claudeProviderId = entry.claudeProviderId;
       }
       if (stats) {
-        detail.nativeSessionId = stats.sessionId;
+        // Contract 1.64.0 (correction): nativeSessionId reports the NATIVE
+        // Claude session id (the transcript filename id) once the runtime has
+        // confirmed it — previously this held the Pi Web UI registry session
+        // id, which duplicated `sessionId` and was never the id the Claude
+        // process runs under (census bug 2).
+        if (entry.nativeSessionId) detail.nativeSessionId = entry.nativeSessionId;
         detail.sessionFile = stats.sessionFile;
         detail.model = stats.model ?? detail.model;
         detail.tokens = { input: stats.tokens.input, output: stats.tokens.output, total: stats.tokens.total };
@@ -2672,7 +2699,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (opencodePinUntil) detail.pinnedUntil = opencodePinUntil;
       detail.status = opencodeService.isRunning(sessionId) ? 'running' : detail.status;
       if (stats) {
-        detail.nativeSessionId = entry.opencodeSessionId ?? stats.sessionId;
+        detail.nativeSessionId = entry.nativeSessionId ?? entry.opencodeSessionId ?? stats.sessionId;
         detail.model = stats.model ?? detail.model;
         detail.tokens = { input: stats.tokens.input, output: stats.tokens.output, total: stats.tokens.total };
         detail.cost = stats.cost;
@@ -2699,6 +2726,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const antigravityPinUntil = apiPinDeadline(sessionId);
       if (antigravityPinUntil) detail.pinnedUntil = antigravityPinUntil;
       detail.status = antigravityService.isRunning(sessionId) ? 'running' : detail.status;
+      // Contract 1.64.0: the agy conversation id is the native id — known from
+      // the init event (or the first finalised turn), matching the list item.
+      if (entry.antigravityConversationId) detail.nativeSessionId = entry.antigravityConversationId;
       if (stats) {
         detail.model = stats.model ?? detail.model;
         detail.stats = {

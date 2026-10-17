@@ -11,10 +11,19 @@ export interface RegistryEntry {
   id: string;              // Internal UUID
   sdkType: SdkType;        // 'pi' | 'claude' | 'opencode' | 'antigravity'
   path: string;            // For Pi: session path; For Claude: our JSONL file path
-  claudeSessionId?: string; // For Claude: the --session-id
-  opencodeSessionId?: string; // For OpenCode: the OpenCode server session ID
-  antigravityConversationId?: string; // For Antigravity: the agy --conversation UUID
+  claudeSessionId?: string; // For Claude: the resume-target id — Pi Web UI-minted at createSession (passed as --session-id by the direct backend), rewritten to the CLI-confirmed id as soon as the runtime reports one. Before the first confirmed turn it is NOT the id the Claude process/transcript runs under.
+  opencodeSessionId?: string; // For OpenCode: the OpenCode server session ID (native from creation)
+  antigravityConversationId?: string; // For Antigravity: the agy --conversation UUID (the conversation id agy reports at init)
   commandCodeNativeSessionId?: string; // For Command Code: native resume/session id
+  /** Contract 1.64.0: the id the runtime's OWN process/transcript runs under,
+   *  once the runtime has reported it (Claude: the CLI session id from the
+   *  stream; Antigravity: the conversation id from the init event; written
+   *  alongside the runtime-specific field above). Absent before the first
+   *  confirmed turn — a Pi Web UI-minted placeholder is never a native id.
+   *  Exposed additively as `nativeSessionId` on the Internal API session
+   *  list/detail so supervisors can join registry sessions to process and
+   *  transcript rows by an exact token (census bugs 2/18). */
+  nativeSessionId?: string;
   cwd: string;
   model?: string;
   thinkingLevel?: string;
@@ -368,6 +377,7 @@ export class SessionRegistryManager {
         // contract 1.40.0 adopt-native so an adopted agy child keeps its
         // conversation id and parent linkage from the first write.
         antigravityConversationId: entry.antigravityConversationId,
+        nativeSessionId: entry.nativeSessionId,
         parentSessionId: entry.parentSessionId,
         parentSource: entry.parentSource,
         cwd: entry.cwd,

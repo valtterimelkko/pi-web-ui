@@ -172,7 +172,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     </button>
   );
 
-  const ActionButtons = ({ position }: { position: 'top' | 'bottom' }) => {
+  const ActionButtons = () => {
     const buttons = (
       <>
         {ReadAloudButton && (
@@ -187,16 +187,16 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       </>
     );
 
-    if (position === 'top') {
-      return (
-        <div className="absolute top-1 right-1 flex items-center gap-1">
-          {buttons}
-        </div>
-      );
-    }
-
+    // Step 1i item 2 (census): exactly ONE copy affordance per message at
+    // every width. The bubble used to draw two action rows — this top-right
+    // overlay and a bottom row — each with its own copy button. Below
+    // Tailwind's sm breakpoint (640px) neither row is hover-hidden, so phones
+    // showed both at once (the command centre had to hide one with local
+    // CSS). The bottom row is gone; the top-right overlay (the Claude apps'
+    // placement, always visible on touch widths, hover-revealed from sm up)
+    // is the single action row.
     return (
-      <div className="mt-2 ml-auto flex items-center gap-1">
+      <div className="absolute top-1 right-1 flex items-center gap-1">
         {buttons}
       </div>
     );
@@ -314,9 +314,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
             }
           `}
         >
-          {/* Action buttons - top */}
+          {/* Action buttons - top-right overlay, the single action row */}
           {isAssistant && !isStreamingThis && !shouldCollapse && (
-            <ActionButtons position="top" />
+            <ActionButtons />
           )}
 
           {isStreamingThis ? (
@@ -417,10 +417,8 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                 ▴ Show less
               </button>
             )}
-            {/* Action buttons - bottom */}
-            {isAssistant && !isStreamingThis && !shouldCollapse && (
-              <ActionButtons position="bottom" />
-            )}
+            {/* Action buttons: none at the bottom — the top-right overlay is
+                the one action row (one copy affordance at every width) */}
             </>
           )}
         </div>

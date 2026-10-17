@@ -390,10 +390,32 @@ export class ClaudeSdkService {
               steerStream.scheduleEnd(this.getSteerEndGraceMs());
             }
 
-            // Capture the confirmed session ID from any message that carries one
+            // Capture the confirmed session ID from any message that carries one.
+            // Contract 1.64.0 (census bug 2): persist it the MOMENT the SDK
+            // reports it — mid-turn — not only after the loop ends. The
+            // registry's claudeSessionId starts as a Pi Web UI-minted resume
+            // hint, and the SDK backend passes no --session-id on a first
+            // turn, so the CLI mints its own id (also the transcript
+            // filename). Until this write lands, the registry id is NOT the
+            // id the process/transcript runs under; supervisors reading the
+            // registry mid-first-turn saw an unjoinable placeholder.
             if (!capturedClaudeSessionId) {
               const sid = (sdkMessage as { type: string; session_id?: string }).session_id;
-              if (sid && sid !== claudeSessionId) capturedClaudeSessionId = sid;
+              if (sid && sid !== claudeSessionId) {
+                capturedClaudeSessionId = sid;
+                if (state) state.claudeSessionId = sid;
+                void this.registry.upsert({
+                  id: sessionId, sdkType: 'claude', cwd, claudeSessionId: sid, nativeSessionId: sid,
+                }).catch((err) => logger.warn('[ClaudeSdkService] Failed to persist runtime session id:', err));
+              } else if (sid && !entry.nativeSessionId) {
+                // Legacy session (created before 1.64.0): claudeSessionId was
+                // already rewritten to the runtime id at its first turn end,
+                // but the nativeSessionId marker was never written. Backfill.
+                capturedClaudeSessionId = sid;
+                void this.registry.upsert({
+                  id: sessionId, sdkType: 'claude', cwd, nativeSessionId: sid,
+                }).catch((err) => logger.warn('[ClaudeSdkService] Failed to persist native session id:', err));
+              }
             }
 
             for (const event of events) {
@@ -422,10 +444,12 @@ export class ClaudeSdkService {
         }
 
         // Persist the confirmed claudeSessionId as soon as we have one.
+        // (1.64.0: the mid-turn write above is the primary path; this remains
+        // as the end-of-turn safety net, e.g. when the mid-turn write failed.)
         if (capturedClaudeSessionId && capturedClaudeSessionId !== claudeSessionId) {
           logger.info(`[ClaudeSdkService] Updating claudeSessionId: ${claudeSessionId} → ${capturedClaudeSessionId}`);
           await this.registry.upsert({
-            id: sessionId, sdkType: 'claude', cwd, claudeSessionId: capturedClaudeSessionId,
+            id: sessionId, sdkType: 'claude', cwd, claudeSessionId: capturedClaudeSessionId, nativeSessionId: capturedClaudeSessionId,
           });
           if (state) state.claudeSessionId = capturedClaudeSessionId;
         }

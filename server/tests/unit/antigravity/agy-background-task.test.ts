@@ -239,6 +239,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AntigravityService } from '../../../src/antigravity/antigravity-service.js';
+import { getSessionRegistry } from '../../../src/session-registry.js';
 
 const svcCtrl = vi.hoisted(() => {
   const sessionDir = `/tmp/agy-bg-service-${process.pid}-${Math.random().toString(36).slice(2)}`;
@@ -446,6 +447,78 @@ describe('AntigravityService background task tracking', () => {
       expect(children[0].status).toBe('completed');
       expect(children[0].exitCode).toBe(1);
       expect(service.getBackgroundChildren(sessionId)[0].status).toBe('completed');
+    } finally {
+      rmSync(isolatedWatchDir, { recursive: true, force: true });
+      await service.shutdown();
+    }
+  });
+
+  it('persists the conversation id to the registry as soon as agy reports it at init — before the turn finalises (census bug: Antigravity registry entry had no conversation id during the first turn)', async () => {
+    const registry = getSessionRegistry(svcCtrl.registryPath);
+    const child = svcFakeSpawnChild();
+    const service = makeService(child);
+    try {
+      const { sessionId } = await service.createSession('/tmp/bg-svc-test', 'gemini-3.6-flash-medium');
+      // Only the init line: the turn stays in flight (no result yet), which is
+      // exactly the census window where the registry carried no conversation id.
+      svcCtrl.scripted = `${SVC_INIT}\n`;
+      const completion = new Promise<void>((resolve, reject) => {
+        void service.sendPrompt(sessionId, 'run the long command', () => {}, (err) => {
+          if (err) reject(err); else resolve();
+        }).catch(() => resolve());
+      });
+
+      await vi.waitFor(async () => {
+        const entry = await registry.get(sessionId);
+        expect(entry?.antigravityConversationId).toBe(SVC_CONV);
+        expect(entry?.nativeSessionId).toBe(SVC_CONV);
+      }, { timeout: 3000 });
+      // The turn is still in flight — the id landed at INIT time, not at turn end.
+      expect(service.isRunning(sessionId)).toBe(true);
+
+      // Finish the turn so the service can shut down cleanly.
+      child.stdout.emit('data', Buffer.from(`${delta('done', 'DONE', 11)}\n${svcResultLine()}\n`));
+      await completion;
+    } finally {
+      await service.shutdown();
+    }
+  });
+
+  it('a user Stop keeps polling background-task completion receipts (the normalizer\'s watch dir survives abort)', async () => {
+    // Isolated watch dir: the shared dir may hold a stale receipt from another
+    // test (same task id, 5s mtime slack) — see the respawn-parity note above.
+    const isolatedWatchDir = mkdtempSync(join(tmpdir(), 'agy-bg-watch-abort-'));
+    const scripted = [SVC_INIT, scriptedStartStep('sleep 30 && echo DONE', 10, isolatedWatchDir), delta('Launched.', 'DONE', 11), svcResultLine()].join('\n') + '\n';
+
+    const child = svcFakeSpawnChild();
+    const service = makeService(child);
+    try {
+      const { sessionId } = await service.createSession('/tmp/bg-svc-test', 'gemini-3.6-flash-medium');
+      await runTurn(service, sessionId, scripted);
+      expect(service.getBackgroundChildren(sessionId)[0].status).toBe('running');
+
+      // The user Stops the turn's session: abort() ends the process but must
+      // keep the receipt watch dir resolvable until the task settles or times
+      // out (brief item 3; pollBackgroundCompletions reads the normalizer's
+      // watch dir — deleting it orphaned the running tasks).
+      service.abort(sessionId);
+
+      // agy writes the completion receipt into <brain>/<conv>/messages/ while
+      // the process is already gone.
+      mkdirSync(join(isolatedWatchDir, '.system_generated', 'messages'), { recursive: true });
+      writeFileSync(
+        join(isolatedWatchDir, '.system_generated', 'messages', 'receipt-1.json'),
+        JSON.stringify({
+          id: 'receipt-abort', recipient: SVC_CONV, sender: SVC_TASK,
+          priority: 'MESSAGE_PRIORITY_HIGH', timestamp: new Date().toISOString(),
+          content: `Task id "${SVC_TASK}" finished with result:\n\nThe command exited with code 0.\nOutput:\nDONE`,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(service.getBackgroundChildren(sessionId)[0]?.status).toBe('completed');
+      }, { timeout: 5000 });
+      expect(service.getBackgroundChildren(sessionId)[0].exitCode).toBe(0);
     } finally {
       rmSync(isolatedWatchDir, { recursive: true, force: true });
       await service.shutdown();

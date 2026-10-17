@@ -531,14 +531,22 @@ export class ClaudeService {
       },
       // onEvent: persist interesting events, capture confirmed session_id, and forward to caller
       async (event: NormalizedEvent) => {
-        // On first turn, capture the session_id Claude actually used so --resume targets it correctly
+        // On first turn, capture the session_id Claude actually used so --resume targets it correctly.
+        // Contract 1.64.0: session_init always reports the id the CLI runs
+        // under (the direct backend passes --session-id, so an equal id still
+        // CONFIRMS the minted one is native) — record nativeSessionId on every
+        // first-turn session_init, and rewrite claudeSessionId when the CLI
+        // ignored the --session-id hint.
         if (event.type === 'session_init' && !this.sessionsWithHistory.has(sessionId)) {
           const confirmedSid = (event.data as Record<string, unknown>)?.sessionId as string | undefined;
           if (confirmedSid && confirmedSid !== entry.claudeSessionId) {
             logger.info(`[ClaudeService] Updating claudeSessionId for ${sessionId}: ${entry.claudeSessionId} → ${confirmedSid}`);
-            await this.registry.upsert({ id: sessionId, sdkType: 'claude', cwd: entry.cwd, claudeSessionId: confirmedSid });
+            await this.registry.upsert({ id: sessionId, sdkType: 'claude', cwd: entry.cwd, claudeSessionId: confirmedSid, nativeSessionId: confirmedSid });
             // Mutate entry so onComplete and future sends use the confirmed id
             entry.claudeSessionId = confirmedSid;
+          } else if (confirmedSid && !entry.nativeSessionId) {
+            await this.registry.upsert({ id: sessionId, sdkType: 'claude', cwd: entry.cwd, nativeSessionId: confirmedSid });
+            entry.nativeSessionId = confirmedSid;
           }
         }
         try {
