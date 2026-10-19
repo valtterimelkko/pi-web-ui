@@ -40,7 +40,10 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * 1.63.0 by correction round 1 — the additive `SessionControlResponse`
  * `parentSource` field; re-based again at **1.64.0** (2026-10-16, step 1i.3)
  * — the additive `SessionInfo.nativeSessionId` field (moved onto the list
- * item; `SessionDetail` inherits it) and `features.nativeSessionIds`. The
+ * item; `SessionDetail` inherits it) and `features.nativeSessionIds`; re-based
+ * again at **1.66.0** (2026-10-19, channel programme lane ch-tg, design
+ * `CHANNEL.md` §7) — the additive notification-action request fields,
+ * `actionTaken` on the delivery and `features.notificationActions`. The
  * ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
@@ -48,7 +51,7 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = 'dbdcdc377860dc1ce37b714fb5f95d9d3e9833c20fe817284585fbccf115061e';
+export const BASELINE_SHAPE_SHA256 = '146ea4fcf2e4891374059b5a058a5f8e585c1b3008366ba3373db6523043c52a';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */

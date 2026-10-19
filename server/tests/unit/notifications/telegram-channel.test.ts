@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TelegramChannel, type TelegramTransport } from '../../../src/notifications/channels/telegram-channel.js';
+import { formatCallbackData } from '../../../src/notifications/channels/telegram-callback-data.js';
 import type { Notification } from '../../../src/notifications/types.js';
 
 // Fake creds only — never a real secret. Tests must not hit the network.
@@ -161,6 +162,51 @@ describe('TelegramChannel', () => {
       expect(payload.text.length).toBeLessThanOrEqual(4096);
       // The deep link must survive truncation.
       expect(payload.text).toContain('https://app.example.com?session=s1');
+    });
+  });
+
+  describe('send — actions (inline keyboard, CHANNEL.md §7)', () => {
+    it('omits reply_markup for a notification without actions', async () => {
+      const transport = makeTransport();
+      const ch = new TelegramChannel({ botToken: FAKE_TOKEN, chatId: FAKE_CHAT, transport });
+      await ch.send(agentEndNotification());
+      expect(JSON.parse(transport.calls[0].body).reply_markup).toBeUndefined();
+    });
+
+    it('renders the actions as a one-row inline keyboard of label + callback_data', async () => {
+      const transport = makeTransport();
+      const ch = new TelegramChannel({ botToken: FAKE_TOKEN, chatId: FAKE_CHAT, transport });
+      const id = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+      await ch.send(agentEndNotification({
+        id,
+        actions: [
+          { id: 'approve', label: 'Approve' },
+          { id: 'reject', label: 'Reject' },
+        ],
+      }));
+
+      const payload = JSON.parse(transport.calls[0].body);
+      expect(payload.reply_markup).toEqual({
+        inline_keyboard: [
+          [
+            { text: 'Approve', callback_data: formatCallbackData(id, 'approve') },
+            { text: 'Reject', callback_data: formatCallbackData(id, 'reject') },
+          ],
+        ],
+      });
+    });
+
+    it('keeps every callback_data within Telegram’s 64-byte limit', async () => {
+      const transport = makeTransport();
+      const ch = new TelegramChannel({ botToken: FAKE_TOKEN, chatId: FAKE_CHAT, transport });
+      await ch.send(agentEndNotification({
+        id: '019f23d5-624d-7ca3-b34c-53b6732c2b44',
+        actions: [{ id: 'a'.repeat(32), label: 'Decide' }],
+      }));
+      const payload = JSON.parse(transport.calls[0].body);
+      for (const button of payload.reply_markup.inline_keyboard[0]) {
+        expect(button.callback_data.length).toBeLessThanOrEqual(64);
+      }
     });
   });
 });

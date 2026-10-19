@@ -10,6 +10,7 @@
  */
 
 import type { Notification, NotificationChannel } from '../types.js';
+import { buildInlineKeyboard } from './telegram-callback-data.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const TELEGRAM_TEXT_MAX = 4096;
@@ -73,6 +74,12 @@ export class TelegramChannel implements NotificationChannel {
       chat_id: this.chatId,
       text,
       disable_web_page_preview: true,
+      // Contract CHANNEL.md §7: notifications may carry up to three tappable
+      // actions, rendered as a one-row inline keyboard. callback_data encodes
+      // the notification id + action id within Telegram's 64-byte limit.
+      ...(notification.actions?.length
+        ? { reply_markup: buildInlineKeyboard(notification.actions, notification.id) }
+        : {}),
     });
     const controller = new AbortController();
     const timer = setTimeout(() => {

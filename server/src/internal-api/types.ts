@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.65.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.66.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
@@ -1539,6 +1539,18 @@ export interface CapabilitiesResponse {
       guards: { pinned: string; liveTurn: string };
       idempotent: boolean;
       body: { updatedAt: string };
+    };
+    /** Contract 1.66.0 (CHANNEL.md §7): tappable notification actions with a
+     *  server-registered handler — 1–3 buttons, owner-only taps, first tap
+     *  wins. The names of the registered handlers are advertised so callers
+     *  can send a valid `actionHandler`. */
+    notificationActions: {
+      maxActions: number;
+      actionIdMaxLength: number;
+      actionLabelMaxLength: number;
+      actionRefMaxLength: number;
+      handlerTimeoutMs: number;
+      handlers: string[];
     };
   };
   runtimes: {

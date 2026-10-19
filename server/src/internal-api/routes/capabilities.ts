@@ -27,6 +27,8 @@ import {
   COMPLETION_SCHEMA_NAME,
 } from '../completion/completion-schema.js';
 import { DEADLINE_MIN_SECONDS, DEADLINE_MAX_SECONDS } from '../watch/condition-evaluator.js';
+import { NOTIFICATION_ACTION_HANDLER_TIMEOUT_MS } from '../../notifications/action-handlers.js';
+import { NOTIFICATION_ACTION_LIMITS } from '../../notifications/types.js';
 
 export interface CapabilitiesRoutesDeps {
   claudeService: ClaudeService;
@@ -34,11 +36,14 @@ export interface CapabilitiesRoutesDeps {
   antigravityService: AntigravityService;
   commandCodeService?: CommandCodeService;
   blockedPiProviders?: readonly string[];
+  /** Contract 1.66.0: registered notification action handler names (CHANNEL.md §7). */
+  notificationActionHandlers?: readonly string[];
 }
 
 export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
   const { claudeService, opencodeService, antigravityService, commandCodeService } = deps;
   const blockedPiProviders = [...(deps.blockedPiProviders ?? config.internalApiBlockedPiProviders)];
+  const notificationActionHandlers = [...(deps.notificationActionHandlers ?? [])];
 
   async function handleGetCapabilities(
     _req: IncomingMessage,
@@ -118,6 +123,16 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           maxSeconds: DEADLINE_MAX_SECONDS,
         },
         watchFireIfSettled: { registerField: 'fireIfSettled', eventTypes: ['agent_end', 'goal_end'] },
+        // Contract 1.66.0 (CHANNEL.md §7): notification actions — tappable
+        // approve/reject buttons with a server-registered handler.
+        notificationActions: {
+          maxActions: NOTIFICATION_ACTION_LIMITS.maxActions,
+          actionIdMaxLength: NOTIFICATION_ACTION_LIMITS.actionIdMaxLength,
+          actionLabelMaxLength: NOTIFICATION_ACTION_LIMITS.actionLabelMaxLength,
+          actionRefMaxLength: NOTIFICATION_ACTION_LIMITS.actionRefMaxLength,
+          handlerTimeoutMs: NOTIFICATION_ACTION_HANDLER_TIMEOUT_MS,
+          handlers: notificationActionHandlers,
+        },
         sessionAgentOsCapture: {
           createField: 'agentOsCapture',
           values: ['enabled', 'disabled'],

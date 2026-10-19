@@ -38,7 +38,15 @@ import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
 import { NotificationIngressSpool } from '../notifications/notification-ingress-spool.js';
 import { ChannelRouter } from '../notifications/channels/notification-channel.js';
-import { pickNotificationChannel } from '../notifications/channel-factory.js';
+import { pickNotificationChannel, type CapturedNotificationSend } from '../notifications/channel-factory.js';
+import {
+  ActionHandlerRegistry,
+  loadNotificationActionHandlers,
+} from '../notifications/action-handlers.js';
+import {
+  TelegramActionsListener,
+  type TelegramCallbackQuery,
+} from '../notifications/telegram-actions-listener.js';
 import { readPreferences, deriveLegacyArrays } from '../routes/preferences.js';
 import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
@@ -237,6 +245,10 @@ export class InternalApiServer {
   private runReceiptManager: RunReceiptManager | null = null;
   private drainController: DrainController | null = null;
   private notificationManager: NotificationManager | null = null;
+  /** Contract CHANNEL.md §7: the owner's tap listener; null before start. */
+  private notificationActionsListener: TelegramActionsListener | null = null;
+  /** Validation-mode capture of outgoing sends + rendered buttons (never the network). */
+  private notificationValidationCapture: CapturedNotificationSend[] = [];
   private socketOwner: UnixSocketOwner | null = null;
   private sessionRoutesShutdown: (() => Promise<void>) | null = null;
   /** B2: unsubscribes admission from A2 lag readings on stop. */
@@ -655,15 +667,22 @@ export class InternalApiServer {
     };
     const healthRoutes = createHealthRoutes(healthDeps);
 
+    // Contract CHANNEL.md §7: handlers are registered in SERVER CONFIGURATION
+    // ONLY (built-in Agent OS verbs, overridable via NOTIFICATION_ACTION_HANDLERS
+    // JSON) — a caller names a handler, never a command. Built once here, shared
+    // by the routes (acceptance validation), the tap listener and /capabilities.
+    const notificationActionHandlerDefs = loadNotificationActionHandlers();
+    const notificationActionHandlers = new ActionHandlerRegistry(notificationActionHandlerDefs);
+
     const capabilitiesDeps: CapabilitiesRoutesDeps = {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
       commandCodeService: this.commandCodeService,
       blockedPiProviders: config.internalApiBlockedPiProviders,
+      notificationActionHandlers: Object.keys(notificationActionHandlerDefs),
     };
     const capabilitiesRoutes = createCapabilitiesRoutes(capabilitiesDeps);
-
     const diagnosticsRoutes = createDiagnosticsRoutes({
       sessionRegistry: this.sessionRegistry,
       isVisibleSession: async (sessionId) => {
@@ -695,15 +714,33 @@ export class InternalApiServer {
     // not drained. Credentials come from env only (never committed).
     const notificationsDir = config.notificationsDir || DEFAULT_NOTIFICATIONS_DIR;
     const notificationStore = new NotificationStore(notificationsDir);
-    const notificationRouter = new ChannelRouter();
+    this.notificationValidationCapture = [];    const notificationRouter = new ChannelRouter();
     notificationRouter.register(
       pickNotificationChannel({
         validationMode: config.validationMode,
         telegramBotToken: config.telegramBotToken,
         telegramChatId: config.telegramChatId,
         timeoutMs: config.notificationsChannelTimeoutMs,
+        validationCapture: this.notificationValidationCapture,
       }),
     );
+    const notificationActionsListener = new TelegramActionsListener({
+      botToken: config.telegramBotToken ?? 'validation-mode-placeholder',
+      ownerChatId: config.telegramChatId ?? 'validation-mode-placeholder',
+      store: notificationStore,
+      handlers: notificationActionHandlers,
+      offsetPath: path.join(notificationsDir, 'telegram-offset.json'),
+      validationMode: config.validationMode,
+      ...(config.validationMode
+        ? // Validation mode never touches the network: an offline success
+          // transport keeps the full tap path (answer + edit) exercisable.
+          { transport: { async post() { return { status: 200, ok: true, bodyText: '{"ok":true}' }; } } }
+        : {}),
+    });
+    this.notificationActionsListener = notificationActionsListener;
+    if (!config.validationMode && config.notificationsEnabled && config.telegramBotToken && config.telegramChatId) {
+      notificationActionsListener.start();
+    }
     const notificationManager = new NotificationManager({
       enabled: config.notificationsEnabled,
       store: notificationStore,
@@ -742,6 +779,7 @@ export class InternalApiServer {
     const notificationRoutes = createNotificationsRoutes({
       manager: notificationManager,
       sessionRegistry: this.sessionRegistry,
+      actionHandlers: notificationActionHandlers,
     });
 
     // Capture recent structured logs into the diagnostics ring buffer so the
@@ -841,6 +879,8 @@ export class InternalApiServer {
       this.drainController?.shutdown();
       this.drainController = null;
       const notificationManager = this.notificationManager;
+      await this.notificationActionsListener?.stop().catch(() => { /* best-effort during startup rollback */ });
+      this.notificationActionsListener = null;
       notificationManager?.shutdown();
       await notificationManager?.waitForIdle();
       this.notificationManager = null;
@@ -871,6 +911,28 @@ export class InternalApiServer {
   /** The notification manager (built in start()), or null. Exposed so the cookie-auth browser route can reach it. */
   getNotificationManager(): NotificationManager | null {
     return this.notificationManager;
+  }
+
+  /**
+   * Contract CHANNEL.md §7: the outgoing-send capture (notification + rendered
+   * inline keyboard) of a VALIDATION-mode server, for validation harnesses and
+   * tests. Empty on a production server (its channel is the real transport).
+   */
+  getNotificationValidationCapture(): readonly CapturedNotificationSend[] {
+    return this.notificationValidationCapture;
+  }
+
+  /**
+   * Contract CHANNEL.md §7: the TEST-ONLY tap injection. Simulates the owner
+   * tapping one of a notification's buttons through the FULL tap path (handler,
+   * record, answer, edit) without Telegram. Never reachable on a production
+   * server: this refuses unless the server runs in validation mode.
+   */
+  async simulateNotificationActionTap(query: TelegramCallbackQuery): Promise<void> {
+    if (!config.validationMode || !this.notificationActionsListener) {
+      throw new Error('notification action tap simulation is only available on a validation-mode server');
+    }
+    await this.notificationActionsListener.handleCallbackQuery(query);
   }
 
   /**
@@ -919,6 +981,8 @@ export class InternalApiServer {
       this.drainController?.shutdown();
       this.drainController = null;
       const notificationManager = this.notificationManager;
+      await this.notificationActionsListener?.stop().catch((error) => failures.push(error));
+      this.notificationActionsListener = null;
       notificationManager?.shutdown();
       await notificationManager?.waitForIdle().catch((error) => failures.push(error));
       this.notificationManager = null;

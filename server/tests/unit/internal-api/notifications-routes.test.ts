@@ -8,6 +8,10 @@ import { createNotificationsRoutes } from '../../../src/internal-api/routes/noti
 import { NotificationStore } from '../../../src/notifications/notification-store.js';
 import { ChannelRouter } from '../../../src/notifications/channels/notification-channel.js';
 import { NotificationManager } from '../../../src/notifications/notification-manager.js';
+import {
+  ActionHandlerRegistry,
+  loadNotificationActionHandlers,
+} from '../../../src/notifications/action-handlers.js';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { Notification, NotificationChannel } from '../../../src/notifications/types.js';
@@ -111,6 +115,7 @@ describe('notifications routes', () => {
   let antigravity: ReturnType<typeof fakeService>;
   let commandcode: ReturnType<typeof fakeService>;
   let channel: ReturnType<typeof captureChannel>;
+  let store: NotificationStore;
   let manager: NotificationManager;
   let registry: { get: ReturnType<typeof vi.fn> };
   let routes: ReturnType<typeof createNotificationsRoutes>;
@@ -125,7 +130,7 @@ describe('notifications routes', () => {
     channel = captureChannel();
     const router = new ChannelRouter();
     router.register(channel);
-    const store = new NotificationStore(dir);
+    store = new NotificationStore(dir);
     manager = new NotificationManager({
       enabled: true,
       store,
@@ -140,7 +145,11 @@ describe('notifications routes', () => {
     });
     await manager.init();
     registry = { get: vi.fn() };
-    routes = createNotificationsRoutes({ manager, sessionRegistry: registry as never, isShadowCommandCodeSession: async (id) => id !== 'browser-cmd-1' && id !== 'browser-cmd-3' });
+    routes = createNotificationsRoutes({
+      manager,
+      sessionRegistry: registry as never,
+      actionHandlers: new ActionHandlerRegistry(loadNotificationActionHandlers({})),
+    });
   });
 
   afterEach(async () => {
@@ -274,7 +283,7 @@ describe('notifications routes', () => {
 
     it('warns when opt-in targets a session whose runtime is unsupported', async () => {
       const records: LogRecord[] = [];
-      routes = createNotificationsRoutes({ manager, sessionRegistry: registry as never, isShadowCommandCodeSession: async () => true });
+      routes = createNotificationsRoutes({ manager, sessionRegistry: registry as never, actionHandlers: new ActionHandlerRegistry(loadNotificationActionHandlers({})) });
       setLogTap((r) => records.push(r));
       try {
         registry.get.mockResolvedValue(entry('opencli', 'weird1'));
@@ -467,6 +476,92 @@ describe('notifications routes', () => {
       expect(res.statusCode).toBe(400);
       expect((json(res) as { code: string }).code).toBe('INVALID_REQUEST');
       expect(channel.received).toHaveLength(0);
+    });
+  });
+
+  describe('POST /notifications — actions (CHANNEL.md §7)', () => {
+    const actions = [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject' }];
+    const fullBody = { title: 'Agent request', body: 'wants to message', actions, actionHandler: 'agent-os-channel', actionRef: 'req-1' };
+
+    it('accepts actions + actionHandler + actionRef together and stores them on the record', async () => {
+      const res = createMockRes();
+      await routes.handleExplicitNotify(createJsonReq('POST', '/api/v1/notifications', fullBody), res);
+      expect(res.statusCode).toBe(202);
+      await manager.drain();
+
+      expect(channel.received[0].actions).toEqual(actions);
+      expect(channel.received[0].actionHandler).toBe('agent-os-channel');
+      expect(channel.received[0].actionRef).toBe('req-1');
+    });
+
+    it('rejects every partial combination (all three or none)', async () => {
+      for (const partial of [
+        { actions },
+        { actionHandler: 'agent-os-channel' },
+        { actionRef: 'req-1' },
+        { actions, actionHandler: 'agent-os-channel' },
+        { actions, actionRef: 'req-1' },
+        { actionHandler: 'agent-os-channel', actionRef: 'req-1' },
+      ]) {
+        const res = createMockRes();
+        await routes.handleExplicitNotify(
+          createJsonReq('POST', '/api/v1/notifications', { title: 'T', body: 'b', ...partial }),
+          res,
+        );
+        expect(res.statusCode, `expected 400 for ${JSON.stringify(Object.keys(partial))}`).toBe(400);
+        expect((json(res) as { code: string }).code).toBe('INVALID_REQUEST');
+        expect((json(res) as { error: string }).error).toMatch(/together/i);
+      }
+      expect(channel.received).toHaveLength(0);
+    });
+
+    it('rejects malformed ids, labels and refs with a clear code', async () => {
+      for (const broken of [
+        { ...fullBody, actions: [{ id: 'bad id!', label: 'Ok' }] },
+        { ...fullBody, actions: [{ id: 'a'.repeat(33), label: 'Ok' }] },
+        { ...fullBody, actions: [{ id: 'ok-id', label: 'l'.repeat(33) }] },
+        { ...fullBody, actions: [{ id: 'ok-id', label: '' }] },
+        { ...fullBody, actionRef: 'bad ref with spaces' },
+        { ...fullBody, actionRef: 'r'.repeat(65) },
+        { ...fullBody, actions: [{ id: 'same', label: 'A' }, { id: 'same', label: 'B' }] },
+        { ...fullBody, actions: [
+          { id: 'a', label: '1' }, { id: 'b', label: '2' }, { id: 'c', label: '3' }, { id: 'd', label: '4' },
+        ] },
+      ]) {
+        const res = createMockRes();
+        await routes.handleExplicitNotify(createJsonReq('POST', '/api/v1/notifications', broken), res);
+        expect(res.statusCode).toBe(400);
+        expect((json(res) as { code: string }).code).toBe('INVALID_REQUEST');
+      }
+      expect(channel.received).toHaveLength(0);
+    });
+
+    it('rejects an unregistered actionHandler and names the registered handlers', async () => {
+      const res = createMockRes();
+      await routes.handleExplicitNotify(
+        createJsonReq('POST', '/api/v1/notifications', { ...fullBody, actionHandler: 'rm -rf /' }),
+        res,
+      );
+      expect(res.statusCode).toBe(400);
+      const body = json(res) as { error: string };
+      expect(body.error).toMatch(/registered/i);
+      expect(body.error).toContain('agent-os-channel');
+      expect(channel.received).toHaveLength(0);
+    });
+
+    it('shows the recorded action via GET /:id after the owner’s tap', async () => {
+      const accepted = createMockRes();
+      await routes.handleExplicitNotify(createJsonReq('POST', '/api/v1/notifications', fullBody), accepted);
+      const id = (json(accepted) as { notification: { id: string } }).notification.id;
+      await manager.drain();
+
+      await store.recordAction(id, { action: 'approve', at: '2026-06-29T00:00:10.000Z', result: 'Decision recorded' });
+
+      const status = createMockRes();
+      await routes.handleGetDeliveryStatus(createJsonReq('GET', `/api/v1/notifications/${id}`), status, id);
+      expect(status.statusCode).toBe(200);
+      const body = json(status) as { delivery: { actionTaken?: { action: string; result: string } } };
+      expect(body.delivery.actionTaken).toEqual({ action: 'approve', at: '2026-06-29T00:00:10.000Z', result: 'Decision recorded' });
     });
   });
 

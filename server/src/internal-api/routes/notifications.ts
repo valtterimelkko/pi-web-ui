@@ -21,6 +21,8 @@ import {
   type NotificationManager,
 } from '../../notifications/notification-manager.js';
 import type { NotificationRuntime, OptInRecord } from '../../notifications/types.js';
+import { NOTIFICATION_ACTION_LIMITS } from '../../notifications/types.js';
+import type { ActionHandlerRegistry } from '../../notifications/action-handlers.js';
 
 const logger = createLogger('NotificationsRoutes');
 
@@ -36,6 +38,14 @@ const optInBodySchema = z
   })
   .strict();
 
+const actionIdPattern = new RegExp(`^[A-Za-z0-9_-]{1,${NOTIFICATION_ACTION_LIMITS.actionIdMaxLength}}$`);
+const actionRefPattern = new RegExp(`^[A-Za-z0-9_-]{1,${NOTIFICATION_ACTION_LIMITS.actionRefMaxLength}}$`);
+
+const notificationActionSchema = z.object({
+  id: z.string().regex(actionIdPattern, `action id must be 1-${NOTIFICATION_ACTION_LIMITS.actionIdMaxLength} characters of A-Z a-z 0-9 _ -`),
+  label: z.string().trim().min(1, 'action label must not be empty').max(NOTIFICATION_ACTION_LIMITS.actionLabelMaxLength, `action label must be at most ${NOTIFICATION_ACTION_LIMITS.actionLabelMaxLength} characters`),
+});
+
 const explicitBodySchema = z
   .object({
     title: z.string().trim().min(1).max(500),
@@ -43,8 +53,24 @@ const explicitBodySchema = z
     deepLink: z.string().trim().max(2000).refine(isSafeDeepLink, {
       message: 'deepLink must be an app-relative path or an HTTP(S) URL',
     }).optional(),
+    // Contract CHANNEL.md §7: tappable actions. All three fields or none.
+    actions: z.array(notificationActionSchema).min(1).max(NOTIFICATION_ACTION_LIMITS.maxActions, `at most ${NOTIFICATION_ACTION_LIMITS.maxActions} actions`).optional(),
+    actionHandler: z.string().min(1).max(128).optional(),
+    actionRef: z.string().regex(actionRefPattern, `actionRef must be 1-${NOTIFICATION_ACTION_LIMITS.actionRefMaxLength} characters of A-Z a-z 0-9 _ -`).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const present = ['actions', 'actionHandler', 'actionRef'].filter((key) => value[key as 'actions'] !== undefined).length;
+    if (present !== 0 && present !== 3) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'actions, actionHandler and actionRef must be provided together (all three or none)',
+      });
+    }
+    if (value.actions && new Set(value.actions.map((a) => a.id)).size !== value.actions.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'action ids must be unique' });
+    }
+  });
 
 export interface NotificationsRoutesDeps {
   manager: NotificationManager;
@@ -52,10 +78,12 @@ export interface NotificationsRoutesDeps {
   sessionRegistry: {
     get(sessionId: string): Promise<{ sdkType: string; path?: string } | undefined | null>;
   };
+  /** The server's registered action handlers (CHANNEL.md §7): a caller names one, never a command. */
+  actionHandlers: ActionHandlerRegistry;
 }
 
 export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
-  const { manager, sessionRegistry } = deps;
+  const { manager, sessionRegistry, actionHandlers } = deps;
 
   async function resolveVisibleEntry(sessionId: string): Promise<{ sdkType: string; path?: string } | undefined> {
     return (await sessionRegistry.get(sessionId)) ?? undefined;
@@ -141,6 +169,17 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
     const parsed = explicitBodySchema.safeParse((await readBoundedJsonBody(req, { maxBytes: 32 * 1024 })) ?? {});
     if (!parsed.success) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, parsed.error.issues[0]?.message ?? 'invalid request body'));
+      return;
+    }
+    if (parsed.data.actionHandler !== undefined && !actionHandlers.has(parsed.data.actionHandler)) {
+      sendJson(
+        res,
+        400,
+        enrichedErrorBody(
+          ErrorCode.INVALID_REQUEST,
+          `actionHandler must be a registered handler (registered: ${actionHandlers.names().join(', ')})`,
+        ),
+      );
       return;
     }
     const rawKey = req.headers['idempotency-key'];

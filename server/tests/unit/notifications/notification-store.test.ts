@@ -264,6 +264,60 @@ describe('NotificationStore — durable persistence', () => {
     });
   });
 
+  describe('action records (CHANNEL.md §7 first tap wins)', () => {
+    const taken = { action: 'approve', at: '2026-06-29T00:00:10.000Z', result: 'Decision recorded' };
+
+    it('records the action on a delivered notification and shows it via getById', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.enqueue(queued('n1'));
+      await store.markSent('n1', '2026-06-29T00:00:09.000Z');
+
+      expect(await store.recordAction('n1', taken)).toBe(true);
+      expect(store.getById('n1')?.actionTaken).toEqual(taken);
+    });
+
+    it('records the action on a still-pending notification too', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.enqueue(queued('p1', 's1'));
+
+      expect(await store.recordAction('p1', taken)).toBe(true);
+      expect(store.getById('p1')?.actionTaken).toEqual(taken);
+      expect(store.listPending()).toHaveLength(1);
+    });
+
+    it('survives a restart: a fresh store on the same directory still shows the action', async () => {
+      const storeA = new NotificationStore(dir);
+      await storeA.init();
+      await storeA.enqueue(queued('n1'));
+      await storeA.markSent('n1', '2026-06-29T00:00:09.000Z');
+      await storeA.recordAction('n1', taken);
+      await storeA.drain();
+
+      const storeB = new NotificationStore(dir);
+      await storeB.init();
+      expect(storeB.getById('n1')?.actionTaken).toEqual(taken);
+    });
+
+    it('is first-tap-wins: a second recordAction is refused and changes nothing', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.enqueue(queued('n1'));
+      await store.markSent('n1', '2026-06-29T00:00:09.000Z');
+      await store.recordAction('n1', taken);
+
+      expect(await store.recordAction('n1', { action: 'reject', at: '2026-06-29T00:00:11.000Z', result: 'no' })).toBe(false);
+      expect(store.getById('n1')?.actionTaken).toEqual(taken);
+    });
+
+    it('resolves false for an unknown notification (never throws)', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      expect(await store.recordAction('missing', taken)).toBe(false);
+    });
+  });
+
   describe('atomicity & resilience', () => {
     it('enforces a private state directory and refuses symlinked ledger files', async () => {
       await fs.chmod(dir, 0o777);

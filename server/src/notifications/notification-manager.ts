@@ -30,6 +30,7 @@ import { getOperationalMetrics, type OperationalMetrics } from '../observability
 import type {
   DeliveryRecord,
   Notification,
+  NotificationAction,
   NotificationRuntime,
   OptInRecord,
   QueuedNotification,
@@ -269,12 +270,22 @@ export class NotificationManager {
     title: string;
     body: string;
     deepLink?: string;
+    actions?: NotificationAction[];
+    actionHandler?: string;
+    actionRef?: string;
   }): Promise<Notification> {
     return (await this.acceptExplicit(input)).notification;
   }
 
   async acceptExplicit(
-    input: { title: string; body: string; deepLink?: string },
+    input: {
+      title: string;
+      body: string;
+      deepLink?: string;
+      actions?: NotificationAction[];
+      actionHandler?: string;
+      actionRef?: string;
+    },
     idempotencyKey?: string,
   ): Promise<ExplicitNotificationAcceptance> {
     const ingress = idempotencyKey
@@ -284,6 +295,11 @@ export class NotificationManager {
             title: input.title,
             body: input.body,
             deepLink: input.deepLink ?? null,
+            // Action fields join the fingerprint only when present, so a key
+            // minted before §7 keeps its original fingerprint byte-for-byte.
+            ...(input.actions
+              ? { actions: input.actions, actionHandler: input.actionHandler, actionRef: input.actionRef }
+              : {}),
           })),
         }
       : undefined;
@@ -294,6 +310,9 @@ export class NotificationManager {
       title: input.title,
       body: input.body,
       deepLink: input.deepLink,
+      actions: input.actions,
+      actionHandler: input.actionHandler,
+      actionRef: input.actionRef,
       createdAt: this.now(),
     };
 

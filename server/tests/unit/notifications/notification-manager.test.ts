@@ -666,6 +666,51 @@ describe('NotificationManager', () => {
       expect(h.channel.received[0].title).toBe('Deploy');
       expect(h.channel.received[0].sessionId).toBeUndefined();
     });
+
+    it('carries action fields (actions, actionHandler, actionRef) onto the stored + delivered notification', async () => {
+      const h = makeHarness(dir);
+      await h.mgr.init();
+      const actions = [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject' }];
+      const accepted = await h.mgr.acceptExplicit({
+        title: 'Agent request',
+        body: 'wants to message another agent',
+        actions,
+        actionHandler: 'agent-os-channel',
+        actionRef: 'req-1',
+      }, 'actions-key-1');
+
+      expect(accepted.notification.actions).toEqual(actions);
+      expect(accepted.notification.actionHandler).toBe('agent-os-channel');
+      expect(accepted.notification.actionRef).toBe('req-1');
+      await h.mgr.drain();
+      expect(h.channel.received[0].actions).toEqual(actions);
+      expect(h.store.getById(accepted.notification.id)?.notification.actionRef).toBe('req-1');
+    });
+
+    it('treats a different action payload under the same idempotency key as a conflict', async () => {
+      const h = makeHarness(dir);
+      await h.mgr.init();
+      const input = {
+        title: 'Agent request',
+        body: 'b',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        actionHandler: 'agent-os-channel',
+        actionRef: 'req-1',
+      };
+      await h.mgr.acceptExplicit(input, 'actions-key-2');
+      await expect(h.mgr.acceptExplicit({ ...input, actionRef: 'req-OTHER' }, 'actions-key-2'))
+        .rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+    });
+
+    it('stores no action fields when none were requested (unchanged pre-§7 behaviour)', async () => {
+      const h = makeHarness(dir);
+      await h.mgr.init();
+      const accepted = await h.mgr.emitExplicit({ title: 'Plain', body: 'b' });
+      const stored = h.store.getById(accepted.id)?.notification;
+      expect(stored?.actions).toBeUndefined();
+      expect(stored?.actionHandler).toBeUndefined();
+      expect(stored?.actionRef).toBeUndefined();
+    });
   });
 
   describe('live session-name resolution (renamed sessions)', () => {

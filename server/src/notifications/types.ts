@@ -9,6 +9,18 @@
 /** The normalized runtimes Pi Web UI unifies into one event stream. */
 export type NotificationRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
 
+/**
+ * Acceptance limits for notification actions (contract CHANNEL.md §7; also
+ * advertised on /capabilities as features.notificationActions). Single source
+ * of truth for the route validation and the capability advertisement.
+ */
+export const NOTIFICATION_ACTION_LIMITS = {
+  maxActions: 3,
+  actionIdMaxLength: 32,
+  actionLabelMaxLength: 32,
+  actionRefMaxLength: 64,
+} as const;
+
 /** How a notification was produced. `agent_end` = the agent yielded control. */
 export type NotificationKind = 'agent_end' | 'explicit';
 
@@ -24,6 +36,29 @@ export interface OptInRecord {
   access?: 'internal' | 'browser';
 }
 
+/**
+ * One tappable action on a notification (contract CHANNEL.md §7): rendered as
+ * an inline-keyboard button; the owner's tap runs the notification's registered
+ * handler once with the action id.
+ */
+export interface NotificationAction {
+  /** Stable action id (`[A-Za-z0-9_-]{1,32}`); echoed to the handler as {action}. */
+  id: string;
+  /** Button label, ≤ 32 characters. */
+  label: string;
+}
+
+/**
+ * The recorded outcome of the owner's tap (first tap wins): the action id,
+ * when it was applied, and the handler's result line (its JSON `message`, or
+ * `Could not apply: <first stderr line>`).
+ */
+export interface NotificationActionTaken {
+  action: string;
+  at: string; // ISO timestamp
+  result: string;
+}
+
 /** A single, already-formatted (Telegram-ready) notification. */
 export interface Notification {
   /** Stable server id. Retries reuse it for at-least-once delivery accounting. */
@@ -37,6 +72,12 @@ export interface Notification {
   body: string;
   /** Deep link back into the session in the web UI. */
   deepLink?: string;
+  /** 1–3 tappable actions (explicit notifications only; all-or-none with actionHandler/actionRef). */
+  actions?: NotificationAction[];
+  /** Registered handler name (never a caller-chosen command); see action-handlers.ts. */
+  actionHandler?: string;
+  /** Opaque reference passed to the handler as {ref} (`[A-Za-z0-9_-]{1,64}`). */
+  actionRef?: string;
   createdAt: string; // ISO timestamp
 }
 
@@ -73,6 +114,8 @@ export interface QueuedNotification {
   delivery: DeliveryRecord;
   /** Present only for idempotent explicit-notification submissions. */
   ingress?: NotificationIngressIdentity;
+  /** The owner's action on a notification that carried actions (first tap wins). */
+  actionTaken?: NotificationActionTaken;
 }
 
 /**

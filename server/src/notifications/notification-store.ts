@@ -22,6 +22,7 @@ import type {
   OptInRecord,
   QueuedNotification,
   DeliveryRecord,
+  NotificationActionTaken,
 } from './types.js';
 
 const logger = createLogger('NotificationStore');
@@ -261,6 +262,47 @@ export class NotificationStore {
       };
       await this.persist(OUTBOX_FILE, this.outbox);
     }
+  }
+
+  /**
+   * Record the owner's action on a notification (contract CHANNEL.md §7): the
+   * first tap wins, so a notification that already carries an `actionTaken` is
+   * never overwritten and an unknown id is refused. Works on pending outbox
+   * items and terminal delivery-log entries alike. Returns false when nothing
+   * was written (unknown id, or an action already recorded).
+   */
+  async recordAction(notificationId: string, taken: NotificationActionTaken): Promise<boolean> {
+    const outboxIdx = this.outbox.findIndex((q) => q.notification.id === notificationId);
+    const logIdx = outboxIdx === -1
+      ? this.log.findIndex((q) => q.notification.id === notificationId)
+      : -1;
+    const inOutbox = outboxIdx !== -1;
+    if (!inOutbox && logIdx === -1) return false;
+
+    const existing = inOutbox ? this.outbox[outboxIdx] : this.log[logIdx];
+    if (existing.actionTaken) return false;
+
+    const updated: QueuedNotification = { ...existing, actionTaken: taken };
+    if (inOutbox) {
+      const previous = this.outbox[outboxIdx];
+      this.outbox[outboxIdx] = updated;
+      try {
+        await this.persist(OUTBOX_FILE, this.outbox);
+      } catch (error) {
+        this.outbox[outboxIdx] = previous;
+        throw error;
+      }
+    } else {
+      const previous = this.log[logIdx];
+      this.log[logIdx] = updated;
+      try {
+        await this.persist(LOG_FILE, this.log);
+      } catch (error) {
+        this.log[logIdx] = previous;
+        throw error;
+      }
+    }
+    return true;
   }
 
   // ── Delivery log ──────────────────────────────────────────────────

@@ -17,6 +17,13 @@ import { createNotificationsRoutes } from '../../src/internal-api/routes/notific
 import { NotificationStore } from '../../src/notifications/notification-store.js';
 import { ChannelRouter } from '../../src/notifications/channels/notification-channel.js';
 import { NotificationManager } from '../../src/notifications/notification-manager.js';
+import {
+  ActionHandlerRegistry,
+  loadNotificationActionHandlers,
+  type ExecFileFn,
+} from '../../src/notifications/action-handlers.js';
+import { TelegramActionsListener } from '../../src/notifications/telegram-actions-listener.js';
+import { formatCallbackData } from '../../src/notifications/channels/telegram-callback-data.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { Notification, NotificationChannel } from '../../src/notifications/types.js';
 
@@ -78,6 +85,7 @@ describe('notification lifecycle (integration)', () => {
   let dir: string;
   let pi: ReturnType<typeof fakeService>;
   let channel: NotificationChannel & { received: Notification[] };
+  let store: NotificationStore;
   let manager: NotificationManager;
   let registry: { get: ReturnType<typeof vi.fn> };
   let routes: ReturnType<typeof createNotificationsRoutes>;
@@ -112,11 +120,16 @@ describe('notification lifecycle (integration)', () => {
         received.push(n);
       },
     };
-    const store = new NotificationStore(dir);
-    manager = buildRoutes(store, channel);
+    const freshStore = new NotificationStore(dir);
+    store = freshStore;
+    manager = buildRoutes(freshStore, channel);
     await manager.init();
     registry = { get: vi.fn().mockResolvedValue({ id: 's1', path: '/sessions/s1', sdkType: 'pi', cwd: '/tmp' }) };
-    routes = createNotificationsRoutes({ manager, sessionRegistry: registry as never });
+    routes = createNotificationsRoutes({
+      manager,
+      sessionRegistry: registry as never,
+      actionHandlers: new ActionHandlerRegistry(loadNotificationActionHandlers({})),
+    });
   });
 
   afterEach(async () => {
@@ -157,6 +170,82 @@ describe('notification lifecycle (integration)', () => {
     const body = json(state) as { optIn: { label: string }; deliveries: { delivery: { status: string } }[] };
     expect(body.optIn.label).toBe('Job');
     expect(body.deliveries.some((d) => d.delivery.status === 'sent')).toBe(true);
+  });
+
+  it('actions round-trip: explicit POST with buttons → delivered → owner tap runs the handler once → GET shows the result', async () => {
+    const execCalls: Array<{ file: string; args: readonly string[] }> = [];
+    const execFile: ExecFileFn = (file, args, _options, callback) => {
+      execCalls.push({ file, args });
+      callback(null, JSON.stringify({ message: 'Decision recorded' }), '');
+      return undefined;
+    };
+    const handlers = new ActionHandlerRegistry({
+      ...loadNotificationActionHandlers({}),
+      // Override the built-in with a fake command: the routes harness registers
+      // the built-in name, but this test must never exec anything real.
+      'agent-os-channel': { command: '/bin/agent-os-fake', args: ['decide', '--request', '{ref}', '--decision', '{action}', '--json'] },
+    });
+
+    // 1. POST an explicit notification with two buttons (all three fields together).
+    const accepted = createMockRes();
+    await routes.handleExplicitNotify(
+      createJsonReq('POST', '/api/v1/notifications', {
+        title: 'Agent request',
+        body: 'pi-01 · job (folder) wants to message pi-02 about "deploy":',
+        actions: [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject' }],
+        actionHandler: 'agent-os-channel',
+        actionRef: 'req-int-1',
+      }),
+      accepted,
+    );
+    expect(accepted.statusCode).toBe(202);
+    const id = (json(accepted) as { notification: { id: string } }).notification.id;
+    await manager.drain();
+    expect(channel.received[0].actions).toHaveLength(2); // delivered with the buttons
+
+    // 2. The owner taps Approve through the listener's injection path (validation mode).
+    const listener = new TelegramActionsListener({
+      botToken: 'FAKE:TOKEN',
+      ownerChatId: '987654321',
+      store,
+      handlers,
+      offsetPath: path.join(dir, 'telegram-offset.json'),
+      transport: { async post() { return { status: 200, ok: true, bodyText: '{"ok":true}' }; } },
+      execFile,
+      now: () => '2026-06-29T00:00:10.000Z',
+    });
+    await listener.handleCallbackQuery({
+      id: 'cbq-int-1',
+      from: { id: 987654321 },
+      message: { message_id: 7, chat: { id: 987654321 }, text: 'Agent request\n\npi-01 · job …' },
+      data: formatCallbackData(id, 'approve'),
+    });
+
+    // 3. The handler ran once with the substituted argv (no shell)…
+    expect(execCalls).toEqual([
+      { file: '/bin/agent-os-fake', args: ['decide', '--request', 'req-int-1', '--decision', 'approve', '--json'] },
+    ]);
+
+    // 4. …and GET /:id shows the action taken with the handler result.
+    const status = createMockRes();
+    await routes.handleGetDeliveryStatus(createJsonReq('GET', `/api/v1/notifications/${id}`), status, id);
+    expect(status.statusCode).toBe(200);
+    const statusBody = json(status) as { delivery: { actionTaken?: { action: string; at: string; result: string } } };
+    expect(statusBody.delivery.actionTaken).toEqual({
+      action: 'approve',
+      at: '2026-06-29T00:00:10.000Z',
+      result: 'Decision recorded',
+    });
+
+    // 5. A second tap is inert: the handler does not run again.
+    await listener.handleCallbackQuery({
+      id: 'cbq-int-2',
+      from: { id: 987654321 },
+      message: { message_id: 7, chat: { id: 987654321 }, text: 'x' },
+      data: formatCallbackData(id, 'reject'),
+    });
+    expect(execCalls).toHaveLength(1);
+    expect(statusBody.delivery.actionTaken.action).toBe('approve');
   });
 
   it('Pi desync lifecycle: basename opt-in normalizes to the bare uuid; cross-id read-back + opt-out stops notifications', async () => {
@@ -233,7 +322,11 @@ describe('notification lifecycle (integration)', () => {
     const storeA = new NotificationStore(dir);
     const mgrA = buildRoutes(storeA, failChannel);
     await mgrA.init();
-    const routesA = createNotificationsRoutes({ manager: mgrA, sessionRegistry: registry as never });
+    const routesA = createNotificationsRoutes({
+      manager: mgrA,
+      sessionRegistry: registry as never,
+      actionHandlers: new ActionHandlerRegistry(loadNotificationActionHandlers({})),
+    });
     const opt = createMockRes();
     await routesA.handleOptIn(createJsonReq('POST', '/api/v1/sessions/s1/notifications/opt-in'), opt, 's1');
     pi.emit('/sessions/s1', { type: 'agent_end', sessionId: 's1', timestamp: 1, data: {} });
