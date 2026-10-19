@@ -89,13 +89,16 @@ notifications later without a rewrite.
 
 | File | Responsibility |
 |---|---|
-| `types.ts` | Stable contract: `Notification`, `OptInRecord`, `DeliveryRecord`, `QueuedNotification`, `NotificationChannel`. |
-| `notification-store.ts` | Durable JSON persistence (atomic writes, restart reconciliation, recent-list and wider status-ledger caps). Mirrors `watch-store.ts`. |
+| `types.ts` | Stable contract: `Notification`, `NotificationAction`, `NotificationActionTaken`, `OptInRecord`, `DeliveryRecord`, `QueuedNotification`, `NotificationChannel`, action limits. |
+| `notification-store.ts` | Durable JSON persistence (atomic writes, restart reconciliation, recent-list and wider status-ledger caps). Mirrors `watch-store.ts`. Records the owner's action on a notification (first tap wins). |
 | `notification-ingress-spool.ts` | Bounded, schema-validating local spool drainer for terminal clients that outlive a server restart window. |
 | `notification-formatter.ts` | Builds `{ title, body, deepLink }` from metadata + the agent's tail; truncation; clamps the session name in the title. |
 | `notification-manager.ts` | Orchestration: own broker, per-session observer attach/detach, debounce, durable outbox + retry, restart rehydration, explicit emit, **live session-name resolution** at flush time. |
+| `action-handlers.ts` | The registered-handler table (built-in Agent OS verbs; `NOTIFICATION_ACTION_HANDLERS` JSON override) and the argv runner: whole-element `{ref}`/`{action}` substitution, `execFile` (no shell), 20 s timeout, JSON `{message}` stdout, `Could not apply: <first stderr line>` on any failure. |
+| `telegram-actions-listener.ts` | The one `getUpdates` long-poll listener: persisted offset, owner-only taps (chat AND sender), first tap wins, answers every callback, edits the message (original text + result, no buttons), error backoff. |
 | `channels/notification-channel.ts` | `NotificationChannel` interface + `ChannelRouter`. |
-| `channels/telegram-channel.ts` | Telegram Bot API `sendMessage`; injectable transport; 4096 cap; token redaction. |
+| `channels/telegram-channel.ts` | Telegram Bot API `sendMessage`; injectable transport; 4096 cap; token redaction; renders the actions inline keyboard. |
+| `channels/telegram-callback-data.ts` | `callback_data` codec (≤ 64 bytes) + inline-keyboard rendering. |
 | `../internal-api/routes/notifications.ts` | The REST handlers. |
 
 ### Origin-independence (the key design point)
@@ -131,8 +134,8 @@ All vars are documented in [`.env.example`](../.env.example) (names only).
 | `NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS` | `5` | Outbox retry cap before a delivery is marked `failed`. |
 | `NOTIFICATIONS_INGRESS_POLL_MS` | `5000` | Poll interval for locally spooled explicit notifications. Must be positive. |
 | `NOTIFICATIONS_CHANNEL_TIMEOUT_MS` | `10000` | Per-attempt Telegram request timeout, including response-body read. Must be positive. |
-| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Dedicated bot token. Unset → Telegram reports not configured. |
-| `TELEGRAM_CHAT_ID` | _(unset)_ | Operator's chat id. |
+| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Dedicated bot token. Unset → Telegram reports not configured. || `TELEGRAM_CHAT_ID` | _(unset)_ | Operator's chat id. Also the tap authority: a button tap is accepted only when both the chat id and the sender id equal it (§7 listener). |
+| `NOTIFICATION_ACTION_HANDLERS` | _(unset)_ | Optional JSON map replacing the whole registered-handler table (`{ "name": { "command": "/abs/path", "args": ["…", "{ref}", "{action}"] } }`). Built-ins: `agent-os-channel`, `agent-os-inbox` (the Agent OS `channel decide` / `inbox release` verbs). Invalid JSON fails startup loudly. |
 
 **Secret handling:** the bot token lives **only** in the un-committed `.env`
 (never in a tracked file, log, test fixture, or commit). It is redacted from any
@@ -152,8 +155,8 @@ Token-authed like every Internal API route (bearer token). Base path `/api/v1`.
 | `POST /sessions/:id/notifications/opt-in` | `{ label?: string }` | opt-in record (runtime + path resolved from the registry) |
 | `DELETE /sessions/:id/notifications/opt-in` | — | `{ optIn: null }` |
 | `GET /sessions/:id/notifications` | — | `{ optIn, deliveries }` (pending + recent, for this session) |
-| `POST /notifications` | `{ title, body, deepLink? }`; optional `Idempotency-Key` header | `202` + `{ notification, duplicate, statusUrl }` after durable acceptance; `Location` points to status |
-| `GET /notifications/:notificationId` | — | `{ status: "ok", delivery: { notification, delivery } }` (`pending`, `sent`, or `failed`) |
+| `POST /notifications` | `{ title, body, deepLink? }`; optional `actions` + `actionHandler` + `actionRef` (tappable actions, all three or none); optional `Idempotency-Key` header | `202` + `{ notification, duplicate, statusUrl }` after durable acceptance; `Location` points to status |
+| `GET /notifications/:notificationId` | — | `{ status: "ok", delivery: { notification, delivery, actionTaken? } }` (`pending`, `sent`, or `failed`; `actionTaken` after the owner's tap) |
 | `GET /notifications[?limit=N]` | — | `{ deliveries }` (recent delivery log, ops/debug) |
 
 Validation uses Zod and returns stable `{ error, code }` shapes (e.g.
@@ -177,6 +180,25 @@ also exposes a cookie-auth REST facade for the session toggle used in the sideba
 
 The browser route is intentionally thin: it forwards to the same
 `NotificationManager` and exists only so the UI can reuse normal browser auth.
+
+### Tappable actions (Telegram buttons; contract `CHANNEL.md` §7)
+
+An explicit notification may be decidable from a phone: send `actions` (1–3 of
+`{id, label}`), `actionHandler` (a server-registered name — never a command)
+and `actionRef` — **all three or none**, anything else is a 400
+`INVALID_REQUEST`. The limits (`[A-Za-z0-9_-]{1,32}` ids, ≤ 32-char labels,
+`[A-Za-z0-9_-]{1,64}` refs, 20 s handler timeout) are advertised in
+`GET /capabilities` → `features.notificationActions`, together with the
+registered handler names.
+
+```
+POST /notifications (actions) ─▶ durable outbox ─▶ TelegramChannel
+                                                    └─ reply_markup: one-row inline keyboard
+                                                       (callback_data = notification id + action id, ≤ 64 bytes)
+TelegramActionsListener (one long-poll getUpdates, offset on disk)
+                                                    └─ owner-only tap → handler once (execFile, no shell)
+                                                       → record (action, at, result) → answer → editMessageText
+```
 
 ### Deep links (`?session=<id>`)
 

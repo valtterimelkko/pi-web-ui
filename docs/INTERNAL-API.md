@@ -2187,6 +2187,40 @@ returns the original notification; reusing the key for another payload returns
 `409 IDEMPOTENCY_KEY_CONFLICT`. The key is optional, but callers that retry after
 an ambiguous response should always provide and reuse one.
 
+**Tappable actions (contract 1.66.0, `CHANNEL.md` §7).** An explicit notification
+may carry up to three buttons by sending three fields TOGETHER (all three or
+none; anything else is a 400 `INVALID_REQUEST`):
+
+```json
+{
+  "title": "Agent request",
+  "body": "pi-01… wants to message claude-… about "deploy "",
+  "actions": [ { "id": "approve", "label": "Approve" }, { "id": "reject", "label": "Reject" } ],
+  "actionHandler": "agent-os-channel",
+  "actionRef": "req-2026-10-19-01"
+}
+```
+
+- `actions`: 1–3 of `{id, label}` — `id` matches `[A-Za-z0-9_-]{1,32}` (unique),
+  `label` is 1–32 characters.
+- `actionHandler`: a name the SERVER has registered — never a command. The
+  registered names are advertised in `GET /capabilities` →
+  `features.notificationActions.handlers` (built-ins: `agent-os-channel`,
+  `agent-os-inbox`); deployments can override the whole map with the
+  `NOTIFICATION_ACTION_HANDLERS` env JSON.
+- `actionRef`: `[A-Za-z0-9_-]{1,64}`; the handler receives it as `{ref}` and the
+  tapped action id as `{action}` (whole argv elements, `execFile`, no shell,
+  20 s timeout).
+
+On Telegram the actions render as a one-row inline keyboard. The owner taps;
+the first tap wins: the handler runs once, every callback is answered, the
+message is edited to the original text, a blank line, the result line — and no
+buttons. Taps are accepted only when BOTH the Telegram chat id and the sender
+id equal the configured owner chat id; anyone else is answered "Not allowed"
+and nothing runs. `GET /api/v1/notifications/:notificationId` then reports
+additive `actionTaken: {action, at, result}`; later taps are answered "Already
+decided" and change nothing.
+
 `GET /api/v1/notifications/:notificationId` returns its current delivery record.
 `GET /api/v1/notifications` returns recent deliveries with `status`, `attempts`,
 and `lastError`; `GET /api/v1/sessions/:id/notifications` scopes that to one
