@@ -26,6 +26,7 @@ describe('Command Code Internal API boundary', () => {
     // 1.63.0: step 1i.2 B (2026-10-16) — native parent linkage (parentKind "native", parentSource "declared").
     // 1.64.0: step 1i.3 (2026-10-16) — nativeSessionId on the sessions list/detail, features.nativeSessionIds.
     // 1.65.0: step 1k (2026-10-17) — sessionClass + Internal API archive/unarchive, features.sessionClass/sessionArchive.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.65.0');
+    // 1.66.0: Channel C4 (2026-10-19) — tappable notification actions, features.notificationActions.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.66.0');
   });
 });
