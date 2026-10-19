@@ -714,7 +714,8 @@ export class InternalApiServer {
     // not drained. Credentials come from env only (never committed).
     const notificationsDir = config.notificationsDir || DEFAULT_NOTIFICATIONS_DIR;
     const notificationStore = new NotificationStore(notificationsDir);
-    this.notificationValidationCapture = [];    const notificationRouter = new ChannelRouter();
+    this.notificationValidationCapture = [];
+    const notificationRouter = new ChannelRouter();
     notificationRouter.register(
       pickNotificationChannel({
         validationMode: config.validationMode,

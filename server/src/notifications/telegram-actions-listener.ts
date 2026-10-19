@@ -260,7 +260,7 @@ export class TelegramActionsListener {
         }
       } catch (error) {
         if (!this.running) break; // aborted by stop()
-        logger.warn(`getUpdates failed; backing off ${backoffMs}ms: ${(error as Error).message}`);
+        logger.warn(`getUpdates failed; backing off ${backoffMs}ms: ${safeErrorText(error, this.opts.botToken)}`);
         await sleep(backoffMs);
         backoffMs = Math.min(this.opts.backoffMaxMs, backoffMs * 2);
         continue;
@@ -344,4 +344,11 @@ export class TelegramActionsListener {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Error text safe to log: the bot token (which sits in every request URL) is redacted, length capped. */
+export function safeErrorText(error: unknown, botToken: string): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const redacted = botToken ? raw.split(botToken).join('<redacted>') : raw;
+  return redacted.slice(0, 300);
 }
