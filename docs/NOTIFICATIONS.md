@@ -183,6 +183,8 @@ The browser route is intentionally thin: it forwards to the same
 
 ### Tappable actions (Telegram buttons; contract `CHANNEL.md` §7)
 
+These buttons carry the whole Agent OS approval surface (held owner messages, channel requests, held launches). Where every piece lives across the repos, and which repo owns what: agent-os `docs/reference/CHANNEL-SURFACES.md`.
+
 An explicit notification may be decidable from a phone: send `actions` (1–3 of
 `{id, label}`), `actionHandler` (a server-registered name — never a command)
 and `actionRef` — **all three or none**, anything else is a 400
