@@ -43,6 +43,7 @@ first-class backend boundary.
 | Observability: logging, diagnostics, error codes | `docs/OBSERVABILITY.md` |
 | Known sharp edges | `docs/SHARP-EDGES.md` |
 | Internal API, orchestration or live validation | `docs/INTERNAL-API.md`, `docs/INTERNAL-API-ORCHESTRATION.md`, `docs/LIVE-VALIDATION.md` |
+| A surface the command centre (Wheelhouse) consumes (Internal API routes, the session registry, notifications, `packages/session-core` and `packages/session-ui`) | `/root/command-centre` — its DEPENDENCIES.md |
 | Voice Mode | `docs/VOICE-MODE-INDEX.md` |
 | Cross-repo strategic context and current status | `AGENT-REFERENCE.md` (`## Cross-repo strategic context`) |
 | The high-signal file map and runtime validation shortcuts | `AGENT-REFERENCE.md` (`## High-signal file map`, `## Runtime-aware validation shortcuts`) |

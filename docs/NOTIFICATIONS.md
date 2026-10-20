@@ -185,6 +185,8 @@ The browser route is intentionally thin: it forwards to the same
 
 These buttons carry the whole Agent OS approval surface (held owner messages, channel requests, held launches). Where every piece lives across the repos, and which repo owns what: agent-os `docs/reference/CHANNEL-SURFACES.md`.
 
+The command centre (Wheelhouse) at `/root/command-centre` depends on this chain: a held `send_message` from the Claude app or Grok Bot is posted here, and the owner's tap runs the registered `agent-os-inbox` / `agent-os-channel` handler, which decides the message with an `agent-os` verb. Changing a handler name, the button set or the handler's arguments breaks the centre's MCP sends — read `/root/command-centre/docs/DEPENDENCIES.md` first.
+
 An explicit notification may be decidable from a phone: send `actions` (1–3 of
 `{id, label}`), `actionHandler` (a server-registered name — never a command)
 and `actionRef` — **all three or none**, anything else is a 400

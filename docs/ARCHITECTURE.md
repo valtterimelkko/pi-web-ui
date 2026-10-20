@@ -260,6 +260,10 @@ The unifying layer across all runtimes is:
 - `server/src/session-registry.ts`
 - `~/.pi-web-ui/session-registry.json`
 
+The command centre (Wheelhouse) at `/root/command-centre` reads this registry file and `~/.pi/agent/web-ui-prefs.json`
+directly, without the API, so their shapes are a cross-repo contract: a renamed field or a new registry version breaks it
+before it breaks anything else here. Read `/root/command-centre/docs/DEPENDENCIES.md` before changing either file.
+
 Registry entries let the UI treat sessions consistently while preserving runtime-specific metadata such as:
 - `sdkType`
 - cwd

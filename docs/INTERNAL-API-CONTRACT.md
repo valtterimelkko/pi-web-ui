@@ -580,6 +580,14 @@ constant (`PI_WEB_UI_REPO`, else `/root/pi-web-ui`) and fails on any drift, and
 `agent-os health` warns (never errors) when the mirror is behind. The Agent OS
 mirror doc carries the same procedure under "Keeping this mirror in step".
 
+**Live consumers, not mirrors.** The command centre (Wheelhouse) at `/root/command-centre` runs against this API
+on this host and is not a mirror of it: it reads the session registry and the preferences file directly instead of
+through the API, its MCP tools call `GET /sessions`, `GET /sessions/:id/transcript`, `GET /sessions/:id/messages`,
+`POST /sessions/:id/message`, `POST /sessions/:id/resume` and `POST /sessions/:id/handoff`, its launcher reads
+`GET /models`, and it **vendors** `packages/session-core` and `packages/session-ui` at a pinned commit (its
+`scripts/vendor-check.mjs` gate fails on any difference). A route, a payload field, the registry's shape or either
+package is therefore a cross-repo change: read `/root/command-centre/docs/DEPENDENCIES.md` before you make it.
+
 ## Compatibility rules
 
 For `/api/v1`, preserve these rules:
