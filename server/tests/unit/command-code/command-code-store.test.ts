@@ -34,6 +34,18 @@ describe('Command Code private state', () => {
     expect(recovered[0]?.lastResult?.stopReason).toBe('server_restart_unknown');
   });
 
+  it('stores colon-qualified model ids such as :free and reloads them', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-colon-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const store = new CommandCodeSessionStore(root);
+    await store.init();
+    const created = await store.create({ sessionId: 'cc-free', cwd, modelSelector: 'ornith/ornith-1.5-122b:free', eventJournalRef: 'cc-free.jsonl' });
+    expect(created.modelSelector).toBe('ornith/ornith-1.5-122b:free');
+    const reloaded = new CommandCodeSessionStore(root);
+    await reloaded.init();
+    expect((await reloaded.get('cc-free'))?.modelSelector).toBe('ornith/ornith-1.5-122b:free');
+  });
+
   it('persists dropped-line diagnostics and rejects malformed samples', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-dropped-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));

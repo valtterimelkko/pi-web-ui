@@ -184,6 +184,12 @@ alone. `PiService` flushes provider registrations queued by the shared
 models are visible to `/api/models` and `/api/v1/models` before a session is
 created.
 
+Colon-qualified ids (`:free`) are exact ids in both consumers: the native session
+store and the Pi provider's extractor accept them. Ornith 1.5 122B
+(`ornith/ornith-1.5-122b` and `ornith/ornith-1.5-122b:free`, 21 October 2026) is the
+first `:free` model registered in the Pi provider; its selector is
+`commandcode/ornith/ornith-1.5-122b:free`.
+
 ## Goal function (contract 1.27.0)
 
 Command Code has no headless goal of its own (upstream `/goal` is TUI-only).
