@@ -189,6 +189,27 @@ describe('createModelsRoutes — handleListModels', () => {
     });
   });
 
+  it('labels the Claude sonnet, opus and haiku aliases with the 5.5 models they launch', async () => {
+    const profile = (model: string) => ({ id: `native-${model}`, label: model, model, backend: 'sdk-subscription' });
+    const routes = createModelsRoutes({
+      piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getProfiles: vi.fn().mockReturnValue([profile('sonnet'), profile('opus'), profile('haiku')]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(createMockReq(undefined, 'GET', '/api/v1/models?runtime=claude'), res);
+
+    const names = Object.fromEntries(JSON.parse(res.body).models.claude
+      .filter((m: { id: string }) => ['sonnet', 'opus', 'haiku'].includes(m.id))
+      .map((m: { id: string; displayName: string }) => [m.id, m.displayName]));
+    expect(names).toEqual({ sonnet: 'Claude Sonnet 5.5', opus: 'Claude Opus 5.5', haiku: 'Claude Haiku 5.5' });
+  });
+
   it('publishes zai/glm-5.3-flash with only its catalogued low/high/max levels', async () => {
     // Metadata shape mirrors the SDK dynamic model store entry exactly:
     // `null` in the map means "not supported" and must not surface as a

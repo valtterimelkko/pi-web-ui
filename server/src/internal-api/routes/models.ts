@@ -83,7 +83,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             {
               id: 'sonnet',
               selector: 'sonnet',
-              displayName: 'Claude Sonnet 4',
+              displayName: 'Claude Sonnet 5.5',
               provider: 'anthropic',
               reasoning: true,
               thinkingLevels: claudeThinkingLevels('sonnet', 'anthropic'),
@@ -91,7 +91,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             {
               id: 'opus',
               selector: 'opus',
-              displayName: 'Claude Opus 4',
+              displayName: 'Claude Opus 5.5',
               provider: 'anthropic',
               reasoning: true,
               thinkingLevels: claudeThinkingLevels('opus', 'anthropic'),
@@ -99,7 +99,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             {
               id: 'haiku',
               selector: 'haiku',
-              displayName: 'Claude Haiku 3.5',
+              displayName: 'Claude Haiku 5.5',
               provider: 'anthropic',
               reasoning: true,
               thinkingLevels: claudeThinkingLevels('haiku', 'anthropic'),
