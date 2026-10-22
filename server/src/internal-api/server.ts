@@ -731,6 +731,7 @@ export class InternalApiServer {
       store: notificationStore,
       handlers: notificationActionHandlers,
       offsetPath: path.join(notificationsDir, 'telegram-offset.json'),
+      inboxDir: process.env.TELEGRAM_INBOX_DIR || path.join(notificationsDir, 'telegram-inbox'),
       validationMode: config.validationMode,
       ...(config.validationMode
         ? // Validation mode never touches the network: an offline success

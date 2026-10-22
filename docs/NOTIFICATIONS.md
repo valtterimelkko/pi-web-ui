@@ -136,6 +136,7 @@ All vars are documented in [`.env.example`](../.env.example) (names only).
 | `NOTIFICATIONS_CHANNEL_TIMEOUT_MS` | `10000` | Per-attempt Telegram request timeout, including response-body read. Must be positive. |
 | `TELEGRAM_BOT_TOKEN` | _(unset)_ | Dedicated bot token. Unset → Telegram reports not configured. || `TELEGRAM_CHAT_ID` | _(unset)_ | Operator's chat id. Also the tap authority: a button tap is accepted only when both the chat id and the sender id equal it (§7 listener). |
 | `NOTIFICATION_ACTION_HANDLERS` | _(unset)_ | Optional JSON map replacing the whole registered-handler table (`{ "name": { "command": "/abs/path", "args": ["…", "{ref}", "{action}"] } }`). Built-ins: `agent-os-channel`, `agent-os-inbox` (the Agent OS `channel decide` / `inbox release` verbs). Invalid JSON fails startup loudly. |
+| `TELEGRAM_INBOX_DIR` | `<NOTIFICATIONS_DIR>/telegram-inbox` | Spool dir for the owner's own messages ([§10](#10-owner-messages-into-the-spool)); created with mode `0700`. |
 
 **Secret handling:** the bot token lives **only** in the un-committed `.env`
 (never in a tracked file, log, test fixture, or commit). It is redacted from any
@@ -433,3 +434,57 @@ existing token-authed explicit-emit endpoint. The bearer token is read from the
 notification title/body and caller idempotency key, so their directory is
 forced to `0700` and each file to `0600`. Nothing secret is embedded in the
 tracked script.
+
+---
+
+## 10. Owner messages into the spool
+
+The §7 actions listener is the bot's only `getUpdates` consumer, and it now
+asks for `message` updates too (`allowed_updates: ["callback_query",
+"message"]`). A message is accepted only when BOTH the chat id and the sender
+id equal `TELEGRAM_CHAT_ID` — the same owner rule as button taps. Anything
+else is ignored silently: no reply, and only a debug line without message
+content.
+
+**What is kept:** voice notes, audio, video notes, documents whose mime type
+starts `audio/`, and plain text. Commands (text starting `/`) and other kinds
+are answered `Not saved: only voice notes, audio and text are kept.` and
+nothing is written. Media over the 20 MB Telegram bot cap is answered `Too
+large to save` and nothing is kept; a failed save answers `Not saved:
+<short reason>` and leaves no partial files. Successful saves are confirmed
+with a short reply (`Saved voice note (1:23).`, `Saved audio.`, `Saved video
+note.`, `Saved audio file.`, `Saved text.`).
+
+**Where:** `TELEGRAM_INBOX_DIR` (default `<NOTIFICATIONS_DIR>/telegram-inbox`),
+directory created with mode `0700`. Media is written atomically (tmp + rename)
+as `<UTC yyyyMMddTHHmmssZ>-<message_id>.<ext>` — extension from the file path
+or mime type: `ogg`, `oga`, `mp3`, `m4a`, `mp4`, `wav`, else `bin` — mode
+`0600`. Every accepted message (media or text) also gets a sidecar
+`<same stem>.json` (mode `0600`), written LAST so a present `.json` means
+"complete":
+
+```json
+{
+  "messageId": 55,
+  "date": "2026-06-29T00:00:10.000Z",
+  "kind": "voice",
+  "durationSec": 83,
+  "mimeType": "audio/ogg",
+  "fileName": "20260629T000010Z-55.oga",
+  "caption": "optional caption",
+  "text": "text messages only",
+  "replyTo": { "messageId": 54, "text": "first 500 chars, when replying" }
+}
+```
+
+`durationSec` appears for voice/audio/video notes, `fileName` for media,
+`caption`/`text`/`replyTo` when present.
+
+**Nothing is forwarded to a runtime.** This is a plain drop folder: no
+transcription, no interpretation, no runtime call. A reader (e.g. the
+PostPilot role on this host) consumes it like this: read `<stem>.json` first,
+then move or delete both the sidecar and the media file (if any); never act
+on a media file whose sidecar is absent.
+
+Offset handling is unchanged: one bad update never stops the loop, and the
+persisted offset means a restart never re-saves an already processed message.

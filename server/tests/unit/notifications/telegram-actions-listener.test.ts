@@ -160,7 +160,7 @@ describe('TelegramActionsListener (CHANNEL.md §7)', () => {
     expect(getUpdates.length).toBeGreaterThanOrEqual(1);
     for (const call of getUpdates) {
       expect(call.body.timeout).toBe(30);
-      expect(call.body.allowed_updates).toEqual(['callback_query']);
+      expect(call.body.allowed_updates).toEqual(['callback_query', 'message']);
       expect(call.body.offset).toBeUndefined(); // no stored offset yet
     }
   });
@@ -357,6 +357,58 @@ describe('TelegramActionsListener (CHANNEL.md §7)', () => {
     expect(exec.calls).toHaveLength(0);
     expect(calls.find((c) => c.url.endsWith('/answerCallbackQuery'))).toBeUndefined();
     expect(JSON.parse(await fs.readFile(offsetPath, 'utf8'))).toEqual({ offset: 101 });
+  });
+
+  it('spools a text message from the owner and advances the offset', async () => {
+    const { transport, calls } = makeTransport([[{
+      update_id: 100,
+      message: {
+        message_id: 9,
+        date: Math.floor(Date.parse('2026-06-29T00:00:10.000Z') / 1000),
+        from: { id: Number(OWNER_CHAT) },
+        chat: { id: Number(OWNER_CHAT) },
+        text: 'note to self',
+      },
+    }], []]);
+    const listener = makeListener(transport);
+    listener.start();
+    const spooled = path.join(dir, 'telegram-inbox', '20260629T000010Z-9.json');
+    await waitFor(() => fs.stat(spooled).then(() => true, () => false));
+    await listener.stop();
+
+    expect(calls.find((c) => c.url.endsWith('/sendMessage'))?.body).toEqual({
+      chat_id: Number(OWNER_CHAT),
+      text: 'Saved text.',
+      reply_to_message_id: 9,
+    });
+    expect(JSON.parse(await fs.readFile(offsetPath, 'utf8'))).toEqual({ offset: 101 });
+  });
+
+  it('a restarted listener does not re-save an already processed message', async () => {
+    const inboxDir = path.join(dir, 'telegram-inbox');
+    const first = makeListener(makeTransport([[{
+      update_id: 100,
+      message: {
+        message_id: 9,
+        date: Math.floor(Date.parse('2026-06-29T00:00:10.000Z') / 1000),
+        from: { id: Number(OWNER_CHAT) },
+        chat: { id: Number(OWNER_CHAT) },
+        text: 'note to self',
+      },
+    }], []]).transport);
+    first.start();
+    await waitFor(() => fs.stat(path.join(inboxDir, '20260629T000010Z-9.json')).then(() => true, () => false));
+    await first.stop();
+
+    const { transport, calls } = makeTransport([], 0);
+    const restarted = makeListener(transport);
+    restarted.start();
+    await waitFor(() => calls.some((c) => c.url.endsWith('/getUpdates')));
+    await wait(20);
+    await restarted.stop();
+
+    expect((await fs.readdir(inboxDir)).filter((f) => f.endsWith('.json'))).toEqual(['20260629T000010Z-9.json']);
+    expect(calls.find((c) => c.url.endsWith('/sendMessage'))).toBeUndefined();
   });
 
   it('exposes the tap path directly for the validation-mode test-only injection', async () => {

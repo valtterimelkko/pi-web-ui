@@ -2,11 +2,13 @@
  * Telegram Actions Listener (contract CHANNEL.md §7).
  *
  * ONE listener long-polls the bot's `getUpdates` (timeout ~30s,
- * `allowed_updates: ["callback_query"]`), persisting its offset under the
- * server's data directory so a restart never replays processed taps. It
- * accepts a callback query only when BOTH the chat id and the sender id equal
- * the configured owner chat id — anyone else is answered "Not allowed" and
- * ignored. The first tap on a notification runs its registered handler ONCE
+ * `allowed_updates: ["callback_query", "message"]`), persisting its offset
+ * under the server's data directory so a restart never replays processed
+ * updates. It accepts a callback query only when BOTH the chat id and the
+ * sender id equal the configured owner chat id — anyone else is answered
+ * "Not allowed" and ignored. Owner `message` updates (voice notes, audio,
+ * video notes, audio documents, text) are spooled for another service by
+ * {@link TelegramInbox}; nothing is interpreted or forwarded to a runtime. The first tap on a notification runs its registered handler ONCE
  * (execFile, no shell) and records the outcome on the notification; later taps
  * are answered "Already decided". Every callback query is answered, then the
  * message is edited to the original text, a blank line, the result line — and
@@ -28,6 +30,7 @@ import {
 } from './action-handlers.js';
 import { parseCallbackData } from './channels/telegram-callback-data.js';
 import { defaultTelegramTransport, type TelegramTransport } from './channels/telegram-channel.js';
+import { TelegramInbox, type TelegramMessage } from './telegram-inbox.js';
 
 const logger = createLogger('TelegramActionsListener');
 
@@ -52,6 +55,7 @@ export interface TelegramCallbackQuery {
 interface TelegramUpdate {
   update_id: number;
   callback_query?: TelegramCallbackQuery;
+  message?: TelegramMessage;
 }
 
 export interface TelegramActionsListenerOptions {
@@ -62,6 +66,8 @@ export interface TelegramActionsListenerOptions {
   handlers: ActionHandlerRegistry;
   /** Offset file under the server's data directory (survives restarts). */
   offsetPath: string;
+  /** Spool dir for owner messages (default: `<offset dir>/telegram-inbox`). */
+  inboxDir?: string;
   /** Injectable transport; defaults to the real Telegram HTTPS transport. */
   transport?: TelegramTransport;
   /** Long-poll server wait, seconds. */
@@ -88,6 +94,7 @@ export class TelegramActionsListener {
     backoffInitialMs: number;
     backoffMaxMs: number;
   };
+  private readonly inbox: TelegramInbox;
   private offset: number | undefined;
   private running = false;
   private loopPromise: Promise<void> | null = null;
@@ -104,6 +111,13 @@ export class TelegramActionsListener {
       backoffInitialMs: options.backoffInitialMs ?? DEFAULT_BACKOFF_INITIAL_MS,
       backoffMaxMs: options.backoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS,
     };
+    this.inbox = new TelegramInbox({
+      botToken: options.botToken,
+      ownerChatId: options.ownerChatId,
+      inboxDir: options.inboxDir ?? path.join(path.dirname(options.offsetPath), 'telegram-inbox'),
+      transport: this.opts.transport,
+      now: this.opts.now,
+    });
   }
 
   /** Idempotent. Refused in validation mode (no network there, ever). */
@@ -251,9 +265,10 @@ export class TelegramActionsListener {
           received += 1;
           try {
             if (update.callback_query) await this.handleCallbackQuery(update.callback_query);
+            else if (update.message) await this.inbox.handleMessage(update.message);
           } catch (error) {
             // One bad update never stops the loop; the offset still advances.
-            logger.errorObject('callback query handling failed', error, { updateId: update.update_id });
+            logger.errorObject('telegram update handling failed', error, { updateId: update.update_id });
           }
           this.offset = update.update_id + 1;
           await this.persistOffset();
@@ -283,7 +298,7 @@ export class TelegramActionsListener {
         JSON.stringify({
           ...(this.offset !== undefined ? { offset: this.offset } : {}),
           timeout: this.opts.pollTimeoutSec,
-          allowed_updates: ['callback_query'],
+          allowed_updates: ['callback_query', 'message'],
         }),
         controller.signal,
       );
