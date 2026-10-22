@@ -151,6 +151,8 @@ registry was actually updated (needs the key).
 
 ## Scheduling (systemd timer)
 
+**Retired 2026-10-22 (owner):** the timer is disabled on the host. The OpenRouter route is metered and never a default, so nothing depends on a weekly refresh; `npm run pi:refresh-models` can still be run by hand. The unit files stay in the repo as reference.
+
 Templates live in `deploy/systemd/`. Install host-specific copies (kept out of
 the repo) and enable the timer:
 

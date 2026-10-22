@@ -166,6 +166,8 @@ Adding a brand-new gateway is two actions, only the first of which is secret:
 
 ### Scheduling (systemd timer)
 
+**Retired 2026-10-22 (owner):** the timer is disabled on the host. The runtime keeper role compares the live gateway list with Pi's catalogue each run (its CATALOGUE.md), and `npm run opencode:refresh-models` can still be run by hand or by a delegation. The unit files stay in the repo as reference.
+
 Templates live in `deploy/systemd/`. Install host-specific copies (kept out of the
 repo) and enable the timer:
 
