@@ -12,6 +12,7 @@ import {
   TelegramActionsListener,
   type TelegramCallbackQuery,
 } from '../../../src/notifications/telegram-actions-listener.js';
+import type { DownloadFileFn } from '../../../src/notifications/telegram-inbox.js';
 import { formatCallbackData } from '../../../src/notifications/channels/telegram-callback-data.js';
 import type { TelegramTransport } from '../../../src/notifications/channels/telegram-channel.js';
 import type { Notification } from '../../../src/notifications/types.js';
@@ -89,6 +90,60 @@ function ownerCallbackQuery(over: Partial<TelegramCallbackQuery> = {}): Telegram
 
 function update(id: number, query: TelegramCallbackQuery) {
   return { update_id: id, callback_query: query };
+}
+
+function ownerVoiceMessage(messageId = 9) {
+  return {
+    message_id: messageId,
+    date: Math.floor(Date.parse('2026-06-29T00:00:10.000Z') / 1000),
+    from: { id: Number(OWNER_CHAT) },
+    chat: { id: Number(OWNER_CHAT) },
+    voice: { file_id: 'fv9', duration: 83, mime_type: 'audio/ogg' },
+  };
+}
+
+function voiceMessageUpdate(updateId: number, messageId = 9) {
+  return { update_id: updateId, message: ownerVoiceMessage(messageId) };
+}
+
+/** Transport for loop-level tests: scripted getUpdates batches, a working getFile, optional sendMessage failures. */
+function makeLoopTransport(batches: unknown[][], over: { failSend?: boolean } = {}): {
+  transport: TelegramTransport;
+  calls: TransportCall[];
+} {
+  const calls: TransportCall[] = [];
+  let getUpdatesCalls = 0;
+  const transport: TelegramTransport = {
+    async post(url, body) {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      const endpoint = url.split('/').pop() ?? '';
+      calls.push({ url, body: parsed });
+      if (endpoint === 'getUpdates') {
+        const result = batches[Math.min(getUpdatesCalls, batches.length - 1)] ?? [];
+        getUpdatesCalls += 1;
+        return { status: 200, ok: true, bodyText: JSON.stringify({ ok: true, result }) };
+      }
+      if (endpoint === 'sendMessage' && over.failSend) throw new Error('sendMessage network down');
+      if (endpoint === 'getFile') {
+        return {
+          status: 200,
+          ok: true,
+          bodyText: JSON.stringify({ ok: true, result: { file_id: 'fv9', file_size: 10, mime_type: 'audio/ogg', file_path: 'voice/file_9.oga' } }),
+        };
+      }
+      return { status: 200, ok: true, bodyText: '{"ok":true}' };
+    },
+  };
+  return { transport, calls };
+}
+
+function chunkDownload(chunks: Buffer[]): DownloadFileFn {
+  return async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: (async function* () { for (const c of chunks) yield c; })(),
+  });
 }
 
 describe('TelegramActionsListener (CHANNEL.md §7)', () => {
@@ -420,5 +475,81 @@ describe('TelegramActionsListener (CHANNEL.md §7)', () => {
     expect(exec.calls).toHaveLength(1);
     expect(store.getById(UUID)?.actionTaken).toEqual({ action: 'approve', at: '2026-06-29T00:00:10.000Z', result: 'Decision recorded' });
     expect(calls.find((c) => c.url.endsWith('/editMessageText'))).toBeDefined();
+  });
+
+  // ── B1: message spooling never blocks the tap path ─────────────────────────
+
+  it('answers a tap within ~1s while a voice-note download hangs in the same batch, and stop() aborts the download', async () => {
+    await seedNotification();
+    let aborted = false;
+    const hangDownload: DownloadFileFn = (_url, signal) => {
+      const fail = () => {
+        aborted = true;
+        rejectRef(new Error(signal.reason instanceof Error ? signal.reason.message : 'aborted'));
+      };
+      let rejectRef: (e: Error) => void;
+      const promise = new Promise<never>((_, reject) => { rejectRef = reject; });
+      if (signal.aborted) fail();
+      else signal.addEventListener('abort', fail);
+      return promise;
+    };
+    const { transport, calls } = makeLoopTransport([[
+      voiceMessageUpdate(100),
+      update(101, ownerCallbackQuery()),
+    ]]);
+    const listener = makeListener(transport, { downloadFile: hangDownload });
+
+    const t0 = Date.now();
+    listener.start();
+    await waitFor(() => calls.some((c) => c.url.endsWith('/answerCallbackQuery')), 1_000);
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    // The message is past the queue (getFile called), so stop() has a
+    // download to abort — waiting messages are dropped by design.
+    await waitFor(() => calls.some((c) => c.url.endsWith('/getFile')));
+
+    await listener.stop();
+    expect(aborted).toBe(true);
+    expect(store.getById(UUID)?.actionTaken).toBeDefined();
+  });
+
+  it('answers a tap after a message whose handling throws (offset still advances past both)', async () => {
+    await seedNotification();
+    // Unsupported kind (photo) from the owner; sendMessage always fails, so the
+    // "Not saved" reply itself throws out of the message handling.
+    const { transport, calls } = makeLoopTransport([[
+      {
+        update_id: 100,
+        message: { ...ownerVoiceMessage(), voice: undefined, photo: [{ file_id: 'p1', file_size: 10 }] },
+      },
+      update(101, ownerCallbackQuery()),
+    ]], { failSend: true });
+    const listener = makeListener(transport);
+    listener.start();
+
+    await waitFor(() => calls.some((c) => c.url.endsWith('/answerCallbackQuery')), 1_000);
+    await listener.stop();
+
+    expect(store.getById(UUID)?.actionTaken).toBeDefined();
+    expect(JSON.parse(await fs.readFile(offsetPath, 'utf8'))).toEqual({ offset: 102 });
+  });
+
+  it('handles callback queries before messages within one batch', async () => {
+    await seedNotification();
+    const { transport, calls } = makeLoopTransport([[
+      voiceMessageUpdate(100),
+      update(101, ownerCallbackQuery()),
+    ]]);
+    const listener = makeListener(transport, { downloadFile: chunkDownload([Buffer.from('ogg')]) });
+    listener.start();
+    await waitFor(() => calls.some((c) => c.url.endsWith('/answerCallbackQuery')));
+    // The tap is answered first; wait for the message's getFile so the
+    // ordering assertion below cannot race stop().
+    await waitFor(() => calls.some((c) => c.url.endsWith('/getFile')));
+    await listener.stop();
+
+    const answerIdx = calls.findIndex((c) => c.url.endsWith('/answerCallbackQuery'));
+    const getFileIdx = calls.findIndex((c) => c.url.endsWith('/getFile'));
+    expect(answerIdx).toBeGreaterThanOrEqual(0);
+    expect(getFileIdx).toBeGreaterThan(answerIdx);
   });
 });

@@ -488,3 +488,13 @@ on a media file whose sidecar is absent.
 
 Offset handling is unchanged: one bad update never stops the loop, and the
 persisted offset means a restart never re-saves an already processed message.
+The spool is not transactional with that offset, though: a crash between the
+final file rename and the offset write can re-spool the same message after a
+restart — **readers must dedupe on `messageId`**.
+
+Spooling runs on a bounded background queue, never inside the poll loop, so
+button taps are always answered immediately. At most 20 messages wait in the
+queue; further ones are answered `Busy, please resend` and dropped (the owner
+resends). On shutdown the in-flight download is aborted and waiting messages
+are dropped — like any crash this is at-most-once: the owner sees no `Saved`
+reply and knows to resend.

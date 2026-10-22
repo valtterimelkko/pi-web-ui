@@ -12,7 +12,11 @@
  * (execFile, no shell) and records the outcome on the notification; later taps
  * are answered "Already decided". Every callback query is answered, then the
  * message is edited to the original text, a blank line, the result line — and
- * no buttons.
+ * no buttons. Owner `message` updates (voice notes, audio, video notes, audio
+ * documents, text) are handed to {@link TelegramInbox}'s bounded background
+ * queue — callback queries in a batch are always handled first — so a
+ * spooling download never delays a tap; nothing is interpreted or forwarded
+ * to a runtime.
  *
  * In validation mode the listener is constructed but `start()` is refused: the
  * capture channel records the outgoing buttons and tests drive the tap path
@@ -30,7 +34,7 @@ import {
 } from './action-handlers.js';
 import { parseCallbackData } from './channels/telegram-callback-data.js';
 import { defaultTelegramTransport, type TelegramTransport } from './channels/telegram-channel.js';
-import { TelegramInbox, type TelegramMessage } from './telegram-inbox.js';
+import { TelegramInbox, type DownloadFileFn, type TelegramMessage } from './telegram-inbox.js';
 
 const logger = createLogger('TelegramActionsListener');
 
@@ -68,6 +72,8 @@ export interface TelegramActionsListenerOptions {
   offsetPath: string;
   /** Spool dir for owner messages (default: `<offset dir>/telegram-inbox`). */
   inboxDir?: string;
+  /** Download seam passed to the inbox (tests inject; default: global fetch). */
+  downloadFile?: DownloadFileFn;
   /** Injectable transport; defaults to the real Telegram HTTPS transport. */
   transport?: TelegramTransport;
   /** Long-poll server wait, seconds. */
@@ -116,6 +122,7 @@ export class TelegramActionsListener {
       ownerChatId: options.ownerChatId,
       inboxDir: options.inboxDir ?? path.join(path.dirname(options.offsetPath), 'telegram-inbox'),
       transport: this.opts.transport,
+      ...(options.downloadFile ? { downloadFile: options.downloadFile } : {}),
       now: this.opts.now,
     });
   }
@@ -139,11 +146,16 @@ export class TelegramActionsListener {
       });
   }
 
-  /** Stop the loop and abort any in-flight long poll. Resolves when stopped. */
+  /** Stop the loop, abort any in-flight long poll and abort the inbox's in-flight download. Resolves when stopped. */
   async stop(): Promise<void> {
-    if (!this.running) return;
+    if (!this.running) {
+      await this.inbox.stop();
+      return;
+    }
     this.running = false;
     this.pollAbort?.abort(new Error('listener stopped'));
+    // Bounded (~2 s): aborts the spool queue's in-flight download.
+    await this.inbox.stop();
     if (this.loopPromise) {
       await new Promise<void>((resolve) => {
         this.resolveStopped = resolve;
@@ -261,16 +273,32 @@ export class TelegramActionsListener {
       try {
         const updates = await this.getUpdates();
         backoffMs = this.opts.backoffInitialMs;
-        for (const update of updates) {
+        // Taps first: a button answer must never wait behind a spooling
+        // download. Message work is handed to the inbox's queue and never
+        // awaited here.
+        const ordered = [
+          ...updates.filter((u) => u.callback_query),
+          ...updates.filter((u) => !u.callback_query),
+        ];
+        let settled = this.offset ?? 0;
+        for (const update of ordered) {
           received += 1;
           try {
             if (update.callback_query) await this.handleCallbackQuery(update.callback_query);
-            else if (update.message) await this.inbox.handleMessage(update.message);
+            else if (update.message) this.inbox.enqueue(update.message);
           } catch (error) {
             // One bad update never stops the loop; the offset still advances.
-            logger.errorObject('telegram update handling failed', error, { updateId: update.update_id });
+            // Logged redacted: the token sits in every request URL.
+            logger.errorObject(
+              'telegram update handling failed',
+              new Error(safeErrorText(error, this.opts.botToken)),
+              { updateId: update.update_id },
+            );
           }
-          this.offset = update.update_id + 1;
+          // Updates are processed out of id order, so the offset must only
+          // ever move forward.
+          settled = Math.max(settled, update.update_id + 1);
+          this.offset = settled;
           await this.persistOffset();
         }
       } catch (error) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -7,7 +7,29 @@ import {
   type DownloadFileFn,
   type TelegramMessage,
 } from '../../../src/notifications/telegram-inbox.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type { TelegramTransport } from '../../../src/notifications/channels/telegram-channel.js';
+
+// Injected failing writes for the atomic-write tests (N1): the first N
+// FileHandles opened come back with a writeFile that always throws.
+const failState = vi.hoisted(() => ({ failNextWrites: 0 }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    default: actual,
+    open: (async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      if (failState.failNextWrites > 0) {
+        failState.failNextWrites -= 1;
+        handle.writeFile = async () => {
+          throw Object.assign(new Error('simulated write failure'), { code: 'ENOSPC' });
+        };
+      }
+      return handle;
+    }) as unknown as typeof actual.open,
+  };
+});
 
 const OWNER_CHAT = '987654321';
 const DATE_SEC = Math.floor(Date.parse('2026-06-29T00:00:10.000Z') / 1000);
@@ -17,7 +39,10 @@ interface TransportCall { endpoint: string; body: Record<string, unknown> }
 
 interface ScriptedGetFile { result?: unknown; httpStatus?: number }
 
-function fakeTransport(getFile?: (body: Record<string, unknown>) => ScriptedGetFile): {
+function fakeTransport(
+  getFile?: (body: Record<string, unknown>) => ScriptedGetFile,
+  over: { failSend?: boolean } = {},
+): {
   transport: TelegramTransport;
   calls: TransportCall[];
 } {
@@ -27,6 +52,7 @@ function fakeTransport(getFile?: (body: Record<string, unknown>) => ScriptedGetF
       const endpoint = url.split('/').pop() ?? '';
       const parsed = JSON.parse(body) as Record<string, unknown>;
       calls.push({ endpoint, body: parsed });
+      if (endpoint === 'sendMessage' && over.failSend) throw new Error('sendMessage network down');
       if (endpoint === 'getFile' && getFile) {
         const scripted = getFile(parsed);
         const status = scripted.httpStatus ?? 200;
@@ -44,14 +70,81 @@ function fakeTransport(getFile?: (body: Record<string, unknown>) => ScriptedGetF
   return { transport, calls };
 }
 
+/** A download seam in the streamed shape: the inbox reads headers, then the body chunk by chunk. */
+function chunkResponse(chunks: Buffer[], headers: Record<string, string> = {}): {
+  ok: boolean;
+  status: number;
+  headers: { get(name: string): string | null };
+  body: AsyncIterable<Uint8Array>;
+} {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+    body: (async function* () { for (const c of chunks) yield c; })(),
+  };
+}
+
 function fakeDownload(outcome: Buffer | Error): DownloadFileFn & { calls: string[] } {
   const calls: string[] = [];
   const fn: DownloadFileFn = async (url) => {
     calls.push(url);
     if (outcome instanceof Error) throw outcome;
-    return outcome;
+    return chunkResponse([outcome]);
   };
   return Object.assign(fn, { calls });
+}
+
+interface StreamDownloadHandle {
+  fn: DownloadFileFn;
+  calls: string[];
+  aborted: () => boolean;
+  bodyIterated: () => boolean;
+}
+
+/** A seam that yields the body in chunks; `hangUntilAbort` never resolves until aborted. */
+function fakeStreamDownload(
+  chunks: Buffer[],
+  over: { headers?: Record<string, string>; hangUntilAbort?: boolean } = {},
+): StreamDownloadHandle {
+  const calls: string[] = [];
+  let aborted = false;
+  let bodyIterated = false;
+  const fn: DownloadFileFn = (url, signal) => {
+    calls.push(url);
+    const fail = () => { aborted = true; };
+    if (signal.aborted) fail();
+    else signal.addEventListener('abort', fail);
+    if (over.hangUntilAbort) {
+      return new Promise((_, reject) => {
+        const stop = () => reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+        if (signal.aborted) stop();
+        else signal.addEventListener('abort', stop);
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: (name) => over.headers?.[name.toLowerCase()] ?? null },
+      get body() {
+        bodyIterated = true;
+        return (async function* () { for (const c of chunks) yield c; })();
+      },
+    });
+  };
+  return { fn, calls, aborted: () => aborted, bodyIterated: () => bodyIterated };
+}
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Poll until `condition` is true (bounded), so tests never race async spooling. */
+async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await wait(5);
+  }
+  throw new Error('waitFor timed out');
 }
 
 function ownerMessage(over: Partial<TelegramMessage> = {}): TelegramMessage {
@@ -69,17 +162,18 @@ const VOICE_FILE = {
   file_id: 'fv1', file_size: 1200, duration: 83, mime_type: 'audio/ogg', file_path: 'voice/file_55.oga',
 };
 
-async function isInboxEmpty(): Promise<boolean> {
-  try {
-    return (await fs.readdir(inboxDir)).length === 0;
-  } catch {
-    return true; // not created yet counts as empty
-  }
-}
-
 describe('TelegramInbox (owner voice notes into the spool)', () => {
   let root: string;
   let inboxDir: string;
+
+  /** True when the spool dir holds no files (missing dir counts as empty). */
+  async function isInboxEmpty(): Promise<boolean> {
+    try {
+      return (await fs.readdir(inboxDir)).length === 0;
+    } catch {
+      return true; // not created yet counts as empty
+    }
+  }
 
   function makeInbox(transport: TelegramTransport, download: DownloadFileFn, over: Record<string, unknown> = {}) {
     return new TelegramInbox({
@@ -99,6 +193,8 @@ describe('TelegramInbox (owner voice notes into the spool)', () => {
   });
 
   afterEach(async () => {
+    failState.failNextWrites = 0;
+    setLogTap(null);
     await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
@@ -333,5 +429,210 @@ describe('TelegramInbox (owner voice notes into the spool)', () => {
 
     expect(String(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).startsWith('Not saved: ')).toBe(true);
     expect((await fs.readdir(root, { recursive: true })).sort()).toEqual([]);
+  });
+
+  // ── N7(a): authorisation edges ────────────────────────────────────────────
+
+  it('ignores a message with no `from` (sender_chat only) and a negative group chat id', async () => {
+    const senderChatOnly = fakeTransport(() => ({ result: VOICE_FILE }));
+    const groupChat = fakeTransport(() => ({ result: VOICE_FILE }));
+    await makeInbox(senderChatOnly.transport, fakeDownload(Buffer.alloc(0)))
+      .handleMessage(ownerMessage({ from: undefined, sender_chat: { id: Number(OWNER_CHAT) } }));
+    await makeInbox(groupChat.transport, fakeDownload(Buffer.alloc(0)))
+      .handleMessage(ownerMessage({ chat: { id: -1009988776655 } }));
+
+    expect(senderChatOnly.calls).toHaveLength(0);
+    expect(groupChat.calls).toHaveLength(0);
+    expect(await isInboxEmpty()).toBe(true);
+  });
+
+  it('accepts a forwarded message that the owner sent (its content is spooled like any owner text)', async () => {
+    const { transport, calls } = fakeTransport();
+    const inbox = makeInbox(transport, fakeDownload(Buffer.alloc(0)));
+    await inbox.handleMessage(ownerMessage({
+      voice: undefined,
+      text: 'forwarded story',
+      forward_origin: { type: 'user', sender_user: { id: 42 } },
+    }));
+
+    expect(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).toBe('Saved text.');
+    const sidecar = JSON.parse(await fs.readFile(path.join(inboxDir, `${STEM}.json`), 'utf8')) as { text?: string };
+    expect(sidecar.text).toBe('forwarded story');
+  });
+
+  // ── N1: no orphan tmp file when a write fails ─────────────────────────────
+
+  it('unlinks the tmp file when the media write fails (no partial files left)', async () => {
+    const { transport, calls } = fakeTransport(() => ({ result: VOICE_FILE }));
+    const inbox = makeInbox(transport, fakeDownload(Buffer.from('ogg-bytes')));
+    failState.failNextWrites = 1; // the media tmp write fails
+    await inbox.handleMessage(ownerMessage());
+
+    expect(String(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).startsWith('Not saved: ')).toBe(true);
+    expect(await isInboxEmpty()).toBe(true);
+  });
+
+  it('removes the media file when the sidecar write fails and leaves no tmp files', async () => {
+    const { transport, calls } = fakeTransport(() => ({ result: VOICE_FILE }));
+    const inbox = makeInbox(transport, fakeDownload(Buffer.from('ogg-bytes')));
+    failState.failNextWrites = 2; // first write (media) succeeds, second (sidecar) fails
+    await inbox.handleMessage(ownerMessage());
+
+    expect(String(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).startsWith('Not saved: ')).toBe(true);
+    expect(await isInboxEmpty()).toBe(true);
+  });
+
+  // ── N2: the size cap is enforced before and during the download ───────────
+
+  it('rejects on Content-Length above the cap without reading the body', async () => {
+    const { transport, calls } = fakeTransport(() => ({ result: VOICE_FILE }));
+    const download = fakeStreamDownload([Buffer.from('should-never-be-read')], {
+      headers: { 'content-length': String(21 * 1024 * 1024) },
+    });
+    const inbox = makeInbox(transport, download.fn);
+    await inbox.handleMessage(ownerMessage());
+
+    expect(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).toBe('Too large to save');
+    expect(download.bodyIterated()).toBe(false);
+    expect(await isInboxEmpty()).toBe(true);
+  });
+
+  it('aborts a chunked download mid-stream once the bytes exceed the cap', async () => {
+    const { transport, calls } = fakeTransport(() => ({ result: { ...VOICE_FILE, file_size: 5 } }));
+    const download = fakeStreamDownload([Buffer.alloc(6, 0x61), Buffer.alloc(6, 0x62)]);
+    const inbox = makeInbox(transport, download.fn, { maxFileBytes: 10 });
+    await inbox.handleMessage(ownerMessage());
+
+    expect(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).toBe('Too large to save');
+    expect(download.aborted()).toBe(true);
+    expect(await isInboxEmpty()).toBe(true);
+  });
+
+  it('saves a chunked download that stays within the cap', async () => {
+    const { transport, calls } = fakeTransport(() => ({ result: { ...VOICE_FILE, file_size: 9 } }));
+    const download = fakeStreamDownload([Buffer.from('aaaa'), Buffer.from('bbbbb')]);
+    const inbox = makeInbox(transport, download.fn, { maxFileBytes: 10 });
+    await inbox.handleMessage(ownerMessage());
+
+    expect(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).toBe('Saved voice note (1:23).');
+    const media = await fs.readFile(path.join(inboxDir, `${STEM}.oga`));
+    expect(media.equals(Buffer.from('aaaabbbbb'))).toBe(true);
+    expect((await fs.readdir(inboxDir)).sort()).toEqual([`${STEM}.oga`, `${STEM}.json`].sort());
+  });
+
+  // ── N3: a failed confirmation never turns a successful save into "Not saved" ─
+
+  it('keeps spooled files and never answers "Not saved" when only the confirmation fails', async () => {
+    const { transport, calls } = fakeTransport(() => ({ result: VOICE_FILE }), { failSend: true });
+    const inbox = makeInbox(transport, fakeDownload(Buffer.from('ogg-bytes')));
+    await inbox.handleMessage(ownerMessage());
+
+    // handleMessage resolves (the failure was the best-effort confirmation only),
+    // exactly one reply attempt was made (no retry storm, no "Not saved" line),
+    // and both files stay on disk.
+    expect(calls.filter((c) => c.endpoint === 'sendMessage')).toHaveLength(1);
+    expect(String(calls[0].body.text).startsWith('Not saved:')).toBe(false);
+    expect((await fs.readdir(inboxDir)).sort()).toEqual([`${STEM}.oga`, `${STEM}.json`].sort());
+  });
+
+  // ── N6: file_path from getFile is validated ───────────────────────────────
+
+  it('rejects a getFile file_path that fails the allowlist or carries traversal', async () => {
+    for (const file_path of ['../etc/passwd', 'voice/../../x', 'voice\\file.oga']) {
+      const { transport, calls } = fakeTransport(() => ({ result: { ...VOICE_FILE, file_path } }));
+      const download = fakeDownload(Buffer.from('x'));
+      const inbox = makeInbox(transport, download);
+      await inbox.handleMessage(ownerMessage());
+
+      expect(String(calls.find((c) => c.endpoint === 'sendMessage')?.body.text).startsWith('Not saved: ')).toBe(true);
+      expect(download.calls).toHaveLength(0);
+      expect(await isInboxEmpty()).toBe(true);
+    }
+  });
+
+  // ── N7(c): the token never reaches a reply or a log line ─────────────────
+
+  it('a download error carrying the token reaches neither a reply nor a log line', async () => {
+    const logRecords: LogRecord[] = [];
+    setLogTap((record) => logRecords.push(record));
+    const { transport, calls } = fakeTransport(() => ({ result: VOICE_FILE }));
+    const inbox = makeInbox(transport, fakeDownload(
+      new Error(`getaddrinfo failed for https://api.telegram.org/file/botFAKE:TOKEN/voice/file_55.oga`),
+    ));
+    await inbox.handleMessage(ownerMessage());
+
+    const reply = String(calls.find((c) => c.endpoint === 'sendMessage')?.body.text);
+    expect(reply.startsWith('Not saved: ')).toBe(true);
+    expect(reply).not.toContain('FAKE:TOKEN');
+    expect(JSON.stringify(logRecords)).not.toContain('FAKE:TOKEN');
+  });
+
+  // ── B1: spooling runs on a bounded queue, never inside the caller ────────
+
+  it('caps the pending queue at 20: further messages are answered "Busy, please resend" and dropped', async () => {
+    let release!: () => void;
+    const gated = new Promise<void>((resolve) => { release = resolve; });
+    const download: DownloadFileFn = async (_url) => {
+      await gated; // hold the first message in flight
+      return chunkResponse([Buffer.from('ogg-bytes')]);
+    };
+    const { transport, calls } = fakeTransport(() => ({ result: VOICE_FILE }));
+    const inbox = makeInbox(transport, download);
+
+    expect(inbox.enqueue(ownerMessage())).toBe('accepted'); // in flight (held at the download)
+    for (let id = 56; id <= 75; id++) {
+      expect(inbox.enqueue(ownerMessage({ voice: undefined, message_id: id, text: 'note' }))).toBe('accepted');
+    }
+    expect(inbox.enqueue(ownerMessage({ chat: { id: 111 } }))).toBe('ignored'); // non-owner: not queued
+    expect(inbox.enqueue(ownerMessage({ voice: undefined, message_id: 76, text: 'one too many' }))).toBe('busy');
+
+    release();
+    await waitFor(() => calls.filter((c) => c.endpoint === 'sendMessage').length >= 22);
+
+    const texts = calls.filter((c) => c.endpoint === 'sendMessage').map((c) => String(c.body.text));
+    expect(texts.filter((t) => t === 'Saved text.')).toHaveLength(20);
+    expect(texts).toContain('Saved voice note (1:23).');
+    expect(texts).toContain('Busy, please resend');
+    expect((await fs.readdir(inboxDir)).filter((f) => f.endsWith('.json'))).toHaveLength(21); // ids 55–75
+    expect(await fs.stat(path.join(inboxDir, '20260629T000010Z-76.json')).then(() => true, () => false)).toBe(false);
+  });
+
+  it('stop() aborts the in-flight download, drops queued messages and settles quickly', async () => {
+    const download = fakeStreamDownload([Buffer.from('ogg')], { hangUntilAbort: true });
+    const { transport, calls } = fakeTransport(() => ({ result: VOICE_FILE }));
+    const inbox = makeInbox(transport, download.fn);
+
+    inbox.enqueue(ownerMessage());
+    await waitFor(() => download.calls.length > 0); // download started
+    inbox.enqueue(ownerMessage({ voice: undefined, message_id: 56, text: 'queued' }));
+
+    const t0 = Date.now();
+    await inbox.stop();
+    expect(Date.now() - t0).toBeLessThan(2_500);
+    expect(download.aborted()).toBe(true);
+    expect(inbox.enqueue(ownerMessage({ voice: undefined, message_id: 57, text: 'too late' }))).toBe('ignored');
+
+    await wait(30);
+    // Nothing was saved: the in-flight note failed with the stop reason, the queued one was dropped.
+    expect(await isInboxEmpty()).toBe(true);
+    expect(calls.filter((c) => c.endpoint === 'sendMessage').map((c) => String(c.body.text)))
+      .toEqual(['Not saved: download aborted: listener stopping']);
+  });
+
+  it('stop() never waits more than ~2s even when the download ignores the abort', async () => {
+    let release!: () => void;
+    const gated = new Promise<void>((resolve) => { release = resolve; });
+    const download: DownloadFileFn = async (_url) => {
+      await gated; // ignores the abort signal entirely
+      return chunkResponse([Buffer.from('ogg')]);
+    };
+    const { transport } = fakeTransport(() => ({ result: VOICE_FILE }));
+    const inbox = makeInbox(transport, download);
+    inbox.enqueue(ownerMessage());
+
+    const t0 = Date.now();
+    await inbox.stop();
+    expect(Date.now() - t0).toBeLessThan(2_900);
+    release();
   });
 });

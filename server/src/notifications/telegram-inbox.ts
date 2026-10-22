@@ -12,6 +12,14 @@
  * followed by a `<same stem>.json` sidecar — written LAST, so a reader can
  * treat a present `.json` as "complete".
  *
+ * Spooling never runs inside the poll loop: the listener hands each accepted
+ * message to {@link TelegramInbox.enqueue}, which returns at once and works
+ * through a single-slot serial queue (at most 20 pending; beyond that the
+ * message is answered "Busy, please resend" and dropped — the spool is
+ * at-most-once). `stop()` aborts the in-flight download, stops accepting and
+ * never waits more than ~2 s. Every Telegram call is bounded by an
+ * AbortController timeout (getFile and replies 15 s, download 60 s).
+ *
  * Nothing here is interpreted, transcribed or forwarded to any runtime: this
  * is a drop folder, nothing more. The bot token and the full file URL never
  * reach a log or a thrown error the owner does not see redacted.
@@ -30,10 +38,20 @@ const TELEGRAM_FILE_BASE = 'https://api.telegram.org/file';
 /** Telegram's bot-API download cap. */
 const DEFAULT_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
+/** Timeout for every Telegram API call made here (getFile, replies). */
+const TELEGRAM_CALL_TIMEOUT_MS = 15_000;
+/** At most this many messages wait in the serial spool queue. */
+const MAX_PENDING_MESSAGES = 20;
+/** stop() waits at most this long for the in-flight message to settle. */
+const INBOX_STOP_SETTLE_MS = 2_000;
 const REPLY_TO_TEXT_MAX = 500;
 
 const NOT_SAVED_UNSUPPORTED = 'Not saved: only voice notes, audio and text are kept.';
 const TOO_LARGE_REPLY = 'Too large to save';
+const BUSY_REPLY = 'Busy, please resend';
+
+/** Defence against a malformed `getFile` result reaching the download URL. */
+const FILE_PATH_ALLOWED = /^[\w\-./]+$/;
 
 /** The slice of a Telegram `message` update the inbox path needs. */
 export interface TelegramMessageMedia {
@@ -61,13 +79,25 @@ export interface TelegramMessage {
 
 export type TelegramInboxKind = 'voice' | 'audio' | 'video_note' | 'document' | 'text';
 
+/**
+ * The slice of a download response the inbox consumes: headers are checked
+ * before the body is streamed chunk by chunk, so the size cap is enforced
+ * before AND during the download (never a full buffer in memory first).
+ */
+export interface DownloadResponse {
+  ok: boolean;
+  status: number;
+  headers: { get(name: string): string | null };
+  body: AsyncIterable<Uint8Array>;
+}
+
 /** Seam for the binary download (default: global fetch GET). */
-export type DownloadFileFn = (url: string, signal: AbortSignal) => Promise<Buffer>;
+export type DownloadFileFn = (url: string, signal: AbortSignal) => Promise<DownloadResponse>;
 
 export const defaultDownloadFile: DownloadFileFn = async (url, signal) => {
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`file download failed: HTTP ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
+  // Response matches DownloadResponse structurally; body is null only for
+  // 204/205 responses, which Telegram's file endpoint never returns.
+  return (await fetch(url, { signal })) as unknown as DownloadResponse;
 };
 
 export interface TelegramInboxOptions {
@@ -190,6 +220,14 @@ export class TelegramInbox {
     now: () => string;
   };
 
+  /** Serial spool queue: the poll loop never awaits the media work. */
+  private queue: TelegramMessage[] = [];
+  private draining = false;
+  private inFlight: Promise<void> | null = null;
+  private stopped = false;
+  /** Aborted by stop(): every download links to it, whenever it started. */
+  private readonly stopController = new AbortController();
+
   constructor(options: TelegramInboxOptions) {
     this.opts = {
       ...options,
@@ -201,25 +239,102 @@ export class TelegramInbox {
   }
 
   /**
-   * The full message path for one `message` update — the loop's per-update
-   * step for messages and the validation/test injection point (never the
-   * network in tests: transport and download are injected).
+   * Queue one `message` update for spooling and return at once — the poll
+   * loop's entry point, so button taps are never delayed by a download.
+   * Owner gating happens synchronously; the work itself runs on a serial
+   * queue (at most 20 pending: further messages are answered once
+   * "Busy, please resend" and dropped — at-most-once spool).
+   */
+  enqueue(message: TelegramMessage): 'accepted' | 'ignored' | 'busy' {
+    if (this.stopped) return 'ignored'; // shutdown: stop accepting, no reply
+    if (!this.fromOwner(message)) return 'ignored';
+    if (this.queue.length >= MAX_PENDING_MESSAGES) {
+      const messageId = message.message_id;
+      void this.postMessage('sendMessage', {
+        chat_id: message.chat?.id,
+        text: BUSY_REPLY,
+        ...(Number.isInteger(messageId) ? { reply_to_message_id: messageId } : {}),
+      }).catch((error: unknown) => {
+        logger.errorObject('failed to send the busy reply', new Error(safeReason(error, this.opts.botToken)), { messageId });
+      });
+      return 'busy';
+    }
+    this.queue.push(message);
+    void this.drain();
+    return 'accepted';
+  }
+
+  /**
+   * Stop accepting messages, abort the in-flight download and drop queued
+   * messages; waits for the in-flight message to settle, but never longer
+   * than ~2 s (a hung API call must not hold up shutdown).
+   */
+  async stop(): Promise<void> {
+    this.stopped = true;
+    this.queue.length = 0;
+    // Downloads link to this signal (even ones that start later, mid-getFile
+    // when stop() fired), so the in-flight download is always aborted.
+    this.stopController.abort(new Error('download aborted: listener stopping'));
+    const inFlight = this.inFlight;
+    if (!inFlight) return;
+    await Promise.race([
+      inFlight.catch(() => { /* the drain logs it redacted; stopping never throws */ }),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, INBOX_STOP_SETTLE_MS);
+        timer.unref?.();
+      }),
+    ]);
+  }
+
+  /** Owner-only gate: BOTH the chat id and the sender id must be the owner's. */
+  private fromOwner(message: TelegramMessage): boolean {
+    const chatMatches = message.chat?.id !== undefined && String(message.chat.id) === this.opts.ownerChatId;
+    const senderMatches = message.from?.id !== undefined && String(message.from.id) === this.opts.ownerChatId;
+    if (chatMatches && senderMatches) return true;
+    // Ignored silently, no reply. The debug line carries match flags only —
+    // never message content.
+    logger.debug('ignored telegram message: not from the configured owner', {
+      chatMatchesOwner: chatMatches,
+      senderMatchesOwner: senderMatches,
+    });
+    return false;
+  }
+
+  /** Work through the queue one message at a time; never dies with one. */
+  private async drain(): Promise<void> {
+    if (this.draining) return;
+    this.draining = true;
+    try {
+      while (!this.stopped && this.queue.length > 0) {
+        const message = this.queue.shift() as TelegramMessage;
+        const task = this.handleMessage(message);
+        this.inFlight = task;
+        try {
+          await task;
+        } catch (error) {
+          // One bad message never kills the queue; logged redacted.
+          logger.errorObject(
+            'failed to process owner message',
+            new Error(safeReason(error, this.opts.botToken)),
+            { messageId: message.message_id },
+          );
+        } finally {
+          this.inFlight = null;
+        }
+      }
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  /**
+   * The full message path for one accepted `message` update — the queue's
+   * worker step and the validation/test injection point (never the network
+   * in tests: transport and download are injected).
    */
   async handleMessage(message: TelegramMessage): Promise<void> {
-    const chatId = message.chat?.id;
-    const senderId = message.from?.id;
-    const chatMatches = chatId !== undefined && String(chatId) === this.opts.ownerChatId;
-    const senderMatches = senderId !== undefined && String(senderId) === this.opts.ownerChatId;
-    if (!chatMatches || !senderMatches) {
-      // Owner-only, same rule as button taps: ignored silently, no reply.
-      // The debug line carries match flags only — never message content.
-      logger.debug('ignored telegram message: not from the configured owner', {
-        chatMatchesOwner: chatMatches,
-        senderMatchesOwner: senderMatches,
-      });
-      return;
-    }
-
+    if (!this.fromOwner(message)) return;
+    const chatId = message.chat?.id as number | string;
     const messageId = message.message_id;
     const reply = async (text: string): Promise<void> => {
       await this.postMessage('sendMessage', {
@@ -245,14 +360,30 @@ export class TelegramInbox {
       } else {
         await this.spoolMedia(message, messageId, classified);
       }
-      await reply(savedReplyText(classified.kind, classified.kind === 'text' ? undefined : classified.media.duration));
     } catch (error) {
       if (error instanceof FileTooLargeError) {
         await reply(TOO_LARGE_REPLY);
         return;
       }
-      logger.errorObject('failed to spool owner message', error, { messageId });
+      logger.errorObject(
+        'failed to spool owner message',
+        new Error(safeReason(error, this.opts.botToken)),
+        { messageId },
+      );
       await reply(`Not saved: ${safeReason(error, this.opts.botToken)}`);
+      return;
+    }
+    // The save succeeded: the confirmation is a separate best-effort try. A
+    // failed reply must never turn a successful save into a "Not saved" (the
+    // files stay; the owner sees no "Saved" line and can resend).
+    try {
+      await reply(savedReplyText(classified.kind, classified.kind === 'text' ? undefined : classified.media.duration));
+    } catch (error) {
+      logger.errorObject(
+        'failed to send the save confirmation',
+        new Error(safeReason(error, this.opts.botToken)),
+        { messageId },
+      );
     }
   }
 
@@ -304,9 +435,9 @@ export class TelegramInbox {
   }
 
   private async getFileFilePath(fileId: string): Promise<{ file_path?: string; file_size?: number }> {
-    const res = await this.opts.transport.post(
-      `${TELEGRAM_API_BASE}/bot${this.opts.botToken}/getFile`,
-      JSON.stringify({ file_id: fileId }),
+    const res = await this.postWithTimeout(
+      'getFile',
+      { file_id: fileId },
     );
     if (!res.ok || res.status < 200 || res.status >= 300) {
       throw new Error(`getFile failed: HTTP ${res.status}: ${redactToken(res.bodyText, this.opts.botToken).slice(0, 200)}`);
@@ -320,6 +451,11 @@ export class TelegramInbox {
     if (!parsed.ok || typeof parsed.result?.file_path !== 'string' || parsed.result.file_path.length === 0) {
       throw new Error('getFile returned no file path');
     }
+    // The path comes from Telegram, but it goes into a request URL: accept a
+    // conservative shape only (word chars, dash, dot, slash; no traversal).
+    if (!FILE_PATH_ALLOWED.test(parsed.result.file_path) || parsed.result.file_path.includes('..')) {
+      throw new Error('getFile returned an unexpected file path');
+    }
     return parsed.result;
   }
 
@@ -330,15 +466,40 @@ export class TelegramInbox {
       this.opts.downloadTimeoutMs,
     );
     timer.unref?.();
+    // stop() must abort the download no matter when it started relative to
+    // the stop call.
+    const onStop = () => controller.abort(this.stopController.signal.reason);
+    if (this.stopController.signal.aborted) onStop();
+    else this.stopController.signal.addEventListener('abort', onStop, { once: true });
     try {
-      return await this.opts.downloadFile(url, controller.signal);
+      const res = await this.opts.downloadFile(url, controller.signal);
+      if (!res.ok) throw new Error(`file download failed: HTTP ${res.status}`);
+      // Cap check one: the declared size, before a single byte is read.
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > this.opts.maxFileBytes) throw new FileTooLargeError();
+      // Cap check two: stream the body, counting bytes, aborting past the cap.
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of res.body) {
+        total += chunk.byteLength;
+        if (total > this.opts.maxFileBytes) {
+          controller.abort(new Error('file exceeds the bot download size cap'));
+          throw new FileTooLargeError();
+        }
+        chunks.push(Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks);
     } catch (error) {
-      if (controller.signal.aborted) {
-        throw new Error(`file download timed out after ${this.opts.downloadTimeoutMs}ms`);
+      // Translate an abort into its reason (timeout, stop), except the cap
+      // abort, whose FileTooLargeError already says what happened.
+      if (!(error instanceof FileTooLargeError) && controller.signal.aborted) {
+        const reason = controller.signal.reason;
+        throw reason instanceof Error ? reason : new Error(String(reason));
       }
       throw error;
     } finally {
       clearTimeout(timer);
+      this.stopController.signal.removeEventListener('abort', onStop);
     }
   }
 
@@ -386,6 +547,10 @@ export class TelegramInbox {
     const handle = await open(tmpPath, 'w', 0o600);
     try {
       await handle.writeFile(content);
+    } catch (error) {
+      // No orphan tmp on a failed write (disk full, EIO): remove and rethrow.
+      await unlink(tmpPath).catch(() => { /* best effort */ });
+      throw error;
     } finally {
       await handle.close();
     }
@@ -397,11 +562,33 @@ export class TelegramInbox {
     }
   }
 
-  private async postMessage(endpoint: string, body: Record<string, unknown>): Promise<void> {
-    const res = await this.opts.transport.post(
-      `${TELEGRAM_API_BASE}/bot${this.opts.botToken}/${endpoint}`,
-      JSON.stringify(body),
+  /** Every API call here is bounded: the transport gets an abort signal. */
+  private async postWithTimeout(endpoint: string, body: Record<string, unknown>): Promise<{ status: number; ok: boolean; bodyText: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error(`${endpoint} timed out after ${TELEGRAM_CALL_TIMEOUT_MS}ms`)),
+      TELEGRAM_CALL_TIMEOUT_MS,
     );
+    timer.unref?.();
+    try {
+      return await this.opts.transport.post(
+        `${TELEGRAM_API_BASE}/bot${this.opts.botToken}/${endpoint}`,
+        JSON.stringify(body),
+        controller.signal,
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        const reason = controller.signal.reason;
+        throw reason instanceof Error ? reason : new Error(String(reason));
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async postMessage(endpoint: string, body: Record<string, unknown>): Promise<void> {
+    const res = await this.postWithTimeout(endpoint, body);
     if (!res.ok || res.status < 200 || res.status >= 300) {
       throw new Error(`${endpoint} failed: HTTP ${res.status}: ${redactToken(res.bodyText, this.opts.botToken).slice(0, 200)}`);
     }
