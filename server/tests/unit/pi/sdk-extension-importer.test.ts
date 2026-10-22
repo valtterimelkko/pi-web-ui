@@ -114,6 +114,41 @@ describe('B1.2b SDK alias map', () => {
     }
   });
 
+  /**
+   * 1.4.0 (#11156) added the `pi-ai/models` subpath to getAliases() and to the
+   * virtual modules, so extensions importing `clampThinkingLevel` from
+   * `@earendil-works/pi-ai/models` load again. The SDK's `getAliases()` is not
+   * exported, so the alias SURFACE is read from the loader source text (the
+   * same public-file technique the pristine-SDK test above uses) and compared
+   * with ours: a future SDK that adds or drops an alias fails here until the
+   * map is re-validated.
+   */
+  function sdkAliasKeys(): string[] {
+    const loaderSource = readFileSync(join(sdkRoot, 'dist', 'core', 'extensions', 'loader.js'), 'utf-8');
+    const start = loaderSource.indexOf('_aliases = {');
+    expect(start).toBeGreaterThan(-1);
+    const block = loaderSource.slice(start, loaderSource.indexOf('};', start));
+    const keys: string[] = [];
+    for (const line of block.split('\n')) {
+      const match = /^\s+(?:"([^"]+)"|([A-Za-z@][\w@./-]*)):/u.exec(line);
+      if (match) keys.push(match[1] ?? match[2]);
+    }
+    return keys.sort();
+  }
+
+  it('covers exactly the alias keys the installed SDK loader defines', () => {
+    const expected = sdkAliasKeys();
+    expect(expected.length).toBeGreaterThan(15);
+    expect(Object.keys(resolveSdkAliasMap()).sort()).toEqual(expected);
+  });
+
+  it('maps the pi-ai/models subpath (1.4.0) to pi-ai models, not the compat entrypoint', () => {
+    const aliases = resolveSdkAliasMap();
+    expect(aliases['@earendil-works/pi-ai/models']).toBe(aliases['@mariozechner/pi-ai/models']);
+    expect(aliases['@earendil-works/pi-ai/models']).not.toBe(aliases['@earendil-works/pi-ai']);
+    expect(aliases['@earendil-works/pi-ai/models'].endsWith(join('ai', 'dist', 'models.js'))).toBe(true);
+  });
+
   it('caches the map per process until reset', () => {
     const before = getCachedSdkAliasMap();
     expect(getCachedSdkAliasMap()).toBe(before);
@@ -123,12 +158,14 @@ describe('B1.2b SDK alias map', () => {
     expect(after).toEqual(before);
   });
 
-  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 1.2.1 included)', () => {
+  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 1.4.1 included)', () => {
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.87.1' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.99.2' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.0.0' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.2.1' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.2.0' })).not.toThrow();
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.2.0' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.3.0' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.4.1' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.4.0' })).not.toThrow();
   });
 
   it('degrades as a typed error when an alias target cannot be resolved', () => {
@@ -185,6 +222,23 @@ describe('B1.2b jiti factory import', () => {
     expect(captured['defineTool']).toBe(native['defineTool']);
     expect(captured['ExtensionRunner']).toBe(native['ExtensionRunner']);
     delete (globalThis as Record<string, unknown>)['__b12bIdentity'];
+  });
+
+  it('gives the imported module the pi-ai/models alias: an extension can import clampThinkingLevel (1.4.0 #11156)', async () => {
+    const entry = writeFixture(
+      'pi-ai-models',
+      `import { clampThinkingLevel } from '@earendil-works/pi-ai/models';
+       (globalThis).__b12bModels = clampThinkingLevel;
+       export default function () {}`,
+    );
+    await importFactoryViaJiti(entry);
+    const clamp = (globalThis as Record<string, unknown>)['__b12bModels'] as (model: unknown, level: string) => string;
+    expect(typeof clamp).toBe('function');
+    // Behaves like the real function (not a stub or interop wrapper): a model
+    // without the xhigh/max levels clamps a request for max down to high.
+    expect(clamp({ reasoning: true }, 'max')).toBe('high');
+    expect(clamp({ reasoning: true }, 'low')).toBe('low');
+    delete (globalThis as Record<string, unknown>)['__b12bModels'];
   });
 
   it('wraps import failures in ExtensionImporterError (the loader builder degrades to the plain path)', async () => {

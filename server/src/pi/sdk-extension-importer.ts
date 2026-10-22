@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
  * patches, no deep private imports; the package `exports` map is the boundary).
  *
  * `resolveSdkAliasMap()` replicates the SDK's private `getAliases()`
- * (`dist/core/extensions/loader.js`, validated 1.0.0; getAliases() byte-identical to 0.87.1): every alias target is resolved
+ * (`dist/core/extensions/loader.js`, validated 1.4.0; the 1.2.0 map plus the
+ * `pi-ai/models` subpath, 1.4.0 #11156): every alias target is resolved
  * to the SAME absolute file the SDK itself uses, so an extension imported here
  * shares module instances with SDK-loaded extensions (measured: aliased ESM
  * entries load through Node's native ESM registry, so exported bindings like
@@ -27,7 +28,7 @@ import { fileURLToPath } from 'node:url';
  */
 
 /** The only SDK minor this module's alias map and override were validated against. */
-export const VALIDATED_SDK_VERSION = '1.2.0';
+export const VALIDATED_SDK_VERSION = '1.4.0';
 
 export class ExtensionImporterError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -289,6 +290,7 @@ export function resolveSdkAliasMap(deps: SdkResolutionDeps = {}): Record<string,
   const piTuiEntry = canonicalTarget(resolveCompanion('tui/dist/index.js', '@earendil-works/pi-tui', '.'));
   // Extensions resolve the pi-ai root to the compat entrypoint, as the SDK does.
   const piAiCompatEntry = canonicalTarget(resolveCompanion('ai/dist/compat.js', '@earendil-works/pi-ai', './compat'));
+  const piAiModelsEntry = canonicalTarget(resolveCompanion('ai/dist/models.js', '@earendil-works/pi-ai', './models'));
   const piAiOauthEntry = canonicalTarget(resolveCompanion('ai/dist/oauth.js', '@earendil-works/pi-ai', './oauth'));
   const piAiProvidersEntry = canonicalTarget(resolveCompanion('ai/dist/providers/all.js', '@earendil-works/pi-ai', './providers/all'));
   const typeboxEntry = requireFromSdk('typebox');
@@ -301,6 +303,7 @@ export function resolveSdkAliasMap(deps: SdkResolutionDeps = {}): Record<string,
     '@earendil-works/pi-tui': piTuiEntry,
     '@earendil-works/pi-ai/providers/all': piAiProvidersEntry,
     '@earendil-works/pi-ai/compat': piAiCompatEntry,
+    '@earendil-works/pi-ai/models': piAiModelsEntry,
     '@earendil-works/pi-ai/oauth': piAiOauthEntry,
     '@earendil-works/pi-ai': piAiCompatEntry,
     '@mariozechner/pi-coding-agent': piCodingAgentEntry,
@@ -308,6 +311,7 @@ export function resolveSdkAliasMap(deps: SdkResolutionDeps = {}): Record<string,
     '@mariozechner/pi-tui': piTuiEntry,
     '@mariozechner/pi-ai/providers/all': piAiProvidersEntry,
     '@mariozechner/pi-ai/compat': piAiCompatEntry,
+    '@mariozechner/pi-ai/models': piAiModelsEntry,
     '@mariozechner/pi-ai/oauth': piAiOauthEntry,
     '@mariozechner/pi-ai': piAiCompatEntry,
     typebox: typeboxEntry,
