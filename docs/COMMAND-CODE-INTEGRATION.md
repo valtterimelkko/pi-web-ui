@@ -148,7 +148,9 @@ Flags: `--dry-run` (detect and probe only — no writes, git, or restart),
 staging area is not empty.
 
 Scheduling: `deploy/systemd/command-code-model-refresh.{service,timer}`
-(Mondays 04:45, `Persistent=true`). Install per the unit's header comment.
+(Mondays 04:45, `Persistent=true`). **Retired 2026-10-22 (owner):** the timer is disabled on the host; the runtime keeper
+role now runs the weekly refresh through a delegation (`npm run commandcode:weekly-refresh -- --no-git --no-restart`,
+then the Pi provider refresh in `/root/pi-enhancement`). The unit files stay in the repo as reference. Install per the unit's header comment.
 Because the catalogue fails open, the runtime never depends on the timer; the
 timer only keeps selector metadata and exclusions current.
 
