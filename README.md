@@ -48,10 +48,10 @@ Four public repositories, linked to each other, make up the orchestration model.
 |---|---|
 | **Pi Web UI** (this repo) | The server and Internal API: one session model across five harnesses |
 | [**pi-orch**](https://github.com/valtterimelkko/pi-orch) | A zero-dependency CLI and module for the parent's side: spawn, prompt, wait, result, verify, cleanup |
-| [**Orchestration skills**](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md) | `pi-web-ui-internal-api-orchestration` (the parent's loop and rules), `long-horizon-waiting-strategies` (going idle safely), `orchestrated-child-worker` (the child's protocol), `secret-scanning` |
+| [**Orchestration skills**](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md) | `pi-web-ui-internal-api-orchestration` (the parent's loop and rules), `long-horizon-waiting-strategies` (going idle safely), `agent-os-child` (the child's protocol), `secret-scanning` |
 | [**watch-wake companions**](https://github.com/valtterimelkko/agent-workflow-skills/tree/main/companions/watch-wake) | A Pi extension and a Claude Code mod: register a watch on a child, end your turn, get woken when it finishes; plus model-free wake deadlines as a backstop |
 
-How they fit, how to install them in order, and what to say to your agent to start: [`docs/ORCHESTRATION-FIXTURE-SET.md`](./docs/ORCHESTRATION-FIXTURE-SET.md).
+How they fit, how to install them in order, and what to say to your agent to start: [`docs/ORCHESTRATION-FIXTURE-SET.md`](./docs/ORCHESTRATION-FIXTURE-SET.md). A few names in these repos come from my private setup (the child skill is called `agent-os-child`, and there are board and capture hooks you can ignore); the same guide has a [table of what to ignore](./docs/ORCHESTRATION-FIXTURE-SET.md#adopting-outside-the-authors-setup-what-to-ignore).
 
 ## Adopt as much or as little as you like
 

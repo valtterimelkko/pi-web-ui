@@ -284,7 +284,7 @@ Once one runtime works end to end, the Internal API can drive child sessions acr
 - **[Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md)** — the public pack (copy the skills into your own agent setup):
   - `pi-web-ui-internal-api-orchestration` — the parent's loop: discover, create, dispatch, watch, read results, verify, clean up.
   - `long-horizon-waiting-strategies` — how to go idle safely and supervise children without polling.
-  - `orchestrated-child-worker` — the discipline every dispatched child is told to follow (evidence, exit statuses, clean hand-back).
+  - `agent-os-child` — the discipline every dispatched child is told to follow (evidence, exit statuses, clean hand-back).
   - `secret-scanning` — scan repositories and artefacts for credentials before publishing.
 - **[`pi-orch`](https://github.com/valtterimelkko/pi-orch)** — an optional thin client for the common loop (`spawn`, `prompt`, `wait`, `result`, `verify`, `cleanup`, `status`) with a drift-guarded contract snapshot.
 

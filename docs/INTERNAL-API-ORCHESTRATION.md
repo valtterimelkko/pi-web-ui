@@ -126,7 +126,7 @@ The discipline *around* this API — how a parent plans waves, keeps children bo
 
 - **`pi-web-ui-internal-api-orchestration`** — the parent's loop against this API (discover, create, dispatch, watch, read results, verify, clean up), including the mandatory child directive and the dispatch template.
 - **`long-horizon-waiting-strategies`** — going idle safely: the pre-idle checklist, wake mechanisms per harness, model-free backstops, and liveness-correct supervision.
-- **`orchestrated-child-worker`** — the skill every dispatched child is told to follow: owned paths, commit and evidence discipline, hand-back by ending the turn, never self-sign-off.
+- **`agent-os-child`** — the skill every dispatched child is told to follow: owned paths, commit and evidence discipline, hand-back by ending the turn, never self-sign-off.
 - **`secret-scanning`** — credential scanning with gitleaks before anything is published.
 
 The companion **`pi-orch`** client (https://github.com/valtterimelkko/pi-orch; the thin client described above) wraps the common loop — `spawn`, `prompt`, `wait`, `result`, `verify`, `cleanup`, `status` — against a drift-guarded contract snapshot, so parents stop hand-writing curl and sleeping in loops.

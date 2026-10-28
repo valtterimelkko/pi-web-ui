@@ -25,7 +25,7 @@ A wake means "go look", not "done". The skills teach the parent to reconcile aga
 
 1. **The parent loads the orchestration skill.** `pi-web-ui-internal-api-orchestration` starts with a one-page parent card (rules that have cost real time, copy-paste sequences per harness, what to do on a wake). It is the only must-read before dispatching; the rest is reference.
 2. **It checks what the server offers.** `pi-orch capabilities`, `models` and `capacity`. Model lists are live; never trust a remembered one.
-3. **It spawns children** in their own working directories, each with a retention owner id, and sends each a brief that **mandates the child skill** (`orchestrated-child-worker`) in the prompt itself. Harnesses do not inject skills into API-created sessions; only the prompt does.
+3. **It spawns children** in their own working directories, each with a retention owner id, and sends each a brief that **mandates the child skill** (`agent-os-child`) in the prompt itself. Harnesses do not inject skills into API-created sessions; only the prompt does.
 4. **Before it dispatches, it arms the wait:** a watch on each child (`watch_wake_register`) and one deadline (`wake_deadline`), per `long-horizon-waiting-strategies`. Then it dispatches, writes down what it is waiting for, and ends its turn.
 5. **On a wake, it reconciles:** `pi-orch status`, the run receipt, the child's completion block. It treats stale or spurious wakes as noise.
 6. **It verifies instead of trusting.** `pi-orch verify` re-checks claimed commits and files read-only; the parent re-runs the brief's gates itself.
@@ -50,6 +50,21 @@ A prompt that starts this off can be as short as: *"Use the `pi-web-ui-internal-
 | The waiting skill | Parents poll, sleep or end their turn with nothing armed; windows end with nobody awake |
 | The child-worker skill | Children drift into narrative, omit command exit statuses and sign themselves off |
 | Watch-wake | A bare CLI parent cannot go idle safely; waiting costs tokens or never ends |
+
+## Adopting outside the author's setup: what to ignore
+
+Pi Web UI and `pi-orch` are the author's own working tools, published as they are rather than forked into a "public edition", so a few things in them assume his private setup. None of it is needed, and none of it breaks if you leave it alone:
+
+| You will see | What it is | What to do |
+|---|---|---|
+| The child skill is called `agent-os-child`, and `pi-orch`'s directive begins "You are dispatched as an Agent OS child worker" | Agent OS is the author's private memory and coordination layer, and this skill's name predates the public release. The public copy of the skill has none of that layer's mechanics | Use it as is. The name is only a name |
+| The directive tells the child to "declare presence on the board" and "leave the board" | A shared task board in the author's layer | If you have no board, ignore it: the child skill tells a child without one to write a one-line note file in the hand-back directory instead |
+| `pi-orch spawn --agent-os-capture enabled\|disabled` | Switches Agent OS's session capture for a child | Do not pass it. The flag is only sent when you give it |
+| `agent-os provider-usage` in the `pi-orch` README (route-cap overflow text) and in the older docs | The author's quota read-out | Check your providers' own dashboards. Pi Web UI's `/capacity` and `/models` are the live sources inside the API |
+| "The command centre (Wheelhouse)" notes in the `pi-orch` README, `AGENTS.md` and a few docs | A private consumer of the same API, signposted so the author does not break it | Ignore. It documents flags and exit codes that stay stable anyway |
+| `AGENTS.md`/`CLAUDE.md`, the Agent OS contract mirror, host paths in older plans | Maintainer guidance for the author's host | Read only if you maintain a fork |
+
+The public skills in [`agent-workflow-skills`](https://github.com/valtterimelkko/agent-workflow-skills) are derived from the author's private skill library with those mechanics removed. They can lag his private versions; the Pi Web UI and `pi-orch` docs and code are the same ones he runs.
 
 ## Honest limits
 
