@@ -378,7 +378,10 @@ export async function scanExtensionsTree(
   const readFileFn = overrides.readFile ?? ((path: string) => readFile(path, 'utf-8'));
   const extensionsDir = join(agentDir, 'extensions');
   const parts: string[] = [];
-  const entryPaths: string[] = [];
+  // Entry paths grouped by top-level entry name, so the final order can match the SDK's
+  // (fs.readdirSync returns names sorted; fs.opendir returns raw filesystem order, which
+  // decides which extension wins a tool/command conflict).
+  const entryGroups: Array<{ name: string; paths: string[] }> = [];
   const unfingerprintable = new Set<string>();
   let dirsVisited = 0;
   let entriesVisited = 0;
@@ -438,12 +441,12 @@ export async function scanExtensionsTree(
       continue;
     }
     if (entry.isFile && extensionName(entry.name)) {
-      entryPaths.push(full);
+      entryGroups.push({ name: entry.name, paths: [full] });
       continue;
     }
     if (entry.isDirectory) {
       const resolved = await resolveExtensionEntries(full, { stat: statB, readFile: readFileFn }, debitEntry);
-      entryPaths.push(...resolved);
+      entryGroups.push({ name: entry.name, paths: resolved });
       queue.push({ dir: full, id });
     }
   }
@@ -472,6 +475,8 @@ export async function scanExtensionsTree(
   }
 
   parts.sort();
+  entryGroups.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const entryPaths = entryGroups.flatMap((group) => group.paths);
   return {
     entryPaths: entryPaths.filter((path) => !unfingerprintable.has(extensionId(path, extensionsDir))),
     fingerprint: parts.join('|'),

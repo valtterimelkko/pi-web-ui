@@ -19,6 +19,7 @@ import {
   ExtensionFactoryCache,
   createExtensionFactoryResourceLoader,
   discoverGlobalExtensionPaths,
+  scanExtensionsTree,
   getExtensionLoaderTelemetry,
   refreshExtensionFactories,
   resetExtensionLoaderTelemetry,
@@ -95,6 +96,29 @@ describe('discoverGlobalExtensionPaths', () => {
       `${AGENT}/extensions/beta/index.js`,
       `${AGENT}/extensions/gamma/main.ts`,
       `${AGENT}/extensions/loose.ts`,
+    ]);
+  });
+
+  it('orders extensions by top-level entry name whatever order the filesystem lists them in (matches the SDK, which reads with a sorted readdir)', async () => {
+    const { deps } = fakeFs({
+      dirs: {
+        [`${AGENT}/extensions`]: ['twin', 'zeta.ts', 'iso', 'alpha'],
+        [`${AGENT}/extensions/twin`]: ['index.ts'],
+        [`${AGENT}/extensions/iso`]: ['index.ts'],
+        [`${AGENT}/extensions/alpha`]: ['index.ts'],
+      },
+      files: {
+        [`${AGENT}/extensions/zeta.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/twin/index.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/iso/index.ts`]: { mtimeMs: 1 },
+        [`${AGENT}/extensions/alpha/index.ts`]: { mtimeMs: 1 },
+      },
+    });
+    expect((await scanExtensionsTree(AGENT, deps)).entryPaths).toEqual([
+      `${AGENT}/extensions/alpha/index.ts`,
+      `${AGENT}/extensions/iso/index.ts`,
+      `${AGENT}/extensions/twin/index.ts`,
+      `${AGENT}/extensions/zeta.ts`,
     ]);
   });
 
