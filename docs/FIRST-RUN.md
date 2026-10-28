@@ -33,6 +33,7 @@ Then configure exactly one runtime:
 - **OpenCode** — a straightforward server-backed path
 - **Claude Code** — choose the SDK backend first, especially for provider profiles
 - **Antigravity** — useful for Gemini/Antigravity workflows, but operationally the least native path
+- **Command Code** — feature-gated (`COMMAND_CODE_ENABLED=true`); see [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md)
 
 Use [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md) for runtime-specific authentication and caveats.
 
@@ -63,6 +64,7 @@ Confirm that:
 
 - Production or always-on service: [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
 - Runtime selection: [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md)
+- Orchestrating agents across harnesses: [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md)
 - Internal API: [`INTERNAL-API-QUICKSTART.md`](./INTERNAL-API-QUICKSTART.md)
 - Telegram and terminal-agent notifications: [`SELF-NOTIFICATIONS.md`](./SELF-NOTIFICATIONS.md)
 - Troubleshooting: [`TROUBLESHOOTING-DECISION-TREE.md`](./TROUBLESHOOTING-DECISION-TREE.md)

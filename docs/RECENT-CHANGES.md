@@ -4,6 +4,9 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Public positioning: orchestration first (2026-10-28)**
+  - The README, [`PROJECT-STORY.md`](./PROJECT-STORY.md) and [`VISION.md`](./VISION.md) now lead with what the repo is mostly used for: a standardisation and orchestration layer across Pi Coding Agent, Claude Code, OpenCode, Antigravity and Command Code, with the browser UI as one client. New [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) is the public entry point (what it standardises, the harnesses, how it is used, three-level adoption, caveats). Command Code gains an adopter-level introduction and a runtime-chooser entry. A stale "no parent/child metadata" limitation in [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) was corrected, and the README no longer hard-codes a contract version.
+
 - **Production env moved fully outside the repo (2026-10-03)**
   - The public repo never tracked secrets (audited: every value in `/root/.pi-web-ui/secrets.env` is absent from the tracked tree and full git history), and `.env.production` itself held only non-secret ops config — but it sat inside the repo directory. It now lives at `/root/.pi-web-ui/production.env`; the systemd unit loads it alongside `/root/.pi-web-ui/secrets.env`, so **nothing env-like is read from inside the repo at runtime**. The old in-repo file was removed; `.gitignore` keeps ignoring the legacy name for local leftovers. `scripts/live-validate-parent-child-e2e.mjs` `--env-file` default follows the new path.
 

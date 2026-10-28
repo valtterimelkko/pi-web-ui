@@ -1,5 +1,7 @@
 # Internal API quickstart
 
+> Want the overview first? [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) explains what this API is for and how to adopt it. The optional [`pi-orch`](https://github.com/valtterimelkko/pi-orch) client wraps the loop below in one CLI.
+
 Use this page when you want a working local automation flow quickly. For full semantics and caveats, continue to [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), and [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md).
 
 ## Safety boundary

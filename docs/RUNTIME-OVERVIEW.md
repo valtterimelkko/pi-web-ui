@@ -2,7 +2,9 @@
 
 Pi Web UI can present **five runtime families in one browser UI**. Command Code is a full runtime path behind its own env gate (`COMMAND_CODE_ENABLED`, disabled by default).
 
-This guide helps you choose where to start.
+This guide helps you choose where to start. If you mainly want to orchestrate agents across these harnesses rather than use the browser UI, read [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) first: the same five families are what a parent agent can drive through the Internal API.
+
+**Codex models** are reached through the Pi Coding Agent path (its `openai-codex` subscription provider), not as a separate family.
 
 ## Recommended mindset
 
@@ -88,6 +90,14 @@ Read next:
 Read next:
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
 
+### Start with Command Code if...
+- Command Code (`cmd`) is already part of your workflow and you want its models in the same session model as the others
+- you are happy to enable a feature-gated runtime (`COMMAND_CODE_ENABLED=true`, off by default) and set a working-directory root policy
+- you accept that this is the newest path and the one with the fewest companions
+
+Read next:
+- [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md)
+
 ## Capability summary
 
 | Capability | Pi Coding Agent | Claude Code | OpenCode | Antigravity | Command Code |
@@ -125,7 +135,7 @@ Choose:
 
 ### For the fullest multi-runtime philosophy
 Choose:
-- **Pi Coding Agent + Claude Code + OpenCode + Antigravity**
+- **Pi Coding Agent + Claude Code + OpenCode + Antigravity**, and add **Command Code** if you already use it
 
 But only if you already know why each one belongs.
 

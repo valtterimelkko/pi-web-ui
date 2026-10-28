@@ -4,11 +4,11 @@
 
 ## Purpose
 
-Pi Web UI is a **runtime-agnostic browser UI** over five runtime families — Pi Coding Agent, Claude Code, OpenCode,
-Antigravity and Command Code (behind the `COMMAND_CODE_ENABLED` gate). It is the production control plane on this
-host, and the repo is treated as permanently public. Core themes: a mostly runtime-neutral frontend, runtime-specific
-complexity on the server, sessions unified through one registry and replay model, and the Internal API as a
-first-class backend boundary.
+Pi Web UI is a **standardisation and orchestration layer** over five runtime families — Pi Coding Agent, Claude Code,
+OpenCode, Antigravity and Command Code (behind the `COMMAND_CODE_ENABLED` gate): one session registry, an Internal API
+for orchestrating children across harnesses, and a runtime-agnostic browser UI. It is the production control plane on
+this host, and the repo is treated as permanently public. Public positioning: `README.md`,
+`docs/ORCHESTRATION-OVERVIEW.md`.
 
 ## Binding rules
 
@@ -47,7 +47,7 @@ first-class backend boundary.
 | Voice Mode | `docs/VOICE-MODE-INDEX.md` |
 | Cross-repo strategic context and current status | `AGENT-REFERENCE.md` (`## Cross-repo strategic context`) |
 | The high-signal file map and runtime validation shortcuts | `AGENT-REFERENCE.md` (`## High-signal file map`, `## Runtime-aware validation shortcuts`) |
-| The public overview | `README.md` |
+| The public overview and the orchestration story | `README.md`, `docs/ORCHESTRATION-OVERVIEW.md` |
 
 ## Validate & commit
 

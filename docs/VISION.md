@@ -1,112 +1,58 @@
 # Vision and Direction of Travel
 
-Pi Web UI is already a usable self-hosted multi-runtime browser interface.
+Pi Web UI started as a multi-runtime browser UI. It has become, in daily use, a **standardisation and orchestration layer** for coding agents, with the browser UI as one client of it.
 
-It is also, increasingly, a platform for something broader:
-- live validation against real agent runtimes
-- local application integration
-- cross-runtime orchestration experiments
+This page says what is already real, what is still rough, and where I want to take it. For the practical picture, read [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md); for the history, [`PROJECT-STORY.md`](./PROJECT-STORY.md).
 
-This page explains that direction without pretending the whole vision is finished today.
+## What is real today
 
-## What Pi Web UI already is
+- **Multi-harness orchestration.** A parent agent can create, prompt, watch, read and verify children across Pi Coding Agent, Claude Code, OpenCode, Antigravity and Command Code through one local API, and I do this daily. The parent can be any of those harnesses.
+- **One session model.** One registry, model catalogue, run-receipt format, transcript and completion block, whichever harness answers.
+- **Waiting, retention and cleanup that work without polling.** Watches wake a parent when a child ends; leases let a child outlive the turn that created it.
+- **Verification.** A child's claims about commits, files and tests can be re-checked read-only against git and the filesystem.
+- **A browser UI** over the same sessions, for mobile and desktop, including voice.
+- **Live validation** against real runtime sessions, on a disposable server, which is where the API started.
 
-Today, Pi Web UI is already useful as:
-- a browser UI for multiple coding-agent runtimes
-- a persistent session shell across desktop and mobile
-- a place where Pi Coding Agent extensions and OpenCode plugins can surface richer workflows
-- a local automation surface for real end-to-end testing against those runtimes
+## Where the API came from
 
-## Where the local automation API came from
+The local API (the **Internal API**) did not begin as a product. Its original purpose was to let coding agents build, troubleshoot and validate Pi Web UI against **real runtime sessions**, not only unit tests or mocks. Many meaningful bugs in a project like this only appear when a real runtime does real work: a new-session flow that fails only with a live Claude or OpenCode backend, a replay path that breaks on a genuine event sequence, a tool rendering that looks right in code and fails in practice.
 
-The local automation API (currently documented as the **Internal API**) did **not** begin primarily as a productized integration layer.
+Giving agents a way to drive those sessions also gave them a way to drive each other. That second use is now the larger one.
 
-Its original purpose was much more practical:
+## What the layer is for
 
-> to let coding agents build, troubleshoot, and validate Pi Web UI features against **real runtime sessions**, not just against unit tests, mocks, or browser-only test environments.
+It lets a parent workflow choose the best route for each subtask instead of assuming every child comes from the same harness:
 
-That matters because many meaningful bugs in a project like this only appear when a real session is created and a real runtime is asked to do real work.
+- model-diverse planning, implementation and review loops
+- cost- and quota-aware routing, with cheap children doing the bulk of the work
+- the right harness for the right model, since the same model can behave differently in different harnesses
+- other local software (voice interfaces, monitors, custom front ends, coordination tools) treating Pi Web UI as a runtime-aware backend
 
-Examples:
-- a new session flow that only fails with a live Claude or OpenCode backend
-- replay logic that only breaks once a genuine runtime emits a real event sequence
-- tool rendering or follow-up behaviour that looks correct in code but fails in practice
+The API publishes explicit contract metadata and a short compatibility policy in [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), so local consumers can tell which surface they are talking to. Pi Web UI stays the **runtime gateway**: memory, planning and work-object concerns belong to whatever consumes it.
 
-So the first value of the API was **live validation**.
+## Still rough
 
-## The second purpose: local backend integration
+- The harnesses are operationally uneven. What a child can do mid-turn (steering, approvals, live events) differs by runtime, and the capabilities endpoint is the honest answer, not this page.
+- Claude Code and Antigravity are wrapper-oriented and need upkeep when upstream CLIs, auth or policy change.
+- Command Code is feature-gated and newer than the rest.
+- It is a trusted, same-host, single-operator interface. There is no per-client access control inside the API.
+- The repo is a living system and carries a lot of operational documentation. Expect rough edges.
 
-The API is also becoming a local backend surface for other tools running on the same machine or trusted host.
+## Direction
 
-That could include things like:
-- Agent OS style tooling running as a separate local project
-- observer or monitoring tools
-- voice interfaces
-- custom frontends
-- automation helpers
+No fixed roadmap, but the principles are stable:
 
-In that model, Pi Web UI is not just a browser app. It is a runtime-aware backend that other local software can call.
-
-The API now publishes explicit contract metadata and has a short compatibility policy in [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), because local consumers should be able to detect which Internal API surface they are using.
-
-## The longer-term orchestration vision
-
-The more ambitious direction is still early, and should be read as **vision, not finished product**.
-
-The idea is this:
-
-Instead of a parent coding agent spawning subagents only through its own native harness, Pi Web UI's local automation API could become a place where a parent agent can call **different runtime/provider paths through one integrated surface**.
-
-In other words, a future workflow could look more like:
-- one child session on a Pi Coding Agent-backed model path
-- one child session on an OpenCode/GLM path
-- one child session on an Antigravity/Gemini path
-- one child session on a Claude Code path
-- all coordinated through the same local API
-
-That would let a parent workflow choose the best available route for each subtask, rather than assuming every child should come from the same harness.
-
-## Why that is interesting
-
-If this direction matures, it could support workflows such as:
-- model-diverse planning and implementation loops
-- cost-aware or quota-aware routing across runtimes
-- dynamic workflows where different providers are better at different stages
-- local tools that treat Pi Web UI as a unified multi-runtime control plane
-
-That is the more radical possibility behind the project.
-
-## Important caveat
-
-This orchestration vision is **not half-finished product marketing**.
-
-Important parts of it are still:
-- incomplete
-- evolving
-- operationally uneven across runtimes
-- limited by the different native capabilities of Pi Coding Agent, Claude Code, OpenCode, Antigravity, and Command Code
-
-So the right current public framing is:
-
-- **already real today:** browser UI, persistence, replay, local automation API, runtime integration, live validation
-- **emerging now:** local integration for other applications and more capable orchestration endpoints
-- **longer-term vision:** a stronger multi-runtime orchestration layer where one parent workflow can recruit the best available path across providers and harnesses
+- Keep harness differences behind the API, so a parent written today keeps working when a child's harness or model is swapped.
+- Keep the orchestration discipline portable: the skills and client should work with any harness that can read a `SKILL.md` and run a shell command.
+- Keep adoption incremental, so someone can take the API, the client or the skills alone.
 
 ## Why this matters to adopters
 
-You do not need to buy into the whole vision to use the repo.
-
-You can still adopt Pi Web UI simply as:
-- a Pi Coding Agent web UI
-- an OpenCode web UI
-- a Claude-facing browser shell
-- a Gemini/Antigravity browser shell
-- a starting point for your own fork
-
-But if you are the kind of power user who cares about where these systems could go, the longer-term direction is part of the point.
+You do not need the whole vision. You can adopt Pi Web UI as just the API, as the API plus a thin client, as the skills on their own, or purely as a browser shell for one runtime. Forking it as a starting point for your own provider and harness mix is a feature, not a misuse.
 
 ## Related docs
 
+- [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md)
 - [`PROJECT-STORY.md`](./PROJECT-STORY.md)
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)

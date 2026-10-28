@@ -40,6 +40,9 @@ Good first choices:
 - **OpenCode** if OpenCode is already part of your workflow
 - **Claude Code** if Claude Code is your main coding runtime and you accept a more wrapper-oriented integration
 - **Antigravity** if Gemini/Antigravity is specifically why you want this UI
+- **Command Code** if `cmd` is already part of your workflow (feature-gated; see [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md))
+
+If your main goal is orchestrating agents across harnesses rather than the browser UI, read [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) alongside this guide and start with two runtimes.
 
 ## 4. Install base prerequisites
 

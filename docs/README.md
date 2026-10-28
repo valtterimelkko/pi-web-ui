@@ -2,10 +2,11 @@
 
 > **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes, and the [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) changelog for the authoritative contract version history.
 
-This folder supports **four distinct reading paths**. Choose by task instead of reading the documentation linearly.
+This folder supports **five distinct reading paths**. Choose by task instead of reading the documentation linearly.
 
 | Reader/task | Start here | Then |
 |---|---|---|
+| Anyone wanting the multi-harness orchestration layer | [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) | [`INTERNAL-API-QUICKSTART.md`](./INTERNAL-API-QUICKSTART.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) |
 | New adopter wanting first success | [`FIRST-RUN.md`](./FIRST-RUN.md) | [`GETTING-STARTED.md`](./GETTING-STARTED.md), [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md) |
 | Local API consumer or orchestrator | [`INTERNAL-API-QUICKSTART.md`](./INTERNAL-API-QUICKSTART.md) | [`INTERNAL-API-RECIPES.md`](./INTERNAL-API-RECIPES.md), [`INTERNAL-API.md`](./INTERNAL-API.md) |
 | Operator troubleshooting a symptom | [`TROUBLESHOOTING-DECISION-TREE.md`](./TROUBLESHOOTING-DECISION-TREE.md) | [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md), [`OBSERVABILITY.md`](./OBSERVABILITY.md) |
@@ -30,6 +31,7 @@ Then use the resolved internal id with `GET /api/v1/sessions/<id>/evidence`. Fol
 ### Start here
 
 - [`../README.md`](../README.md) — public landing page
+- [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) — **what the repo is mostly used for now:** one standardised layer for orchestrating agents across Pi, Claude Code, OpenCode, Antigravity and Command Code; how I use it; how to adopt it
 - [`FIRST-RUN.md`](./FIRST-RUN.md) — one blessed Linux + one-runtime path
 - [`GETTING-STARTED.md`](./GETTING-STARTED.md) — broader clone → configure → first-session guide
 - [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md) — choose a runtime and understand trade-offs
@@ -48,14 +50,15 @@ Then use the resolved internal id with `GET /api/v1/sessions/<id>/evidence`. Fol
 
 ### Understand the project
 
-- [`PROJECT-STORY.md`](./PROJECT-STORY.md) — why this exists and how the runtime mix evolved
-- [`VISION.md`](./VISION.md) — local automation and cross-runtime direction
+- [`PROJECT-STORY.md`](./PROJECT-STORY.md) — how a browser UI became an orchestration layer, and how the runtime mix evolved
+- [`VISION.md`](./VISION.md) — what is real, what is still rough, and the principles going forward
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — high-level system structure and runtime boundaries
 - [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) — how Pi extensions and OpenCode plugins fit
 - [`GOAL-EXTENSION-UI.md`](./GOAL-EXTENSION-UI.md) — goal UI ownership and lifecycle boundary
 
 ### Automation and integration
 
+- [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) — the overview and adoption path; read first
 - [`../API.md`](../API.md) — REST / WebSocket / automation API index
 - [`INTERNAL-API-QUICKSTART.md`](./INTERNAL-API-QUICKSTART.md) — shortest safe automation loop
 - [`INTERNAL-API-RECIPES.md`](./INTERNAL-API-RECIPES.md) — durable dispatch, fan-out, evidence, transfer, notifications

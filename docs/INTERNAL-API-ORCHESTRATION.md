@@ -4,7 +4,7 @@
 >
 > Read [`INTERNAL-API.md`](./INTERNAL-API.md) for the canonical endpoint reference and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) for compatibility/versioning rules. Read this guide when you want to spawn child sessions across runtimes, monitor them, collect their results, and hand context between them.
 >
-> Important framing: the Internal API began first as a **live-validation API** for exercising real runtime sessions during development and troubleshooting. The orchestration role described here is real and growing, but parts of the broader cross-runtime vision are still early and evolving.
+> Important framing: the Internal API began as a **live-validation API** for exercising real runtime sessions during development and troubleshooting. Orchestration is now its main day-to-day use: a parent agent in any harness driving children across Pi, Claude Code, OpenCode, Antigravity and Command Code. For the short overview, how it is used and how to adopt it, read [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) first. Runtimes still differ in what they can do mid-turn, so check `/capabilities` rather than assuming.
 >
 > **Safety boundary:** live validation must target a disposable validation server by default, not the running production Web UI. Production validation requires explicit user permission and the CLI-level `--allow-production` acknowledgement.
 
@@ -153,9 +153,12 @@ full Tier-1 orchestration loop:
 
 These are the main limitations to keep in mind when designing orchestrators:
 
-- **No parent/child metadata model yet** — the API does not expose
-  `parentSessionId`, `orchestrationId`, or `GET /sessions?parent=...`.
-  You must track those relationships yourself.
+- **No `orchestrationId` or job grouping** — parent/child lineage is recorded
+  (`parentSessionId`, `parentSource`, `GET /sessions?parent=...`, including a
+  declared native parent such as a Claude Code session id since contract
+  1.63.0), but the API has no wider grouping of children into one named
+  orchestration. Track that in your own caller state, e.g. with a per-run
+  `ownerId` on retention leases.
 - **Run receipts are dispatch-scoped, not a queue:** every accepted Internal-API
   prompt has a durable `runId` and receipt, but there is still no general job
   queue or scheduler. Use `GET /sessions/:id/wait` for live status and
@@ -562,7 +565,7 @@ agents on other runtimes:
 - **Claude child** — use `/events` only if you truly need live progress; for
   robustness prefer `/wait` + `/transcript`
 
-That gives you broad functional coverage across these four runtime paths without
+That gives you broad functional coverage across the runtime paths without
 assuming identical runtime behaviour where the backends are actually different.
 
 ## Transcript vs screen view vs history

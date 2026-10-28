@@ -2,6 +2,12 @@
 
 > Canonical reference for the Command Code runtime (`cmd`), Pi Web UI's fifth runtime family. Scope: what it is, how it runs, how to refresh its catalogues, and how to validate it.
 
+## In plain terms
+
+Command Code is one of the five harness families Pi Web UI can drive, alongside Pi Coding Agent, Claude Code, OpenCode and Antigravity. Once enabled, its sessions appear in the browser UI and are available through the Internal API exactly like the others: a parent agent can create a Command Code child (`runtime: "commandcode"`), prompt it, wait for it and read a normalised result, and can pick from its live model catalogue and native effort levels where the CLI advertises them. See [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md).
+
+**To try it:** install and sign in to the `cmd` CLI, then set `COMMAND_CODE_ENABLED=true` and `COMMAND_CODE_ALLOWED_CWD_ROOTS=/path/to/workspace-root` in `.env` and restart. It is off by default, and it is not part of the Internal API MCP adapter or disposable `--runtime all` validation (see [`MCP-SERVER.md`](./MCP-SERVER.md) and [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)). The rest of this page is the maintainer reference.
+
 ## What it is
 
 Command Code wraps a single installed CLI, `cmd` (GOAT subscription). One

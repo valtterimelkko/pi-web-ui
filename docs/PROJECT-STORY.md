@@ -1,6 +1,8 @@
 # Project Story
 
-Pi Web UI began as a practical response to the limits of relying on a single coding-agent product.
+Pi Web UI began as a practical response to the limits of relying on a single coding-agent product. It started as a browser UI, and it has slowly turned into something I use more as an orchestration layer than as a screen. This page tells that story in order; the current picture is in [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md).
+
+**In four steps:** (1) a browser UI so I could prompt agents from anywhere; (2) more harnesses behind it, which forced one shared session model; (3) a local API so agents could drive real sessions for validation; (4) that API becoming the layer a parent agent uses to orchestrate children across every harness.
 
 ## The original problem
 
@@ -50,11 +52,34 @@ That remains true, but the story later became more nuanced: GLM access did not n
 ### Antigravity runtime
 Antigravity was added as another way to bring subscription-backed Gemini-style agent use into the same browser surface. Like Claude, it is not the same kind of first-class extension ecosystem as Pi Coding Agent. The integration is therefore more wrapper-like and operationally sensitive.
 
+### Command Code runtime
+Command Code was the fifth family to arrive. It is a subscription-backed coding CLI with its own model catalogue, and it fits the same pattern as the others: one more subscription-backed source of models that a parent can route work to. It is a direct `cmd` subprocess per session, off by default behind `COMMAND_CODE_ENABLED`, with live model and effort discovery and a private normalised replay journal. See [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md).
+
+### Codex models
+Codex-subscription models are reached through the Pi Coding Agent path (its `openai-codex` provider) rather than as a separate harness family, so they sit in the same session model as everything else.
+
+## From a UI to a standardisation layer
+
+The first reason for the local API was not orchestration at all. I wanted coding agents to be able to build and troubleshoot Pi Web UI against **real** sessions on real runtimes, because many bugs in a project like this only appear when a genuine backend does genuine work. That API is the [Internal API](./INTERNAL-API.md).
+
+Once it existed, a different use became obvious. A parent agent in one harness could create a child in another, send it a task, wait, and read its result in one common format. Every harness suddenly looked the same from the outside: same session ids, same model catalogue, same run receipts, same way of being woken when a child finishes. That is what I now call a **standardisation layer**, and it is the part of the repo I use most.
+
+What followed was mostly learning how to run parents and children well, and then writing it down and building tools for it:
+
+- **Waiting without polling.** Watches and long-poll waits, so a parent can go idle and be woken, instead of burning tokens in a sleep loop.
+- **Retention and cleanup.** Leases, so a child can outlive the turn that created it and is still cleaned up by its owner.
+- **Evidence over trust.** Completion blocks and a read-only `verify` step that re-checks a child's claims against git and the filesystem.
+- **Capacity and lineage.** Admission control for bursts of children, and parent/child links, including for a Claude Code parent that Pi Web UI does not host.
+- **Portable discipline.** The method around the API became four harness-neutral skills in the [orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md), plus a thin client, [`pi-orch`](https://github.com/valtterimelkko/pi-orch).
+
+Today the usual shape is a strong parent model in Claude Code, with a large share of the work done by cheaper children such as DeepSeek V4.1 Flash and GLM 5.3 Flash running in other harnesses. That spread is a big part of why a smaller Claude Code plan has been enough for me.
+
 ## How it is used in practice
 
 This is not just a showcase repo. It is a live working interface used in day-to-day agent workflows.
 
 Typical personal usage patterns include:
+- **orchestrating**: a strong parent agent fanning work out to children on cheaper runtimes across several harnesses (the main use now; 1,116 sessions in one 30-day stretch)
 - using stronger premium runtimes for the hardest coding/research tasks
 - using cheaper or higher-quota runtimes for medium-complexity work
 - switching between runtimes without switching browser surface
@@ -80,6 +105,8 @@ For example:
 The public version of this repo is meant to be both:
 - a genuinely usable self-hosted project for others
 - an honest record of a real, evolving personal agent workspace
+
+I link it from my posts because the orchestration layer has been useful enough to me that I would like it to be of use to someone else. I would rather you adopt a small piece of it than all of it: the API alone, the thin client, or the skills.
 
 It is not trying to pretend that all runtimes are equally clean, equally official, or equally extensible. The project is strongest when understood as a practical multi-runtime interface shaped by real usage constraints, changing upstream policies, and a preference for owning more of the interface layer personally.
 

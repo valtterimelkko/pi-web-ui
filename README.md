@@ -1,243 +1,141 @@
 # Pi Web UI
 
-> **Latest work:** **Voice Mode** — a two-lane voice harness for talking to an agent while it works: a server-side talker with a confirm-gated instruction relay, a client speech arbiter with the anti-duet rule, verbatim/summary/headlines reading levels, and full voice observability. See [`docs/VOICE-MODE-INTENT.md`](./docs/VOICE-MODE-INTENT.md). Recent maintenance: lint-ratchet headroom restored (test-file exemptions, ceiling re-baselined) and all live secrets migrated out of the repository (see [`SECURITY.md`](./SECURITY.md)). Rolling delta: [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md).
+**A standardisation layer for coding agents: one session model and one local API across Pi Coding Agent, Claude Code, OpenCode, Antigravity and Command Code — so a parent agent can orchestrate children on any harness. It also comes with a browser UI over the same sessions.**
 
-Built for a simple reality: **one agent runtime and one subscription is often not enough.**
+I use it mostly as an orchestration layer now. A strong model in one harness plans the work and fans it out to cheaper children running in *other* harnesses, waits without burning tokens, reads normalised results and checks them before accepting. The browser UI is where it started, and I still use it, but less and less.
 
-Pi Web UI is a self-hosted browser interface for running multiple coding-agent runtimes from one place. It works across mobile, desktop, and laptop browsers, so you can keep the same agent workspace available at a desk or on the go.
+It is a working personal system made public. It is messy in places and honest about it, and it is meant to be adopted piece by piece.
 
-Built around [Pi Coding Agent](https://shittycodingagent.ai/) (via its SDK mode), Pi Web UI lets you use **Pi Coding Agent**, **Claude Code**, **OpenCode**, **Antigravity**, and the feature-gated **Command Code** runtime through a single persistent UI with unified sessions, replay, and a local automation API.
+> **New here?** Read [`docs/ORCHESTRATION-OVERVIEW.md`](./docs/ORCHESTRATION-OVERVIEW.md) (what it is, how I use it, how to adopt it), then [`docs/INTERNAL-API-QUICKSTART.md`](./docs/INTERNAL-API-QUICKSTART.md) for a first call.
 
-It is built for people who want more than one vendor-owned coding surface: different runtime strengths, different provider access, different subscription economics, and one persistent session UI across them.
+## What it does
 
-Currently supported runtime paths:
+- **Multi-harness, multi-runtime orchestration.** A parent creates, prompts, watches, reads and verifies child sessions across five harness families through one local HTTP API (a Unix socket on the same machine). The parent can be any of them; mine is usually Claude Code.
+- **One session model.** One registry, one model catalogue, one set of run receipts, transcripts and completion blocks, whichever harness answers.
+- **Waiting without polling.** Watches and long-poll waits wake the parent when a child ends. Children can outlive the parent's turn and are cleaned up by an owner lease.
+- **Verification, not trust.** A child's claimed commits, files and tests are re-checked against git and the filesystem.
+- **A browser UI over the same sessions**, for mobile, desktop and laptop: live streaming, replay, voice and Drive Mode, files, notifications.
 
-- **Pi Coding Agent**
-- **Claude Code** (SDK/profile-backed, direct `claude -p`, or channel-backed Claude Code)
-- **OpenCode**
-- **Antigravity** (`agy` stream-json / Gemini)
-- **Command Code** (`cmdc`, behind the `COMMAND_CODE_ENABLED` gate, disabled by default)
+## The harnesses
 
-## Why this exists
+| Harness | Integration | Caveat level |
+|---|---|---|
+| **Pi Coding Agent** | Native SDK, in-process. Also reaches OpenRouter models and the `openai-codex` subscription provider | Lowest |
+| **Claude Code** | Claude Agent SDK with provider profiles, direct `claude -p`, or channel-backed Claude Code | Medium–higher |
+| **OpenCode** | `opencode serve`, HTTP and SSE | Low–medium |
+| **Antigravity** | `agy` stream-json, a persistent process per session | Higher |
+| **Command Code** | One `cmd` subprocess per session, behind `COMMAND_CODE_ENABLED` (off by default), with live model and effort discovery and a private normalised replay journal | High |
 
-Pi Web UI started as a practical response to a simple problem: one coding harness and one subscription was not enough.
+These are **not equally official** upstream. Pi Coding Agent and OpenCode use supported integration surfaces; Claude Code and Antigravity are wrapper-oriented and need maintenance when upstream CLIs, auth or policy change; Command Code is the newest and is feature-gated. Claude Code keeps three backends on purpose (SDK, direct CLI, channel-backed) because upstream policy and behaviour have shifted more than once. Detail: [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md), [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md).
 
-Some tasks deserved the strongest available runtime. Others only needed a cheaper or higher-quota path. I also wanted:
+## How I use it
 
-- one persistent browser UI instead of several terminals
-- session continuity across desktop and mobile
-- a place to extend Pi Coding Agent with custom extensions and OpenCode with custom plugins
-- a local automation surface for live validation and cross-runtime orchestration experiments
+A top-tier model is the parent: it plans, splits the work and judges the result. A great deal of the work goes to children on much cheaper or higher-quota models — DeepSeek V4.1 Flash and GLM 5.3 Flash are the ones I use most — in whichever harness suits the task. I call them children to a parent. Spreading the load this way is a large part of why I could stay on a smaller Claude Code plan. In one 30-day stretch I counted 1,116 sessions.
 
-For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md).
+The story of how a browser UI turned into this is in [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md). The short version is below.
 
-## What makes it different
+## The story in brief
 
-- **Five runtime families behind one UI** (Command Code is a full path for browser and Internal API callers once `COMMAND_CODE_ENABLED=true`)
-- **Unified session list and replay model** across runtimes with very different backends
-- **Local automation API** for live validation, integrations, and orchestration experiments
-- **Optional per-session Telegram notifications** when an agent yields control back to you
-- **Companion extension/plugin ecosystem** for Pi Coding Agent and OpenCode workflows
-- **Honest documentation** about what is native, what is wrapper-like, and what is still evolving
+I wanted one place to prompt agents from my phone and my laptop, with more than one subscription behind it, so I built a web UI around Pi Coding Agent. Adding Claude Code, OpenCode, Antigravity and later Command Code meant giving them one session model. To validate the UI I then needed a way for agents to drive real sessions, which became the Internal API. Over time that API, not the screen, became the thing I used most: a layer that standardises any agent in any harness so one can orchestrate the others. Full version: [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md); direction: [`docs/VISION.md`](./docs/VISION.md).
 
-## Runtime overview
+## Adopt as much or as little as you like
 
-| Runtime family | Integration style | Best for | Caveat level |
-|---|---|---|---|
-| **Pi Coding Agent** | Native Pi Coding Agent integration via its SDK path | Pi Coding Agent workflows, extensions, custom tools, and now a much broader optional OpenRouter-backed model catalogue | Lowest |
-| **Claude Code** | Claude Agent SDK (profiles), `claude -p`, or channel-backed Claude Code | Harder coding work on Claude Code; multi-provider access via provider profiles | Medium–higher |
-| **OpenCode** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
-| **Antigravity** | `agy` stream-json persistent process | Gemini/Antigravity workflows in the same UI | Higher |
-| **Command Code** | Server-owned `cmd` subprocess per session with exact live model/effort discovery and a private normalized replay journal | Command Code catalogue workflows with native effort where advertised | High |
+1. **The API only.** Run the server on a Linux or macOS machine you control, enable two runtimes you already use, and call the [Internal API](./docs/INTERNAL-API-QUICKSTART.md). You can ignore the browser UI.
+2. **Plus a thin client.** [`pi-orch`](https://github.com/valtterimelkko/pi-orch) wraps the common loop (`spawn`, `prompt`, `wait`, `result`, `verify`, `cleanup`) in a zero-dependency CLI, so parents stop hand-writing `curl` and `sleep` loops.
+3. **Plus the skills.** The [Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md) holds four portable `SKILL.md` files for the parent's loop, safe waiting, the child's discipline and secret scanning.
+4. **The browser UI.** If you also want a persistent web shell over your agents, follow [`docs/FIRST-RUN.md`](./docs/FIRST-RUN.md).
 
-The important truth is that these paths are **not equally official in the eyes of their upstreams**:
-
-- **Pi Coding Agent** and **OpenCode** use supported integration surfaces.
-- **Claude** and **Antigravity** are more wrapper-oriented and may need maintenance when upstream CLI behaviour, auth, or policy changes.
-
-For Claude specifically, Pi Web UI now keeps **three usable backend paths** available on purpose:
-- **SDK backend** — preferred, especially for explicit provider profiles
-- **direct CLI backend** — a practical fallback when SDK behaviour regresses
-- **channel-backed backend** — an escape hatch for richer Claude Code semantics when you accept the extra moving parts
-
-That is not accidental complexity. It is deliberate flexibility in response to changing upstream policy/economic constraints and real-world runtime behaviour — including the fact that GLM 5.2 has proven more effective inside the Claude Code harness than in some other harnesses.
-
-For a fuller chooser, read [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md).
+No cloud account and no extra daemon are needed. Start with **two** runtimes, not five. The Internal API token is full control of every session on the server, so keep it on a machine you trust and read [`SECURITY.md`](./SECURITY.md) first.
 
 ## Who this is for
 
-Pi Web UI is aimed at **medium-to-power users**, not absolute beginners to agentic tooling.
+Medium-to-power users of agent harnesses who want to self-host a personal agent workspace, orchestrate agents across harnesses, or fork a real multi-runtime codebase. It is a single-operator, small-trusted-context tool, not a multi-tenant SaaS.
 
-Typical good fits:
+- **Tier 1: Linux** — local servers, VPS deployments, always-on use
+- **Tier 2: macOS** — viable for technically comfortable users
+- **Windows** — not a primary target; use a Linux host, or treat WSL as experimental
 
-- you already use Pi Coding Agent, Claude Code, OpenCode, or Antigravity and want one browser surface around them
-- you want to self-host a personal coding-agent workspace
-- you want to fork a real multi-runtime UI and adapt it to your own harness/provider mix
-- you want a local automation/orchestration API that can talk to real agent runtimes
-
-## Support tiers
-
-Pi Web UI is not pretending every operating system is equally supported.
-
-- **Tier 1: Linux** — first-class target for local servers, VPS deployments, and always-on use
-- **Tier 2: macOS** — viable for technically comfortable users, especially local development and personal always-on machines such as Mac minis
-- **Windows** — not a primary target today; use a Linux host or treat WSL as experimental
-
-Read [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md) before planning a deployment.
+See [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md).
 
 ## Choose your docs path
 
-- **Adopting / self-hosting / evaluating the repo?** Start with [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
-- **Orchestrating agents with Pi Web UI?** Read [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md), then adopt the public [Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md) with the optional [`pi-orch`](https://github.com/valtterimelkko/pi-orch) client
-- **Choosing between runtime families?** Read [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
-- **Integrating programmatically or orchestrating agents?** Read [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
-- **Maintaining, contributing, or debugging the repo itself?** Start with [`docs/README.md`](./docs/README.md)
+| You want to… | Start here |
+|---|---|
+| Understand and adopt the orchestration layer | [`docs/ORCHESTRATION-OVERVIEW.md`](./docs/ORCHESTRATION-OVERVIEW.md) |
+| Make a first API call | [`docs/INTERNAL-API-QUICKSTART.md`](./docs/INTERNAL-API-QUICKSTART.md), then [`docs/INTERNAL-API-RECIPES.md`](./docs/INTERNAL-API-RECIPES.md) |
+| Run a parent properly (waves, waiting, supervision) | [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) |
+| Look up an endpoint or contract version | [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md), [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) |
+| Choose between harnesses | [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md) |
+| Self-host the browser UI | [`docs/FIRST-RUN.md`](./docs/FIRST-RUN.md), then [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md) |
+| Maintain, contribute or debug the repo | [`docs/README.md`](./docs/README.md), [`AGENTS.md`](./AGENTS.md) |
 
-## Quick start paths
+## The Internal API in more detail
 
-Do **not** try to adopt everything at once unless you already know you need it.
+The Internal API began as a way for coding agents to do **live end-to-end validation** against real runtimes while building Pi Web UI — real sessions against real backends, not just a test suite. It is now the main way I orchestrate agents, and a local backend for other tools on the same machine.
 
-### Option A — Start with one runtime
-Best for most adopters.
+It offers: runtime health and self-service diagnostics; durable run receipts and idempotent, disconnect-safe prompt dispatch; watches that wake a parent when a child ends; goals with turn and token budgets; parent/child lineage (including for a Claude Code parent that Pi Web UI does not host); session archive and retention leases; admission control with `Retry-After`; and a read-only screen-view transcript projection. The server publishes its contract version through `/health` and `/capabilities`; the changelog is in [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md), which is the source of truth for the version.
 
-Choose one of:
-- **Pi Coding Agent-focused setup**
-- **OpenCode-focused setup**
-- **Claude Code-focused setup**
-- **Antigravity-focused setup**
-- **Command Code-focused setup**
+Pi Web UI stays the runtime gateway. Memory and work-object concerns belong in whatever consumes the API; mine is a separate private project, Agent OS, which is **not** required.
 
-Then add more runtimes later.
+## The browser UI
 
-### Option B — Full multi-runtime setup
-Best if you already use several of these tools and want Pi Web UI to become your main browser shell.
+The same sessions are available in a React web app that works across mobile, desktop and laptop browsers:
 
-## Fastest path to first success
-
-1. Read [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
-2. Choose one runtime from [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
-3. Copy `.env.example` to `.env`
-4. Set your login password and other minimum config
-5. Run `npm ci --include=dev` and `npm run dev`
-6. Open the local UI and create your first session
-
-## Companion ecosystem
-
-Pi Web UI is stronger when paired with the public companion repositories:
-
-- **Pi Coding Agent extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
-- **OpenCode plugins:** [valtterimelkko/opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
-
-These are not mandatory for core chat/session flows, but they add a lot of the richer planning, memory, goal, orchestration, and status behaviour that shaped the project in practice.
-
-Read [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md).
-
-## Local automation API
-
-Despite the current filename, the **Internal API** is one of the most important power-user features in this repo.
-
-It began as a way for coding agents to do **live end-to-end validation** against real runtimes while building or troubleshooting Pi Web UI — not just by running a test suite, but by initiating real sessions against real agent backends.
-
-It is now also becoming:
-
-- a **local backend API** for other tools or applications on the same machine
-- a **growing orchestration surface** for cross-runtime workflows
-
-Current docs:
-- [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
-- [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
-- [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
-
-The workflow *around* the API — parent/child discipline, waiting without polling, evidence before acceptance and secret scanning before publishing — is packaged as portable agent skills in the public [Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md), with the optional [`pi-orch`](https://github.com/valtterimelkko/pi-orch) client for the common loop.
-
-Recent power-user additions worth knowing about (current contract **`1.29.0`** — see `docs/INTERNAL-API-CONTRACT.md` as source of truth; `header_up -Authorization` only in `forward_auth`):
-- **runtime health** and filtered, secret-scrubbed **self-service diagnostics** with a bounded process-local operational snapshot
-- durable **run receipts**, idempotent prompt dispatch, and explicit disconnect-safe detached answer-mode prompts
-- a read-only **screen-view transcript projection** (`view=screen`) for fetching what the user sees without browser automation
-- optional **Pi runtime OpenRouter model refresh** via `npm run pi:refresh-models`; see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md)
-- **Files tab:** MarkdownEditor with GFM preview, `filesStore.ts` (200 KiB truncation, read-only when truncated)
-
-The API now publishes contract metadata through `/health` and `/capabilities` because trusted local consumers may use Pi Web UI as a runtime backend. One such consumer under separate design is Agent OS; Pi Web UI should remain the runtime gateway rather than absorbing Agent OS memory/work-object concerns.
-
-Longer-term direction:
-- [`docs/VISION.md`](./docs/VISION.md)
+- one persistent session list and replay model across all five harnesses
+- **Voice Mode**, a two-lane harness for talking to an agent while it works — a confirm-gated instruction relay, an anti-duet speech arbiter and verbatim/summary/headlines reading levels ([`docs/VOICE-MODE-INTENT.md`](./docs/VOICE-MODE-INTENT.md)); and **Drive Mode** ([`docs/DRIVE-MODE.md`](./docs/DRIVE-MODE.md))
+- a Files tab with Markdown editing, optional per-session Telegram notifications, and companion extensions and plugins for Pi Coding Agent and OpenCode ([`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md))
 
 ## Architecture at a glance
 
 ```text
-Browser (React + Zustand + Vite)
-  └─ WebSocket /ws + REST /api/*
-       └─ Express server
-            ├─ auth / CSRF / security layers
-            ├─ unified session registry
-            ├─ Pi Coding Agent path
-            ├─ Claude Code path
-            ├─ OpenCode runtime path
-            ├─ Antigravity runtime path
-            ├─ Command Code runtime path
-            └─ local automation API over a Unix socket
+Parent agent (any harness)          Browser (React + Zustand + Vite)
+  └─ pi-orch / HTTP over Unix socket   └─ WebSocket /ws + REST /api/*
+       └──────────────┬─────────────────────┘
+                 Express server
+                  ├─ auth / CSRF / security layers
+                  ├─ unified session registry + replay
+                  ├─ Pi Coding Agent · Claude Code · OpenCode
+                  ├─ Antigravity · Command Code (gated)
+                  └─ Internal API (Unix socket): sessions, runs, watches, goals
 ```
 
-Canonical architecture doc:
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+Canonical architecture doc: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
-## Installation and adoption docs
+## Companion repositories
 
-### Public/adopter path
-- **Getting started:** [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
-- **Runtime chooser:** [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
-- **Platform support:** [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md)
-- **Project story:** [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md)
-- **Vision / direction of travel:** [`docs/VISION.md`](./docs/VISION.md)
-- **Claude backend modes:** [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md)
-- **Claude provider profiles / GLM routing:** [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md)
-- **Command Code runtime:** [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md)
-- **Companion repos:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
-- **Automation API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
-- **Automation API contract:** [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
-- **Notifications:** [`docs/NOTIFICATIONS.md`](./docs/NOTIFICATIONS.md)
-- **Deployment:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
-- **Security:** [`SECURITY.md`](./SECURITY.md)
-- **API index:** [`API.md`](./API.md)
-- **Docs hub:** [`docs/README.md`](./docs/README.md)
-- **Recent doc-relevant changes:** [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md)
+- [`pi-orch`](https://github.com/valtterimelkko/pi-orch) — the thin parent client for the Internal API
+- [`agent-workflow-skills`](https://github.com/valtterimelkko/agent-workflow-skills) — the orchestration pack and other portable skills
+- [`pi-extensions-public`](https://github.com/valtterimelkko/pi-extensions-public) and [`opencode-plugins`](https://github.com/valtterimelkko/opencode-plugins) — extensions and plugins for Pi Coding Agent and OpenCode
 
-### Maintainer / contributor / LLM-agent path
-- **Agent instructions:** [`AGENTS.md`](./AGENTS.md)
-- **Maintainer docs index:** [`docs/MAINTAINER-INDEX.md`](./docs/MAINTAINER-INDEX.md)
-- **Troubleshooting:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
-- **Codebase map:** [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
-- **Event pipeline:** [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md)
-- **Add a runtime:** [`docs/ADDING-A-RUNTIME.md`](./docs/ADDING-A-RUNTIME.md)
+None is needed for core sessions. See [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md).
+
+## Installation and reference docs
+
+**Adopters:** [`docs/ORCHESTRATION-OVERVIEW.md`](./docs/ORCHESTRATION-OVERVIEW.md) · [`docs/FIRST-RUN.md`](./docs/FIRST-RUN.md) · [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md) · [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md) · [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md) · [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) · [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md) · [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md) · [`docs/NOTIFICATIONS.md`](./docs/NOTIFICATIONS.md) · [`DEPLOYMENT.md`](./DEPLOYMENT.md) · [`SECURITY.md`](./SECURITY.md) · [`API.md`](./API.md)
+
+**Background:** [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md) · [`docs/VISION.md`](./docs/VISION.md) · [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md)
+
+**Maintainers and agents:** [`AGENTS.md`](./AGENTS.md) · [`docs/README.md`](./docs/README.md) · [`docs/MAINTAINER-INDEX.md`](./docs/MAINTAINER-INDEX.md) · [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) · [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) · [`docs/ADDING-A-RUNTIME.md`](./docs/ADDING-A-RUNTIME.md)
 
 ## Repo layout
 
 ```text
 client/       React frontend
-server/       Express server and runtime integrations
+server/       Express server, runtime integrations, Internal API
 shared/       shared protocol/types package
 docs/         public docs + maintainer docs
 tests/        Playwright E2E + benchmarks + utility tests
 server/tests/ server unit/integration tests
-extensions/   local extension code
 scripts/      operational helpers and validation tools
 ```
 
 ## Security and deployment posture
 
-Pi Web UI is best understood first as a **self-hosted, operator-controlled, single-user or small-trusted-context tool**, not as a turnkey multi-tenant SaaS product.
-
-That does not mean it must stay private to localhost, but it does mean you should read the deployment and security docs carefully before exposing it more broadly.
-
-- [`DEPLOYMENT.md`](./DEPLOYMENT.md)
-- [`SECURITY.md`](./SECURITY.md)
+Pi Web UI is a **self-hosted, operator-controlled, single-user or small-trusted-context tool**, not a turnkey multi-tenant service. You do not have to keep it on localhost, but read the deployment and security docs before exposing it more broadly: [`DEPLOYMENT.md`](./DEPLOYMENT.md), [`SECURITY.md`](./SECURITY.md).
 
 ## Credits and upstreams
 
-This project builds on top of other agent ecosystems rather than replacing them.
-
-- **Pi Coding Agent** is the original foundation and inspiration for the first runtime path. See [shittycodingagent.ai](https://shittycodingagent.ai/) and [the upstream codebase](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
-- **Claude Code**, **OpenCode**, **Antigravity**, and **Command Code** each provide their own runtime capabilities; Pi Web UI adds a browser layer, persistence layer, replay layer, and cross-runtime UX around them.
+This project builds on other agent ecosystems rather than replacing them. **Pi Coding Agent** is the original foundation: see [shittycodingagent.ai](https://shittycodingagent.ai/) and [the upstream codebase](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent). **Claude Code**, **OpenCode**, **Antigravity** and **Command Code** each provide their own runtime capabilities; Pi Web UI adds the session, replay, orchestration and browser layers around them.
 
 ## License
 
