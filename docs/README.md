@@ -59,6 +59,7 @@ Then use the resolved internal id with `GET /api/v1/sessions/<id>/evidence`. Fol
 ### Automation and integration
 
 - [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) — the overview and adoption path; read first
+- [`ORCHESTRATION-FIXTURE-SET.md`](./ORCHESTRATION-FIXTURE-SET.md) — the whole set (Internal API, `pi-orch`, the skills, the watch-wake companions): how it fits, install order, how to start an agent on it
 - [`../API.md`](../API.md) — REST / WebSocket / automation API index
 - [`INTERNAL-API-QUICKSTART.md`](./INTERNAL-API-QUICKSTART.md) — shortest safe automation loop
 - [`INTERNAL-API-RECIPES.md`](./INTERNAL-API-RECIPES.md) — durable dispatch, fan-out, evidence, transfer, notifications

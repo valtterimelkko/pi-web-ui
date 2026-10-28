@@ -16,7 +16,8 @@ The safest default assumption is:
 - one trusted operator or a very small trusted context
 - careful control of which runtimes are enabled
 - a reverse proxy and HTTPS if exposed beyond localhost
-- awareness that some runtime paths are more wrapper-oriented or permission-sensitive than others
+- awareness that some runtime paths are more wrapper-oriented or permission-sensitive than others (Claude Code and Antigravity are wrapper-oriented; Command Code is feature-gated, off by default, and runs a `cmd` subprocess with full-trust permissions inside a working-directory root policy)
+- treating the Internal API token as full control of every session on the server: orchestration parents, `pi-orch` and the watch-wake companions all hold it, so keep it on a machine and account you trust
 
 This repo is not documented as a turnkey multi-tenant SaaS product.
 

@@ -6,6 +6,8 @@ I use it mostly as an orchestration layer now. A strong model in one harness pla
 
 It is a working personal system made public. It is messy in places and honest about it, and it is meant to be adopted piece by piece.
 
+> **It works because of the whole set, not the API alone.** The Internal API is used with a thin client ([`pi-orch`](https://github.com/valtterimelkko/pi-orch)), four orchestration skills ([the pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md)) and the [watch-wake companions](https://github.com/valtterimelkko/agent-workflow-skills/tree/main/companions/watch-wake) that wake an idle parent when a child finishes, at zero token cost. Those are the reason a parent can supervise several children for hours without watching them. Take all of it: [`docs/ORCHESTRATION-FIXTURE-SET.md`](./docs/ORCHESTRATION-FIXTURE-SET.md).
+
 > **New here?** Read [`docs/ORCHESTRATION-OVERVIEW.md`](./docs/ORCHESTRATION-OVERVIEW.md) (what it is, how I use it, how to adopt it), then [`docs/INTERNAL-API-QUICKSTART.md`](./docs/INTERNAL-API-QUICKSTART.md) for a first call.
 
 ## What it does
@@ -38,6 +40,19 @@ The story of how a browser UI turned into this is in [`docs/PROJECT-STORY.md`](.
 
 I wanted one place to prompt agents from my phone and my laptop, with more than one subscription behind it, so I built a web UI around Pi Coding Agent. Adding Claude Code, OpenCode, Antigravity and later Command Code meant giving them one session model. To validate the UI I then needed a way for agents to drive real sessions, which became the Internal API. Over time that API, not the screen, became the thing I used most: a layer that standardises any agent in any harness so one can orchestrate the others. Full version: [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md); direction: [`docs/VISION.md`](./docs/VISION.md).
 
+## The orchestration fixture set
+
+Four public repositories, linked to each other, make up the orchestration model. Pi Web UI and `pi-orch` are in daily use on my own machines; the skills and companions are the same material I give my agents, in a sanitised public edition.
+
+| Piece | What it is |
+|---|---|
+| **Pi Web UI** (this repo) | The server and Internal API: one session model across five harnesses |
+| [**pi-orch**](https://github.com/valtterimelkko/pi-orch) | A zero-dependency CLI and module for the parent's side: spawn, prompt, wait, result, verify, cleanup |
+| [**Orchestration skills**](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md) | `pi-web-ui-internal-api-orchestration` (the parent's loop and rules), `long-horizon-waiting-strategies` (going idle safely), `orchestrated-child-worker` (the child's protocol), `secret-scanning` |
+| [**watch-wake companions**](https://github.com/valtterimelkko/agent-workflow-skills/tree/main/companions/watch-wake) | A Pi extension and a Claude Code mod: register a watch on a child, end your turn, get woken when it finishes; plus model-free wake deadlines as a backstop |
+
+How they fit, how to install them in order, and what to say to your agent to start: [`docs/ORCHESTRATION-FIXTURE-SET.md`](./docs/ORCHESTRATION-FIXTURE-SET.md).
+
 ## Adopt as much or as little as you like
 
 1. **The API only.** Run the server on a Linux or macOS machine you control, enable two runtimes you already use, and call the [Internal API](./docs/INTERNAL-API-QUICKSTART.md). You can ignore the browser UI.
@@ -61,7 +76,7 @@ See [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md).
 
 | You want to… | Start here |
 |---|---|
-| Understand and adopt the orchestration layer | [`docs/ORCHESTRATION-OVERVIEW.md`](./docs/ORCHESTRATION-OVERVIEW.md) |
+| Understand and adopt the orchestration layer | [`docs/ORCHESTRATION-OVERVIEW.md`](./docs/ORCHESTRATION-OVERVIEW.md), then [`docs/ORCHESTRATION-FIXTURE-SET.md`](./docs/ORCHESTRATION-FIXTURE-SET.md) |
 | Make a first API call | [`docs/INTERNAL-API-QUICKSTART.md`](./docs/INTERNAL-API-QUICKSTART.md), then [`docs/INTERNAL-API-RECIPES.md`](./docs/INTERNAL-API-RECIPES.md) |
 | Run a parent properly (waves, waiting, supervision) | [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) |
 | Look up an endpoint or contract version | [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md), [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) |
@@ -104,7 +119,7 @@ Canonical architecture doc: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 ## Companion repositories
 
 - [`pi-orch`](https://github.com/valtterimelkko/pi-orch) — the thin parent client for the Internal API
-- [`agent-workflow-skills`](https://github.com/valtterimelkko/agent-workflow-skills) — the orchestration pack and other portable skills
+- [`agent-workflow-skills`](https://github.com/valtterimelkko/agent-workflow-skills) — the orchestration pack, the watch-wake companions and other portable skills
 - [`pi-extensions-public`](https://github.com/valtterimelkko/pi-extensions-public) and [`opencode-plugins`](https://github.com/valtterimelkko/opencode-plugins) — extensions and plugins for Pi Coding Agent and OpenCode
 
 None is needed for core sessions. See [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md).

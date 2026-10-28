@@ -4,6 +4,9 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **The orchestration fixture set is published and linked (2026-10-28)**
+  - New [`ORCHESTRATION-FIXTURE-SET.md`](./ORCHESTRATION-FIXTURE-SET.md): how Pi Web UI, [`pi-orch`](https://github.com/valtterimelkko/pi-orch), the four orchestration skills and the watch-wake companions fit together, the install order, what to tell an agent, and what is lost without each piece. The README front page, the overview, the docs hub, [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) and [`INTERNAL-API-RECIPES.md`](./INTERNAL-API-RECIPES.md) link to it. The skills were refreshed to the current versions and the watch-wake Pi extension and Claude Code mod are now public in [`agent-workflow-skills`](https://github.com/valtterimelkko/agent-workflow-skills) (`companions/watch-wake`). [`SECURITY.md`](../SECURITY.md) now says the Internal API token is held by orchestration parents, `pi-orch` and the companions.
+
 - **Public positioning: orchestration first (2026-10-28)**
   - The README, [`PROJECT-STORY.md`](./PROJECT-STORY.md) and [`VISION.md`](./VISION.md) now lead with what the repo is mostly used for: a standardisation and orchestration layer across Pi Coding Agent, Claude Code, OpenCode, Antigravity and Command Code, with the browser UI as one client. New [`ORCHESTRATION-OVERVIEW.md`](./ORCHESTRATION-OVERVIEW.md) is the public entry point (what it standardises, the harnesses, how it is used, three-level adoption, caveats). Command Code gains an adopter-level introduction and a runtime-chooser entry. A stale "no parent/child metadata" limitation in [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) was corrected, and the README no longer hard-codes a contract version.
 

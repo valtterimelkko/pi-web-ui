@@ -29,11 +29,16 @@ Each runtime has different extension/plugin capabilities.
 
 - **Pi Coding Agent path** can expose custom tools, slash commands, widgets, status lines, and extension UI requests.
 - **OpenCode** can expose plugin-driven state and runtime events that Pi Web UI normalizes into the common frontend model.
-- **Claude** and **Antigravity** are integrated more as runtime wrappers than extension ecosystems.
+- **Claude**, **Antigravity** and **Command Code** are integrated more as runtime wrappers than extension ecosystems.
 
 So Pi Web UI can feel reasonably consistent across runtimes, but some of its most workflow-rich behaviour was shaped around Pi Coding Agent extensions and OpenCode plugins.
 
 ## Companion repositories
+
+### Orchestration companions (the ones that matter most for orchestration)
+- Repo: [valtterimelkko/agent-workflow-skills](https://github.com/valtterimelkko/agent-workflow-skills) — the [orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md) (four skills) and the [`watch-wake` companions](https://github.com/valtterimelkko/agent-workflow-skills/tree/main/companions/watch-wake) (a Pi extension and a Claude Code mod that wake an idle parent when a child finishes)
+- Plus [`pi-orch`](https://github.com/valtterimelkko/pi-orch), the thin parent client
+- Best for: anyone using the Internal API to orchestrate children across harnesses. How the pieces fit: [`ORCHESTRATION-FIXTURE-SET.md`](./ORCHESTRATION-FIXTURE-SET.md)
 
 ### Pi Coding Agent extensions
 - Repo: [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)

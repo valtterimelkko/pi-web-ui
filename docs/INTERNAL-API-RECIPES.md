@@ -1,5 +1,7 @@
 # Internal API recipes
 
+> These recipes are the raw API patterns. For the parent-side client, the skills and the wake mechanism that make them reliable in practice, see [`ORCHESTRATION-FIXTURE-SET.md`](./ORCHESTRATION-FIXTURE-SET.md); [`pi-orch`](https://github.com/valtterimelkko/pi-orch) implements most of them as single verbs.
+
 These recipes complement the canonical endpoint documentation. Capability-gate fields/endpoints through `/health` and `/capabilities`; contract `1.14.0` adds run-liveness and session-recovery evidence, while `1.13.0` orchestrators also preflight `/capacity`.
 
 ## Durable, retriable prompt dispatch

@@ -74,7 +74,11 @@ You do not have to take all of it. There are three levels, and each works on its
 
 1. **Just the API.** Run Pi Web UI on a Linux or macOS machine you control, configure **two** runtimes you already use (start with two, not five), and call the Internal API yourself. Start at [`INTERNAL-API-QUICKSTART.md`](./INTERNAL-API-QUICKSTART.md), then [`INTERNAL-API-RECIPES.md`](./INTERNAL-API-RECIPES.md). Setup is in [`FIRST-RUN.md`](./FIRST-RUN.md) and [`GETTING-STARTED.md`](./GETTING-STARTED.md); you can ignore the browser UI entirely once the server is up.
 2. **Plus `pi-orch`.** Clone [`pi-orch`](https://github.com/valtterimelkko/pi-orch) so a parent agent stops hand-writing `curl` and `sleep` loops. Node 22.18 or newer, no install step.
-3. **Plus the skills.** The discipline around the API — how a parent plans a wave, briefs a child, waits safely, demands evidence and keeps secrets out of anything published — is packaged as four portable `SKILL.md` skills in the [Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md). Copy them into your harness's skills folder. They are harness-neutral and need nothing else from my setup.
+3. **Plus the skills and the wake mechanism.** (This is where it starts to work well; the full set and install order are in [`ORCHESTRATION-FIXTURE-SET.md`](./ORCHESTRATION-FIXTURE-SET.md).)
+
+   **The skills.** The discipline around the API — how a parent plans a wave, briefs a child, waits safely, demands evidence and keeps secrets out of anything published — is packaged as four portable `SKILL.md` skills in the [Pi Web UI orchestration pack](https://github.com/valtterimelkko/agent-workflow-skills/blob/main/packs/pi-web-ui-orchestration-pack/README.md). Copy them into your harness's skills folder. They are harness-neutral and need nothing else from my setup.
+
+   **The wake mechanism.** The [watch-wake companions](https://github.com/valtterimelkko/agent-workflow-skills/tree/main/companions/watch-wake) (a Pi extension and a Claude Code mod) let a bare CLI parent register a watch on a child, end its turn and be woken when the child finishes, at zero token cost, with a model-free deadline as backstop. Without them a parent has to sleep or poll.
 
 You do **not** need Agent OS (my private coordination and memory layer), a cloud account, or any extra daemon.
 
