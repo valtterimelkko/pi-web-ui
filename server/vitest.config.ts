@@ -20,6 +20,10 @@ export default defineConfig({
   envDir: false,
   test: {
     setupFiles: ['./tests/setup-env.ts'],
+    // Tripwire for the shared temp directory's mode (the /tmp 0700 incident):
+    // record os.tmpdir()'s mode before the run and fail the run, naming the
+    // cause class, if a test left it changed. See tests/tmp-mode-tripwire.ts.
+    globalSetup: ['./tests/tmp-mode-tripwire.ts'],
     globals: true,
     environment: 'node',
     server: {
