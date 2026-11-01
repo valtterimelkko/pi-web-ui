@@ -1,13 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { SdkType } from '@pi-web-ui/shared';
 import { getSlashCommands, type SlashCommand } from '../../lib/api';
 
 interface SlashPaletteProps {
   filter: string;
+  /** The viewed session's runtime: the list is scoped to what that runtime can
+   *  really run from the browser (B2). Omitted → the server's default (pi). */
+  sdkType?: SdkType | null;
   onSelect: (command: string) => void;
   onClose: () => void;
 }
 
-export function SlashPalette({ filter, onSelect, onClose }: SlashPaletteProps) {
+export function SlashPalette({ filter, sdkType, onSelect, onClose }: SlashPaletteProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,7 +24,7 @@ export function SlashPalette({ filter, onSelect, onClose }: SlashPaletteProps) {
     async function loadCommands() {
       try {
         setLoading(true);
-        const cmds = await getSlashCommands();
+        const cmds = await getSlashCommands(sdkType);
         if (mounted) {
           setCommands(cmds);
           setError(null);
@@ -28,12 +32,11 @@ export function SlashPalette({ filter, onSelect, onClose }: SlashPaletteProps) {
       } catch (err) {
         if (mounted) {
           setError(err instanceof Error ? err.message : 'Failed to load commands');
-          // Fall back to basic commands on error
+          // Degrade to the one built-in the browser really runs for a pi
+          // session. Offering `/clear`, `/export` or `/help` here would promise
+          // commands Pi 1.4.0 cannot run from the web UI (B2).
           setCommands([
             { name: '/compact', description: 'Summarize conversation to free context', type: 'builtin' },
-            { name: '/clear', description: 'Clear the current conversation', type: 'builtin' },
-            { name: '/export', description: 'Export session to file', type: 'builtin' },
-            { name: '/help', description: 'Show available commands', type: 'builtin' },
           ]);
         }
       } finally {
@@ -48,7 +51,7 @@ export function SlashPalette({ filter, onSelect, onClose }: SlashPaletteProps) {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [sdkType]);
 
   // Filter commands based on input
   const query = filter.toLowerCase();

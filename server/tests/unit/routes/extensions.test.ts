@@ -90,6 +90,54 @@ describe('Extensions Routes', () => {
   });
 
   describe('GET /api/extensions/commands', () => {
+    it('B2: offers only the built-ins the browser can really run — /compact for pi', async () => {
+      // Pi 1.4.0 has no /clear, /export or /help reachable from the browser: the
+      // composer intercepts /compact (CompactModal) and everything else would be
+      // sent to the model as text. Offering the other three made the palette lie.
+      mockPiService.getSkills.mockReturnValue([]);
+      mockPiService.getExtensionCommands.mockReturnValue([]);
+
+      const response = await request(app)
+        .get('/api/extensions/commands')
+        .query({ sdkType: 'pi' })
+        .expect(200);
+
+      const builtinCommands = response.body.commands.filter((c: any) => c.type === 'builtin');
+      expect(builtinCommands.map((c: any) => c.name)).toEqual(['/compact']);
+    });
+
+    it('B2: offers no pi-only entries to a non-pi runtime', async () => {
+      mockPiService.getSkills.mockReturnValue([
+        { name: 'deep-research', description: 'Research skill', path: '/path/to/skill.md', disableModelInvocation: false },
+      ]);
+      mockPiService.getExtensionCommands.mockReturnValue([
+        { name: 'plan', description: 'Plan command', extension: '/path/to/ext.ts' },
+      ]);
+
+      for (const sdkType of ['claude', 'antigravity', 'opencode', 'commandcode']) {
+        const response = await request(app)
+          .get('/api/extensions/commands')
+          .query({ sdkType })
+          .expect(200);
+
+        expect(response.body.commands).toEqual([]);
+        expect(typeof response.body.unavailable).toBe('string');
+      }
+    });
+
+    it('B2: defaults to the pi runtime when no sdkType is given', async () => {
+      mockPiService.getSkills.mockReturnValue([]);
+      mockPiService.getExtensionCommands.mockReturnValue([]);
+
+      const response = await request(app)
+        .get('/api/extensions/commands')
+        .expect(200);
+
+      const builtinCommands = response.body.commands.filter((c: any) => c.type === 'builtin');
+      expect(builtinCommands.map((c: any) => c.name)).toEqual(['/compact']);
+      expect(response.body.unavailable).toBeUndefined();
+    });
+
     it('should return combined list of all slash commands', async () => {
       mockPiService.getSkills.mockReturnValue([
         { name: 'deep-research', description: 'Research skill', path: '/path/to/skill.md', disableModelInvocation: false },
@@ -102,11 +150,12 @@ describe('Extensions Routes', () => {
         .get('/api/extensions/commands')
         .expect(200);
 
-      expect(response.body.commands).toHaveLength(6); // 4 builtin + 1 skill + 1 extension
+      expect(response.body.commands).toHaveLength(3); // 1 builtin (B2) + 1 skill + 1 extension
       
       // Check builtin commands
       const builtinCommands = response.body.commands.filter((c: any) => c.type === 'builtin');
-      expect(builtinCommands).toHaveLength(4);
+      expect(builtinCommands).toHaveLength(1);
+      expect(builtinCommands[0].name).toBe('/compact');
       
       // Check skill command
       const skillCommands = response.body.commands.filter((c: any) => c.type === 'skill');

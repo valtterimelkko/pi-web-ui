@@ -466,6 +466,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
       {showSlashPalette && (
         <SlashPalette
           filter={currentDraft}
+          sdkType={currentSessionSdkType}
           onSelect={handleSlashSelect}
           onClose={() => setShowSlashPalette(false)}
         />

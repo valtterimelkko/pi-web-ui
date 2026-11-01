@@ -1,4 +1,6 @@
 // Use relative URL in production (same origin), or VITE_API_URL in development
+import type { SdkType } from '@pi-web-ui/shared';
+
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 export interface UploadedFile {
@@ -133,11 +135,15 @@ export interface SlashCommand {
 
 /**
  * Fetch available slash commands from server (skills + extension commands).
- * Falls back to basic commands if the request fails.
+ * `sdkType` scopes the answer to the session's own runtime (B2): the server
+ * returns only the built-ins the browser really runs for it, and nothing at
+ * all for a runtime whose commands this surface cannot run. Omitted → the
+ * server's own default (pi).
  */
-export async function getSlashCommands(): Promise<SlashCommand[]> {
+export async function getSlashCommands(sdkType?: SdkType | null): Promise<SlashCommand[]> {
   try {
-    const response = await fetch(`${API_URL}/api/extensions/commands`, {
+    const query = sdkType ? `?sdkType=${encodeURIComponent(sdkType)}` : '';
+    const response = await fetch(`${API_URL}/api/extensions/commands${query}`, {
       credentials: 'include',
     });
 
