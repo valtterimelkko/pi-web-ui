@@ -17,6 +17,8 @@ import {
   canSteerWhileStreaming,
   canSendStreamingText,
   streamingComposeIsQueueOnly,
+  compactCommandRoute,
+  COMPACTION_UNAVAILABLE_NOTICE,
 } from '../../lib/piExtensionControls';
 
 export interface QueuedStreamingMessage {
@@ -182,6 +184,10 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
   const [isFocused, setIsFocused] = useState(false);
   const [showCompactModal, setShowCompactModal] = useState(false);
+  // One plain inline sentence shown above the composer when an action is
+  // refused for this session's runtime (e.g. `/compact` off Pi). Replaced
+  // (never stacked) on each refusal and cleared as soon as the owner types.
+  const [composerNotice, setComposerNotice] = useState<string | null>(null);
   const [showSlashPalette, setShowSlashPalette] = useState(false);
   // Delivery mode for messages sent while the agent is streaming (streaming-
   // compose runtimes: pi, claude, commandcode, antigravity): 'steer' delivers
@@ -196,6 +202,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   useEffect(() => {
     setDeliveryMode(streamingComposeIsQueueOnly(currentSessionSdkType) ? 'followUp' : 'steer');
     setQueuedStreaming([]);
+    setComposerNotice(null);
   }, [currentSessionId, currentSessionSdkType]);
 
   // A queued message is delivered once the matching user message reaches the
@@ -229,6 +236,9 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
+    // A refusal message describes the previous attempt; it stops being true as
+    // soon as the owner edits the box.
+    if (composerNotice) setComposerNotice(null);
     
     // Save to draft store for per-session persistence
     if (currentSessionId) {
@@ -258,8 +268,18 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     if (streamingTextSend && !canSendStreamingText(isStreaming, currentSessionSdkType, uploadedFiles.some(f => f.serverPath && !f.uploading))) return;
 
     // Handle slash commands
-    if (message === '/compact') {
+    const compactRoute = compactCommandRoute(message, currentSessionSdkType);
+    if (compactRoute === 'unavailable') {
+      // Compaction is Pi-only: opening CompactModal for another runtime sent a
+      // compact request the server can only answer with a misleading
+      // "Session not found". Say so inline and send nothing.
+      setComposerNotice(COMPACTION_UNAVAILABLE_NOTICE);
+      setShowSlashPalette(false);
+      return;
+    }
+    if (compactRoute === 'compact') {
       setShowCompactModal(true);
+      setComposerNotice(null);
       if (currentSessionId) {
         setDraft(currentSessionId, '');
       }
@@ -470,6 +490,17 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           onSelect={handleSlashSelect}
           onClose={() => setShowSlashPalette(false)}
         />
+      )}
+
+      {/* Inline refusal for this runtime (one muted sentence, no send) */}
+      {composerNotice && (
+        <div
+          className="px-3 pt-2 text-xs text-gray-500"
+          role="status"
+          data-testid="composer-notice"
+        >
+          {composerNotice}
+        </div>
       )}
 
       {/* Status strip */}

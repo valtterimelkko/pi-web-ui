@@ -161,3 +161,22 @@ export function deriveGoalTag(
 
   return { active: true, label, paused, pulsing, run };
 }
+
+/**
+ * What a hand-typed `/compact` should do for this session's runtime.
+ *
+ * Compaction is a Pi-only browser action: the composer opens `CompactModal`,
+ * which compacts through the Pi agent session. Any other runtime refuses it
+ * server-side with a misleading `SESSION_NOT_FOUND` ("Session not found") even
+ * though the session plainly exists, so the composer must not open the modal
+ * there — it shows {@link COMPACTION_UNAVAILABLE_NOTICE} inline and sends
+ * nothing instead (L4 round 2, NOTE 1).
+ */
+export const COMPACTION_UNAVAILABLE_NOTICE = 'Compaction is not available for this runtime from the browser';
+
+export type CompactCommandRoute = 'compact' | 'unavailable' | 'prompt';
+
+export function compactCommandRoute(draft: string, sdkType: RuntimeSdkType): CompactCommandRoute {
+  if (draft.trim() !== '/compact') return 'prompt';
+  return sdkType === 'pi' ? 'compact' : 'unavailable';
+}
