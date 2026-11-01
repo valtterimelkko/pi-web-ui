@@ -134,13 +134,23 @@ export interface SlashCommand {
 }
 
 /**
+ * The server's answer for one runtime's slash commands. `unavailable` carries
+ * the honest reason when the runtime has no browser-runnable commands at all
+ * (B2/NOTE 2) — the palette renders it instead of an empty list.
+ */
+export interface SlashCommandsResult {
+  commands: SlashCommand[];
+  unavailable?: string;
+}
+
+/**
  * Fetch available slash commands from server (skills + extension commands).
  * `sdkType` scopes the answer to the session's own runtime (B2): the server
  * returns only the built-ins the browser really runs for it, and nothing at
  * all for a runtime whose commands this surface cannot run. Omitted → the
  * server's own default (pi).
  */
-export async function getSlashCommands(sdkType?: SdkType | null): Promise<SlashCommand[]> {
+export async function getSlashCommands(sdkType?: SdkType | null): Promise<SlashCommandsResult> {
   try {
     const query = sdkType ? `?sdkType=${encodeURIComponent(sdkType)}` : '';
     const response = await fetch(`${API_URL}/api/extensions/commands${query}`, {
@@ -161,7 +171,10 @@ export async function getSlashCommands(sdkType?: SdkType | null): Promise<SlashC
     }
 
     const result = await response.json();
-    return result.commands as SlashCommand[];
+    return {
+      commands: (result.commands ?? []) as SlashCommand[],
+      ...(typeof result.unavailable === 'string' && result.unavailable ? { unavailable: result.unavailable } : {}),
+    };
   } catch (error) {
     // Re-throw ApiErrors
     if (error instanceof ApiError) {

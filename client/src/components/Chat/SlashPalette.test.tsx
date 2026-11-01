@@ -55,6 +55,31 @@ describe('SlashPalette (B2)', () => {
       expect(screen.queryByText(dead)).toBeNull();
     }
   });
+
+  it('renders the server’s unavailable reason instead of an empty palette', async () => {
+    // NOTE 2: a non-pi runtime gets `{commands: [], unavailable: "…"}`. The
+    // reason is the honest answer; showing nothing looked like a broken palette.
+    const reason = 'Pi Web UI cannot run slash commands from the browser for this runtime yet; only a Pi session has any.';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ commands: [], unavailable: reason }), { status: 200 })));
+
+    render(<SlashPalette filter="/" sdkType="antigravity" onSelect={() => {}} onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByTestId('slash-unavailable')).toBeTruthy());
+    expect(screen.getByTestId('slash-unavailable').textContent).toBe(reason);
+    expect(screen.queryByText(/No commands found/)).toBeNull();
+  });
+
+  it('still lists commands when the payload carries commands and no reason', async () => {
+    const commands: SlashCommand[] = [
+      { name: '/compact', description: 'Summarize conversation to free context', type: 'builtin' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ commands }), { status: 200 })));
+
+    render(<SlashPalette filter="/" sdkType="pi" onSelect={() => {}} onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('/compact')).toBeTruthy());
+    expect(screen.queryByTestId('slash-unavailable')).toBeNull();
+  });
 });
 
 describe('getSlashCommands (B2)', () => {
@@ -78,5 +103,15 @@ describe('getSlashCommands (B2)', () => {
     await getSlashCommands();
 
     expect(String(fetchMock.mock.calls[0][0])).not.toContain('sdkType=');
+  });
+
+  it('carries the server\u2019s unavailable reason through to the caller (NOTE 2)', async () => {
+    const reason = 'Pi Web UI cannot run slash commands from the browser for this runtime yet; only a Pi session has any.';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ commands: [], unavailable: reason }), { status: 200 })));
+
+    const result = await getSlashCommands('claude');
+
+    expect(result.commands).toEqual([]);
+    expect(result.unavailable).toBe(reason);
   });
 });

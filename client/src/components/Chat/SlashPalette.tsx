@@ -14,6 +14,7 @@ interface SlashPaletteProps {
 export function SlashPalette({ filter, sdkType, onSelect, onClose }: SlashPaletteProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,14 +25,16 @@ export function SlashPalette({ filter, sdkType, onSelect, onClose }: SlashPalett
     async function loadCommands() {
       try {
         setLoading(true);
-        const cmds = await getSlashCommands(sdkType);
+        const result = await getSlashCommands(sdkType);
         if (mounted) {
-          setCommands(cmds);
+          setCommands(result.commands);
+          setUnavailable(result.unavailable ?? null);
           setError(null);
         }
       } catch (err) {
         if (mounted) {
           setError(err instanceof Error ? err.message : 'Failed to load commands');
+          setUnavailable(null);
           // Degrade to the one built-in the browser really runs for a pi
           // session. Offering `/clear`, `/export` or `/help` here would promise
           // commands Pi 1.4.0 cannot run from the web UI (B2).
@@ -104,6 +107,18 @@ export function SlashPalette({ filter, sdkType, onSelect, onClose }: SlashPalett
         <div className="py-3 px-4 text-sm text-gray-500 flex items-center gap-2">
           <div className="w-3 h-3 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
           Loading commands...
+        </div>
+      </div>
+    );
+  }
+
+  // The server's honest answer for a runtime with no browser-runnable commands
+  // (NOTE 2): one muted line, not a silently empty palette.
+  if (unavailable && commands.length === 0) {
+    return (
+      <div className="absolute bottom-full left-0 right-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
+        <div className="py-2 px-4 text-xs text-gray-500" data-testid="slash-unavailable">
+          {unavailable}
         </div>
       </div>
     );
