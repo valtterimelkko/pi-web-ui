@@ -32,7 +32,18 @@ LOCK_PATH="${PI_WEB_UI_PRODUCTION_LOCK:-$HOME/.pi-web-ui/production-control.lock
 if [[ "${PI_WEB_UI_PRODUCTION_LOCK_HELD:-}" != "$LOCK_PATH" ]]; then
   LOCK_DIR="$(dirname -- "$LOCK_PATH")"
   mkdir -p -- "$LOCK_DIR"
-  chmod 700 -- "$LOCK_DIR"
+  # Lock the directory down ONLY when it is a private directory of ours.
+  # A sticky (1777) or world-writable directory is shared by design — os.tmpdir(),
+  # /var/tmp, a CI job dir — and its mode is not ours to change. Applying this
+  # repair to /tmp made the host unusable four times (2026-10-05, 10-16, 10-21,
+  # 11-01), because a caller named its lock path directly inside a shared
+  # directory. The production directory (~/.pi-web-ui) has neither bit, so it
+  # keeps today's repair. If the mode cannot be read, skip the change: touching
+  # the mode of an unknown, possibly shared directory is the risk we are removing.
+  lock_dir_mode="$(stat -c '%a' -- "$LOCK_DIR" 2>/dev/null || true)"
+  if [[ -n "$lock_dir_mode" ]] && [[ ! -k "$LOCK_DIR" ]] && (( (8#$lock_dir_mode & 01002) == 0 )); then
+    chmod 700 -- "$LOCK_DIR"
+  fi
   if [[ -L "$LOCK_PATH" ]]; then
     printf 'production control: refusing symbolic-link lock path (%s)\n' "$LOCK_PATH" >&2
     exit 73

@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -23,9 +24,17 @@ if (!process.env.PI_WEB_UI_STOP_AUDIT_FILE) {
 // ~/.pi-web-ui/production-control.lock; a suite that forgot the seam would
 // otherwise flock the real file and could block (or be blocked by) a deploy.
 if (!process.env.PI_WEB_UI_PRODUCTION_LOCK) {
+  // NEVER name the default path DIRECTLY inside os.tmpdir():
+  // scripts/with-production-lock.sh repairs its lock directory to 0700, so a
+  // lock called /tmp/production.lock chmods the shared /tmp itself — which
+  // broke this host on 2026-10-05, 10-16, 10-21 and 2026-11-01 (nothing else on
+  // the host could create files). A private per-run directory (mkdtemp → 0700)
+  // keeps that repair inside the run, where it is a no-op.
+  //
   // Unique per test file: files running in parallel threads of one worker share
   // a pid, and a shared lock would make them refuse each other (exit 75).
-  process.env.PI_WEB_UI_PRODUCTION_LOCK = path.join(tmpdir(), `pi-web-ui-test-production-${process.pid}-${randomUUID()}.lock`);
+  const lockDir = mkdtempSync(path.join(tmpdir(), 'pi-web-ui-test-production-lock-'));
+  process.env.PI_WEB_UI_PRODUCTION_LOCK = path.join(lockDir, `production-${process.pid}-${randomUUID()}.lock`);
 }
 
 // No test process may reach the host service manager (2026-09-15).

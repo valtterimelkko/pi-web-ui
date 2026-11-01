@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import http from 'node:http';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,39 @@ describe('production-control helper scripts', () => {
     expect(result.code).toBe(73);
     expect(result.stderr).toContain('symbolic-link');
     expect(await readFile(target, 'utf8')).toBe('do-not-touch');
+  });
+
+  it('never changes the mode of a shared sticky lock directory (the /tmp 0700 incident)', async () => {
+    // 2026-10-05, 10-16, 10-21 and 11-01: a test run left /tmp at 0700, breaking
+    // every agent on the host. Cause: a lock path placed directly inside a shared
+    // scratch directory made this script chmod 700 that directory. A sticky or
+    // world-writable directory is shared by design — the repair is not ours to do.
+    const shared = await mkdtemp(path.join(tmpdir(), 'pi-shared-lock-'));
+    await chmod(shared, 0o1777);
+    try {
+      const lockPath = path.join(shared, 'production.lock');
+      const result = await run('bash', [LOCK_SCRIPT, 'true'], { PI_WEB_UI_PRODUCTION_LOCK: lockPath });
+
+      expect(result.code, result.stderr).toBe(0);
+      expect((await stat(shared)).mode & 0o7777).toBe(0o1777);
+    } finally {
+      await chmod(shared, 0o700);
+      await rm(shared, { recursive: true, force: true });
+    }
+  });
+
+  it('still repairs the mode of a private lock directory (production behaviour unchanged)', async () => {
+    const privateDir = await mkdtemp(path.join(tmpdir(), 'pi-private-lock-'));
+    await chmod(privateDir, 0o755);
+    try {
+      const lockPath = path.join(privateDir, 'production.lock');
+      const result = await run('bash', [LOCK_SCRIPT, 'true'], { PI_WEB_UI_PRODUCTION_LOCK: lockPath });
+
+      expect(result.code, result.stderr).toBe(0);
+      expect((await stat(privateDir)).mode & 0o7777).toBe(0o700);
+    } finally {
+      await rm(privateDir, { recursive: true, force: true });
+    }
   });
 
   it('passes metacharacters as literal arguments instead of evaluating them', async () => {
