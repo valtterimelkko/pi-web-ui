@@ -127,6 +127,44 @@ describe('AgyStreamProcess', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('gemini-3.6-flash-low');
   });
 
+  it('B1: disables agy slash-command parsing so owner text starting with / reaches the model', async () => {
+    // agy 1.4.x recognises a leading `/command` on the stream-json stdin path,
+    // answers a small read-only whitelist and REFUSES everything else with
+    // "error: /clear is not available in print mode …", which errors the turn
+    // (exit 2). Pi Web UI never wants agy's parser: `/goal …` is intercepted
+    // server-side, the model switch is the `--model` argv flag, and skills are
+    // not exposed through any Pi Web UI route. `--disable-slash-commands`
+    // forces literal text, so an owner message is a message.
+    const seen: string[][] = [];
+    const child = new FakeChild();
+    const proc = new AgyStreamProcess({
+      sessionId: 's',
+      cwd: '/w',
+      model: 'gemini-3.6-flash-low',
+      conversationId: null,
+      timeoutMs: 1000,
+      stallTimeoutMs: 1000,
+      idleTimeoutMs: 1000,
+      onEvent: () => {},
+      spawnFn: ((...args: unknown[]) => {
+        seen.push(args[1] as string[]);
+        return child;
+      }) as unknown as typeof import('node:child_process').spawn,
+    });
+    await proc.start();
+    expect(seen[0]).toContain('--disable-slash-commands');
+  });
+
+  it('B1: writes a /-prefixed prompt verbatim as one user event (no local refusal or framing)', async () => {
+    const { proc, child } = makeHarness();
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const pending = proc.writeTurn('/clear');
+    expect(JSON.parse(child.stdinWrites[0])).toEqual({ event: 'user', message: { content: '/clear' } });
+    child.writeStdout(resultLine('c-abc', 1));
+    await expect(pending).resolves.toMatchObject({ status: 'SUCCESS' });
+  });
+
   it('T3.1: passes a valid conversation id through to the spawn args', async () => {
     const seen: string[][] = [];
     const child = new FakeChild();

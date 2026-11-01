@@ -118,6 +118,18 @@ export class AgyStreamProcess {
 
   private buildArgs(): string[] {
     const args = ['--input-format', 'stream-json', '--output-format', 'stream-json'];
+    // B1: never let agy parse an owner prompt as a slash command. On this stdin
+    // path agy 1.4.x recognises a leading `/name`, answers a small read-only
+    // whitelist and REFUSES everything else —
+    //   error: /clear is not available in print mode … (result status ERROR, exit 2)
+    // (live-probed 2026-11-01 on agy 1.4.11 with `/clear` and `/tasks`).
+    // That turned an ordinary owner message into a failed turn, unlike every other
+    // runtime path, which sends such text to the model. Nothing in Pi Web UI wants
+    // agy's parser: `/goal …` is intercepted server-side (parseAgyGoalCommand), the
+    // model switch is the `--model` argv flag, and no route exposes agy skills.
+    // `--disable-slash-commands` forces literal text — the same command with the flag
+    // live-returned status SUCCESS with the text answered by the model.
+    args.push('--disable-slash-commands');
     if (this.opts.model) args.push('--model', this.opts.model);
     // Never pass an empty/whitespace id: agy resumes an UNRELATED recent
     // conversation for the empty string (live-validated hazard).
