@@ -53,7 +53,11 @@ describe('health-probe.sh', () => {
     expect(webService).toContain('WatchdogSec=45');
     expect(probeService).toContain('ExecStart=/root/pi-web-ui/scripts/health-probe.sh');
     expect(probeService).not.toMatch(/systemctl\s+restart/);
-    expect(probeTimer).toContain('OnUnitActiveSec=1min');
+    // Calendar cadence: a monotonic-only timer (OnBootSec/OnUnitActiveSec) goes permanently
+    // "elapsed" if the service's start job fails once before it runs (silent 2026-10-21 → 11-01).
+    expect(probeTimer).toContain('OnCalendar=*-*-* *:*:00');
+    expect(probeTimer).toContain('Persistent=true');
+    expect(probeTimer).not.toMatch(/^On(Boot|UnitActive)Sec=/m);
   });
 
   it('accepts only a successful authenticated Internal API health response', () => {

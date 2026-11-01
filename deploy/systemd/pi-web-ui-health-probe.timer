@@ -2,8 +2,11 @@
 Description=Pi Web UI - one-minute authenticated health probe timer
 
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
+# Calendar cadence, not OnBootSec/OnUnitActiveSec (2026-11-01): a monotonic-only timer goes
+# permanently "elapsed" if the service's start job fails once before it runs; this probe was
+# silent from the 2026-10-21 reboot until 2026-11-01. Reproduction:
+# /root/agent-os/operations/oracle2-20261101/w1b/README.md
+OnCalendar=*-*-* *:*:00
 AccuracySec=5s
 Persistent=true
 Unit=pi-web-ui-health-probe.service
