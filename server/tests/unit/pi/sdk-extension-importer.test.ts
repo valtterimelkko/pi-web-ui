@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import {
   VALIDATED_SDK_VERSION,
   ExtensionImporterError,
@@ -87,11 +88,12 @@ describe('B1.2b SDK alias map', () => {
 
   it('resolves companions to the copy the SDK scope finds (nested when one exists, else hoisted)', () => {
     const aliases = resolveSdkAliasMap();
-    for (const name of ['pi-tui', 'pi-agent-core', 'pi-ai'] as const) {
+    // pi-ai's companion check uses /models: since 1.5.0 the pi-ai root is the extension view.
+    for (const [name, key] of [['pi-tui', 'pi-tui'], ['pi-agent-core', 'pi-agent-core'], ['pi-ai', 'pi-ai/models']] as const) {
       const nested = join(sdkRoot, 'node_modules', '@earendil-works', name);
       const hoisted = join(dirname(sdkRoot), name);
       const expectedRoot = realpathSync(existsSync(nested) ? nested : hoisted);
-      expect(realpathSync(aliases[`@earendil-works/${name}`]).startsWith(expectedRoot)).toBe(true);
+      expect(realpathSync(aliases[`@earendil-works/${key}`]).startsWith(expectedRoot)).toBe(true);
     }
   });
 
@@ -149,6 +151,31 @@ describe('B1.2b SDK alias map', () => {
     expect(aliases['@earendil-works/pi-ai/models'].endsWith(join('ai', 'dist', 'models.js'))).toBe(true);
   });
 
+  /**
+   * 1.5.0: pi-ai's main entry no longer re-exports TypeBox, so the SDK maps the
+   * pi-ai root (and /compat, and the @mariozechner twins) to its own
+   * `pi-ai-extension-view.js` (compat + TypeBox `Type` + a TypeBox
+   * `StringEnum`). That file is not in the SDK `exports` map, so Pi Web UI
+   * carries its own equivalent view instead of importing it (owner rule: no
+   * deep private imports); the export SURFACE is checked against the SDK's
+   * view below.
+   */
+  it('maps the pi-ai root and compat (1.5.0) to the extension view, not to pi-ai compat.js', () => {
+    const aliases = resolveSdkAliasMap();
+    const view = aliases['@earendil-works/pi-ai'];
+    expect(existsSync(view)).toBe(true);
+    expect(/pi-ai-extension-view\.(cjs|cts)$/u.test(view)).toBe(true);
+    expect(view.includes(`${join('node_modules', '@earendil-works')}`)).toBe(false);
+    for (const key of ['@earendil-works/pi-ai/compat', '@mariozechner/pi-ai', '@mariozechner/pi-ai/compat']) {
+      expect(aliases[key]).toBe(view);
+    }
+  });
+
+  it('the SDK itself still points the pi-ai root at its extension view (re-validate if this changes)', () => {
+    const loaderSource = readFileSync(join(sdkRoot, 'dist', 'core', 'extensions', 'loader.js'), 'utf-8');
+    expect(loaderSource).toContain('"pi-ai-extension-view.js"');
+  });
+
   it('caches the map per process until reset', () => {
     const before = getCachedSdkAliasMap();
     expect(getCachedSdkAliasMap()).toBe(before);
@@ -158,14 +185,16 @@ describe('B1.2b SDK alias map', () => {
     expect(after).toEqual(before);
   });
 
-  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 1.4.1 included)', () => {
+  it('degrades as a typed error unless the SDK version matches VALIDATED_SDK_VERSION EXACTLY (correction 02: 1.5.1 included)', () => {
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.87.1' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '0.99.2' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.0.0' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.2.0' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.3.0' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.4.0' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.4.1' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.4.0' })).not.toThrow();
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.5.1' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.5.0' })).not.toThrow();
   });
 
   it('degrades as a typed error when an alias target cannot be resolved', () => {
@@ -240,6 +269,101 @@ describe('B1.2b jiti factory import', () => {
     expect(clamp({ reasoning: true }, 'low')).toBe('low');
     delete (globalThis as Record<string, unknown>)['__b12bModels'];
   });
+
+  it('gives extensions TypeBox Type and StringEnum through @earendil-works/pi-ai (1.5.0 extension view)', async () => {
+    const entry = writeFixture(
+      'pi-ai-type',
+      `import { Type, StringEnum, complete } from '@earendil-works/pi-ai';
+       import { Type as LegacyType } from '@mariozechner/pi-ai';
+       import { Type as DirectType } from 'typebox';
+       (globalThis).__b12bType = { Type, StringEnum, complete, LegacyType, DirectType };
+       export default function () {}`,
+    );
+    await importFactoryViaJiti(entry);
+    const captured = (globalThis as Record<string, unknown>)['__b12bType'] as Record<string, any>;
+    expect(typeof captured['Type']?.Object).toBe('function');
+    // One TypeBox for everyone: the same module the `typebox` alias (the SDK's own) gives.
+    expect(captured['Type']).toBe(captured['DirectType']);
+    expect(captured['LegacyType']).toBe(captured['Type']);
+    // The compat surface is still there (module-object identity with the SDK's
+    // own view is asserted in the fresh-process test: vitest's module graph
+    // gives a dynamic import() its own instance).
+    expect(typeof captured['complete']).toBe('function');
+    // StringEnum is the TypeBox-typed one: a plain string enum schema.
+    const schema = captured['StringEnum'](['a', 'b'], { description: 'd' });
+    expect(schema).toMatchObject({ type: 'string', enum: ['a', 'b'], description: 'd' });
+    delete (globalThis as Record<string, unknown>)['__b12bType'];
+  });
+
+  it('the view exports the same names as the SDK extension view', async () => {
+    const aliases = resolveSdkAliasMap();
+    const sdkViewPath = join(sdkRoot, 'dist', 'core', 'extensions', 'pi-ai-extension-view.js');
+    const sdkView = (await import(pathToFileURL(sdkViewPath).href)) as Record<string, unknown>;
+    const entry = writeFixture(
+      'pi-ai-names',
+      `import * as view from '@earendil-works/pi-ai';
+       (globalThis).__b12bNames = Object.keys(view).filter((k) => k !== 'default' && k !== '__esModule');
+       export default function () {}`,
+    );
+    await importFactoryViaJiti(entry);
+    const names = ((globalThis as Record<string, unknown>)['__b12bNames'] as string[]).sort();
+    expect(names).toEqual(Object.keys(sdkView).sort());
+    expect(aliases['@earendil-works/pi-ai']).not.toBe(sdkViewPath);
+    delete (globalThis as Record<string, unknown>)['__b12bNames'];
+  });
+
+  it('imports several Type-using extensions in parallel in a fresh process (no require(esm) race on typebox)', () => {
+    // The view loads typebox and pi-ai compat with Node's require(); while a
+    // parallel import() of typebox is still in flight Node refuses that
+    // ("not yet fully loaded"), which is exactly what the factory cache's
+    // parallel scan did on a fresh 1.5.0 server. Needs a fresh process: the
+    // test worker has typebox loaded already.
+    const fixtures: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      fixtures.push(
+        writeFixture(
+          `parallel-${i}`,
+          `import { Type } from '@earendil-works/pi-ai';
+           import { Type as T2 } from 'typebox';
+           import { complete } from '@earendil-works/pi-ai';
+           const schema = Type.Object({ n: T2.Number() });
+           (globalThis).__b12bParallel = { Type, T2, complete };
+           export default function () { return schema; }`,
+        ),
+      );
+    }
+    const importer = pathToFileURL(resolve(__dirname, '../../../src/pi/sdk-extension-importer.ts')).href;
+    const script = `
+      const { importFactoryViaJiti } = await import(${JSON.stringify(importer)});
+      const results = await Promise.allSettled(${JSON.stringify(fixtures)}.map((f) => importFactoryViaJiti(f)));
+      const failed = results.filter((r) => r.status === 'rejected').map((r) => String(r.reason?.message ?? r.reason));
+      const sdkView = await import(${JSON.stringify(pathToFileURL(join(sdkRoot, 'dist', 'core', 'extensions', 'pi-ai-extension-view.js')).href)});
+      const seen = globalThis.__b12bParallel ?? {};
+      const identity = {
+        type: seen.Type === sdkView.Type,
+        typeboxAlias: seen.T2 === sdkView.Type,
+        complete: typeof seen.complete === 'function' && seen.complete === sdkView.complete,
+      };
+      console.log(JSON.stringify({ ok: results.length - failed.length, failed, identity }));
+      process.exit(0);
+    `;
+    // Plain Node (type stripping loads the importer's .ts and the view's .cts
+    // source); the importer imports only node: builtins and jiti.
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: resolve(__dirname, '../../..'),
+      encoding: 'utf-8',
+      timeout: 60_000,
+    });
+    const summary = JSON.parse(out.trim().split('\n').pop() ?? '{}') as {
+      ok: number;
+      failed: string[];
+      identity: Record<string, boolean>;
+    };
+    expect(summary.failed).toEqual([]);
+    expect(summary.ok).toBe(6);
+    // Same module objects as the SDK's own extension view: one TypeBox, one pi-ai.
+    expect(summary.identity).toEqual({ type: true, typeboxAlias: true, complete: true });
+  }, 90_000);
 
   it('wraps import failures in ExtensionImporterError (the loader builder degrades to the plain path)', async () => {
     const entry = writeFixture('broken', `throw new ReferenceError('b12b-import-time-failure');\nexport default function () {};`);

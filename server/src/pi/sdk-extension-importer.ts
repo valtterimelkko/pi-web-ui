@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { existsSync as defaultExistsSync, readFileSync as defaultReadFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
  * B1.2b — imports extension **factories** with jiti using the same module
@@ -10,8 +10,10 @@ import { fileURLToPath } from 'node:url';
  * patches, no deep private imports; the package `exports` map is the boundary).
  *
  * `resolveSdkAliasMap()` replicates the SDK's private `getAliases()`
- * (`dist/core/extensions/loader.js`, validated 1.4.0; the 1.2.0 map plus the
- * `pi-ai/models` subpath, 1.4.0 #11156): every alias target is resolved
+ * (`dist/core/extensions/loader.js`, validated 1.5.0; the 1.2.0 map plus the
+ * `pi-ai/models` subpath, 1.4.0 #11156, with the pi-ai root and `/compat`
+ * pointing at an extension view since 1.5.0 — see `pi-ai-extension-view.cts`):
+ * every alias target is resolved
  * to the SAME absolute file the SDK itself uses, so an extension imported here
  * shares module instances with SDK-loaded extensions (measured: aliased ESM
  * entries load through Node's native ESM registry, so exported bindings like
@@ -28,7 +30,7 @@ import { fileURLToPath } from 'node:url';
  */
 
 /** The only SDK minor this module's alias map and override were validated against. */
-export const VALIDATED_SDK_VERSION = '1.4.0';
+export const VALIDATED_SDK_VERSION = '1.5.0';
 
 export class ExtensionImporterError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -288,8 +290,12 @@ export function resolveSdkAliasMap(deps: SdkResolutionDeps = {}): Record<string,
   const piCodingAgentEntry = canonicalTarget(sdkEntry);
   const piAgentCoreEntry = canonicalTarget(resolveCompanion('agent/dist/index.js', '@earendil-works/pi-agent-core', '.'));
   const piTuiEntry = canonicalTarget(resolveCompanion('tui/dist/index.js', '@earendil-works/pi-tui', '.'));
-  // Extensions resolve the pi-ai root to the compat entrypoint, as the SDK does.
-  const piAiCompatEntry = canonicalTarget(resolveCompanion('ai/dist/compat.js', '@earendil-works/pi-ai', './compat'));
+  // Extensions resolve the pi-ai root (and /compat) to an extension view: pi-ai
+  // compat plus TypeBox's Type and a TypeBox StringEnum, as the SDK does since
+  // 1.5.0. The SDK's own view is private (not exported), so ours is used.
+  const piAiCompatEntry = canonicalTarget(resolvePiAiExtensionView(full.existsSync));
+  // The real pi-ai compat entry the view re-exports (preloaded natively, see preloadPiAiExtensionView).
+  resolvedPiAiCompat = canonicalTarget(resolveCompanion('ai/dist/compat.js', '@earendil-works/pi-ai', './compat'));
   const piAiModelsEntry = canonicalTarget(resolveCompanion('ai/dist/models.js', '@earendil-works/pi-ai', './models'));
   const piAiOauthEntry = canonicalTarget(resolveCompanion('ai/dist/oauth.js', '@earendil-works/pi-ai', './oauth'));
   const piAiProvidersEntry = canonicalTarget(resolveCompanion('ai/dist/providers/all.js', '@earendil-works/pi-ai', './providers/all'));
@@ -323,6 +329,20 @@ export function resolveSdkAliasMap(deps: SdkResolutionDeps = {}): Record<string,
   };
 }
 
+/**
+ * Pi Web UI's pi-ai extension view (`pi-ai-extension-view.cts`), next to this
+ * module: the compiled `.cjs` in production, the `.cts` source under the test
+ * runner (jiti loads either).
+ */
+function resolvePiAiExtensionView(existsSync: (path: string) => boolean): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const name of ['pi-ai-extension-view.cjs', 'pi-ai-extension-view.cts']) {
+    const candidate = join(here, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new ExtensionImporterError(`pi-ai extension view not found next to ${here}`);
+}
+
 export function getInstalledSdkVersion(): string {
   const pkgJsonPath = join(dirname(resolveSdkEntryPath()), '..', 'package.json');
   return (JSON.parse(defaultReadFileSync(pkgJsonPath, 'utf-8')) as PackageJsonLike).version ?? 'unknown';
@@ -339,6 +359,7 @@ export function getCachedSdkAliasMap(): Record<string, string> {
 /** Test seam. */
 export function resetSdkAliasMapCache(): void {
   cachedAliasMap = undefined;
+  piAiViewPreload = undefined;
 }
 
 export interface JitiImportDeps {
@@ -348,6 +369,40 @@ export interface JitiImportDeps {
   createJiti?: (id: string, options: { moduleCache: boolean; alias: Record<string, string> }) => {
     import: (path: string, options: { default: boolean }) => Promise<unknown>;
   };
+}
+
+let resolvedPiAiCompat: string | undefined;
+let piAiViewPreload: Promise<void> | undefined;
+const PI_AI_VIEW_STASH = Symbol.for('pi-web-ui.pi-ai-extension-view');
+
+/**
+ * Load pi-ai compat and typebox with native `import()` once per process, before
+ * any extension import, and hand them to the pi-ai extension view
+ * (`pi-ai-extension-view.cts`), which cannot import them itself (jiti aliases
+ * its compat import back to the view) and must not `require()` them (a race
+ * with a parallel `import()` on a fresh server: "Cannot require() ES Module …
+ * not yet fully loaded"; and loaders such as tsx resolve pi-ai's import-only
+ * dependencies with CommonJS conditions).
+ */
+async function preloadPiAiExtensionView(alias: Record<string, string>): Promise<void> {
+  const typeboxPath = alias['typebox'];
+  if (!resolvedPiAiCompat || !typeboxPath) {
+    throw new ExtensionImporterError('pi-ai compat or typebox was not resolved with the alias map');
+  }
+  const compatPath = resolvedPiAiCompat;
+  piAiViewPreload ??= (async () => {
+    const [compat, typebox] = await Promise.all([
+      import(pathToFileURL(compatPath).href) as Promise<Record<string, unknown>>,
+      import(pathToFileURL(typeboxPath).href) as Promise<{ Type: unknown }>,
+    ]);
+    (globalThis as Record<symbol, unknown>)[PI_AI_VIEW_STASH] = { compat, Type: typebox.Type };
+  })();
+  try {
+    await piAiViewPreload;
+  } catch (error) {
+    piAiViewPreload = undefined;
+    throw error;
+  }
 }
 
 /**
@@ -362,6 +417,13 @@ export async function importFactoryViaJiti(extensionPath: string, deps: JitiImpo
     alias = deps.aliasMap ? deps.aliasMap() : getCachedSdkAliasMap();
   } catch (error) {
     throw error instanceof ExtensionImporterError ? error : new ExtensionImporterError('SDK alias map unavailable', { cause: error });
+  }
+  if (!deps.createJiti) {
+    try {
+      await preloadPiAiExtensionView(alias);
+    } catch (error) {
+      throw new ExtensionImporterError(`pi-ai extension view failed to load (${extensionPath})`, { cause: error });
+    }
   }
   let jitiInstance: { import: (path: string, options: { default: boolean }) => Promise<unknown> };
   try {
