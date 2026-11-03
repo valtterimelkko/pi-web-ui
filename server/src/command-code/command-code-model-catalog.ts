@@ -38,6 +38,8 @@ export const COMMAND_CODE_EXCLUDED_MODELS = [
   'gpt-6-sol',
   'google/gemini-4-argon',
   'meta/muse-wonder-1.0',
+  // 3 Nov 2026: advertised by the CLI, absent from the GOAT plan page (owner).
+  'gpt-6.1-terra',
   // Headless-only decision model (GOAT page): not selectable in /model, never a chat model.
   'typesafe/jev',
 ] as const;

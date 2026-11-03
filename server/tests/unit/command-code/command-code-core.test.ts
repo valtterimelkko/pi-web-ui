@@ -34,6 +34,8 @@ describe('Command Code model discovery', () => {
       // 14 Oct 2026 GOAT page: Opus 5.5 / GPT-6 Sol / GPT-6.1 Sol need Pro or Max;
       // Jev is a headless decision model, not selectable in /model.
       'claude-opus-5-5', 'gpt-6-sol', 'gpt-6.1-sol', 'typesafe/jev',
+      // 3 Nov 2026: GPT-6.1 Terra is advertised by the CLI but absent from the GOAT page (owner).
+      'gpt-6.1-terra',
     ]));
     // GOAT premium models that DO carry GOAT credits stay eligible.
     expect(isCommandCodeEligible('claude-sonnet-5-5')).toBe(true);
