@@ -643,6 +643,17 @@ export class DevinService {
     return entry && entry.sdkType === 'devin' ? entry.cwd : undefined;
   }
 
+  /** The model id actually applied for this session's next run (contract
+n  * 1.68.0 receipt truth). The registry stores a model only after a successful
+n  * `session/set_config_option` (closure N1), so the registry binding — or the
+n  * configured default when the session has none — is exactly what the child
+n  * is served on. */
+  async getServedModel(sessionId: string): Promise<string | undefined> {
+    const entry = await this.registry.get(sessionId).catch(() => null);
+    if (!entry || entry.sdkType !== 'devin') return undefined;
+    return entry.model || config.devinDefaultModel;
+  }
+
   /** Model switch: set the session's `model` config option (the spawn flag
    *  LOSES to the config file — plan §2). Busy → 409-style refusal (plan D4). */
   async setModel(sessionId: string, modelId: string): Promise<string> {

@@ -7513,6 +7513,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       case 'devin': {
         if (!devinService) throw new Error('Devin service is not configured');
+        // Contract 1.68.0: record the model actually served BEFORE the dispatch
+        // (a fast runtime turn could otherwise terminalise the receipt first
+        // and turn the patch into a no-op). Closure N1 keeps the registry equal
+        // to the applied model, so the read is the run's served model. Best-
+        // effort: a failed receipt patch never blocks the run.
+        try {
+          if (runId) {
+            const servedModel: string | undefined = await devinService.getServedModel(sessionId);
+            await runReceipts.recordServedModel(runId, servedModel, false);
+          }
+        } catch { /* receipt truth is best-effort; the run continues */ }
         return new Promise<void>((resolve) => {
           const wrappedComplete = (error?: Error) => {
             onComplete(error);

@@ -267,6 +267,16 @@ describe('createSessionRoutes orchestration endpoints', () => {
       pinSession: vi.fn(() => true),
       unpinSession: vi.fn(() => true),
       isSessionPinned: vi.fn(() => false),
+      // Goal sweeper + goal dispatch surfaces (contract 1.68.0) and the
+      // servedModel receipt truth (the applied model).
+      sendPrompt: vi.fn((_id: string, _message: string, _broadcast: unknown, complete: (error?: Error) => void) => {
+        complete();
+        return Promise.resolve();
+      }),
+      followUp: vi.fn(() => Promise.resolve(true)),
+      getServedModel: vi.fn(async (id: string) => (id === 'devin-served' ? 'swe-2-flash-high' : 'swe-2-flash-medium')),
+      getLastCompletedTurn: vi.fn(async () => null),
+      getSessionCwd: vi.fn(async () => '/root/proj'),
     };
   });
 
@@ -287,6 +297,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       multiSessionManager, sessionRegistry: registry, piService,
       internalClientId: 'test-client',
       watchDir: path.join(tempDir, 'watches'),
+      devinSessionDir: path.join(tempDir, 'devin-sessions'),
       runReceiptManager,
       admissionController,
       blockedPiProviders,
@@ -1076,6 +1087,34 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_REQUEST' });
       expect(devinService.setModel).toHaveBeenCalledWith('devin-ctl', 'swe-2-flash-high');
+    });
+
+    it('contract 1.68.0: a devin dispatch records servedModel on its run receipt', async () => {
+      registry.get.mockResolvedValue({
+        id: 'devin-served', path: 'devin-served', sdkType: 'devin', cwd: '/root/proj',
+        model: 'swe-2-flash-high', firstMessage: '', messageCount: 0, status: 'idle',
+      });
+      const receipts = new RunReceiptManager({ store: new RunReceiptStore(path.join(tempDir, 'devin-served-receipts')) });
+      await receipts.init();
+      try {
+        const routes = makeRoutes(receipts);
+        const res = createMockRes();
+        await routes.handleSendPrompt(
+          createJsonReq('POST', '/api/v1/sessions/devin-served/prompt', { message: 'do the work' }),
+          res,
+          'devin-served',
+        );
+        expect(res.statusCode).toBe(200);
+        const runId = JSON.parse(res.body).runId as string;
+        expect(runId).toBeTruthy();
+        // servedModel = the model actually applied for the run (the session's
+        // applied model; the registry never names a model the child is not on).
+        await vi.waitFor(() => expect(receipts.get(runId)?.servedModel).toBe('swe-2-flash-high'));
+        expect(receipts.get(runId)?.modelRebound).toBe(false);
+        await routes.shutdown();
+      } finally {
+        await receipts.shutdown();
+      }
     });
 
     it.each([
