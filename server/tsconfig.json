@@ -4,11 +4,7 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "baseUrl": ".",
-    "paths": {
-      "@pi-web-ui/shared": ["../shared/dist/index.d.ts"]
-    }
+    "moduleResolution": "NodeNext"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests", "src/**/*.test.ts", "src/**/*.spec.ts"]
