@@ -29,7 +29,7 @@ export const MAX_BATCH_ITEMS = 50;
  */
 export const BATCH_CONCURRENCY_LIMIT = 4;
 
-export const sessionRuntimeSchema = z.enum(['pi', 'claude', 'opencode', 'antigravity', 'commandcode']);
+export const sessionRuntimeSchema = z.enum(['pi', 'claude', 'opencode', 'antigravity', 'commandcode', 'devin']);
 
 const cwdSchema = z.string().min(1).max(4096);
 const modelSchema = z.string().min(1).max(200);
@@ -244,7 +244,7 @@ export const sessionControlBodySchema = z.object({
   alias: z.string().min(1).max(120).optional(),
   role: z.string().min(1).max(120).optional(),
   // Contract 1.40.0 `adopt-native` shares the control schema surface via types.
-  runtime: z.enum(['claude', 'commandcode', 'opencode', 'antigravity']).optional(),
+  runtime: z.enum(['claude', 'commandcode', 'opencode', 'antigravity', 'devin']).optional(),
   nativeId: z.string().min(1).max(128).optional(),
   cwd: cwdSchema.optional(),
 }).strict().superRefine((body, ctx) => {
@@ -276,7 +276,7 @@ const nativeIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/, 'n
  *  absent — native pi sessions are auto-discovered into the registry by the
  *  SessionWatcher (same rule as GET /sessions/native). */
 export const adoptNativeBodySchema = z.object({
-  runtime: z.enum(['claude', 'commandcode', 'opencode', 'antigravity']),
+  runtime: z.enum(['claude', 'commandcode', 'opencode', 'antigravity', 'devin']),
   nativeId: nativeIdSchema,
   cwd: cwdSchema.optional(),
   parentSessionId: sessionIdSchema.optional(),

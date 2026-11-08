@@ -694,6 +694,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     opencodeStorageDir: deps.opencodeStorageDir ?? config.opencodeStorageDir,
     antigravityConversationsDir: deps.antigravityConversationsDir ?? config.antigravityNativeConversationsDir,
     antigravityDesktopConversationsDir: deps.antigravityDesktopConversationsDir ?? config.antigravityNativeDesktopConversationsDir,
+    devinNativeSessionsDb: deps.devinNativeSessionsDb ?? config.devinNativeSessionsDb,
   };
   const blockedPiProviders = deps.blockedPiProviders ?? config.internalApiBlockedPiProviders;
   // I2 (contract 1.58.1): settle-sweep cadence for undelivered queued Pi
@@ -1117,6 +1118,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'claude') return claudeService.pinSession(sessionId, claimId);
     if (entry.sdkType === 'opencode') return opencodeService.pinSession(sessionId, claimId);
     if (entry.sdkType === 'antigravity') return antigravityService.pinSession(sessionId, claimId);
+    if (entry.sdkType === 'devin') return devinService?.pinSession(sessionId, claimId) ?? false;
     return multiSessionManager.pinSession(entry.path, claimId);
   }
 
@@ -1129,6 +1131,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'claude') return claudeService.unpinSession(sessionId, claimId);
     if (entry.sdkType === 'opencode') return opencodeService.unpinSession(sessionId, claimId);
     if (entry.sdkType === 'antigravity') return antigravityService.unpinSession(sessionId, claimId);
+    if (entry.sdkType === 'devin') return devinService?.unpinSession(sessionId, claimId) ?? false;
     return multiSessionManager.unpinSession(entry.path, claimId);
   }
 
@@ -1136,6 +1139,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'claude') return claudeService.isSessionPinned(entry.id);
     if (entry.sdkType === 'opencode') return opencodeService.isSessionPinned(entry.id);
     if (entry.sdkType === 'antigravity') return antigravityService.isSessionPinned(entry.id);
+    if (entry.sdkType === 'devin') return devinService?.isSessionPinned(entry.id) ?? false;
     return multiSessionManager.isSessionPinned(entry.path);
   }
 
@@ -1673,6 +1677,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'claude') claudeService.abort(sessionId);
     if (entry.sdkType === 'opencode') opencodeService.disposeSession(sessionId);
     if (entry.sdkType === 'antigravity') antigravityService.disposeSession(sessionId);
+    if (entry.sdkType === 'devin') devinService?.disposeSession(sessionId);
     if (entry.sdkType === 'pi') await multiSessionManager.disposeLoadedSession(entry.path);
     await deleteSessionFiles(entry);
     await sessionRegistry.delete(sessionId);
@@ -1690,7 +1695,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           ? claudeService.isRunning(entry.id)
           : entry.sdkType === 'opencode'
             ? opencodeService.isRunning(entry.id)
-            : antigravityService.isRunning(entry.id);
+            : entry.sdkType === 'devin'
+              ? (devinService?.isRunning(entry.id) ?? false)
+              : antigravityService.isRunning(entry.id);
       return running ? 'running' : entry.status;
     } catch {
       return entry.status;
@@ -2114,6 +2121,29 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sessionId,
             sessionPath: sessionId,
             runtime: 'antigravity',
+            model: body.model,
+            cwd,
+            createdAt: new Date().toISOString(),
+          };
+          break;
+        }
+
+        case 'devin': {
+          // Feature-gated like commandcode: a disabled or unavailable Devin
+          // refuses honestly (never substituted).
+          if (!devinService) {
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is not configured'));
+            return;
+          }
+          if (!(await devinService.isAvailable())) {
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is disabled or unavailable'));
+            return;
+          }
+          const { sessionId } = await devinService.createSession(cwd, body.model);
+          base = {
+            sessionId,
+            sessionPath: sessionId,
+            runtime: 'devin',
             model: body.model,
             cwd,
             createdAt: new Date().toISOString(),
@@ -2641,6 +2671,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         commandCodeNativeSessionIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
         opencodeSessionIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
         antigravityConversationIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
+        devinSessionIds: new Map<string, { id: string; sessionClass?: 'validation' }>(),
       };
       for (const entry of await sessionRegistry.listAll()) {
         // Contract 1.65.0: carry the recorded class (if any) alongside the id
@@ -2651,6 +2682,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, withClass(entry.id));
         if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, withClass(entry.id));
         if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, withClass(entry.id));
+        if (entry.devinNativeSessionId) known.devinSessionIds.set(entry.devinNativeSessionId, withClass(entry.id));
       }
 
       const result = await scanNativeSessions({ runtimes, limit, since, before, roots: nativeRoots, known });
@@ -2758,6 +2790,35 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         used: context?.tokens,
         percent: context?.percent,
       };
+      return finalizeSessionDetail(detail, entry);
+    }
+
+    if (entry.sdkType === 'devin') {
+      const stats = await devinService?.getSessionStats(sessionId);
+      detail.backendMode = 'acp';
+      detail.pinned = devinService?.isSessionPinned(sessionId) ?? false;
+      const devinPinUntil = apiPinDeadline(sessionId);
+      if (devinPinUntil) detail.pinnedUntil = devinPinUntil;
+      detail.status = (devinService?.isRunning(sessionId) ?? false) ? 'running' : detail.status;
+      // Contract 1.64.0: the native `devin acp` session id (e.g. brass-akubra).
+      if (entry.devinNativeSessionId) detail.nativeSessionId = entry.devinNativeSessionId;
+      if (stats) {
+        detail.sessionFile = stats.sessionFile;
+        detail.model = stats.model ?? detail.model;
+        detail.tokens = {
+          input: stats.tokens.input,
+          output: stats.tokens.output,
+          total: stats.tokens.total,
+        };
+        detail.stats = {
+          userMessages: stats.userMessages,
+          assistantMessages: stats.assistantMessages,
+          toolCalls: stats.toolCalls,
+          toolResults: stats.toolResults,
+          totalMessages: stats.totalMessages,
+        };
+        detail.pinned = stats.pinned || detail.pinned;
+      }
       return finalizeSessionDetail(detail, entry);
     }
 
@@ -3670,6 +3731,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'claude') return claudeService.isRunning(entry.id);
     if (entry.sdkType === 'opencode') return opencodeService.isRunning(entry.id);
     if (entry.sdkType === 'antigravity') return antigravityService.isRunning(entry.id);
+    if (entry.sdkType === 'devin') return devinService?.isRunning(entry.id) ?? false;
     // C2 correction 01: the one liveness predicate — manager busy/streaming,
     // SDK isStreaming truth (extension/browser turns), or compaction. During
     // compaction the runtime refuses every input; during an SDK-streaming turn
@@ -3753,7 +3815,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // Antigravity (stream-json): a mid-turn write queues inside the live agy
       // process and runs as the next turn (live-validated) — same queue
       // semantics as Pi.
-      if (busy) return runtime === 'pi' || runtime === 'antigravity' ? { dispatchMode: 'follow_up' } : { error: ErrorCode.SESSION_BUSY };
+      if (busy) return runtime === 'pi' || runtime === 'antigravity' || runtime === 'devin' ? { dispatchMode: 'follow_up' } : { error: ErrorCode.SESSION_BUSY };
       if (requireActiveTurn) return { error: ErrorCode.SESSION_NOT_STREAMING };
       return { dispatchMode: 'prompt' };
     }
@@ -4230,6 +4292,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             ? opencodeService.isRunning(sessionId)
             : runtime === 'antigravity'
               ? antigravityService.isRunning(sessionId)
+              : runtime === 'devin'
+                ? (devinService?.isRunning(sessionId) ?? false)
               : (() => {
                   // C2 correction 01: the one liveness predicate, so an
                   // SDK-streaming extension/browser turn the manager never
@@ -7158,6 +7222,32 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             return;
           }
           antigravityService.sendPrompt(sessionId, message, broadcast, wrappedComplete).catch((err) => {
+            onComplete(err instanceof Error ? err : new Error(String(err)));
+            resolve();
+          });
+        });
+      }
+
+      case 'devin': {
+        if (!devinService) throw new Error('Devin service is not configured');
+        return new Promise<void>((resolve) => {
+          const wrappedComplete = (error?: Error) => {
+            onComplete(error);
+            resolve();
+          };
+          if (mode === 'follow_up') {
+            // FIFO server-side queue drained between turns (brief design
+            // point 7). A false return is a lost race with turn completion.
+            devinService.followUp(sessionId, message, broadcast, wrappedComplete)
+              .then((queued: boolean) => {
+                if (!queued) wrappedComplete(new Error('session is no longer running a turn; resend as a plain prompt'));
+              })
+              .catch((err: unknown) => {
+                wrappedComplete(err instanceof Error ? err : new Error(String(err)));
+              });
+            return;
+          }
+          devinService.sendPrompt(sessionId, message, broadcast, wrappedComplete).catch((err) => {
             onComplete(err instanceof Error ? err : new Error(String(err)));
             resolve();
           });

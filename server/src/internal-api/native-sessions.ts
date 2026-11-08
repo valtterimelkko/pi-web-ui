@@ -21,10 +21,11 @@
 import fs from 'fs/promises';
 import path from 'path';
 import type { NativeSessionItem } from './types.js';
+import { readDevinNativeSessions } from '../devin/devin-native-reader.js';
 
-export type NativeRuntime = 'claude' | 'commandcode' | 'opencode' | 'antigravity';
+export type NativeRuntime = 'claude' | 'commandcode' | 'opencode' | 'antigravity' | 'devin';
 
-export const NATIVE_RUNTIMES: readonly NativeRuntime[] = ['claude', 'commandcode', 'opencode', 'antigravity'];
+export const NATIVE_RUNTIMES: readonly NativeRuntime[] = ['claude', 'commandcode', 'opencode', 'antigravity', 'devin'];
 
 /** Per-directory-level readdir cap: bound the walk even on pathological stores. */
 export const MAX_ENTRIES_PER_ROOT = 2000;
@@ -37,6 +38,8 @@ export interface NativeScanRoots {
   commandCodeNativeHomeDir?: string;
   opencodeStorageDir?: string;
   antigravityConversationsDir?: string;
+  /** Devin sessions DB (<DEVIN_HOME>/.local/share/devin/cli/sessions.db); read READ-ONLY. */
+  devinNativeSessionsDb?: string;
   /** Parallel Antigravity desktop-app conversations root (see config
    *  antigravityNativeDesktopConversationsDir). Scanned in addition to the CLI
    *  root; equal roots are deduplicated. */
@@ -60,6 +63,8 @@ export interface NativeKnownSets {
   opencodeSessionIds: Map<string, NativeKnownSetEntry>;
   /** native antigravity conversation id → registry entry */
   antigravityConversationIds: Map<string, NativeKnownSetEntry>;
+  /** native devin session id (e.g. brass-akubra) → registry entry */
+  devinSessionIds: Map<string, NativeKnownSetEntry>;
 }
 
 export interface NativeScanInput {
@@ -571,7 +576,52 @@ export async function resolveNativeSessionArtifact(input: {
       }
       return null;
     }
+    case 'devin': {
+      // The store is one SQLite DB, not per-session files: the "artefact" is
+      // the DB row (read-only lookup by id).
+      if (!roots.devinNativeSessionsDb) return null;
+      const rows = await readDevinNativeSessions(roots.devinNativeSessionsDb);
+      const row = rows.find((r) => r.id === nativeId);
+      if (!row) return null;
+      return {
+        runtime,
+        nativePath: roots.devinNativeSessionsDb,
+        mtimeMs: row.lastActivityAt ?? row.createdAt ?? 0,
+        size: 0,
+        ...(row.title ? { preview: row.title } : {}),
+        fileCwd: cwd ?? row.cwd,
+      };
+    }
   }
+}
+
+/**
+ * Devin: every session in the CLI's SQLite store (brief §9). The reader opens
+ * the DB READ-ONLY and never locks it; since/before filter on lastActivityAt
+ * (the mtime analogue). Preview = the session's title; cwd from the store.
+ */
+async function scanDevin(root: string | undefined, since?: Date, before?: Date): Promise<RawItem[]> {
+  if (!root) return [];
+  let rows: Awaited<ReturnType<typeof readDevinNativeSessions>> = [];
+  try {
+    rows = await readDevinNativeSessions(root, { ...(since ? { since } : {}), ...(before ? { before } : {}) });
+  } catch {
+    return [];
+  }
+  const items: RawItem[] = [];
+  for (const row of rows) {
+    items.push({
+      runtime: 'devin',
+      nativePath: root,
+      // lastActivityAt is the ordering key; fall back to createdAt.
+      mtimeMs: row.lastActivityAt ?? row.createdAt ?? 0,
+      size: 0,
+      ...(row.cwd ? { cwd: row.cwd } : {}),
+      ...(row.title ? { preview: row.title } : {}),
+      knownId: row.id,
+    });
+  }
+  return items;
 }
 
 export async function scanNativeSessions(input: NativeScanInput): Promise<NativeScanResult> {
@@ -586,6 +636,15 @@ export async function scanNativeSessions(input: NativeScanInput): Promise<Native
     scannedRoots.push({ runtime, root, considered: items.length });
     raw = raw.concat(items);
   };
+
+  // Devin is SQLite-backed, not a directory walk: its filter runs inside the
+  // reader (busy-WAL tolerant, read-only), so `collect`'s mtime filtering is
+  // bypassed by pre-filtering here.
+  if (runtimes.includes('devin') && roots.devinNativeSessionsDb) {
+    const items = await scanDevin(roots.devinNativeSessionsDb, since, before);
+    scannedRoots.push({ runtime: 'devin', root: roots.devinNativeSessionsDb, considered: items.length });
+    raw = raw.concat(items);
+  }
 
   await collect('claude', roots.claudeProjectsDir, scanClaude);
   await collect('commandcode', roots.commandCodeCliHomeDir ?? roots.commandCodeNativeHomeDir, () =>
@@ -615,6 +674,7 @@ export async function scanNativeSessions(input: NativeScanInput): Promise<Native
     if (item.runtime === 'claude') knownEntry = known.claudeSessionIds.get(knownId);
     else if (item.runtime === 'commandcode') knownEntry = known.commandCodeNativeSessionIds.get(knownId);
     else if (item.runtime === 'opencode') knownEntry = known.opencodeSessionIds.get(knownId);
+    else if (item.runtime === 'devin') knownEntry = known.devinSessionIds.get(knownId);
     else knownEntry = known.antigravityConversationIds.get(knownId);
     return {
       runtime: item.runtime,

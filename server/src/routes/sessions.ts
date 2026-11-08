@@ -117,6 +117,7 @@ router.get('/native', async (req: Request, res: Response) => {
       opencodeStorageDir: config.opencodeStorageDir,
       antigravityConversationsDir: config.antigravityNativeConversationsDir,
       antigravityDesktopConversationsDir: config.antigravityNativeDesktopConversationsDir,
+      devinNativeSessionsDb: config.devinNativeSessionsDb,
     };
 
     const registry = getSessionRegistry(config.sessionRegistryPath);
@@ -125,6 +126,7 @@ router.get('/native', async (req: Request, res: Response) => {
       commandCodeNativeSessionIds: new Map<string, NativeKnownSetEntry>(),
       opencodeSessionIds: new Map<string, NativeKnownSetEntry>(),
       antigravityConversationIds: new Map<string, NativeKnownSetEntry>(),
+      devinSessionIds: new Map<string, NativeKnownSetEntry>(),
     };
     for (const entry of await registry.listAll()) {
       // Contract 1.65.0: carry the recorded session class (if any) alongside
@@ -135,6 +137,7 @@ router.get('/native', async (req: Request, res: Response) => {
       if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, withClass(entry.id));
       if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, withClass(entry.id));
       if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, withClass(entry.id));
+      if (entry.devinNativeSessionId) known.devinSessionIds.set(entry.devinNativeSessionId, withClass(entry.id));
     }
 
     const result = await scanNativeSessions({ runtimes, limit, since, before, roots: nativeRoots, known });
