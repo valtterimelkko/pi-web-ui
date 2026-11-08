@@ -529,14 +529,14 @@ export class DevinService {
     const timer = setTimeout(() => {
       this.processIdleTimers.delete(sessionId);
       if (this.runningSessions.has(sessionId)) return; // busy: keep the child
-      this.shutdownProcessForTest(sessionId);
+      this.shutdownProcess(sessionId);
     }, this.processIdleShutdownMs);
     if (timer.unref) timer.unref();
     this.processIdleTimers.set(sessionId, timer);
   }
 
   /** Stop and forget the session's ACP child (idle shutdown, abort, dispose). */
-  shutdownProcessForTest(sessionId: string): void {
+  shutdownProcess(sessionId: string): void {
     const client = this.clients.get(sessionId);
     if (client) {
       client.stop();
@@ -567,7 +567,7 @@ export class DevinService {
   }
 
   disposeSession(sessionId: string): void {
-    this.shutdownProcessForTest(sessionId);
+    this.shutdownProcess(sessionId);
     const queued = this.turnQueues.get(sessionId);
     if (queued) {
       for (const item of queued) item.onComplete(new Error('Devin session disposed'));
@@ -808,7 +808,7 @@ export class DevinService {
       this.cleanupTimer = null;
     }
     for (const [sessionId] of this.clients) {
-      this.shutdownProcessForTest(sessionId);
+      this.shutdownProcess(sessionId);
     }
     this.clients.clear();
     this.processIdleTimers.clear();

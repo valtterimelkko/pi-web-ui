@@ -290,7 +290,7 @@ describe('devin service', () => {
     await turn1Completed;
 
     // Simulate idle shutdown of the process (service-owned) then a new turn.
-    service.shutdownProcessForTest(sessionId);
+    service.shutdownProcess(sessionId);
     expect(child1.signals.length).toBeGreaterThan(0);
     const turn2Completed = new Promise<void>((resolve) => {
       void service.sendPrompt(sessionId, 'turn two', () => undefined, () => resolve());
@@ -330,7 +330,7 @@ describe('devin service', () => {
     await turn1Completed;
 
     // Idle-shutdown the child, then a follow-up prompt respawns with session/load.
-    service.shutdownProcessForTest(sessionId);
+    service.shutdownProcess(sessionId);
     const turn2Events: any[] = [];
     const turn2Completed = new Promise<void>((resolve) => {
       void service.sendPrompt(sessionId, 'turn two', (e) => turn2Events.push(e), () => resolve());
