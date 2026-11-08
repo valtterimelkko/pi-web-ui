@@ -85,3 +85,16 @@ export function resolveDevinVariantId(family: DevinFamily, level: string | null)
   if (!level || family.levels.length === 0) return family.family;
   return `${family.family}-${level}`;
 }
+
+/** The server's default Devin family (`swe-2-flash-medium`, free on Pro): the
+ *  New Session modal's preselection when the catalogue carries it. */
+export const DEFAULT_DEVIN_FAMILY = 'swe-2-flash';
+
+/** The family the New Session modal preselects: SWE-2 Flash when present,
+ *  else the first free family, else the first family. */
+export function pickDefaultDevinFamily(families: DevinFamily[]): DevinFamily | null {
+  return families.find((f) => f.family === DEFAULT_DEVIN_FAMILY)
+    ?? families.find((f) => f.free)
+    ?? families[0]
+    ?? null;
+}

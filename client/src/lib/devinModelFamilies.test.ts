@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupDevinModelsByFamily, resolveDevinVariantId, type DevinCatalogModel } from './devinModelFamilies';
+import { groupDevinModelsByFamily, pickDefaultDevinFamily, resolveDevinVariantId, type DevinCatalogModel } from './devinModelFamilies';
 
 /**
  * Lane D3 (devin-parity): one model choice per Devin family. The catalogue
@@ -95,5 +95,20 @@ describe('resolveDevinVariantId', () => {
   it('returns the family id itself for an axis-less family (level null)', () => {
     const kimi = groupDevinModelsByFamily(catalogue).find((f) => f.family === 'kimi-k2-6');
     expect(resolveDevinVariantId(kimi!, null)).toBe('kimi-k2-6');
+  });
+});
+
+describe('pickDefaultDevinFamily', () => {
+  it('prefers SWE-2 Flash (the server default) over an earlier free family', () => {
+    const families = groupDevinModelsByFamily([...catalogue.slice(3, 6), ...catalogue.slice(0, 3)]);
+    expect(families[0].family).toBe('swe-2');
+    expect(pickDefaultDevinFamily(families)?.family).toBe('swe-2-flash');
+  });
+  it('falls back to the first free family, then the first family', () => {
+    const noFlash = groupDevinModelsByFamily(catalogue.slice(3));
+    expect(pickDefaultDevinFamily(noFlash)?.family).toBe('swe-2');
+    const paidOnly = groupDevinModelsByFamily(catalogue.slice(6));
+    expect(pickDefaultDevinFamily(paidOnly)?.family).toBe('claude-opus-5-5');
+    expect(pickDefaultDevinFamily([])).toBeNull();
   });
 });

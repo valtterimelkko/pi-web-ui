@@ -4,7 +4,7 @@ import { api } from '../../lib/api';
 import { useUIStore } from '../../store/uiStore';
 import { useSessionStore } from '../../store';
 import type { SdkType, CommandCodeEffort } from '@pi-web-ui/shared';
-import { groupDevinModelsByFamily, resolveDevinVariantId, type DevinCatalogModel } from '../../lib/devinModelFamilies';
+import { groupDevinModelsByFamily, resolveDevinVariantId, type DevinCatalogModel, pickDefaultDevinFamily } from '../../lib/devinModelFamilies';
 
 interface NewSessionModalProps {
   isOpen: boolean;
@@ -241,14 +241,14 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const devinFamilies = useMemo(() => groupDevinModelsByFamily(devinModels), [devinModels]);
   const selectedDevinFamily = devinFamilies.find((f) => f.family === devinFamily) ?? null;
 
-  // Default to the first free family once the catalogue is in; a selection the
+  // Default to SWE-2 Flash (else the first free family) once the catalogue is in; a selection the
   // user made is never re-derived or snapped back.
   useEffect(() => {
     if (sdkType !== 'devin') return;
     if (devinFamily && devinFamilies.some((f) => f.family === devinFamily)) return;
-    const firstFree = devinFamilies.find((f) => f.free) ?? devinFamilies[0] ?? null;
-    setDevinFamily(firstFree?.family ?? '');
-    setDevinLevel(firstFree?.defaultLevel ?? null);
+    const preferred = pickDefaultDevinFamily(devinFamilies);
+    setDevinFamily(preferred?.family ?? '');
+    setDevinLevel(preferred?.defaultLevel ?? null);
   }, [sdkType, devinFamilies, devinFamily]);
 
   // Fetch Claude models/profiles when the Claude session type is chosen so the
@@ -321,9 +321,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (sdkType === 'devin') {
       // Lane D3: the request sends the RESOLVED variant id (family + level).
       if (selectedDevinFamily) return resolveDevinVariantId(selectedDevinFamily, devinLevel);
-      return devinFamilies[0]
-        ? resolveDevinVariantId(devinFamilies[0], devinFamilies[0].defaultLevel)
-        : undefined;
+      const preferred = pickDefaultDevinFamily(devinFamilies);
+      return preferred ? resolveDevinVariantId(preferred, preferred.defaultLevel) : undefined;
     }
     return claudeModelArg();
   };
