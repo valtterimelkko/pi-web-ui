@@ -1,8 +1,10 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
+import { config } from '../config.js';
 import { getPiService } from '../pi/index.js';
 import { getOpenCodeService } from '../opencode/index.js';
 import { getAntigravityService } from '../antigravity/index.js';
+import { getDevinService } from '../devin/index.js';
 import { getClaudeProfiles } from '../claude/index.js';
 import { claudeThinkingLevels } from '../claude/claude-profiles.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
@@ -49,6 +51,19 @@ router.get('/', async (req: Request, res: Response) => {
     if (sdkType === 'antigravity') {
       const antigravityService = getAntigravityService();
       const models = await antigravityService.getAvailableModels();
+      res.json({ models });
+      return;
+    }
+
+    if (sdkType === 'devin') {
+      const devinService = getDevinService();
+      // Fail-closed for a disabled runtime (ruling 01: no allow-list — every
+      // catalogue model carries its pricing field instead).
+      if (!config.devinEnabled || !(await devinService.isAvailable())) {
+        res.json({ models: [] });
+        return;
+      }
+      const models = await devinService.getAvailableModels();
       res.json({ models });
       return;
     }

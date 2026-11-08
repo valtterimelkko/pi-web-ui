@@ -20,6 +20,7 @@ import type { RegistryEntry } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import { CommandCodeRuntimeError, type CommandCodeService } from '../../command-code/command-code-service.js';
 import { commandCodeEventsToScreenEvents } from '../../command-code/command-code-event-adapter.js';
+import type { DevinService } from '../../devin/devin-service.js';
 import type { CommandCodeInternalSessionRecord } from '../../command-code/command-code-session-store.js';
 import type {
   CreateSessionRequest,
@@ -520,6 +521,10 @@ export interface SessionRoutesDeps {
   blockedPiProviders?: readonly string[];
   /** Feature-gated server-local Command Code runtime. */
   commandCodeService?: CommandCodeService;
+  /** Devin over ACP (DEVIN_ENABLED gate). */
+  devinService?: DevinService;
+  /** Native Devin sessions DB (<DEVIN_HOME>/.local/share/devin/cli/sessions.db). Defaults to config. */
+  devinNativeSessionsDb?: string;
   /**
    * Contract 1.27.0 goal function: browser bridge. Goal events on the broker
    * are also surfaced to WebSocket clients as extension-UI-grammar messages so
@@ -547,6 +552,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onBrowserMessage,
   } = deps;
   const commandCodeService = deps.commandCodeService;
+  const devinService = deps.devinService;
   // Correction 01 (Luna r1 finding 2): deletes record here so the quiescence
   // wiring can gate the missing-session branch on awaited termination acks or
   // the bounded deletion grace instead of raw registry absence.

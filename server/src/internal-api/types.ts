@@ -1354,6 +1354,13 @@ export interface ModelInfo {
   backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
   /** For Claude profile entries: the underlying model alias (sonnet/opus/haiku). */
   claudeModel?: string;
+  /** Devin (ruling 01): additive cost projection — the CLI's `Free` tier flag
+   *  plus the raw price text. Informational, never a gate. */
+  pricing?: { free: boolean; raw: string; costTier?: string };
+  /** Devin: catalogue flag from the CLI (is_new). */
+  isNew?: boolean;
+  /** Devin: catalogue flag from the CLI (is_beta). */
+  isBeta?: boolean;
 }
 
 export interface ModelsResponse {
@@ -1363,6 +1370,8 @@ export interface ModelsResponse {
     opencode: ModelInfo[];
     /** Optional Internal-API-only runtime; absent from older servers/clients. */
     commandcode?: ModelInfo[];
+    /** Devin over ACP (DEVIN_ENABLED); absent from older servers/clients. */
+    devin?: ModelInfo[];
   };
   /** Additive runtime catalogue freshness metadata. */
   catalogueMetadata?: Partial<Record<SessionRuntime, CommandCodeCatalogueMetadata>>;
@@ -1560,6 +1569,8 @@ export interface CapabilitiesResponse {
     antigravity: RuntimeCapabilities;
     /** Internal-API-only runtime; older clients may ignore the additive key. */
     commandcode: RuntimeCapabilities;
+    /** Devin over ACP (DEVIN_ENABLED); always emitted (available:false when gated). */
+    devin: RuntimeCapabilities;
   };
   /** Claude provider profiles, non-secret fields only. `claudeModel` added in 1.25.0 so the documented profile-selection predicate is satisfiable from this surface too. */
   claudeProfiles?: Array<{

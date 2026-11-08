@@ -18,6 +18,7 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { claudeThinkingLevels } from '../../claude/claude-profiles.js';
 import { createLogger } from '../../logging/logger.js';
 import { config } from '../../config.js';
+import type { DevinService } from '../../devin/devin-service.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -26,12 +27,13 @@ export interface ModelsRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
+  devinService?: DevinService;
   commandCodeService?: CommandCodeService;
   blockedPiProviders?: readonly string[];
 }
 
 export function createModelsRoutes(deps: ModelsRoutesDeps) {
-  const { piService, claudeService, opencodeService, antigravityService, commandCodeService } = deps;
+  const { piService, claudeService, opencodeService, antigravityService, devinService, commandCodeService } = deps;
   const blockedPiProviders = new Set(
     (deps.blockedPiProviders ?? config.internalApiBlockedPiProviders).map((provider) => provider.toLowerCase()),
   );
@@ -50,6 +52,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
         opencode: [],
         antigravity: [],
         commandcode: [],
+        devin: [],
       };
 
       // Pi SDK models
@@ -153,6 +156,29 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
         result.commandcode = commandCodeService.isEnabled()
           ? commandCodeService.getModels().map((m) => ({ ...m, selector: m.id }))
           : [];
+      }
+
+      // Devin models (ruling 01: the whole catalogue; pricing is additive
+      // information, never a gate). Disabled gate → empty list.
+      if (devinService && (!runtimeFilter || runtimeFilter === 'devin')) {
+        if (config.devinEnabled) {
+          try {
+            const dvModels = await devinService.getAvailableModels();
+            result.devin = dvModels.map((m) => ({
+              id: m.id,
+              selector: m.id,
+              displayName: m.name || m.id,
+              provider: m.provider,
+              ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+              thinkingLevels: m.thinkingLevels,
+              pricing: m.pricing,
+              ...(m.isNew ? { isNew: true } : {}),
+              ...(m.isBeta ? { isBeta: true } : {}),
+            }));
+          } catch {
+            // devin models may not respond — return empty
+          }
+        }
       }
 
       // Antigravity models

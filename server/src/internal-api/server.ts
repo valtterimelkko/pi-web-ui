@@ -74,6 +74,7 @@ import {
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { createValidationLeakOverride } from '../observability/admission-leak-override.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
+import { getDevinService, type DevinService } from '../devin/index.js';
 import { DrainController, composeInterruptedBusySessions, consumeDrainRecord, createBusySessionSource, type DrainBusySession } from './drain-controller.js';
 import { createDrainRoutes, isExecutionEntryRequest } from './routes/drain.js';
 
@@ -200,6 +201,7 @@ export interface RuntimeQuiescencePredicateDeps {
   claudeService: { isRunning: (sessionId: string) => boolean };
   opencodeService: { isRunning: (sessionId: string) => boolean };
   antigravityService: { isRunning: (sessionId: string) => boolean };
+  devinService?: { isRunning: (sessionId: string) => boolean };
   readPiStatus: (sessionPath: string) => PiSessionStatusInfo | undefined;
 }
 
@@ -221,6 +223,7 @@ export function createRuntimeQuiescencePredicate(deps: RuntimeQuiescencePredicat
       if (entry.sdkType === 'claude') return !deps.claudeService.isRunning(sessionId);
       if (entry.sdkType === 'opencode') return !deps.opencodeService.isRunning(sessionId);
       if (entry.sdkType === 'antigravity') return !deps.antigravityService.isRunning(sessionId);
+      if (entry.sdkType === 'devin') return deps.devinService ? !deps.devinService.isRunning(sessionId) : true;
       return readPiRuntimeQuiescence(() => deps.readPiStatus(entry.path));
     } catch {
       return false; // status lookup failure is not positive cessation evidence
@@ -242,6 +245,7 @@ export class InternalApiServer {
   private sessionRegistry: SessionRegistryManager;
   private piService: PiService;
   private commandCodeService: CommandCodeService;
+  private devinService: DevinService;
   private runReceiptManager: RunReceiptManager | null = null;
   private drainController: DrainController | null = null;
   private notificationManager: NotificationManager | null = null;
@@ -277,6 +281,7 @@ export class InternalApiServer {
     sessionRegistry: SessionRegistryManager;
     piService: PiService;
     commandCodeService?: CommandCodeService;
+    devinService?: DevinService;
     /** Contract 1.27.0: browser bridge for goal events (WebSocket fan-out). */
     onBrowserMessage?: (message: Record<string, unknown>) => void;
   }) {
@@ -289,6 +294,7 @@ export class InternalApiServer {
     this.multiSessionManager = deps.multiSessionManager;
     this.sessionRegistry = deps.sessionRegistry;
     this.piService = deps.piService;
+    this.devinService = deps.devinService ?? getDevinService();
     this.commandCodeService = deps.commandCodeService ?? new CommandCodeService({
       config: {
         enabled: config.commandCodeEnabled,
@@ -390,6 +396,7 @@ export class InternalApiServer {
         claudeService: this.claudeService,
         opencodeService: this.opencodeService,
         antigravityService: this.antigravityService,
+        devinService: this.devinService,
         readPiStatus: (sessionPath) => this.multiSessionManager.getSessionStatus(sessionPath),
       }),
       // C2 (contract 1.57.0): the operator learns a dispatched run never
@@ -555,6 +562,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      devinService: this.devinService,
       multiSessionManager: this.multiSessionManager,
       sessionRegistry: this.sessionRegistry,
       piService: this.piService,
@@ -647,6 +655,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      devinService: this.devinService,
       commandCodeService: this.commandCodeService,
       blockedPiProviders: config.internalApiBlockedPiProviders,
     };
@@ -656,6 +665,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      devinService: this.devinService,
       commandCodeService: this.commandCodeService,
       startTime: this.startTime,
       enabled: {
@@ -663,6 +673,7 @@ export class InternalApiServer {
         opencode: config.opencodeServerEnabled,
         antigravity: config.antigravityEnabled,
         commandcode: config.commandCodeEnabled,
+        devin: config.devinEnabled,
       },
     };
     const healthRoutes = createHealthRoutes(healthDeps);
@@ -678,6 +689,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      devinService: this.devinService,
       commandCodeService: this.commandCodeService,
       blockedPiProviders: config.internalApiBlockedPiProviders,
       notificationActionHandlers: Object.keys(notificationActionHandlerDefs),
@@ -753,6 +765,7 @@ export class InternalApiServer {
         opencode: this.opencodeService,
         antigravity: this.antigravityService,
         commandcode: this.commandCodeService,
+        devin: this.devinService,
       },
       isSessionAllowed: async (record) => record.runtime !== 'commandcode'
         || await this.commandCodeService.getSession(record.sessionId) !== undefined

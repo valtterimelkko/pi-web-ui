@@ -5152,6 +5152,10 @@ export class WebSocketConnectionManager {
     return this.antigravityService;
   }
 
+  getDevinService(): DevinService {
+    return this.devinService;
+  }
+
   getCommandCodeService(): CommandCodeService {
     return this.commandCodeService;
   }

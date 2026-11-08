@@ -11,6 +11,7 @@ import { getInternalApiContractInfo, SSE_EVENT_TYPES, type CapabilitiesResponse 
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
+import type { DevinService } from '../../devin/devin-service.js';
 import { config } from '../../config.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
 import {
@@ -34,6 +35,7 @@ export interface CapabilitiesRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
+  devinService?: DevinService;
   commandCodeService?: CommandCodeService;
   blockedPiProviders?: readonly string[];
   /** Contract 1.66.0: registered notification action handler names (CHANNEL.md §7). */
@@ -41,7 +43,7 @@ export interface CapabilitiesRoutesDeps {
 }
 
 export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
-  const { claudeService, opencodeService, antigravityService, commandCodeService } = deps;
+  const { claudeService, opencodeService, antigravityService, devinService, commandCodeService } = deps;
   const blockedPiProviders = [...(deps.blockedPiProviders ?? config.internalApiBlockedPiProviders)];
   const notificationActionHandlers = [...(deps.notificationActionHandlers ?? [])];
 
@@ -56,6 +58,12 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
       opencodeService.isAvailable().catch(() => false),
       antigravityService.isAvailable().catch(() => false),
     ]);
+    // Devin is feature-gated (DEVIN_ENABLED, off by default): a disabled gate
+    // answers enabled:false/available:false without probing the binary.
+    const devinEnabled = Boolean(devinService) && config.devinEnabled;
+    const devinAvailable = devinEnabled
+      ? await devinService!.isAvailable().catch(() => false)
+      : false;
     // Operator enablement is distinct from installed/healthy availability.
     // A disabled-but-installed runtime is advertised as unavailable and its
     // new work is refused rather than silently substituted.
@@ -282,6 +290,26 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
             supportsStructuredQuestionResponse: false,
           };
         })(),
+        devin: {
+          available: devinAvailable,
+          enabled: devinEnabled,
+          backendMode: 'acp' as const,
+          supportsFollowUp: true,
+          // FIFO server-side queue drained between turns (brief design point 7).
+          followUpSemantics: 'queue_while_busy' as const,
+          // No mid-run join in the ACP protocol; steer refused honestly.
+          supportsSteer: false,
+          supportsSteerWhileBusy: false,
+          // Model via session/set_config_option; sibling-level swap for levels.
+          supportsModelSwitch: true,
+          supportsThinkingLevel: true,
+          supportsPinning: true,
+          supportsReplayHistory: true,
+          supportsApprovals: false,
+          supportsHeartbeat: false,
+          supportsInteractiveQuestions: false,
+          supportsStructuredQuestionResponse: false,
+        },
         commandcode: {
           available: commandCodeEnabled && commandCodeAvailable,
           enabled: commandCodeEnabled,

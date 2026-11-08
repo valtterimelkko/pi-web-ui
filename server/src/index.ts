@@ -327,6 +327,7 @@ async function initialize(): Promise<void> {
           claudeService: wsManager.getClaudeService(),
           opencodeService: wsManager.getOpenCodeService(),
           antigravityService: wsManager.getAntigravityService(),
+          devinService: wsManager.getDevinService(),
           multiSessionManager: wsManager.getMultiSessionManager(),
           sessionRegistry: notificationsRegistry,
           piService: getPiService(),
