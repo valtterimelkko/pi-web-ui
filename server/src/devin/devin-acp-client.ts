@@ -263,6 +263,9 @@ export class DevinAcpClient {
       sessionId: this.nativeSessionId,
       prompt: [{ type: 'text', text }],
     });
+    if (response.error) {
+      return { cancelled: false, usage: { input: 0, output: 0 }, error: response.error.message };
+    }
     const result = (response.result ?? {}) as {
       stopReason?: string;
       usage?: { inputTokens?: number; outputTokens?: number; cachedReadTokens?: number; totalTokens?: number };
@@ -286,15 +289,17 @@ export class DevinAcpClient {
     this.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.nativeSessionId } });
   }
 
-  /** Set a session config option (`model`, `mode`) — never a spawn flag. */
-  async setConfigOption(contentId: string, value: string): Promise<void> {
+  /** Set a session config option (`model`, `mode`) — never a spawn flag.
+   *  Wire shape (live-probed v3000.12.28): {sessionId, configId, value}; the
+   *  result echoes the session's updated configOptions. */
+  async setConfigOption(configId: string, value: string): Promise<void> {
     if (!this.nativeSessionId) throw new Error('devin acp client not started');
     const response = await this.request('session/set_config_option', {
       sessionId: this.nativeSessionId,
-      contentId,
+      configId,
       value,
     }, 10_000);
-    if (response.error) throw new Error(`session/set_config_option ${contentId} failed: ${response.error.message}`);
+    if (response.error) throw new Error(`session/set_config_option ${configId} failed: ${response.error.message}`);
   }
 
   /** Stop the child (SIGTERM then SIGKILL after a grace period). */

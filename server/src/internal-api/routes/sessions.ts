@@ -5368,6 +5368,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             }
             const normalizedModel = await antigravityService.setModel(sessionId, body.modelId);
             response = { success: true, action: 'set_model', modelId: normalizedModel };
+          } else if (entry.sdkType === 'devin') {
+            // Ruling 01: every catalogue model; busy refuses like antigravity.
+            if (!devinService) {
+              sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is not configured'));
+              return;
+            }
+            try {
+              const normalizedModel = await devinService.setModel(sessionId, body.modelId);
+              response = { success: true, action: 'set_model', modelId: normalizedModel };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Failed to change model';
+              if (message.includes('SESSION_BUSY')) {
+                res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+                sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, message));
+                return;
+              }
+              sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, message));
+              return;
+            }
           } else {
             try {
               assertPiModelAllowed(body.modelId, blockedPiProviders);
@@ -5419,6 +5438,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               sendJson(res, 200, { success: true, action: 'set_thinking_level', level: body.level, model: resolvedSlug });
             } catch (error) {
               sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, error instanceof Error ? error.message : 'Thinking level not resolvable for this model'));
+            }
+            return;
+          } else if (entry.sdkType === 'devin') {
+            // Plan D4: sibling-model swap among low|medium|high|xhigh|max;
+            // busy refuses with 409 SESSION_BUSY.
+            if (!devinService) {
+              sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is not configured'));
+              return;
+            }
+            try {
+              const resolvedSlug = await devinService.setThinkingLevel(sessionId, body.level);
+              sendJson(res, 200, { success: true, action: 'set_thinking_level', level: body.level, model: resolvedSlug });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Thinking level not resolvable for this model';
+              if (message.includes('SESSION_BUSY')) {
+                res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+                sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, message));
+                return;
+              }
+              sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, message));
             }
             return;
           } else if (entry.sdkType === 'pi') {

@@ -129,7 +129,7 @@ describe('devin ACP client', () => {
     expect(JSON.parse(child.stdinWrites[1]!).method).toBe('session/new');
     // D6: children run bypass mode — set right after session/new.
     const bypass = child.sent().find((m) => m.method === 'session/set_config_option');
-    expect(bypass?.params).toMatchObject({ sessionId: 'brass-akubra', contentId: 'mode', value: 'bypass' });
+    expect(bypass?.params).toMatchObject({ sessionId: 'brass-akubra', configId: 'mode', value: 'bypass' });
   });
 
   it('resume path uses session/load instead of session/new', async () => {
@@ -220,7 +220,7 @@ describe('devin ACP client', () => {
     const lastId = child.lastRequestId;
     child.writeStdout({ jsonrpc: '2.0', id: lastId, result: {} });
     await expect(setPromise).resolves.toBeUndefined();
-    const set = child.sent().find((m) => m.method === 'session/set_config_option' && m.params?.contentId === 'model');
-    expect(set?.params).toMatchObject({ sessionId: 'brass-akubra', contentId: 'model', value: 'swe-2-flash-high' });
+    const set = child.sent().find((m) => m.method === 'session/set_config_option' && m.params?.configId === 'model');
+    expect(set?.params).toMatchObject({ sessionId: 'brass-akubra', configId: 'model', value: 'swe-2-flash-high' });
   });
 });
