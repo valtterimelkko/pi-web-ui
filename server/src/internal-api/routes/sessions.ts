@@ -3485,6 +3485,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         opencodeService.abort(sessionId);
       } else if (entry.sdkType === 'antigravity') {
         antigravityService.abort(sessionId);
+      } else if (entry.sdkType === 'devin') {
+        devinService?.abort(sessionId);
       } else if (entry.sdkType === 'commandcode') {
         await commandCodeService?.abort(sessionId);
       } else {
@@ -4531,6 +4533,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             opencodeService.abort(sessionId);
           } else if (runtime === 'antigravity') {
             antigravityService.abort(sessionId);
+          } else if (runtime === 'devin') {
+            devinService?.abort(sessionId);
           } else {
             const entry = await getNonCommandCodeRegistryEntry(sessionId);
             const agentSession = entry ? multiSessionManager.getAgentSession(entry.path) : undefined;
@@ -4599,6 +4603,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         opencodeService.abort(sessionId);
       } else if (entry.sdkType === 'antigravity') {
         antigravityService.abort(sessionId);
+      } else if (entry.sdkType === 'devin') {
+        devinService?.abort(sessionId);
       } else {
         const agentSession = multiSessionManager.getAgentSession(entry.path);
         if (agentSession) {
@@ -6725,6 +6731,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       antigravityService.abort(sessionId);
       return;
     }
+    if (runtime === 'devin') {
+      devinService?.abort(sessionId);
+      return;
+    }
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     const agentSession = entry ? multiSessionManager.getAgentSession(entry.path) : undefined;
     await agentSession?.abort().catch(() => { /* best-effort runtime fencing */ });
@@ -8254,6 +8264,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             cleanupRejectedSession: cleanupRejectedCreatedSession,
             blockedPiProviders,
             commandCodeService,
+            devinService,
           },
         });
         // Contract 1.30.0 origin provenance: best-effort tag mirroring the

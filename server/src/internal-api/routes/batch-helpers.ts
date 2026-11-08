@@ -14,6 +14,7 @@ import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
+import type { DevinService } from '../../devin/devin-service.js';
 import type { CommandCodeEffort } from '../../command-code/command-code-model-catalog.js';
 import type { BatchCreateEntry, SessionRuntime } from '../types.js';
 import { unlink } from 'fs/promises';
@@ -47,6 +48,7 @@ export interface BatchCreateDeps {
   cleanupRejectedSession(sessionId: string): Promise<void>;
   blockedPiProviders?: readonly string[];
   commandCodeService?: CommandCodeService;
+  devinService?: DevinService;
 }
 
 export interface CreatedSession {
@@ -153,6 +155,15 @@ export async function createOneSession(params: {
       }
       const { sessionId } = await deps.antigravityService.createSession(cwd, entry.model);
       return { sessionId, sessionPath: sessionId, runtime: 'antigravity', model: entry.model, cwd };
+    }
+
+    case 'devin': {
+      if (!deps.devinService) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is not configured');
+      if (!(await deps.devinService.isAvailable())) {
+        throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is disabled or unavailable');
+      }
+      const { sessionId } = await deps.devinService.createSession(cwd, entry.model);
+      return { sessionId, sessionPath: sessionId, runtime: 'devin', model: entry.model, cwd };
     }
 
     case 'pi': {

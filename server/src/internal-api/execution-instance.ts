@@ -21,6 +21,8 @@ export function resolveExecutionInstanceId(
       return 'antigravity-default';
     case 'commandcode':
       return 'commandcode-default';
+    case 'devin':
+      return 'devin-default';
     case 'pi':
     default:
       return 'pi-local-default';

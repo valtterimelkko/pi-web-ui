@@ -473,7 +473,7 @@ export class RunReceiptStore {
     if (!record.sessionId || !record.runtime || !record.executionInstanceId) {
       throw new Error('Receipt identity fields are required');
     }
-    if (!['pi', 'claude', 'opencode', 'antigravity', 'commandcode'].includes(record.runtime)) {
+    if (!['pi', 'claude', 'opencode', 'antigravity', 'commandcode', 'devin'].includes(record.runtime)) {
       throw new Error('Invalid receipt runtime');
     }
     if (record.runtime === 'commandcode') {
