@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { describe, it, expect } from 'vitest';
 import { devinSpawnEnv, DEVIN_ENV_ALLOWLIST } from '../../../src/devin/devin-spawn-env.js';
 
@@ -42,7 +43,8 @@ describe('devin spawn env allow-list (plan D2)', () => {
     expect(env[SECRET]).toBeUndefined();
     expect(env.CLAUDECODE).toBeUndefined();
     expect(env.DEVIN_TRACE).toBe('x');
-    expect(env.HOME).toBe('/root');
+    // No override: the real home of the server process (os.homedir()), never the parent map's HOME.
+    expect(env.HOME).toBe(os.homedir());
   });
 
   it('HOME defaults to os.homedir() when no override is given (plan D1 real-HOME production)', () => {

@@ -27,6 +27,7 @@ describe('Command Code Internal API boundary', () => {
     // 1.64.0: step 1i.3 (2026-10-16) — nativeSessionId on the sessions list/detail, features.nativeSessionIds.
     // 1.65.0: step 1k (2026-10-17) — sessionClass + Internal API archive/unarchive, features.sessionClass/sessionArchive.
     // 1.66.0: Channel C4 (2026-10-19) — tappable notification actions, features.notificationActions.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.66.0');
+    // 1.67.0: devin-parity A1 (2026-11-08) — additive devin runtime over ACP.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.67.0');
   });
 });
