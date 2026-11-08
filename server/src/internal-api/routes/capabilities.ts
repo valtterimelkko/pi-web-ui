@@ -306,6 +306,11 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsPinning: true,
           supportsReplayHistory: true,
           supportsApprovals: false,
+          // Contract 1.68.0: the antigravity server-owned goal manager, mirrored
+          // with Devin names (control records under the devin session dir, a
+          // turn-driven sweeper, goal_state/goal_end on the broker).
+          supportsGoal: true,
+          goalControls: ['start', 'pause', 'resume', 'clear'],
           supportsHeartbeat: false,
           supportsInteractiveQuestions: false,
           supportsStructuredQuestionResponse: false,

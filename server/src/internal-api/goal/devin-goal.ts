@@ -39,14 +39,14 @@ const SENTINEL_RE = /GOAL_STATUS:\s*ACHIEVED/i;
 
 // ─── /goal command parsing (web-UI + prompt-path interception) ───────────────
 
-export type AgyGoalCommand =
+export type DevinGoalCommand =
   | { kind: 'start'; objective: string; verifyCommand?: string }
   | { kind: 'pause' }
   | { kind: 'resume' }
   | { kind: 'clear' }
   | { kind: 'status' };
 
-const CONTROL_VERBS: Record<string, AgyGoalCommand> = {
+const CONTROL_VERBS: Record<string, DevinGoalCommand> = {
   pause: { kind: 'pause' },
   'pause-now': { kind: 'pause' },
   resume: { kind: 'resume' },
@@ -64,7 +64,7 @@ const CONTROL_VERBS: Record<string, AgyGoalCommand> = {
  * goal (quotes around the whole objective are stripped), optionally with
  * `--verify "cmd"` / `--verify=cmd`.
  */
-export function parseDevinGoalCommand(raw: string): AgyGoalCommand | null {
+export function parseDevinGoalCommand(raw: string): DevinGoalCommand | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (!/^\/goal(?![a-z])/i.test(trimmed)) return null;

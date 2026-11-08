@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readDevinNativeSessions } from '../../../src/devin/devin-native-reader.js';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';

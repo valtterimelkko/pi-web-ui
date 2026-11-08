@@ -80,6 +80,7 @@ import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CL
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
 import { AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
+import { DevinGoalControlStore, buildDevinGoalContinuationPrompt, buildDevinGoalStartPrompt, createDevinGoalSweeper, loadDevinGoalAutoContinueConfig, parseDevinGoalCommand, projectDevinGoal, type DevinGoalCommand } from '../goal/devin-goal.js';
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
@@ -491,6 +492,8 @@ export interface SessionRoutesDeps {
   claudeProjectsDir?: string;
   /** Directory for Antigravity session JSONL/log files. Defaults to config. */
   antigravitySessionDir?: string;
+  /** Directory for Devin session files (goal-control records). Defaults to config. */
+  devinSessionDir?: string;
   /** Web UI preferences file (archived flags for the list response). Defaults to config.webUiPrefsPath. */
   preferencesPath?: string;
   /** Native Command Code CLI home (~/.commandcode). Defaults to config. */
@@ -686,6 +689,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const claudeProjectsDir = deps.claudeProjectsDir ?? resolveClaudeProjectsRoot();
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
+  const devinSessionDir = deps.devinSessionDir ?? config.devinSessionDir;
   const preferencesPath = deps.preferencesPath ?? PREFS_FILE;
   const nativeRoots = {
     claudeProjectsDir,
@@ -1469,6 +1473,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     pinExpiry?.stop();
     claudeGoalNudger?.stop();
     agyGoalSweeper?.stop();
+    devinGoalSweeper?.stop();
     goalStall.monitor?.stop();
     await runReceipts.shutdown();
     disposal.disposeAll();
@@ -4046,6 +4051,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
     }
 
+    // Contract 1.68.0: devin mirrors antigravity — `/goal …` at the prompt
+    // boundary is goal control, even while busy.
+    if (entry.sdkType === 'devin') {
+      const devinGoalCmd = parseDevinGoalCommand(body.message);
+      if (devinGoalCmd) {
+        await handleDevinGoalPromptControl(res, sessionId, entry, devinGoalCmd);
+        return;
+      }
+    }
+
     const runtime = entry.sdkType;
 
     // C4 (contract 1.53.0): runtime-aware preflight execution — before any
@@ -5702,22 +5717,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   /** Minimal JSON request carrying `{message, verbosity, detach}` for internal prompt-pipeline reuse. */
-  function synthesizePromptRequest(message: string, options: { detach?: boolean } = {}): IncomingMessage {
+  function synthesizePromptRequest(message: string, options: { detach?: boolean; mode?: PromptMode } = {}): IncomingMessage {
     const req = new PassThrough() as unknown as IncomingMessage;
     (req as { method?: string }).method = 'POST';
     (req as { url?: string }).url = '/api/v1/sessions/goal-internal/prompt';
     (req as { headers?: Record<string, string> }).headers = { 'content-type': 'application/json' };
     process.nextTick(() => {
-      (req as unknown as PassThrough).emit('data', Buffer.from(JSON.stringify({ message, verbosity: 'answers', ...(options.detach ? { detach: true } : {}) })));
+      (req as unknown as PassThrough).emit('data', Buffer.from(JSON.stringify({ message, verbosity: 'answers', ...(options.detach ? { detach: true } : {}), ...(options.mode ? { mode: options.mode } : {}) })));
       (req as unknown as PassThrough).emit('end');
     });
     return req;
   }
 
   /** Dispatch a message through the real prompt pipeline detached (fire-and-forget, receipted). */
-  async function dispatchDetachedInternal(sessionId: string, message: string): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+  async function dispatchDetachedInternal(sessionId: string, message: string, options: { queueWhenBusy?: boolean } = {}): Promise<{ statusCode: number; body: Record<string, unknown> }> {
     const innerRes = createCaptureResponse();
-    await handleSendPrompt(synthesizePromptRequest(message, { detach: true }), innerRes, sessionId);
+    await handleSendPrompt(synthesizePromptRequest(message, { detach: true, ...(options.queueWhenBusy ? { mode: 'follow_up' as const } : {}) }), innerRes, sessionId);
     let body: Record<string, unknown> = {};
     try { body = JSON.parse(innerRes.body) as Record<string, unknown>; } catch { /* non-JSON */ }
     return { statusCode: innerRes.statusCode, body };
@@ -5734,6 +5749,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType === 'pi') return getGoalIdStore().stamp(entry.path, await readProjectPiGoalState(entry.path));
     if (entry.sdkType === 'claude') return readClaudeGoalProjection(entry);
     if (entry.sdkType === 'antigravity') return getGoalIdStore().stamp(entry.id, projectAgyGoal(await agyGoalStore.get(entry.id)));
+    // Contract 1.68.0: the devin goal is the antigravity server-owned manager
+    // mirrored with Devin names; the registry id is the broker key.
+    if (entry.sdkType === 'devin') return getGoalIdStore().stamp(entry.id, projectDevinGoal(await devinGoalStore.get(entry.id)));
     // Command Code gains its mod-state channel in Phase 3. OpenCode
     // is out of scope (plan D1).
     return unsupportedGoalProjection();
@@ -5799,6 +5817,32 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   });
   agyGoalSweeper.start();
 
+  /** Contract 1.68.0 — Devin goal ledger (server-owned; mirrors the antigravity goal with Devin names). */
+  const devinGoalStore = new DevinGoalControlStore(path.join(devinSessionDir, 'goal-control'));
+  const devinGoalSweeper = createDevinGoalSweeper({
+    config: loadDevinGoalAutoContinueConfig(),
+    listGoalSessions: () => devinGoalStore.listSessionIds(),
+    isRunning: (id) => devinService?.isRunning(id) ?? false,
+    getStore: () => devinGoalStore,
+    readLastCompletedTurn: (id) => devinService?.getLastCompletedTurn(id) ?? Promise.resolve(null),
+    sessionCwd: (id) => devinService?.getSessionCwd(id) ?? Promise.resolve(undefined),
+    dispatch: async (id, message) => {
+      // Contract 1.68.0: a devin continuation queues when busy (the service's
+      // FIFO follow-up queue) instead of being refused and re-attempted.
+      const dispatched = await dispatchDetachedInternal(id, message, { queueWhenBusy: true });
+      if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+        throw new Error(`goal continuation dispatch failed (${dispatched.statusCode})`);
+      }
+    },
+    publish: (sessionId, event) => {
+      try {
+        broker.publish(sessionId, event as NormalizedEvent);
+        emitGoalBrowserBridge(sessionId, event.data as SessionGoalProjection);
+      } catch { /* non-fatal */ }
+    },
+  });
+  devinGoalSweeper.start();
+
   // Contract 1.62.0 (W2-b): a goal that reads `running` while its session has
   // been idle GOAL_STALL_MINUTES emits goal_state {stalled:true, stalledForMs}.
   goalStall.monitor = createGoalStallMonitor({
@@ -5853,7 +5897,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    *  `start` already tolerated the busy case; both branches now answer 200 with an
    *  honest note, and the sweeper continues from the next completed turn. Every
    *  other refusal is still forwarded unchanged. */
-  function agyDispatchRefusedAsBusy(dispatched: { statusCode: number; body: Record<string, unknown> }): boolean {
+  /** Honest refusal-tolerating helper shared by every server-owned goal manager:
+   *  does this dispatch refusal mean only "the session is still finishing a turn"?
+   *  (The long antigravity rationale comment sits with the agy handler.) */
+  function goalDispatchRefusedAsBusy(dispatched: { statusCode: number; body: Record<string, unknown> }): boolean {
     return dispatched.statusCode === 409 && dispatched.body?.code === ErrorCode.SESSION_BUSY;
   }
 
@@ -5923,7 +5970,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (!busy) {
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalStartPrompt(objective, verifyCommand !== undefined));
         const accepted = dispatched.statusCode === 200 || dispatched.statusCode === 202;
-        if (!accepted && !agyDispatchRefusedAsBusy(dispatched)) {
+        if (!accepted && !goalDispatchRefusedAsBusy(dispatched)) {
           sendJson(res, dispatched.statusCode || 500, dispatched.body);
           return;
         }
@@ -5960,7 +6007,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (!antigravityService.isRunning(sessionId)) {
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalContinuationPrompt(existing.objective, existing.verifyCommand !== undefined));
         const accepted = dispatched.statusCode === 200 || dispatched.statusCode === 202;
-        if (!accepted && !agyDispatchRefusedAsBusy(dispatched)) {
+        if (!accepted && !goalDispatchRefusedAsBusy(dispatched)) {
           sendJson(res, dispatched.statusCode || 500, dispatched.body);
           return;
         }
@@ -6002,6 +6049,160 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ? { action: 'start', objective: goalCmd.objective, verifyCommand: goalCmd.verifyCommand }
       : { action: goalCmd.kind };
     await handleSessionGoalControlAntigravity(res, sessionId, entry, raw);
+  }
+
+  /** Contract 1.68.0 — devin goal control (the antigravity server-owned manager, mirrored with Devin names). */
+  async function handleSessionGoalControlDevin(
+    res: ServerResponse,
+    sessionId: string,
+    entry: RegistryEntry,
+    raw: SessionGoalControlRequest,
+  ): Promise<void> {
+    if (!devinService) {
+      sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is not configured'));
+      return;
+    }
+    const action = raw.action;
+    if (action !== 'start' && action !== 'pause' && action !== 'resume' && action !== 'clear' && action !== 'status') {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'action must be one of start|pause|resume|clear|status'));
+      return;
+    }
+    const respond = async (extra: Record<string, unknown> = {}): Promise<void> => {
+      const projection = await readGoalProjection(entry);
+      emitGoalBrowserBridge(sessionId, projection);
+      sendJson(res, 200, { sessionId, runtime: 'devin', action, accepted: true, ...extra, goal: projection });
+    };
+
+    if (action === 'status') {
+      await respond({ note: 'read-only status' });
+      return;
+    }
+
+    if (action === 'start') {
+      const objective = typeof raw.objective === 'string' ? raw.objective.trim() : '';
+      if (!objective) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, "action 'start' requires a non-empty objective"));
+        return;
+      }
+      if (objective.length > 4000 || /[\n\r]/.test(objective)) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'objective must be a single line of at most 4000 characters'));
+        return;
+      }
+      const verifyCommand = typeof raw.verifyCommand === 'string' && raw.verifyCommand.trim() !== ''
+        ? raw.verifyCommand.trim()
+        : undefined;
+      if (verifyCommand !== undefined && /[\n\r]/.test(verifyCommand)) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'verifyCommand must be a single line'));
+        return;
+      }
+      const maxRuns = typeof raw.maxTurns === 'number' && Number.isSafeInteger(raw.maxTurns) && raw.maxTurns > 0
+        ? Math.min(Math.floor(raw.maxTurns), 100)
+        : 100;
+      const previous = await devinGoalStore.get(sessionId);
+      getGoalIdStore().rotate(sessionId); // W2-a: a start is a new goal (new goalId)
+      await devinGoalStore.patch(sessionId, {
+        objective,
+        verifyCommand,
+        maxRuns,
+        status: 'running',
+        runs: 0,
+        pausedReason: undefined,
+        lastReason: undefined,
+        verification: undefined,
+        completedAt: null,
+        clearedAt: undefined,
+        consecutiveErrors: 0,
+        pendingContinuation: false,
+        lastVerifiedTurnAt: undefined,
+        autoContinue: raw.autoContinue !== false,
+        createdAt: previous?.createdAt ?? Date.now(),
+      });
+      const busy = devinService.isRunning(sessionId);
+      let settling = false;
+      if (!busy) {
+        const dispatched = await dispatchDetachedInternal(sessionId, buildDevinGoalStartPrompt(objective, verifyCommand !== undefined));
+        const accepted = dispatched.statusCode === 200 || dispatched.statusCode === 202;
+        if (!accepted && !goalDispatchRefusedAsBusy(dispatched)) {
+          sendJson(res, dispatched.statusCode || 500, dispatched.body);
+          return;
+        }
+        settling = !accepted;
+      }
+      await respond({
+        note: busy || settling
+          ? 'goal armed; the session is busy — the sweeper verifies the turn in flight and continues from there'
+          : 'goal armed and start prompt dispatched; the sweeper verifies each completed turn and continues while unmet',
+      });
+      return;
+    }
+
+    if (action === 'pause') {
+      const existing = await devinGoalStore.get(sessionId);
+      if (!existing) {
+        sendJson(res, 409, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'no goal is armed for this session'));
+        return;
+      }
+      await devinGoalStore.patch(sessionId, { status: 'paused', pausedReason: 'user', autoContinue: false });
+      await respond({ note: 'auto-continue disarmed (server-side pause; the in-flight turn still settles)' });
+      return;
+    }
+
+    if (action === 'resume') {
+      const existing = await devinGoalStore.get(sessionId);
+      if (!existing || existing.status === 'cleared') {
+        sendJson(res, 409, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'no goal is armed for this session'));
+        return;
+      }
+      // A resume opens a fresh provider-error strike window (contract 1.58.3).
+      await devinGoalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true, consecutiveErrors: 0 });
+      let continuationDispatched = false;
+      if (!devinService.isRunning(sessionId)) {
+        // Contract 1.68.0: in a settling window the continuation queues (the
+        // devin FIFO follow-up) rather than being refused and owed.
+        const dispatched = await dispatchDetachedInternal(sessionId, buildDevinGoalContinuationPrompt(existing.objective, existing.verifyCommand !== undefined), { queueWhenBusy: true });
+        const accepted = dispatched.statusCode === 200 || dispatched.statusCode === 202;
+        if (!accepted && !goalDispatchRefusedAsBusy(dispatched)) {
+          sendJson(res, dispatched.statusCode || 500, dispatched.body);
+          return;
+        }
+        continuationDispatched = accepted;
+      }
+      // When the continuation could not be dispatched now (the session is still
+      // finishing or settling a turn), the sweeper owes it: it dispatches once
+      // the session settles, unless a newer completed turn supersedes it.
+      await devinGoalStore.patch(sessionId, { pendingContinuation: !continuationDispatched });
+      await respond({
+        note: continuationDispatched
+          ? 'auto-continue re-armed; continuation prompt dispatched'
+          : 'auto-continue re-armed; the session is still finishing a turn — the sweeper continues from it and the next continuation is dispatched when that turn completes',
+      });
+      return;
+    }
+
+    // clear
+    await devinGoalStore.patch(sessionId, { status: 'cleared', clearedAt: Date.now(), autoContinue: false, completedAt: null });
+    await respond({ note: 'goal cleared' });
+  }
+
+  /** Contract 1.68.0: `/goal …` typed at the devin prompt boundary is goal
+   *  control, not a model prompt — it resolves even while the session is busy
+   *  because control never needs the runtime process (antigravity parity). */
+  async function handleDevinGoalPromptControl(
+    res: ServerResponse,
+    sessionId: string,
+    entry: RegistryEntry,
+    goalCmd: DevinGoalCommand,
+  ): Promise<void> {
+    if (goalCmd.kind === 'status') {
+      const projection = await readGoalProjection(entry);
+      emitGoalBrowserBridge(sessionId, projection);
+      sendJson(res, 200, { sessionId, runtime: 'devin', action: 'status', accepted: true, goal: projection });
+      return;
+    }
+    const raw: SessionGoalControlRequest = goalCmd.kind === 'start'
+      ? { action: 'start', objective: goalCmd.objective, verifyCommand: goalCmd.verifyCommand }
+      : { action: goalCmd.kind };
+    await handleSessionGoalControlDevin(res, sessionId, entry, raw);
   }
 
   /** Create-with-goal arming (contract 1.27.0). Never throws; reports honestly. */
@@ -6048,6 +6249,32 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           createdAt: previous?.createdAt ?? Date.now(),
         });
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalStartPrompt(goal.objective, verifyCommand !== undefined));
+        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
+        return { armed: true, note: 'goal armed and start prompt dispatched; the sweeper continues while unmet' };
+      }
+      if (runtime === 'devin') {
+        const verifyCommand = typeof goal.verifyCommand === 'string' && goal.verifyCommand.trim() !== '' ? goal.verifyCommand.trim() : undefined;
+        const maxRuns = typeof goal.maxTurns === 'number' && goal.maxTurns > 0 ? Math.min(Math.floor(goal.maxTurns), 100) : 100;
+        const previous = await devinGoalStore.get(sessionId);
+        getGoalIdStore().rotate(sessionId);
+        await devinGoalStore.patch(sessionId, {
+          objective: goal.objective,
+          verifyCommand,
+          maxRuns,
+          status: 'running',
+          runs: 0,
+          pausedReason: undefined,
+          lastReason: undefined,
+          verification: undefined,
+          completedAt: null,
+          clearedAt: undefined,
+          consecutiveErrors: 0,
+          pendingContinuation: false,
+          lastVerifiedTurnAt: undefined,
+          autoContinue: true,
+          createdAt: previous?.createdAt ?? Date.now(),
+        });
+        const dispatched = await dispatchDetachedInternal(sessionId, buildDevinGoalStartPrompt(goal.objective, verifyCommand !== undefined));
         if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
         return { armed: true, note: 'goal armed and start prompt dispatched; the sweeper continues while unmet' };
       }
@@ -6434,6 +6661,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     if (entry.sdkType === 'antigravity') {
       await handleSessionGoalControlAntigravity(res, sessionId, entry, raw ?? {});
+      return;
+    }
+
+    if (entry.sdkType === 'devin') {
+      await handleSessionGoalControlDevin(res, sessionId, entry, raw ?? {});
       return;
     }
 
