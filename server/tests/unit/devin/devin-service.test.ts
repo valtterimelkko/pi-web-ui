@@ -78,20 +78,36 @@ function makeService(opts: { catalogue?: string } = {}) {
 
 const tick = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Request-driven handshake/answer step: wait until the child has actually
+ *  been SENT `method` for the nth time (1-based). Blind 5 ms-tick answers can
+ *  fire before the request write lands — especially after turn 2's two async
+ *  registry/store writes — double-answering the previous request and leaving
+ *  the real request pending (30 s init / 3.6 h turn timeout): the observed
+ *  5 s vitest timeouts on loaded hosts. */
+async function waitForSent(child: FakeChild, method: string, nth = 1, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const sentCount = () => child.sent().filter((m) => m.method === method).length;
+  while (sentCount() < nth) {
+    if (Date.now() > deadline) throw new Error(`waitForSent: '${method}' #${nth} not written within ${timeoutMs}ms`);
+    await tick(2);
+  }
+}
+
 /** Wait for the lazy spawn (registry/store writes precede it), then complete
- *  the ACP handshake: initialize, session/new, bypass set, model set. */
+ *  the ACP handshake: initialize, session/new, bypass set, model set — each
+ *  answered only once its request has actually been written. */
 async function waitForChild(children: FakeChild[], timeoutMs = 3000): Promise<FakeChild> {
   const deadline = Date.now() + timeoutMs;
   while (children.length === 0 && Date.now() < deadline) await tick();
   const child = children[0]!;
   expect(child).toBeDefined();
-  await tick();
+  await waitForSent(child, 'initialize', 1, timeoutMs);
   child.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
-  await tick();
+  await waitForSent(child, 'session/new', 1, timeoutMs);
   child.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
-  await tick();
+  await waitForSent(child, 'session/set_config_option', 1, timeoutMs);
   child.respondLast({}); // bypass mode set
-  await tick();
+  await waitForSent(child, 'session/set_config_option', 2, timeoutMs);
   child.respondLast({}); // service-side model set
   await tick();
   return child;
@@ -183,7 +199,7 @@ describe('devin service', () => {
     expect(starts.length).toBeGreaterThan(0);
   });
 
-  it('followUp while busy queues FIFO and runs as the next turn; returns false when idle', async () => {
+  it('followUp while busy queues FIFO and runs as the next turn; returns false when idle', { timeout: 20_000 }, async () => {
     const { sessionId } = await service.createSession('/ws');
     const turn1Events: any[] = [];
     const allEvents: any[] = [];
@@ -191,6 +207,7 @@ describe('devin service', () => {
       void service.sendPrompt(sessionId, 'first', (e) => turn1Events.push(e), () => resolve());
     });
     const child = await waitForChild(children);
+    await waitForSent(child, 'session/prompt', 1);
     child.respondLast(promptResult());
     await turn1Completed;
 
@@ -198,19 +215,18 @@ describe('devin service', () => {
     const turn2Completed = new Promise<void>((resolve) => {
       void service.sendPrompt(sessionId, 'second', (e) => allEvents.push(e), () => resolve());
     });
-    await tick();
+    await waitForSent(child, 'session/prompt', 2);
     const queued = await service.followUp(sessionId, 'queued-third', () => allEvents.push({ type: 'stream_activity' } as any), () => undefined);
     expect(queued).toBe(true);
     child.respondLast(promptResult());
     await turn2Completed;
     // the queued turn drains next; wait for its prompt to be sent, answer it
-    const deadline = Date.now() + 2000;
-    while (child.sent().filter((m) => m.method === 'session/prompt').length < 3 && Date.now() < deadline) await tick();
+    await waitForSent(child, 'session/prompt', 3);
     child.respondLast(promptResult());
     const prompts = child.sent().filter((m) => m.method === 'session/prompt').map((m) => m.params.prompt[0].text);
     expect(prompts).toEqual(['first', 'second', 'queued-third']);
     // the queued turn completes on its own answer; wait for the session to go idle
-    const idleDeadline = Date.now() + 2000;
+    const idleDeadline = Date.now() + 5000;
     while (service.isRunning(sessionId) && Date.now() < idleDeadline) await tick();
     // idle follow-up returns false
     expect(await service.followUp(sessionId, 'nope', () => undefined, () => undefined)).toBe(false);

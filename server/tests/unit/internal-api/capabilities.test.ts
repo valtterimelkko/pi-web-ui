@@ -162,6 +162,23 @@ describe('createCapabilitiesRoutes', () => {
     expect(runtimes.pi.supportsGoal).toBe(true);
   });
 
+  it('27c. contract 1.68.0: devin advertises the server-owned goal function', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false), getBackendMode: vi.fn().mockResolvedValue('sdk'), getProfiles: vi.fn().mockReturnValue([]) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      devinService: { isAvailable: vi.fn().mockResolvedValue(true), getBackendMode: vi.fn().mockReturnValue('acp') } as any,
+    } as any);
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    const runtimes = JSON.parse(res.body).runtimes;
+    expect(runtimes.devin).toMatchObject({
+      backendMode: 'acp',
+      supportsGoal: true,
+      goalControls: ['start', 'pause', 'resume', 'clear'],
+    });
+  });
+
   it('27. reports structured interactive-question support only for the Claude SDK backend', async () => {
     const routes = createCapabilitiesRoutes({
       claudeService: {
