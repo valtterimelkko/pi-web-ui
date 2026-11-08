@@ -216,7 +216,7 @@ describe('devin goal function (contract 1.68.0)', () => {
     const body = JSON.parse(res.body);
     expect(body).toMatchObject({ accepted: true, action: 'start', runtime: 'devin' });
     expect(body.goal).toMatchObject({ supported: true, status: 'running', objective: 'Ship the release', maxRuns: 100 });
-    expect(devinService.sendPrompt).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(devinService.sendPrompt).toHaveBeenCalledTimes(1));
     const prompt = devinService.sendPrompt.mock.calls[0][1] as string;
     expect(prompt).toContain('Ship the release');
     expect(prompt).toContain(DEVIN_GOAL_SENTINEL);
@@ -230,6 +230,7 @@ describe('devin goal function (contract 1.68.0)', () => {
     await routes.handleSessionGoalControl(req, res, 'session-1');
 
     expect(res.statusCode).toBe(200);
+    await vi.waitFor(() => expect(devinService.sendPrompt).toHaveBeenCalledTimes(1));
     const prompt = devinService.sendPrompt.mock.calls[0][1] as string;
     expect(prompt).not.toContain(DEVIN_GOAL_SENTINEL);
     const record = JSON.parse(await fs.readFile(recordPath(), 'utf8'));
@@ -302,7 +303,7 @@ describe('devin goal function (contract 1.68.0)', () => {
       return Promise.resolve(true);
     });
     await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'start', objective: 'Ship it' }), mockRes(), 'session-1');
-    expect(devinService.sendPrompt).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(devinService.sendPrompt).toHaveBeenCalledTimes(1));
 
     const resume = mockRes();
     await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'resume' }), resume, 'session-1');
@@ -336,7 +337,7 @@ describe('devin goal function (contract 1.68.0)', () => {
     const body = JSON.parse(res.body);
     expect(body.accepted).toBe(true);
     expect(body.goal).toMatchObject({ status: 'running', objective: 'Ship the beta' });
-    expect(devinService.sendPrompt).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(devinService.sendPrompt).toHaveBeenCalledTimes(1));
     expect(devinService.sendPrompt.mock.calls[0][1] as string).toContain('Ship the beta');
   });
 
@@ -386,7 +387,7 @@ describe('devin goal function (contract 1.68.0)', () => {
     const newId = body.sessionId as string;
     const record = JSON.parse(await fs.readFile(path.join(dir, 'devin-sessions', 'goal-control', `${newId}.json`), 'utf8'));
     expect(record).toMatchObject({ objective: 'Ship it', status: 'running', maxRuns: 3 });
-    expect(devinService.sendPrompt).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(devinService.sendPrompt).toHaveBeenCalledTimes(1));
     expect(devinService.sendPrompt.mock.calls[0][0] as string).toBe(newId);
   });
 });
