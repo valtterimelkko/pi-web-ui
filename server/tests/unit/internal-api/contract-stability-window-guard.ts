@@ -43,7 +43,11 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * item; `SessionDetail` inherits it) and `features.nativeSessionIds`; re-based
  * again at **1.66.0** (2026-10-19, channel programme lane ch-tg, design
  * `CHANNEL.md` §7) — the additive notification-action request fields,
- * `actionTaken` on the delivery and `features.notificationActions`. The
+ * `actionTaken` on the delivery and `features.notificationActions`; re-based
+ * again at **1.67.0** (2026-11-08, devin-parity programme lane A1) — the
+ * additive `devin` runtime (capabilities runtimes.devin, models.devin with
+ * per-model pricing/isNew/isBeta, session/native/receipt runtime value,
+ * RuntimeBackendMode "acp"). The
  * ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
@@ -51,7 +55,7 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '146ea4fcf2e4891374059b5a058a5f8e585c1b3008366ba3373db6523043c52a';
+export const BASELINE_SHAPE_SHA256 = '632ed0f258455699d8a3096242fff27e9132d21bb286e6a95fe87810198dc487';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */
