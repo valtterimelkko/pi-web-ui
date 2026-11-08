@@ -122,6 +122,45 @@ steer is refused honestly with 409 `SESSION_BUSY` — send it as a follow-up
 instead. Review fix (2026-11-08): `abort` also clears that session's queued
 follow-ups — abort stops everything pending.
 
+## Goal function (contract 1.68.0)
+
+Devin's ACP surface exposes no `/goal` contract, so the devin goal is the
+**Antigravity server-owned goal manager mirrored with Devin names**
+(`server/src/internal-api/goal/devin-goal.ts`):
+
+- `POST /api/v1/sessions/:id/goal {action:"start", objective, verifyCommand?, maxTurns?}`
+  arms a control record under `<DEVIN_SESSION_DIR>/goal-control/<sessionId>.json`
+  (restart-safe truth) and dispatches a goal start prompt through the normal
+  prompt pipeline. Same body validation and busy-toleration semantics as
+  antigravity: on a busy session the goal arms and the sweeper continues from
+  the turn in flight; a continuation landing in a settling window **queues**
+  through the devin FIFO follow-up queue instead of being refused.
+- A turn-driven sweeper (`DEVIN_GOAL_SWEEP_MS`, default 15 s) verifies each
+  **completed** turn: with `verifyCommand`, exit 0 means achieved
+  (`verification.status:"passed"`); without one, the goal prompts ask the model
+  to end its reply with exactly `GOAL_STATUS: ACHIEVED`
+  (`verification.status:"self_reported"`). Unmet turns get a continuation
+  prompt until `maxTurns` (default/cap 100) is exhausted → `failed`/`budget`.
+  A completed turn finalised with a provider error is an **error strike**
+  (contract 1.58.3 semantics): strikes 1–2 retry the continuation, three
+  consecutive strikes pause the goal with `pausedReason:"error"`; `resume`
+  re-arms with a fresh strike window.
+- `pause` disarms the sweeper; `resume` re-arms and dispatches one
+  continuation; `clear` retires the record; `status` is read-only.
+- `/goal <objective>` / `/goal pause|resume|clear|status` typed at the prompt
+  boundary (HTTP `POST /prompt` or the web-UI message box) is intercepted as
+  goal control and never reaches the model — it resolves even while the
+  session is busy. `/goal --verify "npm test" <objective>` arms with a verifier.
+- Projections, `goal_state`/`goal_end` broker events (with the canonical
+  shapes, incl. `goalId`), the browser GoalPanel and the generic
+  boot-sweep interruption visibility behave exactly as on the other runtimes.
+  Capabilities advertise `runtimes.devin.supportsGoal: true` and
+  `goalControls: ["start","pause","resume","clear"]`.
+- **Receipts.** Devin run receipts carry `servedModel` — the model id actually
+  applied for that run (the registry binding, written only after a successful
+  `session/set_config_option`, or `DEVIN_DEFAULT_MODEL` when the session has
+  none). `modelRebound` stays `false`: Devin has no mid-flight rebind.
+
 ## Permissions
 
 Children run in Devin's `bypass` mode (plan D6). The client additionally
@@ -160,6 +199,10 @@ fix 2026-11-08, mirroring the antigravity branch in `session-cleanup.ts`).
 | `DEVIN_MAX_SESSIONS` | `4` | Eviction ceiling |
 | `DEVIN_PROCESS_IDLE_SHUTDOWN_MS` | `300000` | Idle child shutdown |
 | `DEVIN_NATIVE_SESSIONS_DB` | `<DEVIN_HOME>/.local/share/devin/cli/sessions.db` | Native listing source |
+| `DEVIN_GOAL_AUTO_CONTINUE` | `true` | Goal sweeper master switch (contract 1.68.0) |
+| `DEVIN_GOAL_SWEEP_MS` | `15000` | Goal sweeper cadence |
+| `DEVIN_GOAL_MAX_RUNS` | `100` | Per-goal verification-cycle ceiling |
+| `DEVIN_GOAL_VERIFY_TIMEOUT_MS` | `60000` | `verifyCommand` timeout per verification |
 
 ## Live validation
 
