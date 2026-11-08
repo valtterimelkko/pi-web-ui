@@ -397,11 +397,12 @@ export class DevinService {
         this.armProcessIdleTimer(sessionId);
         // Ensure the session's model config option matches the registry (the
         // spawn flag LOSES to the config file — plan §2 — so the model travels
-        // per session through session/set_config_option).
+        // per session through session/set_config_option). Review fix 4: a
+        // failed model set fails the turn with a clear error — never a silent
+        // turn on the CLI's default model while the registry says otherwise.
         const desiredModel = entry.model || config.devinDefaultModel;
         if (desiredModel) {
-          await client.setConfigOption('model', desiredModel).catch((err) =>
-            tlog.warn('model set failed (session keeps its default): %s', err instanceof Error ? err.message : String(err)));
+          await client.setConfigOption('model', desiredModel);
         }
       }
 
@@ -623,10 +624,12 @@ export class DevinService {
     // Ruling 01 (2026-11-08): every catalogue model is allowed; no allow-list.
     await this.registry.upsert({ ...entry, id: entry.id, sdkType: 'devin', model: modelId });
     // A live child applies it at once; a respawned child applies it at spawn
-    // (the service sets the model config option after start).
+    // (the service sets the model config option after start). Review fix 4:
+    // a failed set_config_option surfaces — the Internal API control maps it
+    // to 4xx; it is never swallowed into a silently different model.
     const client = this.clients.get(sessionId);
     if (client && !client.hasExited) {
-      await client.setConfigOption('model', modelId).catch(() => undefined);
+      await client.setConfigOption('model', modelId);
     }
     return modelId;
   }

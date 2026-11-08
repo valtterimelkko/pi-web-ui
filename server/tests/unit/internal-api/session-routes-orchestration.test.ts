@@ -102,6 +102,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
   let claudeService: any;
   let opencodeService: any;
   let antigravityService: any;
+  let devinService: any;
   let piService: any;
   let tempDir: string;
   let piObserverSets: Array<(event: unknown) => void>;
@@ -256,6 +257,17 @@ describe('createSessionRoutes orchestration endpoints', () => {
       isAvailable: vi.fn().mockResolvedValue(true),
       createSession: vi.fn().mockResolvedValue({ sessionId: 'new-agy' }),
     };
+
+    // Review fix 4: the devin control lane must surface a failed model set
+    // as 4xx, so the harness now wires a devinService mock.
+    devinService = {
+      isRunning: vi.fn(() => false),
+      setModel: vi.fn().mockResolvedValue('swe-2-flash-medium'),
+      setThinkingLevel: vi.fn().mockResolvedValue('swe-2-flash-high'),
+      pinSession: vi.fn(() => true),
+      unpinSession: vi.fn(() => true),
+      isSessionPinned: vi.fn(() => false),
+    };
   });
 
   afterEach(async () => {
@@ -271,6 +283,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
   ) {
     return createSessionRoutes({
       claudeService, opencodeService, antigravityService,
+      devinService,
       multiSessionManager, sessionRegistry: registry, piService,
       internalClientId: 'test-client',
       watchDir: path.join(tempDir, 'watches'),
@@ -1040,6 +1053,29 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(res.statusCode).toBe(403);
       expect(JSON.parse(res.body)).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
       expect(piService.setModel).not.toHaveBeenCalled();
+    });
+
+    it('review fix 4: devin set_model surfaces a failed set_config_option as 4xx (INVALID_REQUEST)', async () => {
+      registry.get.mockResolvedValue({
+        id: 'devin-ctl', path: 'devin-ctl', sdkType: 'devin', cwd: '/root/proj',
+        model: 'swe-2-flash-medium', status: 'idle',
+      });
+      devinService.setModel.mockRejectedValueOnce(new Error('session/set_config_option model failed: unknown model'));
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSessionControl(
+        createJsonReq('POST', '/api/v1/sessions/devin-ctl/control', {
+          action: 'set_model',
+          modelId: 'swe-2-flash-high',
+        }),
+        res,
+        'devin-ctl',
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(devinService.setModel).toHaveBeenCalledWith('devin-ctl', 'swe-2-flash-high');
     });
 
     it.each([

@@ -345,6 +345,52 @@ describe('devin service', () => {
     expect(summary?.response).toBe('NEW REPLY');
   });
 
+  it('review fix 4: a failed session/set_config_option (model) at turn start fails the turn with a clear error', async () => {
+    const { sessionId } = await service.createSession('/ws');
+    const events: any[] = [];
+    const completed = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'hello', (e) => events.push(e), () => resolve());
+    });
+    const deadline = Date.now() + 3000;
+    while (children.length === 0 && Date.now() < deadline) await tick();
+    const child = children[0]!;
+    await tick();
+    child.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
+    await tick();
+    child.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+    await tick();
+    child.respondLast({}); // bypass set OK
+    await tick();
+    // The model set FAILS (e.g. the id vanished from the live catalogue).
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, error: { code: -32000, message: 'unknown model' } });
+    await tick();
+    // Pre-fix the turn would continue on the default model: answer any prompt.
+    child.respondLast(promptResult());
+    await completed;
+
+    const end = events.find((e) => e.type === 'agent_end');
+    expect(end).toBeDefined();
+    expect(String(end?.data?.error)).toMatch(/set_config_option|model/i);
+    expect(String(end?.data?.error)).toContain('unknown model');
+    const summary = await service.getLastCompletedTurn(sessionId);
+    expect(summary?.status).toBe('error');
+    expect(service.isRunning(sessionId)).toBe(false);
+  });
+
+  it('review fix 4: setModel on a live child surfaces a failed set_config_option (rejects, no silent swallow)', async () => {
+    const { sessionId } = await service.createSession('/ws');
+    const completed = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'warm up', () => undefined, () => resolve());
+    });
+    const child = await waitForChild(children);
+    child.respondLast(promptResult());
+    await completed;
+    const setPromise = service.setModel(sessionId, 'swe-2-flash-high');
+    await tick();
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, error: { code: -32000, message: 'unknown model' } });
+    await expect(setPromise).rejects.toThrow(/set_config_option/);
+  });
+
   it('availableModels parses the catalogue with levels and pricing (no allow-list, ruling 01)', async () => {
     const models = await service.getAvailableModels();
     const flash = models.find((m) => m.id === 'swe-2-flash-medium');
