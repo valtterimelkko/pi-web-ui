@@ -294,6 +294,57 @@ describe('devin service', () => {
     expect(agentEnds.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('review fix 1: session/load replay chunks never reach the live turn — finalText is ONLY the new reply', async () => {
+    const { sessionId } = await service.createSession('/ws');
+    const events: any[] = [];
+    const turn1Completed = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'turn one', (e) => events.push(e), () => resolve());
+    });
+    const child1 = await waitForChild(children);
+    child1.respondLast(promptResult());
+    await turn1Completed;
+
+    // Idle-shutdown the child, then a follow-up prompt respawns with session/load.
+    service.shutdownProcessForTest(sessionId);
+    const turn2Events: any[] = [];
+    const turn2Completed = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'turn two', (e) => turn2Events.push(e), () => resolve());
+    });
+    const deadline = Date.now() + 3000;
+    while (children.length < 2 && Date.now() < deadline) await tick();
+    expect(children.length).toBe(2);
+    const child2 = children[1]!;
+    await tick();
+    child2.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
+    await tick();
+    // Replay streams in BEFORE the session/load response (real shape:
+    // /root/devin-trial/acp-resume.jsonl).
+    child2.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'turn one' } } } });
+    child2.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'OLD REPLY' } } } });
+    child2.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'tool_call', toolCallId: 'call_old', title: 'Listed ./', kind: 'execute' } } });
+    await tick();
+    child2.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+    await tick();
+    child2.respondLast({}); // bypass mode set
+    await tick();
+    child2.respondLast({}); // model set
+    await tick();
+    // The NEW turn's only stream content:
+    child2.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'NEW REPLY' } } } });
+    child2.respondLast(promptResult());
+    await turn2Completed;
+
+    // No replay content anywhere in the live turn stream.
+    const serialized = JSON.stringify(turn2Events);
+    expect(serialized).not.toContain('OLD REPLY');
+    expect(serialized).not.toContain('turn one');
+    const end = turn2Events.find((e) => e.type === 'agent_end');
+    expect(end?.data?.result).toBe('NEW REPLY');
+    // The persisted response equals only the new reply.
+    const summary = await service.getLastCompletedTurn(sessionId);
+    expect(summary?.response).toBe('NEW REPLY');
+  });
+
   it('availableModels parses the catalogue with levels and pricing (no allow-list, ruling 01)', async () => {
     const models = await service.getAvailableModels();
     const flash = models.find((m) => m.id === 'swe-2-flash-medium');

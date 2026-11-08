@@ -366,23 +366,19 @@ export class DevinService {
     try {
       // Acquire or respawn the session's ACP child. A respawn resumes the
       // native session (session/load replays history server-side; our store
-      // holds the replayable turns).
-      const { AcpEventAdapter: Adapter } = { AcpEventAdapter };
-      void Adapter;
+      // holds the replayable turns). Review fix 1: the client itself drops
+      // `session/update` notifications that arrive during session/load, and
+      // the live turn adapter is created/reset immediately before
+      // session/prompt below — a replay can never reach this turn's stream,
+      // finalText or agent_end result.
       let client = this.clients.get(sessionId);
-      let adapter = client ? this.adapters.get(sessionId) : undefined;
-      if (!client || client.hasExited || !adapter) {
-        const freshAdapter = new AcpEventAdapter(sessionId);
-        adapter = freshAdapter;
+      if (!client || client.hasExited) {
         client = new DevinAcpClient({
           cwd: (entry.cwd && entry.cwd.trim()) ? entry.cwd : process.cwd(),
           devinHome: this.devinHome ?? config.devinHome,
           executablePath: this.executablePath,
           ...(storedNativeId ? { resumeNativeSessionId: storedNativeId } : {}),
           ...(this.spawnFn ? { spawnFn: this.spawnFn } : {}),
-          onSessionUpdate: (update) => {
-            for (const ev of freshAdapter.onSessionUpdate(update, Date.now())) emit(ev);
-          },
         });
         const started = await client.start();
         if (started.nativeSessionId !== storedNativeId) {
@@ -397,6 +393,8 @@ export class DevinService {
             nativeSessionId: started.nativeSessionId,
           }).catch((err) => tlog.warn('failed to persist native session id: %s', err instanceof Error ? err.message : String(err)));
         }
+        this.clients.set(sessionId, client);
+        this.armProcessIdleTimer(sessionId);
         // Ensure the session's model config option matches the registry (the
         // spawn flag LOSES to the config file — plan §2 — so the model travels
         // per session through session/set_config_option).
@@ -405,17 +403,16 @@ export class DevinService {
           await client.setConfigOption('model', desiredModel).catch((err) =>
             tlog.warn('model set failed (session keeps its default): %s', err instanceof Error ? err.message : String(err)));
         }
-        this.clients.set(sessionId, client);
-        this.adapters.set(sessionId, adapter);
-        this.armProcessIdleTimer(sessionId);
-      } else {
-        const freshAdapter = new AcpEventAdapter(sessionId);
-        adapter = freshAdapter;
-        this.adapters.set(sessionId, freshAdapter);
-        client.onSessionUpdate((update) => {
-          for (const ev of freshAdapter.onSessionUpdate(update, Date.now())) emit(ev);
-        });
       }
+
+      // Review fix 1: the turn adapter is created/reset immediately before
+      // session/prompt — nothing from the handshake or a session/load replay
+      // can leak into this turn's stream or accumulated turn text.
+      const adapter = new AcpEventAdapter(sessionId);
+      this.adapters.set(sessionId, adapter);
+      client.onSessionUpdate((update) => {
+        for (const ev of adapter.onSessionUpdate(update, Date.now())) emit(ev);
+      });
 
       // Turn watchdog: cancel a turn that outlives the prompt timeout; the
       // pending prompt then resolves cancelled and the turn finalizes.

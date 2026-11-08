@@ -213,6 +213,33 @@ describe('devin ACP client', () => {
     await expect(client.prompt('nope')).rejects.toThrow(/exited/);
   });
 
+  it('review fix 1: session/update notifications during session/load are dropped (replay never reaches the live handler)', async () => {
+    const { client, children } = makeClient({ resumeId: 'brass-akubra' });
+    const updates: unknown[] = [];
+    client.onSessionUpdate((u) => updates.push(u));
+    const startPromise = client.start();
+    await Promise.resolve();
+    const child = children[0]!;
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Replay chunks stream in BEFORE the session/load response (real shape:
+    // /root/devin-trial/acp-resume.jsonl — user chunk, agent chunks, tool calls).
+    child.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'old question' } } } });
+    child.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old reply' } } } });
+    child.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'tool_call', toolCallId: 'call_old', title: 'Listed ./', kind: 'execute' } } });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, result: NEW_RESULT });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    child.respondLast({});
+    await startPromise;
+    // The live handler saw NOTHING from the replay window.
+    expect(updates).toEqual([]);
+    // ...and a post-handshake update still reaches the handler:
+    child.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'live chunk' } } } });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(updates.length).toBe(1);
+  });
+
   it('setConfigOption writes session/set_config_option with the right params', async () => {
     const { client, child } = await startChild();
     const setPromise = client.setConfigOption('model', 'swe-2-flash-high');

@@ -63,6 +63,10 @@ export class DevinAcpClient {
   private pending = new Map<string | number, PendingRequest>();
   private nextIdCounter = 0;
   private updateHandler: (update: AcpSessionUpdate) => void;
+  /** True while a `session/load` handshake is in flight. Review fix 1: replay
+   *  `session/update` notifications that arrive before the load resolves are
+   *  dropped — they must never reach the live turn handler or its turnText. */
+  private loadPending = false;
   nativeSessionId: string | null = null;
   hasExited = false;
   exitCode: number | null = null;
@@ -145,15 +149,20 @@ export class DevinAcpClient {
     }
 
     if (this.options.resumeNativeSessionId) {
-      const loaded = await this.request('session/load', {
-        sessionId: this.options.resumeNativeSessionId,
-        cwd: this.options.cwd,
-        mcpServers: [],
-      }, this.options.initTimeoutMs ?? INIT_TIMEOUT_MS);
-      if (loaded.error) {
-        throw new Error(`devin acp session/load failed: ${loaded.error.message}`);
+      this.loadPending = true;
+      try {
+        const loaded = await this.request('session/load', {
+          sessionId: this.options.resumeNativeSessionId,
+          cwd: this.options.cwd,
+          mcpServers: [],
+        }, this.options.initTimeoutMs ?? INIT_TIMEOUT_MS);
+        if (loaded.error) {
+          throw new Error(`devin acp session/load failed: ${loaded.error.message}`);
+        }
+        this.nativeSessionId = this.options.resumeNativeSessionId;
+      } finally {
+        this.loadPending = false;
       }
-      this.nativeSessionId = this.options.resumeNativeSessionId;
     } else {
       const created = await this.request('session/new', {
         cwd: this.options.cwd,
@@ -186,6 +195,14 @@ export class DevinAcpClient {
       return;
     }
     if (message.method === 'session/update') {
+      if (this.loadPending) {
+        // Review fix 1: session/load replay — dropped. It is history the
+        // service already holds in its own turn store; it must never reach
+        // the live turn handler, its events or its turnText.
+        const kind = (message as unknown as { params?: { update?: { sessionUpdate?: string } } }).params?.update?.sessionUpdate;
+        logger.debug('devin acp replay update dropped during session/load: %s', kind ?? '<none>');
+        return;
+      }
       try {
         this.updateHandler(message as unknown as AcpSessionUpdate);
       } catch (error) {
