@@ -556,6 +556,14 @@ export class DevinService {
     if (client) {
       client.cancel();
     }
+    // Review fix 5: abort stops everything pending for this session — queued
+    // follow-ups are cleared with an abort error instead of draining as the
+    // next turn after the cancellation lands.
+    const queued = this.turnQueues.get(sessionId);
+    if (queued) {
+      for (const item of queued) item.onComplete(new Error('Devin session aborted; queued follow-up cancelled'));
+      this.turnQueues.delete(sessionId);
+    }
   }
 
   disposeSession(sessionId: string): void {

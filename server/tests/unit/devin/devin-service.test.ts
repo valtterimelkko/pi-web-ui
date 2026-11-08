@@ -216,6 +216,31 @@ describe('devin service', () => {
     expect(await service.followUp(sessionId, 'nope', () => undefined, () => undefined)).toBe(false);
   });
 
+  it('review fix 5: abort clears queued follow-ups — they never run after the aborted turn', async () => {
+    const { sessionId } = await service.createSession('/ws');
+    const turn1Completed = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'first', () => undefined, () => resolve());
+    });
+    const child = await waitForChild(children);
+    // Queue a follow-up while the turn is busy.
+    let queuedError: Error | undefined;
+    const queuedCompleted = new Promise<void>((resolve) => {
+      void service.followUp(sessionId, 'queued-second', () => undefined, (err) => { queuedError = err; resolve(); });
+    });
+    await tick();
+    service.abort(sessionId);
+    child.respondLast(promptResult('cancelled'));
+    await turn1Completed;
+    await queuedCompleted;
+    // Owner expectation: abort stops everything pending — the queued item was
+    // completed (with an abort error) at abort time, never run as a turn.
+    expect(queuedError).toBeDefined();
+    // Give a bogus drain a chance to send a further prompt, then check.
+    await tick(30);
+    const prompts = child.sent().filter((m) => m.method === 'session/prompt').map((m) => (m.params as { prompt: Array<{ text: string }> }).prompt[0].text);
+    expect(prompts).toEqual(['first']);
+  });
+
   it('prompt while busy throws SESSION_BUSY (steer is refused)', async () => {
     const { sessionId } = await service.createSession('/ws');
     const completed = new Promise<void>((resolve) => {
