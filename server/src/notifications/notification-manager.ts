@@ -50,6 +50,7 @@ export interface NotificationServices {
   opencode?: NotificationServiceObserver;
   antigravity?: NotificationServiceObserver;
   commandcode?: NotificationServiceObserver;
+  devin?: NotificationServiceObserver;
 }
 
 export interface NotificationManagerDeps {

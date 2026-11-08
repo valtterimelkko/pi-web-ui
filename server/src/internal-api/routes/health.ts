@@ -11,6 +11,7 @@ import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import { RuntimeHealthMonitor } from '../../observability/runtime-health.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
+import type { DevinService } from '../../devin/devin-service.js';
 import { getProcessBootIdentity, runtimeBuildIdentity, type ProcessBootIdentity } from '../../build-identity/runtime.js';
 import type { BuildIdentity } from '../../build-identity/manifest.js';
 
@@ -19,12 +20,13 @@ export interface HealthRoutesDeps {
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
   commandCodeService?: CommandCodeService;
+  devinService?: DevinService;
   startTime: number;
-  enabled?: { claude: boolean; opencode: boolean; antigravity: boolean; commandcode?: boolean };
+  enabled?: { claude: boolean; opencode: boolean; antigravity: boolean; commandcode?: boolean; devin?: boolean };
 }
 
 export function createHealthRoutes(deps: HealthRoutesDeps) {
-  const { claudeService, opencodeService, antigravityService, commandCodeService, startTime } = deps;
+  const { claudeService, opencodeService, antigravityService, commandCodeService, devinService, startTime } = deps;
   const monitor = new RuntimeHealthMonitor();
   const bootIdentity = getProcessBootIdentity(startTime);
 
@@ -33,7 +35,7 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
     res: ServerResponse,
   ): Promise<void> {
     const claudeBackend = await claudeService.getBackendMode().catch(() => 'direct' as const);
-    const enabled = deps.enabled ?? { claude: true, opencode: true, antigravity: true, commandcode: false };
+    const enabled = deps.enabled ?? { claude: true, opencode: true, antigravity: true, commandcode: false, devin: false };
     const runtimeHealth = await monitor.check({
       pi: { enabled: true, backend: 'native', probe: async () => true },
       claude: { enabled: enabled.claude, backend: claudeBackend, probe: () => claudeService.isAvailable() },
@@ -47,6 +49,11 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
         enabled: Boolean(commandCodeService && enabled.commandcode),
         backend: 'subprocess',
         probe: async () => Boolean(commandCodeService?.isAvailable()),
+      },
+      devin: {
+        enabled: Boolean(devinService && enabled.devin),
+        backend: 'acp',
+        probe: async () => Boolean(devinService?.isAvailable()),
       },
     });
 
@@ -65,6 +72,7 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
       opencode: runtimeHealth.opencode.available ? 'available' as const : 'unavailable' as const,
       antigravity: runtimeHealth.antigravity.available ? 'available' as const : 'unavailable' as const,
       commandcode: runtimeHealth.commandcode?.available ? 'available' as const : 'unavailable' as const,
+      devin: runtimeHealth.devin?.available ? 'available' as const : 'unavailable' as const,
     };
 
     const overallStatus: HealthResponse['status'] =

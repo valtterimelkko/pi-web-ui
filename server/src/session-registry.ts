@@ -14,6 +14,7 @@ export interface RegistryEntry {
   claudeSessionId?: string; // For Claude: the resume-target id — Pi Web UI-minted at createSession (passed as --session-id by the direct backend), rewritten to the CLI-confirmed id as soon as the runtime reports one. Before the first confirmed turn it is NOT the id the Claude process/transcript runs under.
   opencodeSessionId?: string; // For OpenCode: the OpenCode server session ID (native from creation)
   antigravityConversationId?: string; // For Antigravity: the agy --conversation UUID (the conversation id agy reports at init)
+  devinNativeSessionId?: string; // For Devin: the native `devin acp` session id (e.g. "brass-akubra")
   commandCodeNativeSessionId?: string; // For Command Code: native resume/session id
   /** Contract 1.64.0: the id the runtime's OWN process/transcript runs under,
    *  once the runtime has reported it (Claude: the CLI session id from the

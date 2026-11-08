@@ -130,7 +130,7 @@ export function createDiagnosticsRoutes(deps: DiagnosticsRoutesDeps = {}) {
   }
 
   function operationalSnapshot(context: Context) {
-    const byRuntime: Record<SessionRuntime, number> = { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 };
+    const byRuntime: Record<SessionRuntime, number> = { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0, devin: 0 };
     const byStatus = { running: 0, idle: 0, error: 0 };
     const visibleEntries = context.entries;
     for (const entry of visibleEntries) {

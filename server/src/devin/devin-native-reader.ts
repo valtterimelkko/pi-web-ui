@@ -12,21 +12,30 @@ import { createRequire } from 'node:module';
 
 // `node:sqlite` via createRequire: vitest's vite resolver cannot resolve the
 // newer `node:` builtin ("Failed to load url sqlite"), while the runtime
-// require path is plain Node — and this keeps the module testable (the
-// DatabaseSync type is structural; tests construct real fixtures with it).
+// require path is plain Node. @types/node (v20) has no node:sqlite typings,
+// so the surface this module uses is declared structurally below.
 const require = createRequire(import.meta.url);
-type SqliteDatabase = InstanceType<typeof import('node:sqlite').DatabaseSync>;
-const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
+
+/** Minimal structural surface of node:sqlite's DatabaseSync (readOnly open,
+ *  prepared statements, close). Real shape: node:sqlite (Node >= 22.5). */
+export interface SqliteDatabase {
+  prepare(sql: string): { all(...args: unknown[]): unknown[] };
+  close(): void;
+}
+interface SqliteDatabaseSyncConstructor {
+  new (path: string, options?: { readOnly?: boolean }): SqliteDatabase;
+}
+const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: SqliteDatabaseSyncConstructor };
 
 export interface DevinNativeSession {
   id: string;
-  cwd: string | undefined;
-  model: string | undefined;
-  title: string | undefined;
+  cwd?: string;
+  model?: string;
+  title?: string;
   /** epoch milliseconds (converted from the store's epoch seconds). */
-  createdAt: number | undefined;
+  createdAt?: number;
   /** epoch milliseconds (converted from the store's epoch seconds). */
-  lastActivityAt: number | undefined;
+  lastActivityAt?: number;
   hidden: boolean;
 }
 

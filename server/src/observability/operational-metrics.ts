@@ -11,6 +11,7 @@ const RUNTIME_ORDER = {
   opencode: 'opencode',
   antigravity: 'antigravity',
   commandcode: 'commandcode',
+  devin: 'devin',
 } as const satisfies { [runtime in SessionRuntime]: runtime };
 const RUNTIMES = Object.values(RUNTIME_ORDER);
 

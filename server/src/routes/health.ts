@@ -5,6 +5,7 @@ import { getWorkerPool } from './sessions.js';
 import { getOpenCodeService } from '../opencode/index.js';
 import { getClaudeService } from '../claude/index.js';
 import { getAntigravityService } from '../antigravity/index.js';
+import { getDevinService } from '../devin/index.js';
 import { createLogger } from '../logging/logger.js';
 import { RuntimeHealthMonitor } from '../observability/runtime-health.js';
 
@@ -151,6 +152,7 @@ router.get('/ready', async (_req: Request, res: Response) => {
   // have a registry. Treat that as unavailable rather than letting the probe hang.
   const claudeService = tryGetRuntimeService(getClaudeService);
   const antigravityService = tryGetRuntimeService(getAntigravityService);
+  const devinService = tryGetRuntimeService(getDevinService);
   const runtimeHealth = await runtimeHealthMonitor.check({
     pi: { enabled: true, backend: 'native', probe: async () => true },
     claude: {
@@ -169,6 +171,11 @@ router.get('/ready', async (_req: Request, res: Response) => {
       enabled: config.antigravityEnabled,
       backend: 'subprocess',
       probe: async () => antigravityService ? antigravityService.isAvailable() : false,
+    },
+    devin: {
+      enabled: config.devinEnabled,
+      backend: 'acp',
+      probe: async () => devinService ? devinService.isAvailable() : false,
     },
   });
 

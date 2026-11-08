@@ -263,9 +263,6 @@ export class DevinAcpClient {
       sessionId: this.nativeSessionId,
       prompt: [{ type: 'text', text }],
     });
-    if (response.error) {
-      return { stopReason: undefined, cancelled: false, usage: { input: 0, output: 0 }, error: response.error.message };
-    }
     const result = (response.result ?? {}) as {
       stopReason?: string;
       usage?: { inputTokens?: number; outputTokens?: number; cachedReadTokens?: number; totalTokens?: number };
@@ -280,7 +277,6 @@ export class DevinAcpClient {
       ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
       cancelled: result.stopReason === 'cancelled',
       usage,
-      ...(response.error ? { error: response.error.message } : {}),
     };
   }
 

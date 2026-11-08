@@ -106,7 +106,7 @@ export interface RunDispatchPreflightOptions {
  * server PATH unchanged. Correction 01 item 1: tool lookups must use THIS
  * environment, not the bare server PATH.
  */
-export function runtimeChildPathEnv(runtime: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode', serverPath?: string): string {
+export function runtimeChildPathEnv(runtime: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin', serverPath?: string): string {
   const base = serverPath ?? process.env.PATH ?? '';
   return runtime === 'antigravity' ? `/root/.local/bin:${base}` : base;
 }

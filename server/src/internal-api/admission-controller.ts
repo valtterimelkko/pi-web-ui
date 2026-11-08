@@ -567,7 +567,7 @@ export function readMemoryCapacity(): MemoryCapacity {
 export class AdmissionController {
   private activeTurns = 0;
   private readonly activeByRuntime: Record<SessionRuntime, number> = {
-    pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0,
+    pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0, devin: 0,
   };
   private readonly maxActiveTurns: number;
   private readonly interactiveReserve: number;

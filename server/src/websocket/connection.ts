@@ -2298,7 +2298,7 @@ export class WebSocketConnectionManager {
    *  failure logs but never fails the creation. */
   private async tagBrowserSessionOrigin(
     sessionId: string,
-    sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode',
+    sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin',
     sessionPath: string,
     cwd: string,
   ): Promise<void> {
@@ -3232,7 +3232,7 @@ export class WebSocketConnectionManager {
     } catch { /* provenance is best-effort */ }
 
     const formattedPiSessions: Array<{
-      id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
+      id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin';
       firstMessage: string; messageCount: number; cwd: string;
       name?: string; createdAt: string; lastActivity: string; origin?: string;
     }> = piSessions.map(s => ({

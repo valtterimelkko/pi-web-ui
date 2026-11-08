@@ -7,7 +7,7 @@
  */
 
 /** The normalized runtimes Pi Web UI unifies into one event stream. */
-export type NotificationRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
+export type NotificationRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin';
 
 /**
  * Acceptance limits for notification actions (contract CHANNEL.md §7; also
