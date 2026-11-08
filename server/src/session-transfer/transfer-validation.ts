@@ -9,7 +9,7 @@ export interface ValidationResult {
 }
 
 const transferScopeSchema = z.enum(['visible_recent', 'visible_full']);
-const sdkTypeSchema = z.enum(['pi', 'claude', 'opencode', 'antigravity', 'commandcode']);
+const sdkTypeSchema = z.enum(['pi', 'claude', 'opencode', 'antigravity', 'commandcode', 'devin']);
 
 export function validateTransferScope(scope: unknown): scope is TransferScope {
   return transferScopeSchema.safeParse(scope).success;

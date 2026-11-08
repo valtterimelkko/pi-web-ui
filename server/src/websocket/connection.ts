@@ -1318,6 +1318,7 @@ export class WebSocketConnectionManager {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      devinService: this.devinService,
       commandCodeService: this.commandCodeService,
       allowBrowserCommandCodeTarget: true,
       piSessionDir: config.sessionDir || process.env.PI_SESSIONS_DIR || `${config.piAgentDir}/sessions`,

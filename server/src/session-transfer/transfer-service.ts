@@ -6,6 +6,7 @@ import type { ClaudeService } from '../claude/claude-service.js';
 import { ClaudeBackendNotAllowedError } from '../claude/claude-backend-policy.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
 import type { AntigravityService } from '../antigravity/antigravity-service.js';
+import type { DevinService } from '../devin/devin-service.js';
 import type { CommandCodeService } from '../command-code/command-code-service.js';
 import { validateTransferRequest } from './transfer-validation.js';
 import { TRANSFER_ERROR_CODES } from './types.js';
@@ -63,6 +64,8 @@ export interface TransferServiceConfig {
   claudeService: ClaudeService | null;
   opencodeService: OpenCodeService | null;
   antigravityService?: AntigravityService | null;
+  /** Devin over ACP (DEVIN_ENABLED gate); target-side only. */
+  devinService?: DevinService | null;
   commandCodeService?: CommandCodeService | null;
   /** Browser-only opt-in; Internal API transfer callers leave this false. */
   allowBrowserCommandCodeTarget?: boolean;
@@ -548,6 +551,18 @@ export class TransferService {
           request.scope,
         );
 
+      case 'devin':
+        if (!this.config.devinService) {
+          return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Devin service unavailable' };
+        }
+        // Devin exposes the same normalised replay-event shape.
+        return extractOpenCodeTranscript(
+          this.config.devinService,
+          entry.id,
+          source,
+          request.scope,
+        );
+
       default:
         return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: `Unknown runtime: ${entry.sdkType}` };
     }
@@ -651,6 +666,26 @@ export class TransferService {
         }
       }
 
+      case 'devin': {
+        if (!this.config.devinService) {
+          return {
+            success: false,
+            sessionId: '',
+            error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Devin is not available' },
+          };
+        }
+        try {
+          const result = await this.config.devinService.createSession(cwd);
+          return { success: true, sessionId: result.sessionId, sessionPath: result.sessionId };
+        } catch (err) {
+          return {
+            success: false,
+            sessionId: '',
+            error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Failed to create Devin session: ${err instanceof Error ? err.message : String(err)}` },
+          };
+        }
+      }
+
       case 'pi': {
         if (!this.config.createPiSession) {
           return {
@@ -693,6 +728,8 @@ export class TransferService {
         return sessionPath ? (this.config.isPiSessionBusy?.(sessionPath, sessionId) ?? false) : false;
       case 'antigravity':
         return this.config.antigravityService?.isRunning(sessionId) ?? false;
+      case 'devin':
+        return this.config.devinService?.isRunning(sessionId) ?? false;
       case 'commandcode':
         return this.config.commandCodeService?.isRunning(sessionId) ?? false;
       default:
@@ -837,6 +874,21 @@ export class TransferService {
         } catch (err) {
           if (!(err instanceof TargetAcceptanceError && err.startRejected)) this.config.antigravityService.abort?.(targetSessionId);
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Antigravity dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
+        }
+      }
+
+      case 'devin': {
+        if (!this.config.devinService) {
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Devin service unavailable' } };
+        }
+        try {
+          await this.awaitTargetAcceptance((onEvent, onComplete) =>
+            this.config.devinService!.sendPrompt(targetSessionId, handoffText, onEvent, onComplete),
+          );
+          return { success: true };
+        } catch (err) {
+          if (!(err instanceof TargetAcceptanceError && err.startRejected)) this.config.devinService.abort?.(targetSessionId);
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Devin dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
         }
       }
 
