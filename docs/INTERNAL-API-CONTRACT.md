@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.68.0",
+  "contractVersion": "1.69.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -81,8 +81,15 @@ Exception table (date, owner decision, what, version):
 | 2026-10-19 | CHANNEL plan (owner plan of record; design `CHANNEL.md` §7, lane ch-tg) | 1.66.0 (ch-tg): `POST /api/v1/notifications` accepts optional `actions` (1–3 of `{id, label}`), `actionHandler` (a server-registered name) and `actionRef` — all three or none; delivered notifications carry them; the owner's Telegram tap runs the registered handler once and `GET /api/v1/notifications/:id` gains additive `actionTaken` `{action, at, result}`; `features.notificationActions` advertises the limits + registered handler names. Additive only. | 1.66.0 |
 | 2026-11-08 | DEVIN-PARITY-PLAN W1 lane A1 (owner plan of record; owner ruling 01 the same day: every Devin catalogue model is usable, pricing travels as information) | 1.67.0 (devin-parity A1): new `devin` runtime over ACP (`devin acp`, gated by `DEVIN_ENABLED`, off by default) — `runtimes.devin` in `GET /capabilities` (backend `acp`, follow-up `queue_while_busy`, no steer), `models.devin` in `GET /models` (+ `models/refresh` covers it) with per-model additive `pricing {free, raw, costTier?}` / `isNew` / `isBeta`, `runtime: "devin"` on create/batch/native-sessions/control/receipts (native ids like `brass-akubra`, registry field `devinNativeSessionId`, native listing over `<DEVIN_HOME>/.local/share/devin/cli/sessions.db` read-only), notification opt-ins accept devin, `RuntimeBackendMode` gains `"acp"`. Additive only. | 1.67.0 |
 | 2026-11-08 | DEVIN-PARITY-PLAN W7 lane C1 (owner plan of record) | 1.68.0 (devin-parity C1): the devin runtime gains the antigravity server-owned goal function — `POST/GET /api/v1/sessions/:id/goal` accepts `runtime: "devin"` (start/pause/resume/clear/status, same body validation and busy-toleration semantics as antigravity; control records under `<DEVIN_SESSION_DIR>/goal-control/`; a turn-driven sweeper verifies completed turns via `verifyCommand` or the `GOAL_STATUS: ACHIEVED` self-report and continues while unmet, with provider-error strikes and budget exhaustion as antigravity); `/goal …` typed at the devin prompt boundary is intercepted as goal control; create-with-goal arms the ledger; `goal_state`/`goal_end` broker events carry the same projection shapes (incl. `goalId`); `runtimes.devin.supportsGoal: true` + `goalControls`; devin run receipts gain `servedModel` (the session's applied model; `modelRebound` stays `false`). No new routes, types or error codes — additive values inside existing optional shapes only. | 1.68.0 |
+| 2026-11-08 | DEVIN-PARITY-PLAN (owner plan of record; peer report from the preference keeper, 2026-11-08) | 1.69.0 (devin-parity worklog fix): `GET /api/v1/sessions/native` devin items gain optional `sessionName` — the session's name in the shared Devin store (`nativePath` is the store path, common to every devin session, so a bare path could not be read back as one session). Additive optional field only; no new routes, types or error codes. | 1.69.0 |
 
 ### Changelog
+
+- **1.69.0** (minor — devin-parity programme, worklog readability fix). Additive only:
+  - **Why.** Every devin native item shared one `nativePath` (the store), so consumers such as the Agent OS worklog ledger could not read a native devin session back.
+  - **`GET /api/v1/sessions/native`.** Devin items carry optional `sessionName` (e.g. `brass-akubra`) — the id `devin -r` and the Agent OS digest reader (`devin:<id>`) take. Other runtimes unchanged.
+  - **Adaptation.** None required: optional field.
+  - **Rollback.** Revert the commit; consumers fall back to the bare store path.
 
 - **1.68.0** (minor — devin-parity programme lane C1, the devin goal function + `servedModel` on devin receipts; authorised by the DEVIN-PARITY-PLAN §4 W7). Additive only:
   - **Why.** Long Devin children must survive like Antigravity ones: the `devin` runtime gets the same server-owned goal function Antigravity has had since contract 1.38.0, and Devin run receipts name the model that actually served the run.

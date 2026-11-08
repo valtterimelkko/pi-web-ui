@@ -50,7 +50,8 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * RuntimeBackendMode "acp"); NOT re-based at **1.68.0** (2026-11-08,
  * devin-parity programme lane C1) — the devin goal function and devin receipt
  * `servedModel` added no routes, types or error codes, so the shape fingerprint
- * is unchanged. The
+ * is unchanged; NOT re-based at **1.69.0** (2026-11-08) — devin native items'
+ * optional `sessionName` is outside the snapshot's shapes. The
  * ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively

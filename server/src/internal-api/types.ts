@@ -73,7 +73,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.68.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.69.0' as const;
 
 // ─── Child completion block (C3a, contract 1.58.0) ───────────────────────────
 
@@ -834,6 +834,9 @@ export interface NativeSessionItem {
    *  native artefact. Absent when the format carries no readable preview
    *  (e.g. antigravity conversation databases). */
   preview?: string;
+  /** Contract 1.69.0: devin only — the session's name in the shared store
+   *  (`nativePath` is the store, common to every devin session). */
+  sessionName?: string;
 }
 
 export interface NativeSessionsResponse {

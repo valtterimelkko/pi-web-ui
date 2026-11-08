@@ -29,6 +29,7 @@ describe('Command Code Internal API boundary', () => {
     // 1.66.0: Channel C4 (2026-10-19) — tappable notification actions, features.notificationActions.
     // 1.68.0: devin-parity C1 (2026-11-08) — the devin server-owned goal
     // function (antigravity parity) + servedModel on devin receipts.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.68.0');
+    // 1.69.0: devin native items gain `sessionName` (2026-11-08).
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.69.0');
   });
 });

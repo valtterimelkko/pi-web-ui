@@ -113,6 +113,8 @@ describe('GET /api/v1/sessions/native (contract 1.30.0)', () => {
       opencodeStorageDir,
       antigravityConversationsDir,
       antigravityDesktopConversationsDir,
+      // Never fall back to the host's real Devin store.
+      devinNativeSessionsDb: path.join(dir, 'devin', 'sessions.db'),
     });
   });
 

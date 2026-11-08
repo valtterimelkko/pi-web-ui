@@ -688,6 +688,9 @@ export async function scanNativeSessions(input: NativeScanInput): Promise<Native
       // registry-known native sessions; unknown ones carry no class.
       ...(knownEntry?.sessionClass ? { sessionClass: knownEntry.sessionClass } : {}),
       ...(item.preview ? { preview: item.preview } : {}),
+      // Contract 1.69.0: devin sessions share one store path, so the item names
+      // its session (the id `devin -r` and the digest readers take).
+      ...(item.runtime === 'devin' && item.knownId ? { sessionName: item.knownId } : {}),
     };
   });
 
