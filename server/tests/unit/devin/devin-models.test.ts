@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDevinModelsJson, deriveDevinThinkingLevels, toDevinCatalogEntries, devinPricingFromVariant, resolveDevinLevelSwap, resolveDevinCreateModel, type DevinModelsFamily } from '../../../src/devin/devin-models.js';
+import { parseDevinModelsJson, deriveDevinThinkingLevels, toDevinCatalogEntries, devinPricingFromVariant, resolveDevinLevelSwap, resolveDevinCreateModel, devinAcpConfigView, resolveDevinAcpModelValue, resolveDevinAcpThoughtLevel, type DevinModelsFamily } from '../../../src/devin/devin-models.js';
 
 /**
  * Shapes mirrored from the live `devin models list --format json` output
@@ -261,5 +261,104 @@ describe('resolveDevinCreateModel (lane D3: create honours the level; family ids
     ]);
     expect(resolveDevinCreateModel('swe-2', undefined, withLoneBase, 'swe-2-medium'))
       .toEqual({ ok: true, modelId: 'swe-2' });
+  });
+});
+
+/**
+ * Lane D5 — the ACP boundary. Live shape captured 2026-11-08 (probe against
+ * `devin acp` v3000.12.28, throwaway HOME): `session/new` returns FOUR config
+ * options — `mode`, `model` (FLAT `{value,name,_meta}` leaves, ONE value per
+ * family), `thought_level` and `speed`. Variant ids are refused live:
+ * `-32602 Invalid params: Invalid value 'swe-2-flash-high' for config option
+ * 'model'`. Every `session/set_config_option` response echoes the session's
+ * updated configOptions (the `thought_level` values follow the model).
+ */
+const acpEntries = toDevinCatalogEntries(catalogue);
+
+const liveConfigOptions = [
+  { id: 'mode', name: 'Session Mode', category: 'mode', type: 'select', currentValue: 'accept-edits', options: [{ value: 'accept-edits', name: 'Code' }, { value: 'bypass', name: 'Bypass Permissions' }] },
+  {
+    id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'swe-2-high', description: 'AI model to use',
+    options: [
+      { value: 'adaptive', name: 'Adaptive', _meta: { 'cognition.ai/supportsImages': true } },
+      { value: 'swe-2-high', name: 'SWE-2', _meta: { 'cognition.ai/supportsImages': true } },
+      { value: 'swe-2-flash-medium', name: 'SWE-2 Flash', _meta: { 'cognition.ai/supportsImages': false } },
+      { value: 'swe-2-high-lightning', name: 'SWE-2 High Lightning', _meta: { 'cognition.ai/supportsImages': true } },
+      { value: 'kimi-k2-6', name: 'Kimi K2.6', _meta: { 'cognition.ai/supportsImages': true } },
+    ],
+  },
+  { id: 'thought_level', name: 'Thinking', category: 'thought_level', type: 'select', currentValue: 'medium', options: [{ value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }, { value: 'max', name: 'Max' }] },
+  { id: 'speed', name: 'Speed', category: 'model_config', type: 'select', currentValue: 'standard', options: [{ value: 'standard', name: 'Standard' }, { value: 'fast', name: 'Fast' }] },
+];
+
+describe('devin ACP config view (lane D5)', () => {
+  it('extracts the model and thought_level values from the live shape, ignoring mode/speed', () => {
+    const view = devinAcpConfigView(liveConfigOptions);
+    expect(view.modelValues).toEqual(['adaptive', 'swe-2-high', 'swe-2-flash-medium', 'swe-2-high-lightning', 'kimi-k2-6']);
+    expect(view.thoughtLevelValues).toEqual(['medium', 'high', 'max']);
+  });
+
+  it('tolerates nested option groups (a group entry contributes its leaves)', () => {
+    const grouped = [
+      { id: 'model', options: [{ group: 'SWE', options: [{ value: 'swe-2-high', name: 'SWE-2' }] }, { value: 'adaptive', name: 'Adaptive' }] },
+    ];
+    expect(devinAcpConfigView(grouped).modelValues).toEqual(['swe-2-high', 'adaptive']);
+  });
+
+  it('garbage or absent configOptions yield empty views (passthrough stays possible)', () => {
+    expect(devinAcpConfigView(undefined)).toEqual({ modelValues: [], thoughtLevelValues: [] });
+    expect(devinAcpConfigView('nope')).toEqual({ modelValues: [], thoughtLevelValues: [] });
+    expect(devinAcpConfigView([{ id: 'model' }, { id: 'thought_level', options: 'x' }])).toEqual({ modelValues: [], thoughtLevelValues: [] });
+  });
+});
+
+describe('devin ACP model value resolution (lane D5)', () => {
+  const view = devinAcpConfigView(liveConfigOptions);
+
+  it('a variant id resolves to its family\'s ACP model value', () => {
+    expect(resolveDevinAcpModelValue('swe-2-flash-high', view, acpEntries).model).toBe('swe-2-flash-medium');
+    expect(resolveDevinAcpModelValue('swe-2-medium', view, acpEntries).model).toBe('swe-2-high');
+    expect(resolveDevinAcpModelValue('swe-2-max', view, acpEntries).model).toBe('swe-2-high');
+  });
+
+  it('an option value resolves to itself (families, adaptive, lightning, fusion ids)', () => {
+    expect(resolveDevinAcpModelValue('swe-2-flash-medium', view, acpEntries).model).toBe('swe-2-flash-medium');
+    expect(resolveDevinAcpModelValue('swe-2-high', view, acpEntries).model).toBe('swe-2-high');
+    expect(resolveDevinAcpModelValue('adaptive', view, acpEntries).model).toBe('adaptive');
+    expect(resolveDevinAcpModelValue('swe-2-high-lightning', view, acpEntries).model).toBe('swe-2-high-lightning');
+  });
+
+  it('unknown ids and unresolvable families keep today\'s passthrough', () => {
+    expect(resolveDevinAcpModelValue('totally-unknown', view, acpEntries).model).toBe('totally-unknown');
+    const narrow = { modelValues: ['adaptive'], thoughtLevelValues: [] };
+    // The catalogue knows the family, but the session's option does not list
+    // it: pass the id through (the runtime refuses with its own clear error).
+    expect(resolveDevinAcpModelValue('swe-2-flash-high', narrow, acpEntries).model).toBe('swe-2-flash-high');
+  });
+});
+
+describe('devin ACP thought level resolution (lane D5)', () => {
+  const view = devinAcpConfigView(liveConfigOptions);
+
+  it('ids with no level token set no thought_level (adaptive, lightning, fusion, kimi)', () => {
+    expect(resolveDevinAcpThoughtLevel('adaptive', view)).toEqual({ ok: true });
+    expect(resolveDevinAcpThoughtLevel('swe-2-high-lightning', view)).toEqual({ ok: true });
+    expect(resolveDevinAcpThoughtLevel('fusion-a-b', view)).toEqual({ ok: true });
+    expect(resolveDevinAcpThoughtLevel('kimi-k2-6', view)).toEqual({ ok: true });
+    expect(resolveDevinAcpThoughtLevel('totally-unknown', view)).toEqual({ ok: true });
+  });
+
+  it('a level token the session offers resolves to a thought_level set', () => {
+    expect(resolveDevinAcpThoughtLevel('swe-2-flash-high', view)).toEqual({ ok: true, thoughtLevel: 'high' });
+    expect(resolveDevinAcpThoughtLevel('swe-2-max', view)).toEqual({ ok: true, thoughtLevel: 'max' });
+    expect(resolveDevinAcpThoughtLevel('swe-2-medium', view)).toEqual({ ok: true, thoughtLevel: 'medium' });
+    expect(resolveDevinAcpThoughtLevel('swe-2-flash-medium', view)).toEqual({ ok: true, thoughtLevel: 'medium' });
+  });
+
+  it('a level the session cannot take fails naming the available levels (never substituted)', () => {
+    const limited = { modelValues: ['x-medium'], thoughtLevelValues: ['low', 'medium'] };
+    expect(resolveDevinAcpThoughtLevel('x-high', limited)).toEqual({ ok: false, reason: 'thinking level "high" not available for "x-high" (available: low, medium)' });
+    const none = { modelValues: ['x-medium'], thoughtLevelValues: [] };
+    expect(resolveDevinAcpThoughtLevel('x-high', none)).toEqual({ ok: false, reason: 'thinking level "high" not available for "x-high" (available: none)' });
   });
 });

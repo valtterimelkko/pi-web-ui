@@ -18,6 +18,14 @@ and session transfer. Two frozen design points shape everything else:
 - **The model travels per session**, through `session/set_config_option` on
   the `model` config option. A `--model` spawn flag loses to Devin's config
   file (live-verified in the W0 trial), so the flag is never passed.
+- **Levels translate at the ACP boundary (lane D5, contract 1.69.1).** ACP's
+  `model` option takes ONE value per family (live-probed 2026-11-08:
+  `swe-2-high` = "SWE-2", `swe-2-flash-medium` = "SWE-2 Flash"); variant ids
+  such as `swe-2-flash-high` are refused on the wire (`-32602 Invalid
+  params`). The public vocabulary stays variant ids; before any write the
+  server reads the session's `configOptions` and translates: the family's
+  `model` value, then a `thought_level` set for the id's level token. See
+  [Models and thinking levels](#models-and-thinking-levels).
 
 ## Feature gate
 
@@ -64,8 +72,8 @@ session's tokens leak into hook logs when the full env is passed.
 `initialize` (protocolVersion 1, fs/terminal client capabilities false) ·
 `session/new {cwd, mcpServers: []}` · `session/load` (resume + replay) ·
 `session/prompt` · `session/cancel` · `session/set_config_option` (`model`,
-`mode`). Children run in Devin's `bypass` mode (set right after session
-creation). Agent→client requests are answered by policy:
+`mode`, `thought_level`). Children run in Devin's `bypass` mode (set right
+after session creation). Agent→client requests are answered by policy:
 
 - `session/request_permission` → select the first `allow` option (children
   also run bypass; this is the belt to those braces);
@@ -121,12 +129,32 @@ summary).
   `x-medium`) is never absorbed into the ladder. Speed variants (`-fast`,
   `-lightning`,
   `-priority`) and `fusion-*` combos are separate models, never levels.
-  Changing level while a turn runs refuses with 409 `SESSION_BUSY`; when
-  idle it sets the sibling id as the session's model. Review fix
-  (2026-11-08): a failed `session/set_config_option` for `model` surfaces —
-  it fails the turn at spawn (clear error, error turn persisted) and
-  rejects `set_model` when idle (the Internal API control answers 4xx) —
-  never a silent turn on the CLI's default model.
+  Changing level while a turn runs refuses with 409 `SESSION_BUSY`.
+- **ACP mapping (lane D5, contract 1.69.1).** ACP's `model` option takes one
+  value per family and refuses variant ids, so the server translates every
+  application (create's first turn, respawn, `set_model`) against the
+  session's live `configOptions` — kept current from `session/new` /
+  `session/load` results and every `session/set_config_option` echo, whose
+  `thought_level` values follow the session's model:
+  - a variant id sets its **family's `model` value**, then its level token
+    rides **`thought_level`** (`swe-2-flash-high` → `swe-2-flash-medium` +
+    `high`; `swe-2-max` → `swe-2-high` + `max`);
+  - a level the session cannot take fails the application with a clear error
+    naming the available levels — never substituted silently; at spawn this
+    keeps the existing cleanup (child stopped and dropped, error turn
+    persisted); on `set_model` it answers 4xx and drops the live child so the
+    next turn respawns on the registry model;
+  - ids with no level token (lightning, fusion, `adaptive`, legacy singles)
+    set no `thought_level`;
+  - unknown ids keep today's passthrough (the runtime refuses them at first
+    use; never a substitution here).
+  The **`set_thinking_level` control** sets `thought_level` directly on the
+  live child (no model swap) and records the variant id
+  (`<family>-<level>`) in the registry, so receipts name the effective
+  variant. Review fix (2026-11-08): a failed `session/set_config_option` for
+  `model` surfaces — it fails the turn at spawn (clear error, error turn
+  persisted) and rejects `set_model` when idle (the Internal API control
+  answers 4xx) — never a silent turn on the CLI's default model.
 
 ## Follow-up and steer
 

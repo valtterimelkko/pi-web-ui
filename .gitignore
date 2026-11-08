@@ -95,3 +95,6 @@ tests/workloads/results/
 
 # Audio regression lab scratch (worktree-local scratch only)
 .audio-lab-tmp/
+
+# Lane scratch (credentials copies, throwaway homes — never commit)
+scratch/

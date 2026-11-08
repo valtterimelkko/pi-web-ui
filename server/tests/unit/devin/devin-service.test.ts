@@ -76,6 +76,53 @@ function makeService(opts: { catalogue?: string } = {}) {
   return { service, children, dir };
 }
 
+/** Lane D5 catalogue: the families the live ACP `model` option carries one
+ *  value per family for (SWE-2, SWE-2 Flash), a family with a NARROW level
+ *  ladder (x: low|medium only) and an axis-less id (kimi-k2-6). */
+const D5_CATALOGUE_JSON = JSON.stringify({ families: [
+  { family_label: 'SWE-2', family_uid: 'swe-2', slug: 'swe-2', variants: [
+    { model_uid: 'swe-2-high', label: 'SWE-2 High', cost_tier: 'Free' },
+    { model_uid: 'swe-2-medium', label: 'SWE-2 Medium', cost_tier: 'Free' },
+    { model_uid: 'swe-2-max', label: 'SWE-2 Max', cost_tier: 'Free' },
+  ] },
+  { family_label: 'SWE-2 Flash', family_uid: 'swe-2-flash', slug: 'swe-2-flash', variants: [
+    { model_uid: 'swe-2-flash-medium', label: 'SWE-2 Flash Medium', cost_tier: 'Free' },
+    { model_uid: 'swe-2-flash-high', label: 'SWE-2 Flash High', cost_tier: 'Free' },
+    { model_uid: 'swe-2-flash-max', label: 'SWE-2 Flash Max', cost_tier: 'Free' },
+  ] },
+  { family_label: 'X', family_uid: 'x', slug: 'x', variants: [
+    { model_uid: 'x-low', label: 'X Low', cost_tier: 'Free' },
+    { model_uid: 'x-medium', label: 'X Medium', cost_tier: 'Free' },
+    { model_uid: 'x-high', label: 'X High', cost_tier: 'Free' },
+  ] },
+  { family_label: 'Kimi K2.6', family_uid: 'kimi-k2-6', slug: 'kimi-k2-6', variants: [
+    { model_uid: 'kimi-k2-6', label: 'Kimi K2.6', cost_tier: 'High cost' },
+  ] },
+] });
+
+/** Live shape (probe 2026-11-08): session/new returns configOptions with ONE
+ *  model value per family and a thought_level option following the model. */
+function liveConfigOptions(modelValues: string[] = ['swe-2-flash-medium'], thoughtLevels: string[] = ['medium', 'high', 'max']): unknown[] {
+  return [
+    { id: 'mode', name: 'Session Mode', type: 'select', currentValue: 'accept-edits', options: [{ value: 'accept-edits', name: 'Code' }, { value: 'bypass', name: 'Bypass Permissions' }] },
+    { id: 'model', name: 'Model', type: 'select', currentValue: modelValues[0], options: modelValues.map((value) => ({ value, name: value })) },
+    { id: 'thought_level', name: 'Thinking', type: 'select', currentValue: thoughtLevels[0], options: thoughtLevels.map((value) => ({ value, name: value })) },
+  ];
+}
+
+function liveSessionNewResult(configOptions: unknown[] = liveConfigOptions()): unknown {
+  return { sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions };
+}
+
+/** The echo the model set carries: the updated configOptions (the
+ *  thought_level values follow the session's model). */
+function liveModelEcho(model: string, thoughtLevels: string[], modelValues: string[] = ['swe-2-flash-medium']): unknown {
+  return { configOptions: [
+    { id: 'model', currentValue: model, options: modelValues.map((value) => ({ value, name: value })) },
+    { id: 'thought_level', currentValue: thoughtLevels[0], options: thoughtLevels.map((value) => ({ value, name: value })) },
+  ] };
+}
+
 const tick = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Request-driven handshake/answer step: wait until the child has actually
@@ -94,7 +141,8 @@ async function waitForSent(child: FakeChild, method: string, nth = 1, timeoutMs 
 }
 
 /** Wait for the lazy spawn (registry/store writes precede it), then complete
- *  the ACP handshake: initialize, session/new, bypass set, model set — each
+ *  the ACP handshake: initialize, session/new (live-shape configOptions),
+ *  bypass set, model set (echoes configOptions), thought_level set — each
  *  answered only once its request has actually been written. */
 async function waitForChild(children: FakeChild[], timeoutMs = 3000): Promise<FakeChild> {
   const deadline = Date.now() + timeoutMs;
@@ -104,11 +152,13 @@ async function waitForChild(children: FakeChild[], timeoutMs = 3000): Promise<Fa
   await waitForSent(child, 'initialize', 1, timeoutMs);
   child.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
   await waitForSent(child, 'session/new', 1, timeoutMs);
-  child.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+  child.respondLast(liveSessionNewResult());
   await waitForSent(child, 'session/set_config_option', 1, timeoutMs);
   child.respondLast({}); // bypass mode set
   await waitForSent(child, 'session/set_config_option', 2, timeoutMs);
-  child.respondLast({}); // service-side model set
+  child.respondLast(liveModelEcho('swe-2-flash-medium', ['medium', 'high', 'max'])); // service-side model application
+  await waitForSent(child, 'session/set_config_option', 3, timeoutMs);
+  child.respondLast({}); // thought_level (the default id carries level "medium")
   await tick();
   return child;
 }
@@ -268,24 +318,29 @@ describe('devin service', () => {
     await completed;
   });
 
-  it('setThinkingLevel while busy refuses with SESSION_BUSY; when idle swaps to the sibling id', async () => {
+  it('setThinkingLevel while busy refuses with SESSION_BUSY; when idle it sets thought_level only (no model swap)', async () => {
     const { sessionId } = await service.createSession('/ws');
     await service.setModel(sessionId, 'swe-2-flash-medium');
     const completed = new Promise<void>((resolve) => {
       void service.sendPrompt(sessionId, 'busy', () => undefined, () => resolve());
     });
-    await waitForChild(children);
+    const child = await waitForChild(children);
     await expect(service.setThinkingLevel(sessionId, 'high')).rejects.toThrow(/SESSION_BUSY/);
     children[0]!.respondLast(promptResult());
     await completed;
-    // idle path: sibling swap persists in the registry. The live child gets a
-    // set_config_option write; answer it.
+    // idle path (lane D5): the level rides the thought_level option on the
+    // LIVE child — no model write — and the registry records the variant id.
     const swapPromise = service.setThinkingLevel(sessionId, 'high');
-    await tick();
-    children[0]!.respondLast({});
+    await waitForSent(child, 'session/set_config_option', 4);
+    child.respondLast({});
     const slug = await swapPromise;
     expect(slug).toBe('swe-2-flash-high');
     expect((await service.getSession(sessionId))?.model).toBe('swe-2-flash-high');
+    const sets = child.sent().filter((m) => m.method === 'session/set_config_option');
+    const levelHigh = sets.filter((m) => (m.params as { configId?: string }).configId === 'thought_level' && (m.params as { value?: string }).value === 'high');
+    expect(levelHigh).toHaveLength(1);
+    expect(levelHigh[0]!.params).toMatchObject({ sessionId: 'brass-akubra', configId: 'thought_level', value: 'high' });
+    expect(sets.some((m) => (m.params as { configId?: string }).configId === 'model' && (m.params as { value?: string }).value === 'swe-2-flash-high')).toBe(false);
   });
 
   it('setModel on a paid model is allowed (ruling 01: no allow-list)', async () => {
@@ -318,11 +373,13 @@ describe('devin service', () => {
     await tick();
     child2.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
     await tick();
-    child2.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+    child2.respondLast(liveSessionNewResult());
     await tick();
     child2.respondLast({}); // bypass mode set
     await tick();
-    child2.respondLast({}); // model set
+    child2.respondLast(liveModelEcho('swe-2-flash-medium', ['medium', 'high', 'max'])); // model application
+    await tick();
+    child2.respondLast({}); // thought_level
     await tick();
     // the respawned child must have received session/load with the native id
     const load = child2.sent().find((m) => m.method === 'session/load');
@@ -364,11 +421,13 @@ describe('devin service', () => {
     child2.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'OLD REPLY' } } } });
     child2.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'tool_call', toolCallId: 'call_old', title: 'Listed ./', kind: 'execute' } } });
     await tick();
-    child2.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+    child2.respondLast(liveSessionNewResult());
     await tick();
     child2.respondLast({}); // bypass mode set
     await tick();
-    child2.respondLast({}); // model set
+    child2.respondLast(liveModelEcho('swe-2-flash-medium', ['medium', 'high', 'max'])); // model application
+    await tick();
+    child2.respondLast({}); // thought_level
     await tick();
     // The NEW turn's only stream content:
     child2.writeStdout({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'brass-akubra', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'NEW REPLY' } } } });
@@ -398,7 +457,7 @@ describe('devin service', () => {
     await tick();
     child.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
     await tick();
-    child.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+    child.respondLast(liveSessionNewResult());
     await tick();
     child.respondLast({}); // bypass set OK
     await tick();
@@ -475,7 +534,7 @@ describe('devin service', () => {
     await tick();
     child.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
     await tick();
-    child.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+    child.respondLast(liveSessionNewResult());
     await tick();
     child.respondLast({}); // bypass set OK
     await tick();
@@ -506,5 +565,193 @@ describe('devin service', () => {
     child.respondLast(promptResult());
     await completed;
     expect(existsSync(join(dir, 'sessions', `${sessionId}.jsonl`))).toBe(true);
+  });
+
+  // ── Lane D5: Devin levels go through ACP's thought_level option ──────────
+
+  describe('lane D5: ACP boundary translation (d5 catalogue)', () => {
+    const D5_MODEL_VALUES = ['swe-2-high', 'swe-2-flash-medium', 'x-medium', 'kimi-k2-6'];
+
+    function makeD5Service() {
+      const harness = makeService({ catalogue: D5_CATALOGUE_JSON });
+      return harness;
+    }
+
+    /** Drive the spawn handshake of a D5 service child up to (and including)
+     *  the model application echo; the caller answers the thought_level set
+     *  when one is expected. */
+    async function d5Spawn(child: FakeChild, echoModel: string, echoLevels: string[]): Promise<void> {
+      await waitForSent(child, 'initialize');
+      child.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
+      await waitForSent(child, 'session/new');
+      child.respondLast(liveSessionNewResult(liveConfigOptions(D5_MODEL_VALUES)));
+      await waitForSent(child, 'session/set_config_option', 1);
+      child.respondLast({}); // bypass mode
+      await waitForSent(child, 'session/set_config_option', 2);
+      child.respondLast(liveModelEcho(echoModel, echoLevels, D5_MODEL_VALUES));
+    }
+
+    const setParams = (child: FakeChild) =>
+      child.sent().filter((m) => m.method === 'session/set_config_option').map((m) => m.params as { configId?: string; value?: string });
+
+    it('create on swe-2-flash-high: the wire gets model swe-2-flash-medium + thought_level high; servedModel stays the variant id', async () => {
+      const { service: svc, children: kids } = makeD5Service();
+      const { sessionId } = await svc.createSession('/ws', 'swe-2-flash-high');
+      const completed = new Promise<void>((resolve) => {
+        void svc.sendPrompt(sessionId, 'hello', () => undefined, () => resolve());
+      });
+      const deadline = Date.now() + 3000;
+      while (kids.length === 0 && Date.now() < deadline) await tick();
+      const child = kids[0]!;
+      await d5Spawn(child, 'swe-2-flash-medium', ['medium', 'high', 'max']);
+      await waitForSent(child, 'session/set_config_option', 3);
+      child.respondLast({});
+      await waitForSent(child, 'session/prompt', 1);
+      child.respondLast(promptResult());
+      await completed;
+
+      expect(setParams(child)).toEqual([
+        { sessionId: 'brass-akubra', configId: 'mode', value: 'bypass' },
+        { sessionId: 'brass-akubra', configId: 'model', value: 'swe-2-flash-medium' },
+        { sessionId: 'brass-akubra', configId: 'thought_level', value: 'high' },
+      ]);
+      expect((await svc.getSession(sessionId))?.model).toBe('swe-2-flash-high');
+      await expect(svc.getServedModel(sessionId)).resolves.toBe('swe-2-flash-high');
+      svc.shutdown();
+    });
+
+    it('create on swe-2-max: model swe-2-high + thought_level max', async () => {
+      const { service: svc, children: kids } = makeD5Service();
+      const { sessionId } = await svc.createSession('/ws', 'swe-2-max');
+      const completed = new Promise<void>((resolve) => {
+        void svc.sendPrompt(sessionId, 'hello', () => undefined, () => resolve());
+      });
+      const deadline = Date.now() + 3000;
+      while (kids.length === 0 && Date.now() < deadline) await tick();
+      const child = kids[0]!;
+      await d5Spawn(child, 'swe-2-high', ['medium', 'high', 'max']);
+      await waitForSent(child, 'session/set_config_option', 3);
+      child.respondLast({});
+      await waitForSent(child, 'session/prompt', 1);
+      child.respondLast(promptResult());
+      await completed;
+      expect(setParams(child).slice(1)).toEqual([
+        { sessionId: 'brass-akubra', configId: 'model', value: 'swe-2-high' },
+        { sessionId: 'brass-akubra', configId: 'thought_level', value: 'max' },
+      ]);
+      await expect(svc.getServedModel(sessionId)).resolves.toBe('swe-2-max');
+      svc.shutdown();
+    });
+
+    it('create on swe-2-medium: model swe-2-high + thought_level medium', async () => {
+      const { service: svc, children: kids } = makeD5Service();
+      const { sessionId } = await svc.createSession('/ws', 'swe-2-medium');
+      const completed = new Promise<void>((resolve) => {
+        void svc.sendPrompt(sessionId, 'hello', () => undefined, () => resolve());
+      });
+      const deadline = Date.now() + 3000;
+      while (kids.length === 0 && Date.now() < deadline) await tick();
+      const child = kids[0]!;
+      await d5Spawn(child, 'swe-2-high', ['medium', 'high', 'max']);
+      await waitForSent(child, 'session/set_config_option', 3);
+      child.respondLast({});
+      await waitForSent(child, 'session/prompt', 1);
+      child.respondLast(promptResult());
+      await completed;
+      expect(setParams(child).slice(1)).toEqual([
+        { sessionId: 'brass-akubra', configId: 'model', value: 'swe-2-high' },
+        { sessionId: 'brass-akubra', configId: 'thought_level', value: 'medium' },
+      ]);
+      svc.shutdown();
+    });
+
+    it('an axis-less id (kimi-k2-6) sets the model only — no thought_level write', async () => {
+      const { service: svc, children: kids } = makeD5Service();
+      const { sessionId } = await svc.createSession('/ws', 'kimi-k2-6');
+      const completed = new Promise<void>((resolve) => {
+        void svc.sendPrompt(sessionId, 'hello', () => undefined, () => resolve());
+      });
+      const deadline = Date.now() + 3000;
+      while (kids.length === 0 && Date.now() < deadline) await tick();
+      const child = kids[0]!;
+      await d5Spawn(child, 'kimi-k2-6', ['medium', 'high', 'max']);
+      await waitForSent(child, 'session/prompt', 1);
+      child.respondLast(promptResult());
+      await completed;
+      expect(setParams(child).some((s) => s.configId === 'thought_level')).toBe(false);
+      expect(setParams(child).find((s) => s.configId === 'model')?.value).toBe('kimi-k2-6');
+      svc.shutdown();
+    });
+
+    it('an unavailable level (x-high) fails the turn with a clear error naming the levels; the child is stopped and dropped', async () => {
+      const { service: svc, children: kids } = makeD5Service();
+      const { sessionId } = await svc.createSession('/ws', 'x-high');
+      const events: any[] = [];
+      const completed = new Promise<void>((resolve) => {
+        void svc.sendPrompt(sessionId, 'hello', (e) => events.push(e), () => resolve());
+      });
+      const deadline = Date.now() + 3000;
+      while (kids.length === 0 && Date.now() < deadline) await tick();
+      const child = kids[0]!;
+      await d5Spawn(child, 'x-medium', ['low', 'medium']);
+      child.respondLast(promptResult()); // never a prompt — defensive
+      await completed;
+      const end = events.find((e) => e.type === 'agent_end');
+      expect(String(end?.data?.error)).toContain('thinking level "high" not available for "x-high" (available: low, medium)');
+      expect(child.signals.length).toBeGreaterThan(0); // criterion 3: spawn cleanup kept
+      const summary = await svc.getLastCompletedTurn(sessionId);
+      expect(summary?.status).toBe('error');
+      svc.shutdown();
+    });
+
+    it('setThinkingLevel without a live child records the variant id; the respawn applies family value + thought_level', async () => {
+      const { service: svc, children: kids } = makeD5Service();
+      const { sessionId } = await svc.createSession('/ws', 'swe-2-flash-medium');
+      const first = new Promise<void>((resolve) => {
+        void svc.sendPrompt(sessionId, 'warm up', () => undefined, () => resolve());
+      });
+      const deadline = Date.now() + 3000;
+      while (kids.length === 0 && Date.now() < deadline) await tick();
+      const child1 = kids[0]!;
+      await d5Spawn(child1, 'swe-2-flash-medium', ['medium', 'high', 'max']);
+      await waitForSent(child1, 'session/set_config_option', 3);
+      child1.respondLast({});
+      await waitForSent(child1, 'session/prompt', 1);
+      child1.respondLast(promptResult());
+      await first;
+
+      // Idle, no live child: registry-only variant id, no wire write.
+      svc.shutdownProcess(sessionId);
+      const slug = await svc.setThinkingLevel(sessionId, 'high');
+      expect(slug).toBe('swe-2-flash-high');
+      expect((await svc.getSession(sessionId))?.model).toBe('swe-2-flash-high');
+      await expect(svc.getServedModel(sessionId)).resolves.toBe('swe-2-flash-high');
+
+      // The respawn re-applies the variant: family value + thought_level high.
+      const second = new Promise<void>((resolve) => {
+        void svc.sendPrompt(sessionId, 'turn two', () => undefined, () => resolve());
+      });
+      const respawnDeadline = Date.now() + 3000;
+      while (kids.length < 2 && Date.now() < respawnDeadline) await tick();
+      const child2 = kids[1]!;
+      await waitForSent(child2, 'initialize', 1);
+      child2.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
+      await waitForSent(child2, 'session/load', 1);
+      // session/load result carries the configOptions (live shape).
+      child2.respondLast(liveSessionNewResult(liveConfigOptions(D5_MODEL_VALUES)));
+      await waitForSent(child2, 'session/set_config_option', 1);
+      child2.respondLast({}); // bypass
+      await waitForSent(child2, 'session/set_config_option', 2);
+      child2.respondLast(liveModelEcho('swe-2-flash-medium', ['medium', 'high', 'max'], D5_MODEL_VALUES));
+      await waitForSent(child2, 'session/set_config_option', 3);
+      child2.respondLast({});
+      await waitForSent(child2, 'session/prompt', 1);
+      child2.respondLast(promptResult());
+      await second;
+      const levelSets = child2.sent().filter((m) => m.method === 'session/set_config_option' && (m.params as { configId?: string }).configId === 'thought_level');
+      expect(levelSets).toHaveLength(1);
+      expect((levelSets[0]!.params as { value?: string }).value).toBe('high');
+      svc.shutdown();
+    });
   });
 });

@@ -54,7 +54,10 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * optional `sessionName` is outside the snapshot's shapes; re-based again at
  * **1.69.0** (2026-11-08, devin-parity lane D3, folded into the undeployed
  * 1.69.0) — the additive `ModelInfo.family` / `ModelInfo.familyName` devin
- * family-grouping fields. The
+ * family-grouping fields; NOT re-based at **1.69.1** (2026-11-08,
+ * devin-parity lane D5) — the ACP-boundary behaviour fix (family `model`
+ * value + `thought_level`) changed no route, type or error code, so a patch
+ * bump fingerprints identically apart from the version string. The
  * ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively

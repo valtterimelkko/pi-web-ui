@@ -269,3 +269,95 @@ export function resolveDevinCreateModel(
   }
   return { ok: true, modelId: `${modelId}-${thinkingLevel}`, levelApplied: thinkingLevel };
 }
+
+// ── Lane D5: the ACP boundary (contract 1.69.1) ─────────────────────────────
+//
+// Devin's ACP `model` config option takes ONE value per family (flat
+// `{value, name, _meta}` leaves; live-probed `devin acp` v3000.12.28,
+// 2026-11-08: `swe-2-high` = "SWE-2", `swe-2-flash-medium` = "SWE-2 Flash",
+// plus `adaptive`, fusion ids and legacy singles). A variant id such as
+// `swe-2-flash-high` is REFUSED on the wire (`-32602 Invalid params: Invalid
+// value 'swe-2-flash-high' for config option 'model'`), so the public
+// vocabulary (variant ids) translates at the boundary: the family's option
+// value plus a `thought_level` set. `session/new` returns FOUR options —
+// `mode`, `model`, `thought_level` and `speed`; every
+// `session/set_config_option` response echoes the session's updated
+// configOptions (the thought_level values follow the session's model).
+
+/** The values a session's `model` and `thought_level` options accept. */
+export interface DevinAcpConfigView {
+  modelValues: string[];
+  thoughtLevelValues: string[];
+}
+
+function flattenAcpOptionValues(options: unknown): string[] {
+  if (!Array.isArray(options)) return [];
+  const out: string[] = [];
+  for (const item of options) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as { value?: unknown; options?: unknown };
+    if (typeof record.value === 'string') {
+      out.push(record.value);
+      continue;
+    }
+    // A group entry contributes its leaves (defensive: the live shape is flat).
+    if (Array.isArray(record.options)) out.push(...flattenAcpOptionValues(record.options));
+  }
+  return out;
+}
+
+/** Extract the view from a configOptions payload (a `session/new`/`session/load`
+ *  result or a `session/set_config_option` echo). Garbage yields empty views;
+ *  callers then pass the requested id through unchanged (today's behaviour). */
+export function devinAcpConfigView(configOptions: unknown): DevinAcpConfigView {
+  const view: DevinAcpConfigView = { modelValues: [], thoughtLevelValues: [] };
+  if (!Array.isArray(configOptions)) return view;
+  for (const entry of configOptions) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { id, options } = entry as { id?: unknown; options?: unknown };
+    if (id !== 'model' && id !== 'thought_level') continue;
+    const values = flattenAcpOptionValues(options);
+    if (id === 'model') view.modelValues = values;
+    else view.thoughtLevelValues = values;
+  }
+  return view;
+}
+
+/** Pick the ACP `model` option value for a public model id: the id itself
+ *  when the session offers it; otherwise the option value belonging to the
+ *  id's catalogue family. Unknown ids and ids whose family the session does
+ *  not list pass through unchanged (the runtime refuses them with its own
+ *  clear error — never a substitution here). */
+export function resolveDevinAcpModelValue(
+  requested: string,
+  view: DevinAcpConfigView,
+  catalogue: DevinModelEntry[],
+): { model: string } {
+  if (view.modelValues.includes(requested)) return { model: requested };
+  const entry = catalogue.find((m) => m.id === requested);
+  if (entry) {
+    const familyValue = view.modelValues.find(
+      (value) => catalogue.find((m) => m.id === value)?.family === entry.family,
+    );
+    if (familyValue) return { model: familyValue };
+  }
+  return { model: requested };
+}
+
+/** Resolve the `thought_level` a public model id implies, against the view
+ *  CURRENT at write time (post-model-set: the echo updates it). Ids with no
+ *  level token (lightning, fusion, adaptive, legacy singles) set none; a
+ *  level the session cannot take fails naming the available levels — never
+ *  substituted silently. */
+export function resolveDevinAcpThoughtLevel(
+  requested: string,
+  view: DevinAcpConfigView,
+): { ok: true; thoughtLevel?: string } | { ok: false; reason: string } {
+  const level = levelOf(requested);
+  if (level === null) return { ok: true };
+  if (!view.thoughtLevelValues.includes(level)) {
+    const available = view.thoughtLevelValues.length > 0 ? view.thoughtLevelValues.join(', ') : 'none';
+    return { ok: false, reason: `thinking level "${level}" not available for "${requested}" (available: ${available})` };
+  }
+  return { ok: true, thoughtLevel: level };
+}

@@ -409,15 +409,18 @@ export class DevinService {
         }
         this.clients.set(sessionId, client);
         this.armProcessIdleTimer(sessionId);
-        // Ensure the session's model config option matches the registry (the
-        // spawn flag LOSES to the config file — plan §2 — so the model travels
-        // per session through session/set_config_option). Review fix 4: a
-        // failed model set fails the turn with a clear error — never a silent
-        // turn on the CLI's default model while the registry says otherwise.
+        // Ensure the session's model config matches the registry (the spawn
+        // flag LOSES to the config file — plan §2 — so the model travels per
+        // session through session/set_config_option). Lane D5: the public id
+        // translates at the ACP boundary — the family's `model` option value
+        // plus a `thought_level` set when the id carries a level token.
+        // Review fix 4: a failed application fails the turn with a clear
+        // error — never a silent turn on the CLI's default model while the
+        // registry says otherwise.
         const desiredModel = entry.model || config.devinDefaultModel;
         if (desiredModel) {
           try {
-            await client.setConfigOption('model', desiredModel);
+            await client.applyModel(desiredModel, await this.getAvailableModels());
           } catch (err) {
             // Closure N2: never keep a child that is on the wrong model — stop and
             // drop it, so the next turn respawns and re-applies the model.
@@ -654,7 +657,8 @@ export class DevinService {
     return entry.model || config.devinDefaultModel;
   }
 
-  /** Model switch: set the session's `model` config option (the spawn flag
+  /** Model switch: apply the public id at the ACP boundary (lane D5 — the
+   *  family's `model` option value plus a `thought_level` set; the spawn flag
    *  LOSES to the config file — plan §2). Busy → 409-style refusal (plan D4). */
   async setModel(sessionId: string, modelId: string): Promise<string> {
     const entry = await this.registry.get(sessionId);
@@ -663,20 +667,32 @@ export class DevinService {
       throw new Error(`SESSION_BUSY: model changes apply between turns`);
     }
     // Ruling 01 (2026-11-08): every catalogue model is allowed; no allow-list.
-    // A live child applies it first; only a successful set is recorded, so the
-    // registry never names a model the child is not using (closure N1). A
-    // respawned child applies the registry model at spawn. A failed
-    // set_config_option surfaces — the Internal API control maps it to 4xx.
+    // A live child applies it first; only a successful application is
+    // recorded, so the registry never names a model the child is not using
+    // (closure N1). A respawned child applies the registry model at spawn.
+    // A failed application surfaces — the Internal API control maps it to 4xx.
     const client = this.clients.get(sessionId);
     if (client && !client.hasExited) {
-      await client.setConfigOption('model', modelId);
+      try {
+        await client.applyModel(modelId, await this.getAvailableModels());
+      } catch (err) {
+        // D5: never keep a child on a model/level mix the registry does not
+        // name — stop and drop it; the next turn respawns and re-applies the
+        // registry model.
+        this.clients.delete(sessionId);
+        client.stop();
+        throw err;
+      }
     }
     await this.registry.upsert({ ...entry, id: entry.id, sdkType: 'devin', model: modelId });
     return modelId;
   }
 
-  /** Thinking-level selection = sibling-model swap (plan D4). Busy → 409-style
-   *  refusal; idle → sibling id becomes the session's model. */
+  /** Thinking-level selection (lane D5): the level rides the ACP
+   *  `thought_level` option — NO model swap. The registry records the variant
+   *  id (`<family>-<level>`) so receipts name the effective variant; a
+   *  respawned child re-applies it (family value + thought_level). Busy →
+   *  409-style refusal. */
   async setThinkingLevel(sessionId: string, level: string): Promise<string> {
     const entry = await this.registry.get(sessionId);
     if (!entry) throw new Error(`Session not found: ${sessionId}`);
@@ -685,9 +701,16 @@ export class DevinService {
     }
     const catalogue = await this.getAvailableModels();
     const current = catalogue.find((m) => m.id === (entry.model || config.devinDefaultModel));
+    // Validation stays catalogue-based (sibling ladder): fails loudly for an
+    // unsupported level or an axis-less model. The slug is the registry id.
     const resolution = resolveDevinLevelSwap(current, level, catalogue);
     if (!resolution.ok) throw new Error(resolution.reason);
-    return this.setModel(sessionId, resolution.slug);
+    const client = this.clients.get(sessionId);
+    if (client && !client.hasExited) {
+      await client.setConfigOption('thought_level', level);
+    }
+    await this.registry.upsert({ ...entry, id: entry.id, sdkType: 'devin', model: resolution.slug });
+    return resolution.slug;
   }
 
   async pinSession(sessionId: string, claimId = 'web-ui'): Promise<boolean> {

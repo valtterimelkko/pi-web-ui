@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { Writable } from 'stream';
 import { DevinAcpClient } from '../../../src/devin/devin-acp-client.js';
+import { toDevinCatalogEntries, type DevinModelEntry, type DevinModelsFamily } from '../../../src/devin/devin-models.js';
 
 /**
  * Controllable fake `devin acp` child. Tests drive stdout lines and inspect
@@ -288,5 +289,200 @@ describe('devin ACP client', () => {
     child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, error: { code: -32000, message: 'no session' } });
     await expect(startPromise).rejects.toThrow(/session\/new failed/);
     expect(child.signals).toContain('SIGTERM');
+  });
+});
+
+/**
+ * Lane D5 — model application at the ACP boundary, over a fake reproducing
+ * the LIVE configOptions shape (probe 2026-11-08, `devin acp` v3000.12.28):
+ * `model` takes ONE value per family (flat `{value,name}` leaves),
+ * `thought_level` follows the session's model, and every set_config_option
+ * response echoes the updated configOptions. Variant ids are refused live
+ * (-32602) — that refusal is the bug this translation removes.
+ */
+const D5_FAMILIES: DevinModelsFamily[] = [
+  { family_label: 'SWE-2', family_uid: 'swe-2', slug: 'swe-2', variants: [
+    { model_uid: 'swe-2-high', label: 'SWE-2 High', cost_tier: 'Free' },
+    { model_uid: 'swe-2-medium', label: 'SWE-2 Medium', cost_tier: 'Free' },
+    { model_uid: 'swe-2-max', label: 'SWE-2 Max', cost_tier: 'Free' },
+  ] },
+  { family_label: 'SWE-2 Flash', family_uid: 'swe-2-flash', slug: 'swe-2-flash', variants: [
+    { model_uid: 'swe-2-flash-medium', label: 'SWE-2 Flash Medium', cost_tier: 'Free' },
+    { model_uid: 'swe-2-flash-high', label: 'SWE-2 Flash High', cost_tier: 'Free' },
+    { model_uid: 'swe-2-flash-max', label: 'SWE-2 Flash Max', cost_tier: 'Free' },
+  ] },
+  { family_label: 'X', family_uid: 'x', slug: 'x', variants: [
+    { model_uid: 'x-low', label: 'X Low', cost_tier: 'Free' },
+    { model_uid: 'x-medium', label: 'X Medium', cost_tier: 'Free' },
+    { model_uid: 'x-high', label: 'X High', cost_tier: 'Free' },
+  ] },
+  { family_label: 'Kimi K2.6', family_uid: 'kimi-k2-6', slug: 'kimi-k2-6', variants: [
+    { model_uid: 'kimi-k2-6', label: 'Kimi K2.6', cost_tier: 'High cost' },
+  ] },
+];
+const D5_CATALOGUE: DevinModelEntry[] = toDevinCatalogEntries(D5_FAMILIES);
+const D5_MODEL_VALUES = ['adaptive', 'swe-2-high', 'swe-2-flash-medium', 'x-medium', 'kimi-k2-6'];
+
+const D5_NEW_RESULT = {
+  sessionId: 'brass-akubra',
+  modes: { currentModeId: 'accept-edits', availableModes: [{ id: 'bypass', name: 'Bypass Permissions' }] },
+  configOptions: [
+    { id: 'mode', name: 'Session Mode', type: 'select', currentValue: 'accept-edits', options: [{ value: 'accept-edits', name: 'Code' }, { value: 'bypass', name: 'Bypass Permissions' }] },
+    { id: 'model', name: 'Model', type: 'select', currentValue: 'swe-2-high', description: 'AI model to use', options: D5_MODEL_VALUES.map((value) => ({ value, name: value })) },
+    { id: 'thought_level', name: 'Thinking', type: 'select', currentValue: 'medium', options: [{ value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }, { value: 'max', name: 'Max' }] },
+  ],
+};
+
+/** The echo a real set_config_option result carries: the session's updated
+ *  configOptions (thought_level values follow the session's model). */
+function d5Echo(model: string, thoughtLevels: string[]): { configOptions: unknown[] } {
+  return {
+    configOptions: [
+      { id: 'model', currentValue: model, options: D5_MODEL_VALUES.map((value) => ({ value, name: value })) },
+      { id: 'thought_level', currentValue: thoughtLevels[0], options: thoughtLevels.map((value) => ({ value, name: value })) },
+    ],
+  };
+}
+
+function setCalls(child: FakeChild): Array<{ configId?: string; value?: string }> {
+  return child.sent()
+    .filter((m) => m.method === 'session/set_config_option')
+    .map((m) => m.params);
+}
+
+async function untilSetWritten(child: FakeChild, configId: string, nth = 1): Promise<void> {
+  const deadline = Date.now() + 2000;
+  const count = () => child.sent().filter((m) => m.method === 'session/set_config_option' && m.params?.configId === configId).length;
+  while (count() < nth) {
+    if (Date.now() > deadline) throw new Error(`set_config_option '${configId}' #${nth} not written`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 2));
+  }
+}
+
+async function startLiveChild(opts: { resumeId?: string } = {}): Promise<{ client: DevinAcpClient; child: FakeChild }> {
+  const { client, children } = makeClient(opts);
+  const startPromise = client.start();
+  await Promise.resolve();
+  const child = children[0]!;
+  child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, result: D5_NEW_RESULT });
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  child.respondLast({}); // bypass-mode set
+  await startPromise;
+  return { client, child };
+}
+
+describe('devin ACP client: model application (lane D5)', () => {
+  it('swe-2-flash-high → model swe-2-flash-medium then thought_level high (the live refusal, translated)', async () => {
+    const { client, child } = await startLiveChild();
+    const applied = client.applyModel('swe-2-flash-high', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('swe-2-flash-medium', ['medium', 'high', 'max']));
+    await untilSetWritten(child, 'thought_level');
+    child.respondLast({});
+    await expect(applied).resolves.toEqual({ model: 'swe-2-flash-medium', thoughtLevel: 'high' });
+    expect(setCalls(child).slice(1)).toEqual([
+      { sessionId: 'brass-akubra', configId: 'model', value: 'swe-2-flash-medium' },
+      { sessionId: 'brass-akubra', configId: 'thought_level', value: 'high' },
+    ]);
+  });
+
+  it('swe-2-max → model swe-2-high + thought_level max', async () => {
+    const { client, child } = await startLiveChild();
+    const applied = client.applyModel('swe-2-max', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('swe-2-high', ['medium', 'high', 'max']));
+    await untilSetWritten(child, 'thought_level');
+    child.respondLast({});
+    await expect(applied).resolves.toEqual({ model: 'swe-2-high', thoughtLevel: 'max' });
+  });
+
+  it('swe-2-medium → model swe-2-high + thought_level medium', async () => {
+    const { client, child } = await startLiveChild();
+    const applied = client.applyModel('swe-2-medium', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('swe-2-high', ['medium', 'high', 'max']));
+    await untilSetWritten(child, 'thought_level');
+    child.respondLast({});
+    await expect(applied).resolves.toEqual({ model: 'swe-2-high', thoughtLevel: 'medium' });
+  });
+
+  it('an exact option value with a level token still applies its level (swe-2-flash-medium)', async () => {
+    const { client, child } = await startLiveChild();
+    const applied = client.applyModel('swe-2-flash-medium', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('swe-2-flash-medium', ['medium', 'high', 'max']));
+    await untilSetWritten(child, 'thought_level');
+    child.respondLast({});
+    await expect(applied).resolves.toEqual({ model: 'swe-2-flash-medium', thoughtLevel: 'medium' });
+  });
+
+  it('an axis-less id sets the model only — no thought_level write (kimi-k2-6, adaptive, lightning)', async () => {
+    const { client, child } = await startLiveChild();
+    const applied = client.applyModel('kimi-k2-6', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('kimi-k2-6', ['medium', 'high', 'max']));
+    await expect(applied).resolves.toEqual({ model: 'kimi-k2-6' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(setCalls(child).some((s) => s.configId === 'thought_level')).toBe(false);
+  });
+
+  it('a level the session cannot take fails AFTER the model set, naming the levels — never substituted', async () => {
+    const { client, child } = await startLiveChild();
+    const applied = client.applyModel('x-high', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('x-medium', ['low', 'medium'])); // the echo: x offers only low|medium
+    await expect(applied).rejects.toThrow('thinking level "high" not available for "x-high" (available: low, medium)');
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(setCalls(child).map((s) => s.configId)).toEqual(['mode', 'model']); // the level was never written
+  });
+
+  it('keeps the options current across calls: the second application reads the latest echo', async () => {
+    const { client, child } = await startLiveChild();
+    const first = client.applyModel('swe-2-flash-high', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('swe-2-flash-medium', ['medium', 'high', 'max']));
+    await untilSetWritten(child, 'thought_level');
+    child.respondLast({});
+    await first;
+
+    const second = client.applyModel('swe-2-max', D5_CATALOGUE);
+    await untilSetWritten(child, 'model', 2);
+    child.respondLast(d5Echo('swe-2-high', ['medium', 'high', 'max']));
+    await untilSetWritten(child, 'thought_level', 2);
+    child.respondLast({});
+    await expect(second).resolves.toEqual({ model: 'swe-2-high', thoughtLevel: 'max' });
+  });
+
+  it('a failed model set throws and writes nothing else (spawn cleanup stays with the caller)', async () => {
+    const { client, child } = await startLiveChild();
+    const applied = client.applyModel('swe-2-flash-high', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, error: { code: -32602, message: 'Invalid params', data: "Invalid value 'swe-2-flash-medium' for config option 'model'" } });
+    await expect(applied).rejects.toThrow(/set_config_option model failed/);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(setCalls(child).some((s) => s.configId === 'thought_level')).toBe(false);
+  });
+
+  it('resume: configOptions from the session/load result drive the translation', async () => {
+    const { client, children } = makeClient({ resumeId: 'brass-akubra' });
+    const startPromise = client.start();
+    await Promise.resolve();
+    const child = children[0]!;
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Live shape (acp-resume.jsonl): the session/load result carries configOptions.
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, result: D5_NEW_RESULT });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    child.respondLast({}); // bypass set
+    await startPromise;
+
+    const applied = client.applyModel('swe-2-flash-high', D5_CATALOGUE);
+    await untilSetWritten(child, 'model');
+    child.respondLast(d5Echo('swe-2-flash-medium', ['medium', 'high', 'max']));
+    await untilSetWritten(child, 'thought_level');
+    child.respondLast({});
+    await expect(applied).resolves.toEqual({ model: 'swe-2-flash-medium', thoughtLevel: 'high' });
   });
 });

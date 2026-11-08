@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import { devinSpawnEnv } from './devin-spawn-env.js';
 import { isAgentToClientRequest, nextRequestId, parseAcpLine, type AcpMessage } from './devin-acp-protocol.js';
+import { devinAcpConfigView, resolveDevinAcpModelValue, resolveDevinAcpThoughtLevel, type DevinModelEntry } from './devin-models.js';
 import type { AcpSessionUpdate } from './devin-event-adapter.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -75,6 +76,10 @@ export class DevinAcpClient {
   exitCode: number | null = null;
   /** Args used for the last spawn (test assertion surface; never the model flag). */
   lastSpawnArgs: string[] = [];
+  /** Lane D5: the session's configOptions, kept current from the
+   *  session/new / session/load results and every set_config_option echo
+   *  (the thought_level values follow the session's model). */
+  private sessionConfigOptions: unknown = null;
 
   constructor(options: DevinAcpClientOptions) {
     this.options = options;
@@ -181,6 +186,7 @@ export class DevinAcpClient {
           if (loaded.error) {
             throw new Error(`devin acp session/load failed: ${loaded.error.message}`);
           }
+          this.rememberConfigOptions(loaded.result);
           this.nativeSessionId = this.options.resumeNativeSessionId;
         } finally {
           this.loadPending = false;
@@ -193,6 +199,7 @@ export class DevinAcpClient {
         if (created.error || !created.result || typeof (created.result as { sessionId?: unknown }).sessionId !== 'string') {
           throw new Error(`devin acp session/new failed: ${created.error?.message ?? 'no sessionId in result'}`);
         }
+        this.rememberConfigOptions(created.result);
         this.nativeSessionId = (created.result as { sessionId: string }).sessionId;
       }
 
@@ -332,9 +339,10 @@ export class DevinAcpClient {
     this.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.nativeSessionId } });
   }
 
-  /** Set a session config option (`model`, `mode`) — never a spawn flag.
-   *  Wire shape (live-probed v3000.12.28): {sessionId, configId, value}; the
-   *  result echoes the session's updated configOptions. */
+  /** Set a session config option (`model`, `mode`, `thought_level`) — never a
+   *  spawn flag. Wire shape (live-probed v3000.12.28): {sessionId, configId,
+   *  value}; the result echoes the session's updated configOptions, which
+   *  lane D5 keeps as the per-session view. */
   async setConfigOption(configId: string, value: string): Promise<void> {
     if (!this.nativeSessionId) throw new Error('devin acp client not started');
     const response = await this.request('session/set_config_option', {
@@ -343,6 +351,38 @@ export class DevinAcpClient {
       value,
     }, 10_000);
     if (response.error) throw new Error(`session/set_config_option ${configId} failed: ${response.error.message}`);
+    this.rememberConfigOptions(response.result);
+  }
+
+  /** Lane D5: apply a public model id to this ACP session. Devin's ACP
+   *  `model` option takes ONE value per family (variant ids such as
+   *  `swe-2-flash-high` are refused live with -32602), so a variant id
+   *  translates to its family's option value; a level token the session's
+   *  `thought_level` option offers rides a second set. The thought_level
+   *  check runs against the POST-model-set view (the echo updates the
+   *  per-session options). A level the session cannot take throws naming
+   *  the available levels — never substituted silently; models with no
+   *  level token (lightning, fusion, adaptive) set no thought_level. */
+  async applyModel(requested: string, catalogue: DevinModelEntry[]): Promise<{ model: string; thoughtLevel?: string }> {
+    const chosen = resolveDevinAcpModelValue(requested, devinAcpConfigView(this.sessionConfigOptions), catalogue);
+    await this.setConfigOption('model', chosen.model);
+    const level = resolveDevinAcpThoughtLevel(requested, devinAcpConfigView(this.sessionConfigOptions));
+    if (!level.ok) throw new Error(level.reason);
+    if (level.thoughtLevel !== undefined) {
+      await this.setConfigOption('thought_level', level.thoughtLevel);
+    }
+    return { model: chosen.model, ...(level.thoughtLevel !== undefined ? { thoughtLevel: level.thoughtLevel } : {}) };
+  }
+
+  /** The session's current configOptions (test/diagnostic surface). */
+  getConfigOptions(): unknown {
+    return this.sessionConfigOptions;
+  }
+
+  private rememberConfigOptions(result: unknown): void {
+    if (result && typeof result === 'object' && Array.isArray((result as { configOptions?: unknown }).configOptions)) {
+      this.sessionConfigOptions = (result as { configOptions: unknown }).configOptions;
+    }
   }
 
   /** Stop the child (SIGTERM then SIGKILL after a grace period). */

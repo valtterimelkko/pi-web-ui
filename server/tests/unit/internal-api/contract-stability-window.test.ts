@@ -202,6 +202,18 @@ const DEVIN_WL_1_69_0_ROW: StabilityExceptionRow = {
   version: '1.69.0',
 };
 
+/** The live table's thirteenth row: lane D5's ACP-boundary behaviour fix. A
+ *  PATCH bump inside the window needs no owner exception (bug fixes only);
+ *  like the retroactive 1.58.5 row this records the semantic change — it
+ *  grants nothing: the snapshot fingerprints identically to 1.69.0 apart
+ *  from the version string. */
+const DEVIN_D5_1_69_1_ROW: StabilityExceptionRow = {
+  date: '2026-11-08',
+  decision: 'DEVIN-PARITY-PLAN lane D5 (owner plan of record; parent-verified live bug the same day)',
+  what: "1.69.1 (devin-parity D5, behaviour fix): every non-default Devin level failed its first turn live (`session/set_config_option model failed: Invalid params` — Devin's ACP `model` option takes ONE value per family and refuses variant ids with -32602). The public vocabulary is unchanged (variant ids, family ids, `thinkingLevel`, `/models` entries, `family`/`familyName`); the translation happens at the ACP boundary: the session's family `model` value plus a `thought_level` set for a level token the session offers; an unavailable level fails with a clear error naming the levels (never substituted); axis-less ids set no `thought_level`; `set_thinking_level` control now sets `thought_level` directly (no model swap) and the registry/`servedModel` keep naming the variant id. No shape change — the snapshot fingerprints identically to 1.69.0 apart from the version string.",
+  version: '1.69.1',
+};
+
 const CH_TG_1_66_0_ROW: StabilityExceptionRow = {
   date: '2026-10-19',
   decision: 'CHANNEL plan (owner plan of record; design `CHANNEL.md` §7, lane ch-tg)',
@@ -237,8 +249,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row and the devin worklog 1.69.0 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row, the devin worklog 1.69.0 row and the devin D5 1.69.1 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW, DEVIN_D5_1_69_1_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -257,7 +269,7 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version now that the 1.69.0 exception row names it', () => {
+    it('accepts the live contract version now that the 1.69.0 exception row names it (the 1.69.1 patch rides the same major.minor)', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
